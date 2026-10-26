@@ -72,6 +72,12 @@ phases 9–10.
 - `command.rs` is ~480 lines (target 400): split `GitConfig` out when the
   streaming API lands.
 
+- **Flaky (open, 2026-10-26)**: `large_stdin_and_stdout_do_not_deadlock` hung ~590 s once
+  in a full parallel run on Windows (its own 60 s timeout did not fire; passes in
+  6 s alone and in later full runs). Suspect: tokio Windows pipe I/O on the
+  blocking pool outliving the timeout. Investigate with the debugger agent
+  before the streaming path (phase 9).
+
 **Gotchas**
 - `git check-ref-format` takes no `--`; the oracle test passes names that
   always start with `refs/`.

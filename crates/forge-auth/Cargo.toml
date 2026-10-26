@@ -1,0 +1,15 @@
+[package]
+name = "forge-auth"
+description = "forge authorization: the single decision point authorize(), roles, scopes, and the permission matrix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-core.workspace = true
+forge-errors.workspace = true
+
+[lints]
+workspace = true
