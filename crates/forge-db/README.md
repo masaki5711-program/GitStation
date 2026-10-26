@@ -1,8 +1,8 @@
 # forge-db
 
 **Responsibility**: the PostgreSQL layer (ADR-0002) — connecting with TLS and
-every timeout applied, and mapping driver errors to registered codes. Later:
-migrations (FG-DB-0003/0004), the Outbox and the job queue.
+every timeout applied, and mapping driver errors to registered codes. Also
+migrations (ADR-0014). Later: the Outbox and the job queue.
 
 **Public API**
 - `Db::connect(&DatabaseConfig) -> Result<Db, ForgeError>` — pool from
@@ -19,8 +19,9 @@ migrations (FG-DB-0003/0004), the Outbox and the job queue.
 `idle_in_transaction_session_timeout`. `application_name = forge`.
 
 **Error codes owned**: FG-DB-0001 DbUnavailable (`reason`, `target`),
-FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`). Reserved:
-FG-DB-0003/0004 (migrations), FG-DB-0005 (Outbox sequencer, ADR-0012).
+FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
+MigrationFailed, FG-DB-0004 SchemaIncompatible. Reserved:
+FG-DB-0005 (Outbox sequencer, ADR-0012).
 
 **Runbook**: `ops/runbooks/db-unavailable.md`.
 
@@ -58,3 +59,12 @@ FG-DB-0003/0004 (migrations), FG-DB-0005 (Outbox sequencer, ADR-0012).
 - `Db::connect` makes one direct probe connection (real failure reason,
   version check) and then a lazy pool: `min_connections` are opened in the
   background, so a failure there surfaces later on `acquire` (FG-DB-0001).
+
+**Migrations** (ADR-0014): `migrate(&db, &MIGRATOR, timeout)`,
+`status(&db, &MIGRATOR)` (read-only, never creates `_sqlx_migrations`),
+`check_schema(&db, &MIGRATOR)` (what `forge serve` runs before binding:
+FG-DB-0004 for pending / db_ahead / checksum_mismatch / dirty). Product
+migrations live in `migrations/` (`YYYYMMDDHHMMSS_desc.sql`, LF, forward
+only); test migrators in `tests/fixtures/migrator/`. Migration tests each
+create a fresh database `forge_t_<uuid>` and drop it at the end.
+Runbook: `ops/runbooks/db-migration.md`.

@@ -1,72 +1,14 @@
 //! Pool tests. Most need the development database (ADR-0011): they fail —
 //! never skip — with the compose command when it is not running.
 
-use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-use forge_core::config::{self, DatabaseConfig, Env, TlsMode};
-use forge_errors::{ErrorCode, ForgeError, Lang};
+use forge_core::config::TlsMode;
+use forge_errors::{ErrorCode, Lang};
 
 use super::*;
 use crate::query_error;
-
-const HINT: &str = "start the development database: \
-    docker compose -f ops/dev/compose.yml up -d --wait (in Git/)";
-
-fn dev_url() -> String {
-    std::env::var("FORGE_TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://forge_dev@127.0.0.1:55432/forge_dev".to_owned())
-}
-
-/// A database config for tests; the password file lives as long as `_pw`.
-struct TestConfig {
-    db: DatabaseConfig,
-    _pw: tempfile::NamedTempFile,
-}
-
-fn test_config(url: &str, password: &str, extra: &[(&str, &str)]) -> TestConfig {
-    let mut pw = tempfile::NamedTempFile::new().expect("password file");
-    pw.write_all(password.as_bytes()).expect("write");
-    let pw_path = pw.path().to_string_lossy().into_owned();
-    let mut pairs = vec![
-        ("FORGE_DATABASE_URL", url),
-        ("FORGE_DATABASE_PASSWORD_FILE", pw_path.as_str()),
-        ("FORGE_DATABASE_TLS_MODE", "disable"),
-    ];
-    pairs.extend_from_slice(extra);
-    let cfg = config::load(None, &Env::from_pairs(pairs)).expect("test config");
-    TestConfig {
-        db: cfg.database,
-        _pw: pw,
-    }
-}
-
-async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
-    let cfg = test_config(&dev_url(), "forge_dev", extra);
-    match Db::connect(&cfg.db).await {
-        Ok(db) => (db, cfg),
-        Err(e) => panic!("{HINT}\n{e}"),
-    }
-}
-
-fn assert_reason(err: &ForgeError, code: ErrorCode, reason: &str) {
-    assert_eq!(err.code(), code, "{err}");
-    assert!(
-        err.to_string().contains(&format!("reason={reason}")),
-        "{err}"
-    );
-}
-
-/// The whole error chain as the log would show it.
-fn chain(err: &ForgeError) -> String {
-    let mut text = err.to_string();
-    let mut source = std::error::Error::source(err);
-    while let Some(s) = source {
-        text.push_str(&format!(" | {s}"));
-        source = s.source();
-    }
-    text
-}
+use crate::test_support::*;
 
 #[tokio::test]
 async fn test_database_is_reachable_or_fails_with_compose_hint() {
@@ -265,9 +207,7 @@ async fn connect_checks_the_server_version() {
 #[tokio::test]
 async fn a_missing_database_is_server_rejected_3d000() {
     let _ = dev_db(&[]).await;
-    let base = dev_url();
-    let (server, _db) = base.rsplit_once('/').expect("url has a dbname");
-    let url = format!("{server}/forge_does_not_exist");
+    let url = url_with_db("forge_does_not_exist");
     let cfg = test_config(&url, "forge_dev", &[]);
     let err = Db::connect(&cfg.db).await.expect_err("no such database");
     assert_reason(&err, ErrorCode::DbUnavailable, "server_rejected");

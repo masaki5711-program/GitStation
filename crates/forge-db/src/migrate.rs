@@ -1,0 +1,216 @@
+//! Schema migrations (ADR-0014): forward-only, applied explicitly by
+//! `forge db migrate`, checked by `forge serve` before it starts.
+//!
+//! - [`status`] is read-only: it never creates `_sqlx_migrations`.
+//! - [`check_schema`] fails with `FG-DB-0004` when the database does not
+//!   match the binary (pending, db_ahead, checksum_mismatch, dirty).
+//! - [`migrate`] applies pending migrations on a dedicated connection with
+//!   `database.migrate_statement_timeout_ms`; sqlx serializes concurrent
+//!   runs with an advisory lock and runs each migration in one transaction.
+//!   A failure is `FG-DB-0003` with the version; nothing is half-applied.
+
+use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+use forge_errors::{ErrorCode, ForgeError};
+use sqlx::migrate::{MigrateError, Migrator};
+use sqlx::Connection as _;
+
+use crate::{query_error, Db};
+
+/// The migrations built into this binary (`crates/forge-db/migrations`).
+pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+/// How the database relates to the binary's migrations.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SchemaStatus {
+    /// Applied successfully and known to this binary.
+    pub applied: Vec<i64>,
+    /// Known to this binary, not applied yet.
+    pub pending: Vec<i64>,
+    /// Applied, but not known to this binary (the database is newer).
+    pub unknown: Vec<i64>,
+    /// Applied, but the file in this binary differs (an edited migration).
+    pub modified: Vec<i64>,
+    /// Recorded as unsuccessful by an earlier run.
+    pub dirty: Vec<i64>,
+}
+
+impl SchemaStatus {
+    /// The first reason the database cannot be used as is, most serious
+    /// first, as `FG-DB-0004`.
+    pub fn incompatibility(&self) -> Option<ForgeError> {
+        [
+            ("dirty", &self.dirty),
+            ("checksum_mismatch", &self.modified),
+            ("db_ahead", &self.unknown),
+            ("pending", &self.pending),
+        ]
+        .into_iter()
+        .find(|(_, versions)| !versions.is_empty())
+        .map(|(reason, versions)| incompatible(reason, versions))
+    }
+}
+
+fn incompatible(reason: &'static str, versions: &[i64]) -> ForgeError {
+    ForgeError::new(ErrorCode::SchemaIncompatible)
+        .with_context("reason", reason)
+        .with_context("versions", join(versions))
+}
+
+fn join(versions: &[i64]) -> String {
+    versions
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Compare the database with `migrator` without changing anything.
+pub async fn status(db: &Db, migrator: &Migrator) -> Result<SchemaStatus, ForgeError> {
+    let table: Option<String> = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations')::text")
+        .fetch_one(db.pool())
+        .await
+        .map_err(|e| query_error("migrate.table_exists", e))?;
+    let recorded: Vec<(i64, Vec<u8>, bool)> = match table {
+        Some(_) => sqlx::query_as(
+            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(db.pool())
+        .await
+        .map_err(|e| query_error("migrate.list_applied", e))?,
+        None => Vec::new(),
+    };
+    let known: BTreeMap<i64, &[u8]> = migrator
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+        .map(|m| (m.version, m.checksum.as_ref()))
+        .collect();
+    let mut st = SchemaStatus::default();
+    for (version, checksum, success) in &recorded {
+        if !success {
+            st.dirty.push(*version);
+            continue;
+        }
+        match known.get(version) {
+            None => st.unknown.push(*version),
+            Some(file) if *file != checksum.as_slice() => st.modified.push(*version),
+            Some(_) => st.applied.push(*version),
+        }
+    }
+    st.pending = known
+        .keys()
+        .filter(|v| !recorded.iter().any(|(r, _, _)| r == *v))
+        .copied()
+        .collect();
+    Ok(st)
+}
+
+/// `forge serve`: refuse to run against a schema that does not match.
+pub async fn check_schema(db: &Db, migrator: &Migrator) -> Result<SchemaStatus, ForgeError> {
+    let st = status(db, migrator).await?;
+    match st.incompatibility() {
+        Some(err) => Err(err.with_context("target", db.target())),
+        None => Ok(st),
+    }
+}
+
+/// Apply the pending migrations; returns the versions applied by this call.
+/// Refuses (FG-DB-0004) when the database is dirty, edited or ahead.
+pub async fn migrate(
+    db: &Db,
+    migrator: &Migrator,
+    statement_timeout: Duration,
+) -> Result<Vec<i64>, ForgeError> {
+    let before = status(db, migrator).await?;
+    for (reason, versions) in [
+        ("dirty", &before.dirty),
+        ("checksum_mismatch", &before.modified),
+        ("db_ahead", &before.unknown),
+    ] {
+        if !versions.is_empty() {
+            return Err(incompatible(reason, versions).with_context("target", db.target()));
+        }
+    }
+    if before.pending.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A dedicated connection: the longer statement timeout must not go back
+    // into the pool.
+    let mut conn = db.acquire().await?.detach();
+    sqlx::query(&format!(
+        "SET statement_timeout = {}",
+        statement_timeout.as_millis()
+    ))
+    .execute(&mut conn)
+    .await
+    .map_err(|e| query_error("migrate.set_statement_timeout", e))?;
+    let started = Instant::now();
+    let result = migrator.run_direct(&mut conn).await;
+    if let Err(e) = conn.close().await {
+        // The connection is gone either way; a failed goodbye is not a fault.
+        tracing::debug!(target: "forge_db", error = %e, "migration connection close failed");
+    }
+    result.map_err(|e| migrate_error(e).with_context("target", db.target()))?;
+    // Whatever another concurrent run applied in between is not ours to
+    // report; re-read to be exact.
+    let after = status(db, migrator).await?;
+    let applied: Vec<i64> = before
+        .pending
+        .iter()
+        .filter(|v| after.applied.contains(v))
+        .copied()
+        .collect();
+    tracing::info!(
+        target: "forge_db",
+        db_target = %db.target(),
+        versions = %join(&applied),
+        duration_ms = started.elapsed().as_millis(),
+        "forge.db.migrate.applied"
+    );
+    Ok(applied)
+}
+
+/// MigrateError is non-exhaustive: matched with `if let`, the rest is
+/// `driver`. Row data never reaches the context (`query_error` sanitizes).
+fn migrate_error(e: MigrateError) -> ForgeError {
+    let failed = |reason: &'static str| {
+        ForgeError::new(ErrorCode::MigrationFailed).with_context("reason", reason)
+    };
+    if let MigrateError::ExecuteMigration(inner, version) = e {
+        return failed("sql_failed")
+            .with_context("version", version)
+            .with_source(query_error("migrate.apply", inner));
+    }
+    if let MigrateError::Execute(inner) = e {
+        // The advisory lock wait is bounded by lock_timeout (55P03): another
+        // run holds it.
+        let state = inner
+            .as_database_error()
+            .and_then(|d| d.code())
+            .map(|c| c.into_owned());
+        let reason = if state.as_deref() == Some("55P03") {
+            "locked"
+        } else {
+            "driver"
+        };
+        return failed(reason).with_source(query_error("migrate.run", inner));
+    }
+    if let MigrateError::Dirty(v) = e {
+        return incompatible("dirty", &[v]);
+    }
+    if let MigrateError::VersionMismatch(v) = e {
+        return incompatible("checksum_mismatch", &[v]);
+    }
+    if let MigrateError::VersionMissing(v) = e {
+        return incompatible("db_ahead", &[v]);
+    }
+    if let MigrateError::Source(_) = e {
+        return failed("source");
+    }
+    failed("driver")
+}
+
+#[cfg(test)]
+#[path = "migrate_tests.rs"]
+mod tests;

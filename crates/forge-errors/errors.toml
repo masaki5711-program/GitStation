@@ -401,7 +401,7 @@ severity = "alert"
 user_message_ja = "サーバーが停止しました。管理者に連絡してください。"
 user_message_en = "The server stopped. Contact the administrator."
 user_message_id = "Server berhenti. Hubungi administrator."
-cause = "forge serve could not build its async runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007."
+cause = "forge serve (or another command that needs the async runtime, such as forge db) could not build its runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007."
 diagnosis = "The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time."
 fix = "Address the resource problem (descriptors, memory) and restart; for shutdown_deadline find the long-running requests in the access log."
 runbook = "server-start-failed"
@@ -434,7 +434,7 @@ fix = "Raise the file-descriptor limit above the connection limit, or lower the 
 test = "accept_failure_has_its_own_code"
 
 # ── DB ───────────────────────────────────────────────────────────────────
-# FG-DB-0003 / 0004 are planned for migrations (M1 phase 2, step 3);
+# FG-DB-0003 / 0004: migrations (ADR-0014);
 # FG-DB-0005 is reserved for the Outbox sequencer lag (ADR-0012).
 
 [[error]]
@@ -464,3 +464,31 @@ diagnosis = "The log event carries `query` (a static name of the statement — n
 fix = "For timeouts remove the blocking session or fix the slow plan (EXPLAIN); serialization and deadlock are safe to retry; for constraint and other states fix the caller named by `query`."
 runbook = "db-unavailable"
 test = "a_slow_statement_is_db_query_failed_with_sqlstate_57014"
+
+[[error]]
+code = "FG-DB-0003"
+name = "MigrationFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "データベースの更新に失敗しました。管理者に連絡してください。"
+user_message_en = "The database upgrade failed. Contact the administrator."
+user_message_id = "Pembaruan basis data gagal. Hubungi administrator."
+cause = "forge db migrate could not apply a migration: its SQL failed (the transaction was rolled back, so the version is not recorded), another migration run held the lock past database.lock_timeout_ms, or the migration files could not be read."
+diagnosis = "The log event carries `version` (the failing migration, when known), `reason` (sql_failed, locked, source, driver) and for SQL errors `sqlstate` / `db_message` (data-free states only). `forge db status` shows what is applied and pending; nothing is half-applied because each migration runs in one transaction."
+fix = "Fix the migration in a new release (an applied migration is never edited — ADR-0014), or wait for the other run (locked) and retry `forge db migrate`."
+runbook = "db-migration"
+test = "a_failing_migration_is_migration_failed_and_leaves_no_partial_version"
+
+[[error]]
+code = "FG-DB-0004"
+name = "SchemaIncompatible"
+http_status = 500
+severity = "alert"
+user_message_ja = "サーバーとデータベースの版が一致しません。管理者に連絡してください。"
+user_message_en = "The server and the database schema do not match. Contact the administrator."
+user_message_id = "Versi server dan skema basis data tidak cocok. Hubungi administrator."
+cause = "The database schema does not match the migrations built into this forge binary, so the server refuses to start (or forge db migrate refuses to run): migrations are pending, the database has migrations this binary does not know (it is newer — e.g. after rolling the binary back), an applied migration was edited, or an earlier run left a migration marked unsuccessful."
+diagnosis = "The log event carries `reason` (pending, db_ahead, checksum_mismatch, dirty) and `versions` (the affected migration versions). `forge db status` lists applied, pending and unknown versions without changing anything."
+fix = "pending: run `forge db migrate` (an approved runbook step). db_ahead: deploy the binary that matches the database (migrations are forward-only). checksum_mismatch / dirty: never edit an applied migration — restore the original file from version control and release a new migration instead."
+runbook = "db-migration"
+test = "pending_migrations_are_schema_incompatible"
