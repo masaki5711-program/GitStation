@@ -51,3 +51,102 @@ cause = "`forge explain` was given a code that is not in the registry (typo or a
 diagnosis = "Compare the code with `forge errors list`; check the forge version with `forge --version`."
 fix = "Use a registered code, or upgrade the CLI to the server's version."
 test = "explain_rejects_unknown_code"
+
+# --- GIT: the git subprocess (forge-git) -------------------------------------
+
+[[error]]
+code = "FG-GIT-0001"
+name = "GitUnavailable"
+http_status = 500
+severity = "alert"
+user_message_ja = "Git の処理基盤が利用できません。管理者に連絡してください。"
+user_message_en = "The Git backend is unavailable. Contact the administrator."
+user_message_id = "Layanan Git tidak tersedia. Hubungi administrator."
+cause = "The configured git binary cannot be executed, or its version is older than the minimum forge requires (2.38, for merge-tree --write-tree)."
+diagnosis = "The log event carries `git_bin` and `reason` (`spawn_failed`, `unparseable_version`, or `too_old` with `found`). Run `forge doctor` to check the git path and version."
+fix = "Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point `git.bin` at it, then restart."
+runbook = "git-unavailable"
+test = "version_below_2_38_is_git_unavailable"
+
+[[error]]
+code = "FG-GIT-0002"
+name = "GitTimeout"
+http_status = 504
+severity = "warn"
+user_message_ja = "Git の処理が時間内に終わりませんでした。しばらくしてから再度お試しください。"
+user_message_en = "The Git operation did not finish in time. Try again later."
+user_message_id = "Operasi Git tidak selesai tepat waktu. Coba lagi nanti."
+cause = "A git subprocess exceeded its total or idle timeout and was killed."
+diagnosis = "The log event carries `subcommand`, `timeout_ms` and `kind` (total|idle). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load."
+fix = "Check storage latency and host load; for a legitimately large repository raise `git.timeout_total_ms` for that operation."
+test = "hung_git_is_killed_after_timeout"
+
+[[error]]
+code = "FG-GIT-0003"
+name = "GitProcessFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "Git の処理に失敗しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The Git operation failed. Contact the administrator with the request ID."
+user_message_id = "Operasi Git gagal. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A git subprocess exited with a non-zero status, or could not be spawned or waited on."
+diagnosis = "The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`). Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`."
+fix = "Act on git's stderr: repository corruption (`git fsck`), permissions on the storage root, or disk space."
+runbook = "git-process-failed"
+test = "nonzero_exit_is_git_process_failed"
+
+[[error]]
+code = "FG-GIT-0004"
+name = "GitBusy"
+http_status = 503
+severity = "warn"
+user_message_ja = "Git の処理が混み合っています。しばらくしてから再度お試しください。"
+user_message_en = "The Git backend is busy. Try again later."
+user_message_id = "Layanan Git sedang sibuk. Coba lagi nanti."
+cause = "Every git subprocess slot was in use for longer than the acquire timeout."
+diagnosis = "Check `git.max_concurrency` against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots."
+fix = "Raise `git.max_concurrency` if the host has CPU and IO headroom, or find the operations that hold slots for long."
+test = "concurrency_limit_reports_git_busy"
+
+[[error]]
+code = "FG-GIT-0005"
+name = "InvalidRefName"
+http_status = 400
+severity = "info"
+user_message_ja = "ブランチ名またはタグ名が正しくありません。"
+user_message_en = "The branch or tag name is not valid."
+user_message_id = "Nama branch atau tag tidak valid."
+cause = "A ref name failed git's check-ref-format rules (or forge's extra rule: no component may start with '-')."
+diagnosis = "The log event carries `reason` (which rule failed); the rejected name is not logged in full."
+fix = "Use a name that `git check-ref-format` accepts."
+test = "invalid_ref_names_are_rejected"
+
+# --- REPO: repositories and their storage --------------------------------------
+
+[[error]]
+code = "FG-REPO-0001"
+name = "StoragePathRejected"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリの保存先に問題があります。管理者に連絡してください。"
+user_message_en = "There is a problem with repository storage. Contact the administrator."
+user_message_id = "Terjadi masalah pada penyimpanan repositori. Hubungi administrator."
+cause = "A repository path resolved outside the storage root, through a symlink, or the storage root itself is not a usable directory."
+diagnosis = "The log event carries `repo_id` and `reason` (`outside_root`, `symlink`, `root_not_dir`, `root_symlink`). Inspect the storage root with `forge doctor`."
+fix = "Remove the symlink or misplaced directory under the storage root, or fix `storage.root`; never point the root at a symlink."
+runbook = "repo-storage"
+test = "path_outside_root_is_rejected"
+
+[[error]]
+code = "FG-REPO-0002"
+name = "StorageMissing"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリのデータが見つかりません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The repository data is missing. Contact the administrator with the request ID."
+user_message_id = "Data repositori tidak ditemukan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The database knows the repository but its directory does not exist under the storage root."
+diagnosis = "The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early."
+fix = "Remount the storage volume or restore the repository from backup; then run `forge doctor`."
+runbook = "repo-storage"
+test = "missing_repository_dir_is_storage_missing"

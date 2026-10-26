@@ -14,8 +14,12 @@ path = "src/main.rs"
 [dependencies]
 forge-errors.workspace = true
 forge-core.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
+forge-git.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

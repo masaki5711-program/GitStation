@@ -8,8 +8,12 @@ server-side crate. Depends only on `forge-errors`.
 `telemetry::log_failure(&ForgeError, &RequestId)` — the single way a handled
 failure is logged (once, at the boundary, level by severity).
 
-**Error codes owned**: none yet (domain newtypes `RepoId`, `UserId`,
-`RefName`, `RepoPath` arrive in M1 with their validation codes).
+**Domain types**: `RepoId`, `UserId`, `GroupId`, `ProjectId` (typed i64 ids),
+`RefName::parse` (git check-ref-format rules + no component starting with `-`;
+`branch()`, `tag()`).
+
+**Error codes owned**: FG-GIT-0005 InvalidRefName (`reason` names the failed rule;
+the rejected name is not logged).
 
 **Gotchas**
 - Externally supplied request ids are accepted only if they are short ASCII
