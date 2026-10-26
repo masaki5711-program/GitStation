@@ -1,7 +1,7 @@
 # ADR-0010: 認可のモデルとルートの登録の仕組み
 
 **Date**: 2026-10-26
-**Status**: accepted
+**Status**: accepted（ADR-0015 が拡張: スコープ付きのルートの登録、`Authorized<R>` の証明、`Resource::Transfer` の移動先の型）
 **Deciders**: Masaki Fujikawa（ユーザー）、Claude
 
 ## Context
