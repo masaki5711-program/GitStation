@@ -18,6 +18,8 @@ DB の接続先、プールの大きさ、各種タイムアウトなど、設�
 - 改名前の名前（`FORGE_BIND`）や空の値は、無視せずに失敗にする。
 - 誤りはすべて読み込みの時点で FG-SYS-0002 とし、`config_key` と `reason` を付ける。値が 0 のタイムアウトは不可。マイグレーション中の statement タイムアウトも上限を持つ（既定 10 分。契約 §3-2）。
 - パスワードは `database.password_file`（絶対パス）**だけ**で渡す。URL に書かれたパスワード（`user:pass@` も `?password=` / `passfile` / `sslpassword` も）は拒否する。Unix では、グループや他のユーザーが読めるパスワードファイルも拒否する。
+- URL のクエリで接続先（`host` / `hostaddr` / `port` / `dbname` / `user` / `service`）を上書きすることも拒否する。ログに出る接続先と、実際に接続する先を一致させるため。
+- 本番のサーバーは Linux とする。Windows（開発機）ではパスワードファイルの ACL を検査しない。これは受け入れたリスクとする。
 - 秘密情報の型は `Debug` でも `Display` でも中身を出さない。URL の表示は host / port / dbname だけにする。設定ファイルの構文エラーは位置（行・列）だけをログに出す。toml のエラー文は問題の行を引用するため付けない。
 
 ## Alternatives Considered

@@ -33,6 +33,7 @@
      - `unreadable`: ファイルを読めない
      - `parse`: 設定ファイルの構文の誤り（位置は `line` / `column`。問題の行の本文はログに出さない）
      - `password_in_url`: URL にパスワードを書いている。`database.password_file` に移す
+     - `target_in_query`: URL のクエリに `host` / `hostaddr` / `port` / `dbname` / `user` / `service` がある。接続先は URL の本体に書く
      - `not_absolute`: パスワードファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
 

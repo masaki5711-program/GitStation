@@ -112,6 +112,33 @@ fn a_password_in_the_database_url_is_rejected() {
 }
 
 #[test]
+fn a_query_that_overrides_the_target_is_rejected() {
+    for raw in [
+        "postgres://forge@db-a/forge?host=db-b",
+        "postgres://forge@db-a/forge?HostAddr=10.0.0.9",
+        "postgres://forge@db-a/forge?port=6000",
+        "postgres://forge@db-a/forge?dbname=other",
+        "postgres://forge@db-a/forge?user=postgres",
+        "postgres://forge@db-a/forge?service=prod",
+    ] {
+        let err = load(None, &env(&[("FORGE_DATABASE_URL", raw)])).expect_err(raw);
+        assert_invalid(&err, "database.url", "target_in_query");
+    }
+}
+
+#[test]
+fn an_oversized_or_non_file_password_path_is_config_invalid() {
+    let big = file(&"x".repeat(5000));
+    let path = big.path().to_string_lossy().into_owned();
+    let err = load(None, &env(&[("FORGE_DATABASE_PASSWORD_FILE", &path)])).expect_err("big");
+    assert_invalid(&err, "database.password_file", "invalid");
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().to_string_lossy().into_owned();
+    let err = load(None, &env(&[("FORGE_DATABASE_PASSWORD_FILE", &path)])).expect_err("dir");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{err}");
+}
+
+#[test]
 fn database_url_display_shows_host_port_and_dbname_only() {
     let cfg = load(
         None,

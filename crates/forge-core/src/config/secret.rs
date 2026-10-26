@@ -25,6 +25,14 @@ impl std::fmt::Debug for Secret {
 /// Query parameters through which libpq accepts a password or its file.
 const PASSWORD_PARAMS: &[&str] = &["password", "passfile", "sslpassword"];
 
+/// Query parameters that would replace the host, port, database or user
+/// written in the URL itself.
+const TARGET_PARAMS: &[&str] = &["host", "hostaddr", "port", "dbname", "user", "service"];
+
+/// Upper bound for the password file (a mistaken `/dev/zero` must not
+/// exhaust memory).
+const MAX_PASSWORD_BYTES: u64 = 4096;
+
 /// A validated `postgres://` URL. It never carries a password: the password
 /// comes only from `database.password_file` (ADR-0013).
 pub struct DatabaseUrl {
@@ -47,6 +55,14 @@ impl DatabaseUrl {
             .any(|(k, _)| PASSWORD_PARAMS.iter().any(|p| k.eq_ignore_ascii_case(p)));
         if url.password().is_some() || has_password_param {
             return Err(invalid("database.url", "password_in_url"));
+        }
+        // The driver prefers these over the URL's own parts: the logged
+        // target would no longer be the one connected to.
+        let overrides_target = url
+            .query_pairs()
+            .any(|(k, _)| TARGET_PARAMS.iter().any(|p| k.eq_ignore_ascii_case(p)));
+        if overrides_target {
+            return Err(invalid("database.url", "target_in_query"));
         }
         let host = url
             .host_str()
@@ -102,9 +118,12 @@ impl std::fmt::Debug for DatabaseUrl {
 }
 
 /// Read `database.password_file`: an absolute path, readable only by its
-/// owner on Unix (on Windows the ACL is the operator's responsibility,
-/// see the config-invalid runbook), with the trailing newline trimmed.
+/// owner on Unix (production runs on Linux; on Windows the ACL is the
+/// operator's responsibility, ADR-0013), at most 4 KiB, with the trailing
+/// newline trimmed. The file is opened once; the permission check and the
+/// read use the same handle.
 pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
+    use std::io::Read as _;
     const KEY: &str = "database.password_file";
     if !path.is_absolute() {
         return Err(invalid(KEY, "not_absolute"));
@@ -114,7 +133,8 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
             .with_context("path", path.display())
             .with_source(e)
     };
-    let meta = std::fs::metadata(path).map_err(unreadable)?;
+    let file = std::fs::File::open(path).map_err(unreadable)?;
+    let meta = file.metadata().map_err(unreadable)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -125,9 +145,17 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
                 .with_context("mode", format!("{mode:o}")));
         }
     }
-    #[cfg(not(unix))]
-    let _ = &meta; // only the existence check applies here
-    let text = std::fs::read_to_string(path).map_err(unreadable)?;
+    if !meta.is_file() || meta.len() > MAX_PASSWORD_BYTES {
+        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+    }
+    let mut text = String::new();
+    // `take` also bounds a file that grows after the size check.
+    file.take(MAX_PASSWORD_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(unreadable)?;
+    if text.len() as u64 > MAX_PASSWORD_BYTES {
+        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+    }
     let value = text.trim_end_matches(['\r', '\n']);
     if value.is_empty() {
         return Err(invalid(KEY, "empty"));
