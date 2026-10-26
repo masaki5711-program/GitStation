@@ -1,0 +1,6 @@
+# Production paths deny unwrap/expect/panic (see [workspace.lints.clippy]);
+# tests may use them to fail loudly.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
