@@ -153,11 +153,11 @@ impl StorageRoot {
             .ok_or_else(|| rejected("outside_root").with_context("repo_id", id))?
             .to_path_buf();
 
-        tokio::fs::create_dir_all(&shard)
-            .await
-            .map_err(|e| io_failed("create_shard", e).with_context("repo_id", id))?;
-        // `create_dir_all` follows symlinks: verify what it walked through.
-        self.check_chain(&shard, id)?;
+        // Create `repos/` and the shard one level at a time, verifying each
+        // level before going below it (never follow a planted symlink).
+        for dir in [self.root.join("repos"), shard.clone()] {
+            self.ensure_real_dir(&dir, id).await?;
+        }
         self.ensure_inside(&shard, id)?;
 
         match tokio::fs::symlink_metadata(&path).await {
@@ -201,6 +201,36 @@ impl StorageRoot {
         self.existing(id)
     }
 
+    /// `dir` exists as a real directory afterwards (created if missing); a
+    /// symlink or a file there is rejected, never followed.
+    async fn ensure_real_dir(&self, dir: &Path, id: RepoId) -> Result<(), ForgeError> {
+        for attempt in 0..2 {
+            match tokio::fs::symlink_metadata(dir).await {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(rejected("symlink").with_context("repo_id", id));
+                }
+                Ok(meta) if meta.is_dir() => return Ok(()),
+                Ok(_) => return Err(rejected("not_dir").with_context("repo_id", id)),
+                Err(e) if e.kind() == io::ErrorKind::NotFound && attempt == 0 => {
+                    match tokio::fs::create_dir(dir).await {
+                        // Created, or a concurrent creator won: re-check either way.
+                        Ok(()) => {}
+                        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(e) => {
+                            return Err(io_failed("create_shard", e).with_context("repo_id", id))
+                        }
+                    }
+                }
+                Err(e) => return Err(io_failed("inspect", e).with_context("repo_id", id)),
+            }
+        }
+        Err(io_failed(
+            "create_shard",
+            io::Error::other("directory vanished while being created"),
+        )
+        .with_context("repo_id", id))
+    }
+
     async fn init_into(
         &self,
         git: &Git,
@@ -216,7 +246,19 @@ impl StorageRoot {
             .path(dir)
             .output()
             .await?;
-        let hooks = hooks_path.map(|h| h.display().to_string());
+        // A lossy or relative hooks path would point git at a directory that
+        // does not exist, and the policy hooks would silently never run.
+        let hooks = match hooks_path {
+            None => None,
+            Some(h) => match h.to_str() {
+                Some(s) if h.is_absolute() => Some(s.to_string()),
+                _ => {
+                    return Err(ForgeError::new(ErrorCode::ConfigInvalid)
+                        .with_context("config_key", "git.hooks_path")
+                        .with_context("reason", "must_be_absolute_utf8"))
+                }
+            },
+        };
         let settings = REPO_SETTINGS
             .iter()
             .map(|(k, v)| (*k, (*v).to_string()))

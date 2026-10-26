@@ -15,13 +15,20 @@ phases 9–10.
   - `.config_override(key, value)` — `-c` for this invocation
   - `.repo(git_dir)` — pins `GIT_DIR` (no discovery); `.current_dir(dir)` —
     discovery stops at `dir` (`GIT_CEILING_DIRECTORIES` = its parent)
-  - `.env(GIT_PROTOCOL, ..)`, `.stdin(bytes)`, `.timeout(d)`, `.output().await`
+  - `.git_protocol(value)` — the only caller-set git variable (validated
+    `key=value` pairs); `.stdin(bytes)`, `.timeout(d)`, `.output().await`
+  - crate-internal: `.arg_owned()` (refused at run time if it starts with `-`),
+    `.config_override()` (`-c` is protected config, so values are forge-owned)
 - Environment is cleared and rebuilt: `HOME` = forge-owned,
   `GIT_CONFIG_GLOBAL=<home>/.gitconfig`, `GIT_CONFIG_NOSYSTEM=1`,
-  `GIT_TERMINAL_PROMPT=0`, `LC_ALL=C`; only `PATH`, `SystemRoot`,
-  `TEMP`/`TMP`/`TMPDIR` pass through.
+  `GIT_TERMINAL_PROMPT=0`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_LITERAL_PATHSPECS=1`,
+  `LC_ALL=C`, applied after caller variables so nothing overrides them; only
+  `PATH`, `SystemRoot`, `TEMP`/`TMP`/`TMPDIR` pass through. Without an explicit
+  directory git runs in forge's home.
 - stdin / stdout / stderr are pumped concurrently (no pipe deadlock); stdout is
-  capped (`max_output_bytes`); stderr (bounded, URL credentials redacted) goes
+  capped (`max_output_bytes`; the child is killed as soon as the cap is hit);
+  one deadline covers I/O and the final wait; stderr (bounded; URL userinfo,
+  secret query values and `Authorization:` values redacted) goes
   to the error context for the log only — `GitOutput` exposes stdout only.
 - A global semaphore limits concurrent subprocesses; on timeout the child is
   killed and reaped; each run emits a debug `git.exec` event (subcommand,
@@ -54,6 +61,16 @@ phases 9–10.
   `index-pack`, hooks) need a process group (Unix) / Job Object (Windows) —
   required before the streaming Smart HTTP path (M1 phase 9).
 - No streaming API yet (phase 9) and no idle timeout yet.
+- `Revision::object_id` accepts 40 or 64 hex digits regardless of the
+  repository's object format; callers that compare against an approved SHA
+  must pass the repository's format (before M3 merge / M4 deploy).
+- `--end-of-options` is accepted differently by some subcommands
+  (`update-ref`, `symbolic-ref` take plain operands): add a real-git test for
+  each subcommand phases 9–10 use.
+- On Windows, `git` on `PATH` may be the `cmd\git.exe` launcher; killing it may
+  not kill the real git — configure an absolute path to `mingw64\bin\git.exe`.
+- `command.rs` is ~480 lines (target 400): split `GitConfig` out when the
+  streaming API lands.
 
 **Gotchas**
 - `git check-ref-format` takes no `--`; the oracle test passes names that

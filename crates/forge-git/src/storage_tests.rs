@@ -204,17 +204,58 @@ async fn init_bare_failure_leaves_nothing_behind() {
     assert!(entries.is_empty(), "no repository and no temp dir remain");
 }
 
+#[test]
+fn unreadable_or_unwritable_storage_is_storage_io_failed() {
+    // An OS-level failure that is not "missing" (here: a path the OS refuses
+    // to look up) is an I/O failure, not a path rejection.
+    let err = StorageRoot::open("bad\0root").expect_err("invalid path");
+    assert_eq!(err.code(), ErrorCode::StorageIoFailed);
+    assert!(err.to_string().contains("operation=inspect"), "{err}");
+}
+
 #[tokio::test]
-async fn unreadable_or_unwritable_storage_is_storage_io_failed() {
+async fn a_file_where_repos_dir_belongs_is_rejected_not_followed() {
     let (_d, root) = root();
     let (_h, git) = git();
-    // A file where the `repos` directory must be created: create_dir_all fails
-    // with an I/O error that is not a path rejection.
     std::fs::write(root.path().join("repos"), b"blocking file").expect("write");
     let err = root
         .init_bare(&git, RepoId::new(3), None)
         .await
-        .expect_err("cannot create shard");
-    assert_eq!(err.code(), ErrorCode::StorageIoFailed);
-    assert!(err.to_string().contains("operation=create_shard"), "{err}");
+        .expect_err("repos is a file");
+    assert_eq!(err.code(), ErrorCode::StoragePathRejected);
+    assert!(err.to_string().contains("reason=not_dir"), "{err}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinked_repos_dir_is_rejected_before_anything_is_created_outside() {
+    let (_d, root) = root();
+    let (_h, git) = git();
+    let outside = tempfile::tempdir().expect("outside");
+    std::os::unix::fs::symlink(outside.path(), root.path().join("repos")).expect("symlink");
+    let err = root
+        .init_bare(&git, RepoId::new(3), None)
+        .await
+        .expect_err("symlinked repos");
+    assert_eq!(err.code(), ErrorCode::StoragePathRejected);
+    assert_eq!(
+        std::fs::read_dir(outside.path()).expect("read").count(),
+        0,
+        "nothing created outside the root"
+    );
+}
+
+#[tokio::test]
+async fn relative_hooks_path_is_refused() {
+    let (_d, root) = root();
+    let (_h, git) = git();
+    let err = root
+        .init_bare(&git, RepoId::new(4), Some(Path::new("relative/hooks")))
+        .await
+        .expect_err("relative hooks path");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        root.existing(RepoId::new(4)).is_err(),
+        "nothing was created"
+    );
 }

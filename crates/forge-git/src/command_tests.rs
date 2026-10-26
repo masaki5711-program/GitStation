@@ -4,6 +4,7 @@ use forge_core::RefName;
 use forge_errors::{ErrorCode, Lang};
 
 use super::*;
+use crate::redact::redact;
 
 /// A git handle with a private HOME (never the shared temp dir).
 fn git_with(config: impl FnOnce(&mut GitConfig)) -> (tempfile::TempDir, Git) {
@@ -253,6 +254,56 @@ async fn output_over_cap_is_git_output_too_large() {
     assert_eq!(err.code(), ErrorCode::GitOutputTooLarge);
 }
 
+/// Regression (git-protocol-reviewer, 2026-10-26): a producer that keeps
+/// writing past the cap must be stopped at once — not left blocked on the
+/// undrained pipe until the total timeout, holding a slot.
+#[tokio::test]
+async fn output_over_cap_stops_a_producer_that_keeps_writing() {
+    let (_h, g) = git_with(|c| c.max_output_bytes = 1024);
+    let dir = tempfile::tempdir().expect("repo");
+    repo_with_commit(&g, dir.path()).await;
+    let input = "refs/heads/main\n".repeat(20_000).into_bytes(); // ~1 MB of output
+    let started = std::time::Instant::now();
+    let err = g
+        .command("cat-file")
+        .repo(dir.path().join(".git"))
+        .arg("--batch-check")
+        .stdin(input)
+        .timeout(Duration::from_secs(60))
+        .output()
+        .await
+        .expect_err("over cap");
+    assert_eq!(err.code(), ErrorCode::GitOutputTooLarge);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "stopped promptly, not at the timeout: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn git_protocol_accepts_only_protocol_pairs() {
+    let (_h, g) = git();
+    let ok = g.command("upload-pack").git_protocol("version=2");
+    assert_eq!(ok.envs, [("GIT_PROTOCOL", OsString::from("version=2"))]);
+    for bad in ["", "version=2\nGIT_DIR=/x", "version=2 GIT_DIR=/x", "a;b"] {
+        let cmd = g.command("upload-pack").git_protocol(bad);
+        assert!(cmd.envs.is_empty(), "{bad:?} must be dropped");
+    }
+}
+
+#[tokio::test]
+async fn option_like_generated_value_is_refused() {
+    let (_h, g) = git();
+    let err = g
+        .command("config")
+        .arg_owned("--add")
+        .output()
+        .await
+        .expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::Internal);
+}
+
 #[tokio::test]
 async fn missing_git_binary_is_git_unavailable() {
     let home = tempfile::tempdir().expect("home");
@@ -297,6 +348,8 @@ fn scrubbed_environment_is_explicit() {
         )
     );
     assert_eq!(get("GIT_DIR").as_deref(), Some("/srv/forge/repos/00/1.git"));
+    assert_eq!(get("GIT_NO_REPLACE_OBJECTS").as_deref(), Some("1"));
+    assert_eq!(get("GIT_LITERAL_PATHSPECS").as_deref(), Some("1"));
     for k in envs.keys() {
         assert!(
             !k.starts_with("GIT_")
@@ -304,12 +357,50 @@ fn scrubbed_environment_is_explicit() {
                     "GIT_CONFIG_NOSYSTEM",
                     "GIT_TERMINAL_PROMPT",
                     "GIT_CONFIG_GLOBAL",
+                    "GIT_NO_REPLACE_OBJECTS",
+                    "GIT_LITERAL_PATHSPECS",
                     "GIT_DIR"
                 ]
                 .contains(&k.as_str()),
             "unexpected git variable {k}"
         );
     }
+}
+
+#[test]
+fn pinned_variables_cannot_be_overridden_and_cwd_defaults_to_home() {
+    let (home, g) = git();
+    let mut cmd = g.command("version");
+    // Simulate a future bug that pushes a pinned key through the caller list.
+    cmd.envs.push(("GIT_CONFIG_NOSYSTEM", OsString::from("0")));
+    let built = cmd.build();
+    let std_cmd = built.as_std();
+    let nosystem = std_cmd
+        .get_envs()
+        .filter(|(k, _)| *k == "GIT_CONFIG_NOSYSTEM")
+        .last()
+        .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()));
+    assert_eq!(nosystem.as_deref(), Some("1"), "pinned value wins");
+    assert_eq!(std_cmd.get_current_dir(), Some(home.path()));
+}
+
+#[tokio::test]
+async fn pathspec_magic_is_treated_literally() {
+    let (_h, g) = git();
+    let dir = tempfile::tempdir().expect("repo");
+    repo_with_commit(&g, dir.path()).await;
+    // With magic, ":/" would mean "the whole tree from the top" and match the
+    // commit; literally it is a path that does not exist, so nothing matches.
+    let out = g
+        .command("log")
+        .repo(dir.path().join(".git"))
+        .arg("--format=%H")
+        .revision(&RefName::parse("refs/heads/main").expect("ref"))
+        .path(":/")
+        .output()
+        .await
+        .expect("log");
+    assert_eq!(out.stdout_str().trim(), "");
 }
 
 #[tokio::test]
@@ -339,5 +430,13 @@ fn redact_removes_url_credentials() {
     assert_eq!(
         redact("ssh://git.example/x and https://a@b/c"),
         "ssh://git.example/x and https://***@b/c"
+    );
+    assert_eq!(
+        redact("GET https://h/api?private_token=abc123&page=2 failed"),
+        "GET https://h/api?private_token=***&page=2 failed"
+    );
+    assert_eq!(
+        redact("http.extraheader: Authorization: Bearer abc.def"),
+        "http.extraheader: Authorization: ***"
     );
 }

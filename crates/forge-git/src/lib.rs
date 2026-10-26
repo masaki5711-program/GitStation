@@ -7,9 +7,13 @@
 //!   creates bare repositories.
 
 mod command;
+mod process;
+mod redact;
+mod revision;
 pub mod storage;
 pub mod version;
 
-pub use command::{Git, GitCommand, GitConfig, GitOutput, Revision};
+pub use command::{Git, GitCommand, GitConfig, GitOutput};
+pub use revision::Revision;
 pub use storage::StorageRoot;
 pub use version::GitVersion;

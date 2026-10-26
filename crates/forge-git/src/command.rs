@@ -27,9 +27,12 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use forge_core::RefName;
 use forge_errors::{ErrorCode, ForgeError};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+use crate::process::{ignore_broken_pipe, read_capped, reap};
+use crate::redact::stderr_head;
+pub use crate::revision::Revision;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
 /// How git is run. Loaded from configuration in `forge serve` / `worker`.
@@ -114,34 +117,9 @@ impl Git {
             stdin: None,
             #[cfg(test)]
             hold_stdin: false,
+            option_like_value: false,
             timeout: self.config.timeout_total,
         }
-    }
-}
-
-/// A revision operand: a validated ref name or a full object id.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Revision(String);
-
-impl Revision {
-    /// A full hex object id (40 for SHA-1, 64 for SHA-256).
-    pub fn object_id(hex: &str) -> Result<Self, ForgeError> {
-        let ok = matches!(hex.len(), 40 | 64) && hex.bytes().all(|b| b.is_ascii_hexdigit());
-        if ok {
-            Ok(Self(hex.to_ascii_lowercase()))
-        } else {
-            Err(ForgeError::new(ErrorCode::InvalidRefName).with_context("reason", "bad_object_id"))
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&RefName> for Revision {
-    fn from(r: &RefName) -> Self {
-        Self(r.as_str().to_string())
     }
 }
 
@@ -161,6 +139,8 @@ pub struct GitCommand {
     /// Keep stdin open without writing (tests: simulate a stalled client).
     #[cfg(test)]
     hold_stdin: bool,
+    /// Set when a forge-generated value starts with `-` (refused at run time).
+    option_like_value: bool,
     timeout: Duration,
 }
 
@@ -181,7 +161,13 @@ impl GitCommand {
     /// forge derived itself). Crate-internal on purpose.
     #[must_use]
     pub(crate) fn arg_owned(mut self, arg: impl AsRef<OsStr>) -> Self {
-        self.options.push(arg.as_ref().to_os_string());
+        let arg = arg.as_ref();
+        // A forge-generated value must never look like an option; `output()`
+        // refuses to run such a command instead of passing it to git.
+        if arg.to_string_lossy().starts_with('-') {
+            self.option_like_value = true;
+        }
+        self.options.push(arg.to_os_string());
         self
     }
 
@@ -200,9 +186,17 @@ impl GitCommand {
     }
 
     /// `git -c key=value` for this invocation only (e.g. forcing
-    /// `core.hooksPath` on every receive-pack).
+    /// `core.hooksPath` on every receive-pack). Crate-internal: `-c` counts as
+    /// protected config (hooks, pack-objects hook), so values are forge-owned.
     #[must_use]
-    pub fn config_override(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first production caller: receive-pack, M1 phase 10"
+        )
+    )]
+    pub(crate) fn config_override(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
         self.config.push((key, value.as_ref().to_os_string()));
         self
     }
@@ -225,10 +219,20 @@ impl GitCommand {
         self
     }
 
-    /// An explicitly intended git variable (e.g. `GIT_PROTOCOL`).
+    /// Pass the client's `Git-Protocol` header as `GIT_PROTOCOL` (the only
+    /// git variable a caller may set). Anything but `key[=value]` pairs
+    /// separated by `:` (e.g. `version=2`) is dropped, so a client cannot
+    /// smuggle other settings.
     #[must_use]
-    pub fn env(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
-        self.envs.push((key, value.as_ref().to_os_string()));
+    pub fn git_protocol(mut self, value: &str) -> Self {
+        let valid = !value.is_empty()
+            && value.len() <= 256
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"=:._-".contains(&b));
+        if valid {
+            self.envs.push(("GIT_PROTOCOL", OsString::from(value)));
+        }
         self
     }
 
@@ -284,26 +288,33 @@ impl GitCommand {
                 cmd.env(key, v);
             }
         }
+        // Caller-provided variables first (only GIT_PROTOCOL can get here);
+        // forge's pinned variables are applied after, so nothing overrides them.
+        for (k, v) in &self.envs {
+            cmd.env(k, v);
+        }
         cmd.env("HOME", &config.home)
             .env("GIT_CONFIG_GLOBAL", config.home.join(".gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
+            // Replace refs could make a reviewed SHA show other content.
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            // Pathspec magic (`:/`, `:(glob)`) could escape a scoped path.
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .env("LC_ALL", "C")
             .env("LANG", "C");
+        // Without an explicit directory git runs in forge's own home, never in
+        // the server's inherited working directory.
+        let cwd = self.cwd.as_deref().unwrap_or(&config.home);
         if let Some(dir) = &self.git_dir {
             cmd.env("GIT_DIR", dir);
-        } else if let Some(parent) = self.cwd.as_deref().and_then(Path::parent) {
+        } else if let Some(parent) = cwd.parent() {
             // Ceilings are directories git must not move *up into*: stop at the
             // working directory itself.
             cmd.env("GIT_CEILING_DIRECTORIES", parent);
         }
-        for (k, v) in &self.envs {
-            cmd.env(k, v);
-        }
         cmd.args(self.argv());
-        if let Some(dir) = &self.cwd {
-            cmd.current_dir(dir);
-        }
+        cmd.current_dir(cwd);
         cmd.stdin(if self.wants_stdin() {
             Stdio::piped()
         } else {
@@ -339,6 +350,12 @@ impl GitCommand {
     /// reaped), stdout over the cap → `FG-GIT-0006`, no free slot → `FG-GIT-0004`,
     /// binary not runnable → `FG-GIT-0001`.
     pub async fn output(mut self) -> Result<GitOutput, ForgeError> {
+        if self.option_like_value {
+            // A forge bug, never user input (user input cannot reach arg_owned).
+            return Err(self
+                .fail(ErrorCode::Internal)
+                .with_context("reason", "option_like_generated_value"));
+        }
         let git = self.git.clone(); // clone: Arc handle; `self` is used mutably below
         let config = git.config();
         let _permit = match tokio::time::timeout(
@@ -354,6 +371,8 @@ impl GitCommand {
         };
 
         let started = Instant::now();
+        // One deadline for the whole run (I/O and the final wait together).
+        let deadline = tokio::time::Instant::now() + self.timeout;
         let mut child = self.build().spawn().map_err(|e| {
             self.fail(ErrorCode::GitUnavailable)
                 .with_context("reason", "spawn_failed")
@@ -385,20 +404,27 @@ impl GitCommand {
             }
             Ok(())
         };
-        let io = async {
-            tokio::join!(
-                write,
-                read_capped(stdout, max_out),
-                read_capped(stderr, MAX_STDERR_BYTES)
-            )
+        let child_ref = &mut child;
+        let io = async move {
+            let out = async {
+                let r = read_capped(stdout, max_out).await;
+                if matches!(r, Ok((_, true))) {
+                    // Over the cap: stop git now. Otherwise it blocks writing to
+                    // the undrained pipe, stderr never closes and the run would
+                    // wait for the full timeout while holding a slot.
+                    let _ = child_ref.start_kill(); // ignore: reaped below
+                }
+                r
+            };
+            tokio::join!(write, out, read_capped(stderr, MAX_STDERR_BYTES))
         };
 
-        let Ok((write_res, out_res, err_res)) = tokio::time::timeout(self.timeout, io).await else {
+        let Ok((write_res, out_res, err_res)) = tokio::time::timeout_at(deadline, io).await else {
             reap(&mut child).await;
             return Err(self.timed_out());
         };
         let (stderr_bytes, _) = err_res.unwrap_or_default();
-        let stderr_head = redact(&stderr_head(&stderr_bytes));
+        let stderr_head = stderr_head(&stderr_bytes);
 
         let (stdout_bytes, overflow) = match out_res {
             Ok(r) => r,
@@ -414,7 +440,7 @@ impl GitCommand {
                 .with_context("max_output_bytes", max_out));
         }
 
-        let status = match tokio::time::timeout(self.timeout, child.wait()).await {
+        let status = match tokio::time::timeout_at(deadline, child.wait()).await {
             Ok(Ok(status)) => status,
             Ok(Err(e)) => {
                 return Err(self
@@ -452,77 +478,6 @@ impl GitCommand {
             stdout: stdout_bytes,
         })
     }
-}
-
-/// git may exit before reading all of stdin; its exit status (and stderr)
-/// then explains the failure better than the pipe error.
-fn ignore_broken_pipe(r: io::Result<()>) -> io::Result<()> {
-    match r {
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        other => other,
-    }
-}
-
-/// Read up to `cap` bytes; returns `(bytes, overflowed)`.
-async fn read_capped<R: AsyncRead + Unpin>(
-    reader: Option<R>,
-    cap: usize,
-) -> io::Result<(Vec<u8>, bool)> {
-    let Some(reader) = reader else {
-        return Ok((Vec::new(), false));
-    };
-    let mut buf = Vec::new();
-    let limit = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
-    reader.take(limit).read_to_end(&mut buf).await?;
-    let overflow = buf.len() > cap;
-    buf.truncate(cap);
-    Ok((buf, overflow))
-}
-
-/// Kill and reap a child we are abandoning (bounded wait).
-async fn reap(child: &mut tokio::process::Child) {
-    // start_kill fails only if the child already exited; the wait observes it.
-    let _ = child.start_kill(); // ignore: outcome observed by the wait below
-    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await; // ignore: best-effort reap after kill
-}
-
-/// The first lines of stderr for the log (bounded).
-fn stderr_head(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let mut head: String = text.lines().take(20).collect::<Vec<_>>().join(" | ");
-    if head.len() > 2000 {
-        let mut cut = 2000;
-        while !head.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        head.truncate(cut);
-        head.push('…');
-    }
-    head
-}
-
-/// Remove `user:password@` from URLs (git prints remote URLs in errors).
-fn redact(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(idx) = rest.find("://") {
-        let (before, after) = rest.split_at(idx + 3);
-        out.push_str(before);
-        let end = after
-            .find(|c: char| c == '/' || c.is_whitespace())
-            .unwrap_or(after.len());
-        let (authority, tail) = after.split_at(end);
-        match authority.rfind('@') {
-            Some(at) => {
-                out.push_str("***@");
-                out.push_str(authority.get(at + 1..).unwrap_or_default());
-            }
-            None => out.push_str(authority),
-        }
-        rest = tail;
-    }
-    out.push_str(rest);
-    out
 }
 
 #[cfg(test)]
