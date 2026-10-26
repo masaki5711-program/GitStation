@@ -1,12 +1,14 @@
 //! `forge` — operator CLI and (from M1) server entry point.
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use forge_core::telemetry::{self, LogFormat};
 use forge_core::RequestId;
-use forge_errors::{ErrorCode, ForgeError, Lang};
+use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
+mod admin;
 mod explain;
 
 #[derive(Parser)]
@@ -31,6 +33,23 @@ enum Command {
         #[command(subcommand)]
         command: ErrorsCommand,
     },
+    /// Operator commands (read-only).
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommand {
+    /// Print where a repository is stored (derived from its id) and whether it exists.
+    RepoPath {
+        /// The repository id.
+        repo_id: i64,
+        /// Storage root (default: $FORGE_STORAGE_ROOT).
+        #[arg(long, env = "FORGE_STORAGE_ROOT")]
+        storage_root: std::path::PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -46,17 +65,34 @@ fn main() -> ExitCode {
     telemetry::init(LogFormat::Pretty, "warn");
 
     let result = match cli.command {
-        Command::Explain { code } => explain::explain(&code).map(|text| print!("{text}")),
+        Command::Explain { code } => explain::explain(&code),
         Command::Errors {
             command: ErrorsCommand::List,
-        } => {
-            print!("{}", explain::list());
-            Ok(())
-        }
+        } => Ok(explain::list()),
+        Command::Admin {
+            command:
+                AdminCommand::RepoPath {
+                    repo_id,
+                    storage_root,
+                },
+        } => admin::repo_path(&storage_root, repo_id),
     };
-    match result {
+    match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => report(&err, &request_id, lang),
+    }
+}
+
+/// Write the command output. A closed pipe (`forge errors list | head`) is
+/// not a failure; any other write error is reported, never a panic.
+fn emit(text: &str) -> Result<(), ForgeError> {
+    let mut out = std::io::stdout().lock();
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("operation", "write_stdout")
+            .with_source(e)),
     }
 }
 
@@ -69,9 +105,10 @@ fn report(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
         err.code(),
         request_id_label(lang)
     );
-    match err.code() {
-        ErrorCode::UnknownErrorCode => ExitCode::from(2),
-        ErrorCode::Internal | ErrorCode::ConfigInvalid => ExitCode::FAILURE,
+    // Exit 2 for an expected client-side condition (wrong input), 1 otherwise.
+    match err.code().severity() {
+        Severity::Info => ExitCode::from(2),
+        Severity::Warn | Severity::Alert => ExitCode::FAILURE,
     }
 }
 

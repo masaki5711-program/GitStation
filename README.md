@@ -15,7 +15,8 @@ Claude Code はそこで起動します。
 | パス | 内容 |
 |---|---|
 | `crates/forge-errors` | エラー台帳 `errors.toml` と、そこから生成するエラー型・カタログ |
-| `crates/forge-core` | 共通の基盤（問い合わせ番号 `RequestId`、ログ設定） |
+| `crates/forge-core` | 共通の基盤（ID の型、`RefName`、問い合わせ番号 `RequestId`、ログ設定） |
+| `crates/forge-git` | git の実行（唯一のラッパー）、バージョンの確認、リポジトリの保存先 |
 | `crates/forge-cli` | `forge` コマンド（`explain`、`errors list`。M1 以降 `serve`、`doctor`、`diag`） |
 | `docs/errors/` | エラーカタログ（**自動生成**。手で編集しない） |
 | `docs/adr/` | 設計判断の記録 |

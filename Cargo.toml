@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-cli"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 forge-errors = { path = "crates/forge-errors" }
 forge-core = { path = "crates/forge-core" }
+forge-git = { path = "crates/forge-git" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "2"
@@ -19,6 +20,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-util", "sync", "fs", "net", "signal"] }
+sha2 = "0.10"
+tempfile = "3"
+proptest = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
