@@ -1,6 +1,9 @@
 //! The inputs of an authorization decision. Everything `authorize()` needs is
 //! loaded into these values beforehand (memberships, effective roles, token
 //! scopes, ref protection), so the decision itself is a pure function.
+//!
+//! Inputs fail closed: a `Principal` cannot be built without stating how it
+//! authenticated and whether the account is active.
 
 use forge_core::UserId;
 
@@ -37,6 +40,9 @@ pub enum Scope {
     ReadApi,
     /// REST API reads and writes (implies `ReadApi`).
     Api,
+    /// Lets an administrator's token use administrator rights. Without it a
+    /// token of an administrator acts as a normal user.
+    Admin,
 }
 
 impl Scope {
@@ -46,6 +52,7 @@ impl Scope {
             Scope::WriteRepository => "write_repository",
             Scope::ReadApi => "read_api",
             Scope::Api => "api",
+            Scope::Admin => "admin",
         }
     }
 
@@ -59,35 +66,71 @@ impl Scope {
     }
 }
 
-/// Who is asking.
+/// How the caller authenticated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// Interactive sign-in: every scope.
+    Session,
+    /// Personal access token limited to these scopes.
+    Token(Vec<Scope>),
+}
+
+/// Who is asking. Built only through the constructors, which take every
+/// security-relevant fact explicitly (no permissive defaults).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Principal {
-    /// `None` = no credentials (forge has no anonymous access).
-    pub user: Option<UserId>,
-    pub is_admin: bool,
-    /// `false` for disabled or locked accounts.
-    pub active: bool,
-    /// `None` = interactive session (all scopes); `Some` = personal access token.
-    pub token_scopes: Option<Vec<Scope>>,
+    user: Option<UserId>,
+    is_admin: bool,
+    active: bool,
+    credential: Credential,
 }
 
 impl Principal {
+    /// No credentials (forge has no anonymous access; only public actions pass).
     pub fn anonymous() -> Self {
         Self {
             user: None,
             is_admin: false,
-            active: true,
-            token_scopes: None,
+            active: false,
+            credential: Credential::Session,
         }
     }
 
-    pub fn user(id: UserId) -> Self {
+    /// A signed-in user. `active` is `false` for disabled or locked accounts.
+    pub fn authenticated(
+        user: UserId,
+        is_admin: bool,
+        active: bool,
+        credential: Credential,
+    ) -> Self {
         Self {
-            user: Some(id),
-            is_admin: false,
-            active: true,
-            token_scopes: None,
+            user: Some(user),
+            is_admin,
+            active,
+            credential,
         }
+    }
+
+    pub fn user(&self) -> Option<UserId> {
+        self.user
+    }
+
+    pub fn active(&self) -> bool {
+        self.active
+    }
+
+    pub fn credential(&self) -> &Credential {
+        &self.credential
+    }
+
+    /// Administrator rights in effect: an administrator in a session, or with
+    /// a token that carries the `admin` scope.
+    pub fn admin_rights(&self) -> bool {
+        self.is_admin
+            && match &self.credential {
+                Credential::Session => true,
+                Credential::Token(scopes) => scopes.contains(&Scope::Admin),
+            }
     }
 }
 
@@ -120,11 +163,44 @@ pub enum RefUpdate {
     Delete,
 }
 
+/// The namespace of a pushed ref.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefKind {
+    /// `refs/heads/*`
+    Branch,
+    /// `refs/tags/*`
+    Tag,
+    /// Anything else (`refs/merge-requests/*`, `refs/replace/*`, `refs/meta/*`,
+    /// …): owned by forge, never pushed by clients.
+    Reserved,
+}
+
 /// Protection that applies to the ref being pushed (`None` = unprotected).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefProtection {
     /// Minimum role allowed to push (create / fast-forward).
     pub push_min_role: Role,
+}
+
+/// Where a membership is changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipScope {
+    Project(ProjectView),
+    /// The caller's effective role on the group.
+    Group {
+        role: Option<Role>,
+    },
+}
+
+/// What is done to one membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembershipChange {
+    /// Add a new member with this role.
+    Add(Role),
+    /// Change a member whose current role is `from` to `to`.
+    Change { from: Role, to: Role },
+    /// Remove a member whose current role is `from`.
+    Remove { from: Role },
 }
 
 /// What the action acts on.
@@ -144,6 +220,7 @@ pub enum Resource {
     /// One ref update in a push.
     Ref {
         project: ProjectView,
+        kind: RefKind,
         update: RefUpdate,
         protection: Option<RefProtection>,
     },
@@ -153,10 +230,10 @@ pub enum Resource {
         source: ProjectView,
         target_role: Option<Role>,
     },
-    /// Granting `granting` on a project or group where the caller has `role`.
+    /// Changing one membership.
     Membership {
-        role: Option<Role>,
-        granting: Role,
+        scope: MembershipScope,
+        change: MembershipChange,
     },
     /// A personal access token owned by `owner`.
     Token {

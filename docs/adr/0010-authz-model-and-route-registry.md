@@ -41,3 +41,27 @@
 
 ### Risks
 - 実効ロールの計算の誤り → マトリクスのテストで祖先のグループの所属を含むケースを検証する
+
+## Amendment (2026-10-26, after the first review of M1 phase 5)
+
+The independent review (authz-matrix-auditor, security-reviewer, rust-reviewer,
+pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
+
+- Signature: `authorize(&Principal, Action, &Resource) -> Result<(), ForgeError>`.
+  `Principal` is built only through `Principal::authenticated(user, is_admin,
+  active, Credential)` / `Principal::anonymous()` — no permissive defaults.
+  `Credential` is `Session` or `Token(scopes)`.
+- The 404 for resources the caller cannot see is **`FG-REPO-0005`**
+  (`FG-REPO-0001` is `StoragePathRejected`). Another user's token is also 404.
+- An administrator's **token** carries administrator rights only with the
+  `admin` scope.
+- **Tokens never mint tokens** (`TokenCreate` needs an interactive session).
+- Membership changes carry the scope (project view or group role) and the
+  change (`Add` / `Change { from, to }` / `Remove { from }`); the caller may not
+  act on a role above their own — neither the granted role nor the member's
+  current role. Project-scoped membership goes through the visibility check.
+- Pushes carry the ref kind; refs outside `refs/heads/` and `refs/tags/` are
+  rejected for everyone (`FG-GIT-0010`).
+- The matrix lives in `crates/forge-auth/src/matrix_rows.rs` (data) and
+  `matrix.rs` (types and the public summary); `Action::ALL` is generated with
+  the enum by one macro.

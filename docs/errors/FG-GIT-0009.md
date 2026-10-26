@@ -20,7 +20,7 @@ A push would delete a protected ref; protected refs cannot be deleted by push.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and `protection`.
+The log event carries `action` and `protection` (the protection's minimum push role).
 
 ## 対処 (fix)
 

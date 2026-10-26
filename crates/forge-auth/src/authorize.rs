@@ -5,15 +5,22 @@
 //! 1. public actions are allowed;
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
 //! 3. project visibility → `FG-REPO-0005` (404, no existence leak) and
-//!    pending deletion → `FG-REPO-0006`;
+//!    pending deletion → `FG-REPO-0006` (restore excepted);
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
-//! 5. role / ownership → `FG-AUTH-0003` (administrators pass this step);
-//! 6. ref protection → `FG-GIT-0007/0008/0009` (applies to administrators too).
+//! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
+//!    carries administrator rights only with the `admin` scope);
+//! 6. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
+//!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
+//!    administrators, and `FG-GIT-0008` below the minimum push role
+//!    (administrators pass the minimum role).
 
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
-use crate::model::{Principal, ProjectView, RefUpdate, Resource, Role, Visibility};
+use crate::model::{
+    Credential, MembershipChange, MembershipScope, Principal, ProjectView, RefKind, RefUpdate,
+    Resource, Role, Visibility,
+};
 
 /// Decide whether `principal` may perform `action` on `resource`.
 /// `Ok(())` = allowed; `Err` carries the code and safe context for the log.
@@ -27,16 +34,17 @@ pub fn authorize(
     if action.is_public() {
         return Ok(());
     }
-    let Some(user) = principal.user else {
+    let Some(user) = principal.user() else {
         return Err(deny(ErrorCode::Unauthenticated));
     };
-    if !principal.active {
+    if !principal.active() {
         return Err(deny(ErrorCode::AccountDisabled));
     }
+    let admin = principal.admin_rights();
 
     // Visibility before anything else that could reveal existence.
     if let Some(project) = project_of(resource) {
-        if !can_see(principal, project) {
+        if !(admin || can_see(project)) {
             return Err(deny(ErrorCode::NotFound).with_context("reason", "not_visible"));
         }
         if project.pending_deletion && action != Action::ProjectRestore {
@@ -44,7 +52,9 @@ pub fn authorize(
         }
     }
 
-    if let (Some(scopes), Some(required)) = (&principal.token_scopes, action.required_scope()) {
+    if let (Credential::Token(scopes), Some(required)) =
+        (principal.credential(), action.required_scope())
+    {
         if !scopes.iter().any(|s| s.satisfies(required)) {
             let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
             return Err(deny(ErrorCode::InsufficientScope)
@@ -53,7 +63,6 @@ pub fn authorize(
         }
     }
 
-    let admin = principal.is_admin;
     let need = |required: Role, actual: Option<Role>| -> Result<(), ForgeError> {
         if admin || actual.is_some_and(|r| r >= required) {
             Ok(())
@@ -70,6 +79,14 @@ pub fn authorize(
             Err(deny(ErrorCode::Forbidden).with_context("required_role", "admin"))
         }
     };
+    // Another user's token is answered like a missing one (no id oracle).
+    let own_token = |owner| -> Result<(), ForgeError> {
+        if owner == user {
+            Ok(())
+        } else {
+            Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_token"))
+        }
+    };
     // A resource of the wrong shape for the action is a programming error in
     // the caller; deny rather than guess.
     let wrong_resource = || {
@@ -79,6 +96,7 @@ pub fn authorize(
     };
 
     match (action, resource) {
+        // Public actions returned above; kept for exhaustiveness.
         (Action::Health, _) => Ok(()),
 
         (Action::RepoRead | Action::ProjectRead, Resource::Project(p)) => {
@@ -89,23 +107,28 @@ pub fn authorize(
             Action::RepoPush,
             Resource::Ref {
                 project,
+                kind,
                 update,
                 protection,
             },
         ) => {
             need(Role::Developer, project.role)?;
+            if *kind == RefKind::Reserved {
+                return Err(deny(ErrorCode::ReservedRefNamespace));
+            }
             let Some(protection) = protection else {
                 return Ok(());
             };
+            let protected =
+                |code| deny(code).with_context("protection", protection.push_min_role.as_str());
             match update {
-                RefUpdate::Force => Err(deny(ErrorCode::ProtectedRefForcePush)),
-                RefUpdate::Delete => Err(deny(ErrorCode::ProtectedRefDeletion)),
+                RefUpdate::Force => Err(protected(ErrorCode::ProtectedRefForcePush)),
+                RefUpdate::Delete => Err(protected(ErrorCode::ProtectedRefDeletion)),
                 RefUpdate::Create | RefUpdate::FastForward => {
-                    let ok = admin || project.role.is_some_and(|r| r >= protection.push_min_role);
-                    if ok {
+                    if admin || project.role.is_some_and(|r| r >= protection.push_min_role) {
                         Ok(())
                     } else {
-                        Err(deny(ErrorCode::ProtectedRefPushNotAllowed)
+                        Err(protected(ErrorCode::ProtectedRefPushNotAllowed)
                             .with_context("required_role", protection.push_min_role.as_str())
                             .with_context("actual_role", project.role.map_or("none", Role::as_str)))
                     }
@@ -141,15 +164,27 @@ pub fn authorize(
             need(Role::Owner, p.role)
         }
 
-        (Action::MemberManage, Resource::Membership { role, granting }) => {
-            need(Role::Maintainer, *role)?;
-            // Nobody grants above their own role; Owner rows need an Owner.
-            if admin || role.is_some_and(|r| *granting <= r) {
+        (Action::MemberManage, Resource::Membership { scope, change }) => {
+            let caller = match scope {
+                MembershipScope::Project(p) => p.role,
+                MembershipScope::Group { role } => *role,
+            };
+            need(Role::Maintainer, caller)?;
+            // Nobody acts on a role above their own: neither the role being
+            // granted nor the member's current role (a Maintainer cannot
+            // demote or remove an Owner).
+            let highest = match change {
+                MembershipChange::Add(to) => *to,
+                MembershipChange::Change { from, to } => (*from).max(*to),
+                MembershipChange::Remove { from } => *from,
+            };
+            if admin || caller.is_some_and(|r| highest <= r) {
                 Ok(())
             } else {
                 Err(deny(ErrorCode::Forbidden)
-                    .with_context("reason", "grant_above_own_role")
-                    .with_context("granting", granting.as_str()))
+                    .with_context("reason", "above_own_role")
+                    .with_context("required_role", highest.as_str())
+                    .with_context("actual_role", caller.map_or("none", Role::as_str)))
             }
         }
 
@@ -160,18 +195,20 @@ pub fn authorize(
             need(Role::Owner, *role)
         }
 
-        (Action::TokenCreate | Action::TokenList, Resource::Token { owner }) => {
-            if *owner == user {
-                Ok(())
-            } else {
-                Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_token"))
+        (Action::TokenCreate, Resource::Token { owner }) => {
+            // A token never mints tokens: a leaked token could otherwise
+            // widen its scopes and outlive its own revocation.
+            if matches!(principal.credential(), Credential::Token(_)) {
+                return Err(deny(ErrorCode::Forbidden).with_context("reason", "token_cannot_mint"));
             }
+            own_token(*owner)
         }
+        (Action::TokenList, Resource::Token { owner }) => own_token(*owner),
         (Action::TokenRevoke, Resource::Token { owner }) => {
-            if admin || *owner == user {
+            if admin {
                 Ok(())
             } else {
-                Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_token"))
+                own_token(*owner)
             }
         }
 
@@ -183,6 +220,9 @@ pub fn authorize(
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
 
+        // Every other combination: the resource does not fit the action.
+        // Both sides are listed exhaustively so a new Action *or* a new
+        // Resource variant is a compile error here until it is decided.
         (
             Action::RepoRead
             | Action::RepoPush
@@ -205,7 +245,14 @@ pub fn authorize(
             | Action::UserDisable
             | Action::AuditRead
             | Action::Metrics,
-            _,
+            Resource::Instance
+            | Resource::Group { .. }
+            | Resource::Namespace { .. }
+            | Resource::Project(_)
+            | Resource::Ref { .. }
+            | Resource::Transfer { .. }
+            | Resource::Membership { .. }
+            | Resource::Token { .. },
         ) => wrong_resource(),
     }
 }
@@ -216,18 +263,25 @@ fn project_of(resource: &Resource) -> Option<&ProjectView> {
         Resource::Project(p) => Some(p),
         Resource::Ref { project, .. } => Some(project),
         Resource::Transfer { source, .. } => Some(source),
-        Resource::Instance
+        Resource::Membership {
+            scope: MembershipScope::Project(p),
+            ..
+        } => Some(p),
+        Resource::Membership {
+            scope: MembershipScope::Group { .. },
+            ..
+        }
+        | Resource::Instance
         | Resource::Group { .. }
         | Resource::Namespace { .. }
-        | Resource::Membership { .. }
         | Resource::Token { .. } => None,
     }
 }
 
-/// Members see their projects; every signed-in user sees internal ones;
-/// administrators see everything.
-fn can_see(principal: &Principal, p: &ProjectView) -> bool {
-    principal.is_admin || p.role.is_some() || p.visibility == Visibility::Internal
+/// Members see their projects; every signed-in user sees internal ones.
+/// (Administrator rights are checked by the caller.)
+fn can_see(p: &ProjectView) -> bool {
+    p.role.is_some() || p.visibility == Visibility::Internal
 }
 
 /// The role that applies to reading: on an internal project every signed-in

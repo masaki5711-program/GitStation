@@ -20,7 +20,7 @@ The caller can see the resource but their role is below what the action requires
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action`, `required_role` and `actual_role`. Compare with the permission matrix (`forge-auth` `matrix.rs`).
+The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership changes, `foreign_namespace`, `token_cannot_mint`). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope.
 
 ## 対処 (fix)
 

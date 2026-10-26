@@ -20,7 +20,7 @@ A push would rewrite (non-fast-forward) a protected ref. In M1 no role, includin
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and the protected ref pattern in `protection`.
+The log event carries `action` and `protection` (the protection's minimum push role).
 
 ## 対処 (fix)
 

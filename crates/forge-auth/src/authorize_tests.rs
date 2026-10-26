@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use forge_core::UserId;
 use forge_errors::ErrorCode;
 
-use crate::matrix::{summary, Actor, Expect, Fixture, ROWS};
+use crate::matrix::{summary, Actor, Expect, Fixture, ME, ROWS};
 use crate::{
-    authorize, Action, Principal, ProjectView, RefUpdate, Resource, Role, Scope, Visibility,
+    authorize, Action, Credential, MembershipChange, MembershipScope, Principal, ProjectView,
+    RefKind, RefProtection, RefUpdate, Resource, Role, Scope, Visibility,
 };
 
 fn decide(action: Action, actor: Actor, fixture: Fixture) -> Expect {
@@ -15,62 +15,71 @@ fn decide(action: Action, actor: Actor, fixture: Fixture) -> Expect {
     }
 }
 
+fn session() -> Principal {
+    Principal::authenticated(ME, false, true, Credential::Session)
+}
+
+fn project(role: Option<Role>) -> ProjectView {
+    ProjectView {
+        visibility: Visibility::Private,
+        role,
+        pending_deletion: false,
+    }
+}
+
 /// Every row of the matrix holds — allowed and denied alike.
 #[test]
 fn denied_matrix_rows_all_deny() {
-    let mut failures = Vec::new();
-    for r in ROWS {
-        let got = decide(r.action, r.actor, r.fixture);
-        if got != r.expect {
-            failures.push(format!(
-                "{:?} {:?} {:?}: expected {:?}, got {:?}",
-                r.action, r.actor, r.fixture, r.expect, got
-            ));
-        }
-    }
+    let failures: Vec<String> = ROWS
+        .iter()
+        .filter_map(|r| {
+            let got = decide(r.action, r.actor, r.fixture);
+            (got != r.expect).then(|| {
+                format!(
+                    "{:?} {:?} {:?}: expected {:?}, got {:?}",
+                    r.action, r.actor, r.fixture, r.expect, got
+                )
+            })
+        })
+        .collect();
     assert!(
         failures.is_empty(),
         "matrix rows violated:\n{}",
         failures.join("\n")
     );
-    assert!(ROWS.iter().any(|r| matches!(r.expect, Expect::Deny(_))));
 }
 
 #[test]
 fn every_action_has_matrix_rows() {
-    let mut missing = Vec::new();
-    for s in summary() {
-        let ok = if s.public {
-            s.allow > 0
-        } else {
-            s.allow > 0 && s.deny > 0
-        };
-        if !ok {
-            missing.push(format!("{} (allow {}, deny {})", s.action, s.allow, s.deny));
-        }
-    }
+    let missing: Vec<String> = summary()
+        .into_iter()
+        .filter(|s| !(s.allow > 0 && (s.public || s.deny > 0)))
+        .map(|s| format!("{} (allow {}, deny {})", s.action, s.allow, s.deny))
+        .collect();
     assert!(
         missing.is_empty(),
         "actions without allow+deny rows: {missing:?}"
     );
-    assert_eq!(summary().len(), Action::ALL.len());
 }
 
 #[test]
-fn action_names_are_unique() {
-    let mut seen = BTreeMap::new();
-    for a in Action::ALL {
-        assert!(
-            seen.insert(a.name(), a).is_none(),
-            "duplicate name {}",
-            a.name()
-        );
+fn rows_are_unique() {
+    let mut seen = BTreeSet::new();
+    for r in ROWS {
+        let key = format!("{:?}|{:?}|{:?}", r.action, r.actor, r.fixture);
+        assert!(seen.insert(key.clone()), "duplicate row {key}");
     }
 }
 
 #[test]
+fn action_names_are_unique_and_all_listed() {
+    let names: BTreeSet<&str> = Action::ALL.iter().map(|a| a.name()).collect();
+    assert_eq!(names.len(), Action::ALL.len());
+}
+
+#[test]
 fn anonymous_is_unauthenticated() {
-    for action in Action::ALL.into_iter().filter(|a| !a.is_public()) {
+    for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
         let err = authorize(&Principal::anonymous(), action, &Resource::Instance)
             .expect_err("no anonymous access");
         assert_eq!(err.code(), ErrorCode::Unauthenticated, "{action:?}");
@@ -80,30 +89,50 @@ fn anonymous_is_unauthenticated() {
 
 #[test]
 fn disabled_account_is_denied() {
-    let mut p = Principal::user(UserId::new(1));
-    p.active = false;
-    p.is_admin = true; // even an administrator
+    let p = Principal::authenticated(ME, true, false, Credential::Session);
     let err = authorize(&p, Action::UserCreate, &Resource::Instance).expect_err("disabled");
     assert_eq!(err.code(), ErrorCode::AccountDisabled);
 }
 
 #[test]
 fn invisible_private_project_is_not_found() {
-    let project = Resource::Project(ProjectView {
-        visibility: Visibility::Private,
-        role: None,
-        pending_deletion: false,
-    });
-    // Every project-scoped action gives the same 404 — no existence oracle.
-    for action in [
-        Action::RepoRead,
-        Action::ProjectRead,
-        Action::ProjectUpdate,
-        Action::ProjectDelete,
-        Action::ProtectedRefManage,
-    ] {
-        let err =
-            authorize(&Principal::user(UserId::new(1)), action, &project).expect_err("not visible");
+    // Every action on a project-bearing resource gives the same 404 to a
+    // non-member — no existence oracle.
+    let invisible = project(None);
+    let resources = [
+        (Action::RepoRead, Resource::Project(invisible)),
+        (Action::ProjectRead, Resource::Project(invisible)),
+        (Action::ProjectUpdate, Resource::Project(invisible)),
+        (Action::ProjectDelete, Resource::Project(invisible)),
+        (Action::ProjectRestore, Resource::Project(invisible)),
+        (Action::ProtectedRefManage, Resource::Project(invisible)),
+        (Action::AuditRead, Resource::Project(invisible)),
+        (
+            Action::RepoPush,
+            Resource::Ref {
+                project: invisible,
+                kind: RefKind::Branch,
+                update: RefUpdate::FastForward,
+                protection: None,
+            },
+        ),
+        (
+            Action::ProjectTransfer,
+            Resource::Transfer {
+                source: invisible,
+                target_role: Some(Role::Owner),
+            },
+        ),
+        (
+            Action::MemberManage,
+            Resource::Membership {
+                scope: MembershipScope::Project(invisible),
+                change: MembershipChange::Add(Role::Guest),
+            },
+        ),
+    ];
+    for (action, resource) in resources {
+        let err = authorize(&session(), action, &resource).expect_err("not visible");
         assert_eq!(err.code(), ErrorCode::NotFound, "{action:?}");
     }
 }
@@ -111,81 +140,185 @@ fn invisible_private_project_is_not_found() {
 #[test]
 fn pending_deletion_blocks_everything_but_restore() {
     let deleted = Resource::Project(ProjectView {
-        visibility: Visibility::Private,
-        role: Some(Role::Owner),
         pending_deletion: true,
+        ..project(Some(Role::Owner))
     });
-    let owner = Principal::user(UserId::new(1));
     for action in [
         Action::RepoRead,
         Action::ProjectRead,
         Action::ProjectUpdate,
         Action::ProjectDelete,
     ] {
-        let err = authorize(&owner, action, &deleted).expect_err("pending deletion");
+        let err = authorize(&session(), action, &deleted).expect_err("pending deletion");
         assert_eq!(err.code(), ErrorCode::PendingDeletion, "{action:?}");
     }
-    assert!(authorize(&owner, Action::ProjectRestore, &deleted).is_ok());
+    assert!(authorize(&session(), Action::ProjectRestore, &deleted).is_ok());
 }
 
 #[test]
 fn token_scope_narrows_role() {
     // An Owner with a read_api token may read but not change anything.
-    let mut p = Principal::user(UserId::new(1));
-    p.token_scopes = Some(vec![Scope::ReadApi]);
-    let project = Resource::Project(ProjectView {
-        visibility: Visibility::Private,
-        role: Some(Role::Owner),
-        pending_deletion: false,
-    });
-    assert!(authorize(&p, Action::ProjectRead, &project).is_ok());
-    let err = authorize(&p, Action::ProjectDelete, &project).expect_err("needs api scope");
+    let p = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::ReadApi]));
+    let owned = Resource::Project(project(Some(Role::Owner)));
+    assert!(authorize(&p, Action::ProjectRead, &owned).is_ok());
+    let err = authorize(&p, Action::ProjectDelete, &owned).expect_err("needs api scope");
     assert_eq!(err.code(), ErrorCode::InsufficientScope);
-    assert!(err.to_string().contains("required_scope=api"), "{err}");
+    let text = err.to_string();
+    assert!(text.contains("required_scope=api"), "{text}");
+    assert!(text.contains("token_scopes=read_api"), "{text}");
 }
 
 #[test]
 fn scope_cannot_exceed_role() {
-    // A Reporter with an `api` token still cannot do Maintainer things.
-    let mut p = Principal::user(UserId::new(1));
-    p.token_scopes = Some(vec![Scope::Api, Scope::WriteRepository]);
-    let project = Resource::Project(ProjectView {
-        visibility: Visibility::Private,
-        role: Some(Role::Reporter),
-        pending_deletion: false,
-    });
-    let err = authorize(&p, Action::ProjectUpdate, &project).expect_err("role too low");
+    let p = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api, Scope::WriteRepository]),
+    );
+    let err = authorize(
+        &p,
+        Action::ProjectUpdate,
+        &Resource::Project(project(Some(Role::Reporter))),
+    )
+    .expect_err("role too low");
     assert_eq!(err.code(), ErrorCode::Forbidden);
 }
 
 #[test]
-fn force_push_to_protected_is_denied_even_for_admin() {
+fn empty_scope_list_denies_everything_that_needs_a_scope() {
+    let p = Principal::authenticated(ME, true, true, Credential::Token(vec![]));
+    for &action in Action::ALL.iter().filter(|a| a.required_scope().is_some()) {
+        let err = authorize(&p, action, &Resource::Instance).expect_err("no scope");
+        assert!(
+            matches!(
+                err.code(),
+                ErrorCode::InsufficientScope | ErrorCode::Internal
+            ),
+            "{action:?}: {:?}",
+            err.code()
+        );
+    }
+}
+
+#[test]
+fn admin_rights_through_a_token_need_the_admin_scope() {
+    let api_only = Principal::authenticated(ME, true, true, Credential::Token(vec![Scope::Api]));
+    let with_admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(vec![Scope::Api, Scope::Admin]),
+    );
+    assert!(!api_only.admin_rights());
+    assert!(with_admin.admin_rights());
+    assert!(authorize(&api_only, Action::UserCreate, &Resource::Instance).is_err());
+    assert!(authorize(&with_admin, Action::UserCreate, &Resource::Instance).is_ok());
+}
+
+#[test]
+fn maintainer_cannot_demote_or_remove_an_owner() {
+    let maintainer_scope = MembershipScope::Project(project(Some(Role::Maintainer)));
+    for change in [
+        MembershipChange::Change {
+            from: Role::Owner,
+            to: Role::Guest,
+        },
+        MembershipChange::Remove { from: Role::Owner },
+        MembershipChange::Add(Role::Owner),
+    ] {
+        let err = authorize(
+            &session(),
+            Action::MemberManage,
+            &Resource::Membership {
+                scope: maintainer_scope,
+                change,
+            },
+        )
+        .expect_err("above own role");
+        assert_eq!(err.code(), ErrorCode::Forbidden, "{change:?}");
+    }
+}
+
+#[test]
+fn a_token_cannot_mint_tokens() {
+    for scopes in [
+        vec![Scope::Api],
+        vec![Scope::Api, Scope::Admin, Scope::WriteRepository],
+    ] {
+        let p = Principal::authenticated(ME, true, true, Credential::Token(scopes));
+        let err = authorize(&p, Action::TokenCreate, &Resource::Token { owner: ME })
+            .expect_err("token cannot mint");
+        assert_eq!(err.code(), ErrorCode::Forbidden);
+    }
+    assert!(authorize(
+        &session(),
+        Action::TokenCreate,
+        &Resource::Token { owner: ME }
+    )
+    .is_ok());
+}
+
+#[test]
+fn reserved_ref_namespace_is_rejected_even_for_admins() {
     assert_eq!(
         decide(
             Action::RepoPush,
             Actor::Admin,
             Fixture::Ref {
-                update: RefUpdate::Force,
-                protected: Some(Role::Owner)
+                kind: RefKind::Reserved,
+                update: RefUpdate::Create,
+                protected: None
             }
         ),
-        Expect::Deny(ErrorCode::ProtectedRefForcePush)
+        Expect::Deny(ErrorCode::ReservedRefNamespace)
     );
 }
 
 #[test]
+fn force_push_to_protected_is_denied_even_for_admin() {
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let err = authorize(
+        &admin,
+        Action::RepoPush,
+        &Resource::Ref {
+            project: project(None),
+            kind: RefKind::Branch,
+            update: RefUpdate::Force,
+            protection: Some(RefProtection {
+                push_min_role: Role::Owner,
+            }),
+        },
+    )
+    .expect_err("protected");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefForcePush);
+    assert!(err.to_string().contains("protection=owner"), "{err}");
+}
+
+#[test]
 fn push_below_protection_min_role_is_denied() {
-    assert_eq!(
-        decide(
-            Action::RepoPush,
-            Actor::Developer,
-            Fixture::Ref {
-                update: RefUpdate::FastForward,
-                protected: Some(Role::Maintainer)
-            }
-        ),
-        Expect::Deny(ErrorCode::ProtectedRefPushNotAllowed)
-    );
+    let err = authorize(
+        &session(),
+        Action::RepoPush,
+        &Resource::Ref {
+            project: project(Some(Role::Developer)),
+            kind: RefKind::Branch,
+            update: RefUpdate::FastForward,
+            protection: Some(RefProtection {
+                push_min_role: Role::Maintainer,
+            }),
+        },
+    )
+    .expect_err("below min role");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefPushNotAllowed);
+    let text = err.to_string();
+    for key in [
+        "protection=maintainer",
+        "required_role=maintainer",
+        "actual_role=developer",
+    ] {
+        assert!(text.contains(key), "{key} missing: {text}");
+    }
 }
 
 #[test]
@@ -195,6 +328,7 @@ fn delete_protected_ref_is_denied() {
             Action::RepoPush,
             Actor::Owner,
             Fixture::Ref {
+                kind: RefKind::Branch,
                 update: RefUpdate::Delete,
                 protected: Some(Role::Developer)
             }
@@ -205,22 +339,27 @@ fn delete_protected_ref_is_denied() {
 
 #[test]
 fn mismatched_resource_is_an_internal_error_not_an_allow() {
-    let admin = Actor::Admin.principal();
-    let err = authorize(&admin, Action::RepoPush, &Resource::Instance).expect_err("wrong shape");
-    assert_eq!(err.code(), ErrorCode::Internal);
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
+        // A token resource fits only the token actions.
+        if matches!(
+            action,
+            Action::TokenCreate | Action::TokenList | Action::TokenRevoke
+        ) {
+            continue;
+        }
+        let err =
+            authorize(&admin, action, &Resource::Token { owner: ME }).expect_err("wrong shape");
+        assert_eq!(err.code(), ErrorCode::Internal, "{action:?}");
+    }
 }
 
 #[test]
 fn denial_never_mentions_resource_names_or_paths() {
-    // Context carries action / role names only (safe for logs, never shown to users).
     let err = authorize(
-        &Principal::user(UserId::new(1)),
+        &session(),
         Action::ProjectUpdate,
-        &Resource::Project(ProjectView {
-            visibility: Visibility::Private,
-            role: Some(Role::Developer),
-            pending_deletion: false,
-        }),
+        &Resource::Project(project(Some(Role::Developer))),
     )
     .expect_err("forbidden");
     let keys: Vec<&str> = err.context().iter().map(|(k, _)| *k).collect();

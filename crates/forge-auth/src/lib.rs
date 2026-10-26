@@ -10,12 +10,14 @@
 mod action;
 mod authorize;
 pub mod matrix;
+mod matrix_rows;
 mod model;
 
 pub use action::Action;
 pub use authorize::authorize;
 pub use model::{
-    Principal, ProjectView, RefProtection, RefUpdate, Resource, Role, Scope, Visibility,
+    Credential, MembershipChange, MembershipScope, Principal, ProjectView, RefKind, RefProtection,
+    RefUpdate, Resource, Role, Scope, Visibility,
 };
 
 #[cfg(test)]

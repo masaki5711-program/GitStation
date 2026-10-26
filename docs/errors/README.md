@@ -27,3 +27,4 @@
 | [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
+| [FG-GIT-0010](FG-GIT-0010.md) | 403 | info | A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*) |

@@ -201,7 +201,7 @@ user_message_ja = "指定されたプロジェクトまたはリポジトリが�
 user_message_en = "The project or repository was not found."
 user_message_id = "Proyek atau repositori tidak ditemukan."
 cause = "The resource does not exist, or the caller may not see it. Both cases return the same code so that private resources do not leak their existence (ADR-0010)."
-diagnosis = "The log event carries `action` and `reason` (`not_visible` or `absent`). `not_visible` with a valid user means the user is not a member of a private project — check memberships, not the URL."
+diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer, `absent`."
 fix = "Check the path; add the user to the project or group if they should see it."
 test = "invisible_private_project_is_not_found"
 
@@ -255,7 +255,7 @@ user_message_ja = "この操作を行う権限がありません。"
 user_message_en = "You do not have permission to do this."
 user_message_id = "Anda tidak memiliki izin untuk melakukan ini."
 cause = "The caller can see the resource but their role is below what the action requires (or the action needs an administrator)."
-diagnosis = "The log event carries `action`, `required_role` and `actual_role`. Compare with the permission matrix (`forge-auth` `matrix.rs`)."
+diagnosis = "The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership changes, `foreign_namespace`, `token_cannot_mint`). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope."
 fix = "Grant the user the required role on the project or group, if appropriate."
 test = "denied_matrix_rows_all_deny"
 
@@ -281,7 +281,7 @@ user_message_ja = "保護されたブランチ・タグには強制プッシュ�
 user_message_en = "Force pushes to a protected branch or tag are not allowed."
 user_message_id = "Force push ke branch atau tag yang dilindungi tidak diizinkan."
 cause = "A push would rewrite (non-fast-forward) a protected ref. In M1 no role, including administrators, may force-push a protected ref."
-diagnosis = "The log event carries `action` and the protected ref pattern in `protection`."
+diagnosis = "The log event carries `action` and `protection` (the protection's minimum push role)."
 fix = "Push a new commit on top instead, or open a merge request; ask a maintainer to change the protection only if history must really be rewritten."
 test = "force_push_to_protected_is_denied_even_for_admin"
 
@@ -294,7 +294,7 @@ user_message_ja = "この保護されたブランチ・タグにプッシュす�
 user_message_en = "You are not allowed to push to this protected branch or tag."
 user_message_id = "Anda tidak diizinkan melakukan push ke branch atau tag yang dilindungi ini."
 cause = "The ref is protected and the caller's role is below the protection's minimum push role."
-diagnosis = "The log event carries `action`, `required_role` (the protection's minimum) and `actual_role`."
+diagnosis = "The log event carries `action`, `protection` / `required_role` (the protection's minimum) and `actual_role`."
 fix = "Push to a feature branch and open a merge request, or ask a maintainer to adjust the protection."
 test = "push_below_protection_min_role_is_denied"
 
@@ -307,6 +307,19 @@ user_message_ja = "保護されたブランチ・タグは削除できません�
 user_message_en = "A protected branch or tag cannot be deleted."
 user_message_id = "Branch atau tag yang dilindungi tidak dapat dihapus."
 cause = "A push would delete a protected ref; protected refs cannot be deleted by push."
-diagnosis = "The log event carries `action` and `protection`."
+diagnosis = "The log event carries `action` and `protection` (the protection's minimum push role)."
 fix = "Remove the protection first (maintainer) if the ref must really be deleted."
 test = "delete_protected_ref_is_denied"
+
+[[error]]
+code = "FG-GIT-0010"
+name = "ReservedRefNamespace"
+http_status = 403
+severity = "info"
+user_message_ja = "この名前の ref には push できません（GitStation が管理する領域です）。"
+user_message_en = "This ref cannot be pushed: it is in a namespace managed by GitStation."
+user_message_id = "Ref ini tidak dapat di-push: berada di namespace yang dikelola GitStation."
+cause = "A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*). Those namespaces are written only by forge; a client-pushed replace ref could make a reviewed commit show other content."
+diagnosis = "The log event carries `action`. The rejected ref name is in the push command list (log only)."
+fix = "Push branches under refs/heads/ and tags under refs/tags/ only."
+test = "reserved_ref_namespace_is_rejected_even_for_admins"

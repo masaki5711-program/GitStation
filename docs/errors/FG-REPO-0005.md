@@ -20,7 +20,7 @@ The resource does not exist, or the caller may not see it. Both cases return the
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and `reason` (`not_visible` or `absent`). `not_visible` with a valid user means the user is not a member of a private project — check memberships, not the URL.
+The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer, `absent`.
 
 ## 対処 (fix)
 
