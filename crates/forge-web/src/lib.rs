@@ -10,13 +10,15 @@
 pub mod app;
 pub mod context;
 pub mod error;
+mod guard;
 pub mod registry;
 pub mod routes;
 pub mod server;
 
-pub use app::{app, build, registry as routes, AppConfig, AppState};
+pub use app::{app, registry as route_registry, AppConfig, AppState};
 pub use context::Ctx;
 pub use error::ApiError;
+pub use server::ServerLimits;
 
 /// Where the generated documents live, relative to the product root (`Git/`).
 pub const ROUTES_MANIFEST: &str = "docs/authz/routes.generated.json";

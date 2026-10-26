@@ -1,9 +1,10 @@
 //! Wiring: the registered routes, the fallback, and the middleware stack
 //! (outermost first): request id + access log → request timeout → routes.
 
+use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::header::ACCEPT_LANGUAGE;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -11,6 +12,7 @@ use axum::Router;
 use forge_auth::Action;
 use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError};
+use futures_util::FutureExt;
 
 use crate::context::{self, Ctx};
 use crate::error::ApiError;
@@ -25,21 +27,29 @@ pub struct AppState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppConfig {
+    /// Time until the response headers are produced (not body streaming;
+    /// per-route timeouts for git streams arrive with Smart HTTP, phase 9).
     pub request_timeout: Duration,
+    /// Request body limit for extractors (raw streams set their own).
+    pub body_limit_bytes: usize,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             request_timeout: Duration::from_secs(30),
+            body_limit_bytes: 1024 * 1024,
         }
     }
 }
 
-/// Actions that have permission-matrix rows but no route yet (M1 phase 8).
+/// Actions that have permission-matrix rows but no route yet (git operations:
+/// M1 phase 9-10; API resources: phase 8).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
+    Action::RepoRead,
+    Action::RepoPush,
     Action::ProjectRead,
     Action::ProjectCreate,
     Action::ProjectUpdate,
@@ -80,7 +90,7 @@ pub fn app(state: AppState, config: AppConfig) -> Result<Router, ForgeError> {
 }
 
 /// Assemble a router from a registry (tests use their own registries).
-pub fn build(
+pub(crate) fn build(
     registry: Registry<AppState>,
     state: AppState,
     config: AppConfig,
@@ -88,6 +98,9 @@ pub fn build(
     Ok(registry
         .into_router()?
         .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
+        .layer(DefaultBodyLimit::max(config.body_limit_bytes))
+        .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(
             config.request_timeout,
             request_timeout,
@@ -102,6 +115,34 @@ async fn not_found(ctx: Ctx, req: Request) -> ApiError {
             .with_context("method", req.method())
             .with_context("path", req.uri().path()),
     )
+}
+
+async fn method_not_allowed(ctx: Ctx, req: Request) -> ApiError {
+    ctx.fail(
+        ForgeError::new(ErrorCode::MethodNotAllowed)
+            .with_context("method", req.method())
+            .with_context("path", req.uri().path()),
+    )
+}
+
+/// A panicking handler becomes a logged `FG-SYS-0001` with the request id,
+/// not a dropped connection.
+async fn catch_panic(req: Request, next: Next) -> Response {
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .cloned()
+        .unwrap_or_else(RequestId::generate);
+    let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    match AssertUnwindSafe(next.run(req)).catch_unwind().await {
+        Ok(res) => res,
+        Err(_) => ApiError::new(
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "handler_panicked"),
+            request_id,
+            lang,
+        )
+        .into_response(),
+    }
 }
 
 async fn request_timeout(State(limit): State<Duration>, req: Request, next: Next) -> Response {

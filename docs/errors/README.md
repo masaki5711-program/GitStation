@@ -28,6 +28,11 @@
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
 | [FG-GIT-0010](FG-GIT-0010.md) | 403 | info | A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*) |
-| [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path (or the method is not registered for that path). |
+| [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path. |
 | [FG-WEB-0002](FG-WEB-0002.md) | 503 | warn | A request exceeded the server's request timeout and was cancelled. |
 | [FG-SYS-0004](FG-SYS-0004.md) | 500 | alert | forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address). |
+| [FG-WEB-0003](FG-WEB-0003.md) | 405 | info | The path is registered, but not for the request's HTTP method. |
+| [FG-WEB-0004](FG-WEB-0004.md) | 500 | alert | The route registry is inconsistent: a duplicate method and path, or a path that is empty, lacks the leading '/', or has an empty segment |
+| [FG-SYS-0005](FG-SYS-0005.md) | 500 | alert | forge serve could not build its async runtime, or the HTTP server loop failed after binding (an I/O error on the listener), or graceful shutdown exceeded its deadline. |
+| [FG-SYS-0006](FG-SYS-0006.md) | 500 | warn | forge serve could not register a signal handler (SIGINT / SIGTERM) |
+| [FG-SYS-0007](FG-SYS-0007.md) | 503 | warn | Accepting a TCP connection failed (usually out of file descriptors) |

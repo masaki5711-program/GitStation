@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 500 |
 | 重大度 | alert |
-| Runbook | [`server-bind-failed`](../../ops/runbooks/server-bind-failed.md) |
+| Runbook | [`server-start-failed`](../../ops/runbooks/server-start-failed.md) |
 | 発生させるテスト | `bind_to_an_occupied_port_is_server_bind_failed` |
 
 ## 利用者向けメッセージ
@@ -20,7 +20,7 @@ forge serve could not bind its listen address (address in use, permission denied
 
 ## 調べ方 (diagnosis)
 
-The log event carries `bind` and the OS error in `source`. Check what holds the port (`ss -ltnp` / `netstat -ano`).
+The `context` field of the log event contains `bind=<address>`; the OS error is in `source`. Check what holds the port (`ss -ltnp` / `netstat -ano`).
 
 ## 対処 (fix)
 

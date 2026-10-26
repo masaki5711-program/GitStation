@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-No registered route matches the request path (or the method is not registered for that path).
+No registered route matches the request path.
 
 ## 調べ方 (diagnosis)
 
-The access log carries `method` and `path`. Compare with `Git/docs/api/openapi.json` (generated from the route registry).
+The `context` field of the log event contains `method=` and `path=`. Compare with `Git/docs/api/openapi.json` (generated from the route registry).
 
 ## 対処 (fix)
 

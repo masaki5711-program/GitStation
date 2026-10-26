@@ -334,8 +334,8 @@ severity = "info"
 user_message_ja = "指定された URL は存在しません。"
 user_message_en = "The requested URL does not exist."
 user_message_id = "URL yang diminta tidak ada."
-cause = "No registered route matches the request path (or the method is not registered for that path)."
-diagnosis = "The access log carries `method` and `path`. Compare with `Git/docs/api/openapi.json` (generated from the route registry)."
+cause = "No registered route matches the request path."
+diagnosis = "The `context` field of the log event contains `method=` and `path=`. Compare with `Git/docs/api/openapi.json` (generated from the route registry)."
 fix = "Use a documented route; for a client, check the API version prefix (/api/v1)."
 test = "unknown_route_is_route_not_found"
 
@@ -348,7 +348,7 @@ user_message_ja = "処理が時間内に終わりませんでした。しばら�
 user_message_en = "The request did not finish in time. Try again later."
 user_message_id = "Permintaan tidak selesai tepat waktu. Coba lagi nanti."
 cause = "A request exceeded the server's request timeout and was cancelled."
-diagnosis = "The log event carries `method`, `path` and `timeout_ms`. Find the slow dependency in the same request_id's events (DB, git, LLM)."
+diagnosis = "The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM)."
 fix = "Fix the slow dependency; raise the request timeout only for routes that legitimately take long."
 test = "slow_handler_is_request_timeout"
 
@@ -361,7 +361,74 @@ user_message_ja = "サーバーを起動できませんでした。管理者に�
 user_message_en = "The server could not start. Contact the administrator."
 user_message_id = "Server tidak dapat dijalankan. Hubungi administrator."
 cause = "forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address)."
-diagnosis = "The log event carries `bind` and the OS error in `source`. Check what holds the port (`ss -ltnp` / `netstat -ano`)."
+diagnosis = "The `context` field of the log event contains `bind=<address>`; the OS error is in `source`. Check what holds the port (`ss -ltnp` / `netstat -ano`)."
 fix = "Stop the other process, choose another port, or run behind the reverse proxy on an unprivileged port."
-runbook = "server-bind-failed"
+runbook = "server-start-failed"
 test = "bind_to_an_occupied_port_is_server_bind_failed"
+
+[[error]]
+code = "FG-WEB-0003"
+name = "MethodNotAllowed"
+http_status = 405
+severity = "info"
+user_message_ja = "この URL ではその操作（メソッド）は使えません。"
+user_message_en = "This method is not allowed for this URL."
+user_message_id = "Metode ini tidak diizinkan untuk URL ini."
+cause = "The path is registered, but not for the request's HTTP method."
+diagnosis = "The `context` field contains `method=` and `path=`; the response `Allow` header lists the registered methods. Compare with `Git/docs/api/openapi.json`."
+fix = "Use one of the methods in the `Allow` header."
+test = "wrong_method_on_a_registered_path_is_method_not_allowed"
+
+[[error]]
+code = "FG-WEB-0004"
+name = "RouteRegistryInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "サーバーの設定に問題があり、起動できませんでした。管理者に連絡してください。"
+user_message_en = "The server could not start because of a configuration problem. Contact the administrator."
+user_message_id = "Server tidak dapat dijalankan karena masalah konfigurasi. Hubungi administrator."
+cause = "The route registry is inconsistent: a duplicate method and path, or a path that is empty, lacks the leading '/', or has an empty segment. Detected at startup, before any request is served (a programming error in a release)."
+diagnosis = "The `context` field contains `reason=` and `routes=`. Look at `app::registry()` in forge-web for the listed routes."
+fix = "Fix the registration in forge-web and release again; nothing to change on the server."
+runbook = "server-start-failed"
+test = "invalid_or_duplicate_routes_are_a_startup_error"
+
+[[error]]
+code = "FG-SYS-0005"
+name = "ServeFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "サーバーが停止しました。管理者に連絡してください。"
+user_message_en = "The server stopped. Contact the administrator."
+user_message_id = "Server berhenti. Hubungi administrator."
+cause = "forge serve could not build its async runtime, or the HTTP server loop failed after binding (an I/O error on the listener), or graceful shutdown exceeded its deadline."
+diagnosis = "The `context` field contains `operation=` (`build_runtime`, `serve`, `shutdown_deadline`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time."
+fix = "Address the resource problem (descriptors, memory) and restart; for shutdown_deadline find the long-running requests in the access log."
+runbook = "server-start-failed"
+test = "serve_failures_have_their_own_code"
+
+[[error]]
+code = "FG-SYS-0006"
+name = "SignalHandlerUnavailable"
+http_status = 500
+severity = "warn"
+user_message_ja = "サーバーの停止の仕組みを準備できませんでした。管理者に連絡してください。"
+user_message_en = "The server could not set up its shutdown handling. Contact the administrator."
+user_message_id = "Server tidak dapat menyiapkan penanganan penghentian. Hubungi administrator."
+cause = "forge serve could not register a signal handler (SIGINT / SIGTERM). The server keeps running, but a stop request ends it without draining in-flight requests."
+diagnosis = "The `context` field contains `signal=`; the OS error is in `source`. Usually a restricted container or seccomp profile."
+fix = "Allow signal handling in the runtime environment; until then stop the service during a quiet period."
+test = "signal_handler_failure_is_logged_with_a_code"
+
+[[error]]
+code = "FG-SYS-0007"
+name = "AcceptFailed"
+http_status = 503
+severity = "warn"
+user_message_ja = "サーバーが混み合っています。しばらくしてから再度お試しください。"
+user_message_en = "The server is busy. Try again later."
+user_message_id = "Server sedang sibuk. Coba lagi nanti."
+cause = "Accepting a TCP connection failed (usually out of file descriptors). The server keeps running and retries after a short pause."
+diagnosis = "The `context` field contains `operation=accept`; the OS error is in `source`. Check `ulimit -n` / `LimitNOFILE` against the connection limit and the number of open connections (`ss -s`)."
+fix = "Raise the file-descriptor limit above the connection limit, or lower the connection limit."
+test = "accept_failure_has_its_own_code"

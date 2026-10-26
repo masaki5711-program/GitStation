@@ -6,6 +6,14 @@
     "public": true
   },
   {
+    "action": "RepoRead",
+    "planned": true
+  },
+  {
+    "action": "RepoPush",
+    "planned": true
+  },
+  {
     "action": "ProjectRead",
     "planned": true
   },

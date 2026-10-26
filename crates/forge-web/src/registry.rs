@@ -59,7 +59,7 @@ pub struct RouteDef {
 pub struct Registry<S> {
     defs: Vec<RouteDef>,
     routers: BTreeMap<&'static str, MethodRouter<S>>,
-    duplicates: Vec<String>,
+    problems: Vec<String>,
 }
 
 impl<S: Clone + Send + Sync + 'static> Default for Registry<S> {
@@ -68,16 +68,28 @@ impl<S: Clone + Send + Sync + 'static> Default for Registry<S> {
     }
 }
 
+/// A path axum accepts and the manifests can describe: non-empty, starts
+/// with '/', no empty segment.
+fn valid_path(path: &str) -> bool {
+    path == "/" || (path.starts_with('/') && path.split('/').skip(1).all(|seg| !seg.is_empty()))
+}
+
 impl<S: Clone + Send + Sync + 'static> Registry<S> {
     pub fn new() -> Self {
         Self {
             defs: Vec::new(),
             routers: BTreeMap::new(),
-            duplicates: Vec::new(),
+            problems: Vec::new(),
         }
     }
 
     /// Register `verb path` handled by `handler`, decided by `action`.
+    ///
+    /// Every non-public route is wrapped in the authentication guard: without
+    /// an authenticated `Principal` in the request extensions it answers
+    /// `FG-AUTH-0001` and the handler is never entered (fails closed even if
+    /// a handler forgets to authorize). The handler then decides on its
+    /// resource with `forge_auth::authorize(.., def.action, ..)`.
     #[must_use]
     pub fn route<H, T>(
         mut self,
@@ -91,9 +103,14 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
         H: Handler<T, S>,
         T: 'static,
     {
+        if !valid_path(path) {
+            self.problems.push(format!("invalid path {path:?}"));
+            return self;
+        }
         if self.defs.iter().any(|d| d.verb == verb && d.path == path) {
             // axum would panic on an overlapping route; fail at build instead.
-            self.duplicates.push(format!("{} {path}", verb.as_str()));
+            self.problems
+                .push(format!("duplicate {} {path}", verb.as_str()));
             return self;
         }
         self.defs.push(RouteDef {
@@ -102,9 +119,16 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
             action,
             summary,
         });
+        let mut one = axum::routing::on(verb.filter(), handler);
+        if !action.is_public() {
+            one = one.route_layer(axum::middleware::from_fn_with_state(
+                action,
+                crate::guard::require_principal,
+            ));
+        }
         let merged = match self.routers.remove(path) {
-            Some(existing) => existing.on(verb.filter(), handler),
-            None => axum::routing::on(verb.filter(), handler),
+            Some(existing) => existing.merge(one),
+            None => one,
         };
         self.routers.insert(path, merged);
         self
@@ -114,12 +138,14 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
         &self.defs
     }
 
-    /// The router. A duplicate registration is a startup failure, not a panic.
-    pub fn into_router(self) -> Result<Router<S>, ForgeError> {
-        if !self.duplicates.is_empty() {
-            return Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "duplicate_route")
-                .with_context("routes", self.duplicates.join(", ")));
+    /// The router (crate-private: routes are added only through `route`).
+    /// An invalid or duplicate registration is a startup failure
+    /// (`FG-WEB-0004`), not a panic.
+    pub(crate) fn into_router(self) -> Result<Router<S>, ForgeError> {
+        if !self.problems.is_empty() {
+            return Err(ForgeError::new(ErrorCode::RouteRegistryInvalid)
+                .with_context("reason", "invalid_or_duplicate_route")
+                .with_context("routes", self.problems.join(", ")));
         }
         Ok(self
             .routers

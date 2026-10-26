@@ -14,7 +14,15 @@ fn main() -> ExitCode {
     let mut stale = Vec::new();
     for (rel, body) in forge_web::generated_documents(env!("CARGO_PKG_VERSION")) {
         let path = root.join(rel);
-        let current = std::fs::read_to_string(&path).unwrap_or_default();
+        // Only a missing file counts as empty; any other read error is real.
+        let current = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => {
+                eprintln!("gen-authz: cannot read {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        };
         if current == body {
             continue;
         }

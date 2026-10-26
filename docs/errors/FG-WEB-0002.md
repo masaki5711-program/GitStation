@@ -20,7 +20,7 @@ A request exceeded the server's request timeout and was cancelled.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `method`, `path` and `timeout_ms`. Find the slow dependency in the same request_id's events (DB, git, LLM).
+The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM).
 
 ## 対処 (fix)
 
