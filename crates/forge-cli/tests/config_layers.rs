@@ -142,3 +142,13 @@ fn explain_needs_no_configuration() {
     );
     assert!(out.status.success(), "{}", stderr(&out));
 }
+
+#[test]
+fn serve_and_db_commands_need_a_database_url() {
+    for args in [&["serve"][..], &["db", "status"], &["db", "migrate"]] {
+        let out = forge(args, &[]);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(err.contains("FG-SYS-0002"), "{args:?}: {err}");
+    }
+}

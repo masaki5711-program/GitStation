@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-forge serve could not build its async runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007.
+forge serve (or another command that needs the async runtime, such as forge db) could not build its runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007.
 
 ## 調べ方 (diagnosis)
 
