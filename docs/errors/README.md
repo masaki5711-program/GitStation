@@ -18,3 +18,12 @@
 | [FG-REPO-0002](FG-REPO-0002.md) | 500 | alert | The database knows the repository but its directory does not exist under the storage root. |
 | [FG-REPO-0003](FG-REPO-0003.md) | 500 | alert | A file-system operation on the storage root failed: permission denied, disk full, or an I/O error while creating or inspecting a repository directory. |
 | [FG-REPO-0004](FG-REPO-0004.md) | 500 | alert | Something already exists at the storage path of a repository being created |
+| [FG-REPO-0005](FG-REPO-0005.md) | 404 | info | The resource does not exist, or the caller may not see it |
+| [FG-REPO-0006](FG-REPO-0006.md) | 410 | info | The project was deleted and is inside its grace period; only restore (or the purge job) may act on it. |
+| [FG-AUTH-0001](FG-AUTH-0001.md) | 401 | info | The request carried no valid credentials; forge has no anonymous access. |
+| [FG-AUTH-0002](FG-AUTH-0002.md) | 403 | info | The caller authenticated with a token whose scopes do not include the scope the action requires |
+| [FG-AUTH-0003](FG-AUTH-0003.md) | 403 | info | The caller can see the resource but their role is below what the action requires (or the action needs an administrator). |
+| [FG-AUTH-0004](FG-AUTH-0004.md) | 403 | info | The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins). |
+| [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
+| [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
+| [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
