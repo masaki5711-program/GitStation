@@ -16,7 +16,7 @@
 1. ログを `error_code` と時間帯で絞り、`context` を読む。`target` は `host:port/dbname`（パスワードは出ない）。文の失敗には `query`（文の名前）が付く。
    - FG-DB-0001 の `reason`（起動時でも、稼働中の文の実行時でも出る）
      - `connect_refused`: DB のサーバーが待ち受けていない（停止している、ポートが違う）
-     - `connect_timeout`: 応答がない（ネットワーク、ファイアウォール、DB の過負荷）。`timeout_ms` と `timeout_key`（どの設定のタイムアウトか）が付く
+     - `connect_timeout`: 応答がない（ネットワーク、ファイアウォール、DB の過負荷）。forge 側のタイマーが切れた場合は `timeout_ms` と `timeout_key`（どの設定のタイムアウトか）が付く。OS の TCP タイムアウトの場合は付かない
      - `auth_failed`: ユーザー名かパスワードが違う。`database.password_file` の中身を確認する（値は表示しない）
      - `server_rejected`: 認証以外の理由で接続を拒否された。`sqlstate` と `db_message` を見る（`3D000` = DB がない）
      - `tls`: TLS の確立に失敗した（サーバーが TLS に対応していない、証明書の検証に失敗した）。`database.tls_mode` と `database.tls_root_cert` を確認する
@@ -29,7 +29,7 @@
      - `read_only`（`25006`）: DB が読み取り専用（スタンバイに接続している、リカバリ中）
      - `resource_exhausted`（`53xxx`）: DB のサーバーのディスク不足・メモリ不足など。DB の担当者へ
      - `server_fault`（`58xxx` / `XXxxx`）: DB のサーバー内部の障害（I/O エラー、データの破損）。DB の担当者へすぐにエスカレーションする
-     - `ping_failed`: 準備確認の `SELECT 1` が失敗した。`source` を読む
+     - `ping_timeout`: 準備確認の `SELECT 1` が `database.acquire_timeout_ms` 以内に返らなかった（接続が半分切れている、DB が応答しない）
      - `driver`: `source` を読む
    - FG-DB-0002 の `reason`（接続は使える状態で、文そのものが失敗した）
      - `statement_timeout`（SQLSTATE `57014`）: 文が `database.statement_timeout_ms` を超えた

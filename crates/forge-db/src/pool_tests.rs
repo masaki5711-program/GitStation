@@ -147,6 +147,11 @@ async fn pool_exhaustion_is_db_unavailable_acquire_timeout() {
     let held = db.acquire().await.expect("first connection");
     let err = db.acquire().await.expect_err("pool exhausted");
     assert_reason(&err, ErrorCode::DbUnavailable, "acquire_timeout");
+    assert!(
+        err.to_string()
+            .contains("timeout_key=database.acquire_timeout_ms"),
+        "{err}"
+    );
     drop(held);
     db.acquire().await.expect("released connection is reusable");
 }

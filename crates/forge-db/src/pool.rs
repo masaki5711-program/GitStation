@@ -53,6 +53,8 @@ const LIBPQ_ENV: &[&str] = &[
 pub struct Db {
     pool: PgPool,
     target: String,
+    /// Client-side bound for the readiness round trip.
+    ping_timeout: Duration,
 }
 
 impl Db {
@@ -75,15 +77,24 @@ impl Db {
         // One direct connection first: the pool retries refused / starting
         // servers until acquire_timeout and would report every cause as a
         // timeout. The probe reports the real one and checks the version.
-        let probe = match tokio::time::timeout(cfg.connect_timeout, options.connect()).await {
-            Ok(Ok(conn)) => conn,
-            Ok(Err(e)) => return Err(connect_error(&target, e)),
+        // connect_timeout bounds the whole probe — connect, version query and
+        // close — so a server that accepts and then goes silent cannot hang
+        // startup (the server-side statement_timeout would not fire).
+        let probe = async {
+            let conn = options
+                .connect()
+                .await
+                .map_err(|e| connect_error(&target, e))?;
+            server_version(conn, &target, min_version).await
+        };
+        let version = match tokio::time::timeout(cfg.connect_timeout, probe).await {
+            Ok(result) => result?,
             Err(_) => {
                 return Err(unavailable(&target, "connect_timeout")
-                    .with_context("timeout_ms", cfg.connect_timeout.as_millis()))
+                    .with_context("timeout_ms", cfg.connect_timeout.as_millis())
+                    .with_context("timeout_key", "database.connect_timeout_ms"))
             }
         };
-        let version = server_version(probe, &target, min_version).await?;
         // The pool opens its connections on demand (min_connections in the
         // background); a later failure surfaces on acquire as FG-DB-0001.
         let pool = PgPoolOptions::new()
@@ -99,7 +110,11 @@ impl Db {
             server_version_num = version,
             "forge.db.connected"
         );
-        Ok(Self { pool, target })
+        Ok(Self {
+            pool,
+            target,
+            ping_timeout: cfg.acquire_timeout,
+        })
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -114,30 +129,29 @@ impl Db {
     /// A pooled connection. Every failure — pool exhausted
     /// (`acquire_timeout`), server down, authentication — is `FG-DB-0001`.
     pub async fn acquire(&self) -> Result<PoolConnection<Postgres>, ForgeError> {
-        self.pool
-            .acquire()
-            .await
-            .map_err(|e| connect_error(&self.target, e))
+        self.pool.acquire().await.map_err(|e| {
+            let timed_out = matches!(e, sqlx::Error::PoolTimedOut);
+            let err = connect_error(&self.target, e);
+            if timed_out {
+                return err.with_context("timeout_key", "database.acquire_timeout_ms");
+            }
+            err
+        })
     }
 
-    /// One round trip (readiness). Any failure means the database cannot be
-    /// used, so it is always `FG-DB-0001` (even a statement timeout).
+    /// One round trip (readiness), bounded on the client by
+    /// `acquire_timeout` (a half-dead link would never answer). Every failure
+    /// means the database cannot be used: always `FG-DB-0001`.
     pub async fn ping(&self) -> Result<(), ForgeError> {
         let mut conn = self.acquire().await?;
-        sqlx::query("SELECT 1")
-            .execute(&mut *conn)
-            .await
-            .map(|_| ())
-            .map_err(|e| {
-                let err = connect_error(&self.target, e);
-                if err.code() == ErrorCode::DbUnavailable {
-                    return err;
-                }
-                ForgeError::new(ErrorCode::DbUnavailable)
-                    .with_context("target", &self.target)
-                    .with_context("reason", "ping_failed")
-                    .with_source(err)
-            })
+        let round_trip = sqlx::query("SELECT 1").execute(&mut *conn);
+        match tokio::time::timeout(self.ping_timeout, round_trip).await {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(e)) => Err(connect_error(&self.target, e)),
+            Err(_) => Err(unavailable(&self.target, "ping_timeout")
+                .with_context("timeout_ms", self.ping_timeout.as_millis())
+                .with_context("timeout_key", "database.acquire_timeout_ms")),
+        }
     }
 }
 

@@ -156,13 +156,15 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool) -> F
     let (class, state) = classify(&e);
     let (code, reason) = match class {
         Class::Unavailable(r) => (ErrorCode::DbUnavailable, r),
-        // At connect time a server-side rejection is not a statement error.
+        // Opening or checking a connection: never a statement error, but a
+        // known reason (statement_timeout, serialization, …) is kept; only
+        // the generic ones are renamed.
         Class::Query(r) if at_connect => (
             ErrorCode::DbUnavailable,
-            if r == "client_error" {
-                "driver"
-            } else {
-                "server_rejected"
+            match r {
+                "client_error" => "driver",
+                "server_error" => "server_rejected",
+                known => known,
             },
         ),
         Class::Query(r) => (ErrorCode::DbQueryFailed, r),
