@@ -132,6 +132,34 @@ mod tests {
     }
 
     #[test]
+    fn every_code_has_messages_in_all_three_languages() {
+        for code in ErrorCode::all() {
+            for lang in [Lang::Ja, Lang::En, Lang::Id] {
+                assert!(
+                    !code.user_message(lang).trim().is_empty(),
+                    "{} has no {} message",
+                    code.id(),
+                    lang.as_str()
+                );
+            }
+        }
+        assert_ne!(
+            ErrorCode::Internal.user_message(Lang::Id),
+            ErrorCode::Internal.user_message(Lang::En)
+        );
+    }
+
+    #[test]
+    fn lang_parse_accepts_tags_and_rejects_unknown() {
+        assert_eq!(Lang::parse("ja"), Some(Lang::Ja));
+        assert_eq!(Lang::parse("en-US"), Some(Lang::En));
+        assert_eq!(Lang::parse("id-ID"), Some(Lang::Id));
+        assert_eq!(Lang::parse("in"), Some(Lang::Id));
+        assert_eq!(Lang::parse("fr"), None);
+        assert_eq!(Lang::parse(""), None);
+    }
+
+    #[test]
     fn alerting_codes_have_runbooks() {
         for code in ErrorCode::all() {
             let e = code.entry();

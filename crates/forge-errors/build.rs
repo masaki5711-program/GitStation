@@ -24,6 +24,7 @@ struct Entry {
     severity: String,
     user_message_ja: String,
     user_message_en: String,
+    user_message_id: String,
     cause: String,
     diagnosis: String,
     fix: String,
@@ -101,6 +102,7 @@ fn validate(entries: &[Entry]) -> Result<(), String> {
         let prose = [
             &e.user_message_ja,
             &e.user_message_en,
+            &e.user_message_id,
             &e.cause,
             &e.diagnosis,
             &e.fix,
@@ -153,7 +155,7 @@ fn render(entries: &[Entry]) -> String {
         let _ = writeln!(
             s,
             "    CatalogEntry {{ code: ErrorCode::{name}, id: {code:?}, http_status: {status}, severity: {sev}, \
-             user_message_ja: {ja:?}, user_message_en: {en:?}, cause: {cause:?}, diagnosis: {diag:?}, fix: {fix:?}, \
+             user_message_ja: {ja:?}, user_message_en: {en:?}, user_message_id: {idm:?}, cause: {cause:?}, diagnosis: {diag:?}, fix: {fix:?}, \
              runbook: {runbook}, test: {test:?}, retired: {retired} }},",
             name = e.name,
             code = e.code,
@@ -161,6 +163,7 @@ fn render(entries: &[Entry]) -> String {
             sev = severity_variant(&e.severity),
             ja = e.user_message_ja,
             en = e.user_message_en,
+            idm = e.user_message_id,
             cause = e.cause,
             diag = e.diagnosis,
             fix = e.fix,

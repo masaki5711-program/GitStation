@@ -24,11 +24,34 @@ impl Severity {
     }
 }
 
-/// Language for user-facing messages.
+/// Language for user-facing messages (GitStation supports ja / en / id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
     Ja,
     En,
+    /// Bahasa Indonesia.
+    Id,
+}
+
+impl Lang {
+    /// Parse a language tag (`ja`, `en`, `id`, or a tag like `id-ID`).
+    pub fn parse(tag: &str) -> Option<Lang> {
+        let primary = tag.split(['-', '_']).next()?.trim().to_ascii_lowercase();
+        match primary.as_str() {
+            "ja" => Some(Lang::Ja),
+            "en" => Some(Lang::En),
+            "id" | "in" => Some(Lang::Id),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lang::Ja => "ja",
+            Lang::En => "en",
+            Lang::Id => "id",
+        }
+    }
 }
 
 /// One registry row, as generated from `errors.toml`.
@@ -40,6 +63,7 @@ pub struct CatalogEntry {
     pub severity: Severity,
     pub user_message_ja: &'static str,
     pub user_message_en: &'static str,
+    pub user_message_id: &'static str,
     pub cause: &'static str,
     pub diagnosis: &'static str,
     pub fix: &'static str,
@@ -53,6 +77,7 @@ impl CatalogEntry {
         match lang {
             Lang::Ja => self.user_message_ja,
             Lang::En => self.user_message_en,
+            Lang::Id => self.user_message_id,
         }
     }
 
@@ -73,7 +98,7 @@ impl CatalogEntry {
              # {id}\n{retired}\n\
              | 項目 | 値 |\n|---|---|\n\
              | HTTP ステータス | {status} |\n| 重大度 | {sev} |\n| Runbook | {runbook} |\n| 発生させるテスト | `{test}` |\n\n\
-             ## 利用者向けメッセージ\n\n- ja: {ja}\n- en: {en}\n\n\
+             ## 利用者向けメッセージ\n\n- ja: {ja}\n- en: {en}\n- id: {idm}\n\n\
              ## 原因 (cause)\n\n{cause}\n\n\
              ## 調べ方 (diagnosis)\n\n{diagnosis}\n\n\
              ## 対処 (fix)\n\n{fix}\n",
@@ -83,6 +108,7 @@ impl CatalogEntry {
             test = self.test,
             ja = self.user_message_ja,
             en = self.user_message_en,
+            idm = self.user_message_id,
             cause = self.cause,
             diagnosis = self.diagnosis,
             fix = self.fix,
@@ -100,6 +126,7 @@ pub(crate) static MISSING_ENTRY: CatalogEntry = CatalogEntry {
     severity: Severity::Alert,
     user_message_ja: "内部エラーが発生しました。",
     user_message_en: "An internal error occurred.",
+    user_message_id: "Terjadi kesalahan internal.",
     cause: "error catalog lookup failed (generated table inconsistent)",
     diagnosis: "rebuild forge-errors; check build.rs output",
     fix: "rebuild",

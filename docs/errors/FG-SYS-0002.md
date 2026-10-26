@@ -12,6 +12,7 @@
 
 - ja: サーバーの設定に問題があります。管理者に連絡してください。
 - en: The server configuration is invalid. Contact the administrator.
+- id: Konfigurasi server tidak valid. Hubungi administrator.
 
 ## 原因 (cause)
 

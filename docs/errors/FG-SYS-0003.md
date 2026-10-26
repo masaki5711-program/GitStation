@@ -12,6 +12,7 @@
 
 - ja: 指定されたエラーコードは登録されていません。
 - en: The given error code is not registered.
+- id: Kode kesalahan yang diberikan tidak terdaftar.
 
 ## 原因 (cause)
 
