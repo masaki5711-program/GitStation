@@ -10,6 +10,6 @@ mod command;
 pub mod storage;
 pub mod version;
 
-pub use command::{Git, GitCommand, GitConfig, GitOutput};
+pub use command::{Git, GitCommand, GitConfig, GitOutput, Revision};
 pub use storage::StorageRoot;
 pub use version::GitVersion;

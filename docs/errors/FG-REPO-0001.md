@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-A repository path resolved outside the storage root, through a symlink, or the storage root itself is not a usable directory.
+A repository path resolved outside the storage root or through a symlink, an entry under the root is not a directory, or the storage root itself is missing, a symlink, or not a directory.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `repo_id` and `reason` (`outside_root`, `symlink`, `root_not_dir`, `root_symlink`). Inspect the storage root with `forge doctor`.
+The log event carries `repo_id` (when a repository is involved) and `reason`: `outside_root`, `symlink`, `not_dir`, `root_missing`, `root_not_dir`, `root_symlink`. Check the entry with `forge admin repo-path <repo_id>` and inspect it with `ls -la` (a symlink under the root may be tampering).
 
 ## 対処 (fix)
 
-Remove the symlink or misplaced directory under the storage root, or fix `storage.root`; never point the root at a symlink.
+Remove or move the symlink or misplaced entry under the storage root (record it first), or fix the configured storage root; never point the root at a symlink.

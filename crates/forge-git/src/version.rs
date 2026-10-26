@@ -60,7 +60,9 @@ pub async fn detect(git: &Git) -> Result<GitVersion, ForgeError> {
     let text = out.stdout_str();
     GitVersion::parse(&text)
         .ok_or_else(|| {
-            ForgeError::new(ErrorCode::GitUnavailable).with_context("reason", "unparseable_version")
+            ForgeError::new(ErrorCode::GitUnavailable)
+                .with_context("reason", "unparseable_version")
+                .with_context("output", text.chars().take(100).collect::<String>())
         })?
         .require_supported()
 }
@@ -89,6 +91,10 @@ mod tests {
             })
         );
         assert_eq!(GitVersion::parse("hg version 1"), None);
+        assert_eq!(GitVersion::parse(""), None);
+        let big = GitVersion::parse("git version 2.100").expect("no patch");
+        assert!(big > MINIMUM, "numeric, not lexicographic, comparison");
+        assert!(GitVersion::parse("git version 3.0.0").expect("v3") > MINIMUM);
     }
 
     #[test]
@@ -105,7 +111,8 @@ mod tests {
 
     #[tokio::test]
     async fn installed_git_is_supported() {
-        let git = Git::new(GitConfig::new("git", std::env::temp_dir()));
+        let home = tempfile::tempdir().expect("home");
+        let git = Git::new(GitConfig::new("git", home.path()));
         let v = detect(&git).await.expect("git >= 2.38 must be installed");
         assert!(v >= MINIMUM);
     }

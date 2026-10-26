@@ -20,7 +20,7 @@ The configuration file or environment is missing a required value or contains an
 
 ## 調べ方 (diagnosis)
 
-The log event carries `config_key` and `reason`. Run `forge doctor` to re-validate the configuration without starting the server.
+The log event carries `config_key` and `reason`. Check the configuration file or environment variable named by `config_key` (`forge doctor` will re-validate it without starting the server once it exists, M1 phase 2).
 
 ## 対処 (fix)
 

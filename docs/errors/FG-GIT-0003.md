@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A git subprocess exited with a non-zero status, or could not be spawned or waited on.
+A git subprocess exited with an unexpected non-zero status, or reading its output / waiting on it failed (spawn failure is FG-GIT-0001). Callers map expected non-zero exits, such as a missing ref, to specific codes; this code means the failure was not expected.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`). Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`.
+The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`, URL credentials redacted); when reading or waiting failed there is no `exit_code` and the cause is in `source`. Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`.
 
 ## 対処 (fix)
 

@@ -11,6 +11,7 @@ publish.workspace = true
 forge-core.workspace = true
 forge-errors.workspace = true
 sha2.workspace = true
+uuid.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

@@ -9,9 +9,12 @@
 | [FG-SYS-0002](FG-SYS-0002.md) | 500 | alert | The configuration file or environment is missing a required value or contains an invalid one; detected at startup or on reload. |
 | [FG-SYS-0003](FG-SYS-0003.md) | 400 | info | `forge explain` was given a code that is not in the registry (typo or a code from a newer version). |
 | [FG-GIT-0001](FG-GIT-0001.md) | 500 | alert | The configured git binary cannot be executed, or its version is older than the minimum forge requires (2.38, for merge-tree --write-tree). |
-| [FG-GIT-0002](FG-GIT-0002.md) | 504 | warn | A git subprocess exceeded its total or idle timeout and was killed. |
-| [FG-GIT-0003](FG-GIT-0003.md) | 500 | alert | A git subprocess exited with a non-zero status, or could not be spawned or waited on. |
+| [FG-GIT-0002](FG-GIT-0002.md) | 504 | warn | A git subprocess exceeded its total timeout and was killed and reaped. |
+| [FG-GIT-0003](FG-GIT-0003.md) | 500 | alert | A git subprocess exited with an unexpected non-zero status, or reading its output / waiting on it failed (spawn failure is FG-GIT-0001) |
 | [FG-GIT-0004](FG-GIT-0004.md) | 503 | warn | Every git subprocess slot was in use for longer than the acquire timeout. |
+| [FG-GIT-0006](FG-GIT-0006.md) | 500 | warn | A captured (non-streaming) git invocation wrote more stdout than `GitConfig::max_output_bytes`; the child was killed |
 | [FG-GIT-0005](FG-GIT-0005.md) | 400 | info | A ref name failed git's check-ref-format rules (or forge's extra rule: no component may start with '-'). |
-| [FG-REPO-0001](FG-REPO-0001.md) | 500 | alert | A repository path resolved outside the storage root, through a symlink, or the storage root itself is not a usable directory. |
+| [FG-REPO-0001](FG-REPO-0001.md) | 500 | alert | A repository path resolved outside the storage root or through a symlink, an entry under the root is not a directory, or the storage root itself is missing, a symlink, or not a directory. |
 | [FG-REPO-0002](FG-REPO-0002.md) | 500 | alert | The database knows the repository but its directory does not exist under the storage root. |
+| [FG-REPO-0003](FG-REPO-0003.md) | 500 | alert | A file-system operation on the storage root failed: permission denied, disk full, or an I/O error while creating or inspecting a repository directory. |
+| [FG-REPO-0004](FG-REPO-0004.md) | 500 | alert | Something already exists at the storage path of a repository being created |

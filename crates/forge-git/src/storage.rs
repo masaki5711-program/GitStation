@@ -2,6 +2,7 @@
 //! of its `RepoId` — `<root>/repos/<shard>/<id>.git`, where `<shard>` is the
 //! first two hex digits of sha256(id). URL segments never reach a path.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use forge_core::RepoId;
@@ -20,8 +21,14 @@ fn rejected(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::StoragePathRejected).with_context("reason", reason)
 }
 
+fn io_failed(operation: &'static str, e: io::Error) -> ForgeError {
+    ForgeError::new(ErrorCode::StorageIoFailed)
+        .with_context("operation", operation)
+        .with_source(e)
+}
+
 /// Strip the Windows verbatim prefix (`\\?\`) that `canonicalize` adds, so
-/// paths compare and print like the configured ones.
+/// paths compare and print like the configured ones (UNC paths keep theirs).
 fn normalize(path: PathBuf) -> PathBuf {
     let s = path.to_string_lossy();
     match s.strip_prefix(r"\\?\") {
@@ -30,13 +37,29 @@ fn normalize(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Server-side settings of every repository forge creates.
+const REPO_SETTINGS: &[(&str, &str)] = &[
+    ("receive.fsckObjects", "true"),
+    ("transfer.fsckObjects", "true"),
+    ("uploadpack.allowFilter", "true"),
+    ("receive.advertisePushOptions", "true"),
+    // Maintenance runs in `forge worker`, never detached after a push.
+    ("receive.autogc", "false"),
+    ("gc.auto", "0"),
+];
+
 impl StorageRoot {
     /// Open an existing root directory. The root must be a real directory,
     /// not a symlink.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ForgeError> {
         let path = path.as_ref();
-        let meta =
-            std::fs::symlink_metadata(path).map_err(|e| rejected("root_not_dir").with_source(e))?;
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Err(rejected("root_missing").with_source(e))
+            }
+            Err(e) => return Err(io_failed("inspect", e)),
+        };
         if meta.file_type().is_symlink() {
             return Err(rejected("root_symlink"));
         }
@@ -45,7 +68,7 @@ impl StorageRoot {
         }
         let root = std::fs::canonicalize(path)
             .map(normalize)
-            .map_err(|e| rejected("root_not_dir").with_source(e))?;
+            .map_err(|e| io_failed("inspect", e))?;
         Ok(Self { root })
     }
 
@@ -54,8 +77,9 @@ impl StorageRoot {
     }
 
     fn shard(id: RepoId) -> String {
-        let digest = Sha256::digest(id.get().to_string().as_bytes());
-        format!("{:02x}", digest.first().copied().unwrap_or(0))
+        let digest: [u8; 32] = Sha256::digest(id.get().to_string().as_bytes()).into();
+        let [first, ..] = digest;
+        format!("{first:02x}")
     }
 
     /// Where the repository lives. Pure: does not touch the file system.
@@ -66,42 +90,36 @@ impl StorageRoot {
             .join(format!("{}.git", id.get()))
     }
 
-    /// The path of an existing repository, verified to be a real directory
-    /// under the root with no symlink on the way.
-    pub fn existing(&self, id: RepoId) -> Result<PathBuf, ForgeError> {
-        let path = self.path_for(id);
-        for p in [path.parent().map(Path::to_path_buf), Some(path.clone())]
-            .into_iter()
-            .flatten()
-        {
-            match std::fs::symlink_metadata(&p) {
+    /// Every directory between the root and `path` (inclusive) must be a real
+    /// directory: no symlink, no file.
+    fn check_chain(&self, path: &Path, id: RepoId) -> Result<(), ForgeError> {
+        let Ok(rel) = path.strip_prefix(&self.root) else {
+            return Err(rejected("outside_root").with_context("repo_id", id));
+        };
+        let mut current = self.root.clone(); // clone: walked down component by component
+        for component in rel.components() {
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
                 Ok(meta) if meta.file_type().is_symlink() => {
                     return Err(rejected("symlink").with_context("repo_id", id));
                 }
                 Ok(meta) if meta.is_dir() => {}
                 Ok(_) => return Err(rejected("not_dir").with_context("repo_id", id)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
                     return Err(ForgeError::new(ErrorCode::StorageMissing)
                         .with_context("repo_id", id)
-                        .with_context("path", p.display()));
+                        .with_context("path", current.display()));
                 }
-                Err(e) => {
-                    return Err(rejected("unreadable")
-                        .with_context("repo_id", id)
-                        .with_source(e))
-                }
+                Err(e) => return Err(io_failed("inspect", e).with_context("repo_id", id)),
             }
         }
-        self.ensure_inside(&path, id)?;
-        Ok(path)
+        Ok(())
     }
 
     fn ensure_inside(&self, path: &Path, id: RepoId) -> Result<(), ForgeError> {
-        let canonical = std::fs::canonicalize(path).map(normalize).map_err(|e| {
-            rejected("unreadable")
-                .with_context("repo_id", id)
-                .with_source(e)
-        })?;
+        let canonical = std::fs::canonicalize(path)
+            .map(normalize)
+            .map_err(|e| io_failed("inspect", e).with_context("repo_id", id))?;
         if canonical.starts_with(&self.root) {
             Ok(())
         } else {
@@ -109,8 +127,20 @@ impl StorageRoot {
         }
     }
 
-    /// Create a bare repository for `id` with forge's server-side settings.
-    /// `hooks_path` is the forge-owned hooks directory (set from M1 phase 10).
+    /// The path of an existing repository, verified to be a real directory
+    /// under the root with no symlink on the way.
+    pub fn existing(&self, id: RepoId) -> Result<PathBuf, ForgeError> {
+        let path = self.path_for(id);
+        self.check_chain(&path, id)?;
+        self.ensure_inside(&path, id)?;
+        Ok(path)
+    }
+
+    /// Create the bare repository for `id`, atomically: initialize and
+    /// configure it in a temporary sibling directory, then rename it into
+    /// place. Refuses to touch an existing path (`FG-REPO-0004`).
+    /// `hooks_path` is the forge-owned hooks directory (M1 phase 10 also
+    /// forces it per invocation with `-c core.hooksPath`).
     pub async fn init_bare(
         &self,
         git: &Git,
@@ -118,136 +148,91 @@ impl StorageRoot {
         hooks_path: Option<&Path>,
     ) -> Result<PathBuf, ForgeError> {
         let path = self.path_for(id);
-        if let Some(shard) = path.parent() {
-            std::fs::create_dir_all(shard).map_err(|e| {
-                rejected("create_failed")
+        let shard = path
+            .parent()
+            .ok_or_else(|| rejected("outside_root").with_context("repo_id", id))?
+            .to_path_buf();
+
+        tokio::fs::create_dir_all(&shard)
+            .await
+            .map_err(|e| io_failed("create_shard", e).with_context("repo_id", id))?;
+        // `create_dir_all` follows symlinks: verify what it walked through.
+        self.check_chain(&shard, id)?;
+        self.ensure_inside(&shard, id)?;
+
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(_) => {
+                return Err(ForgeError::new(ErrorCode::RepoPathOccupied)
                     .with_context("repo_id", id)
-                    .with_source(e)
-            })?;
+                    .with_context("path", path.display()));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_failed("inspect", e).with_context("repo_id", id)),
         }
+
+        let tmp = shard.join(format!(
+            ".tmp-{}-{}.git",
+            id.get(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        let result = match self.init_into(git, &tmp, hooks_path).await {
+            Ok(()) => tokio::fs::rename(&tmp, &path).await.map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists || path.exists() {
+                    ForgeError::new(ErrorCode::RepoPathOccupied)
+                        .with_context("repo_id", id)
+                        .with_context("path", path.display())
+                } else {
+                    io_failed("rename", e).with_context("repo_id", id)
+                }
+            }),
+            Err(e) => Err(e),
+        };
+        if let Err(err) = result {
+            return Err(match tokio::fs::remove_dir_all(&tmp).await {
+                Ok(()) => err,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => err,
+                // The original failure stays the reported code; the leftover
+                // directory is named so an operator can remove it.
+                Err(e) => err
+                    .with_context("cleanup_failed", tmp.display())
+                    .with_context("cleanup_error", e),
+            });
+        }
+        self.existing(id)
+    }
+
+    async fn init_into(
+        &self,
+        git: &Git,
+        dir: &Path,
+        hooks_path: Option<&Path>,
+    ) -> Result<(), ForgeError> {
         git.command("init")
             .arg("--bare")
             .arg("--quiet")
             .arg("--initial-branch=main")
-            .operand(&path)
+            // No template: nothing from the system template dir is copied.
+            .arg("--template=")
+            .path(dir)
             .output()
             .await?;
-        let mut settings: Vec<(&str, String)> = vec![
-            ("receive.fsckObjects", "true".into()),
-            ("transfer.fsckObjects", "true".into()),
-            ("uploadpack.allowFilter", "true".into()),
-            ("receive.advertisePushOptions", "true".into()),
-        ];
-        if let Some(hooks) = hooks_path {
-            settings.push(("core.hooksPath", hooks.display().to_string()));
-        }
+        let hooks = hooks_path.map(|h| h.display().to_string());
+        let settings = REPO_SETTINGS
+            .iter()
+            .map(|(k, v)| (*k, (*v).to_string()))
+            .chain(hooks.map(|h| ("core.hooksPath", h)));
         for (key, value) in settings {
             git.command("config")
-                .current_dir(&path)
-                .arg(key)
-                .arg(value)
+                .repo(dir)
+                .arg_owned(key)
+                .arg_owned(value)
                 .output()
                 .await?;
         }
-        self.existing(id)
+        Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::GitConfig;
-
-    fn root() -> (tempfile::TempDir, StorageRoot) {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let root = StorageRoot::open(dir.path()).expect("open root");
-        (dir, root)
-    }
-
-    #[test]
-    fn path_for_never_escapes_root() {
-        let (_d, root) = root();
-        for raw in [0, 1, -1, 42, i64::MAX, i64::MIN] {
-            let p = root.path_for(RepoId::new(raw));
-            assert!(p.starts_with(root.path()), "{}", p.display());
-            assert!(!p.to_string_lossy().contains(".."));
-        }
-        assert_ne!(
-            root.path_for(RepoId::new(1)).parent(),
-            root.path_for(RepoId::new(2)).parent(),
-            "shards spread repositories"
-        );
-    }
-
-    #[test]
-    fn missing_repository_dir_is_storage_missing() {
-        let (_d, root) = root();
-        let err = root.existing(RepoId::new(7)).expect_err("missing");
-        assert_eq!(err.code(), ErrorCode::StorageMissing);
-    }
-
-    #[test]
-    fn root_that_is_a_file_is_rejected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file = dir.path().join("not-a-dir");
-        std::fs::write(&file, b"x").expect("write");
-        let err = StorageRoot::open(&file).expect_err("file root");
-        assert_eq!(err.code(), ErrorCode::StoragePathRejected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn path_outside_root_is_rejected() {
-        let (_d, root) = root();
-        let outside = tempfile::tempdir().expect("tempdir");
-        let path = root.path_for(RepoId::new(9));
-        let shard = path.parent().expect("shard");
-        std::fs::create_dir_all(shard).expect("shard");
-        std::os::unix::fs::symlink(outside.path(), &path).expect("symlink");
-        let err = root.existing(RepoId::new(9)).expect_err("symlink escape");
-        assert_eq!(err.code(), ErrorCode::StoragePathRejected);
-    }
-
-    /// Windows: creating symlinks needs a privilege the test runner may lack,
-    /// so this variant checks the other rejection on the same path: a
-    /// repository entry that is not a directory. Linux CI runs the symlink case.
-    #[cfg(windows)]
-    #[test]
-    fn path_outside_root_is_rejected() {
-        let (_d, root) = root();
-        let path = root.path_for(RepoId::new(9));
-        std::fs::create_dir_all(path.parent().expect("shard")).expect("shard");
-        std::fs::write(&path, b"not a repository").expect("write");
-        let err = root.existing(RepoId::new(9)).expect_err("not a dir");
-        assert_eq!(err.code(), ErrorCode::StoragePathRejected);
-    }
-
-    #[tokio::test]
-    async fn init_bare_creates_a_bare_repository_with_server_settings() {
-        let (_d, root) = root();
-        let home = tempfile::tempdir().expect("home");
-        let git = Git::new(GitConfig::new("git", home.path()));
-        let path = root
-            .init_bare(&git, RepoId::new(5), None)
-            .await
-            .expect("init");
-        assert!(path.join("HEAD").is_file());
-        let out = git
-            .command("config")
-            .current_dir(&path)
-            .arg("--get")
-            .arg("receive.fsckObjects")
-            .output()
-            .await
-            .expect("config");
-        assert_eq!(out.stdout_str().trim(), "true");
-        let bare = git
-            .command("rev-parse")
-            .current_dir(&path)
-            .arg("--is-bare-repository")
-            .output()
-            .await
-            .expect("rev-parse");
-        assert_eq!(bare.stdout_str().trim(), "true");
-    }
-}
+#[path = "storage_tests.rs"]
+mod tests;

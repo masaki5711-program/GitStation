@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-A git subprocess exceeded its total or idle timeout and was killed.
+A git subprocess exceeded its total timeout and was killed and reaped.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand`, `timeout_ms` and `kind` (total|idle). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load.
+The log event carries `subcommand`, `timeout_ms` and `kind` (`total`). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load.
 
 ## 対処 (fix)
 
-Check storage latency and host load; for a legitimately large repository raise `git.timeout_total_ms` for that operation.
+Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`) for that operation.

@@ -24,4 +24,4 @@ The log event carries `repo_id` and `path`. Check whether the storage volume is 
 
 ## 対処 (fix)
 
-Remount the storage volume or restore the repository from backup; then run `forge doctor`.
+Remount the storage volume or restore the repository from backup; then confirm with `forge admin repo-path <repo_id>` (state `exists`).

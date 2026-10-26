@@ -1,11 +1,12 @@
 //! `forge` — operator CLI and (from M1) server entry point.
 
+use std::io::Write as _;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use forge_core::telemetry::{self, LogFormat};
 use forge_core::RequestId;
-use forge_errors::{ForgeError, Lang, Severity};
+use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
 mod explain;
@@ -64,24 +65,34 @@ fn main() -> ExitCode {
     telemetry::init(LogFormat::Pretty, "warn");
 
     let result = match cli.command {
-        Command::Explain { code } => explain::explain(&code).map(|text| print!("{text}")),
+        Command::Explain { code } => explain::explain(&code),
         Command::Errors {
             command: ErrorsCommand::List,
-        } => {
-            print!("{}", explain::list());
-            Ok(())
-        }
+        } => Ok(explain::list()),
         Command::Admin {
             command:
                 AdminCommand::RepoPath {
                     repo_id,
                     storage_root,
                 },
-        } => admin::repo_path(&storage_root, repo_id).map(|text| print!("{text}")),
+        } => admin::repo_path(&storage_root, repo_id),
     };
-    match result {
+    match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => report(&err, &request_id, lang),
+    }
+}
+
+/// Write the command output. A closed pipe (`forge errors list | head`) is
+/// not a failure; any other write error is reported, never a panic.
+fn emit(text: &str) -> Result<(), ForgeError> {
+    let mut out = std::io::stdout().lock();
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("operation", "write_stdout")
+            .with_source(e)),
     }
 }
 

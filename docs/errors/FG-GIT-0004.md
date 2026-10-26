@@ -20,8 +20,8 @@ Every git subprocess slot was in use for longer than the acquire timeout.
 
 ## 調べ方 (diagnosis)
 
-Check `git.max_concurrency` against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots.
+Check the git concurrency limit (`GitConfig::max_concurrency`) against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots.
 
 ## 対処 (fix)
 
-Raise `git.max_concurrency` if the host has CPU and IO headroom, or find the operations that hold slots for long.
+Raise the git concurrency limit if the host has CPU and IO headroom, or find the operations that hold slots for long.

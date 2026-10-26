@@ -1,18 +1,35 @@
 //! The single git subprocess wrapper.
 //!
-//! Every invocation: argument vector only (never a shell), environment cleared
-//! and rebuilt (no inherited `GIT_*`), user-controlled operands after `--`, a
-//! total timeout, a global concurrency limit, exit status checked and stderr
-//! kept for the log only.
+//! Argument layout (CLAUDE.md §3-5):
+//!
+//! ```text
+//! git [-c key=value]* <subcommand> <options>* [--end-of-options <revisions>*] [-- <paths>*]
+//! ```
+//!
+//! - options are `&'static str` (or crate-internal forge-generated values), so
+//!   user input can never reach the option position;
+//! - revisions (refs, object ids) follow `--end-of-options`, paths follow `--`
+//!   — the two are different for git (`git log -- main` means the *path* main);
+//! - the environment is cleared and rebuilt (no inherited `GIT_*`), the target
+//!   repository is pinned with `GIT_DIR`, the global config is forge-owned;
+//! - stdin, stdout and stderr are pumped concurrently (no pipe deadlock),
+//!   stdout is capped, there is a total timeout, a global concurrency limit,
+//!   and the exit status is checked.
+//!
+//! Known gap (M1 phase 9, streaming): only the direct child is killed on
+//! timeout; helpers such as `pack-objects` must be killed as a process group
+//! (Unix) / Job Object (Windows) once long-running streaming commands land.
 
 use std::ffi::{OsStr, OsString};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use forge_core::RefName;
 use forge_errors::{ErrorCode, ForgeError};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 
 /// How git is run. Loaded from configuration in `forge serve` / `worker`.
@@ -20,15 +37,21 @@ use tokio::sync::Semaphore;
 pub struct GitConfig {
     /// Path to the git binary (or `git` to resolve via `PATH`).
     pub bin: PathBuf,
-    /// The `HOME` git sees — owned by forge, so no user `.gitconfig` applies.
+    /// The `HOME` git sees — a forge-owned directory; the global config is
+    /// pinned to `<home>/.gitconfig`, so no user or shared config applies.
     pub home: PathBuf,
-    /// Upper bound for a non-streaming invocation.
+    /// Upper bound for one invocation.
     pub timeout_total: Duration,
     /// How long to wait for a free subprocess slot.
     pub acquire_timeout: Duration,
     /// Maximum concurrent git subprocesses.
     pub max_concurrency: usize,
+    /// Maximum captured stdout per invocation.
+    pub max_output_bytes: usize,
 }
+
+/// Captured stderr is for logs only; keep a bounded tail.
+const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 impl GitConfig {
     pub fn new(bin: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
@@ -38,6 +61,7 @@ impl GitConfig {
             timeout_total: Duration::from_secs(300),
             acquire_timeout: Duration::from_secs(10),
             max_concurrency: 32,
+            max_output_bytes: 16 * 1024 * 1024,
         }
     }
 }
@@ -49,11 +73,11 @@ pub struct Git {
     slots: Arc<Semaphore>,
 }
 
-/// Captured result of a successful invocation.
+/// Captured result of a successful invocation. stderr is not exposed: it may
+/// contain paths and must never reach a user (CLAUDE.md §3-3).
 #[derive(Debug)]
 pub struct GitOutput {
     pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
 }
 
 impl GitOutput {
@@ -80,14 +104,44 @@ impl Git {
         GitCommand {
             git: self.clone(),
             subcommand,
-            args: Vec::new(),
-            dashdash: false,
+            config: Vec::new(),
+            options: Vec::new(),
+            revisions: Vec::new(),
+            paths: Vec::new(),
+            git_dir: None,
             cwd: None,
             envs: Vec::new(),
             stdin: None,
+            #[cfg(test)]
             hold_stdin: false,
             timeout: self.config.timeout_total,
         }
+    }
+}
+
+/// A revision operand: a validated ref name or a full object id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Revision(String);
+
+impl Revision {
+    /// A full hex object id (40 for SHA-1, 64 for SHA-256).
+    pub fn object_id(hex: &str) -> Result<Self, ForgeError> {
+        let ok = matches!(hex.len(), 40 | 64) && hex.bytes().all(|b| b.is_ascii_hexdigit());
+        if ok {
+            Ok(Self(hex.to_ascii_lowercase()))
+        } else {
+            Err(ForgeError::new(ErrorCode::InvalidRefName).with_context("reason", "bad_object_id"))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&RefName> for Revision {
+    fn from(r: &RefName) -> Self {
+        Self(r.as_str().to_string())
     }
 }
 
@@ -96,12 +150,16 @@ impl Git {
 pub struct GitCommand {
     git: Git,
     subcommand: &'static str,
-    args: Vec<OsString>,
-    dashdash: bool,
+    config: Vec<(&'static str, OsString)>,
+    options: Vec<OsString>,
+    revisions: Vec<OsString>,
+    paths: Vec<OsString>,
+    git_dir: Option<PathBuf>,
     cwd: Option<PathBuf>,
     envs: Vec<(&'static str, OsString)>,
     stdin: Option<Vec<u8>>,
-    /// Keep stdin open without writing (tests: simulate a client that stalls).
+    /// Keep stdin open without writing (tests: simulate a stalled client).
+    #[cfg(test)]
     hold_stdin: bool,
     timeout: Duration,
 }
@@ -111,25 +169,56 @@ pub struct GitCommand {
 const PASSTHROUGH_ENV: &[&str] = &["PATH", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR"];
 
 impl GitCommand {
-    /// A forge-controlled option or argument (never user input).
+    /// A fixed option or argument. `&'static str` keeps user input out of the
+    /// option position by construction.
     #[must_use]
-    pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
-        self.args.push(arg.as_ref().to_os_string());
+    pub fn arg(mut self, arg: &'static str) -> Self {
+        self.options.push(OsString::from(arg));
         self
     }
 
-    /// A user-controlled operand (ref, path, revision). Always placed after a
-    /// single `--`, so it can never be parsed as an option.
+    /// A forge-generated value in the option position (config values, paths
+    /// forge derived itself). Crate-internal on purpose.
     #[must_use]
-    pub fn operand(mut self, value: impl AsRef<OsStr>) -> Self {
-        if !self.dashdash {
-            self.args.push(OsString::from("--"));
-            self.dashdash = true;
-        }
-        self.args.push(value.as_ref().to_os_string());
+    pub(crate) fn arg_owned(mut self, arg: impl AsRef<OsStr>) -> Self {
+        self.options.push(arg.as_ref().to_os_string());
         self
     }
 
+    /// A revision (ref or object id), placed after `--end-of-options`.
+    #[must_use]
+    pub fn revision(mut self, rev: impl Into<Revision>) -> Self {
+        self.revisions.push(OsString::from(rev.into().0));
+        self
+    }
+
+    /// A path or pathspec, placed after `--`.
+    #[must_use]
+    pub fn path(mut self, path: impl AsRef<OsStr>) -> Self {
+        self.paths.push(path.as_ref().to_os_string());
+        self
+    }
+
+    /// `git -c key=value` for this invocation only (e.g. forcing
+    /// `core.hooksPath` on every receive-pack).
+    #[must_use]
+    pub fn config_override(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        self.config.push((key, value.as_ref().to_os_string()));
+        self
+    }
+
+    /// Pin the repository (`GIT_DIR`) and run inside it — git never discovers
+    /// a repository by walking up from the working directory.
+    #[must_use]
+    pub fn repo(mut self, git_dir: impl AsRef<Path>) -> Self {
+        let dir = git_dir.as_ref().to_path_buf();
+        self.cwd = Some(dir.clone()); // clone: the same path is both GIT_DIR and cwd
+        self.git_dir = Some(dir);
+        self
+    }
+
+    /// Working directory without a repository (discovery never leaves this
+    /// directory: its parent is set as `GIT_CEILING_DIRECTORIES`).
     #[must_use]
     pub fn current_dir(mut self, dir: impl AsRef<Path>) -> Self {
         self.cwd = Some(dir.as_ref().to_path_buf());
@@ -149,7 +238,6 @@ impl GitCommand {
         self
     }
 
-    /// Keep the child's stdin open and never write to it (a stalled client).
     #[cfg(test)]
     #[must_use]
     fn hold_stdin_open(mut self) -> Self {
@@ -163,9 +251,27 @@ impl GitCommand {
         self
     }
 
-    /// The argument vector after the subcommand (for tests and logs).
-    pub fn args(&self) -> &[OsString] {
-        &self.args
+    /// The full argument vector after `git` (for tests and logs).
+    pub fn argv(&self) -> Vec<OsString> {
+        let mut v = Vec::new();
+        for (key, value) in &self.config {
+            let mut kv = OsString::from(*key);
+            kv.push("=");
+            kv.push(value);
+            v.push(OsString::from("-c"));
+            v.push(kv);
+        }
+        v.push(OsString::from(self.subcommand));
+        v.extend(self.options.iter().cloned());
+        if !self.revisions.is_empty() {
+            v.push(OsString::from("--end-of-options"));
+            v.extend(self.revisions.iter().cloned());
+        }
+        if !self.paths.is_empty() {
+            v.push(OsString::from("--"));
+            v.extend(self.paths.iter().cloned());
+        }
+        v
     }
 
     /// Build the `tokio::process::Command` with the scrubbed environment.
@@ -179,18 +285,26 @@ impl GitCommand {
             }
         }
         cmd.env("HOME", &config.home)
+            .env("GIT_CONFIG_GLOBAL", config.home.join(".gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
             .env("LANG", "C");
+        if let Some(dir) = &self.git_dir {
+            cmd.env("GIT_DIR", dir);
+        } else if let Some(parent) = self.cwd.as_deref().and_then(Path::parent) {
+            // Ceilings are directories git must not move *up into*: stop at the
+            // working directory itself.
+            cmd.env("GIT_CEILING_DIRECTORIES", parent);
+        }
         for (k, v) in &self.envs {
             cmd.env(k, v);
         }
-        cmd.arg(self.subcommand).args(&self.args);
+        cmd.args(self.argv());
         if let Some(dir) = &self.cwd {
             cmd.current_dir(dir);
         }
-        cmd.stdin(if self.stdin.is_some() || self.hold_stdin {
+        cmd.stdin(if self.wants_stdin() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -201,20 +315,45 @@ impl GitCommand {
         cmd
     }
 
+    fn wants_stdin(&self) -> bool {
+        #[cfg(test)]
+        if self.hold_stdin {
+            return true;
+        }
+        self.stdin.is_some()
+    }
+
     fn fail(&self, code: ErrorCode) -> ForgeError {
         ForgeError::new(code).with_context("subcommand", self.subcommand)
     }
 
-    /// Run to completion and capture output. Non-zero exit is `FG-GIT-0003`,
-    /// exceeding the timeout is `FG-GIT-0002` (the process is killed).
-    pub async fn output(mut self) -> Result<GitOutput, ForgeError> {
-        let git = self.git.clone();
-        let config = git.config();
-        let permit = tokio::time::timeout(config.acquire_timeout, git.slots.acquire())
-            .await
-            .map_err(|_| self.fail(ErrorCode::GitBusy))?
-            .map_err(|e| self.fail(ErrorCode::GitBusy).with_source(e))?;
+    fn timed_out(&self) -> ForgeError {
+        self.fail(ErrorCode::GitTimeout)
+            .with_context("kind", "total")
+            .with_context("timeout_ms", self.timeout.as_millis())
+    }
 
+    /// Run to completion and capture stdout.
+    ///
+    /// Non-zero exit → `FG-GIT-0003`, timeout → `FG-GIT-0002` (child killed and
+    /// reaped), stdout over the cap → `FG-GIT-0006`, no free slot → `FG-GIT-0004`,
+    /// binary not runnable → `FG-GIT-0001`.
+    pub async fn output(mut self) -> Result<GitOutput, ForgeError> {
+        let git = self.git.clone(); // clone: Arc handle; `self` is used mutably below
+        let config = git.config();
+        let _permit = match tokio::time::timeout(
+            config.acquire_timeout,
+            Arc::clone(&git.slots).acquire_owned(),
+        )
+        .await
+        {
+            Err(_) => return Err(self.fail(ErrorCode::GitBusy)),
+            // A closed semaphore is a bug, not load.
+            Ok(Err(e)) => return Err(self.fail(ErrorCode::Internal).with_source(e)),
+            Ok(Ok(permit)) => permit,
+        };
+
+        let started = Instant::now();
         let mut child = self.build().spawn().map_err(|e| {
             self.fail(ErrorCode::GitUnavailable)
                 .with_context("reason", "spawn_failed")
@@ -222,168 +361,170 @@ impl GitCommand {
                 .with_source(e)
         })?;
 
-        // Held for the whole run when `hold_stdin` is set, so the child never
-        // sees EOF (wait_with_output would otherwise close it).
-        let held_stdin = if self.hold_stdin {
-            child.stdin.take()
-        } else {
-            None
-        };
+        let stdin_pipe = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
         let input = self.stdin.take();
-        let run = async move {
-            if let Some(input) = input {
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(&input).await?;
-                    stdin.shutdown().await?;
-                }
-            }
-            child.wait_with_output().await
-        };
-        let result = tokio::time::timeout(self.timeout, run).await;
-        drop(held_stdin);
-        drop(permit);
+        #[cfg(test)]
+        let hold = self.hold_stdin;
+        #[cfg(not(test))]
+        let hold = false;
+        let max_out = config.max_output_bytes;
 
-        let output = match result {
-            Err(_) => {
-                // `kill_on_drop` killed the child when the future was dropped.
+        let write = async move {
+            let Some(mut pipe) = stdin_pipe else {
+                return Ok::<(), io::Error>(());
+            };
+            if hold {
+                // Keep the pipe open forever; only the timeout ends this.
+                std::future::pending::<()>().await;
+            }
+            if let Some(data) = input {
+                ignore_broken_pipe(pipe.write_all(&data).await)?;
+                ignore_broken_pipe(pipe.shutdown().await)?;
+            }
+            Ok(())
+        };
+        let io = async {
+            tokio::join!(
+                write,
+                read_capped(stdout, max_out),
+                read_capped(stderr, MAX_STDERR_BYTES)
+            )
+        };
+
+        let Ok((write_res, out_res, err_res)) = tokio::time::timeout(self.timeout, io).await else {
+            reap(&mut child).await;
+            return Err(self.timed_out());
+        };
+        let (stderr_bytes, _) = err_res.unwrap_or_default();
+        let stderr_head = redact(&stderr_head(&stderr_bytes));
+
+        let (stdout_bytes, overflow) = match out_res {
+            Ok(r) => r,
+            Err(e) => {
+                reap(&mut child).await;
+                return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
+            }
+        };
+        if overflow {
+            reap(&mut child).await;
+            return Err(self
+                .fail(ErrorCode::GitOutputTooLarge)
+                .with_context("max_output_bytes", max_out));
+        }
+
+        let status = match tokio::time::timeout(self.timeout, child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => {
                 return Err(self
-                    .fail(ErrorCode::GitTimeout)
-                    .with_context("kind", "total")
-                    .with_context("timeout_ms", self.timeout.as_millis()));
+                    .fail(ErrorCode::GitProcessFailed)
+                    .with_context("stderr", stderr_head)
+                    .with_source(e))
             }
-            Ok(Err(e)) => return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e)),
-            Ok(Ok(output)) => output,
+            Err(_) => {
+                reap(&mut child).await;
+                return Err(self.timed_out());
+            }
         };
+        let exit_code = status
+            .code()
+            .map_or_else(|| "signal".to_string(), |c| c.to_string());
+        tracing::debug!(
+            target: "forge_git::exec",
+            subcommand = self.subcommand,
+            duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            exit_code = %exit_code,
+            "git.exec"
+        );
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let head: String = stderr.lines().take(5).collect::<Vec<_>>().join(" | ");
+        if !status.success() {
             return Err(self
                 .fail(ErrorCode::GitProcessFailed)
-                .with_context(
-                    "exit_code",
-                    output
-                        .status
-                        .code()
-                        .map_or_else(|| "signal".to_string(), |c| c.to_string()),
-                )
-                .with_context("stderr", head));
+                .with_context("exit_code", exit_code)
+                .with_context("stderr", stderr_head));
+        }
+        if let Err(e) = write_res {
+            // git succeeded but did not receive all input: not a success.
+            return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
         }
         Ok(GitOutput {
-            stdout: output.stdout,
-            stderr: output.stderr,
+            stdout: stdout_bytes,
         })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn git() -> Git {
-        let home = std::env::temp_dir();
-        Git::new(GitConfig::new("git", home))
-    }
-
-    #[test]
-    fn user_ref_starting_with_dash_is_after_double_dash() {
-        let cmd = git()
-            .command("log")
-            .arg("--format=%H")
-            .operand("--upload-pack=evil")
-            .operand("refs/heads/main");
-        let args: Vec<_> = cmd.args().iter().map(|a| a.to_string_lossy()).collect();
-        assert_eq!(
-            args,
-            ["--format=%H", "--", "--upload-pack=evil", "refs/heads/main"]
-        );
-    }
-
-    #[tokio::test]
-    async fn nonzero_exit_is_git_process_failed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let err = git()
-            .command("rev-parse")
-            .arg("--verify")
-            .current_dir(dir.path())
-            .operand("HEAD")
-            .output()
-            .await
-            .expect_err("not a repository");
-        assert_eq!(err.code(), ErrorCode::GitProcessFailed);
-        assert!(err.context().iter().any(|(k, _)| *k == "exit_code"));
-    }
-
-    #[tokio::test]
-    async fn hung_git_is_killed_after_timeout() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let g = git();
-        g.command("init")
-            .arg("--bare")
-            .operand(dir.path())
-            .output()
-            .await
-            .expect("init");
-        // `cat-file --batch` reads stdin until EOF; a stalled client never
-        // sends EOF, so only the timeout can end it.
-        let err = g
-            .command("cat-file")
-            .arg("--batch")
-            .current_dir(dir.path())
-            .hold_stdin_open()
-            .timeout(Duration::from_millis(300))
-            .output()
-            .await
-            .expect_err("must time out");
-        assert_eq!(err.code(), ErrorCode::GitTimeout);
-    }
-
-    #[tokio::test]
-    async fn concurrency_limit_reports_git_busy() {
-        let mut config = GitConfig::new("git", std::env::temp_dir());
-        config.max_concurrency = 1;
-        config.acquire_timeout = Duration::from_millis(100);
-        let g = Git::new(config);
-        let _held = g.slots.clone().acquire_owned().await.expect("permit");
-        let err = g
-            .command("version")
-            .output()
-            .await
-            .expect_err("no free slot");
-        assert_eq!(err.code(), ErrorCode::GitBusy);
-    }
-
-    #[tokio::test]
-    async fn inherited_git_dir_is_not_passed_to_child() {
-        let repo = tempfile::tempdir().expect("tempdir");
-        let g = git();
-        g.command("init")
-            .operand(repo.path())
-            .output()
-            .await
-            .expect("init");
-        // The server process has GIT_DIR pointing at a real repository; a
-        // scrubbed child in an empty directory must not see it.
-        std::env::set_var("GIT_DIR", repo.path().join(".git"));
-        let empty = tempfile::tempdir().expect("tempdir");
-        let res = g
-            .command("rev-parse")
-            .arg("--git-dir")
-            .current_dir(empty.path())
-            .output()
-            .await;
-        std::env::remove_var("GIT_DIR");
-        let err = res.expect_err("GIT_DIR must not leak into the child");
-        assert_eq!(err.code(), ErrorCode::GitProcessFailed);
-    }
-
-    #[tokio::test]
-    async fn missing_git_binary_is_git_unavailable() {
-        let g = Git::new(GitConfig::new(
-            "/nonexistent/forge-test/git",
-            std::env::temp_dir(),
-        ));
-        let err = g.command("version").output().await.expect_err("no binary");
-        assert_eq!(err.code(), ErrorCode::GitUnavailable);
+/// git may exit before reading all of stdin; its exit status (and stderr)
+/// then explains the failure better than the pipe error.
+fn ignore_broken_pipe(r: io::Result<()>) -> io::Result<()> {
+    match r {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
     }
 }
+
+/// Read up to `cap` bytes; returns `(bytes, overflowed)`.
+async fn read_capped<R: AsyncRead + Unpin>(
+    reader: Option<R>,
+    cap: usize,
+) -> io::Result<(Vec<u8>, bool)> {
+    let Some(reader) = reader else {
+        return Ok((Vec::new(), false));
+    };
+    let mut buf = Vec::new();
+    let limit = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
+    reader.take(limit).read_to_end(&mut buf).await?;
+    let overflow = buf.len() > cap;
+    buf.truncate(cap);
+    Ok((buf, overflow))
+}
+
+/// Kill and reap a child we are abandoning (bounded wait).
+async fn reap(child: &mut tokio::process::Child) {
+    // start_kill fails only if the child already exited; the wait observes it.
+    let _ = child.start_kill(); // ignore: outcome observed by the wait below
+    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await; // ignore: best-effort reap after kill
+}
+
+/// The first lines of stderr for the log (bounded).
+fn stderr_head(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut head: String = text.lines().take(20).collect::<Vec<_>>().join(" | ");
+    if head.len() > 2000 {
+        let mut cut = 2000;
+        while !head.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        head.truncate(cut);
+        head.push('…');
+    }
+    head
+}
+
+/// Remove `user:password@` from URLs (git prints remote URLs in errors).
+fn redact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(idx) = rest.find("://") {
+        let (before, after) = rest.split_at(idx + 3);
+        out.push_str(before);
+        let end = after
+            .find(|c: char| c == '/' || c.is_whitespace())
+            .unwrap_or(after.len());
+        let (authority, tail) = after.split_at(end);
+        match authority.rfind('@') {
+            Some(at) => {
+                out.push_str("***@");
+                out.push_str(authority.get(at + 1..).unwrap_or_default());
+            }
+            None => out.push_str(authority),
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+#[path = "command_tests.rs"]
+mod tests;
