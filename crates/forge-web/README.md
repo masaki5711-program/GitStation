@@ -68,6 +68,6 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 **Gotchas**
 - OpenAPI is generated from the registry with `serde_json` for now; request /
   response schemas (utoipa, per ADR-0010) join with the resource routes.
-- `/readyz` (DB, storage) arrives with the database (M1 phase 2).
+- `GET /readyz` (public) runs `AppState::probes` (`forge_core::readiness::ReadinessProbe`; the database today) in order, each bounded by `probe_timeout` (3 s); the first failure answers with its own code (FG-DB-0001, 503) or FG-WEB-0005. The body is `{"status":"ok"}` or the standard error body — never host names. forge-web does not depend on forge-db: `forge serve` passes the probes.
 
 **Tests**: `cargo nextest run -p forge-web` (no DB, no network beyond loopback).

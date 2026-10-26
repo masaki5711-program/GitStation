@@ -16,7 +16,7 @@ use crate::context::REQUEST_ID_HEADER;
 use crate::registry::{openapi_json, routes_json, Registry, Verb};
 
 fn state() -> AppState {
-    AppState { version: "test" }
+    AppState::new("test", Vec::new())
 }
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, HeaderMap, Value) {
@@ -421,8 +421,11 @@ fn openapi_documents_params_security_and_multiple_verbs() {
         .route(Verb::Delete, "/x/{id}", Action::ProjectDelete, "delete", ok);
     let doc: Value = serde_json::from_str(&openapi_json(registry.defs(), "1")).expect("json");
     let path = &doc["paths"]["/x/{id}"];
-    assert_eq!(path["get"]["operationId"], "Health");
-    assert_eq!(path["delete"]["operationId"], "ProjectDelete");
+    assert_eq!(path["get"]["operationId"], "get_x_id");
+    assert_eq!(
+        path["delete"]["operationId"], "delete_x_id",
+        "unique per (verb, path)"
+    );
     assert_eq!(path["get"]["security"], serde_json::json!([]));
     assert!(path["delete"].get("security").is_none(), "inherits bearer");
     assert_eq!(path["delete"]["parameters"][0]["name"], "id");

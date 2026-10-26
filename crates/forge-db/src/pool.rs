@@ -155,6 +155,17 @@ impl Db {
     }
 }
 
+/// `GET /readyz` and `forge doctor`: one bounded round trip (`Db::ping`).
+impl forge_core::readiness::ReadinessProbe for Db {
+    fn name(&self) -> &'static str {
+        "database"
+    }
+
+    fn check(&self) -> forge_core::readiness::ProbeFuture<'_> {
+        Box::pin(self.ping())
+    }
+}
+
 /// Explicit options only: `new_without_pgpass` skips `~/.pgpass`, and every
 /// field it could have taken from the environment is set here (the
 /// environment itself is rejected by `reject_libpq_env`).

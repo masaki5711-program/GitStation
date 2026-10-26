@@ -15,6 +15,7 @@ path = "src/main.rs"
 forge-errors.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
+serde_json.workspace = true
 clap = { workspace = true, features = ["env"] }
 forge-git.workspace = true
 forge-web.workspace = true

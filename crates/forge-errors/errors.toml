@@ -394,6 +394,19 @@ runbook = "server-start-failed"
 test = "invalid_or_duplicate_routes_are_a_startup_error"
 
 [[error]]
+code = "FG-WEB-0005"
+name = "ReadinessTimeout"
+http_status = 503
+severity = "warn"
+user_message_ja = "サーバーの準備ができていません。しばらくしてから再度お試しください。"
+user_message_en = "The server is not ready. Try again later."
+user_message_id = "Server belum siap. Coba lagi nanti."
+cause = "A readiness probe (GET /readyz) did not answer within its client-side timeout, so the dependency it checks (named by `probe`, e.g. database) is treated as unavailable."
+diagnosis = "The log event carries `probe` and `timeout_ms`. Run `forge doctor` on the host to check the same dependency without the HTTP path; for the database see the db-unavailable runbook (a half-open connection or an overloaded server does not answer)."
+fix = "Restore the dependency named by `probe`; if it is healthy but slow, look at its load. The readiness timeout is deliberately short so load balancers stop routing to a stuck instance."
+test = "readyz_probe_is_bounded_by_its_timeout"
+
+[[error]]
 code = "FG-SYS-0005"
 name = "ServeFailed"
 http_status = 500

@@ -42,5 +42,7 @@ pub fn generated_documents(version: &str) -> Vec<(&'static str, String)> {
 }
 
 #[cfg(test)]
+mod readyz_tests;
+#[cfg(test)]
 #[path = "tests.rs"]
 mod tests;

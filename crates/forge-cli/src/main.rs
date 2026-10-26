@@ -11,6 +11,7 @@ use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
 mod db;
+mod doctor;
 mod explain;
 mod runtime;
 mod serve;
@@ -46,6 +47,13 @@ enum Command {
         /// Listen address (default: `server.bind`, 127.0.0.1:8080).
         #[arg(long)]
         bind: Option<String>,
+    },
+    /// Read-only health checks of everything `forge serve` needs
+    /// (configuration, database, schema, storage, git).
+    Doctor {
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
     },
     /// Database schema: status (read-only) and migrate.
     Db {
@@ -107,12 +115,31 @@ fn main() -> ExitCode {
         Command::Explain { .. }
         | Command::Errors { .. }
         | Command::Admin { .. }
+        | Command::Doctor { .. }
         | Command::Db {
             command: DbCommand::Status { .. },
         } => telemetry::init(LogFormat::Pretty, "warn"),
     };
 
     let config_file = cli.config;
+    // doctor prints its report even when a check fails, then exits with the
+    // most severe failure.
+    if let Command::Doctor { json } = cli.command {
+        return match doctor::run(config_file.as_deref(), json, &request_id) {
+            // The checks were logged inside doctor; print the worst only.
+            Ok(r) => match (emit(&r.text), r.failure) {
+                (Err(write_err), failure) => {
+                    if let Some(f) = failure {
+                        print_failure(&f, &request_id, lang);
+                    }
+                    report(&write_err, &request_id, lang)
+                }
+                (Ok(()), Some(f)) => print_failure(&f, &request_id, lang),
+                (Ok(()), None) => ExitCode::SUCCESS,
+            },
+            Err(e) => report(&e, &request_id, lang),
+        };
+    }
     let config = || {
         let env = config::Env::from_process()?;
         config::load(config_file.as_deref(), &env)
@@ -143,6 +170,10 @@ fn main() -> ExitCode {
         Command::Db {
             command: DbCommand::Migrate,
         } => config().and_then(|cfg| db::migrate(&cfg.database)),
+        // Returned above; reaching this arm is a programming error, reported.
+        Command::Doctor { .. } => {
+            Err(ForgeError::new(ErrorCode::Internal).with_context("operation", "doctor_dispatch"))
+        }
     };
     match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,
@@ -166,6 +197,11 @@ fn emit(text: &str) -> Result<(), ForgeError> {
 /// The CLI boundary: log once, show the user message + request id.
 fn report(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
     telemetry::log_failure(err, request_id);
+    print_failure(err, request_id, lang)
+}
+
+/// The user-facing line and exit code, for a failure already logged.
+fn print_failure(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
     eprintln!(
         "{} [{}] ({}: {request_id})",
         err.user_message(lang),
