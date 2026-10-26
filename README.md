@@ -1,7 +1,13 @@
-# forge — 社内 Git プラットフォーム（仮称）
+# GitStation — 社内 Git プラットフォーム
 
-社内で完結する Git プラットフォームの製品リポジトリです。エージェントモデル
-（Claude Code の設定・フック・ゲート）は 1 つ上の階層 `D:\app\git` にあり、
+社内で完結する、GitHub / GitLab に相当する開発基盤です。目的は **AI によるシステム開発の加速**。
+Git ホスティング、MR とレビュー、CI/CD と社内アプリサーバーへの自動デプロイ、ローカル LLM による
+マージ・パイプラインの検証、kanflow（プロジェクト管理ツール）との連携、仕様駆動開発を提供します。
+**実行環境は社内のサーバー**で、外部のサービスには依存しません。
+
+コード上の識別子（クレート名 `forge-*`、コマンド `forge`、エラーコードの `FG-`）は開発時の仮称のままです。
+
+エージェントモデル（Claude Code の設定・フック・ゲート）は 1 つ上の階層 `D:\app\git` にあり、
 Claude Code はそこで起動します。
 
 ## 構成
@@ -28,6 +34,8 @@ cargo run -p forge-cli -- explain FG-SYS-0001
 
 ## ロードマップ
 
-M1 Git の核（HTTP での clone / push、ユーザー、権限、doctor、diag）→ M2 Web UI →
-M3 SSH・Webhook・バックアップ → M4 CI/CD と自動デプロイ → M5 Issue / MR →
-M6 Wiki → M7 文書ポータル。詳細は `../docs/plan/00-agent-model-plan.md`。
+M1 Git の核 → M2 Web UI の基礎 → **M3 MR とレビュー（R1 パイロット）** → M4 CI/CD →
+**M5 ローカル LLM（R2 正式運用）** → M6 Issue とナレッジ → **M7 文書ポータル（R3 全社展開）** → M8 拡張。
+
+計画書（エージェントモデルのリポジトリ `../docs/plan/`）: `01` 全体計画、`02` kanflow 連携と外部 API、
+`03` 仕様駆動開発、`04` CI/CD・コンフリクト・パイプラインの検証。設計判断は `docs/adr/`。
