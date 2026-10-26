@@ -1,0 +1,66 @@
+{
+  "components": {
+    "schemas": {
+      "Error": {
+        "additionalProperties": false,
+        "properties": {
+          "error_code": {
+            "pattern": "^FG-[A-Z]+-[0-9]{4}$",
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "user_message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "user_message",
+          "request_id"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerToken": {
+        "description": "Personal access token",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "GitStation API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "Health",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Liveness probe",
+        "x-forge-action": "Health"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerToken": []
+    }
+  ]
+}

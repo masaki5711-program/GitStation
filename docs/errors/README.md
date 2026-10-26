@@ -28,3 +28,6 @@
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
 | [FG-GIT-0010](FG-GIT-0010.md) | 403 | info | A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*) |
+| [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path (or the method is not registered for that path). |
+| [FG-WEB-0002](FG-WEB-0002.md) | 503 | warn | A request exceeded the server's request timeout and was cancelled. |
+| [FG-SYS-0004](FG-SYS-0004.md) | 500 | alert | forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address). |

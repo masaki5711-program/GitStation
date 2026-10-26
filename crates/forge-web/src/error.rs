@@ -53,8 +53,10 @@ impl IntoResponse for ApiError {
             request_id: self.request_id.as_str(),
         };
         let mut res = (status, Json(body)).into_response();
-        res.headers_mut()
-            .insert(CONTENT_LANGUAGE, HeaderValue::from_static(self.lang.as_str()));
+        res.headers_mut().insert(
+            CONTENT_LANGUAGE,
+            HeaderValue::from_static(self.lang.as_str()),
+        );
         res
     }
 }

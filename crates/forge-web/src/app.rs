@@ -36,6 +36,32 @@ impl Default for AppConfig {
     }
 }
 
+/// Actions that have permission-matrix rows but no route yet (M1 phase 8).
+/// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
+/// stale row; an action leaves this list in the commit that routes it.
+pub const PLANNED: &[Action] = &[
+    Action::ProjectRead,
+    Action::ProjectCreate,
+    Action::ProjectUpdate,
+    Action::ProjectVisibilityChange,
+    Action::ProjectTransfer,
+    Action::ProjectDelete,
+    Action::ProjectRestore,
+    Action::ProtectedRefManage,
+    Action::MemberManage,
+    Action::GroupRead,
+    Action::GroupCreateTopLevel,
+    Action::SubgroupCreate,
+    Action::GroupUpdate,
+    Action::TokenCreate,
+    Action::TokenList,
+    Action::TokenRevoke,
+    Action::UserCreate,
+    Action::UserDisable,
+    Action::AuditRead,
+    Action::Metrics,
+];
+
 /// Every route of the product. The `gen-authz` binary and the tests read the
 /// same list.
 pub fn registry() -> Registry<AppState> {

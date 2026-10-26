@@ -128,8 +128,9 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
     }
 }
 
-/// `Git/docs/authz/routes.generated.json`.
-pub fn routes_json(defs: &[RouteDef]) -> String {
+/// `Git/docs/authz/routes.generated.json`: the routes, then the planned
+/// actions as `{ "action": .., "planned": true }`.
+pub fn routes_json(defs: &[RouteDef], planned: &[Action]) -> String {
     let mut items: Vec<&RouteDef> = defs.iter().collect();
     items.sort_by(|a, b| (a.path, a.verb).cmp(&(b.path, b.verb)));
     let list: Vec<Value> = items
@@ -142,6 +143,11 @@ pub fn routes_json(defs: &[RouteDef]) -> String {
                 "public": d.action.is_public(),
             })
         })
+        .chain(
+            planned
+                .iter()
+                .map(|a| json!({ "action": a.name(), "planned": true })),
+        )
         .collect();
     pretty(&Value::Array(list))
 }

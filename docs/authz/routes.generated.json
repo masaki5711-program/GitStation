@@ -1,0 +1,88 @@
+[
+  {
+    "action": "Health",
+    "method": "GET",
+    "path": "/healthz",
+    "public": true
+  },
+  {
+    "action": "ProjectRead",
+    "planned": true
+  },
+  {
+    "action": "ProjectCreate",
+    "planned": true
+  },
+  {
+    "action": "ProjectUpdate",
+    "planned": true
+  },
+  {
+    "action": "ProjectVisibilityChange",
+    "planned": true
+  },
+  {
+    "action": "ProjectTransfer",
+    "planned": true
+  },
+  {
+    "action": "ProjectDelete",
+    "planned": true
+  },
+  {
+    "action": "ProjectRestore",
+    "planned": true
+  },
+  {
+    "action": "ProtectedRefManage",
+    "planned": true
+  },
+  {
+    "action": "MemberManage",
+    "planned": true
+  },
+  {
+    "action": "GroupRead",
+    "planned": true
+  },
+  {
+    "action": "GroupCreateTopLevel",
+    "planned": true
+  },
+  {
+    "action": "SubgroupCreate",
+    "planned": true
+  },
+  {
+    "action": "GroupUpdate",
+    "planned": true
+  },
+  {
+    "action": "TokenCreate",
+    "planned": true
+  },
+  {
+    "action": "TokenList",
+    "planned": true
+  },
+  {
+    "action": "TokenRevoke",
+    "planned": true
+  },
+  {
+    "action": "UserCreate",
+    "planned": true
+  },
+  {
+    "action": "UserDisable",
+    "planned": true
+  },
+  {
+    "action": "AuditRead",
+    "planned": true
+  },
+  {
+    "action": "Metrics",
+    "planned": true
+  }
+]

@@ -27,9 +27,15 @@ pub const OPENAPI_DOC: &str = "docs/api/openapi.json";
 pub fn generated_documents(version: &str) -> Vec<(&'static str, String)> {
     let registry = app::registry();
     vec![
-        (ROUTES_MANIFEST, registry::routes_json(registry.defs())),
+        (
+            ROUTES_MANIFEST,
+            registry::routes_json(registry.defs(), app::PLANNED),
+        ),
         (MATRIX_MANIFEST, forge_auth::matrix::summary_json()),
-        (OPENAPI_DOC, registry::openapi_json(registry.defs(), version)),
+        (
+            OPENAPI_DOC,
+            registry::openapi_json(registry.defs(), version),
+        ),
     ]
 }
 
