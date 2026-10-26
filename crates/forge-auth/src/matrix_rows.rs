@@ -54,6 +54,13 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::RepoRead, W::Guest, F::InternalProject, Allow),
     row(A::RepoRead, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
     row(A::RepoRead, W::NonMember, F::DeletedProject, deny(E::NotFound)),
+    // --- RepoPush, project level (before receive-pack starts) ---
+    row(A::RepoPush, W::Developer, F::PrivateProject, Allow),
+    row(A::RepoPush, W::DevTokenWriteRepository, F::PrivateProject, Allow),
+    row(A::RepoPush, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
+    row(A::RepoPush, W::NonMember, F::InternalProject, deny(E::Forbidden)),
+    row(A::RepoPush, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    row(A::RepoPush, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
     // --- RepoPush (one ref update) ---
     row(A::RepoPush, W::Anonymous, r(BR, U::FastForward, None), deny(E::Unauthenticated)),
     row(A::RepoPush, W::NonMember, r(BR, U::FastForward, None), deny(E::NotFound)),

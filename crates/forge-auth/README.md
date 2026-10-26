@@ -48,13 +48,27 @@ last Owner cannot be removed; visibility changes need an Owner; tokens never
 mint tokens; an administrator's token needs the `admin` scope and only users
 with administrator rights may request it.
 
-**Handover to the lookup layer and routes** (from review)
-- `MembershipChange.from` and `RefProtectionChange.from` are loaded from
-  the DB, never taken from the request; `Add` on an existing member is a
-  conflict, not an upsert.
-- Protection patterns match case-insensitively; effective protection via
-  `RefProtection::effective`.
-- The `ProjectUpdate` request type has no visibility / protection fields.
+**Handover to the lookup layer and routes** (security review, must be done when they land)
+1. Load `ProjectView.role` (max over ancestor groups), `is_admin`, `active`,
+   `MembershipChange.from`, `RefProtectionChange.from` and `removes_last_owner`
+   from the database — never from the request. `Add` on an existing member is a
+   conflict, not an upsert. Expired / revoked tokens are authentication failures.
+2. Protection patterns match case-insensitively; collect every matching rule and
+   pass them through `RefProtection::effective` (the only constructor).
+3. Receive-pack: `RepoPush` on `Resource::Project` before the pack is accepted;
+   then every ref command (`RefUpdate` from old/new ids + ancestry) before any
+   ref is updated, all-or-nothing (pre-receive, ADR-0008).
+4. The `ProjectUpdate` request type has no visibility / protection fields; in
+   M4 a deploy-branch change must not allow deploying from an unprotected ref.
+5. Transfer into a personal namespace: `target_role = Some(Owner)` only for the
+   caller's own namespace; never into a group pending deletion.
+6. Project creation: the creator gets no direct role above their group role.
+7. Last Owner: apply the same guard to user disable / delete.
+8. List endpoints filter each item through `ProjectRead`.
+9. Decide explicitly whether password Basic auth is allowed on git routes (it
+   would be `Credential::Session`: every scope and administrator rights).
+10. CSRF protection for session-backed changes; rate limits on login and tokens.
+11. Before M4: default protection for tags, or deploy only from protected refs.
 
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).

@@ -103,6 +103,11 @@ pub fn authorize(
             need(Role::Reporter, read_role(p))
         }
 
+        // Before receive-pack starts (no ref is known yet): may this caller
+        // push to the project at all? Stops non-developers from uploading
+        // packs; each ref update is decided again below.
+        (Action::RepoPush, Resource::Project(p)) => need(Role::Developer, p.role),
+
         (
             Action::RepoPush,
             Resource::Ref {
@@ -120,16 +125,20 @@ pub fn authorize(
                 return Ok(());
             };
             let protected =
-                |code| deny(code).with_context("protection", protection.push_min_role.as_str());
+                |code| deny(code).with_context("protection", protection.push_min_role().as_str());
             match update {
                 RefUpdate::Force => Err(protected(ErrorCode::ProtectedRefForcePush)),
                 RefUpdate::Delete => Err(protected(ErrorCode::ProtectedRefDeletion)),
                 RefUpdate::Create | RefUpdate::FastForward => {
-                    if admin || project.role.is_some_and(|r| r >= protection.push_min_role) {
+                    if admin
+                        || project
+                            .role
+                            .is_some_and(|r| r >= protection.push_min_role())
+                    {
                         Ok(())
                     } else {
                         Err(protected(ErrorCode::ProtectedRefPushNotAllowed)
-                            .with_context("required_role", protection.push_min_role.as_str())
+                            .with_context("required_role", protection.push_min_role().as_str())
                             .with_context("actual_role", project.role.map_or("none", Role::as_str)))
                     }
                 }

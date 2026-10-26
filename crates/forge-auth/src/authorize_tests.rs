@@ -392,9 +392,7 @@ fn force_push_to_protected_is_denied_even_for_admin() {
             project: project(None),
             name: main_ref(),
             update: RefUpdate::Force,
-            protection: Some(RefProtection {
-                push_min_role: Role::Owner,
-            }),
+            protection: RefProtection::effective([Role::Owner]),
         },
     )
     .expect_err("protected");
@@ -411,9 +409,7 @@ fn push_below_protection_min_role_is_denied() {
             project: project(Some(Role::Developer)),
             name: main_ref(),
             update: RefUpdate::FastForward,
-            protection: Some(RefProtection {
-                push_min_role: Role::Maintainer,
-            }),
+            protection: RefProtection::effective([Role::Maintainer]),
         },
     )
     .expect_err("below min role");
@@ -493,12 +489,7 @@ fn main_ref() -> forge_core::RefName {
 fn overlapping_protections_use_the_strictest_rule() {
     // Adding a weaker rule over an Owner-level one must not loosen it.
     let effective = RefProtection::effective([Role::Owner, Role::Developer]);
-    assert_eq!(
-        effective,
-        Some(RefProtection {
-            push_min_role: Role::Owner
-        })
-    );
+    assert_eq!(effective, RefProtection::effective([Role::Owner]));
     assert_eq!(RefProtection::effective([]), None);
     let err = authorize(
         &session(),

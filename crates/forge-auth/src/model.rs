@@ -192,8 +192,10 @@ impl RefKind {
 /// Protection that applies to the ref being pushed (`None` = unprotected).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefProtection {
-    /// Minimum role allowed to push (create / fast-forward).
-    pub push_min_role: Role,
+    /// Minimum role allowed to push (create / fast-forward). Private: the
+    /// only constructor is `effective`, so "strictest rule wins" cannot be
+    /// bypassed by building a protection from the first matching rule.
+    push_min_role: Role,
 }
 
 impl RefProtection {
@@ -208,6 +210,10 @@ impl RefProtection {
             .into_iter()
             .max()
             .map(|push_min_role| RefProtection { push_min_role })
+    }
+
+    pub fn push_min_role(&self) -> Role {
+        self.push_min_role
     }
 }
 
