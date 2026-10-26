@@ -26,6 +26,10 @@
      - `connection_lost`: 実行中に接続が切れた（DB の再起動、ネットワーク）
      - `server_shutdown`（SQLSTATE `57P01`〜`57P03`）: DB のサーバーが停止中、または起動中
      - `too_many_connections`（`53300`）: DB のサーバー側の接続数の上限に達した
+     - `read_only`（`25006`）: DB が読み取り専用（スタンバイに接続している、リカバリ中）
+     - `resource_exhausted`（`53xxx`）: DB のサーバーのディスク不足・メモリ不足など。DB の担当者へ
+     - `server_fault`（`58xxx` / `XXxxx`）: DB のサーバー内部の障害（I/O エラー、データの破損）。DB の担当者へすぐにエスカレーションする
+     - `ping_failed`: 準備確認の `SELECT 1` が失敗した。`source` を読む
      - `driver`: `source` を読む
    - FG-DB-0002 の `reason`（接続は使える状態で、文そのものが失敗した）
      - `statement_timeout`（SQLSTATE `57014`）: 文が `database.statement_timeout_ms` を超えた
@@ -33,12 +37,13 @@
      - `serialization`（`40001`）/ `deadlock`（`40P01`）: 同時実行の競合。再実行してよい。頻発するなら呼び出し元を見直す
      - `constraint`（`23xxx`）: 制約の違反。`constraint` と `table` が付く。行の値はログに出さない
      - `row_not_found`: あるはずの行がない（呼び出し元の不具合の可能性）
+     - `idle_in_transaction_timeout`（`25P03`）: 呼び出し元がトランザクションを開いたまま `database.idle_in_transaction_timeout_ms` を超えて放置し、DB がセッションを終了した。呼び出し元の不具合
      - `server_error` / `client_error`: `sqlstate`（と、値を含まない種類なら `db_message`）を読む
 2. DB のサーバーの状態を確認する。
    - 開発機: `docker compose -f ops/dev/compose.yml ps`（`Git/` で実行）
    - 本番: `pg_isready -h <host> -p <port>`、DB のサーバーのログ（同じ時刻）
 3. タイムアウトやロック待ちの場合は、DB に読み取り専用で接続して、遅い文と待たせている側を確認する。
-   - `SELECT pid, state, now() - query_start AS running, wait_event_type, left(query, 80) FROM pg_stat_activity WHERE datname = '<dbname>' ORDER BY running DESC;`
+   - `SELECT pid, state, now() - query_start AS running, wait_event_type, wait_event, application_name FROM pg_stat_activity WHERE datname = '<dbname>' ORDER BY running DESC;`（SQL の本文 `query` 列は値を含むことがあるので表示しない。必要なときも障害記録に貼らない）
    - `SELECT pid, pg_blocking_pids(pid) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0;`
 4. `acquire_timeout` の場合は、接続数（`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'forge';`）と `database.max_connections` を比べる。
 

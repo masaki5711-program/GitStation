@@ -33,7 +33,9 @@ FG-DB-0003/0004 (migrations), FG-DB-0005 (Outbox sequencer, ADR-0012).
 **Gotchas**
 - TLS: `verify-full` (default), `require`, `disable` — no `prefer`, no
   `verify-ca` (the rustls trust store also holds the public web roots;
-  ADR-0013 records the remaining risk). The compose database
+  ADR-0013 records the remaining risk). `require` / `disable` to a
+  non-loopback host also needs `database.tls_allow_unverified = true`
+  (FG-SYS-0002 `unverified_remote` otherwise). The compose database
   has no TLS, so development uses `database.tls_mode = "disable"` (a warning is
   logged for a non-loopback host).
 - No `query!` macros yet, so there is no `.sqlx/` offline data; it arrives
@@ -53,3 +55,6 @@ FG-DB-0003/0004 (migrations), FG-DB-0005 (Outbox sequencer, ADR-0012).
   `macros` feature); `cargo tree -i rsa` / `-i libsqlite3-sys` show they are
   not built. An audit tool reading the lockfile will flag RUSTSEC-2023-0071 —
   waive it with this reason once `cargo audit` / `cargo deny` run in CI.
+- `Db::connect` makes one direct probe connection (real failure reason,
+  version check) and then a lazy pool: `min_connections` are opened in the
+  background, so a failure there surfaces later on `acquire` (FG-DB-0001).

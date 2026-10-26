@@ -136,6 +136,12 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
             .with_context("path", path.display())
             .with_source(e)
     };
+    // Opening a FIFO blocks until a writer appears: refuse anything but a
+    // regular file before opening; the handle's metadata is checked again
+    // below (the path may have changed in between).
+    if !std::fs::metadata(path).map_err(unreadable)?.is_file() {
+        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+    }
     let file = std::fs::File::open(path).map_err(unreadable)?;
     let meta = file.metadata().map_err(unreadable)?;
     #[cfg(unix)]

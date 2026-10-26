@@ -20,7 +20,7 @@ DB の接続先、プールの大きさ、各種タイムアウトなど、設�
 - パスワードは `database.password_file`（絶対パス）**だけ**で渡す。URL に書かれたパスワード（`user:pass@` も `?password=` / `passfile` / `sslpassword` も）は拒否する。Unix では、グループや他のユーザーが読めるパスワードファイルも拒否する。
 - DB の URL は `postgres://user@host[:port]/dbname` だけとし、クエリはすべて拒否する（`query_in_url`）。理由は 3 つある。クエリで接続先や TLS を上書きできてしまうこと。sqlx が知らないパラメータを値ごとログに出すこと（`?pasword=` のような打ち間違いでパスワードが残る）。そして、ログに出る接続先と実際の接続先を一致させるため。
 - 接続の設定は URL をドライバに渡さず、host / port / user / dbname を明示的に組み立てる。`~/.pgpass` は読まない。libpq と互換の環境変数（`PGPASSWORD`、`PGSSLROOTCERT`、`PGOPTIONS` など）が設定されていたら FG-SYS-0002 `libpq_env` にする。これらは `password_file` や TLS の設定をすり抜けるため。
-- DB の TLS は `verify-full`（既定）、`require`、`disable` の 3 つだけにする。`verify-ca` は用意しない。sqlx（rustls）の信頼ストアには公開 CA のルートが入っていて、`tls_root_cert` はそこに追加されるだけだからである。ホスト名を検査しない `verify-ca` では、どの公開証明書でも通ってしまう。`require` と `disable` は、ループバック以外のホストで使うと警告をログに出す。
+- DB の TLS は `verify-full`（既定）、`require`、`disable` の 3 つだけにする。`verify-ca` は用意しない。sqlx（rustls）の信頼ストアには公開 CA のルートが入っていて、`tls_root_cert` はそこに追加されるだけだからである。ホスト名を検査しない `verify-ca` では、どの公開証明書でも通ってしまう。`require` と `disable` でループバック以外のホストに接続するには、`database.tls_allow_unverified = true` を明示する必要がある。明示しなければ FG-SYS-0002 `unverified_remote` で止め、明示した場合も起動のたびに警告をログに出す。
 - **受け入れたリスク**: `verify-full` でも公開 CA のルートを信頼する（sqlx 0.8 では信頼ストアを社内 CA だけに絞れない）。そこで、DB のホスト名には公開の証明書が発行されない社内の名前（公開ドメインの下にない名前）を使う。sqlx で絞れるようになるか、TLS の設定を自前で組んだ時点で見直す。
 - 本番のサーバーは Linux とする。Windows（開発機）ではパスワードファイルの ACL を検査しない。これは受け入れたリスクとする。
 - 秘密情報の型は `Debug` でも `Display` でも中身を出さない。URL の表示は host / port / dbname だけにする。設定ファイルの構文エラーは位置（行・列）だけをログに出す。toml のエラー文は問題の行を引用するため付けない。

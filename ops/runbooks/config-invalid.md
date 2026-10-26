@@ -35,6 +35,7 @@
      - `password_in_url`: URL にパスワードを書いている。`database.password_file` に移す
      - `query_in_url`: URL にクエリ（`?…`）がある。URL は `postgres://user@host[:port]/dbname` だけにし、TLS は `database.tls_mode` / `database.tls_root_cert`、タイムアウトは `database.*_timeout_ms` で設定する
      - `libpq_env`: `PGPASSWORD`、`PGSSLROOTCERT` などの `PG*` 環境変数が設定されている（`config_key` が名前）。forge は使わないので、サービスの環境から外す
+     - `unverified_remote`: `database.tls_mode` が `require`（サーバーの証明書を検証しない）か `disable` のまま、ループバック以外の DB に接続しようとした。本番では `verify-full` にする。どうしても必要な場合だけ `database.tls_allow_unverified = true` を明示する（起動のたびに警告が出る）
      - `not_absolute`: パスワードファイルか CA 証明書のファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
 

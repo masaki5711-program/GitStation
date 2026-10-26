@@ -483,3 +483,29 @@ fn any_query_or_fragment_in_the_url_is_rejected() {
         assert!(!err.to_string().contains("hunter2"), "{err}");
     }
 }
+
+#[test]
+fn tls_allow_unverified_is_a_strict_boolean() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert!(!cfg.database.tls_allow_unverified);
+    let cfg = load(
+        None,
+        &env(&[("FORGE_DATABASE_TLS_ALLOW_UNVERIFIED", "true")]),
+    )
+    .expect("t");
+    assert!(cfg.database.tls_allow_unverified);
+    for bad in ["yes", "1", "TRUE"] {
+        let err = load(None, &env(&[("FORGE_DATABASE_TLS_ALLOW_UNVERIFIED", bad)])).expect_err(bad);
+        assert_invalid(&err, "database.tls_allow_unverified", "invalid");
+    }
+    let f = file("[database]\ntls_allow_unverified = true\n");
+    assert!(
+        load(Some(f.path()), &env(&[]))
+            .expect("toml bool")
+            .database
+            .tls_allow_unverified
+    );
+    let f = file("[database]\nmax_connections = true\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("bool for a number");
+    assert_invalid(&err, "database.max_connections", "invalid");
+}

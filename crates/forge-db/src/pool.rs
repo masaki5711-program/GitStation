@@ -15,8 +15,9 @@ use std::time::Duration;
 use forge_core::config::{DatabaseConfig, DatabaseUrl, TlsMode};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::pool::PoolConnection;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgSslMode};
+use sqlx::postgres::{PgConnectOptions, PgConnection, PgPool, PgPoolOptions, PgSslMode};
 use sqlx::Postgres;
+use sqlx::{ConnectOptions as _, Connection as _};
 
 use crate::error_map::{connect_error, unavailable};
 
@@ -67,37 +68,29 @@ impl Db {
         min_version: i32,
     ) -> Result<Self, ForgeError> {
         let url = cfg.url()?;
-        reject_libpq_env(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()))?;
+        reject_libpq_env(std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()))?;
         let target = url.to_string();
-        warn_if_unverified(cfg.tls_mode, url, &target);
-        let pool_options = PgPoolOptions::new()
-            .max_connections(cfg.max_connections)
-            .min_connections(cfg.min_connections)
-            .acquire_timeout(cfg.acquire_timeout);
-        let connecting = pool_options.connect_with(connect_options(cfg, url));
-        let pool = match tokio::time::timeout(cfg.connect_timeout, connecting).await {
-            Ok(Ok(pool)) => pool,
-            // The pool's own wait for the first connection ran out first.
-            Ok(Err(sqlx::Error::PoolTimedOut)) => {
-                return Err(unavailable(&target, "connect_timeout")
-                    .with_context("timeout_ms", cfg.acquire_timeout.as_millis())
-                    .with_context("timeout_key", "database.acquire_timeout_ms"))
-            }
+        check_unverified(cfg.tls_mode, cfg.tls_allow_unverified, url.host(), &target)?;
+        let options = connect_options(cfg, url);
+        // One direct connection first: the pool retries refused / starting
+        // servers until acquire_timeout and would report every cause as a
+        // timeout. The probe reports the real one and checks the version.
+        let probe = match tokio::time::timeout(cfg.connect_timeout, options.connect()).await {
+            Ok(Ok(conn)) => conn,
             Ok(Err(e)) => return Err(connect_error(&target, e)),
             Err(_) => {
                 return Err(unavailable(&target, "connect_timeout")
-                    .with_context("timeout_ms", cfg.connect_timeout.as_millis())
-                    .with_context("timeout_key", "database.connect_timeout_ms"))
+                    .with_context("timeout_ms", cfg.connect_timeout.as_millis()))
             }
         };
-        let version = match server_version(&pool, &target, min_version).await {
-            Ok(v) => v,
-            Err(e) => {
-                // Release the connections opened for the check before failing.
-                pool.close().await;
-                return Err(e);
-            }
-        };
+        let version = server_version(probe, &target, min_version).await?;
+        // The pool opens its connections on demand (min_connections in the
+        // background); a later failure surfaces on acquire as FG-DB-0001.
+        let pool = PgPoolOptions::new()
+            .max_connections(cfg.max_connections)
+            .min_connections(cfg.min_connections)
+            .acquire_timeout(cfg.acquire_timeout)
+            .connect_lazy_with(options);
         tracing::info!(
             target: "forge_db",
             db_target = %target,
@@ -127,15 +120,24 @@ impl Db {
             .map_err(|e| connect_error(&self.target, e))
     }
 
-    /// One round trip (readiness): `FG-DB-0001` when the database cannot be
-    /// used, `FG-DB-0002` if the statement itself fails.
+    /// One round trip (readiness). Any failure means the database cannot be
+    /// used, so it is always `FG-DB-0001` (even a statement timeout).
     pub async fn ping(&self) -> Result<(), ForgeError> {
         let mut conn = self.acquire().await?;
         sqlx::query("SELECT 1")
             .execute(&mut *conn)
             .await
             .map(|_| ())
-            .map_err(|e| crate::query_error("db.ping", e).with_context("target", &self.target))
+            .map_err(|e| {
+                let err = connect_error(&self.target, e);
+                if err.code() == ErrorCode::DbUnavailable {
+                    return err;
+                }
+                ForgeError::new(ErrorCode::DbUnavailable)
+                    .with_context("target", &self.target)
+                    .with_context("reason", "ping_failed")
+                    .with_source(err)
+            })
     }
 }
 
@@ -173,7 +175,11 @@ fn connect_options(cfg: &DatabaseConfig, url: &DatabaseUrl) -> PgConnectOptions 
 
 /// A set libpq variable is `FG-SYS-0002` naming it (`reason=libpq_env`).
 pub(crate) fn reject_libpq_env(names: impl IntoIterator<Item = String>) -> Result<(), ForgeError> {
-    match names.into_iter().find(|n| LIBPQ_ENV.contains(&n.as_str())) {
+    // Case-insensitive: Windows environment names are.
+    match names
+        .into_iter()
+        .find(|n| LIBPQ_ENV.iter().any(|v| v.eq_ignore_ascii_case(n)))
+    {
         Some(name) => Err(ForgeError::new(ErrorCode::ConfigInvalid)
             .with_context("config_key", name)
             .with_context("reason", "libpq_env")),
@@ -181,28 +187,52 @@ pub(crate) fn reject_libpq_env(names: impl IntoIterator<Item = String>) -> Resul
     }
 }
 
-/// An unverified server on a non-loopback host is allowed (it was written
-/// down) but always visible in the log.
-fn warn_if_unverified(mode: TlsMode, url: &DatabaseUrl, target: &str) {
+/// `require` / `disable` to a non-loopback host needs
+/// `database.tls_allow_unverified = true` (FG-SYS-0002 `unverified_remote`
+/// otherwise); when allowed it is still logged on every start.
+pub(crate) fn check_unverified(
+    mode: TlsMode,
+    allowed: bool,
+    host: &str,
+    target: &str,
+) -> Result<(), ForgeError> {
     let unverified = match mode {
         TlsMode::VerifyFull => false,
         TlsMode::Require | TlsMode::Disable => true,
     };
-    if unverified && !is_loopback(url.host()) {
-        tracing::warn!(
-            target: "forge_db",
-            db_target = %target,
-            tls_mode = mode.as_str(),
-            "database server identity is not verified for a non-loopback host"
-        );
+    if !unverified || is_loopback(host) {
+        return Ok(());
     }
+    if !allowed {
+        return Err(ForgeError::new(ErrorCode::ConfigInvalid)
+            .with_context("config_key", "database.tls_mode")
+            .with_context("reason", "unverified_remote")
+            .with_context("tls_mode", mode.as_str())
+            .with_context("target", target));
+    }
+    tracing::warn!(
+        target: "forge_db",
+        db_target = %target,
+        tls_mode = mode.as_str(),
+        "database server identity is not verified for a non-loopback host (allowed by database.tls_allow_unverified)"
+    );
+    Ok(())
 }
-
-async fn server_version(pool: &PgPool, target: &str, min: i32) -> Result<i32, ForgeError> {
-    let text: String = sqlx::query_scalar("SHOW server_version_num")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| connect_error(target, e))?;
+/// Check the version on the probe connection, then close it. The query is
+/// bounded by the session's statement_timeout.
+async fn server_version(
+    mut probe: PgConnection,
+    target: &str,
+    min: i32,
+) -> Result<i32, ForgeError> {
+    let text: Result<String, _> = sqlx::query_scalar("SHOW server_version_num")
+        .fetch_one(&mut probe)
+        .await;
+    if let Err(e) = probe.close().await {
+        // The probe is dropped either way; a failed goodbye is not a fault.
+        tracing::debug!(target: "forge_db", db_target = %target, error = %e, "probe close failed");
+    }
+    let text = text.map_err(|e| connect_error(target, e))?;
     check_version(&text, min).map_err(|e| e.with_context("target", target))
 }
 

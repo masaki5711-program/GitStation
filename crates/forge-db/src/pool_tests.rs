@@ -4,7 +4,7 @@
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
-use forge_core::config::{self, DatabaseConfig, Env};
+use forge_core::config::{self, DatabaseConfig, Env, TlsMode};
 use forge_errors::{ErrorCode, ForgeError, Lang};
 
 use super::*;
@@ -91,10 +91,7 @@ async fn connect_to_a_closed_port_is_db_unavailable_within_the_connect_timeout()
     );
     assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
     let text = err.to_string();
-    assert!(
-        text.contains("reason=connect_refused") || text.contains("reason=connect_timeout"),
-        "{text}"
-    );
+    assert!(text.contains("reason=connect_refused"), "{text}");
     assert!(
         text.contains(&format!("target=127.0.0.1:{port}/forge")),
         "{text}"
@@ -338,6 +335,8 @@ fn a_libpq_environment_variable_is_a_configuration_error() {
     let text = err.to_string();
     assert!(text.contains("config_key=PGSSLROOTCERT"), "{text}");
     assert!(text.contains("reason=libpq_env"), "{text}");
+    let err = reject_libpq_env(["pgpassword".to_owned()]).expect_err("case-insensitive");
+    assert!(err.to_string().contains("config_key=pgpassword"), "{err}");
     assert!(reject_libpq_env(["PATH".to_owned(), "PGP_HOME".to_owned()]).is_ok());
 }
 
@@ -349,4 +348,26 @@ fn loopback_hosts_are_recognised() {
     for host in ["10.0.0.1", "db.example.invalid", "0.0.0.0"] {
         assert!(!is_loopback(host), "{host}");
     }
+}
+
+#[test]
+fn an_unverified_remote_database_needs_an_explicit_allowance() {
+    for mode in [TlsMode::Require, TlsMode::Disable] {
+        let err = check_unverified(mode, false, "db.internal", "db.internal:5432/forge")
+            .expect_err("remote, not allowed");
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+        assert!(
+            err.to_string().contains("reason=unverified_remote"),
+            "{err}"
+        );
+        assert!(
+            check_unverified(mode, true, "db.internal", "t").is_ok(),
+            "allowed"
+        );
+        assert!(
+            check_unverified(mode, false, "127.0.0.1", "t").is_ok(),
+            "loopback"
+        );
+    }
+    assert!(check_unverified(TlsMode::VerifyFull, false, "db.internal", "t").is_ok());
 }
