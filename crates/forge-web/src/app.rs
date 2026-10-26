@@ -134,15 +134,31 @@ async fn catch_panic(req: Request, next: Next) -> Response {
         .cloned()
         .unwrap_or_else(RequestId::generate);
     let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    // clone: the request moves into the handler; the log needs where it panicked.
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
     match AssertUnwindSafe(next.run(req)).catch_unwind().await {
         Ok(res) => res,
-        Err(_) => ApiError::new(
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "handler_panicked"),
+        Err(payload) => ApiError::new(
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "handler_panicked")
+                .with_context("method", method)
+                .with_context("path", path)
+                .with_context("panic_message", panic_message(payload.as_ref())),
             request_id,
             lang,
         )
         .into_response(),
     }
+}
+
+/// The text of a panic payload (`panic!("..")` carries `&str` or `String`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
 }
 
 async fn request_timeout(State(limit): State<Duration>, req: Request, next: Next) -> Response {

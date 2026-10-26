@@ -2,9 +2,12 @@
 //!
 //! The authentication middleware (M1 phase 7/8: session or personal access
 //! token) inserts the caller's `forge_auth::Principal` into the request
-//! extensions. Without an authenticated principal a non-public route answers
-//! `FG-AUTH-0001` before its handler runs — so a route whose handler forgets
-//! to authorize still fails closed.
+//! extensions. Before the handler runs, a non-public route answers
+//! `FG-AUTH-0001` without an authenticated principal and `FG-AUTH-0004` for a
+//! disabled account — the same preamble as `forge_auth::authorize()`.
+//!
+//! This is authentication only: the per-resource decision is still the
+//! handler's `forge_auth::authorize(.., def.action, ..)` call.
 
 use axum::extract::{Request, State};
 use axum::http::header::ACCEPT_LANGUAGE;
@@ -22,13 +25,11 @@ pub(crate) async fn require_principal(
     req: Request,
     next: Next,
 ) -> Response {
-    let authenticated = req
-        .extensions()
-        .get::<Principal>()
-        .is_some_and(|p| p.user().is_some());
-    if authenticated {
-        return next.run(req).await;
-    }
+    let code = match req.extensions().get::<Principal>() {
+        Some(p) if p.user().is_some() && p.active() => return next.run(req).await,
+        Some(p) if p.user().is_some() => ErrorCode::AccountDisabled,
+        _ => ErrorCode::Unauthenticated,
+    };
     let request_id = req
         .extensions()
         .get::<RequestId>()
@@ -36,7 +37,7 @@ pub(crate) async fn require_principal(
         .unwrap_or_else(RequestId::generate);
     let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
     ApiError::new(
-        ForgeError::new(ErrorCode::Unauthenticated).with_context("action", action.name()),
+        ForgeError::new(code).with_context("action", action.name()),
         request_id,
         lang,
     )

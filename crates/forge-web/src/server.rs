@@ -100,8 +100,10 @@ pub async fn serve(
                     .with_context("operation", "accept")
                     .with_source(e);
                 telemetry::log_failure(&err, &RequestId::generate());
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
+                tokio::select! {
+                    () = &mut shutdown => break,
+                    () = tokio::time::sleep(Duration::from_millis(100)) => continue,
+                }
             }
         };
         let conn = http1::Builder::new()

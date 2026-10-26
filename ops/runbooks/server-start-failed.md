@@ -41,7 +41,7 @@ GitStation の Web・API・Git（HTTP）がすべて使えない（SEV1）。
 
 ## Verify
 
-- `forge serve` が起動し、`curl -fsS http://<bind>/healthz` が `{"status":"ok",...}` を返す
+- `forge serve` が起動し、`curl -fsS http://<bind>/healthz` が `{"status":"ok"}` を返す
 - 対象のエラーコードが新たに出ない
 
 ## Escalate

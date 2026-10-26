@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
-use forge_auth::Action;
+use forge_auth::{Action, Credential, Principal};
+use forge_core::UserId;
 use forge_errors::{ErrorCode, Lang};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -242,6 +243,58 @@ async fn non_public_route_without_principal_is_unauthenticated_and_handler_not_e
     let (status, _, body) = call(router, req("GET", "/admin/users")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error_code"], ErrorCode::Unauthenticated.id());
+    assert!(!entered.load(Ordering::SeqCst), "handler must not run");
+}
+
+/// A guarded route with a handler that records whether it ran.
+fn guarded() -> (axum::Router, Arc<AtomicBool>) {
+    let entered = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&entered);
+    let handler = move || {
+        let flag = Arc::clone(&flag);
+        async move {
+            flag.store(true, Ordering::SeqCst);
+            "secret"
+        }
+    };
+    let router = with(
+        Registry::new().route(Verb::Get, "/admin/users", Action::UserCreate, "x", handler),
+        AppConfig::default(),
+    );
+    (router, entered)
+}
+
+fn req_as(principal: Principal) -> Request<Body> {
+    let mut r = req("GET", "/admin/users");
+    r.extensions_mut().insert(principal);
+    r
+}
+
+#[tokio::test]
+async fn active_principal_reaches_the_guarded_handler() {
+    let (router, entered) = guarded();
+    let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
+    let res = router.oneshot(req_as(me)).await.expect("infallible");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(entered.load(Ordering::SeqCst), "handler must run");
+}
+
+#[tokio::test]
+async fn anonymous_principal_is_unauthenticated() {
+    let (router, entered) = guarded();
+    let (status, _, body) = call(router, req_as(Principal::anonymous())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error_code"], ErrorCode::Unauthenticated.id());
+    assert!(!entered.load(Ordering::SeqCst), "handler must not run");
+}
+
+#[tokio::test]
+async fn disabled_account_is_rejected_before_the_handler() {
+    let (router, entered) = guarded();
+    let disabled = Principal::authenticated(UserId::new(1), true, false, Credential::Session);
+    let (status, _, body) = call(router, req_as(disabled)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], ErrorCode::AccountDisabled.id());
     assert!(!entered.load(Ordering::SeqCst), "handler must not run");
 }
 

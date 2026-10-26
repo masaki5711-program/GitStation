@@ -9,7 +9,16 @@ use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let check = std::env::args().any(|a| a == "--check");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let check = match args.as_slice() {
+        [] => false,
+        [flag] if flag == "--check" => true,
+        _ => {
+            // A typo such as `--chek` must not silently rewrite the documents.
+            eprintln!("gen-authz: unknown arguments {args:?}; usage: gen-authz [--check]");
+            return ExitCode::FAILURE;
+        }
+    };
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut stale = Vec::new();
     for (rel, body) in forge_web::generated_documents(env!("CARGO_PKG_VERSION")) {

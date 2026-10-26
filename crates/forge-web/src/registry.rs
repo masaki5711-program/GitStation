@@ -86,10 +86,11 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
     /// Register `verb path` handled by `handler`, decided by `action`.
     ///
     /// Every non-public route is wrapped in the authentication guard: without
-    /// an authenticated `Principal` in the request extensions it answers
-    /// `FG-AUTH-0001` and the handler is never entered (fails closed even if
-    /// a handler forgets to authorize). The handler then decides on its
-    /// resource with `forge_auth::authorize(.., def.action, ..)`.
+    /// an authenticated, active `Principal` in the request extensions it
+    /// answers `FG-AUTH-0001` / `FG-AUTH-0004` and the handler is never
+    /// entered. The guard does not decide on the resource: the handler must
+    /// still call `forge_auth::authorize(.., def.action, ..)` before any side
+    /// effect.
     #[must_use]
     pub fn route<H, T>(
         mut self,

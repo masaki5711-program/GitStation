@@ -48,6 +48,17 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 | Run the server | `cargo run -p forge-cli -- serve --bind 127.0.0.1:8080` |
 
 **Deferred (from review, tracked)**
+- **Before the first resource route (phase 8, MUST):** make `authorize()`
+  unskippable — the registry loads the resource and calls
+  `forge_auth::authorize(.., def.action, ..)`, handing the handler an
+  `Authorized` proof only `authorize()` can create. Until then the guard is
+  authentication only (security review HIGH, waived by the user 2026-10-26
+  because only public `/healthz` is registered). Also: a test that compares
+  the served route table with `registry().defs()` instead of the text scan.
+- Connection fairness: per-peer connection cap, keep-alive lifetime, write
+  timeout, and a 503 answer when full (before Smart HTTP, phase 9).
+- Log-capture tests asserting `error_code` + `request_id` on failures and the
+  access log; a connection-cap test; a body-limit (413) test.
 - Per-route timeouts and an idle timeout for git streams (Smart HTTP, phase 9);
   the request timeout covers time-to-response only.
 - JSON / path / query rejections wrapped into `ApiError` before the first

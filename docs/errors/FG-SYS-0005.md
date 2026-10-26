@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-forge serve could not build its async runtime, or the HTTP server loop failed after binding (an I/O error on the listener), or graceful shutdown exceeded its deadline.
+forge serve could not build its async runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007.
 
 ## 調べ方 (diagnosis)
 
-The `context` field contains `operation=` (`build_runtime`, `serve`, `shutdown_deadline`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time.
+The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time.
 
 ## 対処 (fix)
 
