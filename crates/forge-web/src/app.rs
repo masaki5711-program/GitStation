@@ -27,8 +27,12 @@ pub struct AppState {
     pub version: &'static str,
     /// Dependencies `GET /readyz` checks, in order.
     pub probes: Arc<[Arc<dyn ReadinessProbe>]>,
-    /// Client-side bound for each probe (FG-WEB-0005 when exceeded).
+    /// Client-side bound for each probe (FG-WEB-0005 when exceeded). Must
+    /// exceed the probe's own bounds, so the probe reports its real cause
+    /// (`forge serve` derives it from the database timeouts).
     pub probe_timeout: Duration,
+    /// Single-flight + cache for `/readyz` (it is public).
+    pub readiness: Arc<routes::health::ReadinessCache>,
 }
 
 impl AppState {
@@ -37,7 +41,14 @@ impl AppState {
             version,
             probes: probes.into(),
             probe_timeout: Duration::from_secs(3),
+            readiness: routes::health::ReadinessCache::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_probe_timeout(mut self, timeout: Duration) -> Self {
+        self.probe_timeout = timeout;
+        self
     }
 }
 

@@ -39,7 +39,7 @@
   "paths": {
     "/healthz": {
       "get": {
-        "operationId": "Health",
+        "operationId": "get_healthz",
         "responses": {
           "default": {
             "content": {
@@ -59,7 +59,7 @@
     },
     "/readyz": {
       "get": {
-        "operationId": "Health",
+        "operationId": "get_readyz",
         "responses": {
           "default": {
             "content": {

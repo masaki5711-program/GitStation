@@ -125,9 +125,16 @@ fn main() -> ExitCode {
     // doctor prints its report even when a check fails, then exits with the
     // most severe failure.
     if let Command::Doctor { json } = cli.command {
-        return match doctor::run(config_file.as_deref(), json) {
+        return match doctor::run(config_file.as_deref(), json, &request_id) {
+            // The checks were logged inside doctor; print the worst only.
             Ok(r) => match (emit(&r.text), r.failure) {
-                (Err(e), _) | (Ok(()), Some(e)) => report(&e, &request_id, lang),
+                (Err(write_err), failure) => {
+                    if let Some(f) = failure {
+                        print_failure(&f, &request_id, lang);
+                    }
+                    report(&write_err, &request_id, lang)
+                }
+                (Ok(()), Some(f)) => print_failure(&f, &request_id, lang),
                 (Ok(()), None) => ExitCode::SUCCESS,
             },
             Err(e) => report(&e, &request_id, lang),
@@ -163,8 +170,10 @@ fn main() -> ExitCode {
         Command::Db {
             command: DbCommand::Migrate,
         } => config().and_then(|cfg| db::migrate(&cfg.database)),
-        // Handled above (it reports and fails at the same time).
-        Command::Doctor { .. } => Ok(String::new()),
+        // Returned above; reaching this arm is a programming error, reported.
+        Command::Doctor { .. } => {
+            Err(ForgeError::new(ErrorCode::Internal).with_context("operation", "doctor_dispatch"))
+        }
     };
     match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,
@@ -188,6 +197,11 @@ fn emit(text: &str) -> Result<(), ForgeError> {
 /// The CLI boundary: log once, show the user message + request id.
 fn report(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
     telemetry::log_failure(err, request_id);
+    print_failure(err, request_id, lang)
+}
+
+/// The user-facing line and exit code, for a failure already logged.
+fn print_failure(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
     eprintln!(
         "{} [{}] ({}: {request_id})",
         err.user_message(lang),

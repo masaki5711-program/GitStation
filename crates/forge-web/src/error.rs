@@ -17,6 +17,9 @@ pub struct ApiError {
     err: ForgeError,
     request_id: RequestId,
     lang: Lang,
+    /// `false` when the same failure was already logged (e.g. an ongoing
+    /// readiness failure answered from the cache).
+    log: bool,
 }
 
 #[derive(Serialize)]
@@ -32,7 +35,16 @@ impl ApiError {
             err,
             request_id,
             lang,
+            log: true,
         }
+    }
+
+    /// The failure was already logged where it was first observed; answer
+    /// with the same body without logging it again.
+    #[must_use]
+    pub fn already_logged(mut self) -> Self {
+        self.log = false;
+        self
     }
 
     pub fn code(&self) -> forge_errors::ErrorCode {
@@ -43,7 +55,9 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         // The boundary: log exactly once, with the code and request id.
-        telemetry::log_failure(&self.err, &self.request_id);
+        if self.log {
+            telemetry::log_failure(&self.err, &self.request_id);
+        }
         let code = self.err.code();
         let status =
             StatusCode::from_u16(code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

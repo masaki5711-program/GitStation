@@ -109,3 +109,41 @@ fn logs_go_to_stderr_so_stdout_stays_machine_readable() {
         "the failure is logged on stderr"
     );
 }
+
+#[test]
+fn doctor_reports_an_unreachable_database_and_a_missing_storage_root() {
+    let closed_port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().expect("addr").port()
+    };
+    let url = format!("postgres://forge@127.0.0.1:{closed_port}/forge");
+    let mut pw = tempfile::NamedTempFile::new().expect("password file");
+    pw.write_all(b"x").expect("write");
+    let pw_path = pw.path().to_string_lossy().into_owned();
+    let gone = tempfile::tempdir().expect("dir");
+    let missing_root = gone.path().join("not-there").to_string_lossy().into_owned();
+    let out = forge(
+        &["doctor"],
+        &[
+            ("FORGE_DATABASE_URL", url.as_str()),
+            ("FORGE_DATABASE_PASSWORD_FILE", pw_path.as_str()),
+            ("FORGE_DATABASE_TLS_MODE", "disable"),
+            ("FORGE_DATABASE_CONNECT_TIMEOUT_MS", "3000"),
+            ("FORGE_STORAGE_ROOT", missing_root.as_str()),
+        ],
+    );
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("FAIL  database  FG-DB-0001"), "{text}");
+    assert!(text.contains("reason=connect_refused"), "{text}");
+    assert!(text.contains("skip  schema"), "{text}");
+    assert!(text.contains("FAIL  storage"), "{text}");
+    assert!(
+        !text.contains("not-there"),
+        "paths stay in the log:\n{text}"
+    );
+    // Every failed check is logged (stderr), not just the worst one.
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(err.matches("FG-DB-0001").count() >= 1, "{err}");
+    assert!(err.contains("FG-REPO-") || err.contains("FG-SYS-"), "{err}");
+}

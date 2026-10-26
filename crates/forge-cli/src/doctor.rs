@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use forge_core::config::{self, Config};
+use forge_core::{telemetry, RequestId};
 use forge_db::{Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
@@ -37,8 +38,19 @@ pub struct Report {
     pub failure: Option<ForgeError>,
 }
 
-pub fn run(config_file: Option<&Path>, as_json: bool) -> Result<Report, ForgeError> {
+/// Every failed check is logged once here (with `request_id`); the caller
+/// prints the worst one without logging it again.
+pub fn run(
+    config_file: Option<&Path>,
+    as_json: bool,
+    request_id: &RequestId,
+) -> Result<Report, ForgeError> {
     let checks = block_on(async { Ok(collect(config_file).await) })?;
+    for c in &checks {
+        if let Outcome::Fail(e) = &c.outcome {
+            telemetry::log_failure(e, request_id);
+        }
+    }
     let text = if as_json {
         render_json(&checks)
     } else {
@@ -153,13 +165,39 @@ fn most_severe(checks: Vec<Check>) -> Option<ForgeError> {
         .max_by_key(|e| rank(e.code().severity()))
 }
 
+/// Context keys safe to print: they name where to look, never values,
+/// sources, paths or server messages (those stay in the log — the error
+/// contract keeps internals out of command output).
+const SAFE_CONTEXT: &[&str] = &[
+    "config_key",
+    "reason",
+    "target",
+    "probe",
+    "versions",
+    "sqlstate",
+    "renamed_to",
+    "timeout_key",
+];
+
+/// `FG-… key=value …` with the allow-listed context only.
+fn summary(e: &ForgeError) -> String {
+    let mut out = e.code().id().to_owned();
+    for (k, v) in e.context() {
+        if SAFE_CONTEXT.contains(k) {
+            // Writing to a String cannot fail.
+            let _ = write!(out, " {k}={v}");
+        }
+    }
+    out
+}
+
 fn render_text(checks: &[Check]) -> String {
     let mut out = String::new();
     for c in checks {
         // Writing to a String cannot fail.
         let _ = match &c.outcome {
             Outcome::Ok(detail) => writeln!(out, "ok    {:<9} {detail}", c.name),
-            Outcome::Fail(e) => writeln!(out, "FAIL  {:<9} {e}", c.name),
+            Outcome::Fail(e) => writeln!(out, "FAIL  {:<9} {}", c.name, summary(e)),
             Outcome::Skip(why) => writeln!(out, "skip  {:<9} {why}", c.name),
         };
     }
@@ -175,7 +213,7 @@ fn render_json(checks: &[Check]) -> String {
                 "name": c.name,
                 "status": "fail",
                 "error_code": e.code().id(),
-                "detail": e.to_string(),
+                "detail": summary(e),
             }),
             Outcome::Skip(why) => json!({ "name": c.name, "status": "skip", "detail": why }),
         })
@@ -202,6 +240,19 @@ mod tests {
         ];
         let worst = most_severe(checks).expect("a failure");
         assert_eq!(worst.code(), ErrorCode::DbUnavailable);
+    }
+
+    #[test]
+    fn output_shows_only_allow_listed_context_never_sources_or_paths() {
+        let e = ForgeError::new(ErrorCode::StorageIoFailed)
+            .with_context("reason", "unreadable")
+            .with_context("path", "/srv/forge/secret-dir")
+            .with_source(std::io::Error::other("db_message with row value 42"));
+        let text = summary(&e);
+        assert!(text.starts_with("FG-REPO-"), "{text}");
+        assert!(text.contains("reason=unreadable"), "{text}");
+        assert!(!text.contains("secret-dir"), "{text}");
+        assert!(!text.contains("row value"), "{text}");
     }
 
     #[test]

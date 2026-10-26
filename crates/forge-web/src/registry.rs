@@ -186,7 +186,7 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
     let mut paths: BTreeMap<&str, Map<String, Value>> = BTreeMap::new();
     for d in defs {
         let mut op = Map::new();
-        op.insert("operationId".into(), json!(d.action.name()));
+        op.insert("operationId".into(), json!(operation_id(d.verb, d.path)));
         op.insert("summary".into(), json!(d.summary));
         op.insert("x-forge-action".into(), json!(d.action.name()));
         if d.action.is_public() {
@@ -238,6 +238,22 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
         }
     });
     pretty(&doc)
+}
+
+/// A document-unique OpenAPI operationId from the method and the path
+/// (`GET /api/v1/projects/{id}` → `get_api_v1_projects_id`); (verb, path)
+/// is unique in the registry, so the id is too.
+fn operation_id(verb: Verb, path: &str) -> String {
+    let slug: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let slug = slug
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    format!("{}_{slug}", verb.as_str().to_ascii_lowercase())
 }
 
 fn path_params(path: &str) -> impl Iterator<Item = &str> {

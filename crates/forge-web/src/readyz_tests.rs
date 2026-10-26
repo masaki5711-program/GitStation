@@ -157,3 +157,71 @@ async fn readyz_without_probes_is_ready_and_needs_no_credentials() {
     let (status, _, _) = get_readyz(router).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn readyz_returns_the_first_failing_probe_without_waiting_for_later_ones() {
+    let router = app_with(
+        vec![
+            Fake {
+                name: "database",
+                behaviour: Behaviour::Ok,
+            },
+            Fake {
+                name: "storage",
+                behaviour: Behaviour::Fail,
+            },
+            Fake {
+                name: "llm",
+                behaviour: Behaviour::Hang,
+            },
+        ],
+        Duration::from_secs(5),
+    );
+    let started = std::time::Instant::now();
+    let (status, body, _) = get_readyz(router).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let json: Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(json["error_code"], ErrorCode::DbUnavailable.id());
+}
+
+/// A probe that counts how often it runs and takes a little time.
+struct Counting {
+    runs: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ReadinessProbe for Counting {
+    fn name(&self) -> &'static str {
+        "database"
+    }
+
+    fn check(&self) -> ProbeFuture<'_> {
+        Box::pin(async move {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn concurrent_and_repeated_readyz_calls_share_one_probe_run() {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let probe: Arc<dyn ReadinessProbe> = Arc::new(Counting {
+        runs: Arc::clone(&runs),
+    });
+    let state = AppState::new("test", vec![probe]);
+    let router = crate::app(state, AppConfig::default()).expect("app");
+    let calls = (0..20).map(|_| get_readyz(router.clone()));
+    let results = futures_util::future::join_all(calls).await;
+    assert!(results.iter().all(|(s, _, _)| *s == StatusCode::OK));
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "20 concurrent requests within the cache window run the probe once"
+    );
+}
