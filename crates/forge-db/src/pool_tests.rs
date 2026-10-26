@@ -8,6 +8,7 @@ use forge_core::config::{self, DatabaseConfig, Env};
 use forge_errors::{ErrorCode, ForgeError, Lang};
 
 use super::*;
+use crate::query_error;
 
 const HINT: &str = "start the development database: \
     docker compose -f ops/dev/compose.yml up -d --wait (in Git/)";
@@ -227,14 +228,125 @@ async fn sessions_carry_the_configured_timeouts() {
 
 #[test]
 fn server_versions_below_16_are_rejected() {
-    assert_eq!(check_version("160004").expect("16"), 160_004);
-    assert_eq!(check_version("170000").expect("17"), 170_000);
-    let err = check_version("150008").expect_err("15");
+    assert_eq!(
+        check_version("160004", MIN_SERVER_VERSION_NUM).expect("16"),
+        160_004
+    );
+    assert_eq!(
+        check_version("170000", MIN_SERVER_VERSION_NUM).expect("17"),
+        170_000
+    );
+    let err = check_version("150008", MIN_SERVER_VERSION_NUM).expect_err("15");
     assert_reason(&err, ErrorCode::DbUnavailable, "version");
     assert!(
         err.to_string().contains("server_version_num=150008"),
         "{err}"
     );
-    let err = check_version("banana").expect_err("garbage");
+    let err = check_version("banana", MIN_SERVER_VERSION_NUM).expect_err("garbage");
     assert_reason(&err, ErrorCode::DbUnavailable, "version");
+}
+
+#[tokio::test]
+async fn connect_checks_the_server_version() {
+    let _ = dev_db(&[]).await;
+    let cfg = test_config(&dev_url(), "forge_dev", &[]);
+    let err = Db::connect_requiring(&cfg.db, 999_999)
+        .await
+        .expect_err("too old for this minimum");
+    assert_reason(&err, ErrorCode::DbUnavailable, "version");
+    assert!(
+        err.to_string().contains("target=127.0.0.1:55432/forge_dev"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_database_is_server_rejected_3d000() {
+    let _ = dev_db(&[]).await;
+    let base = dev_url();
+    let (server, _db) = base.rsplit_once('/').expect("url has a dbname");
+    let url = format!("{server}/forge_does_not_exist");
+    let cfg = test_config(&url, "forge_dev", &[]);
+    let err = Db::connect(&cfg.db).await.expect_err("no such database");
+    assert_reason(&err, ErrorCode::DbUnavailable, "server_rejected");
+    assert!(err.to_string().contains("sqlstate=3D000"), "{err}");
+}
+
+#[tokio::test]
+async fn a_closed_pool_is_unavailable_for_ping_and_acquire() {
+    let (db, _cfg) = dev_db(&[]).await;
+    db.pool().close().await;
+    for err in [
+        db.ping().await.expect_err("closed"),
+        db.acquire().await.map(|_| ()).expect_err("closed"),
+    ] {
+        assert_reason(&err, ErrorCode::DbUnavailable, "pool_closed");
+        assert!(err.to_string().contains("target="), "{err}");
+    }
+}
+
+#[tokio::test]
+async fn a_terminated_backend_is_unavailable_not_a_query_failure() {
+    let (db, _cfg) = dev_db(&[]).await;
+    let mut conn = db.acquire().await.expect("conn");
+    let err = sqlx::query("SELECT pg_terminate_backend(pg_backend_pid())")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("test.terminate", e))
+        .expect_err("terminated");
+    assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
+    // The next statement on the dead connection is a lost link.
+    let err = sqlx::query("SELECT 1")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("test.after", e))
+        .expect_err("dead connection");
+    assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
+}
+
+#[tokio::test]
+async fn a_constraint_violation_never_logs_the_row_values() {
+    let (db, _cfg) = dev_db(&[]).await;
+    let mut conn = db.acquire().await.expect("conn");
+    sqlx::query("CREATE TEMP TABLE t_unique (email text PRIMARY KEY)")
+        .execute(&mut *conn)
+        .await
+        .expect("temp table");
+    for _ in 0..2 {
+        let r = sqlx::query("INSERT INTO t_unique VALUES ($1)")
+            .bind("pii-a1b2@example.invalid")
+            .execute(&mut *conn)
+            .await;
+        if let Err(e) = r {
+            let err = query_error("test.insert", e);
+            assert_reason(&err, ErrorCode::DbQueryFailed, "constraint");
+            let text = chain(&err);
+            assert!(text.contains("sqlstate=23505"), "{text}");
+            assert!(text.contains("constraint=t_unique_pkey"), "{text}");
+            assert!(!text.contains("pii-a1b2"), "row value leaked: {text}");
+            return;
+        }
+    }
+    panic!("the duplicate insert succeeded");
+}
+
+#[test]
+fn a_libpq_environment_variable_is_a_configuration_error() {
+    let err =
+        reject_libpq_env(["PATH".to_owned(), "PGSSLROOTCERT".to_owned()]).expect_err("libpq env");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    let text = err.to_string();
+    assert!(text.contains("config_key=PGSSLROOTCERT"), "{text}");
+    assert!(text.contains("reason=libpq_env"), "{text}");
+    assert!(reject_libpq_env(["PATH".to_owned(), "PGP_HOME".to_owned()]).is_ok());
+}
+
+#[test]
+fn loopback_hosts_are_recognised() {
+    for host in ["localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"] {
+        assert!(is_loopback(host), "{host}");
+    }
+    for host in ["10.0.0.1", "db.example.invalid", "0.0.0.0"] {
+        assert!(!is_loopback(host), "{host}");
+    }
 }

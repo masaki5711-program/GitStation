@@ -33,8 +33,8 @@
      - `unreadable`: ファイルを読めない
      - `parse`: 設定ファイルの構文の誤り（位置は `line` / `column`。問題の行の本文はログに出さない）
      - `password_in_url`: URL にパスワードを書いている。`database.password_file` に移す
-     - `target_in_query`: URL のクエリに `host` / `hostaddr` / `port` / `dbname` / `user` / `service` がある。接続先は URL の本体に書く
-     - `tls_in_query`: URL のクエリに `sslmode` などの `ssl*` がある。TLS は `database.tls_mode` / `database.tls_root_cert` で設定する
+     - `query_in_url`: URL にクエリ（`?…`）がある。URL は `postgres://user@host[:port]/dbname` だけにし、TLS は `database.tls_mode` / `database.tls_root_cert`、タイムアウトは `database.*_timeout_ms` で設定する
+     - `libpq_env`: `PGPASSWORD`、`PGSSLROOTCERT` などの `PG*` 環境変数が設定されている（`config_key` が名前）。forge は使わないので、サービスの環境から外す
      - `not_absolute`: パスワードファイルか CA 証明書のファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
 

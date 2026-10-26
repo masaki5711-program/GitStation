@@ -13,22 +13,27 @@
 
 ## Diagnose（読み取りのみ）
 
-1. ログを `error_code` と時間帯で絞り、`context` を読む。`target` は `host:port/dbname`（パスワードは出ない）。
-   - FG-DB-0001 の `reason`
+1. ログを `error_code` と時間帯で絞り、`context` を読む。`target` は `host:port/dbname`（パスワードは出ない）。文の失敗には `query`（文の名前）が付く。
+   - FG-DB-0001 の `reason`（起動時でも、稼働中の文の実行時でも出る）
      - `connect_refused`: DB のサーバーが待ち受けていない（停止している、ポートが違う）
-     - `connect_timeout`: 応答がない（ネットワーク、ファイアウォール、DB の過負荷）。`timeout_ms` が付く
+     - `connect_timeout`: 応答がない（ネットワーク、ファイアウォール、DB の過負荷）。`timeout_ms` と `timeout_key`（どの設定のタイムアウトか）が付く
      - `auth_failed`: ユーザー名かパスワードが違う。`database.password_file` の中身を確認する（値は表示しない）
-     - `server_rejected`: 認証以外の理由で接続を拒否された。`sqlstate` を見る（`3D000` = DB がない、`53300` = 接続数の上限）
+     - `server_rejected`: 認証以外の理由で接続を拒否された。`sqlstate` と `db_message` を見る（`3D000` = DB がない）
      - `tls`: TLS の確立に失敗した（サーバーが TLS に対応していない、証明書の検証に失敗した）。`database.tls_mode` と `database.tls_root_cert` を確認する
      - `version`: PostgreSQL 16 未満。`server_version_num` が付く
      - `acquire_timeout`: プールに空きがない。長く接続を握っている処理か、接続数の不足
      - `pool_closed`: 停止処理の途中
-     - `io` / `driver`: `source` を読む
-   - FG-DB-0002 の `reason`
+     - `connection_lost`: 実行中に接続が切れた（DB の再起動、ネットワーク）
+     - `server_shutdown`（SQLSTATE `57P01`〜`57P03`）: DB のサーバーが停止中、または起動中
+     - `too_many_connections`（`53300`）: DB のサーバー側の接続数の上限に達した
+     - `driver`: `source` を読む
+   - FG-DB-0002 の `reason`（接続は使える状態で、文そのものが失敗した）
      - `statement_timeout`（SQLSTATE `57014`）: 文が `database.statement_timeout_ms` を超えた
      - `lock_timeout`（`55P03`）: ロックの待ちが `database.lock_timeout_ms` を超えた
-     - `connection_lost`: 実行中に接続が切れた（DB の再起動、ネットワーク）
-     - `server_error` / `client_error`: `sqlstate` と `source` を読む。`query` が呼び出し元の名前
+     - `serialization`（`40001`）/ `deadlock`（`40P01`）: 同時実行の競合。再実行してよい。頻発するなら呼び出し元を見直す
+     - `constraint`（`23xxx`）: 制約の違反。`constraint` と `table` が付く。行の値はログに出さない
+     - `row_not_found`: あるはずの行がない（呼び出し元の不具合の可能性）
+     - `server_error` / `client_error`: `sqlstate`（と、値を含まない種類なら `db_message`）を読む
 2. DB のサーバーの状態を確認する。
    - 開発機: `docker compose -f ops/dev/compose.yml ps`（`Git/` で実行）
    - 本番: `pg_isready -h <host> -p <port>`、DB のサーバーのログ（同じ時刻）

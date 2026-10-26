@@ -15,8 +15,10 @@ use std::time::Duration;
 use forge_errors::{ErrorCode, ForgeError};
 
 mod secret;
+mod tls;
 
 pub use secret::{DatabaseUrl, Secret};
+pub use tls::TlsMode;
 
 /// A configuration key, its environment variable, and whether it is numeric
 /// (a TOML integer is accepted only for numeric keys).
@@ -171,41 +173,6 @@ pub struct ServerConfig {
 #[derive(Debug)]
 pub struct StorageConfig {
     pub root: Option<PathBuf>,
-}
-
-/// TLS to the database. There is no opportunistic mode (`prefer` / `allow`):
-/// a downgrade must be written down as `disable` (development only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TlsMode {
-    /// Encrypt, verify the chain and the host name (default).
-    VerifyFull,
-    /// Encrypt and verify the chain, not the host name.
-    VerifyCa,
-    /// Encrypt without verifying the server.
-    Require,
-    /// Plain text (the development compose database).
-    Disable,
-}
-
-impl TlsMode {
-    fn parse(text: &str) -> Option<Self> {
-        match text {
-            "verify-full" => Some(Self::VerifyFull),
-            "verify-ca" => Some(Self::VerifyCa),
-            "require" => Some(Self::Require),
-            "disable" => Some(Self::Disable),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::VerifyFull => "verify-full",
-            Self::VerifyCa => "verify-ca",
-            Self::Require => "require",
-            Self::Disable => "disable",
-        }
-    }
 }
 
 #[derive(Debug)]

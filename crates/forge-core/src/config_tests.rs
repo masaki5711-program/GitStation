@@ -113,21 +113,6 @@ fn a_password_in_the_database_url_is_rejected() {
 }
 
 #[test]
-fn a_query_that_overrides_the_target_is_rejected() {
-    for raw in [
-        "postgres://forge@db-a/forge?host=db-b",
-        "postgres://forge@db-a/forge?HostAddr=10.0.0.9",
-        "postgres://forge@db-a/forge?port=6000",
-        "postgres://forge@db-a/forge?dbname=other",
-        "postgres://forge@db-a/forge?user=postgres",
-        "postgres://forge@db-a/forge?service=prod",
-    ] {
-        let err = load(None, &env(&[("FORGE_DATABASE_URL", raw)])).expect_err(raw);
-        assert_invalid(&err, "database.url", "target_in_query");
-    }
-}
-
-#[test]
 fn an_oversized_or_non_file_password_path_is_config_invalid() {
     let big = file(&"x".repeat(5000));
     let path = big.path().to_string_lossy().into_owned();
@@ -145,18 +130,29 @@ fn database_url_display_shows_host_port_and_dbname_only() {
         None,
         &env(&[(
             "FORGE_DATABASE_URL",
-            "postgres://forge@db:6543/forge%2Dprod?application_name=x",
+            "postgres://forge%2Dapp@db:6543/forge%2Dprod",
         )]),
     )
     .expect("loads");
     let url = cfg.database.url().expect("url");
     assert_eq!(url.dbname(), "forge-prod", "percent-decoded");
+    assert_eq!(url.user(), "forge-app", "percent-decoded");
+    assert_eq!(url.host(), "db");
+    assert_eq!(url.port(), 6543);
     assert_eq!(format!("{url}"), "db:6543/forge-prod");
     assert_eq!(format!("{url:?}"), "DatabaseUrl(db:6543/forge-prod)");
-    assert!(
-        url.as_str().contains("application_name=x"),
-        "the driver gets the options"
-    );
+}
+
+#[test]
+fn the_database_user_is_required_and_ipv6_hosts_lose_their_brackets() {
+    let err = load(None, &env(&[("FORGE_DATABASE_URL", "postgres://db/forge")])).expect_err("user");
+    assert_invalid(&err, "database.url", "invalid");
+    let cfg = load(
+        None,
+        &env(&[("FORGE_DATABASE_URL", "postgres://forge@[::1]:5433/forge")]),
+    )
+    .expect("ipv6");
+    assert_eq!(cfg.database.url().expect("url").host(), "::1");
 }
 
 #[test]
@@ -443,14 +439,14 @@ fn tls_defaults_to_verify_full_and_accepts_explicit_modes() {
     assert!(cfg.database.tls_root_cert.is_none());
     for (text, mode) in [
         ("verify-full", TlsMode::VerifyFull),
-        ("verify-ca", TlsMode::VerifyCa),
         ("require", TlsMode::Require),
         ("disable", TlsMode::Disable),
     ] {
         let cfg = load(None, &env(&[("FORGE_DATABASE_TLS_MODE", text)])).expect(text);
         assert_eq!(cfg.database.tls_mode, mode);
     }
-    for bad in ["prefer", "allow", "VERIFY_FULL", "on"] {
+    // verify-ca would accept any public certificate (public roots, no name).
+    for bad in ["verify-ca", "prefer", "allow", "VERIFY_FULL", "on"] {
         let err = load(None, &env(&[("FORGE_DATABASE_TLS_MODE", bad)])).expect_err(bad);
         assert_invalid(&err, "database.tls_mode", "invalid");
     }
@@ -467,26 +463,23 @@ fn tls_root_cert_must_be_absolute() {
 }
 
 #[test]
-fn tls_settings_in_the_url_query_are_rejected() {
+fn any_query_or_fragment_in_the_url_is_rejected() {
+    // TLS settings, target overrides, typos of "password" (which the driver
+    // would log with their value), and anything else.
     for raw in [
         "postgres://forge@db/forge?sslmode=disable",
         "postgres://forge@db/forge?SSLROOTCERT=/x",
-        "postgres://forge@db/forge?sslcert=/x",
-        "postgres://forge@db/forge?sslkey=/x",
+        "postgres://forge@db-a/forge?host=db-b",
+        "postgres://forge@db-a/forge?port=6000",
+        "postgres://forge@db-a/forge?options=-csearch_path%3Devil",
+        "postgres://forge@db/forge?pasword=hunter2",
+        "postgres://forge@db/forge?application_name=x",
+        "postgres://forge@db/forge?%E3%81%82=1",
+        "postgres://forge@db/forge?",
+        "postgres://forge@db/forge#frag",
     ] {
         let err = load(None, &env(&[("FORGE_DATABASE_URL", raw)])).expect_err(raw);
-        assert_invalid(&err, "database.url", "tls_in_query");
+        assert_invalid(&err, "database.url", "query_in_url");
+        assert!(!err.to_string().contains("hunter2"), "{err}");
     }
-}
-
-#[test]
-fn a_multibyte_query_key_does_not_panic() {
-    let cfg = load(
-        None,
-        &env(&[(
-            "FORGE_DATABASE_URL",
-            "postgres://forge@db/forge?%E3%81%82=1",
-        )]),
-    );
-    assert!(cfg.is_ok());
 }
