@@ -6,8 +6,10 @@
 //! `/readyz` is unauthenticated, so it must not let callers drive load on
 //! the database: probes are single-flight (concurrent requests wait for the
 //! one running check) and the outcome is cached for [`CACHE_FOR`]. An
-//! ongoing failure is logged when it starts or changes, not on every poll;
-//! recovery is logged too.
+//! ongoing failure is logged when it starts or changes and again every
+//! [`RELOG_EVERY`] while it lasts (alerts and log rotation must still see
+//! it), not on every poll; recovery is logged too. Answers whose failure
+//! is not logged again leave a debug breadcrumb with their request id.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -25,6 +27,9 @@ use crate::error::ApiError;
 /// How long a readiness outcome is reused.
 pub const CACHE_FOR: Duration = Duration::from_secs(1);
 
+/// How often a failure that is still ongoing is logged again.
+pub const RELOG_EVERY: Duration = Duration::from_secs(60);
+
 /// The last readiness outcome: ready, or the failing code and probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -36,6 +41,8 @@ enum Outcome {
 struct Last {
     outcome: Option<Outcome>,
     at: Option<Instant>,
+    /// When the current failure was last logged.
+    logged_at: Option<Instant>,
 }
 
 /// Shared by every `/readyz` request (single-flight + cache).
@@ -70,28 +77,54 @@ pub async fn readyz(State(state): State<AppState>, ctx: Ctx) -> Result<Json<Valu
         Ok(()) => Outcome::Ready,
         Err((e, probe)) => Outcome::NotReady(e.code(), probe),
     };
+    let now = Instant::now();
     let changed = last.outcome != Some(outcome);
     if changed && outcome == Outcome::Ready && last.outcome.is_some() {
         tracing::info!(target: "forge_web::readyz", "forge.readiness.recovered");
     }
+    let relog = !changed
+        && last
+            .logged_at
+            .is_none_or(|t| now.duration_since(t) >= RELOG_EVERY);
+    let log_now = outcome != Outcome::Ready && (changed || relog);
+    if log_now {
+        last.logged_at = Some(now);
+    }
     last.outcome = Some(outcome);
-    last.at = Some(Instant::now());
+    last.at = Some(now);
     drop(last);
     match fresh {
         Ok(()) => Ok(Json(json!({ "status": "ok" }))),
-        Err((e, _)) if changed => Err(ctx.fail(e)),
-        // The same failure as the previous check: logged when it started.
-        Err((e, _)) => Err(ctx.fail(e).already_logged()),
+        Err((e, _)) if log_now => Err(ctx.fail(e)),
+        // The same failure, logged within the last RELOG_EVERY.
+        Err((e, _)) => {
+            breadcrumb(&ctx, e.code());
+            Err(ctx.fail(e).already_logged())
+        }
     }
 }
 
 fn answer_cached(outcome: Outcome, ctx: &Ctx) -> Result<Json<Value>, ApiError> {
     match outcome {
         Outcome::Ready => Ok(Json(json!({ "status": "ok" }))),
-        Outcome::NotReady(code, probe) => Err(ctx
-            .fail(ForgeError::new(code).with_context("probe", probe))
-            .already_logged()),
+        Outcome::NotReady(code, probe) => {
+            breadcrumb(ctx, code);
+            Err(ctx
+                .fail(ForgeError::new(code).with_context("probe", probe))
+                .already_logged())
+        }
     }
+}
+
+/// A request id handed to a user (問い合わせ番号) stays findable even when
+/// its failure was not logged again.
+fn breadcrumb(ctx: &Ctx, code: ErrorCode) {
+    tracing::debug!(
+        target: "forge_web::readyz",
+        request_id = %ctx.request_id,
+        error_code = code.id(),
+        "readiness failure answered from the ongoing outage"
+    );
 }
 
 /// Every probe in order, each bounded by `probe_timeout`; the first failure
