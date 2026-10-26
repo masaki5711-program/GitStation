@@ -105,7 +105,21 @@ fn invisible_private_project_is_not_found() {
         (Action::ProjectUpdate, Resource::Project(invisible)),
         (Action::ProjectDelete, Resource::Project(invisible)),
         (Action::ProjectRestore, Resource::Project(invisible)),
-        (Action::ProtectedRefManage, Resource::Project(invisible)),
+        (
+            Action::ProtectedRefManage,
+            Resource::RefProtectionChange {
+                project: invisible,
+                from: None,
+                to: Some(Role::Developer),
+            },
+        ),
+        (
+            Action::ProjectVisibilityChange,
+            Resource::VisibilityChange {
+                project: invisible,
+                to: Visibility::Internal,
+            },
+        ),
         (Action::AuditRead, Resource::Project(invisible)),
         (
             Action::RepoPush,
@@ -128,6 +142,7 @@ fn invisible_private_project_is_not_found() {
             Resource::Membership {
                 scope: MembershipScope::Project(invisible),
                 change: MembershipChange::Add(Role::Guest),
+                removes_last_owner: false,
             },
         ),
     ];
@@ -191,10 +206,7 @@ fn empty_scope_list_denies_everything_that_needs_a_scope() {
     for &action in Action::ALL.iter().filter(|a| a.required_scope().is_some()) {
         let err = authorize(&p, action, &Resource::Instance).expect_err("no scope");
         assert!(
-            matches!(
-                err.code(),
-                ErrorCode::InsufficientScope | ErrorCode::Internal
-            ),
+            err.code() == ErrorCode::InsufficientScope,
             "{action:?}: {:?}",
             err.code()
         );
@@ -233,6 +245,7 @@ fn maintainer_cannot_demote_or_remove_an_owner() {
             &Resource::Membership {
                 scope: maintainer_scope,
                 change,
+                removes_last_owner: false,
             },
         )
         .expect_err("above own role");
@@ -247,16 +260,110 @@ fn a_token_cannot_mint_tokens() {
         vec![Scope::Api, Scope::Admin, Scope::WriteRepository],
     ] {
         let p = Principal::authenticated(ME, true, true, Credential::Token(scopes));
-        let err = authorize(&p, Action::TokenCreate, &Resource::Token { owner: ME })
-            .expect_err("token cannot mint");
+        let err = authorize(
+            &p,
+            Action::TokenCreate,
+            &request(vec![Scope::ReadRepository]),
+        )
+        .expect_err("token cannot mint");
         assert_eq!(err.code(), ErrorCode::Forbidden);
     }
-    assert!(authorize(
+    assert!(authorize(&session(), Action::TokenCreate, &request(vec![Scope::Api])).is_ok());
+}
+
+fn request(scopes: Vec<Scope>) -> Resource {
+    Resource::TokenRequest { owner: ME, scopes }
+}
+
+#[test]
+fn only_admins_create_admin_scoped_tokens() {
+    let err = authorize(
         &session(),
         Action::TokenCreate,
-        &Resource::Token { owner: ME }
+        &request(vec![Scope::Admin]),
+    )
+    .expect_err("not an admin");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(
+        err.to_string()
+            .contains("reason=admin_scope_requires_admin"),
+        "{err}"
+    );
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    assert!(authorize(&admin, Action::TokenCreate, &request(vec![Scope::Admin])).is_ok());
+}
+
+#[test]
+fn maintainer_cannot_lift_or_set_an_owner_level_protection() {
+    let maintainer = project(Some(Role::Maintainer));
+    for (from, to) in [
+        (Some(Role::Owner), None),
+        (Some(Role::Owner), Some(Role::Developer)),
+        (None, Some(Role::Owner)),
+    ] {
+        let err = authorize(
+            &session(),
+            Action::ProtectedRefManage,
+            &Resource::RefProtectionChange {
+                project: maintainer,
+                from,
+                to,
+            },
+        )
+        .expect_err("above own role");
+        assert_eq!(err.code(), ErrorCode::Forbidden, "{from:?} -> {to:?}");
+        assert!(err.to_string().contains("reason=above_own_role"), "{err}");
+    }
+}
+
+#[test]
+fn visibility_change_needs_an_owner() {
+    let change = |role| Resource::VisibilityChange {
+        project: project(Some(role)),
+        to: Visibility::Internal,
+    };
+    let err = authorize(
+        &session(),
+        Action::ProjectVisibilityChange,
+        &change(Role::Maintainer),
+    )
+    .expect_err("maintainer");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(authorize(
+        &session(),
+        Action::ProjectVisibilityChange,
+        &change(Role::Owner)
     )
     .is_ok());
+}
+
+#[test]
+fn the_last_owner_cannot_be_removed_even_by_an_admin() {
+    let last = Resource::Membership {
+        scope: MembershipScope::Project(project(Some(Role::Owner))),
+        change: MembershipChange::Remove { from: Role::Owner },
+        removes_last_owner: true,
+    };
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    for p in [session(), admin] {
+        let err = authorize(&p, Action::MemberManage, &last).expect_err("last owner");
+        assert!(err.to_string().contains("reason=last_owner"), "{err}");
+    }
+}
+
+#[test]
+fn ref_kind_is_derived_from_the_ref_name() {
+    let kind = |n: &str| RefKind::of(&forge_core::RefName::parse(n).expect("valid ref"));
+    assert_eq!(kind("refs/heads/main"), RefKind::Branch);
+    assert_eq!(kind("refs/tags/v1.0"), RefKind::Tag);
+    for reserved in [
+        "refs/merge-requests/1/head",
+        "refs/replace/0123456789abcdef0123456789abcdef01234567",
+        "refs/meta/config",
+        "refs/notes/commits",
+    ] {
+        assert_eq!(kind(reserved), RefKind::Reserved, "{reserved}");
+    }
 }
 
 #[test]

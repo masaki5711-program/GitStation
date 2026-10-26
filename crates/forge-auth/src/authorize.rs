@@ -19,7 +19,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::model::{
     Credential, MembershipChange, MembershipScope, Principal, ProjectView, RefKind, RefUpdate,
-    Resource, Role, Visibility,
+    Resource, Role, Scope, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -145,8 +145,25 @@ pub fn authorize(
             }
         }
 
-        (Action::ProjectUpdate | Action::ProtectedRefManage, Resource::Project(p)) => {
-            need(Role::Maintainer, p.role)
+        (Action::ProjectUpdate, Resource::Project(p)) => need(Role::Maintainer, p.role),
+
+        (Action::ProjectVisibilityChange, Resource::VisibilityChange { project, .. }) => {
+            need(Role::Owner, project.role)
+        }
+
+        (Action::ProtectedRefManage, Resource::RefProtectionChange { project, from, to }) => {
+            need(Role::Maintainer, project.role)?;
+            // Nobody changes a protection above their own role: a Maintainer
+            // cannot lift (or set) an Owner-level protection.
+            match (*from).max(*to) {
+                Some(level) if !admin && project.role.is_none_or(|r| level > r) => {
+                    Err(deny(ErrorCode::Forbidden)
+                        .with_context("reason", "above_own_role")
+                        .with_context("required_role", level.as_str())
+                        .with_context("actual_role", project.role.map_or("none", Role::as_str)))
+                }
+                Some(_) | None => Ok(()),
+            }
         }
 
         (
@@ -164,7 +181,14 @@ pub fn authorize(
             need(Role::Owner, p.role)
         }
 
-        (Action::MemberManage, Resource::Membership { scope, change }) => {
+        (
+            Action::MemberManage,
+            Resource::Membership {
+                scope,
+                change,
+                removes_last_owner,
+            },
+        ) => {
             let caller = match scope {
                 MembershipScope::Project(p) => p.role,
                 MembershipScope::Group { role } => *role,
@@ -178,14 +202,18 @@ pub fn authorize(
                 MembershipChange::Change { from, to } => (*from).max(*to),
                 MembershipChange::Remove { from } => *from,
             };
-            if admin || caller.is_some_and(|r| highest <= r) {
-                Ok(())
-            } else {
-                Err(deny(ErrorCode::Forbidden)
+            if !(admin || caller.is_some_and(|r| highest <= r)) {
+                return Err(deny(ErrorCode::Forbidden)
                     .with_context("reason", "above_own_role")
                     .with_context("required_role", highest.as_str())
-                    .with_context("actual_role", caller.map_or("none", Role::as_str)))
+                    .with_context("actual_role", caller.map_or("none", Role::as_str)));
             }
+            // Never leave a project or group without an Owner (administrators
+            // included: transfer ownership first).
+            if *removes_last_owner {
+                return Err(deny(ErrorCode::Forbidden).with_context("reason", "last_owner"));
+            }
+            Ok(())
         }
 
         // Groups are visible to every signed-in user (internal).
@@ -195,13 +223,21 @@ pub fn authorize(
             need(Role::Owner, *role)
         }
 
-        (Action::TokenCreate, Resource::Token { owner }) => {
+        (Action::TokenCreate, Resource::TokenRequest { owner, scopes }) => {
             // A token never mints tokens: a leaked token could otherwise
             // widen its scopes and outlive its own revocation.
             if matches!(principal.credential(), Credential::Token(_)) {
                 return Err(deny(ErrorCode::Forbidden).with_context("reason", "token_cannot_mint"));
             }
-            own_token(*owner)
+            own_token(*owner)?;
+            // An admin-scoped token only for someone who has admin rights
+            // now — otherwise it would silently gain them on a later promotion.
+            if scopes.contains(&Scope::Admin) && !admin {
+                return Err(
+                    deny(ErrorCode::Forbidden).with_context("reason", "admin_scope_requires_admin")
+                );
+            }
+            Ok(())
         }
         (Action::TokenList, Resource::Token { owner }) => own_token(*owner),
         (Action::TokenRevoke, Resource::Token { owner }) => {
@@ -229,6 +265,7 @@ pub fn authorize(
             | Action::ProjectRead
             | Action::ProjectCreate
             | Action::ProjectUpdate
+            | Action::ProjectVisibilityChange
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectRestore
@@ -252,7 +289,10 @@ pub fn authorize(
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
             | Resource::Membership { .. }
-            | Resource::Token { .. },
+            | Resource::RefProtectionChange { .. }
+            | Resource::VisibilityChange { .. }
+            | Resource::Token { .. }
+            | Resource::TokenRequest { .. },
         ) => wrong_resource(),
     }
 }
@@ -263,6 +303,8 @@ fn project_of(resource: &Resource) -> Option<&ProjectView> {
         Resource::Project(p) => Some(p),
         Resource::Ref { project, .. } => Some(project),
         Resource::Transfer { source, .. } => Some(source),
+        Resource::RefProtectionChange { project, .. }
+        | Resource::VisibilityChange { project, .. } => Some(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -274,7 +316,8 @@ fn project_of(resource: &Resource) -> Option<&ProjectView> {
         | Resource::Instance
         | Resource::Group { .. }
         | Resource::Namespace { .. }
-        | Resource::Token { .. } => None,
+        | Resource::Token { .. }
+        | Resource::TokenRequest { .. } => None,
     }
 }
 

@@ -62,6 +62,16 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
   current role. Project-scoped membership goes through the visibility check.
 - Pushes carry the ref kind; refs outside `refs/heads/` and `refs/tags/` are
   rejected for everyone (`FG-GIT-0010`).
+- Second review round (security re-review, BLOCK on one HIGH): changing a ref
+  protection is its own resource `RefProtectionChange { project, from, to }`
+  and nobody changes a protection above their own role (a Maintainer cannot
+  lift an Owner-level protection and then force-push). Visibility changes are
+  their own action `ProjectVisibilityChange` (Owner only). Membership changes
+  carry `removes_last_owner`, and the last Owner can never be removed. Token
+  creation carries the requested scopes; only users with administrator rights
+  may request the `admin` scope. `RefKind::of(&RefName)` is the only way to
+  derive a ref kind; `MembershipChange.from` is the effective role loaded from
+  the database, never taken from the request.
 - The matrix lives in `crates/forge-auth/src/matrix_rows.rs` (data) and
   `matrix.rs` (types and the public summary); `Action::ALL` is generated with
   the enum by one macro.

@@ -5,7 +5,7 @@
 //! Inputs fail closed: a `Principal` cannot be built without stating how it
 //! authenticated and whether the account is active.
 
-use forge_core::UserId;
+use forge_core::{RefName, UserId};
 
 /// GitLab-style roles, ordered: `Guest < Reporter < Developer < Maintainer < Owner`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -175,6 +175,20 @@ pub enum RefKind {
     Reserved,
 }
 
+impl RefKind {
+    /// The only way callers derive the kind: from the validated ref name, so
+    /// no caller can default a reserved ref to `Branch`.
+    pub fn of(name: &RefName) -> RefKind {
+        if name.branch().is_some() {
+            RefKind::Branch
+        } else if name.tag().is_some() {
+            RefKind::Tag
+        } else {
+            RefKind::Reserved
+        }
+    }
+}
+
 /// Protection that applies to the ref being pushed (`None` = unprotected).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefProtection {
@@ -193,6 +207,10 @@ pub enum MembershipScope {
 }
 
 /// What is done to one membership.
+///
+/// `from` is the member's current **effective** role, loaded from the
+/// database — never taken from the request. `Add` is only for a user who is
+/// not a member yet (an existing member is a `Change`, never an upsert).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MembershipChange {
     /// Add a new member with this role.
@@ -230,13 +248,34 @@ pub enum Resource {
         source: ProjectView,
         target_role: Option<Role>,
     },
-    /// Changing one membership.
+    /// Changing one membership. `removes_last_owner` is computed by the
+    /// lookup layer: the change would leave the project or group without an
+    /// Owner.
     Membership {
         scope: MembershipScope,
         change: MembershipChange,
+        removes_last_owner: bool,
     },
-    /// A personal access token owned by `owner`.
+    /// Changing the protection of a ref pattern: the minimum push role
+    /// before and after (`None` = unprotected), loaded / validated by the
+    /// caller.
+    RefProtectionChange {
+        project: ProjectView,
+        from: Option<Role>,
+        to: Option<Role>,
+    },
+    /// Changing a project's visibility.
+    VisibilityChange {
+        project: ProjectView,
+        to: Visibility,
+    },
+    /// A personal access token owned by `owner` (list / revoke).
     Token {
         owner: UserId,
+    },
+    /// A token about to be created for `owner` with these scopes.
+    TokenRequest {
+        owner: UserId,
+        scopes: Vec<Scope>,
     },
 }

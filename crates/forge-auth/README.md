@@ -18,8 +18,11 @@ lands (M1 phase 5).
   macro; `is_public()`, `is_git_operation()`, `required_scope()`.
 - `Resource` — `Instance`, `Group { role }`, `Namespace { owner }`,
   `Project(ProjectView)`, `Ref { project, kind, update, protection }`,
-  `Transfer { source, target_role }`, `Membership { scope, change }`,
-  `Token { owner }`.
+  `Transfer { source, target_role }`,
+  `Membership { scope, change, removes_last_owner }`,
+  `RefProtectionChange { project, from, to }`, `VisibilityChange { project, to }`,
+  `Token { owner }` (list / revoke), `TokenRequest { owner, scopes }` (create).
+- `RefKind::of(&RefName)` — the only way to derive a ref kind.
 - `Role` (Guest < Reporter < Developer < Maintainer < Owner), `Scope`
   (`read_repository` ⊂ `write_repository`, `read_api` ⊂ `api`, `admin`),
   `Visibility` (`Private`, `Internal`), `RefKind` (`Branch`, `Tag`,
@@ -36,9 +39,12 @@ lands (M1 phase 5).
 (`FG-GIT-0009`) for everyone including administrators, below the minimum push
 role (`FG-GIT-0008`; administrator rights pass the minimum role).
 
-**Escalation rules**: nobody acts on a role above their own (granted role or
-the member's current role — a Maintainer cannot demote or remove an Owner);
-tokens never mint tokens; an administrator's token needs the `admin` scope.
+**Escalation rules**: nobody acts on a role above their own — granted role or
+the member's current effective role (loaded from the DB), and protection levels
+(a Maintainer cannot demote an Owner or lift an Owner-level protection); the
+last Owner cannot be removed; visibility changes need an Owner; tokens never
+mint tokens; an administrator's token needs the `admin` scope and only users
+with administrator rights may request it.
 
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).

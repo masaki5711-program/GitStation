@@ -37,6 +37,8 @@ actions! {
     ProjectRead,
     ProjectCreate,
     ProjectUpdate,
+    /// Private ⇄ internal: Owner only (exposes a project to every signed-in user).
+    ProjectVisibilityChange,
     ProjectTransfer,
     ProjectDelete,
     ProjectRestore,
@@ -83,6 +85,7 @@ impl Action {
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
+            | Action::ProjectVisibilityChange
             | Action::ProjectTransfer
             | Action::ProjectDelete
             | Action::ProjectRestore

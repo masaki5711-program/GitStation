@@ -71,8 +71,23 @@ pub(crate) enum Fixture {
     InternalProjectMember(MembershipChange),
     DeletedProjectMember(MembershipChange),
     GroupMember(MembershipChange),
+    /// Removing the last Owner of a private project the caller owns.
+    LastOwnerRemoval,
+    /// Changing a protection's minimum push role (None = unprotected).
+    ProtectionChange {
+        from: Option<Role>,
+        to: Option<Role>,
+    },
+    /// Making a private project internal.
+    MakeInternal,
     OwnToken,
     ForeignToken,
+    /// Creating an own token with plain scopes.
+    OwnTokenRequest,
+    /// Creating an own token that carries the admin scope.
+    OwnAdminTokenRequest,
+    /// Creating a token for another user.
+    ForeignTokenRequest,
     Instance,
 }
 
@@ -164,6 +179,11 @@ impl Fixture {
             pending_deletion: true,
             ..private
         };
+        let member = |scope, change| Resource::Membership {
+            scope,
+            change,
+            removes_last_owner: false,
+        };
         let branch_ff = |project| Resource::Ref {
             project,
             kind: RefKind::Branch,
@@ -193,24 +213,42 @@ impl Fixture {
                 source: private,
                 target_role: target,
             },
-            Fixture::ProjectMember(change) => Resource::Membership {
+            Fixture::ProjectMember(change) => member(MembershipScope::Project(private), change),
+            Fixture::InternalProjectMember(change) => {
+                member(MembershipScope::Project(internal), change)
+            }
+            Fixture::DeletedProjectMember(change) => {
+                member(MembershipScope::Project(deleted), change)
+            }
+            Fixture::GroupMember(change) => member(MembershipScope::Group { role }, change),
+            Fixture::LastOwnerRemoval => Resource::Membership {
                 scope: MembershipScope::Project(private),
-                change,
+                change: MembershipChange::Remove { from: Role::Owner },
+                removes_last_owner: true,
             },
-            Fixture::InternalProjectMember(change) => Resource::Membership {
-                scope: MembershipScope::Project(internal),
-                change,
+            Fixture::ProtectionChange { from, to } => Resource::RefProtectionChange {
+                project: private,
+                from,
+                to,
             },
-            Fixture::DeletedProjectMember(change) => Resource::Membership {
-                scope: MembershipScope::Project(deleted),
-                change,
-            },
-            Fixture::GroupMember(change) => Resource::Membership {
-                scope: MembershipScope::Group { role },
-                change,
+            Fixture::MakeInternal => Resource::VisibilityChange {
+                project: private,
+                to: Visibility::Internal,
             },
             Fixture::OwnToken => Resource::Token { owner: ME },
             Fixture::ForeignToken => Resource::Token { owner: OTHER },
+            Fixture::OwnTokenRequest => Resource::TokenRequest {
+                owner: ME,
+                scopes: vec![Scope::ReadRepository],
+            },
+            Fixture::OwnAdminTokenRequest => Resource::TokenRequest {
+                owner: ME,
+                scopes: vec![Scope::Api, Scope::Admin],
+            },
+            Fixture::ForeignTokenRequest => Resource::TokenRequest {
+                owner: OTHER,
+                scopes: vec![Scope::ReadRepository],
+            },
             Fixture::Instance => Resource::Instance,
         }
     }
