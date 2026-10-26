@@ -54,7 +54,7 @@ FG-DB-0003/0004 (migrations), FG-DB-0005 (Outbox sequencer, ADR-0012).
 - `Cargo.lock` lists `rsa`, `sqlx-mysql` and `sqlx-sqlite` (via the sqlx
   `macros` feature); `cargo tree -i rsa` / `-i libsqlite3-sys` show they are
   not built. An audit tool reading the lockfile will flag RUSTSEC-2023-0071 —
-  waive it with this reason once `cargo audit` / `cargo deny` run in CI.
+  waived with this reason in `.cargo/audit.toml` (user, 2026-10-26).
 - `Db::connect` makes one direct probe connection (real failure reason,
   version check) and then a lazy pool: `min_connections` are opened in the
   background, so a failure there surfaces later on `acquire` (FG-DB-0001).

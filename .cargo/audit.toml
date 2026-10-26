@@ -1,0 +1,11 @@
+# cargo-audit configuration (read from <project>/.cargo/audit.toml).
+[advisories]
+ignore = [
+  # RUSTSEC-2023-0071 (rsa, Marvin attack; no fixed release).
+  # rsa is only listed in Cargo.lock through sqlx-mysql (sqlx's weak
+  # `dep?/feature` dependencies keep it in the lockfile); forge enables the
+  # postgres driver only, and `cargo tree -i rsa` prints nothing, so it is
+  # never built. Waived by the user on 2026-10-26; re-check on every sqlx
+  # upgrade and remove this entry once the lockfile no longer lists rsa.
+  "RUSTSEC-2023-0071",
+]
