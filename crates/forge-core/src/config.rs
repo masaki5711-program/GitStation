@@ -4,9 +4,9 @@
 //! `database.max_connections` ↔ `FORGE_DATABASE_MAX_CONNECTIONS`.
 //!
 //! Every problem is `FG-SYS-0002` with `config_key` and `reason`, detected at
-//! load time. Unknown keys fail (a typo never silently becomes a default);
-//! secrets are passed as files (`database.password_file`) and never appear in
-//! `Debug` / `Display` output.
+//! load time. Unknown, renamed and empty keys fail (a typo never silently
+//! becomes a default); the database password comes only from
+//! `database.password_file` and is never printed (ADR-0013).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,43 +14,61 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
-/// A configuration key and its environment variable.
+mod secret;
+
+pub use secret::{DatabaseUrl, Secret};
+
+/// A configuration key, its environment variable, and whether it is numeric
+/// (a TOML integer is accepted only for numeric keys).
 #[derive(Debug, Clone, Copy)]
 pub struct Key {
     pub key: &'static str,
     pub env: &'static str,
+    pub numeric: bool,
 }
 
-const fn key(key: &'static str, env: &'static str) -> Key {
-    Key { key, env }
+const fn text(key: &'static str, env: &'static str) -> Key {
+    Key {
+        key,
+        env,
+        numeric: false,
+    }
+}
+
+const fn number(key: &'static str, env: &'static str) -> Key {
+    Key {
+        key,
+        env,
+        numeric: true,
+    }
 }
 
 /// Every configuration key. `env` equals `env_name(key)` (tested).
 pub const KEYS: &[Key] = &[
-    key("server.bind", "FORGE_SERVER_BIND"),
-    key("storage.root", "FORGE_STORAGE_ROOT"),
-    key("database.url", "FORGE_DATABASE_URL"),
-    key("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),
-    key("database.max_connections", "FORGE_DATABASE_MAX_CONNECTIONS"),
-    key("database.min_connections", "FORGE_DATABASE_MIN_CONNECTIONS"),
-    key(
+    text("server.bind", "FORGE_SERVER_BIND"),
+    text("storage.root", "FORGE_STORAGE_ROOT"),
+    text("database.url", "FORGE_DATABASE_URL"),
+    text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),
+    number("database.max_connections", "FORGE_DATABASE_MAX_CONNECTIONS"),
+    number("database.min_connections", "FORGE_DATABASE_MIN_CONNECTIONS"),
+    number(
         "database.connect_timeout_ms",
         "FORGE_DATABASE_CONNECT_TIMEOUT_MS",
     ),
-    key(
+    number(
         "database.acquire_timeout_ms",
         "FORGE_DATABASE_ACQUIRE_TIMEOUT_MS",
     ),
-    key(
+    number(
         "database.statement_timeout_ms",
         "FORGE_DATABASE_STATEMENT_TIMEOUT_MS",
     ),
-    key("database.lock_timeout_ms", "FORGE_DATABASE_LOCK_TIMEOUT_MS"),
-    key(
+    number("database.lock_timeout_ms", "FORGE_DATABASE_LOCK_TIMEOUT_MS"),
+    number(
         "database.idle_in_transaction_timeout_ms",
         "FORGE_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS",
     ),
-    key(
+    number(
         "database.migrate_statement_timeout_ms",
         "FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS",
     ),
@@ -60,6 +78,10 @@ pub const KEYS: &[Key] = &[
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
 /// ones forge passes to git hooks) are not configuration and are ignored.
 const NAMESPACES: &[&str] = &["FORGE_SERVER_", "FORGE_STORAGE_", "FORGE_DATABASE_"];
+
+/// Variables that used to be configuration: setting one fails instead of
+/// being ignored (old name, new name).
+const RENAMED: &[(&str, &str)] = &[("FORGE_BIND", "FORGE_SERVER_BIND")];
 
 /// The environment variable of a configuration key.
 pub fn env_name(key: &str) -> String {
@@ -72,10 +94,17 @@ fn invalid(config_key: &str, reason: &'static str) -> ForgeError {
         .with_context("reason", reason)
 }
 
-/// A snapshot of the `FORGE_*` environment variables.
-#[derive(Debug, Default)]
+/// A snapshot of the `FORGE_*` environment variables. `Debug` shows the
+/// names only: a value may be a URL or a path an operator considers private.
+#[derive(Default)]
 pub struct Env {
     vars: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.vars.keys()).finish()
+    }
 }
 
 impl Env {
@@ -111,102 +140,7 @@ impl Env {
 }
 
 fn is_config_env(name: &str) -> bool {
-    NAMESPACES.iter().any(|ns| name.starts_with(ns))
-}
-
-/// A secret value: never printed.
-pub struct Secret(String);
-
-impl Secret {
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for Secret {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Secret([redacted])")
-    }
-}
-
-/// A validated `postgres://` URL without its password (the password, if the
-/// URL carried one, is moved into `DatabaseConfig::password`).
-pub struct DatabaseUrl {
-    url: url::Url,
-    host: String,
-    port: u16,
-    dbname: String,
-}
-
-impl DatabaseUrl {
-    /// Parse and split off the password. The raw text is never echoed in the
-    /// error: it may contain the password.
-    fn parse(raw: &str) -> Result<(Self, Option<Secret>), ForgeError> {
-        let bad = || invalid("database.url", "invalid");
-        let mut url = url::Url::parse(raw).map_err(|_| bad())?;
-        if !matches!(url.scheme(), "postgres" | "postgresql") {
-            return Err(bad());
-        }
-        let host = url.host_str().filter(|h| !h.is_empty()).ok_or_else(bad)?;
-        let host = host.to_owned();
-        let dbname = url.path().trim_start_matches('/');
-        if dbname.is_empty() || dbname.contains('/') {
-            return Err(bad());
-        }
-        let dbname = percent_encoding::percent_decode_str(dbname)
-            .decode_utf8()
-            .map_err(|_| bad())?
-            .into_owned();
-        let password = match url.password() {
-            Some(p) => Some(Secret(
-                percent_encoding::percent_decode_str(p)
-                    .decode_utf8()
-                    .map_err(|_| bad())?
-                    .into_owned(),
-            )),
-            None => None,
-        };
-        url.set_password(None).map_err(|()| bad())?;
-        let port = url.port().unwrap_or(5432);
-        Ok((
-            Self {
-                url,
-                host,
-                port,
-                dbname,
-            },
-            password,
-        ))
-    }
-
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-
-    pub fn dbname(&self) -> &str {
-        &self.dbname
-    }
-
-    /// The URL for the driver; the password is passed separately.
-    pub fn without_password(&self) -> String {
-        self.url.to_string()
-    }
-}
-
-impl std::fmt::Display for DatabaseUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.url.as_str())
-    }
-}
-
-impl std::fmt::Debug for DatabaseUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DatabaseUrl({})", self.url)
-    }
+    NAMESPACES.iter().any(|ns| name.starts_with(ns)) || RENAMED.iter().any(|(old, _)| *old == name)
 }
 
 #[derive(Debug)]
@@ -228,6 +162,7 @@ impl Config {
 
 #[derive(Debug)]
 pub struct ServerConfig {
+    /// `host:port`, validated at load time.
     pub bind: String,
 }
 
@@ -247,8 +182,8 @@ pub struct DatabaseConfig {
     pub statement_timeout: Duration,
     pub lock_timeout: Duration,
     pub idle_in_transaction_timeout: Duration,
-    /// `None` = no statement timeout while migrating (`lock_timeout` still applies).
-    pub migrate_statement_timeout: Option<Duration>,
+    /// The statement timeout while migrating (long, but bounded: §3-2).
+    pub migrate_statement_timeout: Duration,
 }
 
 impl DatabaseConfig {
@@ -267,9 +202,12 @@ pub fn load(file: Option<&Path>, env: &Env) -> Result<Config, ForgeError> {
         None => BTreeMap::new(),
     };
     for (name, value) in &env.vars {
+        if let Some((_, new)) = RENAMED.iter().find(|(old, _)| old == name) {
+            return Err(invalid(name, "renamed").with_context("renamed_to", new));
+        }
         match KEYS.iter().find(|k| k.env == name) {
             Some(k) => {
-                values.insert(k.key, value.clone()); // clone: env stays a snapshot
+                values.insert(k.key, value.as_str().into());
             }
             None if is_config_env(name) => return Err(invalid(name, "unknown_env")),
             None => {}
@@ -285,10 +223,14 @@ fn read_file(path: &Path) -> Result<BTreeMap<&'static str, String>, ForgeError> 
             .with_context("path", path.display())
             .with_source(e)
     })?;
+    // The TOML error text quotes the offending line, which may hold a
+    // secret: only its position is kept.
     let table: toml::Table = text.parse().map_err(|e: toml::de::Error| {
+        let (line, column) = position(&text, e.span().map_or(0, |s| s.start));
         invalid("config_file", "parse")
             .with_context("path", path.display())
-            .with_source(e)
+            .with_context("line", line)
+            .with_context("column", column)
     })?;
     let mut values = BTreeMap::new();
     for (section, body) in &table {
@@ -301,9 +243,10 @@ fn read_file(path: &Path) -> Result<BTreeMap<&'static str, String>, ForgeError> 
                 return Err(invalid(&full, "unknown_key"));
             };
             let text = match value {
-                toml::Value::String(s) => s.clone(), // clone: the table is dropped after
-                toml::Value::Integer(i) => i.to_string(),
-                toml::Value::Float(_)
+                toml::Value::String(s) => s.as_str().into(),
+                toml::Value::Integer(i) if k.numeric => i.to_string(),
+                toml::Value::Integer(_)
+                | toml::Value::Float(_)
                 | toml::Value::Boolean(_)
                 | toml::Value::Datetime(_)
                 | toml::Value::Array(_)
@@ -315,35 +258,44 @@ fn read_file(path: &Path) -> Result<BTreeMap<&'static str, String>, ForgeError> 
     Ok(values)
 }
 
+/// 1-based line and column of a byte offset.
+fn position(text: &str, offset: usize) -> (usize, usize) {
+    let before = text.get(..offset).unwrap_or(text);
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    (line, column)
+}
+
 fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> {
     let get = |key: &str| values.get(key).map(String::as_str);
+    // A set-but-empty value (an exported, unfilled template variable) is an
+    // error, never "unset".
+    let text = |key: &'static str| match get(key).map(str::trim) {
+        Some("") => Err(invalid(key, "empty")),
+        other => Ok(other),
+    };
 
-    let (url, url_password) = match get("database.url") {
-        Some(raw) => {
-            let (url, password) = DatabaseUrl::parse(raw)?;
-            (Some(url), password)
-        }
-        None => (None, None),
-    };
-    let password = match (get("database.password_file"), url_password) {
-        (Some(_), Some(_)) => return Err(invalid("database.password_file", "password_twice")),
-        (Some(path), None) => Some(read_password(Path::new(path))?),
-        (None, inline) => inline,
-    };
+    let bind = text("server.bind")?.unwrap_or("127.0.0.1:8080");
+    if !valid_bind(bind) {
+        return Err(invalid("server.bind", "invalid"));
+    }
+    let url = text("database.url")?.map(DatabaseUrl::parse).transpose()?;
+    let password = text("database.password_file")?
+        .map(|p| secret::read_password(Path::new(p)))
+        .transpose()?;
 
     let max_connections = positive(get, "database.max_connections", 10)?;
-    let min_connections = number(get, "database.min_connections", 0)?;
+    let min_connections = unsigned(get, "database.min_connections", 0)?;
     if min_connections > max_connections {
         return Err(invalid("database.min_connections", "above_max"));
     }
-    let migrate_ms = number(get, "database.migrate_statement_timeout_ms", 0)?;
 
     Ok(Config {
         server: ServerConfig {
-            bind: get("server.bind").unwrap_or("127.0.0.1:8080").to_owned(),
+            bind: bind.to_owned(),
         },
         storage: StorageConfig {
-            root: get("storage.root").map(PathBuf::from),
+            root: text("storage.root")?.map(PathBuf::from),
         },
         database: DatabaseConfig {
             url,
@@ -359,27 +311,23 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
                 "database.idle_in_transaction_timeout_ms",
                 60_000,
             )?,
-            migrate_statement_timeout: (migrate_ms > 0)
-                .then(|| Duration::from_millis(u64::from(migrate_ms))),
+            migrate_statement_timeout: millis(
+                get,
+                "database.migrate_statement_timeout_ms",
+                600_000,
+            )?,
         },
     })
 }
 
-fn read_password(path: &Path) -> Result<Secret, ForgeError> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
-        invalid("database.password_file", "unreadable")
-            .with_context("path", path.display())
-            .with_source(e)
-    })?;
-    let value = text.trim_end_matches(['\r', '\n']);
-    if value.is_empty() {
-        return Err(invalid("database.password_file", "empty"));
-    }
-    Ok(Secret(value.to_owned()))
+/// `host:port` with a non-empty host and a numeric port (`[::1]:8080` too).
+fn valid_bind(bind: &str) -> bool {
+    bind.rsplit_once(':')
+        .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
 }
 
 /// A non-negative integer (`u32`), or `default` when unset.
-fn number<'a>(
+fn unsigned<'a>(
     get: impl Fn(&str) -> Option<&'a str>,
     key: &'static str,
     default: u32,
@@ -395,7 +343,7 @@ fn positive<'a>(
     key: &'static str,
     default: u32,
 ) -> Result<u32, ForgeError> {
-    match number(get, key, default)? {
+    match unsigned(get, key, default)? {
         0 => Err(invalid(key, "zero")),
         n => Ok(n),
     }

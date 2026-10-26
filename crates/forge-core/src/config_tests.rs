@@ -35,7 +35,7 @@ fn defaults_apply_without_file_or_env() {
     assert_eq!(db.statement_timeout, Duration::from_millis(15000));
     assert_eq!(db.lock_timeout, Duration::from_millis(5000));
     assert_eq!(db.idle_in_transaction_timeout, Duration::from_millis(60000));
-    assert_eq!(db.migrate_statement_timeout, None);
+    assert_eq!(db.migrate_statement_timeout, Duration::from_millis(600_000));
 }
 
 #[test]
@@ -97,26 +97,37 @@ fn database_url_must_be_postgres_with_host_and_dbname() {
 }
 
 #[test]
-fn database_url_password_is_never_in_debug_or_display() {
+fn a_password_in_the_database_url_is_rejected() {
+    for raw in [
+        "postgres://forge:hunter2@db:5432/forge",
+        "postgres://forge@db/forge?password=hunter2",
+        "postgres://forge@db/forge?sslmode=require&PassWord=hunter2",
+        "postgres://forge@db/forge?passfile=/tmp/pgpass",
+        "postgres://forge@db/forge?sslpassword=hunter2",
+    ] {
+        let err = load(None, &env(&[("FORGE_DATABASE_URL", raw)])).expect_err(raw);
+        assert_invalid(&err, "database.url", "password_in_url");
+        assert!(!err.to_string().contains("hunter2"), "{err}");
+    }
+}
+
+#[test]
+fn database_url_display_shows_host_port_and_dbname_only() {
     let cfg = load(
         None,
         &env(&[(
             "FORGE_DATABASE_URL",
-            "postgres://forge:hunter2@db:5432/forge",
+            "postgres://forge@db:6543/forge%2Dprod?sslmode=require",
         )]),
     )
     .expect("loads");
     let url = cfg.database.url().expect("url");
-    assert!(!format!("{url}").contains("hunter2"));
-    assert!(!format!("{url:?}").contains("hunter2"));
-    assert!(!format!("{cfg:?}").contains("hunter2"));
-    assert_eq!(
-        cfg.database.password.as_ref().map(Secret::expose),
-        Some("hunter2")
-    );
+    assert_eq!(url.dbname(), "forge-prod", "percent-decoded");
+    assert_eq!(format!("{url}"), "db:6543/forge-prod");
+    assert_eq!(format!("{url:?}"), "DatabaseUrl(db:6543/forge-prod)");
     assert!(
-        !url.without_password().contains("hunter2"),
-        "the url handed to the driver carries no password"
+        url.as_str().contains("sslmode=require"),
+        "the driver gets the options"
     );
 }
 
@@ -140,18 +151,29 @@ fn password_file_is_read_and_trailing_newline_trimmed() {
 }
 
 #[test]
-fn password_in_url_and_password_file_is_config_invalid() {
-    let secret = file("other");
-    let path = secret.path().to_string_lossy().into_owned();
+fn a_relative_password_file_is_config_invalid() {
     let err = load(
         None,
-        &env(&[
-            ("FORGE_DATABASE_URL", "postgres://forge:inline@db/forge"),
-            ("FORGE_DATABASE_PASSWORD_FILE", &path),
-        ]),
+        &env(&[("FORGE_DATABASE_PASSWORD_FILE", "secrets/db")]),
     )
-    .expect_err("two passwords");
-    assert_invalid(&err, "database.password_file", "password_twice");
+    .expect_err("relative");
+    assert_invalid(&err, "database.password_file", "not_absolute");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_password_file_readable_by_others_is_config_invalid() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let secret = file("s3cret-value\n");
+    let path = secret.path().to_string_lossy().into_owned();
+    for mode in [0o644, 0o640, 0o604] {
+        std::fs::set_permissions(secret.path(), std::fs::Permissions::from_mode(mode))
+            .expect("chmod");
+        let err = load(None, &env(&[("FORGE_DATABASE_PASSWORD_FILE", &path)])).expect_err("mode");
+        assert_invalid(&err, "database.password_file", "insecure_permissions");
+    }
+    std::fs::set_permissions(secret.path(), std::fs::Permissions::from_mode(0o400)).expect("chmod");
+    assert!(load(None, &env(&[("FORGE_DATABASE_PASSWORD_FILE", &path)])).is_ok());
 }
 
 #[test]
@@ -192,10 +214,106 @@ fn malformed_config_file_is_config_invalid() {
 }
 
 #[test]
+fn a_syntax_error_reports_its_position_but_never_the_line() {
+    let f = file("[database]\nurl = \"postgres://forge:Pa55word@db/forge\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("unclosed string");
+    assert_invalid(&err, "config_file", "parse");
+    let text = err.to_string();
+    assert!(text.contains("line=2"), "{text}");
+    assert!(!text.contains("Pa55word"), "{text}");
+    assert!(
+        std::error::Error::source(&err).is_none(),
+        "the TOML error (which quotes the line) is not attached"
+    );
+}
+
+#[test]
 fn wrong_value_type_in_file_is_config_invalid() {
-    let f = file("[database]\nmax_connections = true\n");
-    let err = load(Some(f.path()), &env(&[])).expect_err("bool");
-    assert_invalid(&err, "database.max_connections", "invalid");
+    for (body, key) in [
+        (
+            "[database]\nmax_connections = true\n",
+            "database.max_connections",
+        ),
+        (
+            "[database]\nmax_connections = 1.5\n",
+            "database.max_connections",
+        ),
+        (
+            "[database]\nmax_connections = 4294967296\n",
+            "database.max_connections",
+        ),
+        (
+            "[database]\nmax_connections = [1]\n",
+            "database.max_connections",
+        ),
+        (
+            "[database]\npassword_file = 1234\n",
+            "database.password_file",
+        ),
+        ("[server]\nbind = 8080\n", "server.bind"),
+    ] {
+        let f = file(body);
+        let err = load(Some(f.path()), &env(&[])).expect_err(body);
+        assert_invalid(&err, key, "invalid");
+    }
+}
+
+#[test]
+fn a_top_level_value_in_file_is_an_unknown_key() {
+    let f = file("bind = \"127.0.0.1:1\"\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("top level");
+    assert_invalid(&err, "bind", "unknown_key");
+}
+
+#[test]
+fn the_renamed_forge_bind_is_rejected_with_its_new_name() {
+    let err = load(None, &env(&[("FORGE_BIND", "0.0.0.0:80")])).expect_err("renamed");
+    assert_invalid(&err, "FORGE_BIND", "renamed");
+    assert!(
+        err.to_string().contains("renamed_to=FORGE_SERVER_BIND"),
+        "{err}"
+    );
+}
+
+#[test]
+fn empty_values_are_config_invalid_not_unset() {
+    for (var, key) in [
+        ("FORGE_SERVER_BIND", "server.bind"),
+        ("FORGE_STORAGE_ROOT", "storage.root"),
+        ("FORGE_DATABASE_URL", "database.url"),
+        ("FORGE_DATABASE_PASSWORD_FILE", "database.password_file"),
+    ] {
+        let err = load(None, &env(&[(var, " ")])).expect_err(var);
+        assert_invalid(&err, key, "empty");
+    }
+}
+
+#[test]
+fn bind_must_be_host_and_port() {
+    for bad in [
+        "8080",
+        "localhost",
+        ":8080",
+        "127.0.0.1:http",
+        "127.0.0.1:70000",
+    ] {
+        let err = load(None, &env(&[("FORGE_SERVER_BIND", bad)])).expect_err(bad);
+        assert_invalid(&err, "server.bind", "invalid");
+    }
+    for good in ["0.0.0.0:80", "[::1]:8080", "forge.internal:8443"] {
+        assert!(
+            load(None, &env(&[("FORGE_SERVER_BIND", good)])).is_ok(),
+            "{good}"
+        );
+    }
+}
+
+#[test]
+fn env_debug_shows_names_only() {
+    let e = env(&[("FORGE_DATABASE_URL", "postgres://forge@secret-host/forge")]);
+    let shown = format!("{e:?}");
+    assert!(shown.contains("FORGE_DATABASE_URL"), "{shown}");
+    assert!(!shown.contains("secret-host"), "{shown}");
 }
 
 #[test]
@@ -244,6 +362,10 @@ fn zero_timeouts_and_connections_are_rejected() {
             "FORGE_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS",
             "database.idle_in_transaction_timeout_ms",
         ),
+        (
+            "FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS",
+            "database.migrate_statement_timeout_ms",
+        ),
         ("FORGE_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
     ] {
         let err = load(None, &env(&[(var, "0")])).expect_err(var);
@@ -267,21 +389,15 @@ fn min_connections_above_max_is_config_invalid() {
 }
 
 #[test]
-fn migrate_statement_timeout_zero_means_unbounded() {
+fn migrate_statement_timeout_is_long_but_bounded() {
     let cfg = load(
         None,
-        &env(&[("FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS", "0")]),
-    )
-    .expect("loads");
-    assert_eq!(cfg.database.migrate_statement_timeout, None);
-    let cfg = load(
-        None,
-        &env(&[("FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS", "600000")]),
+        &env(&[("FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS", "3600000")]),
     )
     .expect("loads");
     assert_eq!(
         cfg.database.migrate_statement_timeout,
-        Some(Duration::from_millis(600_000))
+        Duration::from_millis(3_600_000)
     );
 }
 

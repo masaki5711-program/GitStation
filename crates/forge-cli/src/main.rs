@@ -98,10 +98,11 @@ fn main() -> ExitCode {
                     repo_id,
                     storage_root,
                 },
-        } => config().and_then(|cfg| match storage_root {
+        } => match storage_root {
+            // An explicit root needs nothing else from the configuration.
             Some(root) => admin::repo_path(&root, repo_id),
-            None => admin::repo_path(cfg.storage_root()?, repo_id),
-        }),
+            None => config().and_then(|cfg| admin::repo_path(cfg.storage_root()?, repo_id)),
+        },
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind)

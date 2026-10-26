@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 forge-errors.workspace = true
-serde.workspace = true
 toml.workspace = true
 url.workspace = true
 percent-encoding.workspace = true

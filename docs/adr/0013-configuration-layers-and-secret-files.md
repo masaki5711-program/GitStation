@@ -15,8 +15,10 @@ DB の接続先、プールの大きさ、各種タイムアウトなど、設�
 - `forge-core::config` で型付きの設定を読み込む。層は優先度の低い順に、組み込みの既定値 → TOML ファイル（`--config` / `FORGE_CONFIG`）→ 環境変数 → コマンドラインのフラグ。
 - 環境変数の名前はキーから決める（`database.max_connections` → `FORGE_DATABASE_MAX_CONNECTIONS`）。このため `FORGE_BIND` は `FORGE_SERVER_BIND` に改名した。
 - 未知のキーは失敗にする。設定ファイルのつづりの誤りも、設定の名前空間（`FORGE_SERVER_` / `FORGE_STORAGE_` / `FORGE_DATABASE_`）の下にある未知の環境変数も、どちらも失敗にする。ほかの `FORGE_*`（git フックに渡す変数など）は無視する。
-- 誤りはすべて読み込みの時点で FG-SYS-0002 とし、`config_key` と `reason` を付ける。値が 0 のタイムアウトは不可。
-- パスワードは `database.password_file` で渡す。URL に書かれたパスワードは取り出して URL から外す。両方に書かれていたら失敗にする。秘密情報の型は `Debug` でも `Display` でも中身を出さない。
+- 改名前の名前（`FORGE_BIND`）や空の値は、無視せずに失敗にする。
+- 誤りはすべて読み込みの時点で FG-SYS-0002 とし、`config_key` と `reason` を付ける。値が 0 のタイムアウトは不可。マイグレーション中の statement タイムアウトも上限を持つ（既定 10 分。契約 §3-2）。
+- パスワードは `database.password_file`（絶対パス）**だけ**で渡す。URL に書かれたパスワード（`user:pass@` も `?password=` / `passfile` / `sslpassword` も）は拒否する。Unix では、グループや他のユーザーが読めるパスワードファイルも拒否する。
+- 秘密情報の型は `Debug` でも `Display` でも中身を出さない。URL の表示は host / port / dbname だけにする。設定ファイルの構文エラーは位置（行・列）だけをログに出す。toml のエラー文は問題の行を引用するため付けない。
 
 ## Alternatives Considered
 
