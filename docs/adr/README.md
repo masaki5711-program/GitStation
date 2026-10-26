@@ -18,3 +18,4 @@
 | [0012](0012-outbox-gap-free-sequencer.md) | Outbox のイベントに欠番のない順序番号を付ける | accepted | 2026-10-26 |
 | [0013](0013-configuration-layers-and-secret-files.md) | 設定の層（ファイル → 環境変数 → フラグ）と、秘密情報をファイルで渡すこと | accepted | 2026-10-26 |
 | [0014](0014-migration-policy.md) | マイグレーションの方針 — 明示的に適用し、起動時に検査し、前に向かってだけ直す | accepted | 2026-10-26 |
+| [0015](0015-url-and-namespace-scheme.md) | URL と名前空間の設計 — GitHub の語彙を `/-/` の後ろに置き、入れ子のグループと両立させる | accepted | 2026-10-27 |
