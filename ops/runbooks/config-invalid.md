@@ -12,7 +12,17 @@
 ## Diagnose（読み取りのみ）
 
 1. ログの `context` にある `config_key` と `reason` を読む。
-2. 設定ファイルと環境変数のうち、`config_key` が指す値を確認する（`forge doctor` による検証は M1 の Phase 2 で追加予定。追加したらこの手順を置き換える）。
+2. `config_key` が指す値を、優先度の低い順に確認する。あとのものが前のものを上書きする。
+   - 設定ファイル（`--config` または `FORGE_CONFIG` が指す TOML）
+   - 環境変数。名前はキーから決まる（`database.url` → `FORGE_DATABASE_URL`）
+   - コマンドラインのフラグ（`--bind` など）
+
+   `config_key` の値ごとの意味は次のとおり。
+   - `config_file`: 設定ファイルそのものの問題。`path` を見る。
+   - `FORGE_...`: 未知の環境変数（つづりの誤り）。
+   - `reason`: `missing`（未設定）、`invalid`（形式の誤り）、`zero`（0 は不可）、`unknown_key`（設定ファイルのつづりの誤り）、`unknown_env`、`unreadable`、`parse`、`password_twice`（URL とパスワードファイルの両方にパスワードがある）、`empty`、`above_max`、`not_unicode`。
+
+   環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定ファイルの全体を検証する `forge doctor` は M1 phase 2 の後半で追加する。追加したらこの手順を置き換える。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。
 
 ## Mitigate

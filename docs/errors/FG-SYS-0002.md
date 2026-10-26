@@ -20,7 +20,7 @@ The configuration file or environment is missing a required value or contains an
 
 ## 調べ方 (diagnosis)
 
-The log event carries `config_key` and `reason`. Check the configuration file or environment variable named by `config_key` (`forge doctor` will re-validate it without starting the server once it exists, M1 phase 2).
+The log event carries `config_key` and `reason`. `config_key` is a key such as `database.url` (its environment variable is derived: `FORGE_DATABASE_URL`), `config_file` (then see `path`), or an unknown `FORGE_*` variable (a typo). Layers, later wins: config file (`--config` / `FORGE_CONFIG`) → environment → command-line flags. `reason` is one of missing, invalid, zero, unknown_key, unknown_env, unreadable, parse, password_twice, empty, above_max, not_unicode. Secret values are never logged.
 
 ## 対処 (fix)
 

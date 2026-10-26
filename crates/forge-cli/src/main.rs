@@ -4,6 +4,7 @@ use std::io::Write as _;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use forge_core::config;
 use forge_core::telemetry::{self, LogFormat};
 use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
@@ -18,6 +19,10 @@ struct Cli {
     /// Language for user-facing messages.
     #[arg(long, global = true, value_parser = ["ja", "en", "id"], default_value = "ja")]
     lang: String,
+    /// Configuration file (TOML); environment variables `FORGE_<SECTION>_<KEY>`
+    /// override it, and command-line flags override both.
+    #[arg(long, global = true, env = "FORGE_CONFIG")]
+    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -36,9 +41,9 @@ enum Command {
     },
     /// Run the HTTP server.
     Serve {
-        /// Listen address.
-        #[arg(long, env = "FORGE_BIND", default_value = "127.0.0.1:8080")]
-        bind: String,
+        /// Listen address (default: `server.bind`, 127.0.0.1:8080).
+        #[arg(long)]
+        bind: Option<String>,
     },
     /// Operator commands (read-only).
     Admin {
@@ -53,9 +58,9 @@ enum AdminCommand {
     RepoPath {
         /// The repository id.
         repo_id: i64,
-        /// Storage root (default: $FORGE_STORAGE_ROOT).
-        #[arg(long, env = "FORGE_STORAGE_ROOT")]
-        storage_root: std::path::PathBuf,
+        /// Storage root (default: `storage.root`).
+        #[arg(long)]
+        storage_root: Option<std::path::PathBuf>,
     },
 }
 
@@ -77,6 +82,11 @@ fn main() -> ExitCode {
         }
     };
 
+    let config_file = cli.config;
+    let config = || {
+        let env = config::Env::from_process()?;
+        config::load(config_file.as_deref(), &env)
+    };
     let result = match cli.command {
         Command::Explain { code } => explain::explain(&code),
         Command::Errors {
@@ -88,8 +98,14 @@ fn main() -> ExitCode {
                     repo_id,
                     storage_root,
                 },
-        } => admin::repo_path(&storage_root, repo_id),
-        Command::Serve { bind } => serve::serve(&bind),
+        } => config().and_then(|cfg| match storage_root {
+            Some(root) => admin::repo_path(&root, repo_id),
+            None => admin::repo_path(cfg.storage_root()?, repo_id),
+        }),
+        Command::Serve { bind } => config().and_then(|cfg| {
+            let bind = bind.unwrap_or(cfg.server.bind);
+            serve::serve(&bind)
+        }),
     };
     match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,

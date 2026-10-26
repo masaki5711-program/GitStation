@@ -16,6 +16,8 @@ forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
+url = "2"
+percent-encoding = "2"
 toml = "0.8"
 thiserror = "2"
 tracing = "0.1"
