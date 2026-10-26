@@ -30,7 +30,7 @@ GitStation の Web・API・Git（HTTP）がすべて使えない（SEV1）。
 
 1. 古い forge のプロセスが残っている場合は停止する（`systemctl stop forge` の後に残っていれば `kill <pid>`）。
    `[MUTATING — needs approval]` ロールバック: `systemctl start forge` で起動し直す。
-2. 別のサービスがポートを使っている場合は、forge の待ち受けポートを変更する（`--bind` または `FORGE_BIND`）。リバースプロキシの転送先も合わせて変更する。
+2. 別のサービスがポートを使っている場合は、forge の待ち受けポートを変更する（`--bind`、`FORGE_SERVER_BIND`、または設定ファイルの `server.bind`）。リバースプロキシの転送先も合わせて変更する。
    `[MUTATING — needs approval]` ロールバック: 変更前の `--bind` とプロキシ設定に戻す。
 3. 1024 未満のポートは使わず、リバースプロキシ（443）から 1024 以上のポートへ転送する。
    `[MUTATING — needs approval]` ロールバック: 変更前の設定に戻す。
