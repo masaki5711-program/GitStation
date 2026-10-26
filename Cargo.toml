@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-web", "crates/forge-cli"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-web", "crates/forge-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,7 @@ forge-errors = { path = "crates/forge-errors" }
 forge-core = { path = "crates/forge-core" }
 forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
+forge-db = { path = "crates/forge-db" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
 url = "2"
@@ -35,6 +36,7 @@ tower = { version = "0.5", features = ["util"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "service"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -4,7 +4,7 @@
 
 - `forge serve` が起動時に終了した、または稼働中に止まった
   - `FG-SYS-0004` ServerBindFailed（待ち受けのアドレスを開けない）
-  - `FG-SYS-0005` ServeFailed（実行基盤の準備に失敗、サーバーの処理が I/O エラーで停止、停止時の待ち時間を超過）
+  - `FG-SYS-0005` ServeFailed（実行基盤の準備に失敗、接続数の制御に失敗、停止時の待ち時間を超過）
   - `FG-WEB-0004` RouteRegistryInvalid（ルートの登録に矛盾がある。リリースの不具合）
 - サービス（systemd）が再起動を繰り返す
 
@@ -19,11 +19,11 @@ GitStation の Web・API・Git（HTTP）がすべて使えない（SEV1）。
      - `Address already in use`: 別のプロセスがポートを使っている
      - `Permission denied`: 1024 未満のポートを一般ユーザーで開こうとした
      - `Cannot assign requested address`: そのホストにない IP アドレスを指定した
-   - `FG-SYS-0005`: `context` の `operation=`（`build_runtime` / `serve` / `shutdown_deadline`）と `source`
+   - `FG-SYS-0005`: `context` の `operation=`（`build_runtime` / `connection_limit` / `shutdown_deadline`）と `source`
    - `FG-WEB-0004`: `context` の `reason=` と `routes=`（サーバー側では直せない。リリースの不具合）
 2. ポートを使っているプロセスを確認する（Linux: `ss -ltnp 'sport = :<port>'`、Windows: `netstat -ano | findstr :<port>`）。
 3. 古い `forge serve` が残っていないか確認する（`systemctl status forge`、`ps -ef | grep forge`）。
-4. `FG-SYS-0005` の `build_runtime` / `serve`: ファイル記述子の上限（`ulimit -n`、`systemctl show forge -p LimitNOFILE`）、メモリ、`journalctl -k` を確認する。
+4. `FG-SYS-0005` の `build_runtime` / `connection_limit`: ファイル記述子の上限（`ulimit -n`、`systemctl show forge -p LimitNOFILE`）、メモリ、`journalctl -k` を確認する。
 5. `FG-SYS-0005` の `shutdown_deadline`: 停止の直前のアクセスログで、長く続いていたリクエスト（大きな clone など）を探す。
 
 ## Mitigate

@@ -22,23 +22,22 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Query parameters through which libpq accepts a password or its file.
+/// Query parameters through which libpq accepts a password or its file
+/// (reported as `password_in_url`, so the operator knows where it goes).
 const PASSWORD_PARAMS: &[&str] = &["password", "passfile", "sslpassword"];
-
-/// Query parameters that would replace the host, port, database or user
-/// written in the URL itself.
-const TARGET_PARAMS: &[&str] = &["host", "hostaddr", "port", "dbname", "user", "service"];
 
 /// Upper bound for the password file (a mistaken `/dev/zero` must not
 /// exhaust memory).
 const MAX_PASSWORD_BYTES: u64 = 4096;
 
-/// A validated `postgres://` URL. It never carries a password: the password
-/// comes only from `database.password_file` (ADR-0013).
+/// A validated `postgres://user@host[:port]/dbname` URL. It carries no
+/// password (only `database.password_file`, ADR-0013) and no query: TLS,
+/// timeouts and the application name come from the configuration, and the
+/// driver would log an unknown parameter's value verbatim.
 pub struct DatabaseUrl {
-    url: url::Url,
     host: String,
     port: u16,
+    user: String,
     dbname: String,
 }
 
@@ -56,51 +55,55 @@ impl DatabaseUrl {
         if url.password().is_some() || has_password_param {
             return Err(invalid("database.url", "password_in_url"));
         }
-        // The driver prefers these over the URL's own parts: the logged
-        // target would no longer be the one connected to.
-        let overrides_target = url
-            .query_pairs()
-            .any(|(k, _)| TARGET_PARAMS.iter().any(|p| k.eq_ignore_ascii_case(p)));
-        if overrides_target {
-            return Err(invalid("database.url", "target_in_query"));
+        if url.query().is_some() || url.fragment().is_some() {
+            return Err(invalid("database.url", "query_in_url"));
         }
+        let decode = |s: &str| {
+            percent_encoding::percent_decode_str(s)
+                .decode_utf8()
+                .map(std::borrow::Cow::into_owned)
+                .map_err(|_| bad())
+        };
         let host = url
             .host_str()
             .filter(|h| !h.is_empty())
             .ok_or_else(bad)?
             .to_owned();
+        // The user is required: otherwise the driver falls back to PGUSER or
+        // the operating-system account.
+        let user = decode(url.username())?;
+        if user.is_empty() {
+            return Err(bad());
+        }
         let dbname = url.path().trim_start_matches('/');
         if dbname.is_empty() || dbname.contains('/') {
             return Err(bad());
         }
-        let dbname = percent_encoding::percent_decode_str(dbname)
-            .decode_utf8()
-            .map_err(|_| bad())?
-            .into_owned();
+        let dbname = decode(dbname)?;
         let port = url.port().unwrap_or(5432);
         Ok(Self {
-            url,
             host,
             port,
+            user,
             dbname,
         })
     }
 
     pub fn host(&self) -> &str {
-        &self.host
+        // IPv6 literals keep their brackets in the URL; the driver wants none.
+        self.host.trim_matches(['[', ']'])
     }
 
     pub fn port(&self) -> u16 {
         self.port
     }
 
-    pub fn dbname(&self) -> &str {
-        &self.dbname
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
-    /// The URL for the driver (no password; that is passed separately).
-    pub fn as_str(&self) -> &str {
-        self.url.as_str()
+    pub fn dbname(&self) -> &str {
+        &self.dbname
     }
 }
 
@@ -133,6 +136,12 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
             .with_context("path", path.display())
             .with_source(e)
     };
+    // Opening a FIFO blocks until a writer appears: refuse anything but a
+    // regular file before opening; the handle's metadata is checked again
+    // below (the path may have changed in between).
+    if !std::fs::metadata(path).map_err(unreadable)?.is_file() {
+        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+    }
     let file = std::fs::File::open(path).map_err(unreadable)?;
     let meta = file.metadata().map_err(unreadable)?;
     #[cfg(unix)]

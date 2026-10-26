@@ -1,0 +1,22 @@
+[package]
+name = "forge-db"
+description = "forge PostgreSQL layer: connection pool with timeouts and TLS, error mapping (FG-DB-*)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-errors.workspace = true
+forge-core.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
