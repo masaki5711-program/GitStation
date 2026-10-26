@@ -232,9 +232,11 @@ async fn stdin_input_is_delivered_to_child() {
 async fn large_stdin_and_stdout_do_not_deadlock() {
     let (_h, g) = git();
     let dir = tempfile::tempdir().expect("repo");
-    repo_with_commit(&g, dir.path()).await;
-    // ~340 KB in, ~1 MB out: far above pipe buffers on every OS.
-    let input = "refs/heads/main\n".repeat(20_000).into_bytes();
+    let head = repo_with_commit(&g, dir.path()).await;
+    // ~820 KB in, ~1 MB out: far above pipe buffers on every OS. Full object
+    // ids, not ref names: resolving a ref per line takes seconds on Windows
+    // and made this test time out under a parallel run.
+    let input = format!("{}\n", head.trim()).repeat(20_000).into_bytes();
     let out = g
         .command("cat-file")
         .repo(dir.path().join(".git"))
