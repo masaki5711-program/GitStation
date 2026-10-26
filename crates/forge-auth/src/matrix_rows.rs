@@ -156,6 +156,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MemberManage, W::Owner, F::ProjectMember(M::Remove { from: R::Owner }), Allow),
     row(A::MemberManage, W::Owner, F::LastOwnerRemoval, deny(E::Forbidden)),
     row(A::MemberManage, W::Admin, F::LastOwnerRemoval, deny(E::Forbidden)),
+    row(A::MemberManage, W::Owner, F::GroupLastOwnerRemoval, deny(E::Forbidden)),
+    row(A::MemberManage, W::Admin, F::GroupLastOwnerRemoval, deny(E::Forbidden)),
     row(A::MemberManage, W::Developer, F::ProjectMember(M::Add(R::Guest)), deny(E::Forbidden)),
     row(A::MemberManage, W::NonMember, F::ProjectMember(M::Add(R::Guest)), deny(E::NotFound)),
     row(A::MemberManage, W::NonMember, F::InternalProjectMember(M::Add(R::Guest)), deny(E::Forbidden)),

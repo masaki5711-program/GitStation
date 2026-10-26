@@ -107,13 +107,13 @@ pub fn authorize(
             Action::RepoPush,
             Resource::Ref {
                 project,
-                kind,
+                name,
                 update,
                 protection,
             },
         ) => {
             need(Role::Developer, project.role)?;
-            if *kind == RefKind::Reserved {
+            if RefKind::of(name) == RefKind::Reserved {
                 return Err(deny(ErrorCode::ReservedRefNamespace));
             }
             let Some(protection) = protection else {

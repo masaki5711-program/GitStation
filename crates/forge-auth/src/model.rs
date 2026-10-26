@@ -196,6 +196,21 @@ pub struct RefProtection {
     pub push_min_role: Role,
 }
 
+impl RefProtection {
+    /// The protection in effect when several rules match one ref: the
+    /// **strictest** (highest minimum role). Adding a rule can therefore never
+    /// loosen an existing protection (ADR-0010 amendment). The lookup layer
+    /// must build the push resource only through this function, matching rule
+    /// patterns case-insensitively (`MAIN` and `main` collide on
+    /// case-insensitive file systems).
+    pub fn effective(levels: impl IntoIterator<Item = Role>) -> Option<RefProtection> {
+        levels
+            .into_iter()
+            .max()
+            .map(|push_min_role| RefProtection { push_min_role })
+    }
+}
+
 /// Where a membership is changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MembershipScope {
@@ -235,10 +250,13 @@ pub enum Resource {
         owner: UserId,
     },
     Project(ProjectView),
-    /// One ref update in a push.
+    /// One ref update in a push. The kind is derived from `name` inside
+    /// `authorize()` (callers cannot mislabel a reserved ref); `update` must
+    /// come from the ancestry check of old and new object ids; `protection`
+    /// from `RefProtection::effective`.
     Ref {
         project: ProjectView,
-        kind: RefKind,
+        name: RefName,
         update: RefUpdate,
         protection: Option<RefProtection>,
     },

@@ -75,3 +75,14 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - The matrix lives in `crates/forge-auth/src/matrix_rows.rs` (data) and
   `matrix.rs` (types and the public summary); `Action::ALL` is generated with
   the enum by one macro.
+- Third review round (security re-review, BLOCK on one HIGH): when several
+  protection rules match one ref, the **strictest rule wins**
+  (`RefProtection::effective`, the maximum minimum role) — adding a rule can
+  never loosen an existing protection. Pushes carry the `RefName` and
+  `authorize()` derives the kind itself. Handed to the phases that build the
+  lookup layer and the routes: protection patterns match ref names
+  case-insensitively (the dev platform is Windows; production is Linux with a
+  case-sensitive file system, but loose refs must not be the only defence); the
+  `ProjectUpdate` request type has no visibility or protection fields (those go
+  through `ProjectVisibilityChange` / `ProtectedRefManage`), checked by a test
+  when the route lands.

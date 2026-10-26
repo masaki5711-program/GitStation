@@ -73,6 +73,8 @@ pub(crate) enum Fixture {
     GroupMember(MembershipChange),
     /// Removing the last Owner of a private project the caller owns.
     LastOwnerRemoval,
+    /// Removing the last Owner of a group.
+    GroupLastOwnerRemoval,
     /// Changing a protection's minimum push role (None = unprotected).
     ProtectionChange {
         from: Option<Role>,
@@ -186,7 +188,7 @@ impl Fixture {
         };
         let branch_ff = |project| Resource::Ref {
             project,
-            kind: RefKind::Branch,
+            name: ref_name(RefKind::Branch),
             update: RefUpdate::FastForward,
             protection: None,
         };
@@ -200,9 +202,9 @@ impl Fixture {
                 protected,
             } => Resource::Ref {
                 project: private,
-                kind,
+                name: ref_name(kind),
                 update,
-                protection: protected.map(|push_min_role| RefProtection { push_min_role }),
+                protection: RefProtection::effective(protected),
             },
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),
@@ -221,6 +223,11 @@ impl Fixture {
                 member(MembershipScope::Project(deleted), change)
             }
             Fixture::GroupMember(change) => member(MembershipScope::Group { role }, change),
+            Fixture::GroupLastOwnerRemoval => Resource::Membership {
+                scope: MembershipScope::Group { role },
+                change: MembershipChange::Remove { from: Role::Owner },
+                removes_last_owner: true,
+            },
             Fixture::LastOwnerRemoval => Resource::Membership {
                 scope: MembershipScope::Project(private),
                 change: MembershipChange::Remove { from: Role::Owner },
@@ -252,6 +259,17 @@ impl Fixture {
             Fixture::Instance => Resource::Instance,
         }
     }
+}
+
+/// A representative ref name for each kind.
+#[cfg(test)]
+fn ref_name(kind: RefKind) -> forge_core::RefName {
+    let name = match kind {
+        RefKind::Branch => "refs/heads/main",
+        RefKind::Tag => "refs/tags/v1.0",
+        RefKind::Reserved => "refs/replace/0123456789abcdef0123456789abcdef01234567",
+    };
+    forge_core::RefName::parse(name).expect("fixture ref names are valid")
 }
 
 pub(crate) use crate::matrix_rows::ROWS;

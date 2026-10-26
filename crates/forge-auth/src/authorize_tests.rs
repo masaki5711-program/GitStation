@@ -125,7 +125,7 @@ fn invisible_private_project_is_not_found() {
             Action::RepoPush,
             Resource::Ref {
                 project: invisible,
-                kind: RefKind::Branch,
+                name: main_ref(),
                 update: RefUpdate::FastForward,
                 protection: None,
             },
@@ -390,7 +390,7 @@ fn force_push_to_protected_is_denied_even_for_admin() {
         Action::RepoPush,
         &Resource::Ref {
             project: project(None),
-            kind: RefKind::Branch,
+            name: main_ref(),
             update: RefUpdate::Force,
             protection: Some(RefProtection {
                 push_min_role: Role::Owner,
@@ -409,7 +409,7 @@ fn push_below_protection_min_role_is_denied() {
         Action::RepoPush,
         &Resource::Ref {
             project: project(Some(Role::Developer)),
-            kind: RefKind::Branch,
+            name: main_ref(),
             update: RefUpdate::FastForward,
             protection: Some(RefProtection {
                 push_min_role: Role::Maintainer,
@@ -483,4 +483,53 @@ fn summary_json_lists_every_action() {
         );
     }
     assert!(json.contains("\"git_operation\": true"));
+}
+
+fn main_ref() -> forge_core::RefName {
+    forge_core::RefName::parse("refs/heads/main").expect("valid ref")
+}
+
+#[test]
+fn overlapping_protections_use_the_strictest_rule() {
+    // Adding a weaker rule over an Owner-level one must not loosen it.
+    let effective = RefProtection::effective([Role::Owner, Role::Developer]);
+    assert_eq!(
+        effective,
+        Some(RefProtection {
+            push_min_role: Role::Owner
+        })
+    );
+    assert_eq!(RefProtection::effective([]), None);
+    let err = authorize(
+        &session(),
+        Action::RepoPush,
+        &Resource::Ref {
+            project: project(Some(Role::Maintainer)),
+            name: main_ref(),
+            update: RefUpdate::FastForward,
+            protection: RefProtection::effective([Role::Owner, Role::Developer]),
+        },
+    )
+    .expect_err("strictest rule wins");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefPushNotAllowed);
+}
+
+#[test]
+fn a_mislabelled_reserved_ref_is_still_rejected() {
+    // The kind comes from the name inside authorize(), not from the caller.
+    let replace =
+        forge_core::RefName::parse("refs/replace/0123456789abcdef0123456789abcdef01234567")
+            .expect("valid ref");
+    let err = authorize(
+        &Principal::authenticated(ME, true, true, Credential::Session),
+        Action::RepoPush,
+        &Resource::Ref {
+            project: project(Some(Role::Owner)),
+            name: replace,
+            update: RefUpdate::Create,
+            protection: None,
+        },
+    )
+    .expect_err("reserved");
+    assert_eq!(err.code(), ErrorCode::ReservedRefNamespace);
 }
