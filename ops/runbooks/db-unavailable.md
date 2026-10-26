@@ -39,7 +39,7 @@
      - `row_not_found`: あるはずの行がない（呼び出し元の不具合の可能性）
      - `idle_in_transaction_timeout`（`25P03`）: 呼び出し元がトランザクションを開いたまま `database.idle_in_transaction_timeout_ms` を超えて放置し、DB がセッションを終了した。呼び出し元の不具合
      - `server_error` / `client_error`: `sqlstate`（と、値を含まない種類なら `db_message`）を読む
-2. DB のサーバーの状態を確認する。
+2. DB のサーバーの状態を確認する。まず `forge doctor`（読み取りのみ）で、`database` と `schema` の行を見る。
    - 開発機: `docker compose -f ops/dev/compose.yml ps`（`Git/` で実行）
    - 本番: `pg_isready -h <host> -p <port>`、DB のサーバーのログ（同じ時刻）
 3. タイムアウトやロック待ちの場合は、DB に読み取り専用で接続して、遅い文と待たせている側を確認する。

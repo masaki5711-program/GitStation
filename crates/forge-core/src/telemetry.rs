@@ -19,10 +19,17 @@ pub enum LogFormat {
 
 /// Install the global subscriber. `RUST_LOG` overrides `default_filter`.
 /// Returns `false` if a subscriber was already installed (e.g. in tests).
+///
+/// Logs go to **stderr**: stdout carries only command output, so
+/// `forge doctor --json | jq` and `forge errors list | head` stay parseable
+/// (systemd / journald captures both streams).
 pub fn init(format: LogFormat, default_filter: &str) -> bool {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter));
-    let builder = fmt().with_env_filter(filter).with_target(true);
+    let builder = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_writer(std::io::stderr);
     match format {
         LogFormat::Json => builder
             .json()

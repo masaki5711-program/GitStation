@@ -11,7 +11,7 @@ entry point from M1.
 | `forge errors list` | every registered code (id, HTTP, severity, cause) |
 | `forge --version` | version |
 
-Planned: `forge serve` (M1), `forge doctor` (M1), `forge diag bundle` (M1).
+`forge serve` (connects the database and checks the schema before binding; never migrates), `forge db status [--check]` / `forge db migrate` (ADR-0014), `forge doctor [--json]` (read-only checks: config, database, schema, storage, git; one line each, exits with the most severe failure). Logs go to stderr, command output to stdout. Planned: `forge diag bundle` (M1).
 
 **Boundary rule**: `main.rs::report` is the CLI's error boundary — it logs the
 `ForgeError` once via `telemetry::log_failure` and prints only the localized

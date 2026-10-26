@@ -6,7 +6,10 @@
 //! (ADR-0014): pending, newer, edited or dirty migrations stop the start
 //! with `FG-DB-0004` — `serve` never migrates.
 
+use std::sync::Arc;
+
 use forge_core::config::DatabaseConfig;
+use forge_core::readiness::ReadinessProbe;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
 use forge_web::{AppConfig, AppState, ServerLimits};
@@ -17,9 +20,8 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
-        let state = AppState {
-            version: env!("CARGO_PKG_VERSION"),
-        };
+        let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone()); // clone: the pool handle is shared (Arc inside)
+        let state = AppState::new(env!("CARGO_PKG_VERSION"), vec![probe]);
         let router = forge_web::app(state, AppConfig::default())?;
         let listener = forge_web::server::bind(bind).await?;
         tracing::info!(

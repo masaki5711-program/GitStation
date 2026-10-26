@@ -28,7 +28,7 @@
 5. `FG-REPO-0004`: `git --git-dir=<path> log -1 --format='%H %an %ad'` で中身を確認し、どのプロジェクトのものか DB と突き合わせる。DB を復元して ID の連番が巻き戻っていないか確認する。
 6. 作成の失敗で `cleanup_failed` がある場合は、そこに書かれた一時ディレクトリ（`.tmp-<id>-…git`）が残っている。
 
-（`forge doctor` による保存先の検査は M1 の後半で追加する。追加したらこの手順に加える。）
+`forge doctor` の `storage` の行で、`storage.root` の検査結果を確認できる（読み取りのみ）。
 
 ## Mitigate
 

@@ -517,6 +517,7 @@ dependencies = [
  "forge-errors",
  "forge-git",
  "forge-web",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

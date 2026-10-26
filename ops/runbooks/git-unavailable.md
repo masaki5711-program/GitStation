@@ -18,7 +18,7 @@ Git の操作（clone、fetch、push、リポジトリの作成）がすべて�
 2. サーバー上で、forge と同じユーザーで `<git_bin> version` を実行する（例: `sudo -u forge git version`）。
 3. 直近に OS のパッケージ更新や git の設定変更がなかったか確認する（`/var/log/dpkg.log`、`dnf history`）。
 
-（`forge doctor` による検査は M1 の後半で追加する。追加したらこの手順に加える。）
+`forge doctor` の `git` の行で、PATH 上の git とそのバージョンを確認できる（読み取りのみ）。
 
 ## Mitigate
 

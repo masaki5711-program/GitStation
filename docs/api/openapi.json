@@ -56,6 +56,26 @@
         "summary": "Liveness probe",
         "x-forge-action": "Health"
       }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "Health",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Readiness probe (database and other dependencies)",
+        "x-forge-action": "Health"
+      }
     }
   },
   "security": [

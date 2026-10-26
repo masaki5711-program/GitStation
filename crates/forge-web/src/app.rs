@@ -2,6 +2,7 @@
 //! (outermost first): request id + access log → request timeout → routes.
 
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -10,6 +11,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use forge_auth::Action;
+use forge_core::readiness::ReadinessProbe;
 use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError};
 use futures_util::FutureExt;
@@ -20,9 +22,34 @@ use crate::registry::{Registry, Verb};
 use crate::routes;
 
 /// Shared state of every handler.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppState {
     pub version: &'static str,
+    /// Dependencies `GET /readyz` checks, in order.
+    pub probes: Arc<[Arc<dyn ReadinessProbe>]>,
+    /// Client-side bound for each probe (FG-WEB-0005 when exceeded).
+    pub probe_timeout: Duration,
+}
+
+impl AppState {
+    pub fn new(version: &'static str, probes: Vec<Arc<dyn ReadinessProbe>>) -> Self {
+        Self {
+            version,
+            probes: probes.into(),
+            probe_timeout: Duration::from_secs(3),
+        }
+    }
+}
+
+impl std::fmt::Debug for AppState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.probes.iter().map(|p| p.name()).collect();
+        f.debug_struct("AppState")
+            .field("version", &self.version)
+            .field("probes", &names)
+            .field("probe_timeout", &self.probe_timeout)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -75,13 +102,21 @@ pub const PLANNED: &[Action] = &[
 /// Every route of the product. The `gen-authz` binary and the tests read the
 /// same list.
 pub fn registry() -> Registry<AppState> {
-    Registry::new().route(
-        Verb::Get,
-        "/healthz",
-        Action::Health,
-        "Liveness probe",
-        routes::health::healthz,
-    )
+    Registry::new()
+        .route(
+            Verb::Get,
+            "/healthz",
+            Action::Health,
+            "Liveness probe",
+            routes::health::healthz,
+        )
+        .route(
+            Verb::Get,
+            "/readyz",
+            Action::Health,
+            "Readiness probe (database and other dependencies)",
+            routes::health::readyz,
+        )
 }
 
 /// The full application router.

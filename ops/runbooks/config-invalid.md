@@ -39,7 +39,7 @@
      - `not_absolute`: パスワードファイルか CA 証明書のファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
 
-   環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定ファイルの全体を検証する `forge doctor` は M1 phase 2 の後半で追加する。追加したらこの手順を置き換える。
+   環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定の全体は `forge doctor` で検証できる（読み取りのみ。`config` の行に `config_key` と `reason` が出る。`--config` も同じように指定する）。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。
 
 ## Mitigate
@@ -50,7 +50,7 @@
 
 ## Verify
 
-- サーバーが起動し、ログに設定の検証の成功が出る（`forge doctor` の追加後は、その設定の項目が ok を返すことでも確認する）
+- サーバーが起動し、ログに設定の検証の成功が出る（`forge doctor` の `config` の行が `ok` になることでも確認する）
 - サーバーが起動し、`FG-SYS-0002` が新たに出ない
 
 ## Escalate

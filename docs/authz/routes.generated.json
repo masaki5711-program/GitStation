@@ -6,6 +6,12 @@
     "public": true
   },
   {
+    "action": "Health",
+    "method": "GET",
+    "path": "/readyz",
+    "public": true
+  },
+  {
     "action": "RepoRead",
     "planned": true
   },

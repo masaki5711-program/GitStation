@@ -16,7 +16,7 @@ use crate::context::REQUEST_ID_HEADER;
 use crate::registry::{openapi_json, routes_json, Registry, Verb};
 
 fn state() -> AppState {
-    AppState { version: "test" }
+    AppState::new("test", Vec::new())
 }
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, HeaderMap, Value) {
