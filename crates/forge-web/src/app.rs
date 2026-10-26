@@ -1,0 +1,185 @@
+//! Wiring: the registered routes, the fallback, and the middleware stack
+//! (outermost first): request id + access log → request timeout → routes.
+
+use std::panic::AssertUnwindSafe;
+use std::time::Duration;
+
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::header::ACCEPT_LANGUAGE;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::Router;
+use forge_auth::Action;
+use forge_core::RequestId;
+use forge_errors::{ErrorCode, ForgeError};
+use futures_util::FutureExt;
+
+use crate::context::{self, Ctx};
+use crate::error::ApiError;
+use crate::registry::{Registry, Verb};
+use crate::routes;
+
+/// Shared state of every handler.
+#[derive(Debug, Clone)]
+pub struct AppState {
+    pub version: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AppConfig {
+    /// Time until the response headers are produced (not body streaming;
+    /// per-route timeouts for git streams arrive with Smart HTTP, phase 9).
+    pub request_timeout: Duration,
+    /// Request body limit for extractors (raw streams set their own).
+    pub body_limit_bytes: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_secs(30),
+            body_limit_bytes: 1024 * 1024,
+        }
+    }
+}
+
+/// Actions that have permission-matrix rows but no route yet (git operations:
+/// M1 phase 9-10; API resources: phase 8).
+/// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
+/// stale row; an action leaves this list in the commit that routes it.
+pub const PLANNED: &[Action] = &[
+    Action::RepoRead,
+    Action::RepoPush,
+    Action::ProjectRead,
+    Action::ProjectCreate,
+    Action::ProjectUpdate,
+    Action::ProjectVisibilityChange,
+    Action::ProjectTransfer,
+    Action::ProjectDelete,
+    Action::ProjectRestore,
+    Action::ProtectedRefManage,
+    Action::MemberManage,
+    Action::GroupRead,
+    Action::GroupCreateTopLevel,
+    Action::SubgroupCreate,
+    Action::GroupUpdate,
+    Action::TokenCreate,
+    Action::TokenList,
+    Action::TokenRevoke,
+    Action::UserCreate,
+    Action::UserDisable,
+    Action::AuditRead,
+    Action::Metrics,
+];
+
+/// Every route of the product. The `gen-authz` binary and the tests read the
+/// same list.
+pub fn registry() -> Registry<AppState> {
+    Registry::new().route(
+        Verb::Get,
+        "/healthz",
+        Action::Health,
+        "Liveness probe",
+        routes::health::healthz,
+    )
+}
+
+/// The full application router.
+pub fn app(state: AppState, config: AppConfig) -> Result<Router, ForgeError> {
+    build(registry(), state, config)
+}
+
+/// Assemble a router from a registry (tests use their own registries).
+pub(crate) fn build(
+    registry: Registry<AppState>,
+    state: AppState,
+    config: AppConfig,
+) -> Result<Router, ForgeError> {
+    Ok(registry
+        .into_router()?
+        .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
+        .layer(DefaultBodyLimit::max(config.body_limit_bytes))
+        .layer(middleware::from_fn(catch_panic))
+        .layer(middleware::from_fn_with_state(
+            config.request_timeout,
+            request_timeout,
+        ))
+        .layer(middleware::from_fn(context::request_id))
+        .with_state(state))
+}
+
+async fn not_found(ctx: Ctx, req: Request) -> ApiError {
+    ctx.fail(
+        ForgeError::new(ErrorCode::RouteNotFound)
+            .with_context("method", req.method())
+            .with_context("path", req.uri().path()),
+    )
+}
+
+async fn method_not_allowed(ctx: Ctx, req: Request) -> ApiError {
+    ctx.fail(
+        ForgeError::new(ErrorCode::MethodNotAllowed)
+            .with_context("method", req.method())
+            .with_context("path", req.uri().path()),
+    )
+}
+
+/// A panicking handler becomes a logged `FG-SYS-0001` with the request id,
+/// not a dropped connection.
+async fn catch_panic(req: Request, next: Next) -> Response {
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .cloned()
+        .unwrap_or_else(RequestId::generate);
+    let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    // clone: the request moves into the handler; the log needs where it panicked.
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    match AssertUnwindSafe(next.run(req)).catch_unwind().await {
+        Ok(res) => res,
+        Err(payload) => ApiError::new(
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "handler_panicked")
+                .with_context("method", method)
+                .with_context("path", path)
+                .with_context("panic_message", panic_message(payload.as_ref())),
+            request_id,
+            lang,
+        )
+        .into_response(),
+    }
+}
+
+/// The text of a panic payload (`panic!("..")` carries `&str` or `String`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
+}
+
+async fn request_timeout(State(limit): State<Duration>, req: Request, next: Next) -> Response {
+    let request_id = req
+        .extensions()
+        .get::<RequestId>()
+        .cloned()
+        .unwrap_or_else(RequestId::generate);
+    let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    let method = req.method().clone(); // clone: needed after the request moves
+    let path = req.uri().path().to_string();
+    match tokio::time::timeout(limit, next.run(req)).await {
+        Ok(res) => res,
+        Err(_) => ApiError::new(
+            ForgeError::new(ErrorCode::RequestTimeout)
+                .with_context("method", method)
+                .with_context("path", path)
+                .with_context("timeout_ms", limit.as_millis()),
+            request_id,
+            lang,
+        )
+        .into_response(),
+    }
+}

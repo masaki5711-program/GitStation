@@ -16,6 +16,8 @@ forge-errors.workspace = true
 forge-core.workspace = true
 clap = { workspace = true, features = ["env"] }
 forge-git.workspace = true
+forge-web.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

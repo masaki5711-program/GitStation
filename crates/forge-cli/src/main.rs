@@ -10,6 +10,7 @@ use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
 mod explain;
+mod serve;
 
 #[derive(Parser)]
 #[command(name = "forge", version, about = "forge — internal Git platform")]
@@ -32,6 +33,12 @@ enum Command {
     Errors {
         #[command(subcommand)]
         command: ErrorsCommand,
+    },
+    /// Run the HTTP server.
+    Serve {
+        /// Listen address.
+        #[arg(long, env = "FORGE_BIND", default_value = "127.0.0.1:8080")]
+        bind: String,
     },
     /// Operator commands (read-only).
     Admin {
@@ -62,7 +69,13 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let lang = Lang::parse(&cli.lang).unwrap_or(Lang::Ja);
     let request_id = RequestId::generate();
-    telemetry::init(LogFormat::Pretty, "warn");
+    // The server logs JSON at info level; operator commands stay quiet.
+    match cli.command {
+        Command::Serve { .. } => telemetry::init(LogFormat::Json, "info"),
+        Command::Explain { .. } | Command::Errors { .. } | Command::Admin { .. } => {
+            telemetry::init(LogFormat::Pretty, "warn")
+        }
+    };
 
     let result = match cli.command {
         Command::Explain { code } => explain::explain(&code),
@@ -76,6 +89,7 @@ fn main() -> ExitCode {
                     storage_root,
                 },
         } => admin::repo_path(&storage_root, repo_id),
+        Command::Serve { bind } => serve::serve(&bind),
     };
     match result.and_then(|text| emit(&text)) {
         Ok(()) => ExitCode::SUCCESS,
