@@ -13,7 +13,7 @@ mod explain;
 #[command(name = "forge", version, about = "forge — internal Git platform")]
 struct Cli {
     /// Language for user-facing messages.
-    #[arg(long, global = true, value_parser = ["ja", "en"], default_value = "ja")]
+    #[arg(long, global = true, value_parser = ["ja", "en", "id"], default_value = "ja")]
     lang: String,
     #[command(subcommand)]
     command: Command,
@@ -41,7 +41,7 @@ enum ErrorsCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let lang = if cli.lang == "en" { Lang::En } else { Lang::Ja };
+    let lang = Lang::parse(&cli.lang).unwrap_or(Lang::Ja);
     let request_id = RequestId::generate();
     telemetry::init(LogFormat::Pretty, "warn");
 
@@ -64,12 +64,22 @@ fn main() -> ExitCode {
 fn report(err: &ForgeError, request_id: &RequestId, lang: Lang) -> ExitCode {
     telemetry::log_failure(err, request_id);
     eprintln!(
-        "{} [{}] (問い合わせ番号: {request_id})",
+        "{} [{}] ({}: {request_id})",
         err.user_message(lang),
-        err.code()
+        err.code(),
+        request_id_label(lang)
     );
     match err.code() {
         ErrorCode::UnknownErrorCode => ExitCode::from(2),
         ErrorCode::Internal | ErrorCode::ConfigInvalid => ExitCode::FAILURE,
+    }
+}
+
+/// The label shown next to the request id (問い合わせ番号) in each language.
+fn request_id_label(lang: Lang) -> &'static str {
+    match lang {
+        Lang::Ja => "問い合わせ番号",
+        Lang::En => "Request ID",
+        Lang::Id => "ID permintaan",
     }
 }

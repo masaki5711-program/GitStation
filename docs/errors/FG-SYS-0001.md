@@ -12,6 +12,7 @@
 
 - ja: 内部エラーが発生しました。問い合わせ番号を添えて管理者に連絡してください。
 - en: An internal error occurred. Contact the administrator with the request ID.
+- id: Terjadi kesalahan internal. Hubungi administrator dengan menyertakan ID permintaan.
 
 ## 原因 (cause)
 
