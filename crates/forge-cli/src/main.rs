@@ -75,7 +75,12 @@ enum AdminCommand {
 enum DbCommand {
     /// Show applied / pending / unknown / modified / dirty migrations and
     /// whether `forge serve` would start. Changes nothing.
-    Status,
+    Status {
+        /// Exit non-zero with FG-DB-0004 when `forge serve` would refuse to
+        /// start (for scripts and runbook checks).
+        #[arg(long)]
+        check: bool,
+    },
     /// Apply pending migrations (production: approved runbook step,
     /// ops/runbooks/db-migration.md).
     Migrate,
@@ -91,13 +96,20 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let lang = Lang::parse(&cli.lang).unwrap_or(Lang::Ja);
     let request_id = RequestId::generate();
-    // The server logs JSON at info level; operator commands stay quiet.
+    // The server, and the one mutating operator command (its
+    // forge.db.migrate.applied event is the audit trail of a schema change),
+    // log JSON at info level; the other operator commands stay quiet.
     match cli.command {
-        Command::Serve { .. } => telemetry::init(LogFormat::Json, "info"),
+        Command::Serve { .. }
+        | Command::Db {
+            command: DbCommand::Migrate,
+        } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
         | Command::Errors { .. }
         | Command::Admin { .. }
-        | Command::Db { .. } => telemetry::init(LogFormat::Pretty, "warn"),
+        | Command::Db {
+            command: DbCommand::Status { .. },
+        } => telemetry::init(LogFormat::Pretty, "warn"),
     };
 
     let config_file = cli.config;
@@ -126,8 +138,8 @@ fn main() -> ExitCode {
             serve::serve(&bind, &cfg.database)
         }),
         Command::Db {
-            command: DbCommand::Status,
-        } => config().and_then(|cfg| db::status(&cfg.database)),
+            command: DbCommand::Status { check },
+        } => config().and_then(|cfg| db::status(&cfg.database, check)),
         Command::Db {
             command: DbCommand::Migrate,
         } => config().and_then(|cfg| db::migrate(&cfg.database)),

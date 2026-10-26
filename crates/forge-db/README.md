@@ -67,4 +67,5 @@ FG-DB-0004 for pending / db_ahead / checksum_mismatch / dirty). Product
 migrations live in `migrations/` (`YYYYMMDDHHMMSS_desc.sql`, LF, forward
 only); test migrators in `tests/fixtures/migrator/`. Migration tests each
 create a fresh database `forge_t_<uuid>` and drop it at the end.
+`forge db status --check` exits 1 with FG-DB-0004 when serve would refuse.
 Runbook: `ops/runbooks/db-migration.md`.

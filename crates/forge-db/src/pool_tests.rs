@@ -81,9 +81,12 @@ async fn verify_full_against_a_server_without_tls_is_refused() {
 
 #[tokio::test]
 async fn pool_exhaustion_is_db_unavailable_acquire_timeout() {
+    // The pool is lazy: the first acquire also opens the connection (TCP +
+    // SCRAM), so acquire_timeout must leave room for that under a loaded
+    // parallel run; 300 ms was flaky. 1.5 s still proves exhaustion.
     let (db, _cfg) = dev_db(&[
         ("FORGE_DATABASE_MAX_CONNECTIONS", "1"),
-        ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "300"),
+        ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "1500"),
     ])
     .await;
     let held = db.acquire().await.expect("first connection");

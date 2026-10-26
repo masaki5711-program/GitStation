@@ -7,7 +7,10 @@
 //! - [`migrate`] applies pending migrations on a dedicated connection with
 //!   `database.migrate_statement_timeout_ms`; sqlx serializes concurrent
 //!   runs with an advisory lock and runs each migration in one transaction.
-//!   A failure is `FG-DB-0003` with the version; nothing is half-applied.
+//!   A failure is `FG-DB-0003` with the version; nothing is half-applied
+//!   (except `-- no-transaction` files: one idempotent statement each).
+//!   The whole run has a client-side deadline; status is re-read only to
+//!   report, never to decide success.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -17,6 +20,9 @@ use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::Connection as _;
 
 use crate::{query_error, Db};
+
+/// Bound for closing the dedicated migration connection.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The migrations built into this binary (`crates/forge-db/migrations`).
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -145,30 +151,61 @@ pub async fn migrate(
     .execute(&mut conn)
     .await
     .map_err(|e| query_error("migrate.set_statement_timeout", e))?;
+    // Client-side deadline for the whole run: the server's statement and
+    // lock timeouts would not fire on a half-dead link. One statement
+    // timeout per pending migration, plus one for the bookkeeping.
+    let factor = u32::try_from(before.pending.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    let deadline = statement_timeout.saturating_mul(factor);
     let started = Instant::now();
-    let result = migrator.run_direct(&mut conn).await;
-    if let Err(e) = conn.close().await {
+    let result = tokio::time::timeout(deadline, migrator.run_direct(&mut conn)).await;
+    match tokio::time::timeout(CLOSE_TIMEOUT, conn.close()).await {
+        Ok(Ok(())) => {}
         // The connection is gone either way; a failed goodbye is not a fault.
-        tracing::debug!(target: "forge_db", error = %e, "migration connection close failed");
+        Ok(Err(e)) => {
+            tracing::debug!(target: "forge_db", error = %e, "migration connection close failed")
+        }
+        Err(_) => tracing::debug!(target: "forge_db", "migration connection close timed out"),
     }
-    result.map_err(|e| migrate_error(e).with_context("target", db.target()))?;
-    // Whatever another concurrent run applied in between is not ours to
-    // report; re-read to be exact.
-    let after = status(db, migrator).await?;
-    let applied: Vec<i64> = before
-        .pending
-        .iter()
-        .filter(|v| after.applied.contains(v))
-        .copied()
-        .collect();
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(migrate_error(e).with_context("target", db.target())),
+        Err(_) => {
+            return Err(ForgeError::new(ErrorCode::MigrationFailed)
+                .with_context("reason", "timeout")
+                .with_context("timeout_ms", deadline.as_millis())
+                .with_context("target", db.target()))
+        }
+    }
+    // Committed. Record that first: a failing re-read below must not turn a
+    // successful migration into a reported failure.
     tracing::info!(
         target: "forge_db",
         db_target = %db.target(),
-        versions = %join(&applied),
+        pending_before = %join(&before.pending),
         duration_ms = started.elapsed().as_millis(),
         "forge.db.migrate.applied"
     );
-    Ok(applied)
+    // A concurrent run may have applied some of them first; the versions
+    // reported are those pending before and applied now (by either run).
+    match status(db, migrator).await {
+        Ok(after) => Ok(before
+            .pending
+            .iter()
+            .filter(|v| after.applied.contains(v))
+            .copied()
+            .collect()),
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_db",
+                db_target = %db.target(),
+                error = %e,
+                "migrations committed; the verification read failed — check with forge db status"
+            );
+            Ok(before.pending)
+        }
+    }
 }
 
 /// MigrateError is non-exhaustive: matched with `if let`, the rest is

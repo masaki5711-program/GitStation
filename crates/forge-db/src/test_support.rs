@@ -34,10 +34,16 @@ pub(crate) fn test_config(url: &str, password: &str, extra: &[(&str, &str)]) -> 
     let mut pw = tempfile::NamedTempFile::new().expect("password file");
     pw.write_all(password.as_bytes()).expect("write");
     let pw_path = pw.path().to_string_lossy().into_owned();
+    // Generous waits by default: the suite runs many tests (and CREATE
+    // DATABASE) in parallel against one development server, often while
+    // cargo compiles; a test that is about a timeout sets its own (later
+    // pairs win).
     let mut pairs = vec![
         ("FORGE_DATABASE_URL", url),
         ("FORGE_DATABASE_PASSWORD_FILE", pw_path.as_str()),
         ("FORGE_DATABASE_TLS_MODE", "disable"),
+        ("FORGE_DATABASE_CONNECT_TIMEOUT_MS", "15000"),
+        ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "10000"),
     ];
     pairs.extend_from_slice(extra);
     let cfg = config::load(None, &Env::from_pairs(pairs)).expect("test config");
@@ -59,6 +65,8 @@ pub(crate) async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
 /// [`FreshDb::drop_now`]. A panicking test leaks it; the prefix makes such
 /// leftovers easy to find (`SELECT datname FROM pg_database WHERE datname
 /// LIKE 'forge_t_%'`).
+static CREATE_TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 pub(crate) struct FreshDb {
     pub(crate) db: Db,
     /// Keeps the password file alive while the database is used.
@@ -69,7 +77,13 @@ pub(crate) struct FreshDb {
 
 impl FreshDb {
     pub(crate) async fn new() -> Self {
-        let (admin, _admin_cfg) = dev_db(&[]).await;
+        // One CREATE DATABASE at a time per test process: concurrent ones
+        // contend on the template database and slow every other test.
+        let _turn = CREATE_TURN
+            .acquire()
+            .await
+            .expect("semaphore is never closed");
+        let (admin, _admin_cfg) = dev_db(&[("FORGE_DATABASE_MAX_CONNECTIONS", "1")]).await;
         let name = format!("forge_t_{}", uuid::Uuid::new_v4().simple());
         sqlx::query(&format!("CREATE DATABASE \"{name}\""))
             .execute(admin.pool())

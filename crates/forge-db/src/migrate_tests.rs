@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use forge_errors::ErrorCode;
-use sqlx::migrate::Migrator;
+use sqlx::migrate::{MigrateError, Migrator};
 
 use super::*;
 use crate::test_support::*;
@@ -160,4 +160,130 @@ async fn the_binary_migrator_matches_an_empty_database() {
     let t = FreshDb::new().await;
     check_schema(&t.db, &MIGRATOR).await.expect("compatible");
     t.drop_now().await;
+}
+
+#[tokio::test]
+async fn migrations_run_with_their_own_statement_timeout_on_a_dedicated_connection() {
+    let t = FreshDb::new().await;
+    let err = migrate(&t.db, &fixture("slow").await, Duration::from_millis(500))
+        .await
+        .expect_err("pg_sleep(3) exceeds the migration timeout");
+    assert_reason(&err, ErrorCode::MigrationFailed, "sql_failed");
+    let text = chain(&err);
+    assert!(text.contains("version=20261026000002"), "{text}");
+    assert!(text.contains("sqlstate=57014"), "{text}");
+    // The pool's sessions keep the normal statement timeout.
+    let mut conn = t.db.acquire().await.expect("pooled connection");
+    let value: String = sqlx::query_scalar("SHOW statement_timeout")
+        .fetch_one(&mut *conn)
+        .await
+        .expect("show");
+    assert_eq!(value, "15s");
+    drop(conn);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_migration_run_blocked_by_another_holder_of_the_lock_is_locked() {
+    let t = FreshDb::new().await;
+    let v1 = fixture("v1").await;
+    // sqlx's migration lock: pg_advisory_lock(<id derived from the db name>);
+    // holding every advisory lock is impractical, so take the one sqlx uses.
+    let mut holder = t.db.acquire().await.expect("holder");
+    let dbname: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&mut *holder)
+        .await
+        .expect("db name");
+    let lock_id = sqlx_lock_id(&dbname);
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(lock_id)
+        .execute(&mut *holder)
+        .await
+        .expect("hold the migration lock");
+    // A short lock wait for this run only.
+    let cfg = test_config(
+        &url_with_db(&dbname),
+        "forge_dev",
+        &[("FORGE_DATABASE_LOCK_TIMEOUT_MS", "300")],
+    );
+    let short = Db::connect(&cfg.db).await.expect("connect");
+    let err = migrate(&short, &v1, LONG).await.expect_err("lock held");
+    assert_reason(&err, ErrorCode::MigrationFailed, "locked");
+    drop(holder);
+    short.pool().close().await;
+    t.drop_now().await;
+}
+
+/// The advisory lock id sqlx-postgres 0.8 derives from the database name
+/// (`generate_lock_id`: 0x3d32ad9e * crc32(name)).
+fn sqlx_lock_id(database_name: &str) -> i64 {
+    const CRC_IEEE: crc32::Table = crc32::Table::new();
+    0x3d32ad9e * i64::from(CRC_IEEE.checksum(database_name.as_bytes()))
+}
+
+/// Minimal CRC-32 (IEEE), enough to reproduce sqlx's lock id in a test.
+mod crc32 {
+    pub struct Table([u32; 256]);
+    impl Table {
+        pub const fn new() -> Self {
+            let mut t = [0u32; 256];
+            let mut i = 0;
+            while i < 256 {
+                let mut c = i as u32;
+                let mut k = 0;
+                while k < 8 {
+                    c = if c & 1 == 1 {
+                        0xEDB8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                    k += 1;
+                }
+                t[i] = c;
+                i += 1;
+            }
+            Self(t)
+        }
+        pub fn checksum(&self, bytes: &[u8]) -> u32 {
+            let mut c = !0u32;
+            for b in bytes {
+                c = self.0[((c ^ u32::from(*b)) & 0xFF) as usize] ^ (c >> 8);
+            }
+            !c
+        }
+    }
+}
+
+#[test]
+fn every_migrate_error_maps_to_a_registered_code_and_reason() {
+    for (e, code, reason) in [
+        (
+            MigrateError::Dirty(7),
+            ErrorCode::SchemaIncompatible,
+            "dirty",
+        ),
+        (
+            MigrateError::VersionMismatch(7),
+            ErrorCode::SchemaIncompatible,
+            "checksum_mismatch",
+        ),
+        (
+            MigrateError::VersionMissing(7),
+            ErrorCode::SchemaIncompatible,
+            "db_ahead",
+        ),
+        (
+            MigrateError::Source("bad dir".into()),
+            ErrorCode::MigrationFailed,
+            "source",
+        ),
+        (
+            MigrateError::VersionTooOld(1, 2),
+            ErrorCode::MigrationFailed,
+            "driver",
+        ),
+    ] {
+        let err = migrate_error(e);
+        assert_reason(&err, code, reason);
+    }
 }

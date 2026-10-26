@@ -20,8 +20,10 @@
      - `checksum_mismatch`: 適用済みのマイグレーションのファイルが書き換えられている（禁止されている変更）
      - `dirty`: 以前の実行が失敗として記録されている
    - FG-DB-0003 の `reason`、`version`、`sqlstate`、`db_message`
-     - `sql_failed`: その版の SQL が失敗した（ロールバック済み）
+     - `sql_failed`: その版の SQL が失敗した（ロールバック済み）。`sqlstate=55P03` なら、混んでいるテーブルへの DDL がロック待ちで `database.lock_timeout_ms` を超えた。空いている時間に再実行する
      - `locked`: 別の `forge db migrate` がロックを持っていて、`database.lock_timeout_ms` を超えた
+     - `timeout`: 実行全体がクライアント側の上限（`timeout_ms`）を超えた。DB との通信や、長い DDL を疑う
+     - `-- no-transaction` の付いたマイグレーションが途中で失敗した場合は `dirty` が残る。その版は 1 文だけで、何度実行しても同じ結果になるように書かれている（ADR-0014）ので、原因を直してから再実行する
      - `source` / `driver`: `source` を読む
 2. 現在の状態を確認する（読み取りのみ。何も変更しない）。
    - `forge db status`
@@ -43,9 +45,9 @@
 
 ## Verify
 
-- `forge db status` の `serve` の行が `compatible` になっている
+- `forge db status --check` が終了コード 0 で終わる（`serve` の行が `compatible`）
+- `forge db migrate` の JSON ログに `forge.db.migrate.applied` が出ている（`pending_before` と `duration_ms` 付き）。読み直しに失敗した旨の警告が出ていたら、`forge db status` で適用済みを確認する
 - `forge serve` が起動し、ログに `forge.serve.listening` が出る
-- ログに `forge.db.migrate.applied` が出ている（`versions` と `duration_ms` 付き）
 
 ## Escalate
 

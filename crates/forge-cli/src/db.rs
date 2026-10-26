@@ -9,10 +9,17 @@ use forge_errors::ForgeError;
 
 use crate::runtime::block_on;
 
-pub fn status(cfg: &DatabaseConfig) -> Result<String, ForgeError> {
+/// With `check`, an incompatible schema is returned as the FG-DB-0004 error
+/// (exit code 1) instead of the listing.
+pub fn status(cfg: &DatabaseConfig, check: bool) -> Result<String, ForgeError> {
     block_on(async {
         let db = Db::connect(cfg).await?;
         let st = forge_db::status(&db, &MIGRATOR).await?;
+        if check {
+            if let Some(err) = st.incompatibility() {
+                return Err(err.with_context("target", db.target()));
+            }
+        }
         Ok(render(db.target(), &st))
     })
 }

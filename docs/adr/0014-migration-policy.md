@@ -25,7 +25,11 @@ M1 phase 2 で DB の土台（forge-db）ができた。これからテーブル
 - **ファイル名は `YYYYMMDDHHMMSS_<説明>.sql`（UTC）とする。** 並行のブランチで番号がぶつからない。各ファイルは 1 つのトランザクションで実行されるので、途中まで適用された状態は残らない。
 - **改行は LF に固定する**（`.gitattributes` の `eol=lf`）。チェックサムはファイルの中身から計算されるため、Windows の CRLF のまま埋め込むと、Linux の本番と一致しなくなる。
 - **同時に実行しても安全にする。** `forge db migrate` は sqlx のアドバイザリロックで直列化する。ロックの待ちは `database.lock_timeout_ms` で上限を持つ（超えたら FG-DB-0003 `reason=locked`）。適用は専用の接続で行い、`database.migrate_statement_timeout_ms`（既定 10 分）を使う。この長いタイムアウトは pool に戻さない。
-- **状態を見るだけのコマンドを用意する。** `forge db status` は読み取りだけで、管理用のテーブル `_sqlx_migrations` も作らない。applied / pending / unknown / modified / dirty と、`forge serve` が起動するかどうかを表示する。
+- **トランザクションの外で実行するマイグレーションは例外として扱う。** `CREATE INDEX CONCURRENTLY` のように、トランザクションの中では実行できない文がある。そうしたファイルには、先頭に sqlx の `-- no-transaction` を付ける。その場合は「1 ファイル = 1 文」に限り、`IF NOT EXISTS` などで何度実行しても同じ結果になるように書く。途中で失敗すると `dirty` が残るが、修正したマイグレーションを再実行すれば安全に進められる。
+- **マイグレーションの実行全体に、クライアント側の上限を付ける。** 上限は「未適用の数 + 1」× `database.migrate_statement_timeout_ms` とする。サーバー側の statement / lock のタイムアウトは、通信が半分切れた状態では効かないためである（超えたら FG-DB-0003 `reason=timeout`）。各 DDL のロック待ちには、マイグレーション中も `database.lock_timeout_ms` が効く。混んでいるテーブルへの DDL は `reason=sql_failed`（SQLSTATE `55P03`）で失敗するので、空いている時間に再実行する。
+- **状態を見るだけのコマンドを用意する。** `forge db status` は読み取りだけで、管理用のテーブル `_sqlx_migrations` も作らない。applied / pending / unknown / modified / dirty と、`forge serve` が起動するかどうかを表示する。`--check` を付けると、起動できない状態なら FG-DB-0004 を返して終了コード 1 で終わる（スクリプトや runbook の確認用）。
+- **適用の記録を残す。** `forge db migrate` は、適用を終えた時点で JSON のログ `forge.db.migrate.applied`（info）を出す。その後に確認のための読み直しが失敗しても、適用の事実を失敗として報告しない（警告を出し、`forge db status` での確認を促す）。
+- `forge db migrate` は確認のプロンプトを出さない。本番での承認は、runbook の手順（契約 §3-7）として行う。
 - 製品のマイグレーションは `crates/forge-db/migrations/` に置く（今は 0 本）。テスト用の版は `crates/forge-db/tests/fixtures/migrator/` に置く。immutability フックの対象外にするためである。
 
 ## Alternatives Considered
