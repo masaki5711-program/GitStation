@@ -1,0 +1,21 @@
+[package]
+name = "forge-cli"
+description = "the `forge` binary: server entry point and operator commands (explain, errors list; later serve, doctor, diag)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
+[dependencies]
+forge-errors.workspace = true
+forge-core.workspace = true
+clap.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

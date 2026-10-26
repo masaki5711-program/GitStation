@@ -1,0 +1,50 @@
+# forge error registry — the single source of truth for every FG error code.
+#
+# Contract: .claude/rules/forge-error-contract.md (agent model) — procedure:
+# error-contract skill. Generated from this file:
+#   - the `ErrorCode` enum (build.rs → OUT_DIR/generated.rs)
+#   - Git/docs/errors/<CODE>.md   (cargo run -p forge-errors --bin gen-catalog)
+# Never edit generated output by hand. Never reuse or renumber a code; retire it
+# with `retired = true`.
+#
+# Fields: code, name (PascalCase enum variant), http_status, severity
+# (alert|warn|info), user_message_ja, user_message_en, cause, diagnosis, fix,
+# test (a test that produces the code), runbook (required when severity = alert).
+
+[[error]]
+code = "FG-SYS-0001"
+name = "Internal"
+http_status = 500
+severity = "alert"
+user_message_ja = "内部エラーが発生しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "An internal error occurred. Contact the administrator with the request ID."
+cause = "A failure that no more specific code describes reached a boundary. Every occurrence is a gap in the registry."
+diagnosis = "Filter logs by error_code=FG-SYS-0001 and the reported request_id; read the `context` and `source` fields and the span chain to find the origin crate and operation."
+fix = "Fix the underlying failure, then register a specific code for it so this catch-all stops appearing (feedback action)."
+runbook = "internal-error"
+test = "internal_error_is_alerting_500"
+
+[[error]]
+code = "FG-SYS-0002"
+name = "ConfigInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "サーバーの設定に問題があります。管理者に連絡してください。"
+user_message_en = "The server configuration is invalid. Contact the administrator."
+cause = "The configuration file or environment is missing a required value or contains an invalid one; detected at startup or on reload."
+diagnosis = "The log event carries `config_key` and `reason`. Run `forge doctor` to re-validate the configuration without starting the server."
+fix = "Correct the value named by `config_key` in the configuration file or environment and restart. Never commit secrets to the config sample."
+runbook = "config-invalid"
+test = "config_invalid_is_alerting_500"
+
+[[error]]
+code = "FG-SYS-0003"
+name = "UnknownErrorCode"
+http_status = 400
+severity = "info"
+user_message_ja = "指定されたエラーコードは登録されていません。"
+user_message_en = "The given error code is not registered."
+cause = "`forge explain` was given a code that is not in the registry (typo or a code from a newer version)."
+diagnosis = "Compare the code with `forge errors list`; check the forge version with `forge --version`."
+fix = "Use a registered code, or upgrade the CLI to the server's version."
+test = "explain_rejects_unknown_code"

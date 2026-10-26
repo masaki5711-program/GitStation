@@ -1,0 +1,13 @@
+/target/
+**/*.rs.bk
+
+# runtime artifacts
+/diag-*.tar.gz
+/data/
+*.log
+
+# local config / secrets
+/forge.local.toml
+.env
+.env.*
+!.env.example
