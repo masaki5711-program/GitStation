@@ -1,0 +1,240 @@
+//! Pool tests. Most need the development database (ADR-0011): they fail —
+//! never skip — with the compose command when it is not running.
+
+use std::io::Write as _;
+use std::time::{Duration, Instant};
+
+use forge_core::config::{self, DatabaseConfig, Env};
+use forge_errors::{ErrorCode, ForgeError, Lang};
+
+use super::*;
+
+const HINT: &str = "start the development database: \
+    docker compose -f ops/dev/compose.yml up -d --wait (in Git/)";
+
+fn dev_url() -> String {
+    std::env::var("FORGE_TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://forge_dev@127.0.0.1:55432/forge_dev".to_owned())
+}
+
+/// A database config for tests; the password file lives as long as `_pw`.
+struct TestConfig {
+    db: DatabaseConfig,
+    _pw: tempfile::NamedTempFile,
+}
+
+fn test_config(url: &str, password: &str, extra: &[(&str, &str)]) -> TestConfig {
+    let mut pw = tempfile::NamedTempFile::new().expect("password file");
+    pw.write_all(password.as_bytes()).expect("write");
+    let pw_path = pw.path().to_string_lossy().into_owned();
+    let mut pairs = vec![
+        ("FORGE_DATABASE_URL", url),
+        ("FORGE_DATABASE_PASSWORD_FILE", pw_path.as_str()),
+        ("FORGE_DATABASE_TLS_MODE", "disable"),
+    ];
+    pairs.extend_from_slice(extra);
+    let cfg = config::load(None, &Env::from_pairs(pairs)).expect("test config");
+    TestConfig {
+        db: cfg.database,
+        _pw: pw,
+    }
+}
+
+async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
+    let cfg = test_config(&dev_url(), "forge_dev", extra);
+    match Db::connect(&cfg.db).await {
+        Ok(db) => (db, cfg),
+        Err(e) => panic!("{HINT}\n{e}"),
+    }
+}
+
+fn assert_reason(err: &ForgeError, code: ErrorCode, reason: &str) {
+    assert_eq!(err.code(), code, "{err}");
+    assert!(
+        err.to_string().contains(&format!("reason={reason}")),
+        "{err}"
+    );
+}
+
+/// The whole error chain as the log would show it.
+fn chain(err: &ForgeError) -> String {
+    let mut text = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(s) = source {
+        text.push_str(&format!(" | {s}"));
+        source = s.source();
+    }
+    text
+}
+
+#[tokio::test]
+async fn test_database_is_reachable_or_fails_with_compose_hint() {
+    let (db, _cfg) = dev_db(&[]).await;
+    db.ping().await.expect("ping");
+}
+
+#[tokio::test]
+async fn connect_to_a_closed_port_is_db_unavailable_within_the_connect_timeout() {
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        l.local_addr().expect("addr").port()
+    }; // closed again
+    let url = format!("postgres://forge@127.0.0.1:{port}/forge");
+    let cfg = test_config(&url, "x", &[("FORGE_DATABASE_CONNECT_TIMEOUT_MS", "3000")]);
+    let started = Instant::now();
+    let err = Db::connect(&cfg.db).await.expect_err("closed port");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
+    let text = err.to_string();
+    assert!(
+        text.contains("reason=connect_refused") || text.contains("reason=connect_timeout"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("target=127.0.0.1:{port}/forge")),
+        "{text}"
+    );
+}
+
+#[tokio::test]
+async fn an_unresponsive_server_is_db_unavailable_connect_timeout() {
+    // Accepts TCP (backlog) but never speaks the protocol.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = silent.local_addr().expect("addr").port();
+    let url = format!("postgres://forge@127.0.0.1:{port}/forge");
+    let cfg = test_config(&url, "x", &[("FORGE_DATABASE_CONNECT_TIMEOUT_MS", "500")]);
+    let started = Instant::now();
+    let err = Db::connect(&cfg.db).await.expect_err("silent server");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_reason(&err, ErrorCode::DbUnavailable, "connect_timeout");
+    drop(silent);
+}
+
+#[tokio::test]
+async fn a_wrong_password_is_auth_failed_and_never_logged() {
+    let _ = dev_db(&[]).await; // precondition: the database is up
+    let cfg = test_config(&dev_url(), "wrong-pw-7d1f", &[]);
+    let err = Db::connect(&cfg.db).await.expect_err("bad password");
+    assert_reason(&err, ErrorCode::DbUnavailable, "auth_failed");
+    assert!(!chain(&err).contains("wrong-pw-7d1f"), "{}", chain(&err));
+}
+
+#[tokio::test]
+async fn verify_full_against_a_server_without_tls_is_refused() {
+    let _ = dev_db(&[]).await;
+    let cfg = test_config(
+        &dev_url(),
+        "forge_dev",
+        &[("FORGE_DATABASE_TLS_MODE", "verify-full")],
+    );
+    let err = Db::connect(&cfg.db).await.expect_err("no downgrade");
+    assert_reason(&err, ErrorCode::DbUnavailable, "tls");
+}
+
+#[tokio::test]
+async fn pool_exhaustion_is_db_unavailable_acquire_timeout() {
+    let (db, _cfg) = dev_db(&[
+        ("FORGE_DATABASE_MAX_CONNECTIONS", "1"),
+        ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "300"),
+    ])
+    .await;
+    let held = db.acquire().await.expect("first connection");
+    let err = db.acquire().await.expect_err("pool exhausted");
+    assert_reason(&err, ErrorCode::DbUnavailable, "acquire_timeout");
+    drop(held);
+    db.acquire().await.expect("released connection is reusable");
+}
+
+#[tokio::test]
+async fn a_slow_statement_is_db_query_failed_with_sqlstate_57014() {
+    let (db, _cfg) = dev_db(&[("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "200")]).await;
+    let err = sqlx::query("SELECT pg_sleep(5)")
+        .execute(db.pool())
+        .await
+        .map_err(|e| query_error("test.sleep", e))
+        .expect_err("statement timeout");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "statement_timeout");
+    let text = err.to_string();
+    assert!(text.contains("sqlstate=57014"), "{text}");
+    assert!(text.contains("query=test.sleep"), "{text}");
+}
+
+#[tokio::test]
+async fn a_lock_wait_beyond_lock_timeout_is_db_query_failed() {
+    let (db, _cfg) = dev_db(&[("FORGE_DATABASE_LOCK_TIMEOUT_MS", "200")]).await;
+    let key = i64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8"));
+    let mut holder = db.pool().begin().await.expect("tx");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(key)
+        .execute(&mut *holder)
+        .await
+        .expect("first lock");
+    let mut waiter = db.pool().begin().await.expect("tx");
+    let err = sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(key)
+        .execute(&mut *waiter)
+        .await
+        .map_err(|e| query_error("test.lock", e))
+        .expect_err("lock timeout");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "lock_timeout");
+    assert!(err.to_string().contains("sqlstate=55P03"), "{err}");
+}
+
+#[tokio::test]
+async fn query_errors_never_expose_sql_to_the_user_or_the_context() {
+    let (db, _cfg) = dev_db(&[("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "100")]).await;
+    let err = sqlx::query("SELECT pg_sleep(5) AS secret_column_name")
+        .execute(db.pool())
+        .await
+        .map_err(|e| query_error("test.sleep", e))
+        .expect_err("timeout");
+    for lang in [Lang::Ja, Lang::En, Lang::Id] {
+        assert!(!err.user_message(lang).contains("pg_sleep"));
+    }
+    assert!(!err.to_string().contains("secret_column_name"), "{err}");
+}
+
+#[tokio::test]
+async fn sessions_carry_the_configured_timeouts() {
+    let (db, _cfg) = dev_db(&[
+        ("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "15000"),
+        ("FORGE_DATABASE_LOCK_TIMEOUT_MS", "5000"),
+        ("FORGE_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS", "60000"),
+    ])
+    .await;
+    let mut conn = db.acquire().await.expect("conn");
+    for (setting, expected) in [
+        ("statement_timeout", "15s"),
+        ("lock_timeout", "5s"),
+        ("idle_in_transaction_session_timeout", "1min"),
+        ("application_name", "forge"),
+    ] {
+        let value: String = sqlx::query_scalar(&format!("SHOW {setting}"))
+            .fetch_one(&mut *conn)
+            .await
+            .expect("show");
+        assert_eq!(value, expected, "{setting}");
+    }
+}
+
+#[test]
+fn server_versions_below_16_are_rejected() {
+    assert_eq!(check_version("160004").expect("16"), 160_004);
+    assert_eq!(check_version("170000").expect("17"), 170_000);
+    let err = check_version("150008").expect_err("15");
+    assert_reason(&err, ErrorCode::DbUnavailable, "version");
+    assert!(
+        err.to_string().contains("server_version_num=150008"),
+        "{err}"
+    );
+    let err = check_version("banana").expect_err("garbage");
+    assert_reason(&err, ErrorCode::DbUnavailable, "version");
+}

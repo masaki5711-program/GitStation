@@ -36,3 +36,5 @@
 | [FG-SYS-0005](FG-SYS-0005.md) | 500 | alert | forge serve could not build its async runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline |
 | [FG-SYS-0006](FG-SYS-0006.md) | 500 | warn | forge serve could not register a signal handler (SIGINT / SIGTERM) |
 | [FG-SYS-0007](FG-SYS-0007.md) | 503 | warn | Accepting a TCP connection failed (usually out of file descriptors) |
+| [FG-DB-0001](FG-DB-0001.md) | 503 | alert | forge could not obtain a database connection: the server refused it or did not answer within database.connect_timeout_ms, authentication failed, TLS negotiation failed, the server is older than PostgreSQL 16, or the pool had no free connection within database.acquire_timeout_ms. |
+| [FG-DB-0002](FG-DB-0002.md) | 500 | warn | A statement failed on an open connection: it exceeded database.statement_timeout_ms (SQLSTATE 57014) or database.lock_timeout_ms (55P03), the connection was lost, or the server reported another error. |

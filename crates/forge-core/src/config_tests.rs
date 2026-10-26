@@ -1,4 +1,5 @@
 use std::io::Write as _;
+use std::path::Path;
 use std::time::Duration;
 
 use forge_errors::ErrorCode;
@@ -101,7 +102,7 @@ fn a_password_in_the_database_url_is_rejected() {
     for raw in [
         "postgres://forge:hunter2@db:5432/forge",
         "postgres://forge@db/forge?password=hunter2",
-        "postgres://forge@db/forge?sslmode=require&PassWord=hunter2",
+        "postgres://forge@db/forge?connect_timeout=5&PassWord=hunter2",
         "postgres://forge@db/forge?passfile=/tmp/pgpass",
         "postgres://forge@db/forge?sslpassword=hunter2",
     ] {
@@ -144,7 +145,7 @@ fn database_url_display_shows_host_port_and_dbname_only() {
         None,
         &env(&[(
             "FORGE_DATABASE_URL",
-            "postgres://forge@db:6543/forge%2Dprod?sslmode=require",
+            "postgres://forge@db:6543/forge%2Dprod?application_name=x",
         )]),
     )
     .expect("loads");
@@ -153,7 +154,7 @@ fn database_url_display_shows_host_port_and_dbname_only() {
     assert_eq!(format!("{url}"), "db:6543/forge-prod");
     assert_eq!(format!("{url:?}"), "DatabaseUrl(db:6543/forge-prod)");
     assert!(
-        url.as_str().contains("sslmode=require"),
+        url.as_str().contains("application_name=x"),
         "the driver gets the options"
     );
 }
@@ -433,4 +434,59 @@ fn every_key_has_a_derived_env_name() {
     for key in KEYS {
         assert_eq!(key.env, env_name(key.key), "{}", key.key);
     }
+}
+
+#[test]
+fn tls_defaults_to_verify_full_and_accepts_explicit_modes() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.database.tls_mode, TlsMode::VerifyFull);
+    assert!(cfg.database.tls_root_cert.is_none());
+    for (text, mode) in [
+        ("verify-full", TlsMode::VerifyFull),
+        ("verify-ca", TlsMode::VerifyCa),
+        ("require", TlsMode::Require),
+        ("disable", TlsMode::Disable),
+    ] {
+        let cfg = load(None, &env(&[("FORGE_DATABASE_TLS_MODE", text)])).expect(text);
+        assert_eq!(cfg.database.tls_mode, mode);
+    }
+    for bad in ["prefer", "allow", "VERIFY_FULL", "on"] {
+        let err = load(None, &env(&[("FORGE_DATABASE_TLS_MODE", bad)])).expect_err(bad);
+        assert_invalid(&err, "database.tls_mode", "invalid");
+    }
+}
+
+#[test]
+fn tls_root_cert_must_be_absolute() {
+    let err = load(None, &env(&[("FORGE_DATABASE_TLS_ROOT_CERT", "ca.pem")])).expect_err("rel");
+    assert_invalid(&err, "database.tls_root_cert", "not_absolute");
+    let dir = tempfile::tempdir().expect("dir");
+    let ca = dir.path().join("ca.pem").to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_DATABASE_TLS_ROOT_CERT", &ca)])).expect("abs");
+    assert_eq!(cfg.database.tls_root_cert.as_deref(), Some(Path::new(&ca)));
+}
+
+#[test]
+fn tls_settings_in_the_url_query_are_rejected() {
+    for raw in [
+        "postgres://forge@db/forge?sslmode=disable",
+        "postgres://forge@db/forge?SSLROOTCERT=/x",
+        "postgres://forge@db/forge?sslcert=/x",
+        "postgres://forge@db/forge?sslkey=/x",
+    ] {
+        let err = load(None, &env(&[("FORGE_DATABASE_URL", raw)])).expect_err(raw);
+        assert_invalid(&err, "database.url", "tls_in_query");
+    }
+}
+
+#[test]
+fn a_multibyte_query_key_does_not_panic() {
+    let cfg = load(
+        None,
+        &env(&[(
+            "FORGE_DATABASE_URL",
+            "postgres://forge@db/forge?%E3%81%82=1",
+        )]),
+    );
+    assert!(cfg.is_ok());
 }

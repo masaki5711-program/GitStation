@@ -64,6 +64,14 @@ impl DatabaseUrl {
         if overrides_target {
             return Err(invalid("database.url", "target_in_query"));
         }
+        // TLS is configured only by database.tls_mode / tls_root_cert, so a
+        // URL cannot quietly downgrade it.
+        let sets_tls = url
+            .query_pairs()
+            .any(|(k, _)| k.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("ssl")));
+        if sets_tls {
+            return Err(invalid("database.url", "tls_in_query"));
+        }
         let host = url
             .host_str()
             .filter(|h| !h.is_empty())

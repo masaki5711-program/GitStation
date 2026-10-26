@@ -34,7 +34,8 @@
      - `parse`: 設定ファイルの構文の誤り（位置は `line` / `column`。問題の行の本文はログに出さない）
      - `password_in_url`: URL にパスワードを書いている。`database.password_file` に移す
      - `target_in_query`: URL のクエリに `host` / `hostaddr` / `port` / `dbname` / `user` / `service` がある。接続先は URL の本体に書く
-     - `not_absolute`: パスワードファイルが相対パス
+     - `tls_in_query`: URL のクエリに `sslmode` などの `ssl*` がある。TLS は `database.tls_mode` / `database.tls_root_cert` で設定する
+     - `not_absolute`: パスワードファイルか CA 証明書のファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
 
    環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定ファイルの全体を検証する `forge doctor` は M1 phase 2 の後半で追加する。追加したらこの手順を置き換える。

@@ -1,0 +1,37 @@
+# Product CI (GitHub is source hosting only; GitStation runs on-prem).
+# The database tests use a PostgreSQL 16 service container (ADR-0011).
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: forge_dev
+          POSTGRES_PASSWORD: forge_dev
+          POSTGRES_DB: forge_dev
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U forge_dev -d forge_dev"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      CARGO_TERM_COLOR: always
+      FORGE_TEST_DATABASE_URL: postgres://forge_dev@127.0.0.1:55432/forge_dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo run -q -p forge-errors --bin gen-catalog -- --check
+      - run: cargo run -q -p forge-web --bin gen-authz -- --check

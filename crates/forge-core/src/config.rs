@@ -49,6 +49,8 @@ pub const KEYS: &[Key] = &[
     text("storage.root", "FORGE_STORAGE_ROOT"),
     text("database.url", "FORGE_DATABASE_URL"),
     text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),
+    text("database.tls_mode", "FORGE_DATABASE_TLS_MODE"),
+    text("database.tls_root_cert", "FORGE_DATABASE_TLS_ROOT_CERT"),
     number("database.max_connections", "FORGE_DATABASE_MAX_CONNECTIONS"),
     number("database.min_connections", "FORGE_DATABASE_MIN_CONNECTIONS"),
     number(
@@ -171,10 +173,48 @@ pub struct StorageConfig {
     pub root: Option<PathBuf>,
 }
 
+/// TLS to the database. There is no opportunistic mode (`prefer` / `allow`):
+/// a downgrade must be written down as `disable` (development only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsMode {
+    /// Encrypt, verify the chain and the host name (default).
+    VerifyFull,
+    /// Encrypt and verify the chain, not the host name.
+    VerifyCa,
+    /// Encrypt without verifying the server.
+    Require,
+    /// Plain text (the development compose database).
+    Disable,
+}
+
+impl TlsMode {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "verify-full" => Some(Self::VerifyFull),
+            "verify-ca" => Some(Self::VerifyCa),
+            "require" => Some(Self::Require),
+            "disable" => Some(Self::Disable),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::VerifyFull => "verify-full",
+            Self::VerifyCa => "verify-ca",
+            Self::Require => "require",
+            Self::Disable => "disable",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct DatabaseConfig {
     url: Option<DatabaseUrl>,
     pub password: Option<Secret>,
+    pub tls_mode: TlsMode,
+    /// CA bundle for the internal certificate authority (PEM, absolute).
+    pub tls_root_cert: Option<PathBuf>,
     pub max_connections: u32,
     pub min_connections: u32,
     pub connect_timeout: Duration,
@@ -284,6 +324,15 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         .map(|p| secret::read_password(Path::new(p)))
         .transpose()?;
 
+    let tls_mode = match text("database.tls_mode")? {
+        Some(t) => TlsMode::parse(t).ok_or_else(|| invalid("database.tls_mode", "invalid"))?,
+        None => TlsMode::VerifyFull,
+    };
+    let tls_root_cert = text("database.tls_root_cert")?.map(PathBuf::from);
+    if tls_root_cert.as_deref().is_some_and(|p| !p.is_absolute()) {
+        return Err(invalid("database.tls_root_cert", "not_absolute"));
+    }
+
     let max_connections = positive(get, "database.max_connections", 10)?;
     let min_connections = unsigned(get, "database.min_connections", 0)?;
     if min_connections > max_connections {
@@ -300,6 +349,8 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         database: DatabaseConfig {
             url,
             password,
+            tls_mode,
+            tls_root_cert,
             max_connections,
             min_connections,
             connect_timeout: millis(get, "database.connect_timeout_ms", 5_000)?,
