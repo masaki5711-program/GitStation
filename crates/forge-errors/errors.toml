@@ -323,3 +323,45 @@ cause = "A push targeted a ref outside refs/heads/ and refs/tags/ (for example r
 diagnosis = "The log event carries `action`. The rejected ref name is in the push command list (log only)."
 fix = "Push branches under refs/heads/ and tags under refs/tags/ only."
 test = "reserved_ref_namespace_is_rejected_even_for_admins"
+
+# --- WEB: the HTTP layer (forge-web) ----------------------------------------
+
+[[error]]
+code = "FG-WEB-0001"
+name = "RouteNotFound"
+http_status = 404
+severity = "info"
+user_message_ja = "指定された URL は存在しません。"
+user_message_en = "The requested URL does not exist."
+user_message_id = "URL yang diminta tidak ada."
+cause = "No registered route matches the request path (or the method is not registered for that path)."
+diagnosis = "The access log carries `method` and `path`. Compare with `Git/docs/api/openapi.json` (generated from the route registry)."
+fix = "Use a documented route; for a client, check the API version prefix (/api/v1)."
+test = "unknown_route_is_route_not_found"
+
+[[error]]
+code = "FG-WEB-0002"
+name = "RequestTimeout"
+http_status = 503
+severity = "warn"
+user_message_ja = "処理が時間内に終わりませんでした。しばらくしてから再度お試しください。"
+user_message_en = "The request did not finish in time. Try again later."
+user_message_id = "Permintaan tidak selesai tepat waktu. Coba lagi nanti."
+cause = "A request exceeded the server's request timeout and was cancelled."
+diagnosis = "The log event carries `method`, `path` and `timeout_ms`. Find the slow dependency in the same request_id's events (DB, git, LLM)."
+fix = "Fix the slow dependency; raise the request timeout only for routes that legitimately take long."
+test = "slow_handler_is_request_timeout"
+
+[[error]]
+code = "FG-SYS-0004"
+name = "ServerBindFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "サーバーを起動できませんでした。管理者に連絡してください。"
+user_message_en = "The server could not start. Contact the administrator."
+user_message_id = "Server tidak dapat dijalankan. Hubungi administrator."
+cause = "forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address)."
+diagnosis = "The log event carries `bind` and the OS error in `source`. Check what holds the port (`ss -ltnp` / `netstat -ano`)."
+fix = "Stop the other process, choose another port, or run behind the reverse proxy on an unprivileged port."
+runbook = "server-bind-failed"
+test = "bind_to_an_occupied_port_is_server_bind_failed"

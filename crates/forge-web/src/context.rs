@@ -1,0 +1,85 @@
+//! Per-request context: the request id (from `X-Request-Id` when valid,
+//! otherwise generated) and the user's language (from `Accept-Language`).
+
+use axum::extract::{FromRequestParts, Request};
+use axum::http::header::{HeaderName, HeaderValue, ACCEPT_LANGUAGE};
+use axum::http::request::Parts;
+use axum::middleware::Next;
+use axum::response::Response;
+use forge_core::RequestId;
+use forge_errors::{ForgeError, Lang};
+
+use crate::error::ApiError;
+
+pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+
+/// What every handler knows about the request it serves.
+#[derive(Debug, Clone)]
+pub struct Ctx {
+    pub request_id: RequestId,
+    pub lang: Lang,
+}
+
+impl Ctx {
+    /// Turn a failure into the response error (logged once when rendered).
+    pub fn fail(&self, err: ForgeError) -> ApiError {
+        ApiError::new(err, self.request_id.clone(), self.lang) // clone: the error owns its id
+    }
+}
+
+/// The user's language: the first supported tag in `Accept-Language`
+/// (ja / en / id), Japanese otherwise.
+pub fn language(header: Option<&HeaderValue>) -> Lang {
+    header
+        .and_then(|v| v.to_str().ok())
+        .into_iter()
+        .flat_map(|s| s.split(','))
+        .filter_map(|part| Lang::parse(part.split(';').next().unwrap_or_default()))
+        .next()
+        .unwrap_or(Lang::Ja)
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for Ctx {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let request_id = parts
+            .extensions
+            .get::<RequestId>()
+            .cloned()
+            // Only reachable if the middleware is missing; still traceable.
+            .unwrap_or_else(RequestId::generate);
+        Ok(Ctx {
+            request_id,
+            lang: language(parts.headers.get(ACCEPT_LANGUAGE)),
+        })
+    }
+}
+
+/// Middleware: attach the request id, echo it, and write the access log.
+pub async fn request_id(mut req: Request, next: Next) -> Response {
+    let id = req
+        .headers()
+        .get(&REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(RequestId::parse)
+        .unwrap_or_else(RequestId::generate);
+    let method = req.method().clone(); // clone: logged after the request is consumed
+    let path = req.uri().path().to_string();
+    req.extensions_mut().insert(id.clone()); // clone: also echoed in the response
+    let started = std::time::Instant::now();
+    let mut res = next.run(req).await;
+    if let Ok(value) = HeaderValue::from_str(id.as_str()) {
+        res.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+    tracing::info!(
+        target: "forge_web::access",
+        request_id = %id,
+        method = %method,
+        path = %path,
+        status = res.status().as_u16(),
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "http.request"
+    );
+    res
+}
