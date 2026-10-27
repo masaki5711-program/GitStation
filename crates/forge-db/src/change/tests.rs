@@ -144,8 +144,6 @@ async fn invalid_changes_are_rejected_with_their_reason() {
     };
     let mut mismatched = ctx(act_as(12));
     mismatched.credential_id = Some(13);
-    let mut wide_scope = ctx(Actor::System);
-    wide_scope.effective_scope = vec!["s".to_owned(); 33];
     let mut denied = record(vec![event(1, None)]);
     denied.audit.outcome = Outcome::Denied;
     let mut big_details = record(vec![]);
@@ -194,12 +192,6 @@ async fn invalid_changes_are_rejected_with_their_reason() {
             "credential_mismatch",
             None,
         ),
-        (
-            wide_scope,
-            record(vec![]),
-            "field_too_long",
-            Some("effective_scope"),
-        ),
     ] {
         let tx = ChangeTx::begin(&t.db, &change_ctx).await.expect("begin");
         let err = tx.commit(rec).await.expect_err(reason);
@@ -231,28 +223,123 @@ async fn exactly_max_events_is_accepted() {
     t.drop_now().await;
 }
 
+/// The columns `client_values_are_cut_so_a_refusal_is_still_audited` reads.
+type CutRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    Vec<String>,
+    serde_json::Value,
+);
+
 #[tokio::test]
-async fn long_or_odd_personal_fields_are_cut_not_refused() {
+async fn client_values_are_cut_so_a_refusal_is_still_audited() {
     let t = FreshDb::migrated().await;
-    let mut change_ctx = ctx(Actor::Anonymous);
-    change_ctx.actor_label = Some(format!("evil\n\u{7}{}", "x".repeat(100)));
+    let mut change_ctx = ctx(Actor::UserViaServiceAccount {
+        user: UserId::new(5),
+        via: UserId::new(77),
+        credential_id: 12,
+        act_as_claimed: format!("\u{202E}{}", "c".repeat(200)),
+        act_as_key_id: 1,
+        via_assertion_id: Some("a".repeat(300)),
+    });
+    change_ctx.actor_label = Some(format!("evil\n\u{7}\u{202E}\u{200B}{}", "x".repeat(100)));
     change_ctx.user_agent = Some("ü".repeat(300));
-    let tx = ChangeTx::begin(&t.db, &change_ctx).await.expect("begin");
-    let mut denied = record(vec![]);
-    denied.audit.outcome = Outcome::Denied;
-    tx.commit(denied).await.expect("still audited");
-    let (label, agent): (String, String) = sqlx::query_as(
-        "SELECT actor_label, user_agent FROM forge.audit_log WHERE outcome = 'denied'",
+    change_ctx.effective_scope = vec!["s".repeat(80); 40];
+    for (n, details) in [
+        json!({ "id": 9_007_199_254_740_993_u64 }),
+        json!({ "echo": "d".repeat(9000) }),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tx = ChangeTx::begin(&t.db, &change_ctx).await.expect("begin");
+        let mut denied = record(vec![]);
+        denied.audit.outcome = Outcome::Denied;
+        denied.audit.resource_id = Some(n as i64);
+        denied.audit.details = details;
+        tx.commit(denied).await.expect("still audited");
+    }
+    let rows: Vec<CutRow> = sqlx::query_as(
+        "SELECT actor_label, user_agent, act_as_claimed, via_assertion_id, effective_scope, \
+         details FROM forge.audit_log WHERE outcome = 'denied' ORDER BY resource_id",
     )
-    .fetch_one(&mut t.superuser().await)
+    .fetch_all(&mut t.superuser().await)
     .await
-    .expect("row");
+    .expect("rows");
+    assert_eq!(rows.len(), 2);
+    let (label, agent, claimed, assertion, scope, details) = &rows[0];
     assert_eq!(label.chars().count(), 64);
-    assert!(
-        label.starts_with("evilx") && !label.contains('\n'),
-        "{label:?}"
-    );
+    assert!(label.starts_with("evilx"), "{label:?}");
     assert_eq!(agent.chars().count(), 256);
+    assert_eq!(claimed.chars().count(), 128);
+    assert!(claimed.starts_with('c'), "{claimed:?}");
+    assert_eq!(assertion.as_deref().map(|a| a.chars().count()), Some(128));
+    assert_eq!(scope.len(), 32);
+    assert!(scope.iter().all(|s| s.chars().count() == 64));
+    assert_eq!(details, &json!({ "details_dropped": "unsafe_number" }));
+    assert_eq!(rows[1].5, json!({ "details_dropped": "too_long" }));
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_succeeded_change_over_the_stored_size_is_rejected() {
+    let t = FreshDb::migrated().await;
+    let mut big_details = record(vec![]);
+    big_details.audit.details = json!({ "echo": "d".repeat(9000) });
+    let mut big_payload = event(1, None);
+    big_payload.payload = json!({ "blob": "p".repeat(70_000) });
+    for (rec, field) in [
+        (big_details, "details"),
+        (record(vec![big_payload]), "payload"),
+    ] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err(field);
+        assert_reason(&err, ErrorCode::ChangeRejected, "field_too_long");
+        assert!(err.to_string().contains(&format!("field={field}")), "{err}");
+    }
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE action = 'repository.created'").await,
+        0
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_commit_that_does_not_answer_in_time_has_an_unknown_outcome() {
+    let t = FreshDb::migrated().await;
+    // A deferred check that runs at COMMIT and takes longer than its bound.
+    t.exec_superuser(
+        "CREATE FUNCTION public.slow_commit() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN PERFORM pg_catalog.pg_sleep(2); RETURN NULL; END $$; \
+         CREATE CONSTRAINT TRIGGER slow_commit AFTER INSERT ON forge.audit_log \
+         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.slow_commit()",
+    )
+    .await;
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin")
+        .with_commit_timeout(Duration::from_millis(200));
+    let err = tx
+        .commit(record(vec![event(1, None)]))
+        .await
+        .expect_err("no answer in time");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "commit_outcome_unknown");
+    assert!(err.to_string().contains("timeout_ms=200"), "{err}");
+    assert!(
+        err.to_string().contains("action=repository.created"),
+        "{err}"
+    );
+    // The pool still serves the next change.
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin again");
+    tx.commit(record(vec![event(2, None)]))
+        .await
+        .expect("next change");
     t.drop_now().await;
 }
 
@@ -287,7 +374,7 @@ async fn a_dedup_hit_on_the_first_event_writes_nothing() {
 }
 
 #[tokio::test]
-async fn a_deadline_that_expires_inside_commit_rolls_back_and_frees_the_connection() {
+async fn a_deadline_hit_while_waiting_on_a_lock_rolls_back_and_frees_the_connection() {
     let t = FreshDb::migrated().await;
     // Another transaction holds the same dedup_key, uncommitted: the
     // change's insert waits on it.

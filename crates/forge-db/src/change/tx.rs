@@ -13,7 +13,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::{PgConnection, Postgres};
 use sqlx::Transaction;
 
-use super::validate::{sanitized, validate};
+use super::validate::{fit_sizes, fitted, sanitized, validate};
 use super::{ChangeContext, ChangeRecord, Committed, DomainEvent};
 use crate::{query_error, Db};
 
@@ -29,6 +29,7 @@ pub(crate) struct ChangeTx {
     ctx: ChangeContext,
     deadline: Instant,
     timeout: Duration,
+    commit_timeout: Duration,
 }
 
 impl ChangeTx {
@@ -54,7 +55,15 @@ impl ChangeTx {
             ctx: sanitized(ctx),
             deadline,
             timeout,
+            commit_timeout: COMMIT_TIMEOUT,
         })
+    }
+
+    /// A shorter COMMIT bound (tests of `commit_outcome_unknown`).
+    #[cfg(test)]
+    pub(crate) fn with_commit_timeout(mut self, commit_timeout: Duration) -> Self {
+        self.commit_timeout = commit_timeout;
+        self
     }
 
     /// The connection for the change's state writes. Run each statement
@@ -80,13 +89,26 @@ impl ChangeTx {
             ctx,
             deadline,
             timeout,
+            commit_timeout,
         } = self;
+        let record = fitted(record);
         validate(&ctx, &record)?;
         let written = bounded(deadline, timeout, async {
-            insert_audit(&mut tx, &ctx, &record).await?;
+            // Each JSON value is serialized once: measured, then inserted.
+            let payloads: Vec<String> = record
+                .events
+                .iter()
+                .map(|e| e.payload.to_string())
+                .collect();
+            let details = record.audit.details.to_string();
+            let (details_bytes, payload_bytes) = stored_sizes(&mut tx, &details, &payloads).await?;
+            let record = fit_sizes(record, details_bytes, &payload_bytes)?;
+            // The details may have been replaced by a marker (≤ 8 KiB either way).
+            let details = record.audit.details.to_string();
+            insert_audit(&mut tx, &ctx, &record, &details).await?;
             let mut ids = Vec::with_capacity(record.events.len());
-            for event in &record.events {
-                match insert_event(&mut tx, &ctx, event).await? {
+            for (event, payload) in record.events.iter().zip(&payloads) {
+                match insert_event(&mut tx, &ctx, event, payload).await? {
                     Some(id) => ids.push(id),
                     None => return Ok(None),
                 }
@@ -96,26 +118,38 @@ impl ChangeTx {
         .await
         .map_err(|e| e.with_context("action", action))?;
         let Some(event_ids) = written else {
-            // Nothing of this change may stay; dropping the transaction would
-            // roll back too, so a slow or failed ROLLBACK is not an error.
-            match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::debug!(target: "forge_db", action, error = %e, "rollback of a deduped change failed")
-                }
-                Err(_) => {
-                    tracing::debug!(target: "forge_db", action, "rollback of a deduped change timed out")
-                }
+            // Nothing of this change may stay. Dropping the transaction rolls
+            // back too, so the change is still Deduped; a slow or failed
+            // ROLLBACK points at a sick connection and is logged as such.
+            let failure = match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(query_error("change.rollback", e)),
+                Err(_) => Some(
+                    ForgeError::new(ErrorCode::DbQueryFailed)
+                        .with_context("query", "change.rollback")
+                        .with_context("reason", "rollback_timeout")
+                        .with_context("timeout_ms", ROLLBACK_TIMEOUT.as_millis()),
+                ),
+            };
+            if let Some(e) = failure {
+                tracing::warn!(
+                    target: "forge_db",
+                    request_id = %ctx.request_id,
+                    error_code = e.code().id(),
+                    action,
+                    error = %e,
+                    "rollback of a deduped change failed; the connection rolls back on release"
+                );
             }
             return Ok(Committed::Deduped);
         };
-        match tokio::time::timeout(COMMIT_TIMEOUT, tx.commit()).await {
+        match tokio::time::timeout(commit_timeout, tx.commit()).await {
             Ok(Ok(())) => Ok(Committed::Recorded { event_ids }),
             Ok(Err(e)) => Err(query_error("change.commit", e).with_context("action", action)),
             Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
                 .with_context("query", "change.commit")
                 .with_context("reason", "commit_outcome_unknown")
-                .with_context("timeout_ms", COMMIT_TIMEOUT.as_millis())
+                .with_context("timeout_ms", commit_timeout.as_millis())
                 .with_context("action", action)),
         }
     }
@@ -137,10 +171,28 @@ async fn bounded<T>(
     }
 }
 
+/// The stored sizes of the details and payloads, measured as the table
+/// CHECKs measure them.
+async fn stored_sizes(
+    conn: &mut PgConnection,
+    details: &str,
+    payloads: &[String],
+) -> Result<(i32, Vec<i32>), ForgeError> {
+    sqlx::query_as(
+        "SELECT pg_catalog.pg_column_size($1::jsonb), ARRAY(SELECT          pg_catalog.pg_column_size(p.v::jsonb) FROM unnest($2::text[]) WITH ORDINALITY          AS p(v, n) ORDER BY p.n)",
+    )
+    .bind(details)
+    .bind(payloads)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| query_error("change.sizes", e))
+}
+
 async fn insert_audit(
     conn: &mut PgConnection,
     ctx: &ChangeContext,
     record: &ChangeRecord,
+    details: &str,
 ) -> Result<(), ForgeError> {
     let audit = &record.audit;
     let (credential, claimed, key_id, assertion) = match &ctx.actor {
@@ -186,7 +238,7 @@ async fn insert_audit(
     .bind(ctx.user_agent.as_deref())
     .bind(ctx.request_id.as_str())
     .bind(audit.error_code.map(|c| c.id()))
-    .bind(audit.details.to_string())
+    .bind(details)
     .execute(&mut *conn)
     .await
     .map_err(|e| query_error("change.audit", e))?;
@@ -198,6 +250,7 @@ async fn insert_event(
     conn: &mut PgConnection,
     ctx: &ChangeContext,
     event: &DomainEvent,
+    payload: &str,
 ) -> Result<Option<uuid::Uuid>, ForgeError> {
     let id = uuid::Uuid::now_v7();
     let inserted: Option<String> = sqlx::query_scalar(
@@ -217,7 +270,7 @@ async fn insert_event(
     .bind(ctx.actor.via())
     .bind(ctx.request_id.as_str())
     .bind(event.dedup_key.as_deref())
-    .bind(event.payload.to_string())
+    .bind(payload)
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("change.event", e))?;

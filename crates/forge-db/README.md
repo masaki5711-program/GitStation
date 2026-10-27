@@ -108,7 +108,7 @@ change on the write pool — state writes via `conn()` / `within()`, then
 timeout there is FG-DB-0002 `commit_outcome_unknown`). A repeated
 `dedup_key` rolls the whole change back (`Committed::Deduped`). Invalid
 changes are FG-DB-0010 before anything is written (rules in
-`change/validate.rs`; `actor_label` / `user_agent` are cut, never refused);
+`change/validate.rs`; client-supplied values are cut, never refused);
 an event committed without an audit row in its transaction — derived events
 included until C5 — is FG-DB-0013 (deferred trigger `events_audit_present`).
 The typed commands (step D) are its only callers.

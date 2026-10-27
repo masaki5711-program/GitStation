@@ -152,6 +152,8 @@ pub struct DomainEvent {
     pub payload: serde_json::Value,
     /// Idempotency of the change (e.g. `push:<repo>:<hash>`): a second
     /// change with the same key is [`Committed::Deduped`] and rolled back.
+    /// Keys are unique instance-wide: build them from server-side ids,
+    /// never from a raw client value (another caller could pre-empt it).
     pub dedup_key: Option<String>,
 }
 
