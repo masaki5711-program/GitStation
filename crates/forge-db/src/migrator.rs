@@ -51,11 +51,13 @@ impl Db {
     pub async fn connect_migrator(cfg: &DatabaseConfig) -> Result<MigratorConn, ForgeError> {
         let url = cfg.migrate_url()?;
         let target = preflight(cfg, url)?;
+        // Read here, not at load: serve never holds this password.
+        let password = cfg.migrate_password()?;
         let options = connect_options(
             cfg,
             &Login {
                 url,
-                password: cfg.migrate_password.as_ref(),
+                password: password.as_ref(),
                 application_name: "forge-migrate",
                 settings: &[],
             },

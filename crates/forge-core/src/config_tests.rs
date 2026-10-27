@@ -546,19 +546,34 @@ fn migrate_and_maint_logins_are_separate_and_optional() {
     let db = &cfg.database;
     assert_eq!(db.migrate_url().expect("migrate").user(), "forge_migrator");
     assert_eq!(db.maint_url().expect("maint").user(), "forge_maint");
+    // Read on use only (serve never reads them).
     assert_eq!(
-        db.migrate_password.as_ref().map(Secret::expose),
+        db.migrate_password()
+            .expect("read")
+            .as_ref()
+            .map(Secret::expose),
         Some("migrator-pw-1")
     );
     assert_eq!(
-        db.maint_password.as_ref().map(Secret::expose),
+        db.maint_password()
+            .expect("read")
+            .as_ref()
+            .map(Secret::expose),
         Some("maint-pw-2")
+    );
+    assert_invalid(
+        &db.reject_privileged_logins().expect_err("serve refuses"),
+        "database.migrate_password_file",
+        "not_for_this_command",
     );
     assert!(db.password.is_none());
     let debug = format!("{cfg:?}");
     assert!(!debug.contains("migrator-pw-1") && !debug.contains("maint-pw-2"));
 
     let none = load(None, &env(&[])).expect("defaults");
+    none.database
+        .reject_privileged_logins()
+        .expect("nothing privileged configured");
     assert_invalid(
         &none.database.migrate_url().expect_err("unset"),
         "database.migrate_url",
@@ -614,18 +629,32 @@ fn min_connections_must_fit_the_smaller_pool() {
 }
 
 #[test]
-fn privileged_members_are_validated_role_names() {
+fn privileged_members_are_role_member_pairs() {
     let cfg = load(
         None,
-        &env(&[("FORGE_DATABASE_PRIVILEGED_MEMBERS", "dba_alice, ops_2")]),
+        &env(&[(
+            "FORGE_DATABASE_PRIVILEGED_MEMBERS",
+            "forge_owner:dba_alice, forge_seq:ops_2",
+        )]),
     )
     .expect("loads");
-    assert_eq!(cfg.database.privileged_members, ["dba_alice", "ops_2"]);
+    let pairs: Vec<(&str, &str)> = cfg
+        .database
+        .privileged_members
+        .iter()
+        .map(|m| (m.role.as_str(), m.member.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [("forge_owner", "dba_alice"), ("forge_seq", "ops_2")]
+    );
     for (value, reason) in [
-        ("Dba", "invalid"),
-        ("a;drop", "invalid"),
-        ("ok,", "invalid"),
-        ("x,x", "duplicate"),
+        ("dba_alice", "invalid"),
+        ("forge_app:dba", "invalid"),
+        ("forge_owner:Dba", "invalid"),
+        ("forge_owner:a;drop", "invalid"),
+        ("forge_owner:ok,", "invalid"),
+        ("forge_owner:x,forge_owner:x", "duplicate"),
     ] {
         let err =
             load(None, &env(&[("FORGE_DATABASE_PRIVILEGED_MEMBERS", value)])).expect_err(value);

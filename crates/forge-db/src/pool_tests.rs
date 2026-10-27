@@ -253,29 +253,36 @@ async fn a_terminated_backend_is_unavailable_not_a_query_failure() {
 
 #[tokio::test]
 async fn a_constraint_violation_never_logs_the_row_values() {
-    let (db, _cfg) = dev_db(&[]).await;
+    // forge_app has no TEMP: the table is created by the superuser.
+    let t = FreshDb::new().await;
+    sqlx::raw_sql(
+        "CREATE TABLE forge.t_unique (email text PRIMARY KEY); \
+         GRANT INSERT ON forge.t_unique TO forge_app",
+    )
+    .execute(&mut t.superuser().await)
+    .await
+    .expect("table");
     // The write pool: the read pool runs as forge_ro, read-only.
-    let mut conn = db.write_pool().acquire().await.expect("conn");
-    sqlx::query("CREATE TEMP TABLE t_unique (email text PRIMARY KEY)")
-        .execute(&mut *conn)
-        .await
-        .expect("temp table");
+    let mut conn = t.db.write_pool().acquire().await.expect("conn");
+    let mut failure = None;
     for _ in 0..2 {
-        let r = sqlx::query("INSERT INTO t_unique VALUES ($1)")
+        let r = sqlx::query("INSERT INTO forge.t_unique VALUES ($1)")
             .bind("pii-a1b2@example.invalid")
             .execute(&mut *conn)
             .await;
         if let Err(e) = r {
-            let err = query_error("test.insert", e);
-            assert_reason(&err, ErrorCode::DbQueryFailed, "constraint");
-            let text = chain(&err);
-            assert!(text.contains("sqlstate=23505"), "{text}");
-            assert!(text.contains("constraint=t_unique_pkey"), "{text}");
-            assert!(!text.contains("pii-a1b2"), "row value leaked: {text}");
-            return;
+            failure = Some(query_error("test.insert", e));
+            break;
         }
     }
-    panic!("the duplicate insert succeeded");
+    drop(conn);
+    t.drop_now().await;
+    let err = failure.expect("the duplicate insert failed");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "constraint");
+    let text = chain(&err);
+    assert!(text.contains("sqlstate=23505"), "{text}");
+    assert!(text.contains("constraint=t_unique_pkey"), "{text}");
+    assert!(!text.contains("pii-a1b2"), "row value leaked: {text}");
 }
 
 #[test]
@@ -357,11 +364,12 @@ async fn read_pool_write_is_write_on_read_pool_not_unavailable() {
 async fn a_missing_privilege_is_permission_denied() {
     let t = FreshDb::new().await;
     // forge_app has no INSERT on the DDL acknowledgements (forge_maint only).
-    let err = sqlx::query("INSERT INTO forge.ddl_audit_ack (ddl_audit_id, note) VALUES (1, 'x')")
-        .execute(t.db.write_pool())
-        .await
-        .map_err(|e| query_error("test.ack", e))
-        .expect_err("not granted");
+    let err =
+        sqlx::query("INSERT INTO forge_audit.ddl_audit_ack (ddl_audit_id, note) VALUES (1, 'x')")
+            .execute(t.db.write_pool())
+            .await
+            .map_err(|e| query_error("test.ack", e))
+            .expect_err("not granted");
     assert_reason(&err, ErrorCode::DbQueryFailed, "permission_denied");
     assert!(err.to_string().contains("sqlstate=42501"), "{err}");
     t.drop_now().await;
@@ -391,4 +399,44 @@ async fn a_login_outside_forge_ro_is_config_invalid_wrong_role() {
         .execute(&mut superuser(dev_url().rsplit_once('/').expect("db").1).await)
         .await
         .expect("drop temporary login");
+}
+
+#[tokio::test]
+async fn a_superuser_application_login_is_refused() {
+    let t = FreshDb::new().await;
+    let cfg = test_config(&url_with_db(&t.name), "forge_dev", &[]);
+    let err = Db::connect(&cfg.db).await.expect_err("superuser as app");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "wrong_role");
+    let text = err.to_string();
+    assert!(text.contains("config_key=database.url"), "{text}");
+    assert!(text.contains("role_check=superuser"), "{text}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_application_login_that_can_reach_forge_owner_is_refused() {
+    // A temporary member of forge_owner is a cluster-wide change.
+    let _lock = ClusterLock::exclusive().await;
+    let t = FreshDb::new().await;
+    let role = format!("forge_t_login_{}", uuid::Uuid::new_v4().simple());
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(&format!(
+        "CREATE ROLE \"{role}\" LOGIN PASSWORD 'x-login-pw'; \
+         GRANT CONNECT ON DATABASE \"{}\" TO \"{role}\"; \
+         GRANT forge_ro TO \"{role}\"; GRANT forge_owner TO \"{role}\"",
+        t.name
+    ))
+    .execute(&mut su)
+    .await
+    .expect("temporary privileged login");
+    let cfg = test_config(&url_as(&role, &t.name), "x-login-pw", &[]);
+    let result = Db::connect(&cfg.db).await;
+    t.drop_now().await;
+    sqlx::query(&format!("DROP ROLE \"{role}\""))
+        .execute(&mut superuser(&maintenance_db()).await)
+        .await
+        .expect("drop temporary login");
+    let err = result.expect_err("privileged login");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "wrong_role");
+    assert!(err.to_string().contains("role_check=privileged"), "{err}");
 }

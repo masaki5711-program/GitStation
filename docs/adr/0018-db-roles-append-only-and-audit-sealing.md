@@ -248,18 +248,30 @@ ADR-0016 の表の台帳（audited / derived、`ro_columns`、守る対象）へ
 | security H-1 / DB MEDIUM-1: 復元した DB の大域フラグが真のまま番号付けが走る | §3・§5: `assign_seq(max_batch, include_audit)` でプロセスの状態も条件にする（2 重）、Runbook の最初で false に戻す |
 | DB MEDIUM-2 / MEDIUM-3、security MEDIUM・LOW の残り | 実装時に扱う（`ddl_audit` と `db.migrate` の行の保持の対応、`confirm_sink_compare` の監査は状態の変化時だけ、GRANT/REVOKE は doctor の権限検査が担保、`rotate_epoch` の署名の統一、10 分の連続拒否の Runbook への記載）。受理を妨げない |
 
-## Amendment 2026-10-27: 実装（C1）で決めた点
+## Amendment 2026-10-27: 実装（C1）とそのレビューで決めた点
 
-実装の段階 C1（ロール、導入の手順、プールの分離）で、本文と異なる、または本文が決めていなかった点を次のとおり決めた。
+実装の段階 C1（ロール、導入の手順、プールの分離）と、そのレビュー（DB・セキュリティの CRITICAL 1 件を含む）で、本文と異なる、または本文が決めていなかった点を次のとおり決めた。
+本文の §1・§3 の該当する記述（`ddl_audit`・`ddl_audit_ack`・`bootstrap_log`・`guarded_objects` とガードの関数を `forge_owner` が所有する、`forge.` に置く、`forge.cluster_identity()`）は、この表で置き換える。
 
 | 点 | 決定 | 理由 |
 |---|---|---|
-| 導入の手順のファイル | `ops/db/bootstrap.sql` 1 つではなく `ops/db/bootstrap/01-cluster-roles.sql`・`02-create-database.sql`・`03-database-objects.sql` の 3 つ | `CREATE DATABASE` はトランザクションの中で実行できず、03 は新しい DB に接続して実行する必要がある。02 は psql の変数 `:"dbname"` を 1 つだけ持つ |
-| イベントトリガーと保護の関数の所有者 | イベントトリガー、`forge.ddl_audit_record()`、`forge.reject_log_mutation()`、`forge.cluster_identity()` は、導入の手順を実行した superuser が所有する（§3 の「`forge_owner` が所有」を改める） | PostgreSQL ではイベントトリガーの所有者は superuser でなければならない。関数も superuser が所有すれば、`forge_owner` は置き換えられない。`forge doctor db.bootstrap` は所有者が superuser であることと、本文が出荷したファイルと同一であることを確かめる |
-| `_sqlx_migrations` の読み取り | 最初のマイグレーションの GRANT ではなく、03 の `ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner IN SCHEMA public GRANT SELECT ON TABLES TO forge_app, forge_ro` | 最初のマイグレーションより前（とテストの fixture）にも、読み取りのプールで `status()` が動く。`public` にはマイグレーションの記録しか置かない（アプリのオブジェクトはすべて `forge` に置く。ゲートが検査する） |
-| 読み取りのプールの設定 | `after_connect` ではなく、起動のパケットの `role=forge_ro`・`default_transaction_read_only=on`。接続時に 1 本の probe で `current_user = forge_ro` と読み取り専用を確かめる（違えば `FG-SYS-0002 config_key=database.url reason=wrong_role`） | 最初の文より前に効き、追加の往復がない |
+| 記録の表とガードの関数の置き場所と所有者 | 新しいロール **`forge_audit`**（NOLOGIN、メンバーなし、誰のメンバーでもない）を作り、スキーマ **`forge_audit`**（所有者 `forge_audit`）に `bootstrap_log`・`ddl_audit`・`ddl_audit_ack`・`guarded_objects`、`reject_log_mutation()`、`ddl_audit_record()`（`SECURITY DEFINER`、所有者 `forge_audit`）を置く。`cluster_identity()` も `forge_audit` スキーマに置き、所有者は superuser。イベントトリガーの所有者は superuser | レビューの CRITICAL: superuser が所有する `SECURITY DEFINER` の関数が `forge_owner` の所有する表に書くと、`forge_owner`（= `forge_migrator` の資格情報）がその表にトリガーや既定値を付けて superuser の権限でコードを動かせる。また、スキーマの所有者はその中のどのオブジェクトも DROP できる。`forge_owner` が成れるロールは、superuser の動く経路が書く・呼ぶものを何も所有しない。PostgreSQL ではイベントトリガーの所有者は superuser でなければならない |
+| 記録の表の所有者の変更 | `ddl_audit` の所有者を変えると、イベントトリガーが自分の行を書けずにその DDL が失敗する（テストで確認） | 記録そのものを外す変更は、記録の仕組みが止める |
+| 導入の手順のファイル | `ops/db/bootstrap.sql` 1 つではなく `ops/db/bootstrap/01-cluster-roles.sql`・`02-create-database.sql`・`03-database-objects.sql` の 3 つ。各ファイルは `\set ON_ERROR_STOP on`。01 と 03 は `SET LOCAL search_path = pg_catalog, pg_temp` で始める | `CREATE DATABASE` はトランザクションの中で実行できず、03 は新しい DB に接続して実行する。`public` は DB の所有者（`forge_owner`）のもので、より合う多重定義を置ける（CVE-2018-1058 の型）ため、superuser のセッションは `pg_catalog` だけで名前を解決する |
+| 03 の再実行 | 03 は保護のトリガー・イベントトリガーを毎回作り直し、記録の表の余分なトリガーを外し（警告を出す）、関数の権限を全ロールから取り消してから付け直す | 弱められた保護を、Runbook の 1 手順で出荷した状態に戻せる |
+| 既存のロールの扱い | 01 は自分が作ったロールに `COMMENT 'forge bootstrap role'` を付け、同じ名前でコメントのないロールがあれば止まる（運用者が確かめてコメントを付ければ取り込む） | ロールはクラスター全体のもので、別の DB のロールの属性を黙って書き換えない |
+| ガードの関数の `search_path` | 導入の手順の関数は `SET search_path = pg_catalog, pg_temp`（`forge` を含めない）で、本文はすべて修飾する。マイグレーションの `SECURITY DEFINER` の関数は §1 どおり `pg_catalog, forge, pg_temp`（ゲートが検査する） | 導入の手順の関数は `forge` のオブジェクトを使わない。`forge` は `forge_owner` が書けるスキーマ |
+| 関数の既定の権限 | 03 で `ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner, forge_seq, forge_purge REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` | マイグレーションで REVOKE を 1 つ書き漏らしても、`forge_app` が削除・伏せ字の関数を実行できない（ゲートとの二重） |
+| `_sqlx_migrations` の読み取り | 最初のマイグレーションの GRANT ではなく、03 の `ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner IN SCHEMA public GRANT SELECT ON TABLES TO forge_app, forge_ro` と、再実行のための `GRANT SELECT ON ALL TABLES IN SCHEMA public` | 最初のマイグレーションより前（とテストの fixture）にも、読み取りのプールで `status()` が動く。`public` にはマイグレーションの記録しか置かない |
+| `_sqlx_migrations` の DDL の判定 | sqlx は最初のファイルより前の別のトランザクションで `CREATE TABLE IF NOT EXISTS _sqlx_migrations` を実行する。`ddl_audit_status`（C2）は、`public._sqlx_migrations` とその索引・制約の作成で `session_user = forge_migrator`・`application_name = forge-migrate` のものを expected とする | `db.migrate` の行と同じ `txid` にならないため、§3 の規則だけでは新しい環境で必ず unexpected になる |
+| 読み取りのプールの設定 | `after_connect` ではなく、起動のパケットの `role=forge_ro`・`default_transaction_read_only=on`。接続時に 1 本の probe で確かめる（違えば `FG-SYS-0002 config_key=database.url reason=wrong_role`） | 最初の文より前に効き、追加の往復がない。プールの接続は再利用の前に状態を戻さない（`RESET ROLE` などは残る）が、§2 のとおり事故の防止の水準として受け入れる |
+| アプリのログインの検査 | `Db::connect` は、ログインが superuser・BYPASSRLS、または `forge_owner`・`forge_seq`・`forge_purge` に届く場合に `wrong_role`（`role_check=superuser` / `privileged`）で拒否する | それらのログインでは、すべての保護が意味を失う。doctor だけに任せない |
 | マイグレーションのログイン | superuser のログインは `wrong_role role_check=superuser` で拒否する | superuser は信頼の境界の外（Context の決定 1）。DDL の記録の照合も `forge_migrator` を前提にする |
+| 資格情報の分離 | `database.migrate_password_file`・`maint_password_file` は読み込み時にはパスだけを確かめ、使うコマンド（`forge db migrate`、`forge admin`）が読む。`forge serve` は、どちらかが設定にあれば `FG-SYS-0002 reason=not_for_this_command` で起動しない | サーバーのプロセスが破られても、`forge_migrator`（= `forge_owner`）の資格情報は得られない |
+| `database.privileged_members` | `role:member` の組（`forge_owner:dba_alice` など。role は `forge_owner`・`forge_seq`・`forge_purge`）。ログインのロール（`forge_app`・`forge_maint`・`forge_migrator`）が決まったもの以外のロール（組み込みの `pg_write_all_data` などを含む）のメンバーなら `guard=role_separation`。ADMIN OPTION 付きのメンバーの関係は常に `role_membership_changed` | 1 つのロールの許可で 3 つすべてを持てないようにする |
 | 接続の数の設定 | `database.max_connections` を `database.write_max_connections`・`database.read_max_connections` に分け、旧名の環境変数は `renamed` で拒否する。`min_connections` は両方のプールに使い、小さい方の最大値以下 | §2 の予算 |
-| LISTEN の接続 | `Db::listen_options()` は最初の利用者（worker、段階 C4）と一緒に入れる | 利用者のない API を先に作らない。sqlx 0.8 には TCP keepalive の設定がないため、そのときに方法を決める |
-| `forge.guarded_objects` | 導入の手順のオブジェクトの行を 03 が入れる。行の変更・削除も拒否する（追記のみ） | 行を消すと保護の対象から外れてしまう |
 | 接続の予算の違反 | `FG-SYS-0002 config_key=database.write_max_connections reason=connection_budget`（`needed`・`usable`） | 設定とサーバーの不一致で、保護の仕組みの問題ではない |
+| クライアント側の上限 | doctor の検査、`status()`、マイグレーションの前後の処理は、クライアント側の時間の上限を持つ（`FG-DB-0001 reason=operation_timeout`）。`Db::close` は 5 秒で打ち切る | 半分切れた接続ではサーバー側のタイムアウトが働かない |
+| LISTEN の接続 | `Db::listen_options()` は最初の利用者（worker、段階 C4）と一緒に入れる | 利用者のない API を先に作らない。sqlx 0.8 には TCP keepalive の設定がないため、そのときに方法を決める |
+| `guarded_objects` | 導入の手順のオブジェクトの行を 03 が入れる。行の変更・削除は拒否する（追記のみ）。守る対象から外す（オブジェクトを廃止する）方法は、最初に必要になる段階で、取り消しの行を追記する形で決める | 行を消すと保護の対象から外れてしまう |
+| `forge_ro` の列の権限 | C1 では記録の表に表全体の SELECT を与える。表の台帳（ADR-0016 §1、C2）ができた時点で、`ro_columns` の列単位の GRANT に置き換える | 台帳がまだない |

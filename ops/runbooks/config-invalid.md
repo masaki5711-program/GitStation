@@ -28,9 +28,10 @@
      - `above_max`: `min_connections` が `write_max_connections` か `read_max_connections` より大きい
      - `duplicate`: `database.privileged_members` に同じ名前が 2 回ある
      - `wrong_role`: ログインのロールが違う（`role_check` を見る。ロールが未作成なら Runbook `db-bootstrap`）
-       - `database.url`: `not_member`（`forge_ro` のメンバーでない）、`role_not_applied`・`not_read_only`（読み取りのプールの設定が効いていない）
+       - `database.url`: `not_member`（`forge_ro` のメンバーでない）、`superuser`（superuser か BYPASSRLS のログイン。すべての保護を迂回できるので使わない）、`privileged`（`forge_owner`・`forge_seq`・`forge_purge` に届く）、`role_not_applied`・`not_read_only`（読み取りのプールの設定が効いていない）
        - `database.migrate_url`: `not_member`（`forge_owner` のメンバーでない。`forge_migrator` で接続する）、`owner_missing`（導入の手順が未実行）、`superuser`（superuser ではマイグレーションしない）、`not_owner`
      - `connection_budget`: プールの大きさの合計（`needed`）が DB のサーバーの接続数（`usable`）の 80 % を超える。`database.write_max_connections` / `read_max_connections` を下げるか、サーバーの `max_connections` を上げる
+     - `not_for_this_command`: `forge serve` の設定に `database.migrate_password_file` か `database.maint_password_file` がある。サーバーのプロセスに移行・保守の資格情報を持たせない。設定をログインごとに分ける（Runbook `db-bootstrap` の手順 5）
      - `unknown_key`: 設定ファイルのつづりの誤り
      - `unknown_env`: 環境変数のつづりの誤り
      - `renamed`: 改名前の名前（`renamed_to` に新しい名前が入る。例: `FORGE_BIND` → `FORGE_SERVER_BIND`、`FORGE_DATABASE_MAX_CONNECTIONS` → `FORGE_DATABASE_WRITE_MAX_CONNECTIONS`）

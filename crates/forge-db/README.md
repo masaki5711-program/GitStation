@@ -26,6 +26,12 @@ connection, mapping driver errors to registered codes, migrations
   (read pool) — use at every statement:
   `.map_err(|e| query_error("repo.insert", e))`. `query` is a static name,
   never the SQL text.
+- `Db::within(operation, future)` — client-side bound (acquire + statement
+  timeout) for short multi-statement operations; `Db::close()` is bounded too.
+- The app login must not be a superuser / BYPASSRLS or reach forge_owner,
+  forge_seq or forge_purge (`wrong_role` at connect). The bootstrap objects
+  live in schema `forge_audit`, owned by the member-less role `forge_audit`
+  (ADR-0018 amendment).
 - `bootstrap::check(&Db, privileged_members)` / `bootstrap::check_connections`
   — what `forge doctor` reports as `db.bootstrap` / `db.connections`.
   `bootstrap::FILES` embeds `ops/db/bootstrap/*.sql`; `BOOTSTRAP_VERSION` must

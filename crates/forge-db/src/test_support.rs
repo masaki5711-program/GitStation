@@ -4,7 +4,13 @@
 //!
 //! The cluster is bootstrapped once per test process with the real files
 //! of `ops/db/bootstrap/` (roles; synthetic passwords for the logins), and
-//! every [`FreshDb`] is a new database set up by steps 2 and 3.
+//! every [`FreshDb`] is a new database set up by steps 2 and 3. Because the
+//! logins get passwords that are in this source, the target must be a
+//! loopback server (or `FORGE_TEST_ALLOW_ROLE_RESET=1` must be set).
+//!
+//! Roles are cluster-wide: a test that changes one holds
+//! [`ClusterLock::exclusive`]; every test that runs the role guards holds
+//! [`ClusterLock::shared`] (also across test processes).
 #![allow(clippy::expect_used, clippy::panic)] // test helpers: failing loudly is the point
 
 use std::io::Write as _;
@@ -89,6 +95,35 @@ pub fn test_config(url: &str, password: &str, extra: &[(&str, &str)]) -> TestCon
     }
 }
 
+/// A bootstrap file as SQL the driver can run: psql meta-commands
+/// (`\set ON_ERROR_STOP on`) are dropped — the driver stops at the first
+/// error anyway.
+pub fn bootstrap_sql(index: usize) -> String {
+    FILES[index]
+        .1
+        .lines()
+        .filter(|l| !l.starts_with('\\'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn refuse_remote_cluster() {
+    let url = dev_url();
+    let host = url
+        .split_once('@')
+        .and_then(|(_, rest)| rest.split(['/', ':']).next())
+        .unwrap_or_default()
+        .to_owned();
+    let loopback = host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1";
+    let allowed = std::env::var("FORGE_TEST_ALLOW_ROLE_RESET").as_deref() == Ok("1");
+    assert!(
+        loopback || allowed,
+        "FORGE_TEST_DATABASE_URL points at {host}: the DB tests reset the forge logins' \
+         passwords to values in the source; use a loopback development server or set \
+         FORGE_TEST_ALLOW_ROLE_RESET=1 for a disposable one"
+    );
+}
+
 /// One superuser connection to `dbname`.
 pub async fn superuser(dbname: &str) -> PgConnection {
     let url = url_with_db(dbname);
@@ -107,8 +142,9 @@ static CLUSTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 pub async fn ensure_cluster() {
     CLUSTER
         .get_or_init(|| async {
+            refuse_remote_cluster();
             let mut admin = superuser(&maintenance_db()).await;
-            sqlx::raw_sql(FILES[0].1)
+            sqlx::raw_sql(&bootstrap_sql(0))
                 .execute(&mut admin)
                 .await
                 .expect("bootstrap step 1 (01-cluster-roles.sql)");
@@ -129,21 +165,97 @@ pub async fn ensure_cluster() {
         .await;
 }
 
-fn maintenance_db() -> String {
+/// The database named by `FORGE_TEST_DATABASE_URL` (cluster-wide changes run here).
+pub fn maintenance_db() -> String {
     dev_url()
         .rsplit_once('/')
         .map(|(_, db)| db.to_owned())
         .expect("url has a dbname")
 }
 
-/// The superuser on the maintenance database, as an app-shaped `Db` (for
-/// tests about connecting, timeouts and error mapping).
-pub async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
+/// The database shared by the tests that need a working connection but
+/// no private schema (connecting, timeouts, error mapping).
+pub const SHARED_DB: &str = "forge_test_shared";
+
+static SHARED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+
+/// Create (once per cluster) and re-bootstrap (once per process) the shared
+/// database; concurrent test processes serialize on an advisory lock.
+async fn ensure_shared() {
     ensure_cluster().await;
-    let cfg = test_config(&dev_url(), "forge_dev", extra);
+    SHARED
+        .get_or_init(|| async {
+            let mut admin = superuser(&maintenance_db()).await;
+            sqlx::query("SELECT pg_advisory_lock(hashtext('forge.test.shared_db'))")
+                .execute(&mut admin)
+                .await
+                .expect("shared db lock");
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
+                    .bind(SHARED_DB)
+                    .fetch_one(&mut admin)
+                    .await
+                    .expect("shared db exists?");
+            if !exists {
+                let create = bootstrap_sql(1).replace(":\"dbname\"", &format!("\"{SHARED_DB}\""));
+                sqlx::raw_sql(&create)
+                    .execute(&mut admin)
+                    .await
+                    .expect("bootstrap step 2 (shared)");
+            }
+            let mut owner = superuser(SHARED_DB).await;
+            sqlx::raw_sql(&bootstrap_sql(2))
+                .execute(&mut owner)
+                .await
+                .expect("bootstrap step 3 (shared)");
+            drop(owner);
+            sqlx::query("SELECT pg_advisory_unlock(hashtext('forge.test.shared_db'))")
+                .execute(&mut admin)
+                .await
+                .expect("shared db unlock");
+        })
+        .await;
+}
+
+/// forge_app on the shared bootstrapped database (for tests about
+/// connecting, timeouts and error mapping).
+pub async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
+    ensure_shared().await;
+    let cfg = test_config(&url_as("forge_app", SHARED_DB), APP_PASSWORD, extra);
     match Db::connect(&cfg.db).await {
         Ok(db) => (db, cfg),
         Err(e) => panic!("{HINT}\n{e}"),
+    }
+}
+
+/// A cluster-wide advisory lock on the maintenance database (held while
+/// this value lives).
+pub struct ClusterLock {
+    _held: PgConnection,
+}
+
+impl ClusterLock {
+    const KEY: &'static str = "forge.test.cluster_roles";
+
+    /// For tests that run the role guards.
+    pub async fn shared() -> Self {
+        Self::take("pg_advisory_lock_shared").await
+    }
+
+    /// For tests that change a cluster role.
+    pub async fn exclusive() -> Self {
+        Self::take("pg_advisory_lock").await
+    }
+
+    async fn take(function: &str) -> Self {
+        ensure_cluster().await;
+        let mut conn = superuser(&maintenance_db()).await;
+        sqlx::query(&format!("SELECT {function}(hashtext($1))"))
+            .bind(Self::KEY)
+            .execute(&mut conn)
+            .await
+            .expect("cluster lock");
+        Self { _held: conn }
     }
 }
 
@@ -172,7 +284,7 @@ impl FreshDb {
                 .await
                 .expect("semaphore is never closed");
             let mut admin = superuser(&maintenance_db()).await;
-            let create = FILES[1].1.replace(":\"dbname\"", &format!("\"{name}\""));
+            let create = bootstrap_sql(1).replace(":\"dbname\"", &format!("\"{name}\""));
             sqlx::raw_sql(&create)
                 .execute(&mut admin)
                 .await
@@ -180,7 +292,7 @@ impl FreshDb {
             drop(admin);
         }
         let mut owner = superuser(&name).await;
-        sqlx::raw_sql(FILES[2].1)
+        sqlx::raw_sql(&bootstrap_sql(2))
             .execute(&mut owner)
             .await
             .expect("bootstrap step 3 (03-database-objects.sql)");
@@ -235,6 +347,14 @@ impl FreshDb {
     }
 
     /// A superuser connection to this database (to inspect or tamper).
+    /// Run SQL as the superuser on this database (for crates without sqlx).
+    pub async fn exec_superuser(&self, sql: &str) {
+        sqlx::raw_sql(sql)
+            .execute(&mut self.superuser().await)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+
     pub async fn superuser(&self) -> PgConnection {
         superuser(&self.name).await
     }

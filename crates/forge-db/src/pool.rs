@@ -25,6 +25,9 @@ use sqlx::{ConnectOptions as _, Connection as _};
 use crate::error_map::{connect_error, read_query_error, unavailable};
 use crate::options::{connect_options, preflight, server_version, Login, MIN_SERVER_VERSION_NUM};
 
+/// Bound for closing the pools.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The role and settings of every read-pool session.
 const READ_SETTINGS: &[(&str, &str)] = &[
     ("role", "forge_ro"),
@@ -52,12 +55,18 @@ pub struct Db {
     target: String,
     /// Client-side bound for the readiness round trip.
     ping_timeout: Duration,
+    /// Client-side bound for a short multi-statement operation (doctor
+    /// checks, schema status): acquire + one statement timeout.
+    op_timeout: Duration,
 }
 
 impl Db {
     /// Connect, verify the server version and the read role, and return
-    /// the pools. A missing URL or a `PG*` variable is `FG-SYS-0002`; every
-    /// connection failure is `FG-DB-0001` with `reason` and `target`.
+    /// the pools. A missing URL or a `PG*` variable is `FG-SYS-0002`; so is
+    /// a login that is a superuser, bypasses row security or can reach
+    /// forge_owner / forge_seq / forge_purge (`reason=wrong_role`: it would
+    /// bypass every guard of ADR-0018). Every connection failure is
+    /// `FG-DB-0001` with `reason` and `target`.
     pub async fn connect(cfg: &DatabaseConfig) -> Result<Self, ForgeError> {
         Self::connect_requiring(cfg, MIN_SERVER_VERSION_NUM).await
     }
@@ -115,6 +124,7 @@ impl Db {
             read,
             target,
             ping_timeout: cfg.acquire_timeout,
+            op_timeout: cfg.acquire_timeout.saturating_add(cfg.statement_timeout),
         })
     }
 
@@ -134,9 +144,36 @@ impl Db {
         &self.target
     }
 
-    /// Close both pools (waits for checked-out connections to return).
+    /// Close both pools: waits for checked-out connections to return, at
+    /// most `CLOSE_TIMEOUT` (then the process exits with them open; the
+    /// server ends them).
     pub async fn close(&self) {
-        tokio::join!(self.write.close(), self.read.0.close());
+        let both = async { tokio::join!(self.write.close(), self.read.0.close()) };
+        if tokio::time::timeout(CLOSE_TIMEOUT, both).await.is_err() {
+            tracing::warn!(
+                target: "forge_db",
+                db_target = %self.target,
+                timeout_ms = CLOSE_TIMEOUT.as_millis(),
+                "database pools did not close in time; connections are left to the server"
+            );
+        }
+    }
+
+    /// Run a short multi-statement operation with a client-side bound
+    /// (acquire + statement timeout): a half-dead link fires no server-side
+    /// timeout. Exceeding it is `FG-DB-0001 reason=operation_timeout`.
+    pub async fn within<T>(
+        &self,
+        operation: &'static str,
+        op: impl std::future::Future<Output = Result<T, ForgeError>>,
+    ) -> Result<T, ForgeError> {
+        match tokio::time::timeout(self.op_timeout, op).await {
+            Ok(result) => result,
+            Err(_) => Err(unavailable(&self.target, "operation_timeout")
+                .with_context("operation", operation)
+                .with_context("timeout_ms", self.op_timeout.as_millis())
+                .with_context("timeout_key", "database.statement_timeout_ms")),
+        }
     }
 
     /// A read-pool connection. Every failure — pool exhausted
@@ -227,12 +264,25 @@ async fn probe_read(options: &PgConnectOptions, target: &str) -> Result<(), Forg
         }
         connect_error(target, e)
     })?;
-    let row: Result<(String, String), _> =
-        sqlx::query_as("SELECT current_user::text, current_setting('transaction_read_only')")
-            .fetch_one(&mut conn)
-            .await;
+    let row: Result<(String, String, bool, bool), _> = sqlx::query_as(
+        "SELECT current_user::text, current_setting('transaction_read_only'), \
+         r.rolsuper OR r.rolbypassrls, \
+         coalesce((SELECT bool_or(pg_catalog.pg_has_role(session_user, p.oid, 'MEMBER')) \
+                   FROM pg_catalog.pg_roles p \
+                   WHERE p.rolname IN ('forge_owner', 'forge_seq', 'forge_purge')), false) \
+         FROM pg_catalog.pg_roles r WHERE r.rolname = session_user",
+    )
+    .fetch_one(&mut conn)
+    .await;
     close_quietly(conn, target).await;
-    let (user, read_only) = row.map_err(|e| read_query_error("db.read_role", e))?;
+    let (user, read_only, elevated, privileged) =
+        row.map_err(|e| read_query_error("db.read_role", e))?;
+    if elevated {
+        return Err(wrong_read_role(target, "superuser"));
+    }
+    if privileged {
+        return Err(wrong_read_role(target, "privileged"));
+    }
     if user != "forge_ro" {
         return Err(wrong_read_role(target, "role_not_applied"));
     }

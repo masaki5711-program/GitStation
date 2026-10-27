@@ -24,6 +24,9 @@ const SAFE_CONTEXT: &[&str] = &[
     "role_check",
     "needed",
     "usable",
+    "found",
+    "expected",
+    "operation",
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

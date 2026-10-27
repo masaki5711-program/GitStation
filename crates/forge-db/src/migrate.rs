@@ -22,8 +22,25 @@ use sqlx::postgres::PgConnection;
 
 use crate::{query_error, read_query_error, Db, MigratorConn};
 
-/// Client-side bound for the status re-read after a successful run.
-const VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Client-side bound for the bookkeeping around a run (status reads, the
+/// session setting): a half-dead link fires no server-side timeout.
+const STEP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `STEP_TIMEOUT` around one bookkeeping step of a run.
+async fn step<T>(
+    what: &'static str,
+    target: &str,
+    f: impl std::future::Future<Output = Result<T, ForgeError>>,
+) -> Result<T, ForgeError> {
+    match tokio::time::timeout(STEP_TIMEOUT, f).await {
+        Ok(result) => result,
+        Err(_) => Err(ForgeError::new(ErrorCode::DbUnavailable)
+            .with_context("reason", "operation_timeout")
+            .with_context("operation", what)
+            .with_context("timeout_ms", STEP_TIMEOUT.as_millis())
+            .with_context("target", target)),
+    }
+}
 
 /// The migrations built into this binary (`crates/forge-db/migrations`).
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -76,8 +93,11 @@ fn join(versions: &[i64]) -> String {
 /// Compare the database with `migrator` without changing anything (on the
 /// read pool).
 pub async fn status(db: &Db, migrator: &Migrator) -> Result<SchemaStatus, ForgeError> {
-    let mut conn = db.acquire().await?;
-    status_on(&mut conn, migrator, read_query_error).await
+    db.within("migrate.status", async {
+        let mut conn = db.acquire().await?;
+        status_on(&mut conn, migrator, read_query_error).await
+    })
+    .await
 }
 
 /// The bookkeeping lives in `public` (search_path of forge_migrator, set
@@ -138,13 +158,20 @@ pub async fn check_schema(db: &Db, migrator: &Migrator) -> Result<SchemaStatus, 
 
 /// Apply the pending migrations; returns the versions applied by this call.
 /// Refuses (FG-DB-0004) when the database is dirty, edited or ahead.
+/// After an error the connection's state is unknown: the caller closes it
+/// (`MigratorConn::close`) and never reuses it.
 pub async fn migrate(
     mc: &mut MigratorConn,
     migrator: &Migrator,
     statement_timeout: Duration,
 ) -> Result<Vec<i64>, ForgeError> {
     let target = mc.target().to_owned(); // owned: mc.conn is borrowed mutably below
-    let before = status_on(&mut mc.conn, migrator, query_error).await?;
+    let before = step(
+        "migrate.status",
+        &target,
+        status_on(&mut mc.conn, migrator, query_error),
+    )
+    .await?;
     for (reason, versions) in [
         ("dirty", &before.dirty),
         ("checksum_mismatch", &before.modified),
@@ -159,13 +186,15 @@ pub async fn migrate(
     }
     // The migration connection is not pooled: the longer statement timeout
     // ends with it.
-    sqlx::query(&format!(
-        "SET statement_timeout = {}",
-        statement_timeout.as_millis()
-    ))
-    .execute(&mut mc.conn)
-    .await
-    .map_err(|e| query_error("migrate.set_statement_timeout", e))?;
+    let set = format!("SET statement_timeout = {}", statement_timeout.as_millis());
+    step("migrate.set_statement_timeout", &target, async {
+        sqlx::query(&set)
+            .execute(&mut mc.conn)
+            .await
+            .map(|_| ())
+            .map_err(|e| query_error("migrate.set_statement_timeout", e))
+    })
+    .await?;
     // Client-side deadline for the whole run: the server's statement and
     // lock timeouts would not fire on a half-dead link. One statement
     // timeout per pending migration, plus one for the bookkeeping.
@@ -197,17 +226,12 @@ pub async fn migrate(
     );
     // A concurrent run may have applied some of them first; the versions
     // reported are those pending before and applied now (by either run).
-    let verify = match tokio::time::timeout(
-        VERIFY_TIMEOUT,
+    let verify = step(
+        "migrate.verify",
+        &target,
         status_on(&mut mc.conn, migrator, query_error),
     )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(ForgeError::new(ErrorCode::DbUnavailable)
-            .with_context("reason", "verify_timeout")
-            .with_context("timeout_ms", VERIFY_TIMEOUT.as_millis())),
-    };
+    .await;
     match verify {
         Ok(after) => Ok(before
             .pending
@@ -219,6 +243,7 @@ pub async fn migrate(
             tracing::warn!(
                 target: "forge_db",
                 db_target = %target,
+                error_code = e.code().id(),
                 error = %e,
                 "migrations committed; the verification read failed — check with forge db status"
             );

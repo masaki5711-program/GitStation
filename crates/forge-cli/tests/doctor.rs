@@ -6,7 +6,9 @@
 use std::io::Write as _;
 use std::process::{Command, Output};
 
-use forge_db::test_support::{dev_url, FreshDb, HINT};
+use forge_db::test_support::{
+    dev_url, url_as, ClusterLock, FreshDb, PasswordFile, APP_PASSWORD, HINT,
+};
 
 fn forge_in(args: &[&str], vars: &[(String, String)], extra: &[(&str, &str)]) -> Output {
     let mut env: Vec<(&str, &str)> = vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -24,6 +26,7 @@ fn runtime() -> tokio::runtime::Runtime {
 #[test]
 fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
     let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
     let t = rt.block_on(FreshDb::new());
     let (vars, _pw) = t.env();
     let storage = tempfile::tempdir().expect("storage root");
@@ -86,11 +89,13 @@ fn db_migrate_runs_on_the_migration_login() {
 #[test]
 fn doctor_flags_a_database_without_the_bootstrap() {
     let rt = runtime();
-    rt.block_on(forge_db::test_support::ensure_cluster());
-    let mut pw = tempfile::NamedTempFile::new().expect("password file");
-    pw.write_all(b"forge_dev").expect("write");
-    let pw_path = pw.path().to_string_lossy().into_owned();
-    let url = dev_url();
+    let _lock = rt.block_on(ClusterLock::shared());
+    // forge_app on the maintenance database: the roles exist, the objects
+    // of step 3 do not.
+    let pw = PasswordFile::new(APP_PASSWORD);
+    let pw_path = pw.path();
+    let base = dev_url();
+    let url = url_as("forge_app", base.rsplit_once('/').expect("db").1);
     let out = forge(
         &["doctor"],
         &[
@@ -104,6 +109,71 @@ fn doctor_flags_a_database_without_the_bootstrap() {
     assert!(text.contains("FAIL  db.bootstrap"), "{text}");
     assert!(text.contains("FG-DB-0009"), "{text}");
     assert!(text.contains("guard=bootstrap_version"), "{text}");
+}
+
+#[test]
+fn doctor_names_a_weakened_guard_and_an_oversized_pool() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::new());
+    rt.block_on(async {
+        sqlx_free_tamper(&t).await;
+    });
+    let (vars, _pw) = t.env();
+    let out = forge_in(
+        &["doctor", "--json"],
+        &vars,
+        &[
+            ("FORGE_DATABASE_WRITE_MAX_CONNECTIONS", "500"),
+            ("FORGE_DATABASE_READ_MAX_CONNECTIONS", "500"),
+        ],
+    );
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(out.status.code(), Some(1));
+    let check = |name: &str| {
+        v["checks"]
+            .as_array()
+            .and_then(|c| c.iter().find(|c| c["name"] == name))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let bootstrap = check("db.bootstrap");
+    assert_eq!(bootstrap["error_code"], "FG-DB-0009", "{v}");
+    assert!(
+        bootstrap["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("guard=event_triggers")),
+        "{v}"
+    );
+    let connections = check("db.connections");
+    assert!(
+        connections["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("reason=connection_budget")),
+        "{v}"
+    );
+    rt.block_on(t.drop_now());
+}
+
+/// Disable an event trigger through the forge_db test support (this crate
+/// has no direct database access).
+async fn sqlx_free_tamper(t: &FreshDb) {
+    t.exec_superuser("ALTER EVENT TRIGGER forge_ddl_audit_end DISABLE")
+        .await;
+}
+
+#[test]
+fn serve_refuses_a_configuration_with_the_migration_password() {
+    let pw = PasswordFile::new("x");
+    let path = pw.path();
+    let out = forge(
+        &["serve"],
+        &[("FORGE_DATABASE_MIGRATE_PASSWORD_FILE", path.as_str())],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not_for_this_command"), "{err}");
+    assert!(err.contains("database.migrate_password_file"), "{err}");
 }
 
 fn forge(args: &[&str], env: &[(&str, &str)]) -> Output {
