@@ -9,16 +9,18 @@
 //! the audit log records ([`AuditEntry`]) and which events it publishes
 //! ([`DomainEvent`]), together a [`ChangeRecord`].
 // The first production callers are the typed commands (step D, users and
-// projects); until then only the tests use ChangeTx.
-#![cfg_attr(not(test), allow(dead_code))]
+// projects); until then only the tests use ChangeTx. `expect`: the build
+// warns once a caller exists, so this cannot outlive its reason.
+#![cfg_attr(not(test), expect(dead_code))]
 
 use std::net::IpAddr;
 
 use forge_core::ids::{ProjectId, UserId};
 use forge_core::RequestId;
-use forge_errors::{ErrorCode, ForgeError};
+use forge_errors::ErrorCode;
 
 mod tx;
+mod validate;
 
 #[cfg_attr(not(test), allow(unused_imports))]
 // first production callers: typed commands (step D)
@@ -168,64 +170,6 @@ pub enum Committed {
     /// An event's `dedup_key` was already recorded: nothing was written
     /// (state writes of the change included).
     Deduped,
-}
-
-fn rejected(reason: &'static str, action: &str) -> ForgeError {
-    ForgeError::new(ErrorCode::ChangeRejected)
-        .with_context("reason", reason)
-        .with_context("action", action)
-}
-
-/// `^[a-z][a-z_]*(\.[a-z][a-z_]*){1,3}$` (the events.event_type check).
-fn valid_event_type(name: &str) -> bool {
-    let parts: Vec<&str> = name.split('.').collect();
-    (2..=4).contains(&parts.len())
-        && parts.iter().all(|p| {
-            p.starts_with(|c: char| c.is_ascii_lowercase())
-                && p.chars().all(|c| c.is_ascii_lowercase() || c == '_')
-        })
-}
-
-/// Everything that can be checked before touching the database.
-fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(), ForgeError> {
-    let action = record.audit.action;
-    if record.events.len() > MAX_EVENTS {
-        return Err(rejected("too_many_events", action).with_context("count", record.events.len()));
-    }
-    if !record.events.is_empty() && ctx.actor == Actor::Anonymous {
-        return Err(rejected("anonymous_event", action));
-    }
-    if let Some(e) = record
-        .events
-        .iter()
-        .find(|e| !valid_event_type(e.event_type))
-    {
-        return Err(rejected("invalid_event_type", action).with_context("event_type", e.event_type));
-    }
-    let too_long = [
-        (
-            "actor_label",
-            ctx.actor_label.as_deref().map_or(0, str::len),
-            64,
-        ),
-        (
-            "user_agent",
-            ctx.user_agent.as_deref().map_or(0, str::len),
-            256,
-        ),
-    ]
-    .into_iter()
-    .chain(
-        record
-            .events
-            .iter()
-            .map(|e| ("dedup_key", e.dedup_key.as_deref().map_or(0, str::len), 200)),
-    )
-    .find(|(_, len, max)| len > max);
-    if let Some((field, _, _)) = too_long {
-        return Err(rejected("field_too_long", action).with_context("field", field));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

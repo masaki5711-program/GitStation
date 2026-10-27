@@ -37,7 +37,7 @@ const GUARDED_TRIGGERS: &[(&str, &[(&str, &str)])] = &[
             (
                 "events_audit_present",
                 "CREATE CONSTRAINT TRIGGER events_audit_present AFTER INSERT ON forge.events \
-                 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.caused_by_seq IS NULL)) \
+                 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW \
                  EXECUTE FUNCTION forge.events_audit_present()",
             ),
         ],

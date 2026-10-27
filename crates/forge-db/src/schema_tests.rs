@@ -699,6 +699,61 @@ async fn more_weakened_schema_guards_are_reported() {
     }
 }
 
+#[tokio::test]
+async fn a_weakened_audit_presence_check_is_reported() {
+    let _lock = ClusterLock::shared().await;
+    let recreate = |options: &str| {
+        format!(
+            "DROP TRIGGER events_audit_present ON forge.events; \
+             CREATE CONSTRAINT TRIGGER events_audit_present AFTER INSERT ON forge.events \
+             {options} EXECUTE FUNCTION forge.events_audit_present(); \
+             ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_audit_present"
+        )
+    };
+    for (tamper, guard, context) in [
+        (
+            "DROP TRIGGER events_audit_present ON forge.events".to_owned(),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            recreate("NOT DEFERRABLE FOR EACH ROW"),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            recreate("DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.caused_by_seq IS NULL)"),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            "ALTER TABLE forge.events DISABLE TRIGGER events_audit_present".to_owned(),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            "CREATE OR REPLACE FUNCTION forge.events_audit_present() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp \
+             AS $$ BEGIN RETURN NULL; END $$"
+                .to_owned(),
+            "guard=function_body",
+            "function=events_audit_present",
+        ),
+    ] {
+        let t = migrated().await;
+        t.exec_superuser(&tamper).await;
+        let text = bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(&tamper)
+            .to_string();
+        assert!(
+            text.contains(guard) && text.contains(context),
+            "{tamper}\n=> {text}"
+        );
+        t.drop_now().await;
+    }
+}
+
 /// DDL in the migration login's transaction together with a db.migrate row
 /// listing `changes` — what a later migration file would do.
 async fn migration_like(t: &FreshDb, ddl: &str, changes: &str) {
