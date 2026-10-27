@@ -416,8 +416,9 @@ async fn a_superuser_application_login_is_refused() {
 #[tokio::test]
 async fn an_application_login_that_can_reach_forge_owner_is_refused() {
     // A temporary member of forge_owner is a cluster-wide change.
-    let _lock = ClusterLock::exclusive().await;
+    // The database first: FreshDb::new takes the shared lock for step 3.
     let t = FreshDb::new().await;
+    let _lock = ClusterLock::exclusive().await;
     let role = format!("forge_t_login_{}", uuid::Uuid::new_v4().simple());
     let mut su = t.superuser().await;
     sqlx::raw_sql(&format!(

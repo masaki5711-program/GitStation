@@ -31,6 +31,16 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
     let (vars, _pw) = t.env();
     let storage = tempfile::tempdir().expect("storage root");
     let root = storage.path().to_string_lossy().into_owned();
+    // A fresh database has pending migrations: doctor reports them.
+    let pending = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    assert_eq!(pending.status.code(), Some(1), "{}", stdout(&pending));
+    assert!(
+        stdout(&pending).contains("reason=pending"),
+        "{}",
+        stdout(&pending)
+    );
+    let migrated = forge_in(&["db", "migrate"], &vars, &[]);
+    assert!(migrated.status.success(), "{}", stdout(&migrated));
     let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
     let text = stdout(&out);
     assert!(
@@ -49,11 +59,12 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
     ] {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
-    // Read-only: the bookkeeping table is not created by the schema check.
-    let again = forge_in(&["db", "status"], &vars, &[]);
+    // Read-only: doctor applied nothing (the status still lists exactly the
+    // migrations db migrate applied, none pending).
+    let again = forge_in(&["db", "status", "--check"], &vars, &[]);
     assert!(again.status.success(), "{}", stdout(&again));
     assert!(
-        stdout(&again).contains("applied    -"),
+        stdout(&again).contains("pending    -"),
         "{}",
         stdout(&again)
     );
@@ -72,7 +83,10 @@ fn db_migrate_runs_on_the_migration_login() {
         stdout(&out),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(stdout(&out).contains("up to date"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("applied "), "{}", stdout(&out));
+    let again = forge_in(&["db", "migrate"], &vars, &[]);
+    assert!(again.status.success(), "{}", stdout(&again));
+    assert!(stdout(&again).contains("up to date"), "{}", stdout(&again));
     // Without the migration login the command names the missing key.
     let app_only: Vec<(String, String)> = vars
         .iter()

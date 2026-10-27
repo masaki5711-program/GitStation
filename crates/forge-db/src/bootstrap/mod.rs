@@ -18,13 +18,14 @@ use crate::{read_query_error, Db};
 mod acl;
 mod objects;
 mod roles;
+mod schema;
 
 #[cfg(test)]
 use roles::membership_drift;
 
 /// The version `03-database-objects.sql` writes to
 /// `forge_audit.bootstrap_log`.
-pub const BOOTSTRAP_VERSION: i32 = 4;
+pub const BOOTSTRAP_VERSION: i32 = 8;
 
 /// The bootstrap files, in order (run by psql in production; by the test
 /// support in tests).
@@ -73,6 +74,9 @@ pub async fn check(db: &Db, privileged_members: &[PrivilegedMember]) -> Result<i
         objects::check_functions(&mut tx).await?;
         objects::check_settings(&mut tx).await?;
         acl::check_privileges(&mut tx).await?;
+        schema::check_schema_objects(&mut tx).await?;
+        schema::check_migration_records(&mut tx).await?;
+        schema::check_unexpected_ddl(&mut tx).await?;
         // Read-only: nothing to keep; ending it returns the connection clean.
         tx.rollback()
             .await

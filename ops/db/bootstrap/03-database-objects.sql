@@ -272,6 +272,8 @@ CREATE TABLE IF NOT EXISTS forge_audit.ddl_audit_ack (
 
 -- What DDL must not touch without a migration that names it (§3).
 -- Migrations (forge_owner) append rows for the objects they create.
+CREATE INDEX IF NOT EXISTS ddl_audit_ack_target ON forge_audit.ddl_audit_ack (ddl_audit_id);
+
 CREATE TABLE IF NOT EXISTS forge_audit.guarded_objects (
     object_type text NOT NULL,
     object_identity text NOT NULL,
@@ -397,12 +399,59 @@ BEGIN
                     WHEN r.object_type = 'index' THEN
                         (SELECT indrelid::regclass::text FROM pg_catalog.pg_index
                          WHERE indexrelid = r.objid)
+                    WHEN r.classid = 'pg_catalog.pg_rewrite'::regclass THEN
+                        (SELECT ev_class::regclass::text FROM pg_catalog.pg_rewrite
+                         WHERE oid = r.objid)
+                    WHEN r.classid = 'pg_catalog.pg_policy'::regclass THEN
+                        (SELECT polrelid::regclass::text FROM pg_catalog.pg_policy
+                         WHERE oid = r.objid)
+                    -- A table that inherits from (or is a partition of) another:
+                    -- the change touches the parent.
+                    -- An inheriting table touches its parents; a sequence its
+                    -- owning (identity / serial) table.
+                    WHEN r.classid = 'pg_catalog.pg_class'::regclass THEN
+                        (SELECT pg_catalog.string_agg(x.parent, ',') FROM (
+                             SELECT i.inhparent::regclass::text AS parent
+                             FROM pg_catalog.pg_inherits AS i WHERE i.inhrelid = r.objid
+                             UNION
+                             SELECT dp.refobjid::regclass::text
+                             FROM pg_catalog.pg_depend AS dp
+                             WHERE dp.classid = 'pg_catalog.pg_class'::regclass
+                               AND dp.objid = r.objid
+                               AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                               AND dp.deptype IN ('a', 'i')) AS x)
                 END);
             n := n + 1;
         END LOOP;
     END IF;
     IF n > 0 THEN
         RAISE WARNING 'forge_audit.ddl_audit: % (% object(s)) recorded', TG_TAG, n;
+    END IF;
+    -- A guarded table never takes part in inheritance or partitioning: a
+    -- parent's triggers would run on its rows (and vanish on DETACH), a
+    -- child's rows would show through it. Rejected for everyone, here,
+    -- where forge_owner cannot remove the check.
+    IF TG_EVENT = 'ddl_command_end' AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_inherits AS i
+        JOIN forge_audit.guarded_objects AS g ON g.object_type = 'table'
+         AND g.object_identity IN (i.inhparent::regclass::text, i.inhrelid::regclass::text)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a guarded table cannot inherit, be inherited from or be a partition';
+    END IF;
+    -- Guarded tables are known by name: one that no longer resolves was
+    -- renamed, moved or dropped — refused, so no check loses track of it.
+    IF TG_EVENT = 'ddl_command_end' AND EXISTS (
+        SELECT 1 FROM forge_audit.guarded_objects AS g
+        WHERE g.object_type = 'table'
+          -- The catalog, not to_regclass: forge_audit has no USAGE on forge.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_catalog.pg_class AS c
+              JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+              WHERE pg_catalog.format('%I.%I', n.nspname, c.relname) = g.object_identity)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a guarded table cannot be renamed, moved to another schema or dropped';
     END IF;
 END
 $$;
@@ -452,6 +501,84 @@ $$;
 REVOKE ALL ON FUNCTION forge_audit.cluster_identity() FROM PUBLIC, forge_owner, forge_migrator, forge_seq,
     forge_purge, forge_app, forge_ro, forge_maint;
 GRANT EXECUTE ON FUNCTION forge_audit.cluster_identity() TO forge_app, forge_seq;
+
+-- ── DDL status (§3, decided at read time) ──────────────────────────────
+-- Owned by forge_audit (forge_owner cannot replace or drop it; doctor
+-- compares its body) and SECURITY INVOKER: the caller needs SELECT on the
+-- DDL log and on forge.audit_log (txid, action, details), which exists only
+-- after the first migration. A row is expected when its transaction is a
+-- bootstrap run, or a migration (a db.migrate row in forge.audit_log,
+-- forge_migrator, application_name forge-migrate) whose guarded_changes
+-- name the row's object if it is guarded: a trigger, rule, policy or
+-- constraint by its own name (forge.<table>.<name>), a function without
+-- its argument list, other objects by name or by their parent table.
+-- GRANT / REVOKE rows carry no object (PostgreSQL); doctor's privilege
+-- checks cover them, so inside a migration they count as expected.
+CREATE OR REPLACE FUNCTION forge_audit.ddl_audit_status()
+    RETURNS TABLE (id bigint, occurred_at timestamptz, txid xid8, session_user_name text,
+                   application_name text, command_tag text, object_type text,
+                   object_identity text, parent_identity text, expected boolean,
+                   acknowledged boolean)
+    LANGUAGE plpgsql
+    STABLE
+    SET search_path = pg_catalog, pg_temp
+AS $$
+#variable_conflict use_column
+BEGIN
+    RETURN QUERY
+    SELECT d.id, d.occurred_at, d.txid, d.session_user_name, d.application_name,
+           d.command_tag, d.object_type, d.object_identity, d.parent_identity,
+           (EXISTS (SELECT 1 FROM forge_audit.bootstrap_log AS b WHERE b.txid = d.txid)
+            OR (m.present
+                AND d.session_user_name = 'forge_migrator'
+                AND d.application_name = 'forge-migrate'
+                AND (NOT g.guarded OR m.changes ?| n.names))),
+           EXISTS (SELECT 1 FROM forge_audit.ddl_audit_ack AS a WHERE a.ddl_audit_id = d.id)
+    FROM forge_audit.ddl_audit AS d
+    -- parent_identity comes from the catalog (ddl_audit_record), never
+    -- from the object's name (a quoted name may contain " on ").
+    CROSS JOIN LATERAL (
+        SELECT d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
+                   AND d.parent_identity IS NOT NULL
+                   AND pg_catalog.right(d.object_identity,
+                           pg_catalog.length(' on ' || d.parent_identity))
+                       = ' on ' || d.parent_identity AS child
+    ) AS c
+    CROSS JOIN LATERAL (
+        SELECT EXISTS (
+            SELECT 1 FROM forge_audit.guarded_objects AS go
+            WHERE go.object_identity = d.object_identity
+               OR go.object_identity = ANY (pg_catalog.string_to_array(d.parent_identity, ','))
+        ) AS guarded
+    ) AS g
+    CROSS JOIN LATERAL (
+        SELECT pg_catalog.array_remove(ARRAY[
+            d.object_identity,
+            pg_catalog.regexp_replace(d.object_identity, '\(.*\)$', ''),
+            CASE WHEN c.child
+                 THEN d.parent_identity || '.' || pg_catalog.left(d.object_identity,
+                          pg_catalog.length(d.object_identity)
+                          - pg_catalog.length(' on ' || d.parent_identity))
+                 WHEN d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
+                 THEN NULL
+                 ELSE d.parent_identity END
+        ], NULL) AS names
+    ) AS n
+    CROSS JOIN LATERAL (
+        SELECT pg_catalog.count(al.txid) > 0 AS present,
+               coalesce(pg_catalog.jsonb_agg(e.value) FILTER (WHERE e.value IS NOT NULL),
+                        '[]'::jsonb) AS changes
+        FROM ONLY forge.audit_log AS al
+        LEFT JOIN LATERAL pg_catalog.jsonb_array_elements(
+            coalesce(al.details -> 'guarded_changes', '[]'::jsonb)) AS e ON true
+        WHERE al.txid = d.txid AND al.action = 'db.migrate'
+    ) AS m;
+END
+$$;
+ALTER FUNCTION forge_audit.ddl_audit_status() OWNER TO forge_audit;
+REVOKE ALL ON FUNCTION forge_audit.ddl_audit_status() FROM PUBLIC, forge_owner, forge_migrator,
+    forge_seq, forge_purge, forge_app, forge_ro, forge_maint;
+GRANT EXECUTE ON FUNCTION forge_audit.ddl_audit_status() TO forge_app, forge_ro, forge_maint;
 -- CREATE OR REPLACE keeps an existing owner: set it again.
 ALTER FUNCTION forge_audit.cluster_identity() OWNER TO CURRENT_USER;
 
@@ -474,7 +601,8 @@ BEGIN
         WHERE n.nspname = 'forge_audit'
           AND p.oid NOT IN ('forge_audit.reject_log_mutation()'::pg_catalog.regprocedure,
                             'forge_audit.ddl_audit_record()'::pg_catalog.regprocedure,
-                            'forge_audit.cluster_identity()'::pg_catalog.regprocedure)
+                            'forge_audit.cluster_identity()'::pg_catalog.regprocedure,
+                            'forge_audit.ddl_audit_status()'::pg_catalog.regprocedure)
     LOOP
         RAISE WARNING 'forge bootstrap: dropping unexpected function % in forge_audit', x.sig;
         EXECUTE format('DROP FUNCTION %s', x.sig);
@@ -492,6 +620,7 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('function', 'forge_audit.reject_log_mutation()'),
     ('function', 'forge_audit.ddl_audit_record()'),
     ('function', 'forge_audit.cluster_identity()'),
+    ('function', 'forge_audit.ddl_audit_status()'),
     ('event trigger', 'forge_ddl_audit_end'),
     ('event trigger', 'forge_ddl_audit_drop')
 ON CONFLICT DO NOTHING;
@@ -499,6 +628,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (4);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (8);
 
 COMMIT;

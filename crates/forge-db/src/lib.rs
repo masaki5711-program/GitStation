@@ -19,6 +19,8 @@ mod migrate;
 mod migrator;
 mod options;
 mod pool;
+#[cfg(test)]
+mod schema_tests;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

@@ -100,3 +100,16 @@ only); test migrators in `tests/fixtures/migrator/`. Migration tests each
 create a fresh database `forge_t_<uuid>` and drop it at the end.
 `forge db status --check` exits 1 with FG-DB-0004 when serve would refuse.
 Runbook: `ops/runbooks/db-migration.md`.
+
+**Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
+`forge.event_feed_state`, `forge.event_subscribers`,
+`forge.subscriber_dead_letters`, `forge.jobs`; the DDL-status decision is
+`forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
+(`guarded`, `kind`, `ro_columns`); rules for new migrations are in
+`migrations/README.md`. events / audit_log are append-only (per-table guard
+triggers, XF001 → FG-DB-0009): only forge_seq numbers rows, only forge_purge
+deletes (published rows past 7 / 365 days; never db.migrate rows) or
+redacts; event_feed_state only moves forward; forge_app cannot write the
+reserved audit actions (db.migrate, audit.*, feed.*, events.*). `bootstrap::check` also verifies their triggers, the
+exact privileges of every migrated table and unacknowledged unexpected DDL.
+Schema tests (`src/schema_tests.rs`) migrate a fresh database each.

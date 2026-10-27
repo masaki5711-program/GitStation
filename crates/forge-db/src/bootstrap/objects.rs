@@ -31,6 +31,7 @@ pub(super) const FUNCTIONS: &[(&str, bool)] = &[
     ("reject_log_mutation", false),
     ("ddl_audit_record", false),
     ("cluster_identity", true),
+    ("ddl_audit_status", false),
 ];
 
 pub(super) async fn check_version(conn: &mut PgConnection) -> Result<i32, ForgeError> {
@@ -188,7 +189,7 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
     // runs with the owner's rights.
     let rows: Vec<(String, String, bool, String, bool)> = sqlx::query_as(
         "SELECT p.proname::text, r.rolname::text, r.rolsuper, p.prosrc, \
-         coalesce(p.prosecdef = (p.proname <> 'reject_log_mutation') \
+         coalesce(p.prosecdef = (p.proname NOT IN ('reject_log_mutation', 'ddl_audit_status')) \
          AND p.proconfig = ARRAY['search_path=pg_catalog, pg_temp'] \
          AND p.prolang = (SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname = \
              CASE p.proname WHEN 'cluster_identity' THEN 'sql' ELSE 'plpgsql' END), false) \
@@ -232,7 +233,8 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
             return Err(guard_missing("function_body").with_context("function", name));
         }
     }
-    // EXECUTE: cluster_identity() for forge_app and forge_seq only; the
+    // EXECUTE: cluster_identity() for forge_app and forge_seq,
+    // ddl_audit_status() for forge_app, forge_ro and forge_maint; the
     // guard and DDL-log functions for no forge role.
     let grants: Vec<(String, String, bool)> = sqlx::query_as(
         "SELECT f::text, r::text, pg_catalog.has_function_privilege(r, \
@@ -253,8 +255,13 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
     .await
     .map_err(|e| read_query_error("bootstrap.function_privileges", e))?;
     for (function, role, granted) in &grants {
-        let expected =
-            function == "cluster_identity" && (role == "forge_app" || role == "forge_seq");
+        let expected = match function.as_str() {
+            "cluster_identity" => role == "forge_app" || role == "forge_seq",
+            "ddl_audit_status" => {
+                role == "forge_app" || role == "forge_ro" || role == "forge_maint"
+            }
+            _ => false,
+        };
         if *granted != expected {
             return Err(guard_missing("function_privilege")
                 .with_context("function", function)
