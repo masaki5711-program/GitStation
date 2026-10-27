@@ -139,7 +139,12 @@ pub(super) fn privileged_members(
             return Err(invalid(key, "invalid"));
         };
         let (role, member) = (role.trim(), member.trim());
-        if !PRIVILEGED_ROLES.contains(&role) || !is_role_name(member) {
+        // A bootstrap role is never an extra member (forge_audit, say, as a
+        // member of forge_purge could rewrite the audit log).
+        if !PRIVILEGED_ROLES.contains(&role)
+            || !is_role_name(member)
+            || member.starts_with("forge_")
+        {
             return Err(invalid(key, "invalid"));
         }
         if out.iter().any(|m| m.role == role && m.member == member) {

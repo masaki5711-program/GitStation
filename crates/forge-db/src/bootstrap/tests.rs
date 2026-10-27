@@ -161,11 +161,11 @@ async fn every_weakened_object_guard_is_reported() {
             "guard=log_triggers",
         ),
         (
-            "CREATE FUNCTION forge_audit.noop() RETURNS trigger LANGUAGE plpgsql \
+            "CREATE FUNCTION forge.noop() RETURNS trigger LANGUAGE plpgsql \
              AS $$ BEGIN RETURN NEW; END $$; \
              DROP TRIGGER ddl_audit_append_only ON forge_audit.ddl_audit; \
              CREATE TRIGGER ddl_audit_append_only BEFORE UPDATE OR DELETE ON forge_audit.ddl_audit \
-             FOR EACH ROW EXECUTE FUNCTION forge_audit.noop(); \
+             FOR EACH ROW EXECUTE FUNCTION forge.noop(); \
              ALTER TABLE forge_audit.ddl_audit ENABLE ALWAYS TRIGGER ddl_audit_append_only",
             "guard=log_triggers",
         ),
@@ -196,6 +196,46 @@ async fn every_weakened_object_guard_is_reported() {
             "ALTER TABLE forge_audit.guarded_objects OWNER TO forge_owner",
             "guard=object_owner",
         ),
+        (
+            "CREATE RULE r AS ON INSERT TO forge_audit.guarded_objects DO ALSO NOTIFY forge_t",
+            "guard=object_owner",
+        ),
+        (
+            "ALTER TABLE forge_audit.guarded_objects ENABLE ROW LEVEL SECURITY",
+            "guard=object_owner",
+        ),
+        (
+            "DROP TRIGGER ddl_audit_no_truncate ON forge_audit.ddl_audit",
+            "guard=log_triggers",
+        ),
+        (
+            "ALTER EVENT TRIGGER forge_ddl_audit_drop DISABLE",
+            "guard=event_triggers",
+        ),
+        (
+            "DROP EVENT TRIGGER forge_ddl_audit_drop; CREATE EVENT TRIGGER forge_ddl_audit_drop ON sql_drop WHEN TAG IN ('DROP TABLE') EXECUTE FUNCTION forge_audit.ddl_audit_record()",
+            "guard=event_triggers",
+        ),
+        (
+            "CREATE EVENT TRIGGER forge_t_extra ON ddl_command_start EXECUTE FUNCTION forge_audit.ddl_audit_record()",
+            "guard=event_triggers",
+        ),
+        (
+            "ALTER FUNCTION forge_audit.cluster_identity() OWNER TO forge_audit",
+            "guard=function_owner",
+        ),
+        (
+            "CREATE FUNCTION forge_audit.cluster_identity(i int) RETURNS int LANGUAGE sql AS 'select 1'",
+            "guard=function_owner",
+        ),
+        (
+            "REVOKE EXECUTE ON FUNCTION forge_audit.cluster_identity() FROM forge_app",
+            "guard=function_privilege",
+        ),
+        (
+            "GRANT EXECUTE ON FUNCTION forge_audit.ddl_audit_record() TO forge_app",
+            "guard=function_privilege",
+        ),
     ] {
         let t = FreshDb::new().await;
         exec(&mut t.superuser().await, tamper).await;
@@ -212,35 +252,62 @@ async fn every_weakened_object_guard_is_reported() {
     }
 }
 
+/// Each cluster-wide tampering, its undo (run even when the test panics)
+/// and the guard doctor reports.
 #[tokio::test]
 async fn an_elevated_role_or_an_extra_role_of_a_login_is_reported() {
     let _lock = ClusterLock::exclusive().await;
     let t = FreshDb::new().await;
-    let mut su = superuser(&maintenance_db()).await;
-    for (tamper, restore, guard) in [
+    let hop = format!("forge_t_hop_{}", uuid::Uuid::new_v4().simple());
+    let cases: Vec<(String, String, &str)> = vec![
         (
-            "ALTER ROLE forge_maint CREATEDB",
-            "ALTER ROLE forge_maint NOCREATEDB",
+            "ALTER ROLE forge_maint CREATEDB".into(),
+            "ALTER ROLE forge_maint NOCREATEDB".into(),
             "guard=role_attributes",
         ),
         (
-            "GRANT pg_write_all_data TO forge_maint",
-            "REVOKE pg_write_all_data FROM forge_maint",
+            "ALTER ROLE forge_ro BYPASSRLS".into(),
+            "ALTER ROLE forge_ro NOBYPASSRLS".into(),
+            "guard=role_attributes",
+        ),
+        (
+            "ALTER ROLE forge_owner LOGIN".into(),
+            "ALTER ROLE forge_owner NOLOGIN".into(),
+            "guard=role_attributes",
+        ),
+        (
+            "GRANT pg_write_all_data TO forge_maint".into(),
+            "REVOKE pg_write_all_data FROM forge_maint".into(),
             "guard=role_separation",
         ),
         (
-            "GRANT forge_seq TO forge_maint",
-            "REVOKE forge_seq FROM forge_maint",
+            "GRANT forge_seq TO forge_maint".into(),
+            "REVOKE forge_seq FROM forge_maint".into(),
             "guard=role_separation",
         ),
-    ] {
-        exec(&mut su, tamper).await;
-        let result = check(&t.db, &[]).await;
-        exec(&mut su, restore).await;
-        let text = result.expect_err(tamper).to_string();
+        // Through an intermediate role: forge_maint -> hop -> forge_purge (forge_app is left alone:
+        // the other tests keep connecting as it).
+        (
+            format!(
+                "CREATE ROLE \"{hop}\" NOLOGIN; GRANT forge_purge TO \"{hop}\"; \
+                 GRANT \"{hop}\" TO forge_maint"
+            ),
+            format!("DROP ROLE IF EXISTS \"{hop}\""),
+            "guard=role_separation",
+        ),
+        (
+            "GRANT forge_owner TO forge_migrator WITH ADMIN OPTION".into(),
+            "REVOKE ADMIN OPTION FOR forge_owner FROM forge_migrator".into(),
+            "reason=role_membership_changed",
+        ),
+    ];
+    for (tamper, undo, guard) in &cases {
+        let _undo = Restore(vec![undo.clone()]); // clone: the guard owns its SQL
+        exec(&mut superuser(&maintenance_db()).await, tamper).await;
+        let text = check(&t.db, &[]).await.expect_err(tamper).to_string();
         assert!(text.contains(guard), "{tamper}\n=> {text}");
     }
-    check(&t.db, &[]).await.expect("restored");
+    check(&t.db, &[]).await.expect("every change undone");
     t.drop_now().await;
 }
 
@@ -249,58 +316,68 @@ async fn an_unlisted_privileged_member_is_role_membership_changed() {
     let _lock = ClusterLock::exclusive().await;
     let t = FreshDb::new().await;
     let role = format!("forge_t_dba_{}", uuid::Uuid::new_v4().simple());
+    let _undo = Restore(vec![format!("DROP ROLE IF EXISTS \"{role}\"")]);
     let mut su = superuser(&maintenance_db()).await;
     exec(
         &mut su,
         &format!("CREATE ROLE \"{role}\" NOLOGIN; GRANT forge_owner TO \"{role}\""),
     )
     .await;
-    let unlisted = check(&t.db, &[]).await;
     let member = |r: &str| PrivilegedMember {
         role: r.to_owned(),
         member: role.clone(),
     };
-    let listed = check(&t.db, &[member("forge_owner")]).await;
-    let wrong_role = check(&t.db, &[member("forge_seq")]).await;
-    exec(&mut su, &format!("DROP ROLE \"{role}\"")).await;
-    let missing = check(&t.db, &[member("forge_owner")]).await;
-
-    let text = unlisted.expect_err("unlisted").to_string();
+    let text = check(&t.db, &[]).await.expect_err("unlisted").to_string();
     assert!(text.contains("reason=role_membership_changed"), "{text}");
-    listed.expect("listed member is allowed");
-    assert!(
-        wrong_role
-            .expect_err("listed for another role")
-            .to_string()
-            .contains("role_membership_changed"),
-        "membership is per role"
-    );
-    assert!(missing
+    check(&t.db, &[member("forge_owner")])
+        .await
+        .expect("listed member is allowed");
+    let text = check(&t.db, &[member("forge_seq")])
+        .await
+        .expect_err("listed for another role")
+        .to_string();
+    assert!(text.contains("role_membership_changed"), "per role: {text}");
+    exec(&mut su, &format!("DROP ROLE \"{role}\"")).await;
+    let text = check(&t.db, &[member("forge_owner")])
+        .await
         .expect_err("configured but absent")
-        .to_string()
-        .contains("role_membership_changed"));
+        .to_string();
+    assert!(text.contains("role_membership_changed"), "{text}");
     t.drop_now().await;
 }
 
 #[tokio::test]
 async fn a_role_not_created_by_the_bootstrap_stops_step_1() {
     let _lock = ClusterLock::exclusive().await;
+    let _undo = Restore(vec![
+        "COMMENT ON ROLE forge_ro IS 'forge bootstrap role'".to_owned()
+    ]);
     let mut su = superuser(&maintenance_db()).await;
     exec(&mut su, "COMMENT ON ROLE forge_ro IS NULL").await;
     let result = sqlx::raw_sql(&bootstrap_sql(0)).execute(&mut su).await;
-    // The failed run left its transaction open on that connection.
-    drop(su);
-    exec(
-        &mut superuser(&maintenance_db()).await,
-        "COMMENT ON ROLE forge_ro IS 'forge bootstrap role'",
-    )
-    .await;
     let err = result.expect_err("a foreign role is not adopted");
     assert!(
         err.to_string()
             .contains("was not created by the forge bootstrap"),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn a_stale_bootstrap_version_is_guard_missing() {
+    let _lock = ClusterLock::shared().await;
+    let t = FreshDb::new().await;
+    // A newer run records a higher version (rows are only ever appended).
+    t.exec_superuser("INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (999)")
+        .await;
+    let text = guard_error(&t, &[]).await;
+    assert!(text.contains("guard=bootstrap_version"), "{text}");
+    assert!(text.contains("found=999"), "{text}");
+    assert!(
+        text.contains(&format!("expected={BOOTSTRAP_VERSION}")),
+        "{text}"
+    );
+    t.drop_now().await;
 }
 
 #[tokio::test]
@@ -416,5 +493,96 @@ async fn too_many_connections_for_the_server_is_connection_budget() {
         .await
         .expect("defaults fit");
     assert_eq!(ok.needed, 43);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn audit_schema_changes_fail_or_are_reported() {
+    let _lock = ClusterLock::shared().await;
+    let t = FreshDb::new().await;
+    // Moving the schema away from forge_audit breaks the DDL log's own
+    // write, so the change itself fails.
+    let err = sqlx::raw_sql("ALTER SCHEMA forge_audit OWNER TO forge_owner")
+        .execute(&mut t.superuser().await)
+        .await
+        .expect_err("the DDL log cannot write any more");
+    assert!(err.to_string().contains("permission denied"), "{err}");
+    // forge_owner does not own the database: no extension, no schema, no
+    // database defaults.
+    let mut mc = crate::Db::connect_migrator(&t.migrate_config(&[]).db)
+        .await
+        .expect("migrator (forge_owner)");
+    for sql in [
+        "CREATE EXTENSION citext SCHEMA forge_audit".to_owned(),
+        "CREATE SCHEMA forge_dev".to_owned(),
+        "CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS 'select 1'".to_owned(),
+        format!("ALTER DATABASE \"{}\" SET role = forge_owner", t.name),
+    ] {
+        let err = sqlx::raw_sql(&sql)
+            .execute(&mut mc.conn)
+            .await
+            .expect_err(&sql);
+        let state = err.as_database_error().and_then(|d| d.code());
+        assert_eq!(state.as_deref(), Some("42501"), "{sql}: {err}");
+    }
+    mc.close().await;
+    // An extension a superuser installs there is reported.
+    t.exec_superuser("CREATE EXTENSION citext SCHEMA forge_audit")
+        .await;
+    let text = guard_error(&t, &[]).await;
+    assert!(text.contains("guard=function_owner"), "{text}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn database_session_defaults_are_reported_and_reset() {
+    let _lock = ClusterLock::shared().await;
+    let t = FreshDb::new().await;
+    t.exec_superuser(&format!(
+        "ALTER DATABASE \"{}\" SET search_path = public",
+        t.name
+    ))
+    .await;
+    let text = guard_error(&t, &[]).await;
+    assert!(text.contains("guard=db_settings"), "{text}");
+    exec(&mut t.superuser().await, &bootstrap_sql(2)).await;
+    check(&t.db, &[])
+        .await
+        .expect("03 resets the database defaults");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn overloads_planted_in_forge_do_not_fool_the_checks() {
+    let _lock = ClusterLock::shared().await;
+    let t = FreshDb::new().await;
+    // forge_owner (forge is on the read pool's search_path) plants an
+    // always-true equality and an empty unnest, then a superuser re-points
+    // a guard trigger.
+    let mut mc = crate::Db::connect_migrator(&t.migrate_config(&[]).db)
+        .await
+        .expect("migrator (forge_owner)");
+    exec(
+        &mut mc.conn,
+        "CREATE FUNCTION forge.eq(oid, regprocedure) RETURNS boolean LANGUAGE sql \
+         AS 'select true'; \
+         CREATE OPERATOR forge.= (LEFTARG = oid, RIGHTARG = regprocedure, FUNCTION = forge.eq); \
+         CREATE FUNCTION forge.unnest(text[]) RETURNS SETOF text LANGUAGE sql \
+         AS 'select null::text where false'; \
+         GRANT EXECUTE ON FUNCTION forge.eq(oid, regprocedure), forge.unnest(text[]) TO PUBLIC",
+    )
+    .await;
+    mc.close().await;
+    t.exec_superuser(
+        "CREATE FUNCTION forge.noop() RETURNS trigger LANGUAGE plpgsql \
+         AS $$ BEGIN RETURN NEW; END $$; \
+         DROP TRIGGER ddl_audit_append_only ON forge_audit.ddl_audit; \
+         CREATE TRIGGER ddl_audit_append_only BEFORE UPDATE OR DELETE ON forge_audit.ddl_audit \
+         FOR EACH ROW EXECUTE FUNCTION forge.noop(); \
+         ALTER TABLE forge_audit.ddl_audit ENABLE ALWAYS TRIGGER ddl_audit_append_only",
+    )
+    .await;
+    let text = guard_error(&t, &[]).await;
+    assert!(text.contains("guard=log_triggers"), "{text}");
     t.drop_now().await;
 }

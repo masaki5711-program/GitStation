@@ -63,10 +63,13 @@ async fn status_is_read_only() {
     let t = FreshDb::new().await;
     let st = status(&t.db, &fixture("v1").await).await.expect("status");
     assert_eq!(st.pending, vec![20261026000001, 20261026000002]);
-    assert!(
-        !table_exists(&t.db, "_sqlx_migrations").await,
-        "status must not create the bookkeeping table"
-    );
+    // The bootstrap created the (empty) bookkeeping table; status records
+    // nothing in it.
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM forge._sqlx_migrations")
+        .fetch_one(t.db.pool().executor())
+        .await
+        .expect("count");
+    assert_eq!(rows, 0, "status must not record anything");
     t.drop_now().await;
 }
 
@@ -139,7 +142,7 @@ async fn a_dirty_record_is_schema_incompatible() {
     let t = FreshDb::new().await;
     let v1 = fixture("v1").await;
     run(&t, &v1, LONG).await.expect("v1");
-    sqlx::query("UPDATE _sqlx_migrations SET success = false WHERE version = 20261026000002")
+    sqlx::query("UPDATE forge._sqlx_migrations SET success = false WHERE version = 20261026000002")
         .execute(&mut t.superuser().await)
         .await
         .expect("mark dirty");

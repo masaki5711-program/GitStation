@@ -655,6 +655,7 @@ fn privileged_members_are_role_member_pairs() {
         ("forge_owner:a;drop", "invalid"),
         ("forge_owner:ok,", "invalid"),
         ("forge_owner:x,forge_owner:x", "duplicate"),
+        ("forge_purge:forge_audit", "invalid"),
     ] {
         let err =
             load(None, &env(&[("FORGE_DATABASE_PRIVILEGED_MEMBERS", value)])).expect_err(value);

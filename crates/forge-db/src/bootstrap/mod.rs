@@ -11,6 +11,7 @@
 
 use forge_core::config::{DatabaseConfig, PrivilegedMember};
 use forge_errors::{ErrorCode, ForgeError};
+use sqlx::Connection as _;
 
 use crate::{read_query_error, Db};
 
@@ -22,7 +23,7 @@ use roles::membership_drift;
 
 /// The version `03-database-objects.sql` writes to
 /// `forge_audit.bootstrap_log`.
-pub const BOOTSTRAP_VERSION: i32 = 2;
+pub const BOOTSTRAP_VERSION: i32 = 3;
 
 /// The bootstrap files, in order (run by psql in production; by the test
 /// support in tests).
@@ -52,12 +53,28 @@ pub(crate) fn guard_missing(guard: &'static str) -> ForgeError {
 pub async fn check(db: &Db, privileged_members: &[PrivilegedMember]) -> Result<i32, ForgeError> {
     db.within("bootstrap.check", async {
         let mut conn = db.acquire().await?;
-        let version = objects::check_version(&mut conn).await?;
-        roles::check_roles(&mut conn).await?;
-        roles::check_memberships(&mut conn, privileged_members).await?;
-        objects::check_owners(&mut conn).await?;
-        objects::check_triggers(&mut conn).await?;
-        objects::check_functions(&mut conn).await?;
+        // Names resolve in pg_catalog only: forge (search_path of the read
+        // pool) belongs to forge_owner, which could plant a better-matching
+        // function or operator that makes a check pass.
+        let mut tx = conn
+            .begin()
+            .await
+            .map_err(|e| read_query_error("bootstrap.begin", e))?;
+        sqlx::query("SET LOCAL search_path = pg_catalog, pg_temp")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| read_query_error("bootstrap.search_path", e))?;
+        let version = objects::check_version(&mut tx).await?;
+        roles::check_roles(&mut tx).await?;
+        roles::check_memberships(&mut tx, privileged_members).await?;
+        objects::check_owners(&mut tx).await?;
+        objects::check_triggers(&mut tx).await?;
+        objects::check_functions(&mut tx).await?;
+        objects::check_settings(&mut tx).await?;
+        // Read-only: nothing to keep; ending it returns the connection clean.
+        tx.rollback()
+            .await
+            .map_err(|e| read_query_error("bootstrap.end", e))?;
         Ok(version)
     })
     .await

@@ -25,7 +25,8 @@ ADR-0018 §1 の導入の手順です。新しい DB のサーバーに GitStati
 
 ## Mitigate
 
-導入のファイルは `Git/ops/db/bootstrap/` にあり、**superuser** で `psql` から順に実行する。各ファイルは最初の誤りで止まる
+導入のファイルは `Git/ops/db/bootstrap/` にあり、**superuser** で `psql` から順に実行する（DB の所有者もその superuser になる。`forge_owner` は DB を所有しない）。
+手作業で superuser のセッションを開くときは、最初に `SET search_path = pg_catalog, pg_temp;` を実行する。各ファイルは最初の誤りで止まる
 （`\set ON_ERROR_STOP on`）。01 と 03 は何度実行してもよく、03 は保護の仕組みを出荷した状態に作り直す。
 
 1. クラスターのロールを作る。`[MUTATING — needs approval]`

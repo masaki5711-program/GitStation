@@ -100,21 +100,21 @@ pub async fn status(db: &Db, migrator: &Migrator) -> Result<SchemaStatus, ForgeE
     .await
 }
 
-/// The bookkeeping lives in `public` (search_path of forge_migrator, set
-/// by the bootstrap); the reads name it explicitly.
+/// The bookkeeping is `forge._sqlx_migrations` (created by the bootstrap;
+/// forge is the search_path of forge_migrator); the reads name it.
 async fn status_on(
     conn: &mut PgConnection,
     migrator: &Migrator,
     map: fn(&'static str, sqlx::Error) -> ForgeError,
 ) -> Result<SchemaStatus, ForgeError> {
     let table: Option<String> =
-        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations')::text")
+        sqlx::query_scalar("SELECT to_regclass('forge._sqlx_migrations')::text")
             .fetch_one(&mut *conn)
             .await
             .map_err(|e| map("migrate.table_exists", e))?;
     let recorded: Vec<(i64, Vec<u8>, bool)> = match table {
         Some(_) => sqlx::query_as(
-            "SELECT version, checksum, success FROM public._sqlx_migrations ORDER BY version",
+            "SELECT version, checksum, success FROM forge._sqlx_migrations ORDER BY version",
         )
         .fetch_all(&mut *conn)
         .await

@@ -20,8 +20,9 @@ const ROLES: &[(&str, bool)] = &[
     ("forge_audit", false),
 ];
 
-/// The roles that may change guarded objects.
-const PRIVILEGED: &[&str] = &["forge_owner", "forge_seq", "forge_purge"];
+/// The roles that may change guarded objects or the audit log; neither
+/// the application nor the maintenance login may reach one.
+const PRIVILEGED: &[&str] = &["forge_owner", "forge_seq", "forge_purge", "forge_audit"];
 
 /// The logins: they may hold no role beyond their fixed memberships (no
 /// predefined role such as pg_write_all_data either).

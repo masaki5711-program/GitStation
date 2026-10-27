@@ -59,6 +59,27 @@ pub(super) async fn check_version(conn: &mut PgConnection) -> Result<i32, ForgeE
 /// lower role can become may attach code to what the superuser-owned event
 /// triggers write to); no rules or row policies on them.
 pub(super) async fn check_owners(conn: &mut PgConnection) -> Result<(), ForgeError> {
+    // The database and public belong to a superuser, not forge_owner (the
+    // database owner owns public, creates schemas and sets session
+    // defaults for every login).
+    let (db_super, public_super): (bool, bool) = sqlx::query_as(
+        "SELECT (SELECT r.rolsuper FROM pg_catalog.pg_database d \
+                 JOIN pg_catalog.pg_roles r ON r.oid = d.datdba \
+                 WHERE d.datname = pg_catalog.current_database()), \
+                coalesce((SELECT r.rolsuper OR r.rolname = 'pg_database_owner' \
+                          FROM pg_catalog.pg_namespace n \
+                          JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner \
+                          WHERE n.nspname = 'public'), true)",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| read_query_error("bootstrap.database_owner", e))?;
+    if !db_super {
+        return Err(guard_missing("object_owner").with_context("object", "database"));
+    }
+    if !public_super {
+        return Err(guard_missing("object_owner").with_context("object", "schema public"));
+    }
     let schema_owner: Option<String> = sqlx::query_scalar(
         "SELECT pg_catalog.pg_get_userbyid(nspowner)::text FROM pg_catalog.pg_namespace \
          WHERE nspname = 'forge_audit'",
@@ -71,7 +92,8 @@ pub(super) async fn check_owners(conn: &mut PgConnection) -> Result<(), ForgeErr
     }
     let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
         "SELECT c.relname::text, pg_catalog.pg_get_userbyid(c.relowner)::text, \
-         c.relhasrules, c.relrowsecurity \
+         EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite rw WHERE rw.ev_class = c.oid), \
+         c.relrowsecurity OR c.relforcerowsecurity \
          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = 'forge_audit' AND c.relname = ANY($1)",
     )
@@ -144,9 +166,19 @@ pub(super) async fn check_triggers(conn: &mut PgConnection) -> Result<(), ForgeE
             return Err(guard_missing("event_triggers").with_context("trigger", name));
         }
     }
+    // No other event trigger in this database: it would run on every DDL.
+    if let Some((extra, ..)) = events
+        .iter()
+        .find(|(n, ..)| !EVENT_TRIGGERS.iter().any(|(name, _)| name == n))
+    {
+        return Err(guard_missing("event_triggers").with_context("trigger", extra));
+    }
     Ok(())
 }
 
+/// Schema forge_audit holds exactly the shipped functions and no
+/// extension (a trusted extension can be installed into a schema without
+/// CREATE on it — by forge_owner, the database owner).
 pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), ForgeError> {
     let names: Vec<&str> = FUNCTIONS.iter().map(|(n, _)| *n).collect();
     let rows: Vec<(String, String, bool, String)> = sqlx::query_as(
@@ -154,12 +186,25 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
          FROM pg_catalog.pg_proc p \
          JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
          JOIN pg_catalog.pg_roles r ON r.oid = p.proowner \
-         WHERE n.nspname = 'forge_audit' AND p.proname = ANY($1)",
+         WHERE n.nspname = 'forge_audit'",
     )
-    .bind(&names)
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.functions", e))?;
+    if let Some((extra, ..)) = rows.iter().find(|(n, ..)| !names.contains(&n.as_str())) {
+        return Err(guard_missing("function_owner").with_context("function", extra));
+    }
+    let extension: Option<String> = sqlx::query_scalar(
+        "SELECT e.extname::text FROM pg_catalog.pg_extension e \
+         JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace \
+         WHERE n.nspname = 'forge_audit' LIMIT 1",
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| read_query_error("bootstrap.extensions", e))?;
+    if let Some(extension) = extension {
+        return Err(guard_missing("object_owner").with_context("object", extension));
+    }
     for (name, superuser_owned) in FUNCTIONS {
         let found: Vec<_> = rows.iter().filter(|(n, _, _, _)| n == name).collect();
         // Missing or overloaded.
@@ -178,26 +223,62 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
             return Err(guard_missing("function_body").with_context("function", name));
         }
     }
-    let grants: Vec<(String, bool)> = sqlx::query_as(
-        "SELECT r::text, pg_catalog.has_function_privilege(r, \
-         'forge_audit.cluster_identity()', 'EXECUTE') FROM unnest($1::text[]) AS r",
+    // EXECUTE: cluster_identity() for forge_app and forge_seq only; the
+    // guard and DDL-log functions for no forge role.
+    let grants: Vec<(String, String, bool)> = sqlx::query_as(
+        "SELECT f::text, r::text, pg_catalog.has_function_privilege(r, \
+         'forge_audit.' || f || '()', 'EXECUTE') \
+         FROM unnest($1::text[]) AS f, unnest($2::text[]) AS r",
     )
+    .bind(&names)
     .bind([
         "forge_app",
         "forge_seq",
+        "forge_purge",
         "forge_maint",
         "forge_ro",
         "forge_owner",
+        "forge_migrator",
     ])
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.function_privileges", e))?;
-    for (role, granted) in &grants {
-        let expected = role == "forge_app" || role == "forge_seq";
+    for (function, role, granted) in &grants {
+        let expected =
+            function == "cluster_identity" && (role == "forge_app" || role == "forge_seq");
         if *granted != expected {
             return Err(guard_missing("function_privilege")
-                .with_context("function", "cluster_identity")
+                .with_context("function", function)
                 .with_context("role", role));
+        }
+    }
+    Ok(())
+}
+
+/// The search_path settings of step 3 per login, and nothing else: the
+/// database owner (forge_owner) can `ALTER DATABASE … SET` defaults such as
+/// `role` or `default_transaction_read_only` for every session.
+pub(super) async fn check_settings(conn: &mut PgConnection) -> Result<(), ForgeError> {
+    let rows: Vec<(String, Vec<String>)> = sqlx::query_as(
+        "SELECT coalesce(r.rolname::text, '*'), s.setconfig::text[] \
+         FROM pg_catalog.pg_db_role_setting s \
+         JOIN pg_catalog.pg_database d ON d.oid = s.setdatabase \
+         LEFT JOIN pg_catalog.pg_roles r ON r.oid = s.setrole \
+         WHERE d.datname = pg_catalog.current_database()",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| read_query_error("bootstrap.db_settings", e))?;
+    for (role, settings) in &rows {
+        let expected = match role.as_str() {
+            "forge_app" => Some("search_path=forge, public"),
+            "forge_maint" => Some("search_path=pg_catalog, pg_temp"),
+            "forge_migrator" => Some("search_path=forge"),
+            _ => None,
+        };
+        let ok = matches!((expected, settings.as_slice()), (Some(e), [only]) if only == e);
+        if !ok {
+            return Err(guard_missing("db_settings").with_context("role", role));
         }
     }
     Ok(())

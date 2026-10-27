@@ -138,12 +138,18 @@ static CLUSTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
 /// Step 1 and the synthetic passwords, once per process. Other test
 /// processes may run it at the same time: both statements serialize on
-/// the advisory lock of step 1 (the same maintenance database).
+/// the advisory lock of step 1 (the same maintenance database). It holds
+/// the cluster lock shared, so it never runs while a test changes a role.
 pub async fn ensure_cluster() {
     CLUSTER
         .get_or_init(|| async {
             refuse_remote_cluster();
             let mut admin = superuser(&maintenance_db()).await;
+            sqlx::query("SELECT pg_advisory_lock_shared(hashtext($1))")
+                .bind(ClusterLock::KEY)
+                .execute(&mut admin)
+                .await
+                .expect("cluster lock (shared)");
             sqlx::raw_sql(&bootstrap_sql(0))
                 .execute(&mut admin)
                 .await
@@ -159,7 +165,7 @@ pub async fn ensure_cluster() {
             .execute(&mut admin)
             .await
             .expect("set synthetic passwords");
-            // Dropping the connection closes it; nothing else to wait for.
+            // Closing the connection releases the lock.
             drop(admin);
         })
         .await;
@@ -190,13 +196,23 @@ async fn ensure_shared() {
                 .execute(&mut admin)
                 .await
                 .expect("shared db lock");
-            let exists: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
-                    .bind(SHARED_DB)
-                    .fetch_one(&mut admin)
+            // None, or the owner is (not) a superuser: one created by an
+            // older bootstrap is recreated.
+            let owner_is_superuser: Option<bool> = sqlx::query_scalar(
+                "SELECT r.rolsuper FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba \
+                 WHERE d.datname = $1",
+            )
+            .bind(SHARED_DB)
+            .fetch_optional(&mut admin)
+            .await
+            .expect("shared db owner");
+            if owner_is_superuser == Some(false) {
+                sqlx::query(&format!("DROP DATABASE \"{SHARED_DB}\" WITH (FORCE)"))
+                    .execute(&mut admin)
                     .await
-                    .expect("shared db exists?");
-            if !exists {
+                    .expect("drop outdated shared db");
+            }
+            if owner_is_superuser != Some(true) {
                 let create = bootstrap_sql(1).replace(":\"dbname\"", &format!("\"{SHARED_DB}\""));
                 sqlx::raw_sql(&create)
                     .execute(&mut admin)
@@ -225,6 +241,36 @@ pub async fn dev_db(extra: &[(&str, &str)]) -> (Db, TestConfig) {
     match Db::connect(&cfg.db).await {
         Ok(db) => (db, cfg),
         Err(e) => panic!("{HINT}\n{e}"),
+    }
+}
+
+/// SQL run on the maintenance database when this value is dropped — also
+/// when the test panics — to undo a cluster-wide change. Runs on its own
+/// thread and runtime (Drop cannot await).
+pub struct Restore(pub Vec<String>);
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let statements = std::mem::take(&mut self.0);
+        let worker = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("restore runtime");
+            rt.block_on(async {
+                let mut conn = superuser(&maintenance_db()).await;
+                for sql in &statements {
+                    if let Err(e) = sqlx::raw_sql(sql).execute(&mut conn).await {
+                        // Reported, not panicked: a panic in Drop during an
+                        // unwind would abort the test binary.
+                        eprintln!("restore failed: {sql}: {e}");
+                    }
+                }
+            });
+        });
+        if worker.join().is_err() {
+            eprintln!("restore thread panicked");
+        }
     }
 }
 

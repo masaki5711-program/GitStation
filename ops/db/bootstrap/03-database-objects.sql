@@ -18,14 +18,24 @@
 --   schema);
 -- - cluster_identity() and the event triggers belong to the superuser
 --   running this file (pg_control_* and event triggers need one);
--- - schema forge belongs to forge_owner (migrations create objects there).
--- The session resolves names in pg_catalog only (public belongs to the
--- database owner, forge_owner, and could hold a better-matching overload).
+-- - schema forge belongs to forge_owner (migrations create objects there,
+--   and the migration bookkeeping forge._sqlx_migrations lives there);
+-- - the database and schema public belong to the superuser: forge_owner
+--   cannot create schemas, write public, install extensions or set session
+--   defaults for the database, so it cannot plant code that a superuser
+--   session would resolve.
+-- The session resolves names in pg_catalog only and runs without timeouts
+-- or role switches a database default could impose.
 \set ON_ERROR_STOP on
 
 BEGIN;
 
+-- The database owner can set session defaults for this database (role,
+-- search_path, read-only): undo them for this session first.
+SET LOCAL ROLE NONE;
 SET LOCAL search_path = pg_catalog, pg_temp;
+SET LOCAL statement_timeout = 0;
+SET LOCAL lock_timeout = 0;
 
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('forge.bootstrap.database_objects'));
 
@@ -40,40 +50,60 @@ BEGIN
         RAISE EXCEPTION 'schema forge_audit exists and is owned by %, not forge_audit',
             schema_owner;
     END IF;
-    SELECT pg_catalog.pg_get_userbyid(datdba) INTO owner
-    FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database();
-    IF owner <> 'forge_owner' THEN
-        RAISE EXCEPTION 'database % is owned by %, not forge_owner (run 02 first)',
-            pg_catalog.current_database(), owner;
+    IF current_user <> session_user OR NOT (SELECT rolsuper FROM pg_catalog.pg_roles
+                                             WHERE rolname = current_user) THEN
+        RAISE EXCEPTION 'run 03 as a superuser without SET ROLE (current_user %)', current_user;
     END IF;
+    SELECT r.rolname INTO owner
+    FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
+    WHERE d.datname = pg_catalog.current_database() AND r.rolsuper;
+    IF owner IS NULL THEN
+        RAISE EXCEPTION 'database % must be owned by a superuser (create it with 02)',
+            pg_catalog.current_database();
+    END IF;
+    -- Only the login search_paths below are set for this database.
+    EXECUTE format('ALTER DATABASE %I RESET ALL', pg_catalog.current_database());
+    EXECUTE format('ALTER ROLE forge_app IN DATABASE %I RESET ALL', pg_catalog.current_database());
+    EXECUTE format('ALTER ROLE forge_maint IN DATABASE %I RESET ALL', pg_catalog.current_database());
+    EXECUTE format('ALTER ROLE forge_migrator IN DATABASE %I RESET ALL',
+        pg_catalog.current_database());
     EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC', pg_catalog.current_database());
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO forge_app, forge_migrator, forge_maint',
         pg_catalog.current_database());
     EXECUTE format('ALTER ROLE forge_app IN DATABASE %I SET search_path = forge, public',
         pg_catalog.current_database());
-    EXECUTE format('ALTER ROLE forge_maint IN DATABASE %I SET search_path = forge, public',
+    -- Maintenance commands qualify every name; nothing writable is searched.
+    EXECUTE format('ALTER ROLE forge_maint IN DATABASE %I SET search_path = pg_catalog, pg_temp',
         pg_catalog.current_database());
-    -- _sqlx_migrations lives in public.
-    EXECUTE format('ALTER ROLE forge_migrator IN DATABASE %I SET search_path = public, forge',
+    -- Migrations create (unqualified) in forge, where _sqlx_migrations is.
+    EXECUTE format('ALTER ROLE forge_migrator IN DATABASE %I SET search_path = forge',
         pg_catalog.current_database());
 END
 $$;
 
+-- public belongs to the database owner (this superuser) and holds nothing.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
--- public holds only the migration bookkeeping (_sqlx_migrations, created by
--- forge_owner during forge db migrate); every application object is in
--- schema forge. The read pool must see what is applied (status,
--- check_schema): tables created later, and one that already exists when
--- this file is re-run.
-ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner IN SCHEMA public
-    GRANT SELECT ON TABLES TO forge_app, forge_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO forge_app, forge_ro;
 
 CREATE SCHEMA IF NOT EXISTS forge AUTHORIZATION forge_owner;
 REVOKE ALL ON SCHEMA forge FROM PUBLIC;
 GRANT USAGE ON SCHEMA forge TO forge_app, forge_ro, forge_maint, forge_seq, forge_purge;
 -- PostgreSQL requires CREATE on the schema to own functions in it.
 GRANT CREATE ON SCHEMA forge TO forge_seq, forge_purge;
+
+-- The migration bookkeeping, created here so that it exists before the
+-- first migration (the read pool reads it; its DDL is the bootstrap's).
+-- The definition is sqlx-postgres 0.8's (CREATE TABLE IF NOT EXISTS there
+-- then does nothing); a test runs real migrations against it.
+CREATE TABLE IF NOT EXISTS forge._sqlx_migrations (
+    version BIGINT PRIMARY KEY,
+    description TEXT NOT NULL,
+    installed_on TIMESTAMPTZ NOT NULL DEFAULT pg_catalog.now(),
+    success BOOLEAN NOT NULL,
+    checksum BYTEA NOT NULL,
+    execution_time BIGINT NOT NULL
+);
+ALTER TABLE forge._sqlx_migrations OWNER TO forge_owner;
+GRANT SELECT ON forge._sqlx_migrations TO forge_app, forge_ro;
 
 CREATE SCHEMA IF NOT EXISTS forge_audit AUTHORIZATION forge_audit;
 REVOKE ALL ON SCHEMA forge_audit FROM PUBLIC;
@@ -157,9 +187,20 @@ DO $$
 DECLARE
     t text;
     extra record;
+    rule record;
 BEGIN
     FOREACH t IN ARRAY ARRAY['bootstrap_log', 'ddl_audit', 'ddl_audit_ack', 'guarded_objects']
     LOOP
+        -- No rules or row security on a log table.
+        FOR rule IN
+            SELECT rw.rulename FROM pg_catalog.pg_rewrite rw
+            WHERE rw.ev_class = format('forge_audit.%I', t)::regclass
+        LOOP
+            RAISE WARNING 'forge bootstrap: dropping unexpected rule % on forge_audit.%',
+                rule.rulename, t;
+            EXECUTE format('DROP RULE %I ON forge_audit.%I', rule.rulename, t);
+        END LOOP;
+        EXECUTE format('ALTER TABLE forge_audit.%I DISABLE ROW LEVEL SECURITY, NO FORCE ROW LEVEL SECURITY', t);
         -- Only the shipped guard triggers may exist on a log table.
         FOR extra IN
             SELECT tg.tgname FROM pg_catalog.pg_trigger tg
@@ -243,7 +284,24 @@ ALTER FUNCTION forge_audit.ddl_audit_record() OWNER TO forge_audit;
 REVOKE ALL ON FUNCTION forge_audit.ddl_audit_record() FROM PUBLIC, forge_owner, forge_migrator, forge_seq,
     forge_purge, forge_app, forge_ro, forge_maint;
 
--- Recreated on every run (repairs a re-pointed or disabled trigger).
+-- Recreated on every run (repairs a re-pointed or disabled trigger); any
+-- other event trigger calling a forge_audit function is removed too.
+DO $$
+DECLARE
+    e record;
+BEGIN
+    FOR e IN
+        SELECT evt.evtname FROM pg_catalog.pg_event_trigger evt
+        JOIN pg_catalog.pg_proc fn ON fn.oid = evt.evtfoid
+        JOIN pg_catalog.pg_namespace ns ON ns.oid = fn.pronamespace
+        WHERE ns.nspname = 'forge_audit'
+          AND evt.evtname NOT IN ('forge_ddl_audit_end', 'forge_ddl_audit_drop')
+    LOOP
+        RAISE WARNING 'forge bootstrap: dropping unexpected event trigger %', e.evtname;
+        EXECUTE format('DROP EVENT TRIGGER %I', e.evtname);
+    END LOOP;
+END
+$$;
 DROP EVENT TRIGGER IF EXISTS forge_ddl_audit_end;
 DROP EVENT TRIGGER IF EXISTS forge_ddl_audit_drop;
 CREATE EVENT TRIGGER forge_ddl_audit_end ON ddl_command_end
@@ -268,6 +326,35 @@ $$;
 REVOKE ALL ON FUNCTION forge_audit.cluster_identity() FROM PUBLIC, forge_owner, forge_migrator, forge_seq,
     forge_purge, forge_app, forge_ro, forge_maint;
 GRANT EXECUTE ON FUNCTION forge_audit.cluster_identity() TO forge_app, forge_seq;
+-- CREATE OR REPLACE keeps an existing owner: set it again.
+ALTER FUNCTION forge_audit.cluster_identity() OWNER TO CURRENT_USER;
+
+-- Schema forge_audit holds only what this file creates.
+DO $$
+DECLARE
+    x record;
+BEGIN
+    FOR x IN
+        SELECT e.extname FROM pg_catalog.pg_extension e
+        JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+        WHERE n.nspname = 'forge_audit'
+    LOOP
+        RAISE WARNING 'forge bootstrap: dropping unexpected extension % in forge_audit', x.extname;
+        EXECUTE format('DROP EXTENSION %I', x.extname);
+    END LOOP;
+    FOR x IN
+        SELECT p.oid::pg_catalog.regprocedure AS sig FROM pg_catalog.pg_proc p
+        JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'forge_audit'
+          AND p.oid NOT IN ('forge_audit.reject_log_mutation()'::pg_catalog.regprocedure,
+                            'forge_audit.ddl_audit_record()'::pg_catalog.regprocedure,
+                            'forge_audit.cluster_identity()'::pg_catalog.regprocedure)
+    LOOP
+        RAISE WARNING 'forge bootstrap: dropping unexpected function % in forge_audit', x.sig;
+        EXECUTE format('DROP FUNCTION %s', x.sig);
+    END LOOP;
+END
+$$;
 
 -- ── Guarded objects created here ───────────────────────────────────────
 INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
@@ -285,6 +372,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (2);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (3);
 
 COMMIT;

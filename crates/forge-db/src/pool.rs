@@ -264,12 +264,22 @@ async fn probe_read(options: &PgConnectOptions, target: &str) -> Result<(), Forg
         }
         connect_error(target, e)
     })?;
+    // Resolve in pg_catalog only (forge, on the login's search_path, is
+    // writable by forge_owner).
+    if let Err(e) = sqlx::query("SET search_path = pg_catalog, pg_temp")
+        .execute(&mut conn)
+        .await
+    {
+        close_quietly(conn, target).await;
+        return Err(read_query_error("db.read_role", e));
+    }
     let row: Result<(String, String, bool, bool), _> = sqlx::query_as(
         "SELECT current_user::text, current_setting('transaction_read_only'), \
          r.rolsuper OR r.rolbypassrls, \
          coalesce((SELECT bool_or(pg_catalog.pg_has_role(session_user, p.oid, 'MEMBER')) \
                    FROM pg_catalog.pg_roles p \
-                   WHERE p.rolname IN ('forge_owner', 'forge_seq', 'forge_purge')), false) \
+                   WHERE p.rolname IN ('forge_owner', 'forge_seq', 'forge_purge', \
+                                       'forge_audit')), false) \
          FROM pg_catalog.pg_roles r WHERE r.rolname = session_user",
     )
     .fetch_one(&mut conn)
