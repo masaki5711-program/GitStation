@@ -26,11 +26,13 @@
      - `function_owner` / `function_body`: 保護の関数の所有者（`forge_audit`、`cluster_identity` は superuser）か本文が出荷したものと違う（`function`）
      - `function_privilege`: 保護の関数の EXECUTE が出荷した状態と違う（`cluster_identity()` は `forge_app`・`forge_seq` だけ、ほかの 2 つはどの forge のロールにもない。`function`・`role`）
      - `object_owner` で `object=database` / `schema public`: DB か `public` の所有者が superuser でない（`forge_owner` が DB を持つと、superuser のセッションに関数を仕掛けられる）。拡張の名前なら `forge_audit` に拡張がある
+     - `privileges`: DB・スキーマ（`public`・`forge`・`forge_audit`）・記録の表・`forge._sqlx_migrations` の権限、または `forge_owner`・`forge_seq`・`forge_purge` の既定の権限が出荷した状態と違う（`object`。見つかった権限の一覧はログの `grants`）。GRANT / REVOKE は DDL の記録に対象が残らないので、これが唯一の検出
      - `db_settings`: DB の既定のセッションの設定（`ALTER DATABASE … SET`、`role=*`）か、ログインの設定が導入の手順のもの（`search_path` の 3 行）と違う（`role`）
    - `reason=role_membership_changed`: ログの `unexpected`（決まったものでも `database.privileged_members` にもないメンバーの関係、または ADMIN OPTION 付き。`member->role`）と
      `missing`（あるはずのメンバーの関係）。
 2. 状態を確かめる（読み取りのみ。`forge_app` で接続してよい。superuser で接続するときは、最初に `SET search_path = pg_catalog, pg_temp;` を実行する）:
-   - トリガー: `SELECT c.relname, t.tgname, t.tgenabled, t.tgfoid::regprocedure FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'forge_audit' AND NOT t.tgisinternal;`
+   - トリガー: `SELECT c.relname, t.tgname, t.tgenabled, t.tgtype, t.tgfoid::regprocedure, t.tgattr, t.tgqual IS NOT NULL AS has_when FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'forge_audit' AND NOT t.tgisinternal;`
+   - 権限: `SELECT nspname, nspacl FROM pg_namespace WHERE nspname IN ('public', 'forge', 'forge_audit');`、`SELECT datacl FROM pg_database WHERE datname = current_database();`、`SELECT defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl FROM pg_default_acl;`
    - イベントトリガー: `SELECT evtname, evtevent, evtenabled, evtowner::regrole, evtfoid::regprocedure FROM pg_event_trigger;`
    - メンバーの関係: `SELECT m.rolname AS member, r.rolname AS role, am.admin_option FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member WHERE r.rolname LIKE 'forge\_%' OR m.rolname LIKE 'forge\_%';`
 3. いつ誰が変えたかを DDL の記録で確かめる:

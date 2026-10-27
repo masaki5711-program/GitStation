@@ -9,7 +9,7 @@ use super::guard_missing;
 use crate::read_query_error;
 
 /// Roles created by step 1 and whether they log in.
-const ROLES: &[(&str, bool)] = &[
+pub(super) const ROLES: &[(&str, bool)] = &[
     ("forge_owner", false),
     ("forge_migrator", true),
     ("forge_seq", false),

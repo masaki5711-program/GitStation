@@ -40,9 +40,13 @@ ADR-0018 §1 の導入の手順です。新しい DB のサーバーに GitStati
 3. DB を作る（新しい環境だけ。既にあれば止まる）。`[MUTATING — needs approval]`
    `psql -d postgres -v dbname=forge -f 02-create-database.sql`
    （ロールバック: 新しい環境なら `DROP DATABASE forge`。データが入った後は行わない）
-4. DB の中のオブジェクトを作る、または新しい版に更新する・保護の仕組みを直す。`[MUTATING — needs approval]`
+4. DB の中のオブジェクトを作る、または新しい版に更新する・保護の仕組みを直す。`forge db migrate` の実行中は行わない（ロックの待ちで片方が失敗する）。`[MUTATING — needs approval]`
    `psql -d forge -f 03-database-objects.sql`
-   （1 つのトランザクション。途中で失敗したら何も変わらない。外した余分なトリガーは警告に出る。ロールバック: 前の版のファイルを同じように実行する）
+   （1 つのトランザクション。途中で失敗したら何も変わらない。03 はすべての権限・既定の権限・セッションの既定の設定を出荷した状態に作り直す。外した余分なトリガー・関数・拡張・ルール・権限と、消したセッションの設定（運用者が設定した `log_min_duration_statement` なども消える）は警告に出るので、障害記録に残し、必要な設定は別の方法（`postgresql.conf`）で戻す。ロールバック: 前の版のファイルを同じように実行する）
+
+   **版 2 からの更新**（版 2 では DB の所有者が `forge_owner`、マイグレーションの記録が `public._sqlx_migrations`）: superuser で
+   `SET search_path = pg_catalog, pg_temp; ALTER DATABASE forge OWNER TO <superuser>; ALTER TABLE public._sqlx_migrations SET SCHEMA forge;` を実行してから 03 を実行する。`[MUTATING — needs approval]`
+   （ロールバック: `ALTER TABLE forge._sqlx_migrations SET SCHEMA public; ALTER DATABASE forge OWNER TO forge_owner;`）
 5. 設定を **ログインごとに別のファイル** に書く（`forge serve` は移行と保守のパスワードのファイルを持つ設定では起動しない — `reason=not_for_this_command`）。
    - `forge serve` / `forge doctor`: `database.url = postgres://forge_app@<host>:<port>/forge`、`database.password_file`
    - `forge db migrate`: 上に加えて `database.migrate_url = postgres://forge_migrator@<host>:<port>/forge`、`database.migrate_password_file`
@@ -60,5 +64,6 @@ ADR-0018 §1 の導入の手順です。新しい DB のサーバーに GitStati
 
 ## Escalate
 
-- 03 が `database … is owned by …, not forge_owner` か `schema forge_audit exists and is owned by …` で止まる: 02 で作っていない DB か、別のものが同じ名前を使っている。DB の担当者と確認する。
+- 03 が `database … must be owned by a superuser (create it with 02)` か `schema forge_audit exists and is owned by …` で止まる: 02 で作っていない DB か、別のものが同じ名前を使っている。DB の担当者と確認する（版 2 の DB は下の「版 2 からの更新」）。
+- 03 が `public._sqlx_migrations exists` で止まる: 版 2 の DB。下の「版 2 からの更新」。
 - superuser で実行できない環境（マネージドの DB など）: ADR-0018 の前提が崩れるので、設計の見直しとしてエスカレーションする。

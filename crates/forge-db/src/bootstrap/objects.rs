@@ -119,7 +119,9 @@ pub(super) async fn check_owners(conn: &mut PgConnection) -> Result<(), ForgeErr
 pub(super) async fn check_triggers(conn: &mut PgConnection) -> Result<(), ForgeError> {
     let rows: Vec<(String, String, String, i16, bool)> = sqlx::query_as(
         "SELECT c.relname::text, t.tgname::text, t.tgenabled::text, t.tgtype, \
-         t.tgfoid = 'forge_audit.reject_log_mutation()'::regprocedure \
+         (t.tgfoid = 'forge_audit.reject_log_mutation()'::regprocedure \
+          AND t.tgnargs = 0 AND t.tgqual IS NULL \
+          AND coalesce(pg_catalog.array_length(t.tgattr::int2[], 1), 0) = 0) \
          FROM pg_catalog.pg_trigger t \
          JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid \
          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
@@ -181,8 +183,15 @@ pub(super) async fn check_triggers(conn: &mut PgConnection) -> Result<(), ForgeE
 /// CREATE on it — by forge_owner, the database owner).
 pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), ForgeError> {
     let names: Vec<&str> = FUNCTIONS.iter().map(|(n, _)| *n).collect();
-    let rows: Vec<(String, String, bool, String)> = sqlx::query_as(
-        "SELECT p.proname::text, r.rolname::text, r.rolsuper, p.prosrc \
+    // Besides the body: SECURITY DEFINER (not for the trigger function),
+    // the pinned search_path and the language — any of them changes what
+    // runs with the owner's rights.
+    let rows: Vec<(String, String, bool, String, bool)> = sqlx::query_as(
+        "SELECT p.proname::text, r.rolname::text, r.rolsuper, p.prosrc, \
+         p.prosecdef = (p.proname <> 'reject_log_mutation') \
+         AND p.proconfig = ARRAY['search_path=pg_catalog, pg_temp'] \
+         AND p.prolang = (SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname = \
+             CASE p.proname WHEN 'cluster_identity' THEN 'sql' ELSE 'plpgsql' END) \
          FROM pg_catalog.pg_proc p \
          JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
          JOIN pg_catalog.pg_roles r ON r.oid = p.proowner \
@@ -206,9 +215,9 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
         return Err(guard_missing("object_owner").with_context("object", extension));
     }
     for (name, superuser_owned) in FUNCTIONS {
-        let found: Vec<_> = rows.iter().filter(|(n, _, _, _)| n == name).collect();
+        let found: Vec<_> = rows.iter().filter(|(n, ..)| n == name).collect();
         // Missing or overloaded.
-        let [(_, owner, superuser, body)] = found.as_slice() else {
+        let [(_, owner, superuser, body, shape)] = found.as_slice() else {
             return Err(guard_missing("function_owner").with_context("function", name));
         };
         let owner_ok = if *superuser_owned {
@@ -219,7 +228,7 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
         if !owner_ok {
             return Err(guard_missing("function_owner").with_context("function", name));
         }
-        if shipped_body(name).as_deref() != Some(body.as_str()) {
+        if !shape || shipped_body(name).as_deref() != Some(body.as_str()) {
             return Err(guard_missing("function_body").with_context("function", name));
         }
     }
@@ -255,21 +264,30 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
     Ok(())
 }
 
-/// The search_path settings of step 3 per login, and nothing else: the
-/// database owner (forge_owner) can `ALTER DATABASE … SET` defaults such as
-/// `role` or `default_transaction_read_only` for every session.
+/// The search_path settings of step 3 per login, and nothing else: session
+/// defaults (`role`, `default_transaction_read_only`, `statement_timeout`,
+/// …) for this database, or role-wide ones on a bootstrap role (a role may
+/// change its own), are reported. Step 3 removes them.
 pub(super) async fn check_settings(conn: &mut PgConnection) -> Result<(), ForgeError> {
-    let rows: Vec<(String, Vec<String>)> = sqlx::query_as(
-        "SELECT coalesce(r.rolname::text, '*'), s.setconfig::text[] \
+    let roles: Vec<&str> = super::roles::ROLES.iter().map(|(n, _)| *n).collect();
+    let rows: Vec<(String, bool, Vec<String>)> = sqlx::query_as(
+        "SELECT coalesce(r.rolname::text, '*'), s.setdatabase = 0, s.setconfig::text[] \
          FROM pg_catalog.pg_db_role_setting s \
-         JOIN pg_catalog.pg_database d ON d.oid = s.setdatabase \
          LEFT JOIN pg_catalog.pg_roles r ON r.oid = s.setrole \
-         WHERE d.datname = pg_catalog.current_database()",
+         WHERE s.setdatabase = (SELECT oid FROM pg_catalog.pg_database \
+                                WHERE datname = pg_catalog.current_database()) \
+            OR (s.setdatabase = 0 AND r.rolname = ANY($1))",
     )
+    .bind(&roles)
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.db_settings", e))?;
-    for (role, settings) in &rows {
+    for (role, role_wide, settings) in &rows {
+        if *role_wide {
+            return Err(guard_missing("db_settings")
+                .with_context("role", role)
+                .with_context("scope", "every_database"));
+        }
         let expected = match role.as_str() {
             "forge_app" => Some("search_path=forge, public"),
             "forge_maint" => Some("search_path=pg_catalog, pg_temp"),

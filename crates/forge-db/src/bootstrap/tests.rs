@@ -197,6 +197,46 @@ async fn every_weakened_object_guard_is_reported() {
             "guard=object_owner",
         ),
         (
+            "DROP TRIGGER ddl_audit_append_only ON forge_audit.ddl_audit; CREATE TRIGGER ddl_audit_append_only BEFORE UPDATE OR DELETE ON forge_audit.ddl_audit FOR EACH ROW WHEN (current_user <> 'forge_audit') EXECUTE FUNCTION forge_audit.reject_log_mutation(); ALTER TABLE forge_audit.ddl_audit ENABLE ALWAYS TRIGGER ddl_audit_append_only",
+            "guard=log_triggers",
+        ),
+        (
+            "ALTER FUNCTION forge_audit.ddl_audit_record() SET search_path = forge, pg_catalog",
+            "guard=function_body",
+        ),
+        (
+            "ALTER FUNCTION forge_audit.reject_log_mutation() SECURITY DEFINER",
+            "guard=function_body",
+        ),
+        (
+            "GRANT CREATE ON SCHEMA forge TO forge_app",
+            "guard=privileges",
+        ),
+        (
+            "GRANT USAGE ON SCHEMA forge TO forge_audit",
+            "guard=privileges",
+        ),
+        (
+            "GRANT INSERT, UPDATE ON forge._sqlx_migrations TO forge_app",
+            "guard=privileges",
+        ),
+        (
+            "GRANT SELECT ON forge_audit.ddl_audit TO PUBLIC",
+            "guard=privileges",
+        ),
+        (
+            "GRANT CREATE ON DATABASE forge_placeholder TO forge_owner",
+            "guard=privileges",
+        ),
+        (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner GRANT EXECUTE ON FUNCTIONS TO PUBLIC",
+            "guard=privileges",
+        ),
+        (
+            "ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner IN SCHEMA forge GRANT SELECT ON TABLES TO forge_app",
+            "guard=privileges",
+        ),
+        (
             "CREATE RULE r AS ON INSERT TO forge_audit.guarded_objects DO ALSO NOTIFY forge_t",
             "guard=object_owner",
         ),
@@ -238,6 +278,8 @@ async fn every_weakened_object_guard_is_reported() {
         ),
     ] {
         let t = FreshDb::new().await;
+        let tamper = tamper.replace("forge_placeholder", &t.name);
+        let tamper = tamper.as_str();
         exec(&mut t.superuser().await, tamper).await;
         let text = guard_error(&t, &[]).await;
         assert!(text.contains(guard), "{tamper}\n=> {text}");
@@ -294,6 +336,11 @@ async fn an_elevated_role_or_an_extra_role_of_a_login_is_reported() {
             ),
             format!("DROP ROLE IF EXISTS \"{hop}\""),
             "guard=role_separation",
+        ),
+        (
+            "ALTER ROLE forge_ro SET statement_timeout = 1".into(),
+            "ALTER ROLE forge_ro RESET statement_timeout".into(),
+            "guard=db_settings",
         ),
         (
             "GRANT forge_owner TO forge_migrator WITH ADMIN OPTION".into(),
@@ -538,8 +585,10 @@ async fn audit_schema_changes_fail_or_are_reported() {
 async fn database_session_defaults_are_reported_and_reset() {
     let _lock = ClusterLock::shared().await;
     let t = FreshDb::new().await;
+    // The database owner (now the superuser) for every session; a role for
+    // itself in this database (forge_owner may do that).
     t.exec_superuser(&format!(
-        "ALTER DATABASE \"{}\" SET search_path = public",
+        "ALTER DATABASE \"{0}\" SET search_path = public; \n         ALTER ROLE forge_owner IN DATABASE \"{0}\" SET statement_timeout = 1",
         t.name
     ))
     .await;

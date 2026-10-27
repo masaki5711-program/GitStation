@@ -43,6 +43,7 @@ DO $$
 DECLARE
     owner name;
     schema_owner name;
+    setting record;
 BEGIN
     SELECT pg_catalog.pg_get_userbyid(nspowner) INTO schema_owner
     FROM pg_catalog.pg_namespace WHERE nspname = 'forge_audit';
@@ -50,9 +51,15 @@ BEGIN
         RAISE EXCEPTION 'schema forge_audit exists and is owned by %, not forge_audit',
             schema_owner;
     END IF;
-    IF current_user <> session_user OR NOT (SELECT rolsuper FROM pg_catalog.pg_roles
-                                             WHERE rolname = current_user) THEN
-        RAISE EXCEPTION 'run 03 as a superuser without SET ROLE (current_user %)', current_user;
+    -- (SET LOCAL ROLE NONE above made current_user the login.)
+    IF NOT (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user) THEN
+        RAISE EXCEPTION 'run 03 as a superuser (current_user %)', current_user;
+    END IF;
+    -- A database from bootstrap version 2 kept the migration bookkeeping in
+    -- public; an empty forge._sqlx_migrations next to it would make every
+    -- migration pending again. Move it first (ops/runbooks/db-bootstrap.md).
+    IF pg_catalog.to_regclass('public._sqlx_migrations') IS NOT NULL THEN
+        RAISE EXCEPTION 'public._sqlx_migrations exists: move it with ALTER TABLE public._sqlx_migrations SET SCHEMA forge (runbook db-bootstrap) before running 03';
     END IF;
     SELECT r.rolname INTO owner
     FROM pg_catalog.pg_database d JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
@@ -61,13 +68,46 @@ BEGIN
         RAISE EXCEPTION 'database % must be owned by a superuser (create it with 02)',
             pg_catalog.current_database();
     END IF;
-    -- Only the login search_paths below are set for this database.
-    EXECUTE format('ALTER DATABASE %I RESET ALL', pg_catalog.current_database());
-    EXECUTE format('ALTER ROLE forge_app IN DATABASE %I RESET ALL', pg_catalog.current_database());
-    EXECUTE format('ALTER ROLE forge_maint IN DATABASE %I RESET ALL', pg_catalog.current_database());
-    EXECUTE format('ALTER ROLE forge_migrator IN DATABASE %I RESET ALL',
+    -- Only the login search_paths below are set for this database, and no
+    -- forge role carries a role-wide setting: every other setting is
+    -- removed, each one named in a warning (an operator's setting such as
+    -- log_min_duration_statement is lost too — the runbook says so).
+    FOR setting IN
+        SELECT s.setrole, r.rolname, s.setdatabase, s.setconfig
+        FROM pg_catalog.pg_db_role_setting s
+        LEFT JOIN pg_catalog.pg_roles r ON r.oid = s.setrole
+        WHERE s.setdatabase = (SELECT oid FROM pg_catalog.pg_database
+                               WHERE datname = pg_catalog.current_database())
+           OR (s.setdatabase = 0 AND r.rolname = ANY (ARRAY['forge_owner', 'forge_migrator',
+               'forge_seq', 'forge_purge', 'forge_app', 'forge_ro', 'forge_maint', 'forge_audit']))
+    EXCEPT
+    -- The login search_paths this file sets anyway (no warning on a re-run).
+    SELECT s.setrole, r.rolname, s.setdatabase, s.setconfig
+        FROM pg_catalog.pg_db_role_setting s
+        JOIN pg_catalog.pg_roles r ON r.oid = s.setrole
+        WHERE s.setdatabase = (SELECT oid FROM pg_catalog.pg_database
+                               WHERE datname = pg_catalog.current_database())
+          AND (r.rolname, s.setconfig) IN (
+              ('forge_app', ARRAY['search_path=forge, public']),
+              ('forge_maint', ARRAY['search_path=pg_catalog, pg_temp']),
+              ('forge_migrator', ARRAY['search_path=forge']))
+    LOOP
+        RAISE WARNING 'forge bootstrap: removing session defaults % (role %, %)',
+            setting.setconfig, coalesce(setting.rolname, 'all'),
+            CASE WHEN setting.setdatabase = 0 THEN 'every database' ELSE 'this database' END;
+        IF setting.setdatabase = 0 THEN
+            EXECUTE format('ALTER ROLE %I RESET ALL', setting.rolname);
+        ELSIF setting.setrole = 0 THEN
+            EXECUTE format('ALTER DATABASE %I RESET ALL', pg_catalog.current_database());
+        ELSE
+            EXECUTE format('ALTER ROLE %I IN DATABASE %I RESET ALL', setting.rolname,
+                pg_catalog.current_database());
+        END IF;
+    END LOOP;
+    -- Every ACL below is rebuilt from nothing on each run: a re-run removes
+    -- grants added since (doctor's guard=privileges compares exactly).
+    EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC, forge_owner, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint, forge_audit',
         pg_catalog.current_database());
-    EXECUTE format('REVOKE ALL ON DATABASE %I FROM PUBLIC', pg_catalog.current_database());
     EXECUTE format('GRANT CONNECT ON DATABASE %I TO forge_app, forge_migrator, forge_maint',
         pg_catalog.current_database());
     EXECUTE format('ALTER ROLE forge_app IN DATABASE %I SET search_path = forge, public',
@@ -82,10 +122,12 @@ END
 $$;
 
 -- public belongs to the database owner (this superuser) and holds nothing.
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM PUBLIC, forge_owner, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint, forge_audit;
+GRANT USAGE ON SCHEMA public TO PUBLIC;
 
 CREATE SCHEMA IF NOT EXISTS forge AUTHORIZATION forge_owner;
-REVOKE ALL ON SCHEMA forge FROM PUBLIC;
+ALTER SCHEMA forge OWNER TO forge_owner;
+REVOKE ALL ON SCHEMA forge FROM PUBLIC, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint, forge_audit;
 GRANT USAGE ON SCHEMA forge TO forge_app, forge_ro, forge_maint, forge_seq, forge_purge;
 -- PostgreSQL requires CREATE on the schema to own functions in it.
 GRANT CREATE ON SCHEMA forge TO forge_seq, forge_purge;
@@ -103,16 +145,46 @@ CREATE TABLE IF NOT EXISTS forge._sqlx_migrations (
     execution_time BIGINT NOT NULL
 );
 ALTER TABLE forge._sqlx_migrations OWNER TO forge_owner;
+REVOKE ALL ON forge._sqlx_migrations FROM PUBLIC, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint, forge_audit;
 GRANT SELECT ON forge._sqlx_migrations TO forge_app, forge_ro;
 
 CREATE SCHEMA IF NOT EXISTS forge_audit AUTHORIZATION forge_audit;
-REVOKE ALL ON SCHEMA forge_audit FROM PUBLIC;
+REVOKE ALL ON SCHEMA forge_audit FROM PUBLIC, forge_owner, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint;
 GRANT USAGE ON SCHEMA forge_audit TO forge_app, forge_ro, forge_maint, forge_owner, forge_seq,
     forge_purge;
 
 -- Functions created later by the migration roles are not executable by
 -- PUBLIC unless a migration grants it (each SECURITY DEFINER function also
 -- revokes it in its own file — the gate checks that).
+-- Any other default privilege of these roles (a role may change its own)
+-- is removed first.
+DO $$
+DECLARE
+    d record;
+BEGIN
+    FOR d IN
+        SELECT r.rolname, n.nspname, a.grantee, g.rolname AS grantee_name,
+               CASE dacl.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES'
+                    WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' END
+                   AS kind
+        FROM pg_catalog.pg_default_acl dacl
+        JOIN pg_catalog.pg_roles r ON r.oid = dacl.defaclrole
+        LEFT JOIN pg_catalog.pg_namespace n ON n.oid = dacl.defaclnamespace,
+        pg_catalog.aclexplode(dacl.defaclacl) a
+        LEFT JOIN pg_catalog.pg_roles g ON g.oid = a.grantee
+        WHERE r.rolname IN ('forge_owner', 'forge_seq', 'forge_purge')
+          AND (a.grantee <> dacl.defaclrole OR dacl.defaclnamespace <> 0)
+    LOOP
+        RAISE WARNING 'forge bootstrap: removing default privilege of % on % for %',
+            d.rolname, d.kind, coalesce(d.grantee_name, 'PUBLIC');
+        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I %s REVOKE ALL ON %s FROM %s',
+            d.rolname,
+            CASE WHEN d.nspname IS NULL THEN '' ELSE format('IN SCHEMA %I', d.nspname) END,
+            d.kind,
+            CASE WHEN d.grantee = 0 THEN 'PUBLIC' ELSE format('%I', d.grantee_name) END);
+    END LOOP;
+END
+$$;
 ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner, forge_seq, forge_purge
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
@@ -159,6 +231,8 @@ ALTER TABLE forge_audit.ddl_audit OWNER TO forge_audit;
 ALTER TABLE forge_audit.ddl_audit_ack OWNER TO forge_audit;
 ALTER TABLE forge_audit.guarded_objects OWNER TO forge_audit;
 
+REVOKE ALL ON forge_audit.bootstrap_log, forge_audit.ddl_audit, forge_audit.ddl_audit_ack,
+    forge_audit.guarded_objects FROM PUBLIC, forge_owner, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint;
 GRANT SELECT ON forge_audit.bootstrap_log, forge_audit.ddl_audit, forge_audit.ddl_audit_ack,
     forge_audit.guarded_objects TO forge_app, forge_ro, forge_maint, forge_owner;
 GRANT INSERT (ddl_audit_id, note) ON forge_audit.ddl_audit_ack TO forge_maint;
@@ -362,6 +436,7 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('table', 'forge_audit.ddl_audit'),
     ('table', 'forge_audit.ddl_audit_ack'),
     ('table', 'forge_audit.guarded_objects'),
+    ('table', 'forge._sqlx_migrations'),
     ('function', 'forge_audit.reject_log_mutation()'),
     ('function', 'forge_audit.ddl_audit_record()'),
     ('function', 'forge_audit.cluster_identity()'),
