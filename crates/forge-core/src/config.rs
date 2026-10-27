@@ -1,7 +1,7 @@
 //! Typed configuration. Layers, lowest first: built-in defaults ← TOML file
 //! (`--config` / `FORGE_CONFIG`) ← environment ← command-line flags (applied
 //! by the caller). The environment name of a key is derived from it:
-//! `database.max_connections` ↔ `FORGE_DATABASE_MAX_CONNECTIONS`.
+//! `database.write_max_connections` ↔ `FORGE_DATABASE_WRITE_MAX_CONNECTIONS`.
 //!
 //! Every problem is `FG-SYS-0002` with `config_key` and `reason`, detected at
 //! load time. Unknown, renamed and empty keys fail (a typo never silently
@@ -14,10 +14,12 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
+mod database;
 mod keys;
 mod secret;
 mod tls;
 
+pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
 pub use tls::TlsMode;
@@ -29,7 +31,14 @@ const NAMESPACES: &[&str] = &["FORGE_SERVER_", "FORGE_STORAGE_", "FORGE_DATABASE
 
 /// Variables that used to be configuration: setting one fails instead of
 /// being ignored (old name, new name).
-const RENAMED: &[(&str, &str)] = &[("FORGE_BIND", "FORGE_SERVER_BIND")];
+const RENAMED: &[(&str, &str)] = &[
+    ("FORGE_BIND", "FORGE_SERVER_BIND"),
+    // Split into a write and a read pool (ADR-0018 §2).
+    (
+        "FORGE_DATABASE_MAX_CONNECTIONS",
+        "FORGE_DATABASE_WRITE_MAX_CONNECTIONS",
+    ),
+];
 
 /// The environment variable of a configuration key.
 pub fn env_name(key: &str) -> String {
@@ -119,36 +128,6 @@ pub struct StorageConfig {
     pub root: Option<PathBuf>,
 }
 
-#[derive(Debug)]
-pub struct DatabaseConfig {
-    url: Option<DatabaseUrl>,
-    pub password: Option<Secret>,
-    pub tls_mode: TlsMode,
-    /// CA bundle for the internal certificate authority (PEM, absolute).
-    pub tls_root_cert: Option<PathBuf>,
-    /// `require` / `disable` to a non-loopback host must be allowed here
-    /// explicitly (an unverified link to a remote server is never a default).
-    pub tls_allow_unverified: bool,
-    pub max_connections: u32,
-    pub min_connections: u32,
-    pub connect_timeout: Duration,
-    pub acquire_timeout: Duration,
-    pub statement_timeout: Duration,
-    pub lock_timeout: Duration,
-    pub idle_in_transaction_timeout: Duration,
-    /// The statement timeout while migrating (long, but bounded: §3-2).
-    pub migrate_statement_timeout: Duration,
-}
-
-impl DatabaseConfig {
-    /// The database URL; required by commands that use the database.
-    pub fn url(&self) -> Result<&DatabaseUrl, ForgeError> {
-        self.url
-            .as_ref()
-            .ok_or_else(|| invalid("database.url", "missing"))
-    }
-}
-
 /// Load the configuration from the optional file and the environment.
 pub fn load(file: Option<&Path>, env: &Env) -> Result<Config, ForgeError> {
     let mut values = match file {
@@ -234,10 +213,21 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
     if !valid_bind(bind) {
         return Err(invalid("server.bind", "invalid"));
     }
-    let url = text("database.url")?.map(DatabaseUrl::parse).transpose()?;
-    let password = text("database.password_file")?
-        .map(|p| secret::read_password(Path::new(p)))
-        .transpose()?;
+    let url = |key: &'static str| text(key)?.map(|u| DatabaseUrl::parse(key, u)).transpose();
+    let password = |key: &'static str| {
+        text(key)?
+            .map(|p| secret::read_password(key, Path::new(p)))
+            .transpose()
+    };
+    let password_path = |key: &'static str| {
+        text(key)?
+            .map(|p| database::password_path(key, p))
+            .transpose()
+    };
+    let privileged_members = match text("database.privileged_members")? {
+        Some(list) => database::privileged_members("database.privileged_members", list)?,
+        None => Vec::new(),
+    };
 
     let tls_mode = match text("database.tls_mode")? {
         Some(t) => TlsMode::parse(t).ok_or_else(|| invalid("database.tls_mode", "invalid"))?,
@@ -253,9 +243,10 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         return Err(invalid("database.tls_root_cert", "not_absolute"));
     }
 
-    let max_connections = positive(get, "database.max_connections", 10)?;
+    let write_max_connections = positive(get, "database.write_max_connections", 10)?;
+    let read_max_connections = positive(get, "database.read_max_connections", 10)?;
     let min_connections = unsigned(get, "database.min_connections", 0)?;
-    if min_connections > max_connections {
+    if min_connections > write_max_connections.min(read_max_connections) {
         return Err(invalid("database.min_connections", "above_max"));
     }
 
@@ -267,12 +258,18 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             root: text("storage.root")?.map(PathBuf::from),
         },
         database: DatabaseConfig {
-            url,
-            password,
+            url: url("database.url")?,
+            password: password("database.password_file")?,
+            migrate_url: url("database.migrate_url")?,
+            migrate_password_file: password_path("database.migrate_password_file")?,
+            maint_url: url("database.maint_url")?,
+            maint_password_file: password_path("database.maint_password_file")?,
+            privileged_members,
             tls_mode,
             tls_root_cert,
             tls_allow_unverified,
-            max_connections,
+            write_max_connections,
+            read_max_connections,
             min_connections,
             connect_timeout: millis(get, "database.connect_timeout_ms", 5_000)?,
             acquire_timeout: millis(get, "database.acquire_timeout_ms", 3_000)?,

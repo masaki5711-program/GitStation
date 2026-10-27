@@ -25,14 +25,20 @@
      - `invalid`: 形式の誤り（`server.bind` は `host:port`）
      - `empty`: 空の値（中身を入れ忘れた環境変数など）
      - `zero`: 0 は不可
-     - `above_max`: `min_connections` が `max_connections` より大きい
+     - `above_max`: `min_connections` が `write_max_connections` か `read_max_connections` より大きい
+     - `duplicate`: `database.privileged_members` に同じ名前が 2 回ある
+     - `wrong_role`: ログインのロールが違う（`role_check` を見る。ロールが未作成なら Runbook `db-bootstrap`）
+       - `database.url`: `not_member`（`forge_ro` のメンバーでない）、`superuser`（superuser か BYPASSRLS のログイン。すべての保護を迂回できるので使わない）、`privileged`（`forge_owner`・`forge_seq`・`forge_purge` に届く）、`role_not_applied`・`not_read_only`（読み取りのプールの設定が効いていない）
+       - `database.migrate_url`: `not_member`（`forge_owner` のメンバーでない。`forge_migrator` で接続する）、`owner_missing`（導入の手順が未実行）、`superuser`（superuser ではマイグレーションしない）、`not_owner`
+     - `connection_budget`: プールの大きさの合計（`needed`）が DB のサーバーの接続数（`usable`）の 80 % を超える。`database.write_max_connections` / `read_max_connections` を下げるか、サーバーの `max_connections` を上げる
+     - `not_for_this_command`: `forge serve` の設定に `database.migrate_password_file` か `database.maint_password_file` がある。サーバーのプロセスに移行・保守の資格情報を持たせない。設定をログインごとに分ける（Runbook `db-bootstrap` の手順 5）
      - `unknown_key`: 設定ファイルのつづりの誤り
      - `unknown_env`: 環境変数のつづりの誤り
-     - `renamed`: 改名前の名前（`renamed_to` に新しい名前が入る。例: `FORGE_BIND` → `FORGE_SERVER_BIND`）
+     - `renamed`: 改名前の名前（`renamed_to` に新しい名前が入る。例: `FORGE_BIND` → `FORGE_SERVER_BIND`、`FORGE_DATABASE_MAX_CONNECTIONS` → `FORGE_DATABASE_WRITE_MAX_CONNECTIONS`）
      - `not_unicode`: 値が UTF-8 でない
      - `unreadable`: ファイルを読めない
      - `parse`: 設定ファイルの構文の誤り（位置は `line` / `column`。問題の行の本文はログに出さない）
-     - `password_in_url`: URL にパスワードを書いている。`database.password_file` に移す
+     - `password_in_url`: URL にパスワードを書いている。`database.password_file`（`migrate_url` なら `migrate_password_file`、`maint_url` なら `maint_password_file`）に移す
      - `query_in_url`: URL にクエリ（`?…`）がある。URL は `postgres://user@host[:port]/dbname` だけにし、TLS は `database.tls_mode` / `database.tls_root_cert`、タイムアウトは `database.*_timeout_ms` で設定する
      - `libpq_env`: `PGPASSWORD`、`PGSSLROOTCERT` などの `PG*` 環境変数が設定されている（`config_key` が名前）。forge は使わないので、サービスの環境から外す
      - `unverified_remote`: `database.tls_mode` が `require`（サーバーの証明書を検証しない）か `disable` のまま、ループバック以外の DB に接続しようとした。本番では `verify-full` にする。どうしても必要な場合だけ `database.tls_allow_unverified = true` を明示する（起動のたびに警告が出る）

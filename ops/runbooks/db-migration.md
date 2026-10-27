@@ -11,6 +11,9 @@
 - FG-DB-0004 で `forge serve` が起動しない場合、GitStation 全体が使えない（SEV1）。
 - FG-DB-0003 では何も適用されない（各マイグレーションは 1 つのトランザクションで実行される）。古いバイナリは引き続き動く。
 
+`forge db migrate` は `database.migrate_url`（`forge_migrator`、パスワードは `database.migrate_password_file`）で接続し、
+`SET ROLE forge_owner` の後に適用する（ADR-0018）。接続のロールの誤りは `FG-SYS-0002 reason=wrong_role`（Runbook `config-invalid`）。
+
 ## Diagnose（読み取りのみ）
 
 1. ログの `context` を読む。

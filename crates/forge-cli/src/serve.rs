@@ -18,6 +18,9 @@ use forge_web::{AppConfig, AppState, ServerLimits};
 use crate::runtime::block_on;
 
 pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError> {
+    // The server process must not hold the migration or maintenance
+    // credentials (ADR-0018): their password files belong to other configs.
+    database.reject_privileged_logins()?;
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -39,7 +42,7 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
             forge_web::server::shutdown_signal(),
         )
         .await?;
-        db.pool().close().await;
+        db.close().await;
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })

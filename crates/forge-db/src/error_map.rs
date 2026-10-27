@@ -6,7 +6,11 @@
 //!   shutting down / out of connection slots. This holds at startup *and*
 //!   for every later statement, so an outage always alerts.
 //! - **FG-DB-0002 DbQueryFailed** (warn, 500): the statement itself failed on
-//!   a working connection (timeout, lock, conflict, constraint, …).
+//!   a working connection (timeout, lock, conflict, constraint, …). A write
+//!   on the read pool (`write_on_read_pool`, 25006 there) and a missing
+//!   privilege (`permission_denied`, 42501) are bugs: never retried.
+//! - **FG-DB-0009 AppendOnlyViolation** (alert): a guard trigger rejected a
+//!   change to an append-only table (XF001).
 //!
 //! The context carries `target` / `query` (static names), `reason`,
 //! `sqlstate` and — for constraint errors — `constraint` / `table`. Server
@@ -22,6 +26,15 @@ use forge_errors::{ErrorCode, ForgeError};
 enum Class {
     Unavailable(&'static str),
     Query(&'static str),
+    AppendOnly,
+}
+
+/// Which pool a statement ran on: 25006 means "standby" on the write pool
+/// but "a write was sent to the read pool" on the read pool.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum On {
+    Write,
+    Read,
 }
 
 /// The reason for an error without a SQLSTATE (transport and driver).
@@ -103,8 +116,11 @@ fn driver_kind(e: &sqlx::Error) -> &'static str {
 }
 
 /// The reason for a server error, by SQLSTATE (PostgreSQL appendix A).
-fn by_sqlstate(state: &str) -> Class {
+fn by_sqlstate(state: &str, on: On) -> Class {
     match state {
+        "25006" if on == On::Read => Class::Query("write_on_read_pool"),
+        "42501" => Class::Query("permission_denied"),
+        "XF001" => Class::AppendOnly,
         "57014" => Class::Query("statement_timeout"),
         "55P03" => Class::Query("lock_timeout"),
         "40001" => Class::Query("serialization"),
@@ -132,18 +148,18 @@ fn by_sqlstate(state: &str) -> Class {
 /// never a quoted token or row value (syntax errors and class 22 / 23 quote
 /// the offending input).
 const MESSAGE_SAFE: &[&str] = &[
-    "08001", "08006", "28000", "28P01", "3D000", "42P01", "42703", "42883", "53300", "55P03",
-    "57014", "57P01", "57P02", "57P03",
+    "08001", "08006", "28000", "28P01", "3D000", "42501", "42P01", "42703", "42883", "53300",
+    "55P03", "57014", "57P01", "57P02", "57P03", "XF001",
 ];
 
 fn message_is_safe(state: &str) -> bool {
     MESSAGE_SAFE.contains(&state)
 }
 
-fn classify(e: &sqlx::Error) -> (Class, Option<String>) {
+fn classify(e: &sqlx::Error, on: On) -> (Class, Option<String>) {
     match e.as_database_error() {
         Some(db) => match db.code() {
-            Some(state) => (by_sqlstate(&state), Some(state.into_owned())),
+            Some(state) => (by_sqlstate(&state, on), Some(state.into_owned())),
             None => (Class::Query("server_error"), None),
         },
         None => (transport(e), None),
@@ -152,10 +168,11 @@ fn classify(e: &sqlx::Error) -> (Class, Option<String>) {
 
 /// Build the error: code from the class, safe context, and the source only
 /// when it cannot contain row values.
-fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool) -> ForgeError {
-    let (class, state) = classify(&e);
+fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: On) -> ForgeError {
+    let (class, state) = classify(&e, on);
     let (code, reason) = match class {
         Class::Unavailable(r) => (ErrorCode::DbUnavailable, r),
+        Class::AppendOnly => (ErrorCode::AppendOnlyViolation, "rejected"),
         // Opening or checking a connection: never a statement error, but a
         // known reason (statement_timeout, serialization, …) is kept; only
         // the generic ones are renamed.
@@ -207,13 +224,18 @@ pub(crate) fn unavailable(target: &str, reason: &'static str) -> ForgeError {
 /// A failure to open or obtain a connection to `target` — always
 /// `FG-DB-0001`.
 pub(crate) fn connect_error(target: &str, e: sqlx::Error) -> ForgeError {
-    build("target", target, e, true)
+    build("target", target, e, true, On::Write)
 }
 
-/// Map a failed statement. `query` is a static name such as
-/// `"repo.insert"`, never the SQL text.
+/// Map a failed statement on the write pool or a dedicated connection.
+/// `query` is a static name such as `"repo.insert"`, never the SQL text.
 pub fn query_error(query: &'static str, e: sqlx::Error) -> ForgeError {
-    build("query", query, e, false)
+    build("query", query, e, false, On::Write)
+}
+
+/// Map a failed statement on the [`crate::ReadPool`].
+pub fn read_query_error(query: &'static str, e: sqlx::Error) -> ForgeError {
+    build("query", query, e, false, On::Read)
 }
 
 #[cfg(test)]
@@ -300,14 +322,33 @@ mod tests {
             ("25006", true, "read_only"),
             ("25P03", false, "idle_in_transaction_timeout"),
             ("28P01", true, "auth_failed"),
+            ("42501", false, "permission_denied"),
+            ("XF001", false, "append_only"),
         ] {
-            let class = by_sqlstate(state);
+            let class = by_sqlstate(state, On::Write);
             let (is_unavailable, r) = match class {
                 Class::Unavailable(r) => (true, r),
                 Class::Query(r) => (false, r),
+                Class::AppendOnly => (false, "append_only"),
             };
             assert_eq!((is_unavailable, r), (unavailable, reason), "{state}");
         }
+    }
+
+    #[test]
+    fn a_read_only_rejection_depends_on_the_pool() {
+        assert!(matches!(
+            by_sqlstate("25006", On::Read),
+            Class::Query("write_on_read_pool")
+        ));
+        assert!(matches!(
+            by_sqlstate("25006", On::Write),
+            Class::Unavailable("read_only")
+        ));
+        assert!(matches!(
+            by_sqlstate("42501", On::Read),
+            Class::Query("permission_denied")
+        ));
     }
 
     #[test]

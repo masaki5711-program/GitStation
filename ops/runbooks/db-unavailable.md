@@ -37,6 +37,8 @@
      - `serialization`（`40001`）/ `deadlock`（`40P01`）: 同時実行の競合。再実行してよい。頻発するなら呼び出し元を見直す
      - `constraint`（`23xxx`）: 制約の違反。`constraint` と `table` が付く。行の値はログに出さない
      - `row_not_found`: あるはずの行がない（呼び出し元の不具合の可能性）
+     - `write_on_read_pool`（読み取りのプールの上の `25006`）: 書き込みが読み取りのプール（`forge_ro`、読み取り専用）に送られた。呼び出し元の不具合。再実行しない
+     - `permission_denied`（`42501`）: ロールに権限がない。呼び出し元の不具合か、マイグレーションの GRANT の漏れ。再実行しない
      - `idle_in_transaction_timeout`（`25P03`）: 呼び出し元がトランザクションを開いたまま `database.idle_in_transaction_timeout_ms` を超えて放置し、DB がセッションを終了した。呼び出し元の不具合
      - `server_error` / `client_error`: `sqlstate`（と、値を含まない種類なら `db_message`）を読む
 2. DB のサーバーの状態を確認する。まず `forge doctor`（読み取りのみ）で、`database` と `schema` の行を見る。
@@ -45,7 +47,7 @@
 3. タイムアウトやロック待ちの場合は、DB に読み取り専用で接続して、遅い文と待たせている側を確認する。
    - `SELECT pid, state, now() - query_start AS running, wait_event_type, wait_event, application_name FROM pg_stat_activity WHERE datname = '<dbname>' ORDER BY running DESC;`（SQL の本文 `query` 列は値を含むことがあるので表示しない。必要なときも障害記録に貼らない）
    - `SELECT pid, pg_blocking_pids(pid) FROM pg_stat_activity WHERE cardinality(pg_blocking_pids(pid)) > 0;`
-4. `acquire_timeout` の場合は、接続数（`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'forge';`）と `database.max_connections` を比べる。
+4. `acquire_timeout` の場合は、接続数（`SELECT count(*) FROM pg_stat_activity WHERE application_name = 'forge';`）と `database.write_max_connections`・`database.read_max_connections` を比べる（`forge doctor` の `db.connections` が予算を確かめる）。ログの `pool`（`write` / `read`）でどちらのプールかが分かる。
 
 ## Mitigate
 
@@ -53,7 +55,7 @@
 2. 本番で DB のサーバーが止まっている場合: DB のサーバーを起動する。`[MUTATING — needs approval]`（ロールバック: なし。起動に失敗したら DB の担当者にエスカレーションする）
 3. 設定の誤り（`auth_failed`、`tls`、`server_rejected` の `3D000`）: 設定ファイルか環境変数を直し、forge を再起動する。`[MUTATING — needs approval]`（ロールバック: 変更前の設定に戻して再起動する）
 4. 長く続いている文がほかを待たせている場合: その文を止める（`SELECT pg_cancel_backend(<pid>);`）。`[MUTATING — needs approval]`（ロールバック: なし。止めた処理の利用者に再実行を依頼する）
-5. 負荷で `acquire_timeout` が続く場合: `database.max_connections` を上げて再起動する。DB のサーバー側の `max_connections` を超えないこと。`[MUTATING — needs approval]`（ロールバック: 元の値に戻して再起動する）
+5. 負荷で `acquire_timeout` が続く場合: `database.write_max_connections` か `database.read_max_connections` を上げて再起動する。DB のサーバー側の `max_connections` を超えないこと。`[MUTATING — needs approval]`（ロールバック: 元の値に戻して再起動する）
 
 ## Verify
 

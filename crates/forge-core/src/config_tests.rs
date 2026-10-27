@@ -29,7 +29,8 @@ fn defaults_apply_without_file_or_env() {
     assert_eq!(cfg.server.bind, "127.0.0.1:8080");
     assert!(cfg.storage.root.is_none());
     let db = &cfg.database;
-    assert_eq!(db.max_connections, 10);
+    assert_eq!(db.write_max_connections, 10);
+    assert_eq!(db.read_max_connections, 10);
     assert_eq!(db.min_connections, 0);
     assert_eq!(db.connect_timeout, Duration::from_millis(5000));
     assert_eq!(db.acquire_timeout, Duration::from_millis(3000));
@@ -47,19 +48,19 @@ fn config_file_values_are_overridden_by_env() {
 bind = "0.0.0.0:9000"
 [database]
 url = "postgres://forge@db.internal:5432/forge"
-max_connections = 20
+write_max_connections = 20
 "#,
     );
     let cfg = load(
         Some(f.path()),
         &env(&[
             ("FORGE_SERVER_BIND", "127.0.0.1:9001"),
-            ("FORGE_DATABASE_MAX_CONNECTIONS", "30"),
+            ("FORGE_DATABASE_WRITE_MAX_CONNECTIONS", "30"),
         ]),
     )
     .expect("loads");
     assert_eq!(cfg.server.bind, "127.0.0.1:9001");
-    assert_eq!(cfg.database.max_connections, 30);
+    assert_eq!(cfg.database.write_max_connections, 30);
     let url = cfg.database.url().expect("url");
     assert_eq!(url.host(), "db.internal");
     assert_eq!(url.port(), 5432);
@@ -255,20 +256,20 @@ fn a_syntax_error_reports_its_position_but_never_the_line() {
 fn wrong_value_type_in_file_is_config_invalid() {
     for (body, key) in [
         (
-            "[database]\nmax_connections = true\n",
-            "database.max_connections",
+            "[database]\nwrite_max_connections = true\n",
+            "database.write_max_connections",
         ),
         (
-            "[database]\nmax_connections = 1.5\n",
-            "database.max_connections",
+            "[database]\nwrite_max_connections = 1.5\n",
+            "database.write_max_connections",
         ),
         (
-            "[database]\nmax_connections = 4294967296\n",
-            "database.max_connections",
+            "[database]\nwrite_max_connections = 4294967296\n",
+            "database.write_max_connections",
         ),
         (
-            "[database]\nmax_connections = [1]\n",
-            "database.max_connections",
+            "[database]\nwrite_max_connections = [1]\n",
+            "database.write_max_connections",
         ),
         (
             "[database]\npassword_file = 1234\n",
@@ -362,8 +363,12 @@ fn foreign_forge_env_vars_are_ignored() {
 
 #[test]
 fn non_numeric_env_value_is_config_invalid() {
-    let err = load(None, &env(&[("FORGE_DATABASE_MAX_CONNECTIONS", "ten")])).expect_err("nan");
-    assert_invalid(&err, "database.max_connections", "invalid");
+    let err = load(
+        None,
+        &env(&[("FORGE_DATABASE_WRITE_MAX_CONNECTIONS", "ten")]),
+    )
+    .expect_err("nan");
+    assert_invalid(&err, "database.write_max_connections", "invalid");
 }
 
 #[test]
@@ -390,7 +395,10 @@ fn zero_timeouts_and_connections_are_rejected() {
             "FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS",
             "database.migrate_statement_timeout_ms",
         ),
-        ("FORGE_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
+        (
+            "FORGE_DATABASE_WRITE_MAX_CONNECTIONS",
+            "database.write_max_connections",
+        ),
     ] {
         let err = load(None, &env(&[(var, "0")])).expect_err(var);
         assert_invalid(&err, key, "zero");
@@ -405,7 +413,7 @@ fn min_connections_above_max_is_config_invalid() {
         None,
         &env(&[
             ("FORGE_DATABASE_MIN_CONNECTIONS", "5"),
-            ("FORGE_DATABASE_MAX_CONNECTIONS", "2"),
+            ("FORGE_DATABASE_WRITE_MAX_CONNECTIONS", "2"),
         ]),
     )
     .expect_err("min > max");
@@ -505,7 +513,152 @@ fn tls_allow_unverified_is_a_strict_boolean() {
             .database
             .tls_allow_unverified
     );
-    let f = file("[database]\nmax_connections = true\n");
+    let f = file("[database]\nwrite_max_connections = true\n");
     let err = load(Some(f.path()), &env(&[])).expect_err("bool for a number");
-    assert_invalid(&err, "database.max_connections", "invalid");
+    assert_invalid(&err, "database.write_max_connections", "invalid");
+}
+
+#[test]
+fn migrate_and_maint_logins_are_separate_and_optional() {
+    let migrator = file("migrator-pw-1\n");
+    let maint = file("maint-pw-2\n");
+    let (migrator_path, maint_path) = (
+        migrator.path().to_string_lossy().into_owned(),
+        maint.path().to_string_lossy().into_owned(),
+    );
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_DATABASE_URL", "postgres://forge_app@db/forge"),
+            (
+                "FORGE_DATABASE_MIGRATE_URL",
+                "postgres://forge_migrator@db/forge",
+            ),
+            ("FORGE_DATABASE_MIGRATE_PASSWORD_FILE", &migrator_path),
+            (
+                "FORGE_DATABASE_MAINT_URL",
+                "postgres://forge_maint@db/forge",
+            ),
+            ("FORGE_DATABASE_MAINT_PASSWORD_FILE", &maint_path),
+        ]),
+    )
+    .expect("loads");
+    let db = &cfg.database;
+    assert_eq!(db.migrate_url().expect("migrate").user(), "forge_migrator");
+    assert_eq!(db.maint_url().expect("maint").user(), "forge_maint");
+    // Read on use only (serve never reads them).
+    assert_eq!(
+        db.migrate_password()
+            .expect("read")
+            .as_ref()
+            .map(Secret::expose),
+        Some("migrator-pw-1")
+    );
+    assert_eq!(
+        db.maint_password()
+            .expect("read")
+            .as_ref()
+            .map(Secret::expose),
+        Some("maint-pw-2")
+    );
+    assert_invalid(
+        &db.reject_privileged_logins().expect_err("serve refuses"),
+        "database.migrate_password_file",
+        "not_for_this_command",
+    );
+    assert!(db.password.is_none());
+    let debug = format!("{cfg:?}");
+    assert!(!debug.contains("migrator-pw-1") && !debug.contains("maint-pw-2"));
+
+    let none = load(None, &env(&[])).expect("defaults");
+    none.database
+        .reject_privileged_logins()
+        .expect("nothing privileged configured");
+    assert_invalid(
+        &none.database.migrate_url().expect_err("unset"),
+        "database.migrate_url",
+        "missing",
+    );
+    assert_invalid(
+        &none.database.maint_url().expect_err("unset"),
+        "database.maint_url",
+        "missing",
+    );
+}
+
+#[test]
+fn an_invalid_migrate_url_or_password_file_names_its_own_key() {
+    let err = load(
+        None,
+        &env(&[("FORGE_DATABASE_MIGRATE_URL", "postgres://m:pw@db/forge")]),
+    )
+    .expect_err("password in url");
+    assert_invalid(&err, "database.migrate_url", "password_in_url");
+    let err = load(
+        None,
+        &env(&[("FORGE_DATABASE_MAINT_PASSWORD_FILE", "relative/pw")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "database.maint_password_file", "not_absolute");
+}
+
+#[test]
+fn the_old_max_connections_variable_names_the_write_pool_key() {
+    let err = load(None, &env(&[("FORGE_DATABASE_MAX_CONNECTIONS", "5")])).expect_err("renamed");
+    assert_invalid(&err, "FORGE_DATABASE_MAX_CONNECTIONS", "renamed");
+    assert!(
+        err.to_string()
+            .contains("renamed_to=FORGE_DATABASE_WRITE_MAX_CONNECTIONS"),
+        "{err}"
+    );
+}
+
+#[test]
+fn min_connections_must_fit_the_smaller_pool() {
+    let err = load(
+        None,
+        &env(&[
+            ("FORGE_DATABASE_MIN_CONNECTIONS", "4"),
+            ("FORGE_DATABASE_READ_MAX_CONNECTIONS", "3"),
+        ]),
+    )
+    .expect_err("min > read max");
+    assert_invalid(&err, "database.min_connections", "above_max");
+    let err = load(None, &env(&[("FORGE_DATABASE_READ_MAX_CONNECTIONS", "0")])).expect_err("zero");
+    assert_invalid(&err, "database.read_max_connections", "zero");
+}
+
+#[test]
+fn privileged_members_are_role_member_pairs() {
+    let cfg = load(
+        None,
+        &env(&[(
+            "FORGE_DATABASE_PRIVILEGED_MEMBERS",
+            "forge_owner:dba_alice, forge_seq:ops_2",
+        )]),
+    )
+    .expect("loads");
+    let pairs: Vec<(&str, &str)> = cfg
+        .database
+        .privileged_members
+        .iter()
+        .map(|m| (m.role.as_str(), m.member.as_str()))
+        .collect();
+    assert_eq!(
+        pairs,
+        [("forge_owner", "dba_alice"), ("forge_seq", "ops_2")]
+    );
+    for (value, reason) in [
+        ("dba_alice", "invalid"),
+        ("forge_app:dba", "invalid"),
+        ("forge_owner:Dba", "invalid"),
+        ("forge_owner:a;drop", "invalid"),
+        ("forge_owner:ok,", "invalid"),
+        ("forge_owner:x,forge_owner:x", "duplicate"),
+        ("forge_purge:forge_audit", "invalid"),
+    ] {
+        let err =
+            load(None, &env(&[("FORGE_DATABASE_PRIVILEGED_MEMBERS", value)])).expect_err(value);
+        assert_invalid(&err, "database.privileged_members", reason);
+    }
 }

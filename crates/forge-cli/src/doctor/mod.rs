@@ -1,24 +1,26 @@
 //! `forge doctor` — read-only checks of everything `forge serve` needs:
-//! configuration, database (reachable, TLS, version), schema, storage root
-//! and the git binary. One line per check (`--json` for scripts and the
-//! later diag bundle). Nothing is created, migrated or changed: the schema
-//! check uses the read-only `forge_db::status`.
+//! configuration, database (reachable, TLS, version, read role), the
+//! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
+//! (`db.connections`), schema, storage root and the git binary. One line
+//! per check (`--json` for scripts and the later diag bundle). Nothing is
+//! created, migrated or changed: every database check runs on the read
+//! pool.
 //!
 //! A check that depends on an earlier failed one is `skip`. The command
 //! fails with the most severe error found (alert before warn before info),
 //! so the exit code and the logged FG code name the worst problem.
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{Db, MIGRATOR};
+use forge_db::{bootstrap, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
-use serde_json::{json, Value};
 
 use crate::runtime::block_on;
+
+mod render;
 
 /// The outcome of one check.
 enum Outcome {
@@ -38,6 +40,9 @@ pub struct Report {
     pub failure: Option<ForgeError>,
 }
 
+/// The checks that need a connected database.
+const DB_CHECKS: [&str; 3] = ["db.bootstrap", "db.connections", "schema"];
+
 /// Every failed check is logged once here (with `request_id`); the caller
 /// prints the worst one without logging it again.
 pub fn run(
@@ -52,9 +57,9 @@ pub fn run(
         }
     }
     let text = if as_json {
-        render_json(&checks)
+        render::json(&checks)
     } else {
-        render_text(&checks)
+        render::text(&checks)
     };
     Ok(Report {
         text,
@@ -76,7 +81,7 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         }
     };
     let Some(cfg) = cfg else {
-        for name in ["database", "schema", "storage"] {
+        for name in ["database"].into_iter().chain(DB_CHECKS).chain(["storage"]) {
             checks.push(skip(name, "configuration invalid"));
         }
         checks.push(git_check().await);
@@ -86,21 +91,14 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     match Db::connect(&cfg.database).await {
         Ok(db) => {
             checks.push(ok("database", db.target()));
-            checks.push(match forge_db::status(&db, &MIGRATOR).await {
-                Ok(st) => match st.incompatibility() {
-                    None => ok(
-                        "schema",
-                        &format!("compatible ({} applied)", st.applied.len()),
-                    ),
-                    Some(e) => fail("schema", e.with_context("target", db.target())),
-                },
-                Err(e) => fail("schema", e),
-            });
-            db.pool().close().await;
+            checks.extend(database_checks(&db, &cfg).await);
+            db.close().await;
         }
         Err(e) => {
             checks.push(fail("database", e));
-            checks.push(skip("schema", "database unavailable"));
+            for name in DB_CHECKS {
+                checks.push(skip(name, "database unavailable"));
+            }
         }
     }
 
@@ -113,6 +111,31 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     });
     checks.push(git_check().await);
     checks
+}
+
+async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
+    let bootstrap = match bootstrap::check(db, &cfg.database.privileged_members).await {
+        Ok(version) => ok("db.bootstrap", &format!("version {version}, guards intact")),
+        Err(e) => fail("db.bootstrap", e),
+    };
+    let connections = match bootstrap::check_connections(db, &cfg.database).await {
+        Ok(b) => ok(
+            "db.connections",
+            &format!("{} needed of {} usable", b.needed, b.usable),
+        ),
+        Err(e) => fail("db.connections", e),
+    };
+    let schema = match forge_db::status(db, &MIGRATOR).await {
+        Ok(st) => match st.incompatibility() {
+            None => ok(
+                "schema",
+                &format!("compatible ({} applied)", st.applied.len()),
+            ),
+            Some(e) => fail("schema", e.with_context("target", db.target())),
+        },
+        Err(e) => fail("schema", e),
+    };
+    vec![bootstrap, connections, schema]
 }
 
 /// `git version` from PATH, with an isolated HOME (no user configuration).
@@ -165,65 +188,6 @@ fn most_severe(checks: Vec<Check>) -> Option<ForgeError> {
         .max_by_key(|e| rank(e.code().severity()))
 }
 
-/// Context keys safe to print: they name where to look, never values,
-/// sources, paths or server messages (those stay in the log — the error
-/// contract keeps internals out of command output).
-const SAFE_CONTEXT: &[&str] = &[
-    "config_key",
-    "reason",
-    "target",
-    "probe",
-    "versions",
-    "sqlstate",
-    "renamed_to",
-    "timeout_key",
-];
-
-/// `FG-… key=value …` with the allow-listed context only.
-fn summary(e: &ForgeError) -> String {
-    let mut out = e.code().id().to_owned();
-    for (k, v) in e.context() {
-        if SAFE_CONTEXT.contains(k) {
-            // Writing to a String cannot fail.
-            let _ = write!(out, " {k}={v}");
-        }
-    }
-    out
-}
-
-fn render_text(checks: &[Check]) -> String {
-    let mut out = String::new();
-    for c in checks {
-        // Writing to a String cannot fail.
-        let _ = match &c.outcome {
-            Outcome::Ok(detail) => writeln!(out, "ok    {:<9} {detail}", c.name),
-            Outcome::Fail(e) => writeln!(out, "FAIL  {:<9} {}", c.name, summary(e)),
-            Outcome::Skip(why) => writeln!(out, "skip  {:<9} {why}", c.name),
-        };
-    }
-    out
-}
-
-fn render_json(checks: &[Check]) -> String {
-    let items: Vec<Value> = checks
-        .iter()
-        .map(|c| match &c.outcome {
-            Outcome::Ok(detail) => json!({ "name": c.name, "status": "ok", "detail": detail }),
-            Outcome::Fail(e) => json!({
-                "name": c.name,
-                "status": "fail",
-                "error_code": e.code().id(),
-                "detail": summary(e),
-            }),
-            Outcome::Skip(why) => json!({ "name": c.name, "status": "skip", "detail": why }),
-        })
-        .collect();
-    let all_ok = checks.iter().all(|c| matches!(c.outcome, Outcome::Ok(_)));
-    let mut text = json!({ "ok": all_ok, "checks": items }).to_string();
-    text.push('\n');
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use forge_errors::ErrorCode;
@@ -240,31 +204,5 @@ mod tests {
         ];
         let worst = most_severe(checks).expect("a failure");
         assert_eq!(worst.code(), ErrorCode::DbUnavailable);
-    }
-
-    #[test]
-    fn output_shows_only_allow_listed_context_never_sources_or_paths() {
-        let e = ForgeError::new(ErrorCode::StorageIoFailed)
-            .with_context("reason", "unreadable")
-            .with_context("path", "/srv/forge/secret-dir")
-            .with_source(std::io::Error::other("db_message with row value 42"));
-        let text = summary(&e);
-        assert!(text.starts_with("FG-REPO-"), "{text}");
-        assert!(text.contains("reason=unreadable"), "{text}");
-        assert!(!text.contains("secret-dir"), "{text}");
-        assert!(!text.contains("row value"), "{text}");
-    }
-
-    #[test]
-    fn json_lists_every_check_with_status_and_code() {
-        let checks = vec![
-            ok("config", "loaded"),
-            fail("database", ForgeError::new(ErrorCode::DbUnavailable)),
-            skip("schema", "database unavailable"),
-        ];
-        let v: Value = serde_json::from_str(&render_json(&checks)).expect("json");
-        assert_eq!(v["ok"], false);
-        assert_eq!(v["checks"][1]["error_code"], "FG-DB-0001");
-        assert_eq!(v["checks"][2]["status"], "skip");
     }
 }
