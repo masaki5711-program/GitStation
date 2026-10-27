@@ -793,62 +793,6 @@ async fn a_partial_acknowledgement_still_reports_the_rest() {
 }
 
 #[tokio::test]
-async fn a_quoted_name_or_an_inheriting_table_does_not_hide_a_guarded_change() {
-    // A rule whose own name contains " on ".
-    let t = migrated().await;
-    migration_like(
-        &t,
-        "CREATE RULE \"r on forge.jobs\" AS ON INSERT TO forge.events DO INSTEAD NOTHING",
-        "[]",
-    )
-    .await;
-    assert_eq!(unexpected_rows(&t).await.len(), 1);
-    t.drop_now().await;
-    // A table inheriting from a guarded one touches the guarded table.
-    let t = migrated().await;
-    migration_like(
-        &t,
-        "CREATE TABLE forge.audit_archive () INHERITS (forge.audit_log)",
-        "[]",
-    )
-    .await;
-    let rows = unexpected_rows(&t).await;
-    assert!(
-        rows.iter()
-            .any(|(_, o)| o.as_deref() == Some("forge.audit_archive")),
-        "{rows:?}"
-    );
-    t.drop_now().await;
-}
-
-#[tokio::test]
-async fn inheritance_and_rules_on_the_bookkeeping_are_reported() {
-    let _lock = ClusterLock::shared().await;
-    for (tamper, context) in [
-        (
-            "CREATE TABLE forge.audit_archive () INHERITS (forge.audit_log)",
-            "object=forge.audit_log",
-        ),
-        (
-            "CREATE RULE keep AS ON DELETE TO forge._sqlx_migrations DO INSTEAD NOTHING",
-            "object=forge._sqlx_migrations",
-        ),
-    ] {
-        let t = migrated().await;
-        t.exec_superuser(tamper).await;
-        let text = bootstrap::check(&t.db, &[])
-            .await
-            .expect_err(tamper)
-            .to_string();
-        assert!(
-            text.contains("guard=object_owner") && text.contains(context),
-            "{tamper}\n=> {text}"
-        );
-        t.drop_now().await;
-    }
-}
-
-#[tokio::test]
 async fn the_feed_state_moves_at_most_one_batch_per_update() {
     let t = migrated().await;
     as_role(
@@ -868,5 +812,131 @@ async fn the_feed_state_moves_at_most_one_batch_per_update() {
         ],
     )
     .await;
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_quoted_name_does_not_hide_a_guarded_change() {
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "CREATE RULE \"r on forge.jobs\" AS ON INSERT TO forge.events DO INSTEAD NOTHING",
+        "[]",
+    )
+    .await;
+    assert_eq!(unexpected_rows(&t).await.len(), 1);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_guarded_table_never_inherits_or_becomes_a_partition() {
+    let t = migrated().await;
+    let mut su = t.superuser().await;
+    for sql in [
+        "CREATE TABLE forge.audit_archive () INHERITS (forge.audit_log)",
+        "CREATE TABLE forge.kid (LIKE forge.events); ALTER TABLE forge.events INHERIT forge.kid",
+        "CREATE TABLE forge.pp (LIKE forge.audit_log) PARTITION BY LIST (action); \
+         ALTER TABLE forge.pp ATTACH PARTITION forge.audit_log DEFAULT",
+    ] {
+        assert_eq!(
+            state_of(&mut su, sql).await.as_deref(),
+            Some("XF001"),
+            "{sql}"
+        );
+    }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_rule_on_the_bookkeeping_is_reported() {
+    let _lock = ClusterLock::shared().await;
+    let t = migrated().await;
+    t.exec_superuser("CREATE RULE keep AS ON DELETE TO forge._sqlx_migrations DO INSTEAD NOTHING")
+        .await;
+    let text = bootstrap::check(&t.db, &[])
+        .await
+        .expect_err("rule")
+        .to_string();
+    assert!(
+        text.contains("guard=object_owner") && text.contains("object=forge._sqlx_migrations"),
+        "{text}"
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_db_migrate_row_outside_the_shipped_migrations_is_reported() {
+    let _lock = ClusterLock::shared().await;
+    for forged in [
+        // A version this binary does not ship.
+        "{\"version\": 1, \"guarded_changes\": [\"forge.audit_log\"]}",
+        // A second row for a shipped version.
+        "{\"version\": 20261027100000, \"guarded_changes\": []}",
+    ] {
+        let t = migrated().await;
+        t.exec_superuser(&format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             request_id, details) VALUES ('system', 'db.migrate', 'succeeded', 'migration', \
+             'db.migrate', '{forged}')"
+        ))
+        .await;
+        let text = bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(forged)
+            .to_string();
+        assert!(
+            text.contains("guard=migration_records"),
+            "{forged}\n=> {text}"
+        );
+        t.drop_now().await;
+    }
+}
+
+#[tokio::test]
+async fn redaction_only_blanks_values_of_a_published_event() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        &format!(
+            "{INSERT_EVENT}; ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+             UPDATE forge.events SET seq = 1, sequenced_at = now(), \
+                 payload = '{{\"name\": \"alice\", \"repo\": 7}}'; \
+             ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only"
+        ),
+        "forge_purge",
+        &[
+            // A new key.
+            (
+                "UPDATE forge.events SET payload = '{\"name\": \"[redacted]\", \"repo\": 7, \
+                 \"redacted\": true, \"x\": 1}'",
+                Some("XF001"),
+            ),
+            // A different value instead of the marker.
+            (
+                "UPDATE forge.events SET payload = '{\"name\": \"mallory\", \"repo\": 7, \
+                 \"redacted\": true}'",
+                Some("XF001"),
+            ),
+            // A dropped key.
+            (
+                "UPDATE forge.events SET payload = '{\"name\": \"[redacted]\", \"redacted\": true}'",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.events SET payload = '{\"name\": \"[redacted]\", \"repo\": 7, \
+                 \"redacted\": true}'",
+                None,
+            ),
+        ],
+    )
+    .await;
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_change_to_an_identity_sequence_touches_its_table() {
+    let t = migrated().await;
+    migration_like(&t, "ALTER SEQUENCE forge.audit_log_id_seq CACHE 2", "[]").await;
+    assert_eq!(unexpected_rows(&t).await.len(), 1);
     t.drop_now().await;
 }

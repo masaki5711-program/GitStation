@@ -407,15 +407,37 @@ BEGIN
                          WHERE oid = r.objid)
                     -- A table that inherits from (or is a partition of) another:
                     -- the change touches the parent.
+                    -- An inheriting table touches its parents; a sequence its
+                    -- owning (identity / serial) table.
                     WHEN r.classid = 'pg_catalog.pg_class'::regclass THEN
-                        (SELECT pg_catalog.string_agg(i.inhparent::regclass::text, ',')
-                         FROM pg_catalog.pg_inherits AS i WHERE i.inhrelid = r.objid)
+                        (SELECT pg_catalog.string_agg(x.parent, ',') FROM (
+                             SELECT i.inhparent::regclass::text AS parent
+                             FROM pg_catalog.pg_inherits AS i WHERE i.inhrelid = r.objid
+                             UNION
+                             SELECT dp.refobjid::regclass::text
+                             FROM pg_catalog.pg_depend AS dp
+                             WHERE dp.classid = 'pg_catalog.pg_class'::regclass
+                               AND dp.objid = r.objid
+                               AND dp.refclassid = 'pg_catalog.pg_class'::regclass
+                               AND dp.deptype IN ('a', 'i')) AS x)
                 END);
             n := n + 1;
         END LOOP;
     END IF;
     IF n > 0 THEN
         RAISE WARNING 'forge_audit.ddl_audit: % (% object(s)) recorded', TG_TAG, n;
+    END IF;
+    -- A guarded table never takes part in inheritance or partitioning: a
+    -- parent's triggers would run on its rows (and vanish on DETACH), a
+    -- child's rows would show through it. Rejected for everyone, here,
+    -- where forge_owner cannot remove the check.
+    IF TG_EVENT = 'ddl_command_end' AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_inherits AS i
+        JOIN forge_audit.guarded_objects AS g ON g.object_type = 'table'
+         AND g.object_identity IN (i.inhparent::regclass::text, i.inhrelid::regclass::text)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a guarded table cannot inherit, be inherited from or be a partition';
     END IF;
 END
 $$;
@@ -592,6 +614,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (6);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (7);
 
 COMMIT;

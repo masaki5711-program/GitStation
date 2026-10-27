@@ -193,7 +193,7 @@ async fn every_weakened_object_guard_is_reported() {
             "guard=function_privilege",
         ),
         (
-            "ALTER TABLE forge_audit.guarded_objects OWNER TO forge_owner",
+            "ALTER TABLE forge_audit.bootstrap_log OWNER TO forge_owner",
             "guard=object_owner",
         ),
         (

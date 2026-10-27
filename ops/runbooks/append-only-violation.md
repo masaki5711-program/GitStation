@@ -28,6 +28,7 @@
      - `object_owner` で `object=database` / `schema public`: DB か `public` の所有者が superuser でない（`forge_owner` が DB を持つと、superuser のセッションに関数を仕掛けられる）。拡張の名前なら `forge_audit` に拡張がある
      - `privileges`: DB・スキーマ（`public`・`forge`・`forge_audit`）・記録の表・`forge._sqlx_migrations` の権限、または `forge_owner`・`forge_seq`・`forge_purge` の既定の権限が出荷した状態と違う（`object`。見つかった権限の一覧はログの `grants`）。GRANT / REVOKE は DDL の記録に対象が残らないので、これが唯一の検出
      - `db_settings`: DB の既定のセッションの設定（`ALTER DATABASE … SET`、`role=*`）か、ログインの設定が導入の手順のもの（`search_path` の 3 行）と違う（`role`）
+   - `guard=migration_records`（`version`）: `forge.audit_log` の `db.migrate` の行が、このバイナリのマイグレーションと合わない（存在しない版、同じ版の 2 行目、`guarded_changes` の食い違い）。マイグレーションの外で書かれた行は、その取引の DDL を想定内に見せかける。`SELECT id, txid, occurred_at, details FROM ONLY forge.audit_log WHERE action = 'db.migrate' ORDER BY id;` で一覧にし、同じ `txid` の `forge_audit.ddl_audit` の行を確かめる。セキュリティの事案として扱う
    - `reason=unexpected_ddl`: 導入の手順でもマイグレーションでもない DDL が、確認されないまま残っている（ログに `count` と `first_id`）。
      `SELECT id, occurred_at, session_user_name, application_name, command_tag, object_identity FROM forge_audit.ddl_audit_status() WHERE NOT expected AND NOT acknowledged ORDER BY id;` で一覧にする
    - `reason=role_membership_changed`: ログの `unexpected`（決まったものでも `database.privileged_members` にもないメンバーの関係、または ADMIN OPTION 付き。`member->role`）と
