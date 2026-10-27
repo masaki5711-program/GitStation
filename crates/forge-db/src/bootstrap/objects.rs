@@ -188,10 +188,10 @@ pub(super) async fn check_functions(conn: &mut PgConnection) -> Result<(), Forge
     // runs with the owner's rights.
     let rows: Vec<(String, String, bool, String, bool)> = sqlx::query_as(
         "SELECT p.proname::text, r.rolname::text, r.rolsuper, p.prosrc, \
-         p.prosecdef = (p.proname <> 'reject_log_mutation') \
+         coalesce(p.prosecdef = (p.proname <> 'reject_log_mutation') \
          AND p.proconfig = ARRAY['search_path=pg_catalog, pg_temp'] \
          AND p.prolang = (SELECT l.oid FROM pg_catalog.pg_language l WHERE l.lanname = \
-             CASE p.proname WHEN 'cluster_identity' THEN 'sql' ELSE 'plpgsql' END) \
+             CASE p.proname WHEN 'cluster_identity' THEN 'sql' ELSE 'plpgsql' END), false) \
          FROM pg_catalog.pg_proc p \
          JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
          JOIN pg_catalog.pg_roles r ON r.oid = p.proowner \

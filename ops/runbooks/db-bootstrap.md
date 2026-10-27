@@ -42,7 +42,7 @@ ADR-0018 §1 の導入の手順です。新しい DB のサーバーに GitStati
    （ロールバック: 新しい環境なら `DROP DATABASE forge`。データが入った後は行わない）
 4. DB の中のオブジェクトを作る、または新しい版に更新する・保護の仕組みを直す。`forge db migrate` の実行中は行わない（ロックの待ちで片方が失敗する）。`[MUTATING — needs approval]`
    `psql -d forge -f 03-database-objects.sql`
-   （1 つのトランザクション。途中で失敗したら何も変わらない。03 はすべての権限・既定の権限・セッションの既定の設定を出荷した状態に作り直す。外した余分なトリガー・関数・拡張・ルール・権限と、消したセッションの設定（運用者が設定した `log_min_duration_statement` なども消える）は警告に出るので、障害記録に残し、必要な設定は別の方法（`postgresql.conf`）で戻す。ロールバック: 前の版のファイルを同じように実行する）
+   （1 つのトランザクション。途中で失敗したら何も変わらない。03 はすべての権限（受け手を問わない。付与権を通した付与も CASCADE で外す）・既定の権限・セッションの既定の設定を出荷した状態に作り直す。外した余分なトリガー・関数・拡張・ルール・権限と、消したセッションの設定（運用者が設定した `log_min_duration_statement` なども消える）は警告に出るので、障害記録に残し、必要な設定は別の方法（`postgresql.conf`）で戻す。ロールバック: 前の版のファイルを同じように実行する）
 
    **版 2 からの更新**（版 2 では DB の所有者が `forge_owner`、マイグレーションの記録が `public._sqlx_migrations`）: superuser で
    `SET search_path = pg_catalog, pg_temp; ALTER DATABASE forge OWNER TO <superuser>; ALTER TABLE public._sqlx_migrations SET SCHEMA forge;` を実行してから 03 を実行する。`[MUTATING — needs approval]`

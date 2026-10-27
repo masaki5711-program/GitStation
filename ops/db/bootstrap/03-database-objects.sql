@@ -37,6 +37,58 @@ SET LOCAL search_path = pg_catalog, pg_temp;
 SET LOCAL statement_timeout = 0;
 SET LOCAL lock_timeout = 0;
 
+-- Every grant to anyone but the owner on the objects this file manages is
+-- revoked first (whatever the grantee, with CASCADE for grants made through
+-- a grant option); the statements below grant the shipped set again. A
+-- grantee outside the forge roles is named in a warning.
+DO $$
+DECLARE
+    o record;
+    g record;
+BEGIN
+    FOR o IN
+        SELECT 'DATABASE' AS kind, pg_catalog.format('%I', d.datname) AS name,
+               coalesce(d.datacl, pg_catalog.acldefault('d', d.datdba)) AS acl, d.datdba AS owner
+        FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()
+        UNION ALL
+        SELECT 'SCHEMA', pg_catalog.format('%I', n.nspname),
+               coalesce(n.nspacl, pg_catalog.acldefault('n', n.nspowner)), n.nspowner
+        FROM pg_catalog.pg_namespace n WHERE n.nspname IN ('public', 'forge', 'forge_audit')
+        UNION ALL
+        SELECT 'TABLE', c.oid::pg_catalog.regclass::text,
+               coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner)), c.relowner
+        FROM pg_catalog.pg_class c
+        WHERE c.oid IN (pg_catalog.to_regclass('forge_audit.bootstrap_log'),
+                        pg_catalog.to_regclass('forge_audit.ddl_audit'),
+                        pg_catalog.to_regclass('forge_audit.ddl_audit_ack'),
+                        pg_catalog.to_regclass('forge_audit.guarded_objects'),
+                        pg_catalog.to_regclass('forge._sqlx_migrations'))
+    LOOP
+        FOR g IN
+            SELECT DISTINCT a.grantee, r.rolname
+            FROM pg_catalog.aclexplode(o.acl) a
+            LEFT JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+            WHERE a.grantee <> o.owner
+            UNION
+            -- Column grants (a table-level REVOKE ALL removes them too).
+            SELECT DISTINCT a.grantee, r.rolname
+            FROM pg_catalog.pg_attribute t, pg_catalog.aclexplode(t.attacl) a
+            LEFT JOIN pg_catalog.pg_roles r ON r.oid = a.grantee
+            WHERE o.kind = 'TABLE' AND t.attrelid = o.name::pg_catalog.regclass
+              AND t.attacl IS NOT NULL AND a.grantee <> o.owner
+        LOOP
+            IF g.grantee <> 0 AND g.rolname NOT LIKE 'forge\_%' THEN
+                RAISE WARNING 'forge bootstrap: revoking privileges of % on % %',
+                    g.rolname, o.kind, o.name;
+            END IF;
+            EXECUTE pg_catalog.format('REVOKE ALL ON %s %s FROM %s CASCADE', o.kind, o.name,
+                CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.format('%I', g.rolname) END);
+        END LOOP;
+    END LOOP;
+END
+$$;
+
+
 SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('forge.bootstrap.database_objects'));
 
 DO $$
@@ -447,6 +499,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (3);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (4);
 
 COMMIT;

@@ -197,6 +197,22 @@ async fn every_weakened_object_guard_is_reported() {
             "guard=object_owner",
         ),
         (
+            "GRANT ALL ON forge._sqlx_migrations TO pg_write_all_data",
+            "guard=privileges",
+        ),
+        (
+            "GRANT USAGE, CREATE ON SCHEMA forge TO pg_database_owner",
+            "guard=privileges",
+        ),
+        (
+            "GRANT SELECT ON forge._sqlx_migrations TO forge_seq WITH GRANT OPTION; SET ROLE forge_seq; GRANT SELECT ON forge._sqlx_migrations TO forge_maint; RESET ROLE",
+            "guard=privileges",
+        ),
+        (
+            "ALTER FUNCTION forge_audit.ddl_audit_record() RESET search_path",
+            "guard=function_body",
+        ),
+        (
             "DROP TRIGGER ddl_audit_append_only ON forge_audit.ddl_audit; CREATE TRIGGER ddl_audit_append_only BEFORE UPDATE OR DELETE ON forge_audit.ddl_audit FOR EACH ROW WHEN (current_user <> 'forge_audit') EXECUTE FUNCTION forge_audit.reject_log_mutation(); ALTER TABLE forge_audit.ddl_audit ENABLE ALWAYS TRIGGER ddl_audit_append_only",
             "guard=log_triggers",
         ),

@@ -24,7 +24,7 @@ use roles::membership_drift;
 
 /// The version `03-database-objects.sql` writes to
 /// `forge_audit.bootstrap_log`.
-pub const BOOTSTRAP_VERSION: i32 = 3;
+pub const BOOTSTRAP_VERSION: i32 = 4;
 
 /// The bootstrap files, in order (run by psql in production; by the test
 /// support in tests).
