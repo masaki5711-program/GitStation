@@ -3,6 +3,7 @@
 ## Trigger
 
 - `error_code=FG-DB-0009` AppendOnlyViolation（ログ、または `forge doctor` の `db.bootstrap`）
+- `error_code=FG-DB-0013` AuditMissing（ログ）: イベントが、同じトランザクションの監査の行なしにコミットされようとして、遅延制約トリガー（`events_audit_present`）が拒否した（SQLSTATE `XF002`）
 - `forge doctor` が `FAIL  db.bootstrap  FG-DB-0009 …` を出した
 
 ## Impact
@@ -43,6 +44,8 @@
 3. いつ誰が変えたかを DDL の記録で確かめる:
    `SELECT occurred_at, session_user_name, application_name, command_tag, object_type, object_identity FROM forge_audit.ddl_audit ORDER BY id DESC LIMIT 50;`
    同じ `txid` に `forge_audit.bootstrap_log` の行があれば導入の手順の変更。`forge-migrate` で `forge_migrator` ならマイグレーション。それ以外は想定外の変更。
+
+   - FG-DB-0013: `query`（コミットした文の名前）を出したコードを探す。`forge.events` への INSERT は forge-db の `ChangeTx::commit` だけが行う。それ以外の経路は不具合。変更はロールバックされている
 
 ## Mitigate
 

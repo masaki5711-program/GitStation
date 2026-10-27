@@ -49,7 +49,11 @@ fn ledger_tables(guarded_only: bool) -> BTreeSet<String> {
         .collect()
 }
 
-const INSERT_EVENT: &str = "INSERT INTO forge.events (event_id, event_type, schema_version, \
+// With its audit row: an event commits only together with one (C3).
+const INSERT_EVENT: &str =
+    "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
+     VALUES ('system', 'repository.created', 'succeeded', 'repository', 'r-1'); \
+     INSERT INTO forge.events (event_id, event_type, schema_version, \
      aggregate_type, aggregate_id, actor_kind, request_id, payload) VALUES \
      (gen_random_uuid(), 'repository.created', 1, 'repository', 1, 'system', 'r-1', '{}')";
 
@@ -391,7 +395,8 @@ async fn as_role(t: &FreshDb, setup: &str, role: &str, cases: &[(&str, Option<&s
 
 /// An event that is published and older than the retention floor (the
 /// guard forces occurred_at, so the test moves it with the trigger off).
-const OLD_PUBLISHED_EVENT: &str = "ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+const OLD_PUBLISHED_EVENT: &str = "SET CONSTRAINTS ALL IMMEDIATE; \
+     ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
      UPDATE forge.events SET seq = 1, sequenced_at = now(), \
          occurred_at = now() - interval '30 days' WHERE aggregate_id = 1; \
      ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only";
@@ -439,7 +444,11 @@ async fn purge_changes_only_payloads_and_deletes_only_old_published_events() {
     t.drop_now().await;
 }
 
-const INSERT_EVENT_2: &str = "INSERT INTO forge.events (event_id, event_type, schema_version, \
+// With its audit row: an event commits only together with one (C3).
+const INSERT_EVENT_2: &str =
+    "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
+     VALUES ('system', 'repository.created', 'succeeded', 'repository', 'r-1'); \
+     INSERT INTO forge.events (event_id, event_type, schema_version, \
      aggregate_type, aggregate_id, actor_kind, request_id, payload) VALUES \
      (gen_random_uuid(), 'repository.created', 1, 'repository', 2, 'system', 'r-2', '{}')";
 
@@ -690,6 +699,61 @@ async fn more_weakened_schema_guards_are_reported() {
     }
 }
 
+#[tokio::test]
+async fn a_weakened_audit_presence_check_is_reported() {
+    let _lock = ClusterLock::shared().await;
+    let recreate = |options: &str| {
+        format!(
+            "DROP TRIGGER events_audit_present ON forge.events; \
+             CREATE CONSTRAINT TRIGGER events_audit_present AFTER INSERT ON forge.events \
+             {options} EXECUTE FUNCTION forge.events_audit_present(); \
+             ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_audit_present"
+        )
+    };
+    for (tamper, guard, context) in [
+        (
+            "DROP TRIGGER events_audit_present ON forge.events".to_owned(),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            recreate("NOT DEFERRABLE FOR EACH ROW"),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            recreate("DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.caused_by_seq IS NULL)"),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            "ALTER TABLE forge.events DISABLE TRIGGER events_audit_present".to_owned(),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            "CREATE OR REPLACE FUNCTION forge.events_audit_present() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp \
+             AS $$ BEGIN RETURN NULL; END $$"
+                .to_owned(),
+            "guard=function_body",
+            "function=events_audit_present",
+        ),
+    ] {
+        let t = migrated().await;
+        t.exec_superuser(&tamper).await;
+        let text = bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(&tamper)
+            .to_string();
+        assert!(
+            text.contains(guard) && text.contains(context),
+            "{tamper}\n=> {text}"
+        );
+        t.drop_now().await;
+    }
+}
+
 /// DDL in the migration login's transaction together with a db.migrate row
 /// listing `changes` — what a later migration file would do.
 async fn migration_like(t: &FreshDb, ddl: &str, changes: &str) {
@@ -899,7 +963,8 @@ async fn redaction_only_blanks_values_of_a_published_event() {
     as_role(
         &t,
         &format!(
-            "{INSERT_EVENT}; ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+            "{INSERT_EVENT}; SET CONSTRAINTS ALL IMMEDIATE; \
+             ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
              UPDATE forge.events SET seq = 1, sequenced_at = now(), \
                  payload = '{{\"name\": \"alice\", \"repo\": 7}}'; \
              ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only"

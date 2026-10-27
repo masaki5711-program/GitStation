@@ -401,6 +401,24 @@ impl FreshDb {
         Self { db, name, app }
     }
 
+    /// A fresh database with the product migrations applied (as
+    /// forge_migrator, like `forge db migrate`).
+    pub async fn migrated() -> Self {
+        let t = Self::new().await;
+        let mut mc = Db::connect_migrator(&t.migrate_config(&[]).db)
+            .await
+            .expect("migrator");
+        crate::migrate(
+            &mut mc,
+            &crate::MIGRATOR,
+            std::time::Duration::from_secs(60),
+        )
+        .await
+        .expect("migrate");
+        mc.close().await;
+        t
+    }
+
     /// The application config (forge_app) with extra settings.
     pub fn app_config(&self, extra: &[(&str, &str)]) -> TestConfig {
         test_config(&url_as("forge_app", &self.name), APP_PASSWORD, extra)

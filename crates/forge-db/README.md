@@ -101,6 +101,18 @@ create a fresh database `forge_t_<uuid>` and drop it at the end.
 `forge db status --check` exits 1 with FG-DB-0004 when serve would refuse.
 Runbook: `ops/runbooks/db-migration.md`.
 
+**Changes** (ADR-0016 §6, step C3): `change::ChangeTx` (crate-private) runs a
+change on the write pool — state writes via `conn()` / `within()`, then
+`commit(ChangeRecord)` writes the audit row and up to 100 events
+(`DomainEvent`, UUIDv7 ids) within 30 s, then commits (own 10 s bound; a
+timeout there is FG-DB-0002 `commit_outcome_unknown`). A repeated
+`dedup_key` rolls the whole change back (`Committed::Deduped`). Invalid
+changes are FG-DB-0010 before anything is written (rules in
+`change/validate.rs`; client-supplied values are cut, never refused);
+an event committed without an audit row in its transaction — derived events
+included until C5 — is FG-DB-0013 (deferred trigger `events_audit_present`).
+The typed commands (step D) are its only callers.
+
 **Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
 `forge.event_feed_state`, `forge.event_subscribers`,
 `forge.subscriber_dead_letters`, `forge.jobs`; the DDL-status decision is
