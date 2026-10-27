@@ -47,11 +47,11 @@ connection, mapping driver errors to registered codes, migrations
 **Error codes owned**: FG-DB-0001 DbUnavailable (`reason`, `target`),
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
 MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
-AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`). Reserved:
-FG-DB-0005 (Outbox sequencer, ADR-0012).
+AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-0005
+OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
-`append-only-violation.md`.
+`append-only-violation.md`, `outbox-sequencer-lag.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -125,3 +125,16 @@ redacts; event_feed_state only moves forward; forge_app cannot write the
 reserved audit actions (db.migrate, audit.*, feed.*, events.*). `bootstrap::check` also verifies their triggers, the
 exact privileges of every migrated table and unacknowledged unexpected DDL.
 Schema tests (`src/schema_tests.rs`) migrate a fresh database each.
+
+**Sequencer** (ADR-0016 §7, ADR-0018 §3, step C4): `forge.assign_seq(max_batch,
+include_audit)` (migration `20261027110000`, owned by forge_seq, SECURITY
+DEFINER, EXECUTE for forge_app only) numbers committed events gap-free in id
+order — and audit rows only when `include_audit` AND
+`audit_sequencing_enabled` — under an advisory lock, creating the
+`event_feed_state` row on its first call. `sequencer::run_once(&db,
+BatchSize, AuditSequencing)` calls it on the write pool and, in the same
+transaction, `NOTIFY forge_events_sequenced` (payload: the last event seq)
+when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
+`forge doctor` (`outbox.unsequenced_count`, `outbox.sequencer_lag`,
+FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
+`bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).

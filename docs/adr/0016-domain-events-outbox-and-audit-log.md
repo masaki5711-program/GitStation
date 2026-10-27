@@ -590,3 +590,13 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   長い値を送って拒否の監査そのものを書かせない、という回避を防ぐ。
 - **手順 D で決める（未決）**: `dedup_key` はインスタンス全体で一意なので、型付きのコマンドはサーバー側の ID だけから作る（利用者の値をそのまま使わない）。キーにプロジェクトや種類の接頭辞を強制するか、
   プロジェクトを指さない監査の行の変更がプロジェクトのイベントを出してよいかは、最初の呼び出し元を入れる手順 D で決める。
+
+## Amendment（2026-10-28、手順 C4: シーケンサーと `forge worker`）
+
+- **監査の番号付けは C9 まで行わない**: `forge worker` は `forge.assign_seq(1000, include_audit)` に常に `include_audit = false`（`AuditSequencing::Skip`）を渡す。
+  ADR-0018 §5 のプロセスごとの比較の状態（`unknown` / `ok`）は C9 で入り、その状態が `ok` のときだけ `true` を渡す。それまで監査の行は番号を待つが、
+  `audit_sequencing_enabled` も `false` のまま（変えられるのは C9 の `forge_seq` の関数だけ）なので、`FG-DB-0005` の遅れには数えない。
+- **NOTIFY はイベントに番号を振ったバッチだけ**: 監査の行だけを番号付けしたバッチは `forge_events_sequenced` を送らない（購読者はイベントだけを読む）。payload はバッチの最後の `seq`。
+- **`event_feed_state` の行は `assign_seq` の最初の呼び出しが作る**（advisory lock の中で、`forge_audit.cluster_identity()` と新しい `epoch`）。その表の保護のトリガーは UPDATE・DELETE だけを見るので、
+  `forge_seq` の INSERT は通る（行は主キーで 1 行だけ）。`forge_app` は INSERT を持たない。
+- **LISTEN の接続（`Db::listen_options()`）は C5 に送る**: シーケンサーは LISTEN しない。最初の LISTEN の利用者は購読者（C5）。

@@ -508,6 +508,22 @@ fix = "pending: run `forge db migrate` (an approved runbook step). db_ahead: dep
 runbook = "db-migration"
 test = "pending_migrations_are_schema_incompatible"
 
+# ── C4: the outbox sequencer (ADR-0016 §7, ADR-0018 §3) ──────────────────
+[[error]]
+code = "FG-DB-0005"
+name = "OutboxSequencerLag"
+http_status = 500
+severity = "alert"
+user_message_ja = "更新の通知が遅れています。管理者に連絡してください。"
+user_message_en = "Change notifications are delayed. Contact the administrator."
+user_message_id = "Notifikasi perubahan tertunda. Hubungi administrator."
+cause = "Committed rows wait for their sequence number and the sequencer has not run for more than 30 seconds: forge.events rows (or, while audit sequencing is enabled, forge.audit_log rows) have seq IS NULL and forge.event_feed_state.sequencer_heartbeat is older than 30 s or missing. No `forge worker` is running, it cannot reach the database, or every forge.assign_seq call fails. Until it recovers, subscribers, the integration feed and webhooks see nothing new; nothing is lost (the rows wait)."
+diagnosis = "forge doctor (`outbox.sequencer_lag`, `outbox.unsequenced_count`) reports it with `unsequenced_count` (events plus counted audit rows), `unsequenced_events`, `unsequenced_audit` (`off` while audit sequencing is intentionally off: those rows are not counted), `heartbeat_age_ms` (`none` = the sequencer never ran in this database) and `lock_holder_pid` (the session holding the sequencer's advisory lock, `none` if nobody does). Check that a `forge worker` process runs (systemctl status forge-worker) and read its log: the first failure of a streak is logged once with `context` containing `task=sequencer` and `retry_in_ms`, under the failing call's own error_code (FG-DB-0001: database unreachable; FG-DB-0002 query=sequencer.assign_seq with reason lock_timeout: another session holds the lock — see lock_holder_pid in pg_stat_activity; FG-DB-0009: a guard refused the numbering); `forge.worker.task_recovered` marks the end of a streak."
+fix = "Start or restart `forge worker` (an approved runbook step in production); fix the failure its log names. A session that holds the advisory lock for long (lock_holder_pid) is ended only after review. Never number rows by hand: only forge.assign_seq may set seq."
+runbook = "outbox-sequencer-lag"
+test = "a_stale_sequencer_with_a_backlog_is_outbox_sequencer_lag"
+# ── end C4 ───────────────────────────────────────────────────────────────
+
 [[error]]
 code = "FG-DB-0009"
 name = "AppendOnlyViolation"

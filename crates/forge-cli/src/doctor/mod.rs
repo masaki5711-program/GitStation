@@ -1,7 +1,9 @@
 //! `forge doctor` — read-only checks of everything `forge serve` needs:
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
-//! (`db.connections`), schema, storage root and the git binary. One line
+//! (`db.connections`), schema, the outbox backlog and sequencer lag
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), storage root and
+//! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool.
@@ -14,7 +16,7 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, Db, MIGRATOR};
+use forge_db::{bootstrap, sequencer, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
@@ -41,7 +43,13 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 3] = ["db.bootstrap", "db.connections", "schema"];
+const DB_CHECKS: [&str; 5] = [
+    "db.bootstrap",
+    "db.connections",
+    "schema",
+    "outbox.unsequenced_count",
+    "outbox.sequencer_lag",
+];
 
 /// Every failed check is logged once here (with `request_id`); the caller
 /// prints the worst one without logging it again.
@@ -135,7 +143,44 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         },
         Err(e) => fail("schema", e),
     };
-    vec![bootstrap, connections, schema]
+    let [unsequenced, lag] = outbox_checks(db).await;
+    vec![bootstrap, connections, schema, unsequenced, lag]
+}
+
+/// `outbox.unsequenced_count` (what waits for a number) and
+/// `outbox.sequencer_lag` (`FG-DB-0005`, ADR-0016 §7).
+async fn outbox_checks(db: &Db) -> [Check; 2] {
+    match sequencer::backlog(db).await {
+        Ok(Some(b)) => {
+            let audit = b.unsequenced_audit.map_or_else(
+                || "audit sequencing off".to_owned(),
+                |n| format!("{n} audit"),
+            );
+            let count = ok(
+                "outbox.unsequenced_count",
+                &format!("{} events, {audit}", b.unsequenced_events),
+            );
+            let lag = match b.check_lag() {
+                Ok(()) => ok(
+                    "outbox.sequencer_lag",
+                    &match b.heartbeat_age_ms {
+                        Some(age) => format!("heartbeat {age} ms ago"),
+                        None => "no backlog, no sequencer run yet".to_owned(),
+                    },
+                ),
+                Err(e) => fail("outbox.sequencer_lag", e),
+            };
+            [count, lag]
+        }
+        Ok(None) => [
+            skip("outbox.unsequenced_count", "schema not migrated"),
+            skip("outbox.sequencer_lag", "schema not migrated"),
+        ],
+        Err(e) => [
+            fail("outbox.unsequenced_count", e),
+            skip("outbox.sequencer_lag", "backlog unavailable"),
+        ],
+    }
 }
 
 /// `git version` from PATH, with an isolated HOME (no user configuration).

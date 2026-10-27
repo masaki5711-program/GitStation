@@ -16,7 +16,9 @@ use sqlx::Connection as _;
 use crate::{read_query_error, Db};
 
 mod acl;
+mod definer;
 mod objects;
+mod records;
 mod roles;
 mod schema;
 
@@ -75,8 +77,9 @@ pub async fn check(db: &Db, privileged_members: &[PrivilegedMember]) -> Result<i
         objects::check_settings(&mut tx).await?;
         acl::check_privileges(&mut tx).await?;
         schema::check_schema_objects(&mut tx).await?;
-        schema::check_migration_records(&mut tx).await?;
-        schema::check_unexpected_ddl(&mut tx).await?;
+        definer::check_assign_seq(&mut tx).await?;
+        records::check_migration_records(&mut tx).await?;
+        records::check_unexpected_ddl(&mut tx).await?;
         // Read-only: nothing to keep; ending it returns the connection clean.
         tx.rollback()
             .await
