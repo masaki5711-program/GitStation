@@ -314,8 +314,9 @@ async fn every_weakened_object_guard_is_reported() {
 /// and the guard doctor reports.
 #[tokio::test]
 async fn an_elevated_role_or_an_extra_role_of_a_login_is_reported() {
-    let _lock = ClusterLock::exclusive().await;
+    // The database first: FreshDb::new takes the shared lock for step 3.
     let t = FreshDb::new().await;
+    let _lock = ClusterLock::exclusive().await;
     let hop = format!("forge_t_hop_{}", uuid::Uuid::new_v4().simple());
     let cases: Vec<(String, String, &str)> = vec![
         (
@@ -376,8 +377,9 @@ async fn an_elevated_role_or_an_extra_role_of_a_login_is_reported() {
 
 #[tokio::test]
 async fn an_unlisted_privileged_member_is_role_membership_changed() {
-    let _lock = ClusterLock::exclusive().await;
+    // The database first: FreshDb::new takes the shared lock for step 3.
     let t = FreshDb::new().await;
+    let _lock = ClusterLock::exclusive().await;
     let role = format!("forge_t_dba_{}", uuid::Uuid::new_v4().simple());
     let _undo = Restore(vec![format!("DROP ROLE IF EXISTS \"{role}\"")]);
     let mut su = superuser(&maintenance_db()).await;

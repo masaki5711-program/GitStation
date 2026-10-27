@@ -874,10 +874,11 @@ async fn a_db_migrate_row_outside_the_shipped_migrations_is_reported() {
         "{\"version\": 20261027100000, \"guarded_changes\": []}",
     ] {
         let t = migrated().await;
+        // As forge_owner: only a migration's role may write db.migrate rows.
         t.exec_superuser(&format!(
-            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
-             request_id, details) VALUES ('system', 'db.migrate', 'succeeded', 'migration', \
-             'db.migrate', '{forged}')"
+            "SET ROLE forge_owner; INSERT INTO forge.audit_log (actor_kind, action, outcome, \
+             resource_type, request_id, details) VALUES ('system', 'db.migrate', 'succeeded', \
+             'migration', 'db.migrate', '{forged}')"
         ))
         .await;
         let text = bootstrap::check(&t.db, &[])
@@ -938,5 +939,27 @@ async fn a_change_to_an_identity_sequence_touches_its_table() {
     let t = migrated().await;
     migration_like(&t, "ALTER SEQUENCE forge.audit_log_id_seq CACHE 2", "[]").await;
     assert_eq!(unexpected_rows(&t).await.len(), 1);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn only_migrations_write_db_migrate_rows_and_guarded_tables_keep_their_names() {
+    let t = migrated().await;
+    let mut su = t.superuser().await;
+    for (sql, expected) in [
+        (
+            "SET ROLE forge_seq; INSERT INTO forge.audit_log (actor_kind, action, outcome, \
+             resource_type, request_id) VALUES ('system', 'db.migrate', 'succeeded', 'x', 'r')",
+            Some("XF001"),
+        ),
+        ("RESET ROLE", None),
+        (
+            "ALTER TABLE forge.audit_log RENAME TO audit_log_old",
+            Some("XF001"),
+        ),
+        ("ALTER TABLE forge.events SET SCHEMA public", Some("XF001")),
+    ] {
+        assert_eq!(state_of(&mut su, sql).await.as_deref(), expected, "{sql}");
+    }
     t.drop_now().await;
 }

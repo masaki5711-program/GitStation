@@ -439,6 +439,20 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = 'XF001',
             MESSAGE = 'a guarded table cannot inherit, be inherited from or be a partition';
     END IF;
+    -- Guarded tables are known by name: one that no longer resolves was
+    -- renamed, moved or dropped — refused, so no check loses track of it.
+    IF TG_EVENT = 'ddl_command_end' AND EXISTS (
+        SELECT 1 FROM forge_audit.guarded_objects AS g
+        WHERE g.object_type = 'table'
+          -- The catalog, not to_regclass: forge_audit has no USAGE on forge.
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_catalog.pg_class AS c
+              JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+              WHERE pg_catalog.format('%I.%I', n.nspname, c.relname) = g.object_identity)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'a guarded table cannot be renamed, moved to another schema or dropped';
+    END IF;
 END
 $$;
 ALTER FUNCTION forge_audit.ddl_audit_record() OWNER TO forge_audit;
@@ -614,6 +628,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (7);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (8);
 
 COMMIT;

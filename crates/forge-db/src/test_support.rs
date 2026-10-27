@@ -219,12 +219,14 @@ async fn ensure_shared() {
                     .await
                     .expect("bootstrap step 2 (shared)");
             }
+            let cluster = ClusterLock::shared().await;
             let mut owner = superuser(SHARED_DB).await;
             sqlx::raw_sql(&bootstrap_sql(2))
                 .execute(&mut owner)
                 .await
                 .expect("bootstrap step 3 (shared)");
             drop(owner);
+            drop(cluster);
             sqlx::query("SELECT pg_advisory_unlock(hashtext('forge.test.shared_db'))")
                 .execute(&mut admin)
                 .await
@@ -276,24 +278,58 @@ impl Drop for Restore {
 
 /// A cluster-wide advisory lock on the maintenance database (held while
 /// this value lives).
-pub struct ClusterLock {
-    _held: PgConnection,
+///
+/// The shared lock is reentrant per test process: every holder in the
+/// process shares one database session. PostgreSQL queues a new shared
+/// request behind a waiting exclusive one, so a test that holds the shared
+/// lock and asks for it again (FreshDb::new inside a guarded test) would
+/// otherwise deadlock with an exclusive waiter. An exclusive holder must not
+/// ask for the shared lock (create its FreshDb before taking it).
+pub enum ClusterLock {
+    Shared,
+    Exclusive { _held: PgConnection },
 }
+
+/// The process's shared-lock session and its number of holders.
+static SHARED_HOLD: std::sync::Mutex<(usize, Option<PgConnection>)> =
+    std::sync::Mutex::new((0, None));
 
 impl ClusterLock {
     const KEY: &'static str = "forge.test.cluster_roles";
 
-    /// For tests that run the role guards.
+    /// For tests that run the role guards (and step 3).
     pub async fn shared() -> Self {
-        Self::take("pg_advisory_lock_shared").await
+        if Self::join_shared() {
+            return Self::Shared;
+        }
+        let conn = Self::take("pg_advisory_lock_shared").await;
+        let mut hold = SHARED_HOLD.lock().expect("shared lock state");
+        hold.0 += 1;
+        if hold.1.is_none() {
+            hold.1 = Some(conn);
+        }
+        // Otherwise another task got there first: `conn` is dropped (its
+        // session, and its share of the lock, end with it).
+        Self::Shared
+    }
+
+    fn join_shared() -> bool {
+        let mut hold = SHARED_HOLD.lock().expect("shared lock state");
+        if hold.0 > 0 {
+            hold.0 += 1;
+            return true;
+        }
+        false
     }
 
     /// For tests that change a cluster role.
     pub async fn exclusive() -> Self {
-        Self::take("pg_advisory_lock").await
+        Self::Exclusive {
+            _held: Self::take("pg_advisory_lock").await,
+        }
     }
 
-    async fn take(function: &str) -> Self {
+    async fn take(function: &str) -> PgConnection {
         ensure_cluster().await;
         let mut conn = superuser(&maintenance_db()).await;
         sqlx::query(&format!("SELECT {function}(hashtext($1))"))
@@ -301,7 +337,20 @@ impl ClusterLock {
             .execute(&mut conn)
             .await
             .expect("cluster lock");
-        Self { _held: conn }
+        conn
+    }
+}
+
+impl Drop for ClusterLock {
+    fn drop(&mut self) {
+        if let Self::Shared = self {
+            let mut hold = SHARED_HOLD.lock().expect("shared lock state");
+            hold.0 = hold.0.saturating_sub(1);
+            if hold.0 == 0 {
+                // Dropping the session releases the lock on the server.
+                hold.1 = None;
+            }
+        }
     }
 }
 
@@ -337,12 +386,16 @@ impl FreshDb {
                 .expect("bootstrap step 2 (02-create-database.sql)");
             drop(admin);
         }
+        // Step 3 resets role-wide settings of the bootstrap roles: never while
+        // a test changes a role.
+        let cluster = ClusterLock::shared().await;
         let mut owner = superuser(&name).await;
         sqlx::raw_sql(&bootstrap_sql(2))
             .execute(&mut owner)
             .await
             .expect("bootstrap step 3 (03-database-objects.sql)");
         owner.close().await.expect("close");
+        drop(cluster);
         let app = test_config(&url_as("forge_app", &name), APP_PASSWORD, &[]);
         let db = Db::connect(&app.db).await.expect("connect as forge_app");
         Self { db, name, app }
