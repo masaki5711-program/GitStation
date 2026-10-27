@@ -222,8 +222,12 @@ const SCHEMA_TABLES: &[&str] = &[
 /// the schema check reports it pending; after it, a missing table is a
 /// guard failure, never a skip.
 async fn schema_applied(conn: &mut PgConnection) -> Result<bool, ForgeError> {
+    // Either the bookkeeping says so, or the tables are there (forge_owner
+    // can delete the bookkeeping row with plain DML, which the DDL log does
+    // not see).
     sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM forge._sqlx_migrations WHERE version = $1 AND success)",
+        "SELECT EXISTS (SELECT 1 FROM forge._sqlx_migrations WHERE version = $1 AND success) \
+         OR to_regclass('forge.audit_log') IS NOT NULL",
     )
     .bind(FIRST_SCHEMA_VERSION)
     .fetch_one(&mut *conn)
@@ -241,14 +245,23 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
          pg_catalog.pg_get_userbyid(c.relowner) = 'forge_owner' \
          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite rw WHERE rw.ev_class = c.oid) \
          AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity \
+         AND c.relkind = 'r' AND NOT c.relispartition \
+         AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i \
+                         WHERE i.inhparent = c.oid OR i.inhrelid = c.oid) \
          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
          WHERE n.nspname = 'forge' AND c.relname = ANY($1)",
     )
-    .bind(SCHEMA_TABLES)
+    .bind(
+        [SCHEMA_TABLES, &["_sqlx_migrations"]]
+            .concat()
+            .iter()
+            .map(|t| (*t).to_owned())
+            .collect::<Vec<_>>(),
+    )
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.schema_tables", e))?;
-    for table in SCHEMA_TABLES {
+    for table in SCHEMA_TABLES.iter().chain(&["_sqlx_migrations"]) {
         if !rows.iter().any(|(name, ok)| name == table && *ok) {
             return Err(
                 guard_missing("object_owner").with_context("object", format!("forge.{table}"))

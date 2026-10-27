@@ -272,6 +272,8 @@ CREATE TABLE IF NOT EXISTS forge_audit.ddl_audit_ack (
 
 -- What DDL must not touch without a migration that names it (§3).
 -- Migrations (forge_owner) append rows for the objects they create.
+CREATE INDEX IF NOT EXISTS ddl_audit_ack_target ON forge_audit.ddl_audit_ack (ddl_audit_id);
+
 CREATE TABLE IF NOT EXISTS forge_audit.guarded_objects (
     object_type text NOT NULL,
     object_identity text NOT NULL,
@@ -397,6 +399,17 @@ BEGIN
                     WHEN r.object_type = 'index' THEN
                         (SELECT indrelid::regclass::text FROM pg_catalog.pg_index
                          WHERE indexrelid = r.objid)
+                    WHEN r.classid = 'pg_catalog.pg_rewrite'::regclass THEN
+                        (SELECT ev_class::regclass::text FROM pg_catalog.pg_rewrite
+                         WHERE oid = r.objid)
+                    WHEN r.classid = 'pg_catalog.pg_policy'::regclass THEN
+                        (SELECT polrelid::regclass::text FROM pg_catalog.pg_policy
+                         WHERE oid = r.objid)
+                    -- A table that inherits from (or is a partition of) another:
+                    -- the change touches the parent.
+                    WHEN r.classid = 'pg_catalog.pg_class'::regclass THEN
+                        (SELECT pg_catalog.string_agg(i.inhparent::regclass::text, ',')
+                         FROM pg_catalog.pg_inherits AS i WHERE i.inhrelid = r.objid)
                 END);
             n := n + 1;
         END LOOP;
@@ -486,16 +499,20 @@ BEGIN
                 AND (NOT g.guarded OR m.changes ?| n.names))),
            EXISTS (SELECT 1 FROM forge_audit.ddl_audit_ack AS a WHERE a.ddl_audit_id = d.id)
     FROM forge_audit.ddl_audit AS d
+    -- parent_identity comes from the catalog (ddl_audit_record), never
+    -- from the object's name (a quoted name may contain " on ").
     CROSS JOIN LATERAL (
-        SELECT CASE WHEN d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
-                    THEN pg_catalog.split_part(d.object_identity, ' on ', 2)
-                    ELSE d.parent_identity END AS parent,
-               d.object_type IN ('trigger', 'rule', 'policy', 'table constraint') AS child
+        SELECT d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
+                   AND d.parent_identity IS NOT NULL
+                   AND pg_catalog.right(d.object_identity,
+                           pg_catalog.length(' on ' || d.parent_identity))
+                       = ' on ' || d.parent_identity AS child
     ) AS c
     CROSS JOIN LATERAL (
         SELECT EXISTS (
             SELECT 1 FROM forge_audit.guarded_objects AS go
-            WHERE go.object_identity IN (d.object_identity, c.parent)
+            WHERE go.object_identity = d.object_identity
+               OR go.object_identity = ANY (pg_catalog.string_to_array(d.parent_identity, ','))
         ) AS guarded
     ) AS g
     CROSS JOIN LATERAL (
@@ -503,15 +520,19 @@ BEGIN
             d.object_identity,
             pg_catalog.regexp_replace(d.object_identity, '\(.*\)$', ''),
             CASE WHEN c.child
-                 THEN c.parent || '.' || pg_catalog.split_part(d.object_identity, ' on ', 1)
-                 ELSE c.parent END
+                 THEN d.parent_identity || '.' || pg_catalog.left(d.object_identity,
+                          pg_catalog.length(d.object_identity)
+                          - pg_catalog.length(' on ' || d.parent_identity))
+                 WHEN d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
+                 THEN NULL
+                 ELSE d.parent_identity END
         ], NULL) AS names
     ) AS n
     CROSS JOIN LATERAL (
         SELECT pg_catalog.count(al.txid) > 0 AS present,
                coalesce(pg_catalog.jsonb_agg(e.value) FILTER (WHERE e.value IS NOT NULL),
                         '[]'::jsonb) AS changes
-        FROM forge.audit_log AS al
+        FROM ONLY forge.audit_log AS al
         LEFT JOIN LATERAL pg_catalog.jsonb_array_elements(
             coalesce(al.details -> 'guarded_changes', '[]'::jsonb)) AS e ON true
         WHERE al.txid = d.txid AND al.action = 'db.migrate'
@@ -571,6 +592,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (5);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (6);
 
 COMMIT;

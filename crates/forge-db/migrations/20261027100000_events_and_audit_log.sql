@@ -179,7 +179,7 @@ BEGIN
         IF current_user = 'forge_seq' AND OLD.seq IS NULL AND NEW.seq IS NOT NULL
            AND (pg_catalog.to_jsonb(NEW) - 'seq'::text - 'sequenced_at'::text)
                = (pg_catalog.to_jsonb(OLD) - 'seq'::text - 'sequenced_at'::text) THEN
-            SELECT s.high_seq INTO high FROM forge.event_feed_state AS s WHERE s.singleton;
+            SELECT s.high_seq INTO high FROM ONLY forge.event_feed_state AS s WHERE s.singleton;
             IF high IS NULL OR NEW.seq <= high OR NEW.seq > high + 1000 THEN
                 RAISE EXCEPTION USING ERRCODE = 'XF001',
                     MESSAGE = pg_catalog.format(
@@ -188,7 +188,10 @@ BEGIN
             END IF;
             NEW.sequenced_at := pg_catalog.now();
             RETURN NEW;
-        ELSIF current_user = 'forge_purge'
+        -- Redaction of a published event: the payload only, and the result
+        -- carries the redaction marker (events_redact_user, C10).
+        ELSIF current_user = 'forge_purge' AND OLD.seq IS NOT NULL
+              AND (NEW.payload ->> 'redacted'::text) = 'true'
               AND (pg_catalog.to_jsonb(NEW) - 'payload'::text)
                   = (pg_catalog.to_jsonb(OLD) - 'payload'::text) THEN
             RETURN NEW;
@@ -233,7 +236,7 @@ BEGIN
         IF current_user = 'forge_seq' AND OLD.seq IS NULL AND NEW.seq IS NOT NULL
            AND (pg_catalog.to_jsonb(NEW) - 'seq'::text - 'sequenced_at'::text)
                = (pg_catalog.to_jsonb(OLD) - 'seq'::text - 'sequenced_at'::text) THEN
-            SELECT s.audit_high_seq INTO high FROM forge.event_feed_state AS s WHERE s.singleton;
+            SELECT s.audit_high_seq INTO high FROM ONLY forge.event_feed_state AS s WHERE s.singleton;
             IF high IS NULL OR NEW.seq <= high OR NEW.seq > high + 1000 THEN
                 RAISE EXCEPTION USING ERRCODE = 'XF001',
                     MESSAGE = pg_catalog.format(
@@ -268,8 +271,9 @@ END
 $$;
 REVOKE ALL ON FUNCTION forge.audit_log_guard() FROM PUBLIC;
 
--- The feed state: one row; the counters only grow (a sequencer bug or a
--- misused credential cannot move them back and renumber behind readers);
+-- The feed state: one row; the counters only grow, by at most one batch
+-- (1000) per update (a sequencer bug or a misused credential cannot move
+-- them back and renumber behind readers, or leap ahead);
 -- retained_from stays within [1, high_seq + 1]; the identity columns change
 -- only through forge_seq (rotate_epoch, C4); the row is never deleted.
 CREATE FUNCTION forge.event_feed_state_guard() RETURNS trigger
@@ -278,8 +282,8 @@ CREATE FUNCTION forge.event_feed_state_guard() RETURNS trigger
 AS $$
 BEGIN
     IF TG_OP = 'UPDATE'
-       AND NEW.high_seq >= OLD.high_seq
-       AND NEW.audit_high_seq >= OLD.audit_high_seq
+       AND NEW.high_seq BETWEEN OLD.high_seq AND OLD.high_seq + 1000
+       AND NEW.audit_high_seq BETWEEN OLD.audit_high_seq AND OLD.audit_high_seq + 1000
        AND NEW.retained_from >= OLD.retained_from
        AND NEW.retained_from <= NEW.high_seq + 1
        AND (current_user = 'forge_seq'

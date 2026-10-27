@@ -408,12 +408,12 @@ async fn purge_changes_only_payloads_and_deletes_only_old_published_events() {
         &format!("{INSERT_EVENT}; {INSERT_EVENT_2}"),
         "forge_purge",
         &[
+            // Unsequenced: neither redacted nor deleted.
             (
                 "UPDATE forge.events SET payload = '{\"redacted\": true}'",
-                None,
+                Some("XF001"),
             ),
             ("UPDATE forge.events SET aggregate_id = 9", Some("42501")),
-            // Unsequenced and recent: never deleted.
             ("DELETE FROM forge.events", Some("XF001")),
         ],
     )
@@ -422,7 +422,18 @@ async fn purge_changes_only_payloads_and_deletes_only_old_published_events() {
         &t,
         &format!("RESET ROLE; {OLD_PUBLISHED_EVENT}"),
         "forge_purge",
-        &[("DELETE FROM forge.events WHERE seq = 1", None)],
+        &[
+            // A published event: redaction carries the marker.
+            (
+                "UPDATE forge.events SET payload = '{\"name\": \"other\"}' WHERE seq = 1",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.events SET payload = '{\"redacted\": true}' WHERE seq = 1",
+                None,
+            ),
+            ("DELETE FROM forge.events WHERE seq = 1", None),
+        ],
     )
     .await;
     t.drop_now().await;
@@ -778,5 +789,84 @@ async fn a_partial_acknowledgement_still_reports_the_rest() {
         .to_string();
     assert!(text.contains("reason=unexpected_ddl"), "{text}");
     assert!(text.contains("count=1"), "{text}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_quoted_name_or_an_inheriting_table_does_not_hide_a_guarded_change() {
+    // A rule whose own name contains " on ".
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "CREATE RULE \"r on forge.jobs\" AS ON INSERT TO forge.events DO INSTEAD NOTHING",
+        "[]",
+    )
+    .await;
+    assert_eq!(unexpected_rows(&t).await.len(), 1);
+    t.drop_now().await;
+    // A table inheriting from a guarded one touches the guarded table.
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "CREATE TABLE forge.audit_archive () INHERITS (forge.audit_log)",
+        "[]",
+    )
+    .await;
+    let rows = unexpected_rows(&t).await;
+    assert!(
+        rows.iter()
+            .any(|(_, o)| o.as_deref() == Some("forge.audit_archive")),
+        "{rows:?}"
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn inheritance_and_rules_on_the_bookkeeping_are_reported() {
+    let _lock = ClusterLock::shared().await;
+    for (tamper, context) in [
+        (
+            "CREATE TABLE forge.audit_archive () INHERITS (forge.audit_log)",
+            "object=forge.audit_log",
+        ),
+        (
+            "CREATE RULE keep AS ON DELETE TO forge._sqlx_migrations DO INSTEAD NOTHING",
+            "object=forge._sqlx_migrations",
+        ),
+    ] {
+        let t = migrated().await;
+        t.exec_superuser(tamper).await;
+        let text = bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(tamper)
+            .to_string();
+        assert!(
+            text.contains("guard=object_owner") && text.contains(context),
+            "{tamper}\n=> {text}"
+        );
+        t.drop_now().await;
+    }
+}
+
+#[tokio::test]
+async fn the_feed_state_moves_at_most_one_batch_per_update() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        FEED_STATE,
+        "forge_seq",
+        &[
+            (
+                "UPDATE forge.event_feed_state SET high_seq = 1011",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.event_feed_state SET audit_high_seq = 1006",
+                Some("XF001"),
+            ),
+            ("UPDATE forge.event_feed_state SET high_seq = 1010", None),
+        ],
+    )
+    .await;
     t.drop_now().await;
 }
