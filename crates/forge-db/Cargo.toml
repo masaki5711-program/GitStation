@@ -21,7 +21,9 @@ uuid = { workspace = true, optional = true }
 test-support = ["dep:tempfile", "dep:uuid"]
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true
+toml.workspace = true
 uuid.workspace = true
 
 [lints]

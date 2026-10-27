@@ -28,6 +28,8 @@
      - `object_owner` で `object=database` / `schema public`: DB か `public` の所有者が superuser でない（`forge_owner` が DB を持つと、superuser のセッションに関数を仕掛けられる）。拡張の名前なら `forge_audit` に拡張がある
      - `privileges`: DB・スキーマ（`public`・`forge`・`forge_audit`）・記録の表・`forge._sqlx_migrations` の権限、または `forge_owner`・`forge_seq`・`forge_purge` の既定の権限が出荷した状態と違う（`object`。見つかった権限の一覧はログの `grants`）。GRANT / REVOKE は DDL の記録に対象が残らないので、これが唯一の検出
      - `db_settings`: DB の既定のセッションの設定（`ALTER DATABASE … SET`、`role=*`）か、ログインの設定が導入の手順のもの（`search_path` の 3 行）と違う（`role`）
+   - `reason=unexpected_ddl`: 導入の手順でもマイグレーションでもない DDL が、確認されないまま残っている（ログに `count` と `first_id`）。
+     `SELECT id, occurred_at, session_user_name, application_name, command_tag, object_identity FROM forge.ddl_audit_status WHERE NOT expected AND NOT acknowledged ORDER BY id;` で一覧にする
    - `reason=role_membership_changed`: ログの `unexpected`（決まったものでも `database.privileged_members` にもないメンバーの関係、または ADMIN OPTION 付き。`member->role`）と
      `missing`（あるはずのメンバーの関係）。
 2. 状態を確かめる（読み取りのみ。`forge_app` で接続してよい。superuser で接続するときは、最初に `SET search_path = pg_catalog, pg_temp;` を実行する）:
@@ -46,7 +48,9 @@
    03 は保護のトリガーとイベントトリガーを作り直し、余分なトリガーを外し、関数と権限と所有者を揃える。`[MUTATING — needs approval]`（ロールバック: 不要。出荷した状態に揃えるだけ。外したトリガーの名前は警告に出るので障害記録に残す）
 3. `role_attributes`: `01-cluster-roles.sql` を再実行して属性を戻す。`[MUTATING — needs approval]`（ロールバック: 不要）
 4. `role_separation` / `role_membership_changed` で正当でないメンバーの関係: 外す（`REVOKE <role> FROM <member>;`）。`[MUTATING — needs approval]`（ロールバック: 外したメンバーの関係を `GRANT` で戻す。外す前の一覧を障害記録に残す）
-5. `role_membership_changed` で正当な管理者のロール: レビューの後、`database.privileged_members` に `role:member` を追加する。`[MUTATING — needs approval]`（ロールバック: 設定から外す）
+5. `unexpected_ddl`: 変更を誰が・なぜ行ったかを確かめる。正当なら確認の行を残す（`forge_maint` で `INSERT INTO forge_audit.ddl_audit_ack (ddl_audit_id, note) VALUES (<id>, '<理由>');`。`forge admin ddl-audit ack` ができるまでの手順）。`[MUTATING — needs approval]`（ロールバック: 不可。確認の行は追記のみ。誤って確認した場合は、その旨を新しい確認の行の `note` に残す）。正当でない変更は戻し、セキュリティの事案として扱う
+6. マイグレーションで作った表（`forge.events` など）の `privileges` / `log_triggers`: 03 では直らない。出荷した状態はマイグレーションのファイルにあるので、余分な権限を `REVOKE` し、トリガーを `ALTER TABLE … ENABLE ALWAYS TRIGGER …` で戻す（superuser、`SET search_path = pg_catalog, pg_temp;` から）。`[MUTATING — needs approval]`（ロールバック: 外した権限を `GRANT` で戻す。前の状態をログの `grants` から障害記録に残す）
+7. `role_membership_changed` で正当な管理者のロール: レビューの後、`database.privileged_members` に `role:member` を追加する。`[MUTATING — needs approval]`（ロールバック: 設定から外す）
 
 ## Verify
 

@@ -169,10 +169,17 @@ async fn concurrent_migrate_runs_are_serialized() {
 }
 
 #[tokio::test]
-async fn the_binary_migrator_matches_an_empty_database() {
-    // No product migrations yet: a fresh database is compatible.
+async fn the_binary_migrations_apply_to_a_fresh_database() {
     let t = FreshDb::new().await;
-    check_schema(&t.db, &MIGRATOR).await.expect("compatible");
+    let err = check_schema(&t.db, &MIGRATOR)
+        .await
+        .expect_err("pending on a fresh database");
+    assert_reason(&err, ErrorCode::SchemaIncompatible, "pending");
+    let applied = run(&t, &MIGRATOR, LONG).await.expect("product migrations");
+    assert!(!applied.is_empty());
+    check_schema(&t.db, &MIGRATOR)
+        .await
+        .expect("compatible after migrate");
     t.drop_now().await;
 }
 

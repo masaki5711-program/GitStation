@@ -4,4 +4,21 @@ Forward-only, append-only (CLAUDE.md §3-6, ADR-0014). File name:
 `YYYYMMDDHHMMSS_<description>.sql` (UTC timestamp: no collisions between
 parallel branches). An applied migration is never edited — the
 `migration-immutability` hook blocks it; fix forward with a new file.
-Each file runs in one transaction. Applied with `forge db migrate`.
+Each file runs in one transaction. Applied with `forge db migrate`, as
+forge_owner (ADR-0018). The root gate `migrations` checks every file:
+
+- every object is qualified `forge.`; the only other write is
+  `INSERT INTO forge_audit.guarded_objects (object_type, object_identity)`
+  for the guarded objects the file creates;
+- every new table is in `../tables.toml` (the ledger: `guarded`, `kind`,
+  `ro_columns`) — tests `every_table_is_in_the_ledger` and
+  `guarded_objects_match_the_ledger`;
+- SECURITY DEFINER functions pin `search_path = pg_catalog, forge, pg_temp`
+  and revoke PUBLIC;
+- the last statement is the file's own `forge.audit_log` row with
+  `action = 'db.migrate'` and `details.guarded_changes` naming every
+  guarded object it touches (so `forge.ddl_audit_status` marks its DDL
+  expected).
+
+A new table also needs its privileges in `src/bootstrap/schema.rs` (doctor
+compares them exactly).

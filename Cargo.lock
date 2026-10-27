@@ -543,9 +543,11 @@ version = "0.1.0"
 dependencies = [
  "forge-core",
  "forge-errors",
+ "serde_json",
  "sqlx",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]

@@ -1,0 +1,56 @@
+# The table ledger (ADR-0016 §1, ADR-0018 §3). Every table in schema forge
+# is here (test every_table_is_in_the_ledger); `guarded` tables are the
+# ADR-0018 guarded objects (test guarded_objects_match_the_ledger, and the
+# root migrations gate reads `guarded`).
+#
+#   kind       audited — state whose changes need an audit row in the same
+#                        transaction (deferred trigger, with ChangeTx, C3);
+#              derived — derived / operational state;
+#              log     — the outbox and the audit log themselves.
+#   ro_columns the columns the read pool (forge_ro) may select; "*" = all.
+#
+# Shape (validated by scripts/validate-migrations.js in the root repo):
+# [tables.<bare name>] with a boolean `guarded`.
+
+[tables.events]
+guarded = true
+kind = "log"
+ro_columns = ["*"]
+
+[tables.audit_log]
+guarded = true
+kind = "log"
+# No personal (actor_label, source_ip, user_agent) or act-as (act_as_claimed,
+# act_as_key_id) columns.
+ro_columns = [
+    "id", "seq", "sequenced_at", "txid", "occurred_at", "actor_kind", "actor_user_id",
+    "actor_via_id", "credential_id", "via_assertion_id", "effective_scope", "action", "outcome",
+    "resource_type", "resource_id", "project_id", "request_id", "error_code", "occurrences",
+    "details",
+]
+
+[tables.event_feed_state]
+guarded = true
+kind = "log"
+ro_columns = ["*"]
+
+[tables.event_subscribers]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.subscriber_dead_letters]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+[tables.jobs]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# The migration bookkeeping, created by the bootstrap (step 3).
+[tables._sqlx_migrations]
+guarded = true
+kind = "derived"
+ro_columns = ["*"]

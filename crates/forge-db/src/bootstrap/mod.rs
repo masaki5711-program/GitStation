@@ -18,6 +18,7 @@ use crate::{read_query_error, Db};
 mod acl;
 mod objects;
 mod roles;
+mod schema;
 
 #[cfg(test)]
 use roles::membership_drift;
@@ -73,6 +74,8 @@ pub async fn check(db: &Db, privileged_members: &[PrivilegedMember]) -> Result<i
         objects::check_functions(&mut tx).await?;
         objects::check_settings(&mut tx).await?;
         acl::check_privileges(&mut tx).await?;
+        schema::check_schema_objects(&mut tx).await?;
+        schema::check_unexpected_ddl(&mut tx).await?;
         // Read-only: nothing to keep; ending it returns the connection clean.
         tx.rollback()
             .await
