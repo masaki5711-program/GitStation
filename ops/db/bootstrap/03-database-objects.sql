@@ -452,6 +452,76 @@ $$;
 REVOKE ALL ON FUNCTION forge_audit.cluster_identity() FROM PUBLIC, forge_owner, forge_migrator, forge_seq,
     forge_purge, forge_app, forge_ro, forge_maint;
 GRANT EXECUTE ON FUNCTION forge_audit.cluster_identity() TO forge_app, forge_seq;
+
+-- ── DDL status (§3, decided at read time) ──────────────────────────────
+-- Owned by forge_audit (forge_owner cannot replace or drop it; doctor
+-- compares its body) and SECURITY INVOKER: the caller needs SELECT on the
+-- DDL log and on forge.audit_log (txid, action, details), which exists only
+-- after the first migration. A row is expected when its transaction is a
+-- bootstrap run, or a migration (a db.migrate row in forge.audit_log,
+-- forge_migrator, application_name forge-migrate) whose guarded_changes
+-- name the row's object if it is guarded: a trigger, rule, policy or
+-- constraint by its own name (forge.<table>.<name>), a function without
+-- its argument list, other objects by name or by their parent table.
+-- GRANT / REVOKE rows carry no object (PostgreSQL); doctor's privilege
+-- checks cover them, so inside a migration they count as expected.
+CREATE OR REPLACE FUNCTION forge_audit.ddl_audit_status()
+    RETURNS TABLE (id bigint, occurred_at timestamptz, txid xid8, session_user_name text,
+                   application_name text, command_tag text, object_type text,
+                   object_identity text, parent_identity text, expected boolean,
+                   acknowledged boolean)
+    LANGUAGE plpgsql
+    STABLE
+    SET search_path = pg_catalog, pg_temp
+AS $$
+#variable_conflict use_column
+BEGIN
+    RETURN QUERY
+    SELECT d.id, d.occurred_at, d.txid, d.session_user_name, d.application_name,
+           d.command_tag, d.object_type, d.object_identity, d.parent_identity,
+           (EXISTS (SELECT 1 FROM forge_audit.bootstrap_log AS b WHERE b.txid = d.txid)
+            OR (m.present
+                AND d.session_user_name = 'forge_migrator'
+                AND d.application_name = 'forge-migrate'
+                AND (NOT g.guarded OR m.changes ?| n.names))),
+           EXISTS (SELECT 1 FROM forge_audit.ddl_audit_ack AS a WHERE a.ddl_audit_id = d.id)
+    FROM forge_audit.ddl_audit AS d
+    CROSS JOIN LATERAL (
+        SELECT CASE WHEN d.object_type IN ('trigger', 'rule', 'policy', 'table constraint')
+                    THEN pg_catalog.split_part(d.object_identity, ' on ', 2)
+                    ELSE d.parent_identity END AS parent,
+               d.object_type IN ('trigger', 'rule', 'policy', 'table constraint') AS child
+    ) AS c
+    CROSS JOIN LATERAL (
+        SELECT EXISTS (
+            SELECT 1 FROM forge_audit.guarded_objects AS go
+            WHERE go.object_identity IN (d.object_identity, c.parent)
+        ) AS guarded
+    ) AS g
+    CROSS JOIN LATERAL (
+        SELECT pg_catalog.array_remove(ARRAY[
+            d.object_identity,
+            pg_catalog.regexp_replace(d.object_identity, '\(.*\)$', ''),
+            CASE WHEN c.child
+                 THEN c.parent || '.' || pg_catalog.split_part(d.object_identity, ' on ', 1)
+                 ELSE c.parent END
+        ], NULL) AS names
+    ) AS n
+    CROSS JOIN LATERAL (
+        SELECT pg_catalog.count(al.txid) > 0 AS present,
+               coalesce(pg_catalog.jsonb_agg(e.value) FILTER (WHERE e.value IS NOT NULL),
+                        '[]'::jsonb) AS changes
+        FROM forge.audit_log AS al
+        LEFT JOIN LATERAL pg_catalog.jsonb_array_elements(
+            coalesce(al.details -> 'guarded_changes', '[]'::jsonb)) AS e ON true
+        WHERE al.txid = d.txid AND al.action = 'db.migrate'
+    ) AS m;
+END
+$$;
+ALTER FUNCTION forge_audit.ddl_audit_status() OWNER TO forge_audit;
+REVOKE ALL ON FUNCTION forge_audit.ddl_audit_status() FROM PUBLIC, forge_owner, forge_migrator,
+    forge_seq, forge_purge, forge_app, forge_ro, forge_maint;
+GRANT EXECUTE ON FUNCTION forge_audit.ddl_audit_status() TO forge_app, forge_ro, forge_maint;
 -- CREATE OR REPLACE keeps an existing owner: set it again.
 ALTER FUNCTION forge_audit.cluster_identity() OWNER TO CURRENT_USER;
 
@@ -474,7 +544,8 @@ BEGIN
         WHERE n.nspname = 'forge_audit'
           AND p.oid NOT IN ('forge_audit.reject_log_mutation()'::pg_catalog.regprocedure,
                             'forge_audit.ddl_audit_record()'::pg_catalog.regprocedure,
-                            'forge_audit.cluster_identity()'::pg_catalog.regprocedure)
+                            'forge_audit.cluster_identity()'::pg_catalog.regprocedure,
+                            'forge_audit.ddl_audit_status()'::pg_catalog.regprocedure)
     LOOP
         RAISE WARNING 'forge bootstrap: dropping unexpected function % in forge_audit', x.sig;
         EXECUTE format('DROP FUNCTION %s', x.sig);
@@ -492,6 +563,7 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('function', 'forge_audit.reject_log_mutation()'),
     ('function', 'forge_audit.ddl_audit_record()'),
     ('function', 'forge_audit.cluster_identity()'),
+    ('function', 'forge_audit.ddl_audit_status()'),
     ('event trigger', 'forge_ddl_audit_end'),
     ('event trigger', 'forge_ddl_audit_drop')
 ON CONFLICT DO NOTHING;
@@ -499,6 +571,6 @@ ON CONFLICT DO NOTHING;
 -- Same transaction as the DDL above: ddl_audit rows with this txid are the
 -- bootstrap's own (§3). Bump the version when this file changes; doctor
 -- (db.bootstrap) requires the version its binary was built with.
-INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (4);
+INSERT INTO forge_audit.bootstrap_log (bootstrap_version) VALUES (5);
 
 COMMIT;

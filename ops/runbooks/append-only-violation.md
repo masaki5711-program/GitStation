@@ -29,11 +29,13 @@
      - `privileges`: DB・スキーマ（`public`・`forge`・`forge_audit`）・記録の表・`forge._sqlx_migrations` の権限、または `forge_owner`・`forge_seq`・`forge_purge` の既定の権限が出荷した状態と違う（`object`。見つかった権限の一覧はログの `grants`）。GRANT / REVOKE は DDL の記録に対象が残らないので、これが唯一の検出
      - `db_settings`: DB の既定のセッションの設定（`ALTER DATABASE … SET`、`role=*`）か、ログインの設定が導入の手順のもの（`search_path` の 3 行）と違う（`role`）
    - `reason=unexpected_ddl`: 導入の手順でもマイグレーションでもない DDL が、確認されないまま残っている（ログに `count` と `first_id`）。
-     `SELECT id, occurred_at, session_user_name, application_name, command_tag, object_identity FROM forge.ddl_audit_status WHERE NOT expected AND NOT acknowledged ORDER BY id;` で一覧にする
+     `SELECT id, occurred_at, session_user_name, application_name, command_tag, object_identity FROM forge_audit.ddl_audit_status() WHERE NOT expected AND NOT acknowledged ORDER BY id;` で一覧にする
    - `reason=role_membership_changed`: ログの `unexpected`（決まったものでも `database.privileged_members` にもないメンバーの関係、または ADMIN OPTION 付き。`member->role`）と
      `missing`（あるはずのメンバーの関係）。
 2. 状態を確かめる（読み取りのみ。`forge_app` で接続してよい。superuser で接続するときは、最初に `SET search_path = pg_catalog, pg_temp;` を実行する）:
-   - トリガー: `SELECT c.relname, t.tgname, t.tgenabled, t.tgtype, t.tgfoid::regprocedure, t.tgattr, t.tgqual IS NOT NULL AS has_when FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'forge_audit' AND NOT t.tgisinternal;`
+   - トリガー: `SELECT c.relname, t.tgname, t.tgenabled, t.tgtype, t.tgfoid::regprocedure, t.tgattr, t.tgqual IS NOT NULL AS has_when FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('forge', 'forge_audit') AND NOT t.tgisinternal;`
+   - 表の権限（移行後の表を含む）: `SELECT c.relname, c.relacl FROM pg_class c WHERE c.relnamespace IN ('forge'::regnamespace, 'forge_audit'::regnamespace) AND c.relkind = 'r';`、列の権限は `SELECT attrelid::regclass, attname, attacl FROM pg_attribute WHERE attacl IS NOT NULL AND attrelid IN (SELECT oid FROM pg_class WHERE relnamespace = 'forge'::regnamespace);`
+   - ルールと行のポリシー: `SELECT ev_class::regclass, rulename FROM pg_rewrite WHERE ev_class IN (SELECT oid FROM pg_class WHERE relnamespace = 'forge'::regnamespace) AND rulename <> '_RETURN';`
    - 権限: `SELECT nspname, nspacl FROM pg_namespace WHERE nspname IN ('public', 'forge', 'forge_audit');`、`SELECT datacl FROM pg_database WHERE datname = current_database();`、`SELECT defaclrole::regrole, defaclnamespace::regnamespace, defaclobjtype, defaclacl FROM pg_default_acl;`
    - イベントトリガー: `SELECT evtname, evtevent, evtenabled, evtowner::regrole, evtfoid::regprocedure FROM pg_event_trigger;`
    - メンバーの関係: `SELECT m.rolname AS member, r.rolname AS role, am.admin_option FROM pg_auth_members am JOIN pg_roles r ON r.oid = am.roleid JOIN pg_roles m ON m.oid = am.member WHERE r.rolname LIKE 'forge\_%' OR m.rolname LIKE 'forge\_%';`

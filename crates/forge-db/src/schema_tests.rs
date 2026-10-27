@@ -324,7 +324,7 @@ async fn weakened_schema_guards_are_reported() {
 async fn migrations_leave_no_unexpected_ddl() {
     let t = migrated().await;
     let unexpected: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT command_tag, object_identity FROM forge.ddl_audit_status WHERE NOT expected",
+        "SELECT command_tag, object_identity FROM forge_audit.ddl_audit_status() WHERE NOT expected",
     )
     .fetch_all(t.db.pool().executor())
     .await
@@ -359,7 +359,7 @@ async fn ddl_outside_a_migration_is_unexpected_until_acknowledged() {
         .expect("forge_maint");
     sqlx::raw_sql(
         "INSERT INTO forge_audit.ddl_audit_ack (ddl_audit_id, note) \
-         SELECT id, 'reviewed in a test' FROM forge.ddl_audit_status \
+         SELECT id, 'reviewed in a test' FROM forge_audit.ddl_audit_status() \
          WHERE NOT expected AND NOT acknowledged",
     )
     .execute(&mut maint)
@@ -368,5 +368,415 @@ async fn ddl_outside_a_migration_is_unexpected_until_acknowledged() {
     bootstrap::check(&t.db, &[])
         .await
         .expect("acknowledged rows are fine");
+    t.drop_now().await;
+}
+
+/// Run `sql` as superuser, then each (statement, expected SQLSTATE) as
+/// `role` on the same connection.
+async fn as_role(t: &FreshDb, setup: &str, role: &str, cases: &[(&str, Option<&str>)]) {
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(setup).execute(&mut su).await.expect("setup");
+    sqlx::raw_sql(&format!("SET ROLE {role}"))
+        .execute(&mut su)
+        .await
+        .expect("set role");
+    for (sql, expected) in cases {
+        assert_eq!(
+            state_of(&mut su, sql).await.as_deref(),
+            *expected,
+            "{role}: {sql}"
+        );
+    }
+}
+
+/// An event that is published and older than the retention floor (the
+/// guard forces occurred_at, so the test moves it with the trigger off).
+const OLD_PUBLISHED_EVENT: &str = "ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+     UPDATE forge.events SET seq = 1, sequenced_at = now(), \
+         occurred_at = now() - interval '30 days' WHERE aggregate_id = 1; \
+     ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only";
+
+const FEED_STATE: &str = "INSERT INTO forge.event_feed_state (epoch, system_identifier, \
+     timeline_id, high_seq, audit_high_seq, sequencer_heartbeat) \
+     VALUES (gen_random_uuid(), 1, 1, 10, 5, now())";
+
+#[tokio::test]
+async fn purge_changes_only_payloads_and_deletes_only_old_published_events() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        &format!("{INSERT_EVENT}; {INSERT_EVENT_2}"),
+        "forge_purge",
+        &[
+            (
+                "UPDATE forge.events SET payload = '{\"redacted\": true}'",
+                None,
+            ),
+            ("UPDATE forge.events SET aggregate_id = 9", Some("42501")),
+            // Unsequenced and recent: never deleted.
+            ("DELETE FROM forge.events", Some("XF001")),
+        ],
+    )
+    .await;
+    as_role(
+        &t,
+        &format!("RESET ROLE; {OLD_PUBLISHED_EVENT}"),
+        "forge_purge",
+        &[("DELETE FROM forge.events WHERE seq = 1", None)],
+    )
+    .await;
+    t.drop_now().await;
+}
+
+const INSERT_EVENT_2: &str = "INSERT INTO forge.events (event_id, event_type, schema_version, \
+     aggregate_type, aggregate_id, actor_kind, request_id, payload) VALUES \
+     (gen_random_uuid(), 'repository.created', 1, 'repository', 2, 'system', 'r-2', '{}')";
+
+#[tokio::test]
+async fn the_sequencing_window_has_both_bounds_and_forces_sequenced_at() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        &format!("{INSERT_EVENT}; {FEED_STATE}"),
+        "forge_seq",
+        &[
+            (
+                "UPDATE forge.events SET seq = 10, sequenced_at = now()",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.events SET seq = 1011, sequenced_at = now()",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.events SET seq = 11, sequenced_at = '1999-01-01'",
+                None,
+            ),
+        ],
+    )
+    .await;
+    let recent: bool =
+        sqlx::query_scalar("SELECT sequenced_at > now() - interval '1 minute' FROM forge.events")
+            .fetch_one(&mut t.superuser().await)
+            .await
+            .expect("sequenced_at");
+    assert!(recent, "the guard sets sequenced_at itself");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_audit_sequencing_window_uses_audit_high_seq() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        &format!(
+            "{FEED_STATE}; INSERT INTO forge.audit_log (actor_kind, action, outcome, \
+             resource_type, request_id) VALUES ('system', 'x.y', 'succeeded', 'x', 'r')"
+        ),
+        "forge_seq",
+        &[
+            (
+                "UPDATE forge.audit_log SET seq = 5, sequenced_at = now() WHERE action = 'x.y'",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.audit_log SET seq = 1006, sequenced_at = now() WHERE action = 'x.y'",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.audit_log SET seq = 6, sequenced_at = now() WHERE action = 'x.y'",
+                None,
+            ),
+            (
+                "UPDATE forge.audit_log SET seq = 7, sequenced_at = now() WHERE action = 'x.y'",
+                Some("XF001"),
+            ),
+        ],
+    )
+    .await;
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_application_cannot_write_reserved_audit_actions() {
+    let t = migrated().await;
+    let mut app = t.db.write_pool().acquire().await.expect("forge_app");
+    let insert = |action: &str| {
+        format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             request_id) VALUES ('system', '{action}', 'succeeded', 'x', 'r')"
+        )
+    };
+    for (action, expected) in [
+        ("db.migrate", Some("XF001")),
+        ("audit.purged", Some("XF001")),
+        ("feed.epoch_rotated", Some("XF001")),
+        ("events.retention", Some("XF001")),
+        ("repository.created", None),
+    ] {
+        assert_eq!(
+            state_of(&mut app, &insert(action)).await.as_deref(),
+            expected,
+            "{action}"
+        );
+    }
+    drop(app);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_feed_state_only_moves_forward() {
+    let t = migrated().await;
+    as_role(
+        &t,
+        FEED_STATE,
+        "forge_seq",
+        &[
+            (
+                "UPDATE forge.event_feed_state SET high_seq = 9",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.event_feed_state SET audit_high_seq = 4",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.event_feed_state SET high_seq = 12, epoch = gen_random_uuid()",
+                None,
+            ),
+        ],
+    )
+    .await;
+    as_role(
+        &t,
+        "RESET ROLE",
+        "forge_purge",
+        &[
+            (
+                "UPDATE forge.event_feed_state SET retained_from = 0",
+                Some("XF001"),
+            ),
+            (
+                "UPDATE forge.event_feed_state SET retained_from = 14",
+                Some("XF001"),
+            ),
+            ("UPDATE forge.event_feed_state SET retained_from = 13", None),
+        ],
+    )
+    .await;
+    let mut su = t.superuser().await;
+    assert_eq!(
+        state_of(&mut su, "DELETE FROM forge.event_feed_state")
+            .await
+            .as_deref(),
+        Some("XF001")
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_read_pool_sees_none_of_the_personal_or_act_as_columns() {
+    let t = migrated().await;
+    for column in [
+        "actor_label",
+        "user_agent",
+        "act_as_claimed",
+        "act_as_key_id",
+    ] {
+        let err = sqlx::query(&format!("SELECT {column} FROM forge.audit_log"))
+            .fetch_all(t.db.pool().executor())
+            .await
+            .map_err(|e| crate::read_query_error("test.pii", e))
+            .expect_err(column);
+        assert_reason(&err, ErrorCode::DbQueryFailed, "permission_denied");
+    }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn more_weakened_schema_guards_are_reported() {
+    let _lock = ClusterLock::shared().await;
+    for (tamper, guard, context) in [
+        (
+            "CREATE RULE swallow AS ON INSERT TO forge.audit_log DO INSTEAD NOTHING",
+            "guard=object_owner",
+            "object=forge.audit_log",
+        ),
+        (
+            "ALTER TABLE forge.events ENABLE ROW LEVEL SECURITY",
+            "guard=object_owner",
+            "object=forge.events",
+        ),
+        (
+            "DROP TABLE forge.jobs",
+            "guard=object_owner",
+            "object=forge.jobs",
+        ),
+        (
+            "CREATE OR REPLACE FUNCTION forge.events_guard() RETURNS trigger LANGUAGE plpgsql \
+             SET search_path = pg_catalog, pg_temp AS $$ BEGIN RETURN NEW; END $$",
+            "guard=function_body",
+            "function=events_guard",
+        ),
+        (
+            "ALTER FUNCTION forge.audit_log_guard() SET search_path = forge, pg_catalog",
+            "guard=function_body",
+            "function=audit_log_guard",
+        ),
+        (
+            "DROP TRIGGER events_no_truncate ON forge.events",
+            "guard=log_triggers",
+            "trigger=events_no_truncate",
+        ),
+        (
+            "DROP TRIGGER audit_log_append_only ON forge.audit_log; \
+             CREATE TRIGGER audit_log_append_only BEFORE INSERT OR UPDATE OR DELETE \
+             ON forge.audit_log FOR EACH ROW EXECUTE FUNCTION forge.events_guard(); \
+             ALTER TABLE forge.audit_log ENABLE ALWAYS TRIGGER audit_log_append_only",
+            "guard=log_triggers",
+            "trigger=audit_log_append_only",
+        ),
+        (
+            "DROP TRIGGER events_append_only ON forge.events; \
+             CREATE TRIGGER events_append_only BEFORE INSERT OR UPDATE OR DELETE \
+             ON forge.events FOR EACH ROW WHEN (false) EXECUTE FUNCTION forge.events_guard(); \
+             ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
+            "guard=log_triggers",
+            "trigger=events_append_only",
+        ),
+        (
+            "ALTER TABLE forge.event_feed_state DISABLE TRIGGER event_feed_state_append_only",
+            "guard=log_triggers",
+            "trigger=event_feed_state_append_only",
+        ),
+        (
+            "GRANT UPDATE ON forge.event_feed_state TO forge_app",
+            "guard=privileges",
+            "object=forge.event_feed_state",
+        ),
+        (
+            "GRANT DELETE ON forge.event_subscribers TO forge_ro",
+            "guard=privileges",
+            "object=forge.event_subscribers",
+        ),
+        (
+            "GRANT UPDATE (enabled) ON forge.event_subscribers TO forge_app",
+            "guard=privileges",
+            "object=forge.event_subscribers",
+        ),
+    ] {
+        let t = migrated().await;
+        t.exec_superuser(tamper).await;
+        let text = bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(tamper)
+            .to_string();
+        assert!(
+            text.contains(guard) && text.contains(context),
+            "{tamper}\n=> {text}"
+        );
+        t.drop_now().await;
+    }
+}
+
+/// DDL in the migration login's transaction together with a db.migrate row
+/// listing `changes` — what a later migration file would do.
+async fn migration_like(t: &FreshDb, ddl: &str, changes: &str) {
+    let mut mc = Db::connect_migrator(&t.migrate_config(&[]).db)
+        .await
+        .expect("migrator");
+    sqlx::raw_sql(&format!(
+        "BEGIN; {ddl}; \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, \
+         details) VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate', \
+         '{{\"guarded_changes\": {changes}}}'); COMMIT"
+    ))
+    .execute(&mut mc.conn)
+    .await
+    .expect("migration-like transaction");
+    mc.close().await;
+}
+
+async fn unexpected_rows(t: &FreshDb) -> Vec<(String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT command_tag, object_identity FROM forge_audit.ddl_audit_status() \
+         WHERE NOT expected ORDER BY id",
+    )
+    .fetch_all(t.db.pool().executor())
+    .await
+    .expect("status")
+}
+
+#[tokio::test]
+async fn a_guarded_change_must_be_listed_by_its_own_name() {
+    // Not listed at all.
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "ALTER TABLE forge.events ALTER COLUMN request_id SET DEFAULT 'x'",
+        "[]",
+    )
+    .await;
+    assert_eq!(unexpected_rows(&t).await.len(), 1);
+    t.drop_now().await;
+    // Listed: expected.
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "ALTER TABLE forge.events ALTER COLUMN request_id SET DEFAULT 'x'",
+        "[\"forge.events\"]",
+    )
+    .await;
+    assert!(unexpected_rows(&t).await.is_empty());
+    t.drop_now().await;
+    // A trigger on a guarded table is not covered by listing the table.
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "CREATE TRIGGER sneak BEFORE INSERT ON forge.events \
+         FOR EACH ROW EXECUTE FUNCTION forge.events_guard()",
+        "[\"forge.events\"]",
+    )
+    .await;
+    let rows = unexpected_rows(&t).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    t.drop_now().await;
+    // Nor is a rule.
+    let t = migrated().await;
+    migration_like(
+        &t,
+        "CREATE RULE swallow AS ON INSERT TO forge.audit_log DO INSTEAD NOTHING",
+        "[\"forge.audit_log\"]",
+    )
+    .await;
+    assert_eq!(unexpected_rows(&t).await.len(), 1);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_partial_acknowledgement_still_reports_the_rest() {
+    let _lock = ClusterLock::shared().await;
+    let t = migrated().await;
+    t.exec_superuser("CREATE TABLE forge.rogue_a (i int); CREATE TABLE forge.rogue_b (i int)")
+        .await;
+    let maint_url = url_as("forge_maint", &t.name);
+    let options: sqlx::postgres::PgConnectOptions = maint_url.parse().expect("maint url");
+    let mut maint = sqlx::ConnectOptions::connect(&options.password(MAINT_PASSWORD))
+        .await
+        .expect("forge_maint");
+    sqlx::raw_sql(
+        "INSERT INTO forge_audit.ddl_audit_ack (ddl_audit_id, note) \
+         SELECT min(id), 'one of two' FROM forge_audit.ddl_audit_status() \
+         WHERE NOT expected AND NOT acknowledged",
+    )
+    .execute(&mut maint)
+    .await
+    .expect("acknowledge one");
+    let text = bootstrap::check(&t.db, &[])
+        .await
+        .expect_err("one left")
+        .to_string();
+    assert!(text.contains("reason=unexpected_ddl"), "{text}");
+    assert!(text.contains("count=1"), "{text}");
     t.drop_now().await;
 }

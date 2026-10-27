@@ -17,8 +17,10 @@ forge_owner (ADR-0018). The root gate `migrations` checks every file:
   and revoke PUBLIC;
 - the last statement is the file's own `forge.audit_log` row with
   `action = 'db.migrate'` and `details.guarded_changes` naming every
-  guarded object it touches (so `forge.ddl_audit_status` marks its DDL
-  expected).
+  guarded object it touches — a trigger, rule, policy or constraint by its
+  own name `forge.<table>.<name>`, a function without arguments — so
+  `forge_audit.ddl_audit_status()` marks its DDL expected.
 
 A new table also needs its privileges in `src/bootstrap/schema.rs` (doctor
-compares them exactly).
+compares them exactly); a new or replaced guard function is compared with
+its last `CREATE [OR REPLACE] FUNCTION` in these files.

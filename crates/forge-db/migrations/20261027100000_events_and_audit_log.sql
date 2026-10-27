@@ -3,6 +3,7 @@
 -- letters and jobs; the append-only guards of events and audit_log; the
 -- privileges of every role; the registry rows of the guarded objects.
 -- Runs as forge_owner (forge db migrate). Every object is qualified.
+-- The DDL-status decision is forge_audit.ddl_audit_status() (bootstrap).
 -- Not here (later steps): the feed-state row (the sequencer creates it with
 -- forge_audit.cluster_identity(), C4), the deferred audit-presence triggers
 -- (with ChangeTx, C3), retention_policy (C7), audit_seal (C8).
@@ -95,7 +96,7 @@ CREATE TABLE forge.jobs (
     origin_request_id text NOT NULL,
     origin_event_seq  bigint,
     last_error_code   text CHECK (last_error_code ~ '^FG-[A-Z]+-[0-9]{4}$'),
-    last_error        jsonb,
+    last_error        jsonb CHECK (pg_catalog.pg_column_size(last_error) <= 8192),
     created_at        timestamptz NOT NULL DEFAULT pg_catalog.now(),
     finished_at       timestamptz,
     CONSTRAINT jobs_attempts_bounded CHECK (attempts BETWEEN 0 AND max_attempts),
@@ -156,9 +157,12 @@ CREATE INDEX audit_log_request ON forge.audit_log (request_id);
 -- One function per table (they read different columns). Not SECURITY
 -- DEFINER: current_user is the role doing the change — forge_seq inside the
 -- sequencing function, forge_purge inside the retention / redaction ones.
+-- search_path holds no writable schema: every name is qualified, and
+-- operators resolve in pg_catalog only (an operator planted in forge could
+-- otherwise run inside the guard).
 CREATE FUNCTION forge.events_guard() RETURNS trigger
     LANGUAGE plpgsql
-    SET search_path = pg_catalog, forge, pg_temp
+    SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     high bigint;
@@ -172,20 +176,27 @@ BEGIN
         NEW.occurred_at := pg_catalog.now();
         RETURN NEW;
     ELSIF TG_OP = 'UPDATE' THEN
-        IF current_user = 'forge_seq'
-           AND OLD.seq IS NULL AND NEW.seq IS NOT NULL AND NEW.sequenced_at IS NOT NULL
-           AND (pg_catalog.to_jsonb(NEW) - 'seq' - 'sequenced_at')
-               = (pg_catalog.to_jsonb(OLD) - 'seq' - 'sequenced_at') THEN
+        IF current_user = 'forge_seq' AND OLD.seq IS NULL AND NEW.seq IS NOT NULL
+           AND (pg_catalog.to_jsonb(NEW) - 'seq'::text - 'sequenced_at'::text)
+               = (pg_catalog.to_jsonb(OLD) - 'seq'::text - 'sequenced_at'::text) THEN
             SELECT s.high_seq INTO high FROM forge.event_feed_state AS s WHERE s.singleton;
-            IF high IS NOT NULL AND NEW.seq > high AND NEW.seq <= high + 1000 THEN
-                RETURN NEW;
+            IF high IS NULL OR NEW.seq <= high OR NEW.seq > high + 1000 THEN
+                RAISE EXCEPTION USING ERRCODE = 'XF001',
+                    MESSAGE = pg_catalog.format(
+                        'seq %s on forge.events is outside the sequencing window (high_seq %s)',
+                        NEW.seq, coalesce(high::text, 'missing'));
             END IF;
+            NEW.sequenced_at := pg_catalog.now();
+            RETURN NEW;
         ELSIF current_user = 'forge_purge'
-              AND (pg_catalog.to_jsonb(NEW) - 'payload') = (pg_catalog.to_jsonb(OLD) - 'payload') THEN
+              AND (pg_catalog.to_jsonb(NEW) - 'payload'::text)
+                  = (pg_catalog.to_jsonb(OLD) - 'payload'::text) THEN
             RETURN NEW;
         END IF;
     ELSIF TG_OP = 'DELETE' THEN
-        IF current_user = 'forge_purge' THEN
+        -- Retention only: sequenced (published) rows past the 7-day floor.
+        IF current_user = 'forge_purge' AND OLD.seq IS NOT NULL
+           AND OLD.occurred_at < pg_catalog.now() - interval '7 days' THEN
             RETURN OLD;
         END IF;
     END IF;
@@ -197,7 +208,7 @@ REVOKE ALL ON FUNCTION forge.events_guard() FROM PUBLIC;
 
 CREATE FUNCTION forge.audit_log_guard() RETURNS trigger
     LANGUAGE plpgsql
-    SET search_path = pg_catalog, forge, pg_temp
+    SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     high bigint;
@@ -207,29 +218,47 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = 'XF001',
                 MESSAGE = 'INSERT on forge.audit_log with seq is not allowed (assigned by the sequencer)';
         END IF;
+        -- The application never writes the rows that the migrations and the
+        -- privileged functions write about themselves.
+        IF current_user = 'forge_app'
+           AND (NEW.action = 'db.migrate' OR NEW.action LIKE 'audit.%'
+                OR NEW.action LIKE 'feed.%' OR NEW.action LIKE 'events.%') THEN
+            RAISE EXCEPTION USING ERRCODE = 'XF001',
+                MESSAGE = pg_catalog.format('audit action %s is reserved', NEW.action);
+        END IF;
         NEW.txid := pg_catalog.pg_current_xact_id();
         NEW.occurred_at := pg_catalog.now();
         RETURN NEW;
     ELSIF TG_OP = 'UPDATE' THEN
-        IF current_user = 'forge_seq'
-           AND OLD.seq IS NULL AND NEW.seq IS NOT NULL AND NEW.sequenced_at IS NOT NULL
-           AND (pg_catalog.to_jsonb(NEW) - 'seq' - 'sequenced_at')
-               = (pg_catalog.to_jsonb(OLD) - 'seq' - 'sequenced_at') THEN
+        IF current_user = 'forge_seq' AND OLD.seq IS NULL AND NEW.seq IS NOT NULL
+           AND (pg_catalog.to_jsonb(NEW) - 'seq'::text - 'sequenced_at'::text)
+               = (pg_catalog.to_jsonb(OLD) - 'seq'::text - 'sequenced_at'::text) THEN
             SELECT s.audit_high_seq INTO high FROM forge.event_feed_state AS s WHERE s.singleton;
-            IF high IS NOT NULL AND NEW.seq > high AND NEW.seq <= high + 1000 THEN
-                RETURN NEW;
+            IF high IS NULL OR NEW.seq <= high OR NEW.seq > high + 1000 THEN
+                RAISE EXCEPTION USING ERRCODE = 'XF001',
+                    MESSAGE = pg_catalog.format(
+                        'seq %s on forge.audit_log is outside the sequencing window (audit_high_seq %s)',
+                        NEW.seq, coalesce(high::text, 'missing'));
             END IF;
-        -- Redaction: only the personal columns, only to NULL (the sealed
-        -- columns stay as they are; the per-version check comes with the
-        -- seals, C8).
+            NEW.sequenced_at := pg_catalog.now();
+            RETURN NEW;
+        -- Redaction: all personal columns to NULL at once, nothing else (the
+        -- per-seal-version check comes with the seals, C8).
         ELSIF current_user = 'forge_purge'
               AND NEW.actor_label IS NULL AND NEW.source_ip IS NULL AND NEW.user_agent IS NULL
-              AND (pg_catalog.to_jsonb(NEW) - 'actor_label' - 'source_ip' - 'user_agent')
-                  = (pg_catalog.to_jsonb(OLD) - 'actor_label' - 'source_ip' - 'user_agent') THEN
+              AND (pg_catalog.to_jsonb(NEW) - 'actor_label'::text - 'source_ip'::text
+                   - 'user_agent'::text)
+                  = (pg_catalog.to_jsonb(OLD) - 'actor_label'::text - 'source_ip'::text
+                     - 'user_agent'::text) THEN
             RETURN NEW;
         END IF;
     ELSIF TG_OP = 'DELETE' THEN
-        IF current_user = 'forge_purge' THEN
+        -- Purge only: sequenced rows past the 365-day floor, never the
+        -- migration records (forge_audit.ddl_audit_status() matches DDL to
+        -- them).
+        IF current_user = 'forge_purge' AND OLD.seq IS NOT NULL
+           AND OLD.action <> 'db.migrate'
+           AND OLD.occurred_at < pg_catalog.now() - interval '365 days' THEN
             RETURN OLD;
         END IF;
     END IF;
@@ -239,6 +268,31 @@ END
 $$;
 REVOKE ALL ON FUNCTION forge.audit_log_guard() FROM PUBLIC;
 
+-- The feed state: one row; the counters only grow (a sequencer bug or a
+-- misused credential cannot move them back and renumber behind readers);
+-- retained_from stays within [1, high_seq + 1]; the identity columns change
+-- only through forge_seq (rotate_epoch, C4); the row is never deleted.
+CREATE FUNCTION forge.event_feed_state_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF TG_OP = 'UPDATE'
+       AND NEW.high_seq >= OLD.high_seq
+       AND NEW.audit_high_seq >= OLD.audit_high_seq
+       AND NEW.retained_from >= OLD.retained_from
+       AND NEW.retained_from <= NEW.high_seq + 1
+       AND (current_user = 'forge_seq'
+            OR (NEW.epoch, NEW.system_identifier, NEW.timeline_id)
+               IS NOT DISTINCT FROM (OLD.epoch, OLD.system_identifier, OLD.timeline_id)) THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION USING ERRCODE = 'XF001',
+        MESSAGE = pg_catalog.format('%s on forge.event_feed_state is not allowed', TG_OP);
+END
+$$;
+REVOKE ALL ON FUNCTION forge.event_feed_state_guard() FROM PUBLIC;
+
 CREATE TRIGGER events_append_only BEFORE INSERT OR UPDATE OR DELETE ON forge.events
     FOR EACH ROW EXECUTE FUNCTION forge.events_guard();
 CREATE TRIGGER events_no_truncate BEFORE TRUNCATE ON forge.events
@@ -247,11 +301,17 @@ CREATE TRIGGER audit_log_append_only BEFORE INSERT OR UPDATE OR DELETE ON forge.
     FOR EACH ROW EXECUTE FUNCTION forge.audit_log_guard();
 CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON forge.audit_log
     FOR EACH STATEMENT EXECUTE FUNCTION forge.audit_log_guard();
+CREATE TRIGGER event_feed_state_append_only BEFORE UPDATE OR DELETE ON forge.event_feed_state
+    FOR EACH ROW EXECUTE FUNCTION forge.event_feed_state_guard();
+CREATE TRIGGER event_feed_state_no_truncate BEFORE TRUNCATE ON forge.event_feed_state
+    FOR EACH STATEMENT EXECUTE FUNCTION forge.event_feed_state_guard();
 -- ALWAYS: also under session_replication_role = replica.
 ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only;
 ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_no_truncate;
 ALTER TABLE forge.audit_log ENABLE ALWAYS TRIGGER audit_log_append_only;
 ALTER TABLE forge.audit_log ENABLE ALWAYS TRIGGER audit_log_no_truncate;
+ALTER TABLE forge.event_feed_state ENABLE ALWAYS TRIGGER event_feed_state_append_only;
+ALTER TABLE forge.event_feed_state ENABLE ALWAYS TRIGGER event_feed_state_no_truncate;
 
 -- ── Privileges (ADR-0018 §1) ───────────────────────────────────────────
 -- forge_app writes events and audit rows but never id, seq, sequenced_at,
@@ -265,13 +325,20 @@ GRANT INSERT (actor_kind, actor_user_id, actor_via_id, credential_id, act_as_cla
     act_as_key_id, via_assertion_id, effective_scope, actor_label, action, outcome,
     resource_type, resource_id, project_id, source_ip, user_agent, request_id, error_code,
     occurrences, details) ON forge.audit_log TO forge_app, forge_seq, forge_purge;
-GRANT SELECT, INSERT, UPDATE, DELETE ON forge.jobs, forge.event_subscribers,
-    forge.subscriber_dead_letters TO forge_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON forge.jobs TO forge_app;
+-- Subscribers: the application advances its own progress; whether a
+-- subscriber is enabled or holds back retention is not its decision (a
+-- leaked credential could otherwise unblock retention past a lagging one).
+GRANT SELECT, INSERT (name, ordering, last_seq, last_txid, updated_at),
+    UPDATE (last_seq, last_txid, updated_at, failures, failing_since, last_error_code)
+    ON forge.event_subscribers TO forge_app;
+-- Quarantined events: recorded by the application, removed only by
+-- retention (forge_purge).
+GRANT SELECT, INSERT ON forge.subscriber_dead_letters TO forge_app;
 
 -- The sequencer (functions owned by forge_seq, C4).
 GRANT SELECT, UPDATE (seq, sequenced_at) ON forge.events, forge.audit_log TO forge_seq;
-GRANT SELECT, UPDATE ON forge.event_feed_state TO forge_seq;
-GRANT INSERT ON forge.event_feed_state TO forge_seq;
+GRANT SELECT, INSERT, UPDATE ON forge.event_feed_state TO forge_seq;
 
 -- Retention and redaction (functions owned by forge_purge, C7 / C10).
 GRANT SELECT, DELETE ON forge.events, forge.audit_log TO forge_purge;
@@ -279,6 +346,7 @@ GRANT UPDATE (payload) ON forge.events TO forge_purge;
 GRANT UPDATE (actor_label, source_ip, user_agent) ON forge.audit_log TO forge_purge;
 GRANT SELECT, UPDATE (retained_from) ON forge.event_feed_state TO forge_purge;
 GRANT SELECT ON forge.event_subscribers TO forge_purge;
+GRANT SELECT, DELETE ON forge.subscriber_dead_letters TO forge_purge;
 
 -- The read pool: the ledger's ro_columns (no personal or act-as columns of
 -- the audit log).
@@ -288,6 +356,9 @@ GRANT SELECT (id, seq, sequenced_at, txid, occurred_at, actor_kind, actor_user_i
     actor_via_id, credential_id, via_assertion_id, effective_scope, action, outcome,
     resource_type, resource_id, project_id, request_id, error_code, occurrences, details)
     ON forge.audit_log TO forge_ro;
+-- The maintenance login reads what forge_audit.ddl_audit_status() needs to
+-- list DDL for acknowledgement.
+GRANT SELECT (txid, action, details) ON forge.audit_log TO forge_maint;
 
 -- ── Guarded objects (ADR-0018 §3) ──────────────────────────────────────
 INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
@@ -296,14 +367,17 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('table', 'forge.event_feed_state'),
     ('function', 'forge.events_guard()'),
     ('function', 'forge.audit_log_guard()'),
+    ('function', 'forge.event_feed_state_guard()'),
     ('trigger', 'events_append_only on forge.events'),
     ('trigger', 'events_no_truncate on forge.events'),
     ('trigger', 'audit_log_append_only on forge.audit_log'),
-    ('trigger', 'audit_log_no_truncate on forge.audit_log')
+    ('trigger', 'audit_log_no_truncate on forge.audit_log'),
+    ('trigger', 'event_feed_state_append_only on forge.event_feed_state'),
+    ('trigger', 'event_feed_state_no_truncate on forge.event_feed_state')
 ON CONFLICT DO NOTHING;
 
 -- Last: this migration's own audit row (same transaction as the DDL above,
--- so forge_audit.ddl_audit can match it by txid).
+-- so forge_audit.ddl_audit_status() can match it by txid).
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261027100000, "guarded_changes": ["forge.events", "forge.audit_log", "forge.event_feed_state", "forge.events_guard", "forge.audit_log_guard", "forge.events.events_append_only", "forge.events.events_no_truncate", "forge.audit_log.audit_log_append_only", "forge.audit_log.audit_log_no_truncate"]}');
+    '{"version": 20261027100000, "guarded_changes": ["forge.events", "forge.audit_log", "forge.event_feed_state", "forge.events_guard", "forge.audit_log_guard", "forge.event_feed_state_guard", "forge.events.events_append_only", "forge.events.events_no_truncate", "forge.audit_log.audit_log_append_only", "forge.audit_log.audit_log_no_truncate", "forge.event_feed_state.event_feed_state_append_only", "forge.event_feed_state.event_feed_state_no_truncate"]}');
