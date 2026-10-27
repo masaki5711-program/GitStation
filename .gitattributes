@@ -2,3 +2,6 @@
 * text=auto eol=lf
 *.png binary
 *.jpg binary
+
+# Bootstrap SQL is run by psql and embedded in tests: byte-identical everywhere.
+ops/db/** text eol=lf

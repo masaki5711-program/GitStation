@@ -1,7 +1,7 @@
 //! Typed configuration. Layers, lowest first: built-in defaults ← TOML file
 //! (`--config` / `FORGE_CONFIG`) ← environment ← command-line flags (applied
 //! by the caller). The environment name of a key is derived from it:
-//! `database.max_connections` ↔ `FORGE_DATABASE_MAX_CONNECTIONS`.
+//! `database.write_max_connections` ↔ `FORGE_DATABASE_WRITE_MAX_CONNECTIONS`.
 //!
 //! Every problem is `FG-SYS-0002` with `config_key` and `reason`, detected at
 //! load time. Unknown, renamed and empty keys fail (a typo never silently
@@ -29,7 +29,14 @@ const NAMESPACES: &[&str] = &["FORGE_SERVER_", "FORGE_STORAGE_", "FORGE_DATABASE
 
 /// Variables that used to be configuration: setting one fails instead of
 /// being ignored (old name, new name).
-const RENAMED: &[(&str, &str)] = &[("FORGE_BIND", "FORGE_SERVER_BIND")];
+const RENAMED: &[(&str, &str)] = &[
+    ("FORGE_BIND", "FORGE_SERVER_BIND"),
+    // Split into a write and a read pool (ADR-0018 §2).
+    (
+        "FORGE_DATABASE_MAX_CONNECTIONS",
+        "FORGE_DATABASE_WRITE_MAX_CONNECTIONS",
+    ),
+];
 
 /// The environment variable of a configuration key.
 pub fn env_name(key: &str) -> String {
@@ -121,15 +128,29 @@ pub struct StorageConfig {
 
 #[derive(Debug)]
 pub struct DatabaseConfig {
+    /// `forge_app`: `serve` / `worker` (both pools).
     url: Option<DatabaseUrl>,
     pub password: Option<Secret>,
+    /// `forge_migrator`: `forge db migrate` only (ADR-0018 §2).
+    migrate_url: Option<DatabaseUrl>,
+    pub migrate_password: Option<Secret>,
+    /// `forge_maint`: the approved maintenance commands (ADR-0018 §1).
+    maint_url: Option<DatabaseUrl>,
+    pub maint_password: Option<Secret>,
+    /// Roles allowed as members of forge_owner / forge_seq / forge_purge
+    /// besides the fixed memberships of the bootstrap (`forge doctor`
+    /// reports any other member).
+    pub privileged_members: Vec<String>,
     pub tls_mode: TlsMode,
     /// CA bundle for the internal certificate authority (PEM, absolute).
     pub tls_root_cert: Option<PathBuf>,
     /// `require` / `disable` to a non-loopback host must be allowed here
     /// explicitly (an unverified link to a remote server is never a default).
     pub tls_allow_unverified: bool,
-    pub max_connections: u32,
+    /// Per process, for each pool.
+    pub write_max_connections: u32,
+    pub read_max_connections: u32,
+    /// Kept open in each pool (at most the smaller maximum).
     pub min_connections: u32,
     pub connect_timeout: Duration,
     pub acquire_timeout: Duration,
@@ -146,6 +167,20 @@ impl DatabaseConfig {
         self.url
             .as_ref()
             .ok_or_else(|| invalid("database.url", "missing"))
+    }
+
+    /// The migration login; required by `forge db migrate`.
+    pub fn migrate_url(&self) -> Result<&DatabaseUrl, ForgeError> {
+        self.migrate_url
+            .as_ref()
+            .ok_or_else(|| invalid("database.migrate_url", "missing"))
+    }
+
+    /// The maintenance login; required by the `forge admin` commands.
+    pub fn maint_url(&self) -> Result<&DatabaseUrl, ForgeError> {
+        self.maint_url
+            .as_ref()
+            .ok_or_else(|| invalid("database.maint_url", "missing"))
     }
 }
 
@@ -234,10 +269,16 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
     if !valid_bind(bind) {
         return Err(invalid("server.bind", "invalid"));
     }
-    let url = text("database.url")?.map(DatabaseUrl::parse).transpose()?;
-    let password = text("database.password_file")?
-        .map(|p| secret::read_password(Path::new(p)))
-        .transpose()?;
+    let url = |key: &'static str| text(key)?.map(|u| DatabaseUrl::parse(key, u)).transpose();
+    let password = |key: &'static str| {
+        text(key)?
+            .map(|p| secret::read_password(key, Path::new(p)))
+            .transpose()
+    };
+    let privileged_members = match text("database.privileged_members")? {
+        Some(list) => role_names("database.privileged_members", list)?,
+        None => Vec::new(),
+    };
 
     let tls_mode = match text("database.tls_mode")? {
         Some(t) => TlsMode::parse(t).ok_or_else(|| invalid("database.tls_mode", "invalid"))?,
@@ -253,9 +294,10 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         return Err(invalid("database.tls_root_cert", "not_absolute"));
     }
 
-    let max_connections = positive(get, "database.max_connections", 10)?;
+    let write_max_connections = positive(get, "database.write_max_connections", 10)?;
+    let read_max_connections = positive(get, "database.read_max_connections", 10)?;
     let min_connections = unsigned(get, "database.min_connections", 0)?;
-    if min_connections > max_connections {
+    if min_connections > write_max_connections.min(read_max_connections) {
         return Err(invalid("database.min_connections", "above_max"));
     }
 
@@ -267,12 +309,18 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             root: text("storage.root")?.map(PathBuf::from),
         },
         database: DatabaseConfig {
-            url,
-            password,
+            url: url("database.url")?,
+            password: password("database.password_file")?,
+            migrate_url: url("database.migrate_url")?,
+            migrate_password: password("database.migrate_password_file")?,
+            maint_url: url("database.maint_url")?,
+            maint_password: password("database.maint_password_file")?,
+            privileged_members,
             tls_mode,
             tls_root_cert,
             tls_allow_unverified,
-            max_connections,
+            write_max_connections,
+            read_max_connections,
             min_connections,
             connect_timeout: millis(get, "database.connect_timeout_ms", 5_000)?,
             acquire_timeout: millis(get, "database.acquire_timeout_ms", 3_000)?,
@@ -290,6 +338,27 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             )?,
         },
     })
+}
+
+/// A comma-separated list of PostgreSQL role names (`[a-z_][a-z0-9_]*`,
+/// at most 63 bytes), without duplicates.
+fn role_names(key: &'static str, list: &str) -> Result<Vec<String>, ForgeError> {
+    let mut names: Vec<String> = Vec::new();
+    for name in list.split(',').map(str::trim) {
+        let valid = name.len() <= 63
+            && name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !valid {
+            return Err(invalid(key, "invalid"));
+        }
+        if names.iter().any(|n| n == name) {
+            return Err(invalid(key, "duplicate"));
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
 }
 
 /// `host:port` with a non-empty host and a numeric port (`[::1]:8080` too).

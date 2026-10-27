@@ -247,3 +247,19 @@ ADR-0016 の表の台帳（audited / derived、`ro_columns`、守る対象）へ
 | DB NEW-3: 2 回目以降の削除で根拠の行が消えて誤警報 | §4: system の `audit.purged` / `audit.restore_gap` は削除の対象外、根拠は system かつ送出済みの行だけ |
 | security H-1 / DB MEDIUM-1: 復元した DB の大域フラグが真のまま番号付けが走る | §3・§5: `assign_seq(max_batch, include_audit)` でプロセスの状態も条件にする（2 重）、Runbook の最初で false に戻す |
 | DB MEDIUM-2 / MEDIUM-3、security MEDIUM・LOW の残り | 実装時に扱う（`ddl_audit` と `db.migrate` の行の保持の対応、`confirm_sink_compare` の監査は状態の変化時だけ、GRANT/REVOKE は doctor の権限検査が担保、`rotate_epoch` の署名の統一、10 分の連続拒否の Runbook への記載）。受理を妨げない |
+
+## Amendment 2026-10-27: 実装（C1）で決めた点
+
+実装の段階 C1（ロール、導入の手順、プールの分離）で、本文と異なる、または本文が決めていなかった点を次のとおり決めた。
+
+| 点 | 決定 | 理由 |
+|---|---|---|
+| 導入の手順のファイル | `ops/db/bootstrap.sql` 1 つではなく `ops/db/bootstrap/01-cluster-roles.sql`・`02-create-database.sql`・`03-database-objects.sql` の 3 つ | `CREATE DATABASE` はトランザクションの中で実行できず、03 は新しい DB に接続して実行する必要がある。02 は psql の変数 `:"dbname"` を 1 つだけ持つ |
+| イベントトリガーと保護の関数の所有者 | イベントトリガー、`forge.ddl_audit_record()`、`forge.reject_log_mutation()`、`forge.cluster_identity()` は、導入の手順を実行した superuser が所有する（§3 の「`forge_owner` が所有」を改める） | PostgreSQL ではイベントトリガーの所有者は superuser でなければならない。関数も superuser が所有すれば、`forge_owner` は置き換えられない。`forge doctor db.bootstrap` は所有者が superuser であることと、本文が出荷したファイルと同一であることを確かめる |
+| `_sqlx_migrations` の読み取り | 最初のマイグレーションの GRANT ではなく、03 の `ALTER DEFAULT PRIVILEGES FOR ROLE forge_owner IN SCHEMA public GRANT SELECT ON TABLES TO forge_app, forge_ro` | 最初のマイグレーションより前（とテストの fixture）にも、読み取りのプールで `status()` が動く。`public` にはマイグレーションの記録しか置かない（アプリのオブジェクトはすべて `forge` に置く。ゲートが検査する） |
+| 読み取りのプールの設定 | `after_connect` ではなく、起動のパケットの `role=forge_ro`・`default_transaction_read_only=on`。接続時に 1 本の probe で `current_user = forge_ro` と読み取り専用を確かめる（違えば `FG-SYS-0002 config_key=database.url reason=wrong_role`） | 最初の文より前に効き、追加の往復がない |
+| マイグレーションのログイン | superuser のログインは `wrong_role role_check=superuser` で拒否する | superuser は信頼の境界の外（Context の決定 1）。DDL の記録の照合も `forge_migrator` を前提にする |
+| 接続の数の設定 | `database.max_connections` を `database.write_max_connections`・`database.read_max_connections` に分け、旧名の環境変数は `renamed` で拒否する。`min_connections` は両方のプールに使い、小さい方の最大値以下 | §2 の予算 |
+| LISTEN の接続 | `Db::listen_options()` は最初の利用者（worker、段階 C4）と一緒に入れる | 利用者のない API を先に作らない。sqlx 0.8 には TCP keepalive の設定がないため、そのときに方法を決める |
+| `forge.guarded_objects` | 導入の手順のオブジェクトの行を 03 が入れる。行の変更・削除も拒否する（追記のみ） | 行を消すと保護の対象から外れてしまう |
+| 接続の予算の違反 | `FG-SYS-0002 config_key=database.write_max_connections reason=connection_budget`（`needed`・`usable`） | 設定とサーバーの不一致で、保護の仕組みの問題ではない |

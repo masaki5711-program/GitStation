@@ -7,8 +7,9 @@ use forge_core::config::TlsMode;
 use forge_errors::{ErrorCode, Lang};
 
 use super::*;
-use crate::query_error;
+use crate::options::*;
 use crate::test_support::*;
+use crate::{query_error, read_query_error};
 
 #[tokio::test]
 async fn test_database_is_reachable_or_fails_with_compose_hint() {
@@ -85,7 +86,7 @@ async fn pool_exhaustion_is_db_unavailable_acquire_timeout() {
     // SCRAM), so acquire_timeout must leave room for that under a loaded
     // parallel run; 300 ms was flaky. 1.5 s still proves exhaustion.
     let (db, _cfg) = dev_db(&[
-        ("FORGE_DATABASE_MAX_CONNECTIONS", "1"),
+        ("FORGE_DATABASE_READ_MAX_CONNECTIONS", "1"),
         ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "1500"),
     ])
     .await;
@@ -105,7 +106,7 @@ async fn pool_exhaustion_is_db_unavailable_acquire_timeout() {
 async fn a_slow_statement_is_db_query_failed_with_sqlstate_57014() {
     let (db, _cfg) = dev_db(&[("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "200")]).await;
     let err = sqlx::query("SELECT pg_sleep(5)")
-        .execute(db.pool())
+        .execute(db.pool().executor())
         .await
         .map_err(|e| query_error("test.sleep", e))
         .expect_err("statement timeout");
@@ -119,13 +120,13 @@ async fn a_slow_statement_is_db_query_failed_with_sqlstate_57014() {
 async fn a_lock_wait_beyond_lock_timeout_is_db_query_failed() {
     let (db, _cfg) = dev_db(&[("FORGE_DATABASE_LOCK_TIMEOUT_MS", "200")]).await;
     let key = i64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().expect("8"));
-    let mut holder = db.pool().begin().await.expect("tx");
+    let mut holder = db.pool().executor().begin().await.expect("tx");
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
         .execute(&mut *holder)
         .await
         .expect("first lock");
-    let mut waiter = db.pool().begin().await.expect("tx");
+    let mut waiter = db.pool().executor().begin().await.expect("tx");
     let err = sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
         .execute(&mut *waiter)
@@ -140,7 +141,7 @@ async fn a_lock_wait_beyond_lock_timeout_is_db_query_failed() {
 async fn query_errors_never_expose_sql_to_the_user_or_the_context() {
     let (db, _cfg) = dev_db(&[("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "100")]).await;
     let err = sqlx::query("SELECT pg_sleep(5) AS secret_column_name")
-        .execute(db.pool())
+        .execute(db.pool().executor())
         .await
         .map_err(|e| query_error("test.sleep", e))
         .expect_err("timeout");
@@ -220,7 +221,7 @@ async fn a_missing_database_is_server_rejected_3d000() {
 #[tokio::test]
 async fn a_closed_pool_is_unavailable_for_ping_and_acquire() {
     let (db, _cfg) = dev_db(&[]).await;
-    db.pool().close().await;
+    db.close().await;
     for err in [
         db.ping().await.expect_err("closed"),
         db.acquire().await.map(|_| ()).expect_err("closed"),
@@ -233,7 +234,8 @@ async fn a_closed_pool_is_unavailable_for_ping_and_acquire() {
 #[tokio::test]
 async fn a_terminated_backend_is_unavailable_not_a_query_failure() {
     let (db, _cfg) = dev_db(&[]).await;
-    let mut conn = db.acquire().await.expect("conn");
+    // The write pool: the read pool runs as forge_ro, read-only.
+    let mut conn = db.write_pool().acquire().await.expect("conn");
     let err = sqlx::query("SELECT pg_terminate_backend(pg_backend_pid())")
         .execute(&mut *conn)
         .await
@@ -252,7 +254,8 @@ async fn a_terminated_backend_is_unavailable_not_a_query_failure() {
 #[tokio::test]
 async fn a_constraint_violation_never_logs_the_row_values() {
     let (db, _cfg) = dev_db(&[]).await;
-    let mut conn = db.acquire().await.expect("conn");
+    // The write pool: the read pool runs as forge_ro, read-only.
+    let mut conn = db.write_pool().acquire().await.expect("conn");
     sqlx::query("CREATE TEMP TABLE t_unique (email text PRIMARY KEY)")
         .execute(&mut *conn)
         .await
@@ -318,4 +321,74 @@ fn an_unverified_remote_database_needs_an_explicit_allowance() {
         );
     }
     assert!(check_unverified(TlsMode::VerifyFull, false, "db.internal", "t").is_ok());
+}
+
+#[tokio::test]
+async fn read_pool_sessions_run_as_forge_ro_and_read_only() {
+    let t = FreshDb::new().await;
+    let (user, read_only): (String, String) =
+        sqlx::query_as("SELECT current_user::text, current_setting('transaction_read_only')")
+            .fetch_one(t.db.pool().executor())
+            .await
+            .expect("read session");
+    assert_eq!((user.as_str(), read_only.as_str()), ("forge_ro", "on"));
+    let user: String = sqlx::query_scalar("SELECT current_user::text")
+        .fetch_one(t.db.write_pool())
+        .await
+        .expect("write session");
+    assert_eq!(user, "forge_app");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn read_pool_write_is_write_on_read_pool_not_unavailable() {
+    let t = FreshDb::new().await;
+    let err = sqlx::query("CREATE TABLE forge.read_pool_write (i int)")
+        .execute(t.db.pool().executor())
+        .await
+        .map_err(|e| read_query_error("test.read_write", e))
+        .expect_err("read-only session");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "write_on_read_pool");
+    assert!(err.to_string().contains("sqlstate=25006"), "{err}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_missing_privilege_is_permission_denied() {
+    let t = FreshDb::new().await;
+    // forge_app has no INSERT on the DDL acknowledgements (forge_maint only).
+    let err = sqlx::query("INSERT INTO forge.ddl_audit_ack (ddl_audit_id, note) VALUES (1, 'x')")
+        .execute(t.db.write_pool())
+        .await
+        .map_err(|e| query_error("test.ack", e))
+        .expect_err("not granted");
+    assert_reason(&err, ErrorCode::DbQueryFailed, "permission_denied");
+    assert!(err.to_string().contains("sqlstate=42501"), "{err}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_login_outside_forge_ro_is_config_invalid_wrong_role() {
+    let t = FreshDb::new().await;
+    let role = format!("forge_t_login_{}", uuid::Uuid::new_v4().simple());
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(&format!(
+        "CREATE ROLE \"{role}\" LOGIN PASSWORD 'x-login-pw'; \
+         GRANT CONNECT ON DATABASE \"{}\" TO \"{role}\"",
+        t.name
+    ))
+    .execute(&mut su)
+    .await
+    .expect("temporary login");
+    let cfg = test_config(&url_as(&role, &t.name), "x-login-pw", &[]);
+    let err = Db::connect(&cfg.db)
+        .await
+        .expect_err("not a member of forge_ro");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "wrong_role");
+    assert!(err.to_string().contains("role_check=not_member"), "{err}");
+    t.drop_now().await;
+    sqlx::query(&format!("DROP ROLE \"{role}\""))
+        .execute(&mut superuser(dev_url().rsplit_once('/').expect("db").1).await)
+        .await
+        .expect("drop temporary login");
 }

@@ -1,18 +1,38 @@
 # forge-db
 
-**Responsibility**: the PostgreSQL layer (ADR-0002) — connecting with TLS and
-every timeout applied, and mapping driver errors to registered codes. Also
-migrations (ADR-0014). Later: the Outbox and the job queue.
+**Responsibility**: the PostgreSQL layer (ADR-0002, ADR-0018) — connecting with TLS and
+every timeout applied, the write / read pool split and the migration
+connection, mapping driver errors to registered codes, migrations
+(ADR-0014) and the bootstrap checks. Later: the Outbox and the job queue.
 
 **Public API**
 - `Db::connect(&DatabaseConfig) -> Result<Db, ForgeError>` — pool from
   `forge_core::config` (ADR-0013); checks PostgreSQL ≥ 16; logs
   `forge.db.connected` with `db_target` (host:port/dbname), `tls_mode`,
   `server_version_num`.
-- `Db::pool()`, `Db::acquire()`, `Db::ping()`, `Db::target()`.
-- `query_error(query: &'static str, sqlx::Error) -> ForgeError` — use at
-  every statement: `.map_err(|e| query_error("repo.insert", e))`. `query` is
-  a static name, never the SQL text.
+- Two pools, both logged in as `forge_app` (`database.url`): the write pool
+  stays inside this crate (`write_pool()`, typed commands from step C3);
+  `Db::pool()` returns the **`ReadPool`** (sessions run as `forge_ro` with
+  `default_transaction_read_only = on`, set in the startup packet and
+  verified by a probe at connect). Sizes: `database.write_max_connections`,
+  `database.read_max_connections` (10 each).
+- `Db::acquire()` (read pool), `Db::ping()` (both pools), `Db::close()`,
+  `Db::target()`.
+- `Db::connect_migrator(&DatabaseConfig) -> MigratorConn` — one connection on
+  `database.migrate_url` (`forge_migrator`, `application_name = forge-migrate`),
+  `SET ROLE forge_owner`; refuses a login that is a superuser or cannot
+  become the owner (FG-SYS-0002 `reason=wrong_role`, `role_check`).
+- `query_error` (write pool / migration connection) and `read_query_error`
+  (read pool) — use at every statement:
+  `.map_err(|e| query_error("repo.insert", e))`. `query` is a static name,
+  never the SQL text.
+- `bootstrap::check(&Db, privileged_members)` / `bootstrap::check_connections`
+  — what `forge doctor` reports as `db.bootstrap` / `db.connections`.
+  `bootstrap::FILES` embeds `ops/db/bootstrap/*.sql`; `BOOTSTRAP_VERSION` must
+  match the version 03 writes (tested).
+- Feature `test-support` (dev-dependency of other crates only):
+  `test_support::FreshDb` — a database bootstrapped with the real files,
+  logins with synthetic passwords.
 
 **Bounded waits**: `connect_timeout` (whole connect), `acquire_timeout`
 (pool), and per session `statement_timeout`, `lock_timeout`,
@@ -20,16 +40,21 @@ migrations (ADR-0014). Later: the Outbox and the job queue.
 
 **Error codes owned**: FG-DB-0001 DbUnavailable (`reason`, `target`),
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
-MigrationFailed, FG-DB-0004 SchemaIncompatible. Reserved:
+MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
+AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`). Reserved:
 FG-DB-0005 (Outbox sequencer, ADR-0012).
 
-**Runbook**: `ops/runbooks/db-unavailable.md`.
+**Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
+`append-only-violation.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
 `cargo test -p forge-db`. Without it the DB tests **fail** with that command
 (they never skip). Override the target with `FORGE_TEST_DATABASE_URL`
-(password `forge_dev`, TLS disabled).
+(a superuser, password `forge_dev`, TLS disabled). The tests run
+`ops/db/bootstrap/01` once per process (cluster roles — shared by every
+test process, serialized by an advisory lock) and 02 + 03 for every
+`FreshDb`.
 
 **Gotchas**
 - TLS: `verify-full` (default), `require`, `disable` — no `prefer`, no
@@ -60,8 +85,8 @@ FG-DB-0005 (Outbox sequencer, ADR-0012).
   version check) and then a lazy pool: `min_connections` are opened in the
   background, so a failure there surfaces later on `acquire` (FG-DB-0001).
 
-**Migrations** (ADR-0014): `migrate(&db, &MIGRATOR, timeout)`,
-`status(&db, &MIGRATOR)` (read-only, never creates `_sqlx_migrations`),
+**Migrations** (ADR-0014): `migrate(&mut MigratorConn, &MIGRATOR, timeout)`,
+`status(&db, &MIGRATOR)` (read pool, never creates `_sqlx_migrations`),
 `check_schema(&db, &MIGRATOR)` (what `forge serve` runs before binding:
 FG-DB-0004 for pending / db_ahead / checksum_mismatch / dirty). Product
 migrations live in `migrations/` (`YYYYMMDDHHMMSS_desc.sql`, LF, forward

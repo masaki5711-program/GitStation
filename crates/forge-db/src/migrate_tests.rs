@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use forge_errors::ErrorCode;
+use forge_errors::{ErrorCode, ForgeError};
 use sqlx::migrate::{MigrateError, Migrator};
 
 use super::*;
@@ -20,10 +20,25 @@ async fn fixture(name: &str) -> Migrator {
     Migrator::new(dir).await.expect("fixture migrator")
 }
 
+/// The migration connection of a fresh database (forge_migrator → forge_owner).
+async fn migrator(t: &FreshDb) -> MigratorConn {
+    Db::connect_migrator(&t.migrate_config(&[]).db)
+        .await
+        .expect("migrator connection")
+}
+
+/// Open, migrate, close.
+async fn run(t: &FreshDb, m: &Migrator, timeout: Duration) -> Result<Vec<i64>, ForgeError> {
+    let mut mc = migrator(t).await;
+    let result = migrate(&mut mc, m, timeout).await;
+    mc.close().await;
+    result
+}
+
 async fn table_exists(db: &Db, table: &str) -> bool {
     sqlx::query_scalar::<_, Option<String>>("SELECT to_regclass($1)::text")
         .bind(table)
-        .fetch_one(db.pool())
+        .fetch_one(db.pool().executor())
         .await
         .expect("to_regclass")
         .is_some()
@@ -33,10 +48,10 @@ async fn table_exists(db: &Db, table: &str) -> bool {
 async fn migrate_applies_pending_in_order_and_is_idempotent() {
     let t = FreshDb::new().await;
     let v1 = fixture("v1").await;
-    let applied = migrate(&t.db, &v1, LONG).await.expect("migrate");
+    let applied = run(&t, &v1, LONG).await.expect("migrate");
     assert_eq!(applied, vec![20261026000001, 20261026000002]);
     assert!(table_exists(&t.db, "fixture_b").await);
-    let again = migrate(&t.db, &v1, LONG).await.expect("second run");
+    let again = run(&t, &v1, LONG).await.expect("second run");
     assert!(again.is_empty(), "nothing left to apply: {again:?}");
     let st = check_schema(&t.db, &v1).await.expect("compatible");
     assert_eq!(st.applied, vec![20261026000001, 20261026000002]);
@@ -73,14 +88,12 @@ async fn pending_migrations_are_schema_incompatible() {
 #[tokio::test]
 async fn a_database_newer_than_the_binary_is_db_ahead_and_migrate_refuses() {
     let t = FreshDb::new().await;
-    migrate(&t.db, &fixture("v2").await, LONG)
-        .await
-        .expect("v2");
+    run(&t, &fixture("v2").await, LONG).await.expect("v2");
     let v1 = fixture("v1").await;
     let err = check_schema(&t.db, &v1).await.expect_err("db ahead");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "db_ahead");
     assert!(err.to_string().contains("versions=20261026000003"), "{err}");
-    let err = migrate(&t.db, &v1, LONG).await.expect_err("refuses");
+    let err = run(&t, &v1, LONG).await.expect_err("refuses");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "db_ahead");
     t.drop_now().await;
 }
@@ -88,14 +101,12 @@ async fn a_database_newer_than_the_binary_is_db_ahead_and_migrate_refuses() {
 #[tokio::test]
 async fn an_edited_applied_migration_is_checksum_mismatch() {
     let t = FreshDb::new().await;
-    migrate(&t.db, &fixture("v1").await, LONG)
-        .await
-        .expect("v1");
+    run(&t, &fixture("v1").await, LONG).await.expect("v1");
     let edited = fixture("v1_edited").await;
     let err = check_schema(&t.db, &edited).await.expect_err("edited");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "checksum_mismatch");
     assert!(err.to_string().contains("versions=20261026000002"), "{err}");
-    let err = migrate(&t.db, &edited, LONG).await.expect_err("refuses");
+    let err = run(&t, &edited, LONG).await.expect_err("refuses");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "checksum_mismatch");
     t.drop_now().await;
 }
@@ -103,7 +114,7 @@ async fn an_edited_applied_migration_is_checksum_mismatch() {
 #[tokio::test]
 async fn a_failing_migration_is_migration_failed_and_leaves_no_partial_version() {
     let t = FreshDb::new().await;
-    let err = migrate(&t.db, &fixture("failing").await, LONG)
+    let err = run(&t, &fixture("failing").await, LONG)
         .await
         .expect_err("division by zero");
     assert_reason(&err, ErrorCode::MigrationFailed, "sql_failed");
@@ -127,14 +138,14 @@ async fn a_failing_migration_is_migration_failed_and_leaves_no_partial_version()
 async fn a_dirty_record_is_schema_incompatible() {
     let t = FreshDb::new().await;
     let v1 = fixture("v1").await;
-    migrate(&t.db, &v1, LONG).await.expect("v1");
+    run(&t, &v1, LONG).await.expect("v1");
     sqlx::query("UPDATE _sqlx_migrations SET success = false WHERE version = 20261026000002")
-        .execute(t.db.pool())
+        .execute(&mut t.superuser().await)
         .await
         .expect("mark dirty");
     let err = check_schema(&t.db, &v1).await.expect_err("dirty");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "dirty");
-    let err = migrate(&t.db, &v1, LONG).await.expect_err("refuses");
+    let err = run(&t, &v1, LONG).await.expect_err("refuses");
     assert_reason(&err, ErrorCode::SchemaIncompatible, "dirty");
     t.drop_now().await;
 }
@@ -143,7 +154,7 @@ async fn a_dirty_record_is_schema_incompatible() {
 async fn concurrent_migrate_runs_are_serialized() {
     let t = FreshDb::new().await;
     let v2 = fixture("v2").await;
-    let (a, b) = tokio::join!(migrate(&t.db, &v2, LONG), migrate(&t.db, &v2, LONG));
+    let (a, b) = tokio::join!(run(&t, &v2, LONG), run(&t, &v2, LONG));
     let (a, b) = (a.expect("run a"), b.expect("run b"));
     let mut all: Vec<i64> = a.iter().chain(b.iter()).copied().collect();
     all.sort_unstable();
@@ -165,7 +176,7 @@ async fn the_binary_migrator_matches_an_empty_database() {
 #[tokio::test]
 async fn migrations_run_with_their_own_statement_timeout_on_a_dedicated_connection() {
     let t = FreshDb::new().await;
-    let err = migrate(&t.db, &fixture("slow").await, Duration::from_millis(500))
+    let err = run(&t, &fixture("slow").await, Duration::from_millis(500))
         .await
         .expect_err("pg_sleep(3) exceeds the migration timeout");
     assert_reason(&err, ErrorCode::MigrationFailed, "sql_failed");
@@ -201,16 +212,12 @@ async fn a_migration_run_blocked_by_another_holder_of_the_lock_is_locked() {
         .await
         .expect("hold the migration lock");
     // A short lock wait for this run only.
-    let cfg = test_config(
-        &url_with_db(&dbname),
-        "forge_dev",
-        &[("FORGE_DATABASE_LOCK_TIMEOUT_MS", "300")],
-    );
-    let short = Db::connect(&cfg.db).await.expect("connect");
-    let err = migrate(&short, &v1, LONG).await.expect_err("lock held");
+    let cfg = t.migrate_config(&[("FORGE_DATABASE_LOCK_TIMEOUT_MS", "300")]);
+    let mut short = Db::connect_migrator(&cfg.db).await.expect("connect");
+    let err = migrate(&mut short, &v1, LONG).await.expect_err("lock held");
     assert_reason(&err, ErrorCode::MigrationFailed, "locked");
     drop(holder);
-    short.pool().close().await;
+    short.close().await;
     t.drop_now().await;
 }
 
@@ -286,4 +293,87 @@ fn every_migrate_error_maps_to_a_registered_code_and_reason() {
         let err = migrate_error(e);
         assert_reason(&err, code, reason);
     }
+}
+
+#[tokio::test]
+async fn migrator_connection_runs_as_forge_owner_and_owns_what_it_creates() {
+    let t = FreshDb::new().await;
+    let mut mc = migrator(&t).await;
+    let (current, session, app): (String, String, String) = sqlx::query_as(
+        "SELECT current_user::text, session_user::text, current_setting('application_name')",
+    )
+    .fetch_one(&mut mc.conn)
+    .await
+    .expect("whoami");
+    assert_eq!(
+        (current.as_str(), session.as_str(), app.as_str()),
+        ("forge_owner", "forge_migrator", "forge-migrate")
+    );
+    migrate(&mut mc, &fixture("v1").await, LONG)
+        .await
+        .expect("v1");
+    mc.close().await;
+    let owners: Vec<String> = sqlx::query_scalar(
+        "SELECT tableowner::text FROM pg_tables \
+         WHERE tablename IN ('fixture_a', 'fixture_b', '_sqlx_migrations')",
+    )
+    .fetch_all(t.db.pool().executor())
+    .await
+    .expect("owners");
+    assert_eq!(owners, ["forge_owner"; 3]);
+    // The read pool sees what is applied (default privileges of the bootstrap).
+    let st = check_schema(&t.db, &fixture("v1").await)
+        .await
+        .expect("compatible");
+    assert_eq!(st.applied.len(), 2);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_migrate_login_that_cannot_become_owner_is_config_invalid_wrong_role() {
+    let t = FreshDb::new().await;
+    // forge_app is not a member of forge_owner.
+    let pw = PasswordFile::new(APP_PASSWORD);
+    let (url, path) = (url_as("forge_app", &t.name), pw.path());
+    let cfg = t.migrate_config(&[
+        ("FORGE_DATABASE_MIGRATE_URL", url.as_str()),
+        ("FORGE_DATABASE_MIGRATE_PASSWORD_FILE", path.as_str()),
+    ]);
+    let err = Db::connect_migrator(&cfg.db)
+        .await
+        .expect_err("not a member");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "wrong_role");
+    let text = err.to_string();
+    assert!(text.contains("config_key=database.migrate_url"), "{text}");
+    assert!(text.contains("role_check=not_member"), "{text}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_superuser_migrate_login_is_refused() {
+    let t = FreshDb::new().await;
+    let pw = PasswordFile::new("forge_dev");
+    let (url, path) = (url_with_db(&t.name), pw.path());
+    let cfg = t.migrate_config(&[
+        ("FORGE_DATABASE_MIGRATE_URL", url.as_str()),
+        ("FORGE_DATABASE_MIGRATE_PASSWORD_FILE", path.as_str()),
+    ]);
+    let err = Db::connect_migrator(&cfg.db).await.expect_err("superuser");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "wrong_role");
+    assert!(err.to_string().contains("role_check=superuser"), "{err}");
+    t.drop_now().await;
+}
+
+#[test]
+fn a_missing_migrate_url_is_config_invalid() {
+    let cfg = test_config("postgres://forge_app@127.0.0.1:1/forge", "x", &[]);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let err = rt
+        .block_on(Db::connect_migrator(&cfg.db))
+        .expect_err("no migrate url");
+    assert_reason(&err, ErrorCode::ConfigInvalid, "missing");
+    assert!(err.to_string().contains("config_key=database.migrate_url"));
 }

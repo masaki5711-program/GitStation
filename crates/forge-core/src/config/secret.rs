@@ -43,8 +43,9 @@ pub struct DatabaseUrl {
 
 impl DatabaseUrl {
     /// Parse and validate. The raw text is never echoed in the error.
-    pub(super) fn parse(raw: &str) -> Result<Self, ForgeError> {
-        let bad = || invalid("database.url", "invalid");
+    /// `key` names the configuration key in the error.
+    pub(super) fn parse(key: &'static str, raw: &str) -> Result<Self, ForgeError> {
+        let bad = || invalid(key, "invalid");
         let url = url::Url::parse(raw).map_err(|_| bad())?;
         if !matches!(url.scheme(), "postgres" | "postgresql") {
             return Err(bad());
@@ -53,10 +54,10 @@ impl DatabaseUrl {
             .query_pairs()
             .any(|(k, _)| PASSWORD_PARAMS.iter().any(|p| k.eq_ignore_ascii_case(p)));
         if url.password().is_some() || has_password_param {
-            return Err(invalid("database.url", "password_in_url"));
+            return Err(invalid(key, "password_in_url"));
         }
         if url.query().is_some() || url.fragment().is_some() {
-            return Err(invalid("database.url", "query_in_url"));
+            return Err(invalid(key, "query_in_url"));
         }
         let decode = |s: &str| {
             percent_encoding::percent_decode_str(s)
@@ -120,19 +121,19 @@ impl std::fmt::Debug for DatabaseUrl {
     }
 }
 
-/// Read `database.password_file`: an absolute path, readable only by its
+/// Read a password file (`database.password_file` and the other
+/// `*_password_file` keys, named by `key`): an absolute path, readable only by its
 /// owner on Unix (production runs on Linux; on Windows the ACL is the
 /// operator's responsibility, ADR-0013), at most 4 KiB, with the trailing
 /// newline trimmed. The file is opened once; the permission check and the
 /// read use the same handle.
-pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
+pub(super) fn read_password(key: &'static str, path: &Path) -> Result<Secret, ForgeError> {
     use std::io::Read as _;
-    const KEY: &str = "database.password_file";
     if !path.is_absolute() {
-        return Err(invalid(KEY, "not_absolute"));
+        return Err(invalid(key, "not_absolute"));
     }
     let unreadable = |e: std::io::Error| {
-        invalid(KEY, "unreadable")
+        invalid(key, "unreadable")
             .with_context("path", path.display())
             .with_source(e)
     };
@@ -140,7 +141,7 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
     // regular file before opening; the handle's metadata is checked again
     // below (the path may have changed in between).
     if !std::fs::metadata(path).map_err(unreadable)?.is_file() {
-        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+        return Err(invalid(key, "invalid").with_context("path", path.display()));
     }
     let file = std::fs::File::open(path).map_err(unreadable)?;
     let meta = file.metadata().map_err(unreadable)?;
@@ -149,13 +150,13 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
         use std::os::unix::fs::PermissionsExt as _;
         let mode = meta.permissions().mode() & 0o777;
         if mode & 0o077 != 0 {
-            return Err(invalid(KEY, "insecure_permissions")
+            return Err(invalid(key, "insecure_permissions")
                 .with_context("path", path.display())
                 .with_context("mode", format!("{mode:o}")));
         }
     }
     if !meta.is_file() || meta.len() > MAX_PASSWORD_BYTES {
-        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+        return Err(invalid(key, "invalid").with_context("path", path.display()));
     }
     let mut text = String::new();
     // `take` also bounds a file that grows after the size check.
@@ -163,11 +164,11 @@ pub(super) fn read_password(path: &Path) -> Result<Secret, ForgeError> {
         .read_to_string(&mut text)
         .map_err(unreadable)?;
     if text.len() as u64 > MAX_PASSWORD_BYTES {
-        return Err(invalid(KEY, "invalid").with_context("path", path.display()));
+        return Err(invalid(key, "invalid").with_context("path", path.display()));
     }
     let value = text.trim_end_matches(['\r', '\n']);
     if value.is_empty() {
-        return Err(invalid(KEY, "empty"));
+        return Err(invalid(key, "empty"));
     }
     Ok(Secret(value.to_owned()))
 }

@@ -24,14 +24,18 @@ pub fn status(cfg: &DatabaseConfig, check: bool) -> Result<String, ForgeError> {
     })
 }
 
+/// Runs on the migration login (`database.migrate_url`, ADR-0018).
 pub fn migrate(cfg: &DatabaseConfig) -> Result<String, ForgeError> {
     block_on(async {
-        let db = Db::connect(cfg).await?;
-        let applied = forge_db::migrate(&db, &MIGRATOR, cfg.migrate_statement_timeout).await?;
+        let mut mc = Db::connect_migrator(cfg).await?;
+        let result = forge_db::migrate(&mut mc, &MIGRATOR, cfg.migrate_statement_timeout).await;
+        let target = mc.target().to_owned(); // owned: close consumes mc
+        mc.close().await;
+        let applied = result?;
         Ok(if applied.is_empty() {
-            format!("{}: up to date\n", db.target())
+            format!("{target}: up to date\n")
         } else {
-            format!("{}: applied {}\n", db.target(), list(&applied))
+            format!("{target}: applied {}\n", list(&applied))
         })
     })
 }

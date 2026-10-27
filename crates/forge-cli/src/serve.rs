@@ -39,7 +39,7 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
             forge_web::server::shutdown_signal(),
         )
         .await?;
-        db.pool().close().await;
+        db.close().await;
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })

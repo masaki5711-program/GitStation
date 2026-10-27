@@ -47,13 +47,34 @@ pub const KEYS: &[Key] = &[
     text("storage.root", "FORGE_STORAGE_ROOT"),
     text("database.url", "FORGE_DATABASE_URL"),
     text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),
+    text("database.migrate_url", "FORGE_DATABASE_MIGRATE_URL"),
+    text(
+        "database.migrate_password_file",
+        "FORGE_DATABASE_MIGRATE_PASSWORD_FILE",
+    ),
+    text("database.maint_url", "FORGE_DATABASE_MAINT_URL"),
+    text(
+        "database.maint_password_file",
+        "FORGE_DATABASE_MAINT_PASSWORD_FILE",
+    ),
+    text(
+        "database.privileged_members",
+        "FORGE_DATABASE_PRIVILEGED_MEMBERS",
+    ),
     text("database.tls_mode", "FORGE_DATABASE_TLS_MODE"),
     text("database.tls_root_cert", "FORGE_DATABASE_TLS_ROOT_CERT"),
     boolean(
         "database.tls_allow_unverified",
         "FORGE_DATABASE_TLS_ALLOW_UNVERIFIED",
     ),
-    number("database.max_connections", "FORGE_DATABASE_MAX_CONNECTIONS"),
+    number(
+        "database.write_max_connections",
+        "FORGE_DATABASE_WRITE_MAX_CONNECTIONS",
+    ),
+    number(
+        "database.read_max_connections",
+        "FORGE_DATABASE_READ_MAX_CONNECTIONS",
+    ),
     number("database.min_connections", "FORGE_DATABASE_MIN_CONNECTIONS"),
     number(
         "database.connect_timeout_ms",
