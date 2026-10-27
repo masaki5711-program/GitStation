@@ -49,7 +49,11 @@ fn ledger_tables(guarded_only: bool) -> BTreeSet<String> {
         .collect()
 }
 
-const INSERT_EVENT: &str = "INSERT INTO forge.events (event_id, event_type, schema_version, \
+// With its audit row: an event commits only together with one (C3).
+const INSERT_EVENT: &str =
+    "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
+     VALUES ('system', 'repository.created', 'succeeded', 'repository', 'r-1'); \
+     INSERT INTO forge.events (event_id, event_type, schema_version, \
      aggregate_type, aggregate_id, actor_kind, request_id, payload) VALUES \
      (gen_random_uuid(), 'repository.created', 1, 'repository', 1, 'system', 'r-1', '{}')";
 
@@ -391,7 +395,8 @@ async fn as_role(t: &FreshDb, setup: &str, role: &str, cases: &[(&str, Option<&s
 
 /// An event that is published and older than the retention floor (the
 /// guard forces occurred_at, so the test moves it with the trigger off).
-const OLD_PUBLISHED_EVENT: &str = "ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+const OLD_PUBLISHED_EVENT: &str = "SET CONSTRAINTS ALL IMMEDIATE; \
+     ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
      UPDATE forge.events SET seq = 1, sequenced_at = now(), \
          occurred_at = now() - interval '30 days' WHERE aggregate_id = 1; \
      ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only";
@@ -439,7 +444,11 @@ async fn purge_changes_only_payloads_and_deletes_only_old_published_events() {
     t.drop_now().await;
 }
 
-const INSERT_EVENT_2: &str = "INSERT INTO forge.events (event_id, event_type, schema_version, \
+// With its audit row: an event commits only together with one (C3).
+const INSERT_EVENT_2: &str =
+    "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
+     VALUES ('system', 'repository.created', 'succeeded', 'repository', 'r-1'); \
+     INSERT INTO forge.events (event_id, event_type, schema_version, \
      aggregate_type, aggregate_id, actor_kind, request_id, payload) VALUES \
      (gen_random_uuid(), 'repository.created', 1, 'repository', 2, 'system', 'r-2', '{}')";
 
@@ -899,7 +908,8 @@ async fn redaction_only_blanks_values_of_a_published_event() {
     as_role(
         &t,
         &format!(
-            "{INSERT_EVENT}; ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+            "{INSERT_EVENT}; SET CONSTRAINTS ALL IMMEDIATE; \
+             ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
              UPDATE forge.events SET seq = 1, sequenced_at = now(), \
                  payload = '{{\"name\": \"alice\", \"repo\": 7}}'; \
              ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only"

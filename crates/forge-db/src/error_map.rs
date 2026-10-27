@@ -11,6 +11,8 @@
 //!   privilege (`permission_denied`, 42501) are bugs: never retried.
 //! - **FG-DB-0009 AppendOnlyViolation** (alert): a guard trigger rejected a
 //!   change to an append-only table (XF001).
+//! - **FG-DB-0013 AuditMissing** (alert): an event committed without an audit
+//!   row in its transaction (XF002, deferred trigger).
 //!
 //! The context carries `target` / `query` (static names), `reason`,
 //! `sqlstate` and — for constraint errors — `constraint` / `table`. Server
@@ -27,6 +29,7 @@ enum Class {
     Unavailable(&'static str),
     Query(&'static str),
     AppendOnly,
+    AuditMissing,
 }
 
 /// Which pool a statement ran on: 25006 means "standby" on the write pool
@@ -121,6 +124,7 @@ fn by_sqlstate(state: &str, on: On) -> Class {
         "25006" if on == On::Read => Class::Query("write_on_read_pool"),
         "42501" => Class::Query("permission_denied"),
         "XF001" => Class::AppendOnly,
+        "XF002" => Class::AuditMissing,
         "57014" => Class::Query("statement_timeout"),
         "55P03" => Class::Query("lock_timeout"),
         "40001" => Class::Query("serialization"),
@@ -149,7 +153,7 @@ fn by_sqlstate(state: &str, on: On) -> Class {
 /// the offending input).
 const MESSAGE_SAFE: &[&str] = &[
     "08001", "08006", "28000", "28P01", "3D000", "42501", "42P01", "42703", "42883", "53300",
-    "55P03", "57014", "57P01", "57P02", "57P03", "XF001",
+    "55P03", "57014", "57P01", "57P02", "57P03", "XF001", "XF002",
 ];
 
 fn message_is_safe(state: &str) -> bool {
@@ -173,6 +177,7 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     let (code, reason) = match class {
         Class::Unavailable(r) => (ErrorCode::DbUnavailable, r),
         Class::AppendOnly => (ErrorCode::AppendOnlyViolation, "rejected"),
+        Class::AuditMissing => (ErrorCode::AuditMissing, "no_audit_row"),
         // Opening or checking a connection: never a statement error, but a
         // known reason (statement_timeout, serialization, …) is kept; only
         // the generic ones are renamed.
@@ -324,12 +329,14 @@ mod tests {
             ("28P01", true, "auth_failed"),
             ("42501", false, "permission_denied"),
             ("XF001", false, "append_only"),
+            ("XF002", false, "audit_missing"),
         ] {
             let class = by_sqlstate(state, On::Write);
             let (is_unavailable, r) = match class {
                 Class::Unavailable(r) => (true, r),
                 Class::Query(r) => (false, r),
                 Class::AppendOnly => (false, "append_only"),
+                Class::AuditMissing => (false, "audit_missing"),
             };
             assert_eq!((is_unavailable, r), (unavailable, reason), "{state}");
         }

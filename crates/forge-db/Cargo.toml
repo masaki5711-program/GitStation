@@ -13,18 +13,17 @@ forge-core.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
 tempfile = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
 
 [features]
 # Bootstrapped test databases for other crates' tests (dev-dependency only).
-test-support = ["dep:tempfile", "dep:uuid"]
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
-serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
-uuid.workspace = true
 
 [lints]
 workspace = true

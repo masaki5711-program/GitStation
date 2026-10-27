@@ -14,6 +14,7 @@
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
 
 pub mod bootstrap;
+pub mod change;
 mod error_map;
 mod migrate;
 mod migrator;

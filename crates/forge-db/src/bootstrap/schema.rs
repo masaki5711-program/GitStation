@@ -10,21 +10,69 @@ use super::acl::{compare, table_grants_sql};
 use super::guard_missing;
 use crate::read_query_error;
 
-/// `pg_trigger.tgtype` bits: ROW 1, BEFORE 2, INSERT 4, DELETE 8, UPDATE
-/// 16, TRUNCATE 32.
-const GUARD_ROW_TYPE: i16 = 1 | 2 | 4 | 8 | 16;
-/// event_feed_state: UPDATE and DELETE (its one row is inserted freely).
-const FEED_STATE_ROW_TYPE: i16 = 1 | 2 | 8 | 16;
-const GUARD_TRUNCATE_TYPE: i16 = 2 | 32;
+/// The guard functions of the migrated schema.
+const GUARD_FUNCTIONS: &[&str] = &[
+    "forge.events_guard()",
+    "forge.audit_log_guard()",
+    "forge.event_feed_state_guard()",
+    "forge.events_audit_present()",
+];
 
-/// Guarded tables, their guard function and the row trigger's type.
-const GUARDED: &[(&str, &str, i16)] = &[
-    ("events", "forge.events_guard()", GUARD_ROW_TYPE),
-    ("audit_log", "forge.audit_log_guard()", GUARD_ROW_TYPE),
+/// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
+/// (with `search_path = pg_catalog`): no other trigger may exist.
+const GUARDED_TRIGGERS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "events",
+        &[
+            (
+                "events_append_only",
+                "CREATE TRIGGER events_append_only BEFORE INSERT OR DELETE OR UPDATE ON \
+                 forge.events FOR EACH ROW EXECUTE FUNCTION forge.events_guard()",
+            ),
+            (
+                "events_no_truncate",
+                "CREATE TRIGGER events_no_truncate BEFORE TRUNCATE ON forge.events FOR EACH \
+                 STATEMENT EXECUTE FUNCTION forge.events_guard()",
+            ),
+            (
+                "events_audit_present",
+                "CREATE CONSTRAINT TRIGGER events_audit_present AFTER INSERT ON forge.events \
+                 DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.caused_by_seq IS NULL)) \
+                 EXECUTE FUNCTION forge.events_audit_present()",
+            ),
+        ],
+    ),
+    (
+        "audit_log",
+        &[
+            (
+                "audit_log_append_only",
+                "CREATE TRIGGER audit_log_append_only BEFORE INSERT OR DELETE OR UPDATE ON \
+                 forge.audit_log FOR EACH ROW EXECUTE FUNCTION forge.audit_log_guard()",
+            ),
+            (
+                "audit_log_no_truncate",
+                "CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON forge.audit_log FOR \
+                 EACH STATEMENT EXECUTE FUNCTION forge.audit_log_guard()",
+            ),
+        ],
+    ),
     (
         "event_feed_state",
-        "forge.event_feed_state_guard()",
-        FEED_STATE_ROW_TYPE,
+        &[
+            (
+                "event_feed_state_append_only",
+                "CREATE TRIGGER event_feed_state_append_only BEFORE DELETE OR UPDATE ON \
+                 forge.event_feed_state FOR EACH ROW EXECUTE FUNCTION \
+                 forge.event_feed_state_guard()",
+            ),
+            (
+                "event_feed_state_no_truncate",
+                "CREATE TRIGGER event_feed_state_no_truncate BEFORE TRUNCATE ON \
+                 forge.event_feed_state FOR EACH STATEMENT EXECUTE FUNCTION \
+                 forge.event_feed_state_guard()",
+            ),
+        ],
     ),
 ];
 
@@ -268,28 +316,26 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
             );
         }
     }
-    for (table, function, row_type) in GUARDED {
+    for function in GUARD_FUNCTIONS {
         check_guard_function(conn, function).await?;
-        let rows: Vec<(String, String, i16, bool)> = sqlx::query_as(&format!(
-            "SELECT t.tgname::text, t.tgenabled::text, t.tgtype, \
-             (t.tgfoid = '{function}'::regprocedure AND t.tgnargs = 0 AND t.tgqual IS NULL \
-              AND coalesce(pg_catalog.array_length(t.tgattr::int2[], 1), 0) = 0) \
+    }
+    for (table, expected) in GUARDED_TRIGGERS {
+        // The whole definition (timing, events, level, WHEN, columns,
+        // deferral, function) as PostgreSQL prints it, and enabled ALWAYS.
+        let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
+            "SELECT t.tgname::text, t.tgenabled::text, pg_catalog.pg_get_triggerdef(t.oid) \
              FROM pg_catalog.pg_trigger t \
              WHERE t.tgrelid = 'forge.{table}'::regclass AND NOT t.tgisinternal"
         ))
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| read_query_error("bootstrap.schema_triggers", e))?;
-        let expected = [
-            (format!("{table}_append_only"), *row_type),
-            (format!("{table}_no_truncate"), GUARD_TRUNCATE_TYPE),
-        ];
-        for (name, kind) in &expected {
-            let ok = rows.iter().any(|(n, enabled, tgtype, shape)| {
-                n == name && enabled == "A" && tgtype == kind && *shape
-            });
+        for (name, definition) in *expected {
+            let ok = rows
+                .iter()
+                .any(|(n, enabled, def)| n == name && enabled == "A" && def == definition);
             if !ok {
-                return Err(guard_missing("log_triggers").with_context("trigger", name));
+                return Err(guard_missing("log_triggers").with_context("trigger", *name));
             }
         }
         if let Some((extra, ..)) = rows
