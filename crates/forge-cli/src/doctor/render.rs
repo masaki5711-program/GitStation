@@ -27,6 +27,12 @@ const SAFE_CONTEXT: &[&str] = &[
     "found",
     "expected",
     "operation",
+    // FG-DB-0005 (outbox-sequencer-lag runbook): counts, an age, a pid.
+    "unsequenced_count",
+    "unsequenced_events",
+    "unsequenced_audit",
+    "heartbeat_age_ms",
+    "lock_holder_pid",
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

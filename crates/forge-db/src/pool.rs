@@ -133,8 +133,7 @@ impl Db {
         &self.read
     }
 
-    /// The write pool: typed commands inside this crate only.
-    #[cfg_attr(not(test), allow(dead_code))] // first production caller: ChangeTx (step C3)
+    /// The write pool: typed commands and the sequencer, inside this crate only.
     pub(crate) fn write_pool(&self) -> &PgPool {
         &self.write
     }

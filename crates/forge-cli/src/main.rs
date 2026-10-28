@@ -15,6 +15,7 @@ mod doctor;
 mod explain;
 mod runtime;
 mod serve;
+mod worker;
 
 #[derive(Parser)]
 #[command(name = "forge", version, about = "forge — internal Git platform")]
@@ -48,6 +49,9 @@ enum Command {
         #[arg(long)]
         bind: Option<String>,
     },
+    /// Run the background tasks (the outbox sequencer; later jobs and
+    /// audit seals) until SIGINT / SIGTERM.
+    Worker,
     /// Read-only health checks of everything `forge serve` needs
     /// (configuration, database, schema, storage, git).
     Doctor {
@@ -109,6 +113,7 @@ fn main() -> ExitCode {
     // log JSON at info level; the other operator commands stay quiet.
     match cli.command {
         Command::Serve { .. }
+        | Command::Worker
         | Command::Db {
             command: DbCommand::Migrate,
         } => telemetry::init(LogFormat::Json, "info"),
@@ -164,6 +169,7 @@ fn main() -> ExitCode {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)
         }),
+        Command::Worker => config().and_then(|cfg| worker::worker(&cfg.database)),
         Command::Db {
             command: DbCommand::Status { check },
         } => config().and_then(|cfg| db::status(&cfg.database, check)),

@@ -12,6 +12,8 @@
 //! - [`migrate`] / [`status`] / [`check_schema`] implement the migration
 //!   policy of ADR-0014 (`FG-DB-0003` / `FG-DB-0004`).
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
+//! - [`sequencer`] numbers the outbox (`forge.assign_seq`, `forge worker`)
+//!   and reports its backlog / lag (`FG-DB-0005`).
 
 pub mod bootstrap;
 pub mod change;
@@ -22,6 +24,7 @@ mod options;
 mod pool;
 #[cfg(test)]
 mod schema_tests;
+pub mod sequencer;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
