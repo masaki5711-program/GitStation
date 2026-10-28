@@ -2,12 +2,15 @@
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
-//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the event
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
+//! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
+//! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
-//! pool.
+//! pool, except `audit.seal_verify`, which reads the sealed act-as columns
+//! in a SELECT-only transaction on the write pool that always rolls back.
 //!
 //! A check that depends on an earlier failed one is `skip`. The command
 //! fails with the most severe error found (alert before warn before info),
@@ -17,17 +20,24 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, sequencer, subscribers, Db, MIGRATOR};
+use forge_db::{bootstrap, jobs, sequencer, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
 mod render;
+mod seal;
+// ── C5 ──
+mod subscribers;
+// ── end C5 ──
 
 /// The outcome of one check.
 enum Outcome {
     Ok(String),
+    /// Passed, but not fully checked (no FG code: the exit code stays 0;
+    /// `--json` reports `"status": "warn"` and `"ok": false`).
+    Warn(String),
     Fail(ForgeError),
     Skip(&'static str),
 }
@@ -44,12 +54,20 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 7] = [
+const DB_CHECKS: [&str; 12] = [
     "db.bootstrap",
     "db.connections",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
+    // ── C8 ──
+    "audit.seal_backlog",
+    "audit.seal_verify",
+    // ── end C8 ──
+    // C6: the job queue.
+    "jobs.dead",
+    "jobs.expired_leases",
+    "jobs.queue_depth",
     // ── C5 ──
     "subscribers.lag",
     "subscribers.dead_letters",
@@ -149,49 +167,77 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         Err(e) => fail("schema", e),
     };
     let [unsequenced, lag] = outbox_checks(db).await;
-    let mut checks = vec![bootstrap, connections, schema, unsequenced, lag];
+    // ── C8 ──
+    let [seal_backlog, seal_verify] = seal::seal_checks(db, cfg).await;
+    // ── end C8 ──
+    let [dead, leases, depth] = job_checks(db).await;
     // ── C5 ──
-    checks.extend(subscriber_checks(db).await);
+    let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
     // ── end C5 ──
-    checks
+    vec![
+        bootstrap,
+        connections,
+        schema,
+        unsequenced,
+        lag,
+        seal_backlog,
+        seal_verify,
+        dead,
+        leases,
+        depth,
+        subscriber_lag,
+        dead_letters,
+    ]
 }
 
-// ── C5: event subscribers (ADR-0016 §7, FG-DB-0008) ──
-/// `subscribers.lag` (stuck / behind) and `subscribers.dead_letters`
-/// (quarantined in the last 24 h).
-async fn subscriber_checks(db: &Db) -> [Check; 2] {
-    let lag = match subscribers::states(db).await {
-        Ok(Some(states)) => match subscribers::check_lag(&states) {
-            Ok(()) => {
-                let behind = states.iter().filter(|s| s.lag_events > 0).count();
-                let max = states.iter().map(|s| s.lag_events).max().unwrap_or(0);
-                ok(
-                    "subscribers.lag",
-                    &format!(
-                        "{} subscribers, {behind} with pending events (max {max})",
-                        states.len()
-                    ),
-                )
-            }
-            Err(e) => fail("subscribers.lag", e),
-        },
-        Ok(None) => skip("subscribers.lag", "schema not migrated"),
-        Err(e) => fail("subscribers.lag", e),
+// ── C6: the job queue ────────────────────────────────────────────────────
+/// `jobs.dead` (`FG-DB-0006`), `jobs.expired_leases` and `jobs.queue_depth`
+/// (`FG-DB-0017`), ADR-0016 §7.
+async fn job_checks(db: &Db) -> [Check; 3] {
+    const NAMES: [&str; 3] = ["jobs.dead", "jobs.expired_leases", "jobs.queue_depth"];
+    let h = match jobs::health(db).await {
+        Ok(Some(h)) => h,
+        Ok(None) => return NAMES.map(|n| skip(n, "schema not migrated")),
+        Err(e) => {
+            return [
+                fail(NAMES[0], e),
+                skip(NAMES[1], "job health unavailable"),
+                skip(NAMES[2], "job health unavailable"),
+            ]
+        }
     };
-    let letters = match subscribers::dead_letters(db).await {
-        Ok(Some(d)) => match d.check() {
-            Ok(()) => ok(
-                "subscribers.dead_letters",
-                &format!("{} quarantined, none in the last 24 h", d.total),
+    let dead = match h.check_dead() {
+        Ok(()) => ok(
+            NAMES[0],
+            &format!(
+                "none in the last 24 h ({} in total)",
+                sequencer::shown(h.dead_total)
             ),
-            Err(e) => fail("subscribers.dead_letters", e),
-        },
-        Ok(None) => skip("subscribers.dead_letters", "schema not migrated"),
-        Err(e) => fail("subscribers.dead_letters", e),
+        ),
+        Err(e) => fail(NAMES[0], e),
     };
-    [lag, letters]
+    let leases = match h.check_expired_leases() {
+        Ok(()) => ok(NAMES[1], "none unreaped"),
+        Err(e) => fail(NAMES[1], e),
+    };
+    let depth = match h.check_queue_depth() {
+        Ok(()) => ok(NAMES[2], &depth_detail(&h.depth)),
+        Err(e) => fail(NAMES[2], e),
+    };
+    [dead, leases, depth]
 }
-// ── end C5 ──
+
+fn depth_detail(depth: &[jobs::KindDepth]) -> String {
+    if depth.is_empty() {
+        return "no ready jobs".to_owned();
+    }
+    depth
+        .iter()
+        .map(|k| format!("{} {}", k.kind, sequencer::shown(k.ready)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+// ── end C6 ───────────────────────────────────────────────────────────────
 
 /// `outbox.unsequenced_count` (what waits for a number) and
 /// `outbox.sequencer_lag` (`FG-DB-0005`, ADR-0016 §7).
@@ -250,6 +296,13 @@ fn ok(name: &'static str, detail: &str) -> Check {
     }
 }
 
+fn warn(name: &'static str, detail: &str) -> Check {
+    Check {
+        name,
+        outcome: Outcome::Warn(detail.to_owned()),
+    }
+}
+
 fn fail(name: &'static str, e: ForgeError) -> Check {
     Check {
         name,
@@ -277,7 +330,7 @@ fn most_severe(checks: Vec<Check>) -> Option<ForgeError> {
         .into_iter()
         .filter_map(|c| match c.outcome {
             Outcome::Fail(e) => Some(e),
-            Outcome::Ok(_) | Outcome::Skip(_) => None,
+            Outcome::Ok(_) | Outcome::Warn(_) | Outcome::Skip(_) => None,
         })
         // The first of the most severe: earlier checks are more fundamental.
         .rev()

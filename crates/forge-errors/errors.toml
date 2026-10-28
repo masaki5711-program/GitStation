@@ -524,6 +524,48 @@ runbook = "outbox-sequencer-lag"
 test = "a_stale_sequencer_with_a_backlog_is_outbox_sequencer_lag"
 # ── end C4 ───────────────────────────────────────────────────────────────
 
+# ── C6: the job queue (ADR-0016 §7) ──────────────────────────────────────
+[[error]]
+code = "FG-DB-0006"
+name = "JobDeadLettered"
+http_status = 500
+severity = "alert"
+user_message_ja = "バックグラウンドの処理が完了できませんでした。管理者に連絡してください。"
+user_message_en = "A background task could not be completed. Contact the administrator."
+user_message_id = "Tugas latar belakang tidak dapat diselesaikan. Hubungi administrator."
+cause = "An internal job in forge.jobs died: its work is not done until it is enqueued again. reason=attempts_exhausted: its handler failed max_attempts times; permanent_failure: the handler reported a failure that can never succeed (dead at the first such failure); lease_expired: its last lease expired (worker crashed, run cancelled, hung) with the attempts used up; dead_lettered (forge doctor jobs.dead): a job died within the last 24 h. (Jobs piling up or a reaper that does not run is FG-DB-0017.)"
+diagnosis = "The event carries `reason`, `job_id`, `kind`, `attempts`, `last_error_code` (the code of the last failure; FG-DB-0007 = its lease expired) and `origin_request_id` (the request or event that enqueued it — search the logs for it to follow request → event → job). The job runner logs the cause first, under its own error_code with `job_id` / `kind` / `attempt`, then this event, both with the origin request_id. forge doctor adds `dead_recent` (dead within 24 h, capped). last_error_code FG-SYS-0001 is a runner-side failure; its reason is in last_error: job_panicked (the handler panicked — a bug, see internal-error), job_cancelled (its task was cancelled outside the runner), no_handler (the claimed kind has no handler in this build — normally impossible, since a runner claims only its own kinds; it goes with FG-DB-0017 reason=queue_wait for that kind on other workers). Read the row (read-only): SELECT id, kind, state, attempts, max_attempts, last_error_code, last_error, origin_request_id, created_at, finished_at FROM forge.jobs WHERE id = <job_id>; run `forge doctor --json` (jobs.dead)."
+fix = "Fix the cause named by last_error_code (its own runbook), then have the work redone by the command that owns the kind: a dead job does not hold its dedup_key, so enqueueing the same work again creates a new job (never edit forge.jobs by hand outside an approved runbook step)."
+runbook = "job-dead-lettered"
+test = "a_job_that_fails_max_attempts_times_is_dead_and_reported"
+
+[[error]]
+code = "FG-DB-0007"
+name = "JobLeaseExpired"
+http_status = 500
+severity = "warn"
+user_message_ja = "バックグラウンドの処理をやり直しています。"
+user_message_en = "A background task is being retried."
+user_message_id = "Tugas latar belakang sedang dicoba ulang."
+cause = "A job's run or lease ended before its result was recorded normally. reason=lease_expired: the reaper found a running job past lease_until (= claim + timeout_ms + 30 s: the worker crashed, was killed, or its run was cancelled) and queued it again after the backoff; fenced: a worker tried to record a result (or release the job) for a lease it no longer holds (reaped and re-claimed) — the result was discarded and the newer one kept; execution_timeout: the handler ran longer than the job's timeout_ms and was aborted (retried after the backoff; kept under this code because it is the runner ending the lease early); abort_pending: an aborted handler (after its timeout or a stop) did not end within 5 s (it blocks without awaiting) — followed by left_leased; released_on_shutdown: forge worker stopped while the job ran, the handler was aborted after the 10 s grace and the job was handed back (queued, ready now, the attempt not counted); left_leased (`after` = execution_timeout or shutdown): the aborted handler did not end, so the job keeps its lease and only the reaper makes it claimable after the lease expires — the old run never overlaps the next attempt; release_timeout: the hand-back at shutdown did not answer in 5 s — its outcome is unknown: it may still apply later (fenced; the handler has ended) or the lease expires. Jobs run at least once: a handler may run again after this."
+diagnosis = "The event carries `reason`, `job_id`, `kind`, `worker_id` (the lease holder: `w<pid>-<random>` of a forge worker process), `attempt`, `origin_request_id`, and for execution_timeout `timeout_ms`, for abort_pending `wait_ms`; its request_id is the job's origin request id. Look for the worker's own log around the time (a restart, `forge.worker.stopped`, a crash) and for the same job_id's earlier lines. Several lease_expired or released_on_shutdown lines after a worker restart are expected (one per job that was running). Repeated execution_timeout or abort_pending for one kind means its timeout is too short or the handler hangs on an external call without a timeout. A timeout whose handler does not end logs execution_timeout, then abort_pending, then left_leased; a stop whose handler does not end logs abort_pending, then left_leased (after=shutdown). A stop waits at most about 20 s for the job runner (10 s grace + 5 s abort wait + 5 s hand-back)."
+fix = "Usually none: the job is retried. Repeated for one kind: fix the handler (an unbounded or blocking wait) or raise that kind's timeout in code. A job that keeps expiring ends as FG-DB-0006 when its attempts are used up."
+test = "a_stale_worker_is_fenced_and_the_newer_result_is_kept"
+
+[[error]]
+code = "FG-DB-0017"
+name = "JobQueueBacklog"
+http_status = 500
+severity = "alert"
+user_message_ja = "バックグラウンドの処理が滞っています。管理者に連絡してください。"
+user_message_en = "Background tasks are backed up. Contact the administrator."
+user_message_id = "Tugas latar belakang menumpuk. Hubungi administrator."
+cause = "forge doctor found the job queue not being worked off. reason=queue_wait: the oldest ready job of a kind waits longer than 10 min — no forge worker runs, or the running build has no handler for the kind, or one long job blocks the worker (one job at a time per worker); queue_depth: more than 1000 ready jobs of one kind — a caller enqueues one job per item (the queue is meant for internal work, never one job per edge device; fleet-wide work is one job that walks its targets); reaper_behind (jobs.expired_leases): a lease expired more than 60 s ago and is still running — no forge worker runs its reaper (it runs every 30 s)."
+diagnosis = "forge doctor (`jobs.queue_depth`, `jobs.expired_leases`) reports `reason`, `kind`, and for queue_depth / queue_wait `ready` (per kind, capped at 100000+) and `oldest_wait_ms`; for reaper_behind `expired_leases` (capped), `job_id`, `worker_id`, `attempt` and `expired_ms`. Check that a `forge worker` process runs (systemctl status forge-worker) and read its startup line `forge.worker.jobs` (`job_kinds` = registered handlers) and its failures (`task=job_runner` / `task=job_reaper`). Read-only: SELECT kind, count(*), min(run_after) FROM forge.jobs WHERE state = 'queued' AND run_after <= now() GROUP BY kind;"
+fix = "queue_wait / reaper_behind: start `forge worker` (an approved runbook step) or deploy the build that has the kind's handler; queue_depth: find the caller that enqueues per-item jobs and make it one job that walks its items. Never move rows between states by hand."
+runbook = "job-queue-backlog"
+test = "a_deep_or_waiting_queue_is_reported_per_kind"
+# ── end C6 ───────────────────────────────────────────────────────────────
 # ── C5: event subscribers (ADR-0016 §7) ───────────────────────────────────
 [[error]]
 code = "FG-DB-0008"
@@ -567,6 +609,22 @@ diagnosis = "The event carries `reason` (too_many_events with `count`, invalid_e
 fix = "Fix the command named by `action`: emit one aggregate event instead of many, use a registered event type, give the change a non-anonymous actor, publish events only for a succeeded change and for the audited project, pass large ids as strings, or keep the field within its bound. Build dedup_key from server-side ids only (it is unique instance-wide)."
 test = "a_change_with_too_many_events_is_rejected_before_writing"
 
+# ── C8: the audit seal (ADR-0018 §4) ─────────────────────────────────────
+[[error]]
+code = "FG-DB-0011"
+name = "AuditSealMismatch"
+http_status = 500
+severity = "alert"
+user_message_ja = "監査ログの封印の検証に失敗しました。管理者に連絡してください。"
+user_message_en = "The audit log seal could not be verified. Contact the administrator."
+user_message_id = "Segel log audit tidak dapat diverifikasi. Hubungi administrator."
+cause = "The audit log no longer matches its seals (forge.audit_seal, ADR-0018 §4), or a range to seal is not contiguous: a sealed column of a sealed audit row was changed (recompute), a seal row's own fields (including kind and key_id) no longer give its seal_sha256 or name an unknown hash_version (recompute), its range does not continue the previous seal, or the feed state no longer matches the seals (chain), the HMAC does not match the key named by key_id or that key is not in audit.seal_keys_file (hmac), or rows of a range are missing — sealed rows deleted, or the audit.seal job found a hole in the numbers it was about to seal (gap). Only the database owner or a superuser can do this past the guards (or a sequencer bug, for gap), so treat it as possible tampering until explained. The sink reasons (sink_mismatch, sink_missing, db_behind_sink) arrive with the seal sink in step C9."
+diagnosis = "The event carries `reason` (recompute, chain, hmac, gap), `detail` (recompute: rows_sha256 | seal_sha256 | hash_version | kind; chain: prev_seal_sha256 | first_seq, or from the audit.seal job feed_state_missing (forge.event_feed_state gone while rows are numbered) | audit_high_below_seal (audit_high_seq below the last sealed seq, with `last_sealed_seq` / `audit_high_seq`); hmac: mismatch | unknown_key_id; gap: missing_rows), `seal_id` (absent for a gap found while sealing), `first_seq` / `last_seq` (the seal's range), and for gap `missing_seq` (the first missing number) and for hmac `key_id`. It comes from forge doctor audit.seal_verify (the seals of the last 24 hours by sealed_at, read-only) or from the audit.seal task of forge worker (gap, feed_state_missing, audit_high_below_seal: nothing was sealed; logged once per failure streak with `task=audit_seal` and the streak's request_id). Compare the range with forge_audit.ddl_audit and the PostgreSQL log for the time of the change; `SELECT id, kind, key_id, first_seq, last_seq, sealed_at, shipped_at FROM forge.audit_seal WHERE id = <seal_id>` (read-only)."
+fix = "Never re-seal or edit seals to make the alert go away. Follow the runbook: preserve the evidence, find who changed the rows (the database owner or a superuser), and restore the rows from a backup if needed. hmac with unknown_key_id: the key file lost a key that signed seals — put the retired key back (keys are only ever added). gap while sealing: sealing stops until the missing rows are explained."
+runbook = "audit-seal-mismatch"
+test = "a_tampered_sealed_column_is_audit_seal_mismatch_recompute"
+# ── end C8 ───────────────────────────────────────────────────────────────
+
 [[error]]
 code = "FG-DB-0013"
 name = "AuditMissing"
@@ -580,3 +638,19 @@ diagnosis = "The event carries `query` (the statement that committed, or the ins
 fix = "Route the write through ChangeTx (forge-db typed command). Never disable the trigger; the change was rolled back and can be retried once fixed."
 runbook = "append-only-violation"
 test = "an_event_without_an_audit_row_cannot_commit"
+
+# ── C8: the audit seal backlog (ADR-0018 §4) ─────────────────────────────
+[[error]]
+code = "FG-DB-0015"
+name = "AuditSealBacklog"
+http_status = 500
+severity = "alert"
+user_message_ja = "監査ログの封印が遅れています。管理者に連絡してください。"
+user_message_en = "Sealing of the audit log is delayed. Contact the administrator."
+user_message_id = "Penyegelan log audit tertunda. Hubungi administrator."
+cause = "An audit row older than 5 minutes is not covered by a seal (ADR-0018 §4): forge worker is not running (it does not start without audit.seal_keys_file: FG-SYS-0002 reason=missing) or its audit_seal task keeps failing (for example FG-DB-0011 reason=gap, or FG-SYS-0001 operation=seal.v1 for a row hash version 1 cannot read), or audit rows wait for their number because audit sequencing is off (a fresh installation before the first sink comparison of step C9, or a rollback detected and a seal resync pending — then this alert is expected until the runbook's resync step)."
+diagnosis = "forge doctor audit.seal_backlog reports it with `oldest_age_s` (age of the oldest unsealed row), `last_sealed_seq` (`none` = nothing sealed yet), `audit_high_seq`, `unsealed_numbered` (numbered rows after the last seal, capped at 100000+), `unsequenced` (rows still waiting for a number) and `audit_sequencing` (on / off). unsequenced > 0 with audit_sequencing=off: numbering is stopped — see runbook audit-seal-mismatch (resync) or wait for the first sink comparison. unsealed_numbered > 0: read the forge worker log for task=audit_seal (its error_code names the failure; logged once per failure streak with a request_id)."
+fix = "Start or repair forge worker and its audit.seal_keys_file; fix the failure its log names (FG-DB-0011 reason=gap: follow audit-seal-mismatch first). Never insert seals by hand."
+runbook = "audit-seal-backlog"
+test = "an_old_unsealed_row_is_audit_seal_backlog"
+# ── end C8 ───────────────────────────────────────────────────────────────

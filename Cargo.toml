@@ -37,6 +37,13 @@ hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "service"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "migrate", "macros"] }
+# ── C8: the audit seal (ADR-0018 §4) ──
+# HMAC-SHA256 of the seal (0.12: the digest 0.10 that sha2 0.10 uses).
+hmac = "0.12"
+# RFC 8785 (JCS) for the sealed rows; MIT. It turns on serde_json's
+# float_roundtrip feature for the whole workspace.
+serde_json_canonicalizer = "0.4.1"
+# ── end C8 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

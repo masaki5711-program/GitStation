@@ -31,7 +31,7 @@ use super::supervise::{Next, Runner};
 
 pub(super) const NAME: &str = "subscribers";
 /// The pause after [`super::backoff::MAX_IMMEDIATE`] immediate runs.
-const PERIOD: Duration = Duration::from_millis(200);
+pub(super) const PERIOD: Duration = Duration::from_millis(200);
 
 /// The dispatcher is created by the first run (registration needs the
 /// database, and a failure there is retried like any other).

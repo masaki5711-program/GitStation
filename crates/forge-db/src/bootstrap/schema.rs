@@ -16,6 +16,9 @@ const GUARD_FUNCTIONS: &[&str] = &[
     "forge.audit_log_guard()",
     "forge.event_feed_state_guard()",
     "forge.events_audit_present()",
+    // ── C8 ──
+    "forge.audit_seal_guard()",
+    // ── end C8 ──
     // ── C5: derived-event checks (migration 20261027140000) ──
     "forge.events_lineage()",
     "forge.events_derived_progress()",
@@ -94,6 +97,23 @@ const GUARDED_TRIGGERS: &[(&str, &[(&str, &str)])] = &[
             ),
         ],
     ),
+    // ── C8 ──
+    (
+        "audit_seal",
+        &[
+            (
+                "audit_seal_append_only",
+                "CREATE TRIGGER audit_seal_append_only BEFORE INSERT OR DELETE OR UPDATE ON \
+                 forge.audit_seal FOR EACH ROW EXECUTE FUNCTION forge.audit_seal_guard()",
+            ),
+            (
+                "audit_seal_no_truncate",
+                "CREATE TRIGGER audit_seal_no_truncate BEFORE TRUNCATE ON forge.audit_seal FOR \
+                 EACH STATEMENT EXECUTE FUNCTION forge.audit_seal_guard()",
+            ),
+        ],
+    ),
+    // ── end C8 ──
 ];
 
 const EVENT_INSERT: &[&str] = &[
@@ -270,11 +290,55 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         ("forge.jobs", operational()),
+        // ── C8 ──
+        (
+            "forge.audit_seal",
+            [
+                plain(&[
+                    "forge_app:SELECT",
+                    "forge_seq:SELECT",
+                    "forge_purge:SELECT",
+                    "forge_ro:SELECT",
+                ]),
+                columns("forge_app", "INSERT", SEAL_INSERT),
+                columns("forge_seq", "INSERT", SEAL_INSERT),
+                columns("forge_app", "UPDATE", &["shipped_at"]),
+            ]
+            .concat(),
+        ),
+        // ── end C8 ──
     ]
 }
 
+// ── C8 ──
+/// The columns forge_app and forge_seq may insert into forge.audit_seal
+/// (not id, sealed_at, shipped_at).
+const SEAL_INSERT: &[&str] = &[
+    "kind",
+    "hash_version",
+    "seal_epoch",
+    "key_id",
+    "first_seq",
+    "last_seq",
+    "row_count",
+    "events_high_seq",
+    "rows_sha256",
+    "prev_seal_sha256",
+    "seal_sha256",
+    "hmac",
+];
+// ── end C8 ──
+
 /// The first schema migration (events, audit_log, …).
 const FIRST_SCHEMA_VERSION: i64 = 20261027100000;
+
+/// Tables of later migrations, checked the same way (each phase adds its
+/// own line).
+const LATER_TABLES: &[&str] = &[
+    // ── C8 ──
+    "audit_seal",
+    // ── end C8 ──
+];
 
 /// Every table the first migration creates.
 const SCHEMA_TABLES: &[&str] = &[
@@ -320,7 +384,7 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
          WHERE n.nspname = 'forge' AND c.relname = ANY($1)",
     )
     .bind(
-        [SCHEMA_TABLES, &["_sqlx_migrations"]]
+        [SCHEMA_TABLES, LATER_TABLES, &["_sqlx_migrations"]]
             .concat()
             .iter()
             .map(|t| (*t).to_owned())
@@ -329,7 +393,11 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.schema_tables", e))?;
-    for table in SCHEMA_TABLES.iter().chain(&["_sqlx_migrations"]) {
+    for table in SCHEMA_TABLES
+        .iter()
+        .chain(LATER_TABLES)
+        .chain(&["_sqlx_migrations"])
+    {
         if !rows.iter().any(|(name, ok)| name == table && *ok) {
             return Err(
                 guard_missing("object_owner").with_context("object", format!("forge.{table}"))

@@ -3,7 +3,7 @@
 **Responsibility**: the PostgreSQL layer (ADR-0002, ADR-0018) — connecting with TLS and
 every timeout applied, the write / read pool split and the migration
 connection, mapping driver errors to registered codes, migrations
-(ADR-0014) and the bootstrap checks. Later: the Outbox and the job queue.
+(ADR-0014) and the bootstrap checks. The Outbox sequencer and the job queue.
 
 **Public API**
 - `Db::connect(&DatabaseConfig) -> Result<Db, ForgeError>` — pool from
@@ -48,14 +48,20 @@ connection, mapping driver errors to registered codes, migrations
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
 MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
 AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-0005
-OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`),
-FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined / fanout_limit,
-`subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0010 ChangeRejected,
-FG-DB-0013 AuditMissing (`reason` no_audit_row / derived_lineage / derived_depth /
-derived_fanout / derived_progress).
+OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`), FG-DB-0006
+JobDeadLettered (`job_id`, `kind`, `attempts`, `last_error_code`, `origin_request_id`;
+`reason`), FG-DB-0007 JobLeaseExpired (`job_id`, `kind`, `worker_id`, `attempt`; `reason`), FG-DB-0017 JobQueueBacklog (`kind`, `ready`,
+`oldest_wait_ms`; `reason`), FG-DB-0011 AuditSealMismatch (`reason` recompute / chain /
+hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
+`audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
+fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
+(`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
+derived_progress).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
-`append-only-violation.md`, `outbox-sequencer-lag.md`, `subscriber-lag.md`.
+`append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
+`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`,
+`subscriber-lag.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -143,6 +149,69 @@ when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
 FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
 `bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).
 
+**Audit seal** (ADR-0018 §4, step C8): `forge.audit_seal` (migration
+`20261027130000`; its guard lets only `shipped_at` go NULL → value once,
+forces `sealed_at`, requires each insert to continue the chain and end at or
+below `audit_high_seq`; no DELETE / TRUNCATE) holds one row per sealed range.
+`seal::v1` is the single definition of hash version 1 (columns, SELECT,
+RFC 8785 row bytes; details numbers other than safe integers as
+`{"$n":"<text>"}`, keys starting with `$` get one more `$` — injective;
+golden vector `tests/fixtures/audit_seal_v1_golden.py`, run with
+`py -X utf8 -I`). `seal_sha256` covers `kind` and `key_id` (`seal::chain`).
+`seal::seal_due(&db, &SealKeys, SealPolicy::WORKER)` is the body of the
+`audit_seal` task of `forge worker` (a minute after the last seal, or when
+more than 1000 rows wait; `seal_pending` seals without the policy — the
+drain after `more`): try-lock `(1718579815, 8)` (`Busy` for the loser),
+≤ 5000 rows per seal, hashing on the blocking pool, cancel-safe and
+idempotent (a commit timeout's outcome is unknown; calling again is safe).
+Errors: gap → FG-DB-0011 reason=gap; the feed-state row gone while rows
+are numbered, or `audit_high_seq` below the last seal → reason=chain
+(`feed_state_missing` / `audit_high_below_seal`); a row v1 cannot read
+(details nested past 128) → FG-SYS-0001 `operation=seal.v1`.
+`seal::verify_range` recomputes seals on the write pool (the sealed act-as
+columns are not readable by forge_ro), each in its own SELECT-only
+transaction that always rolls back under `search_path = pg_catalog,
+pg_temp` — **not** READ ONLY / REPEATABLE READ: the root gate
+db-write-boundary keeps `SET TRANSACTION` inside ChangeTx (limitation; C9's
+full reverify may need the gate to allow it). Lists are capped at
+`MAX_VERIFY_SEALS` (`Verified::truncated`). `forge doctor
+audit.seal_verify` checks the last 24 h by `sealed_at`, which is not
+authenticated (the full walk is C9's reverify); `warn` when seals exist
+but no keys are configured. `seal::backlog` feeds `audit.seal_backlog`
+(FG-DB-0015 past 5 minutes). The HMAC keys come from
+`audit.seal_keys_file` (`forge_core::config::SealKeys`; not zeroized on
+drop — deferred, new crate).
+
+**Job queue** (ADR-0016 §7, step C6; `src/jobs/`): `forge.jobs` with fenced
+leases, for internal work only — never one job per edge device (plan 01
+§3.10: fleet-wide work is one job that walks its targets). `jobs::enqueue`
+(write pool) or `ChangeTx::enqueue_job` (inside a change, rolled back with
+it); a `dedup_key` is held per kind by queued, running and succeeded jobs —
+a dead job frees it, so its work can be enqueued again (partial index
+`jobs_dedup`, migration `20261027120000`). `jobs::claim` is ONE autocommit
+`FOR UPDATE SKIP LOCKED` statement taking the oldest ready job (`running`,
+`attempts + 1`, `worker_id`, `lease_until = now() + timeout + 30 s`) of the
+given kinds only. `complete` / `fail` / `release` are fenced by `(id,
+running, worker_id, attempts)` — a lost lease returns `Fenced(FG-DB-0007
+reason=fenced)` and changes nothing. `fail` requeues after 10 s ×
+2^(attempt − 1) (≤ 1 h) or deads (attempts used up, `Retry::Never`);
+`release` hands a job back at shutdown (ready now, attempt not counted).
+`jobs::reap` is ONE statement for up to 1000 expired leases (dead with
+`last_error_code = FG-DB-0007` when the attempts are used up, else requeued
+with the backoff). `JobRunner` (`JobHandler` per kind, one job at a time —
+a head-of-line limit to revisit before C8 / retention jobs; handler in its
+own task under `timeout_ms`: `execution_timeout` → FG-DB-0007 and retry,
+a panic → FG-SYS-0001 and retry; after an abort it waits up to 5 s for the
+handler to end before settling, else `abort_pending`; `run_once_until`
+gives a stopped job a grace, then releases it — `released_on_shutdown`; a
+dropped run aborts the task, the lease expires, reap requeues it) logs the
+handler's failure, dead jobs (FG-DB-0006) and lost leases (FG-DB-0007) with
+the job's origin request id. Delivery is at-least-once: handler side
+effects must be idempotent or fenced by `lease.attempt`. `jobs::health`
+feeds `forge doctor` (`jobs.dead` → FG-DB-0006; `jobs.expired_leases`,
+`jobs.queue_depth` → FG-DB-0017 JobQueueBacklog, counted per kind via
+`jobs_ready_kind`). `forge worker` runs the runner (1 s idle poll, 10 s
+shutdown grace) and the reaper (30 s, also at startup).
 **Subscribers** (ADR-0016 §6, §7, step C5): `subscribers::Subscriber` (name,
 `Ordering::Ordered` / `Independent`, `handle(&SourceEvent, &mut DerivedTx)`),
 `Registry`, `register(&db, sub, Start::Head)`, `run_once(&db, sub)` — one event

@@ -662,3 +662,57 @@ fn privileged_members_are_role_member_pairs() {
         assert_invalid(&err, "database.privileged_members", reason);
     }
 }
+
+// ── C8: audit.seal_keys_file ──
+#[test]
+fn the_seal_keys_file_is_checked_at_load_and_read_on_use() {
+    let keys = file(&format!("1 {}\n2 {}\n", "11".repeat(32), "22".repeat(32)));
+    let path = keys.path().to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_AUDIT_SEAL_KEYS_FILE", path.as_str())])).expect("loads");
+    assert!(cfg.audit.has_seal_keys());
+    let read = cfg.audit.seal_keys().expect("read").expect("configured");
+    assert_eq!(read.signing().id(), 2);
+    assert!(!format!("{cfg:?}").contains("2222"));
+
+    let toml = file(&format!("[audit]\nseal_keys_file = {path:?}\n"));
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file.audit.has_seal_keys());
+
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.audit.seal_keys().expect("unset").is_none());
+    // The worker needs them: not configured is a named error.
+    assert_invalid(
+        &none.audit.require_seal_keys().expect_err("required"),
+        "audit.seal_keys_file",
+        "missing",
+    );
+    assert_eq!(
+        cfg.audit
+            .require_seal_keys()
+            .expect("required")
+            .signing()
+            .id(),
+        2
+    );
+    let err = load(
+        None,
+        &env(&[("FORGE_AUDIT_SEAL_KEYS_FILE", "relative/keys")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "audit.seal_keys_file", "not_absolute");
+    let err = load(None, &env(&[("FORGE_AUDIT_SEAL_KEY", "x")])).expect_err("typo");
+    assert_invalid(&err, "FORGE_AUDIT_SEAL_KEY", "unknown_env");
+    let bad = file("1 abc\n");
+    let bad_path = bad.path().to_string_lossy().into_owned();
+    let cfg = load(
+        None,
+        &env(&[("FORGE_AUDIT_SEAL_KEYS_FILE", bad_path.as_str())]),
+    )
+    .expect("the path is fine");
+    assert_invalid(
+        &cfg.audit.seal_keys().expect_err("content is not"),
+        "audit.seal_keys_file",
+        "invalid_key",
+    );
+}
+// ── end C8 ──

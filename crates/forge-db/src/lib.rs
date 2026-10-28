@@ -14,18 +14,27 @@
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
 //! - [`sequencer`] numbers the outbox (`forge.assign_seq`, `forge worker`)
 //!   and reports its backlog / lag (`FG-DB-0005`).
+//! - [`seal`] seals the audit log (`forge.audit_seal`, the `audit.seal`
+//!   job), verifies seals and reports the seal backlog (`FG-DB-0011`,
+//!   `FG-DB-0015`).
+//! - [`jobs`] is the job queue with fenced leases and its runner
+//!   (`FG-DB-0006` / `FG-DB-0007`).
 //! - [`subscribers`] runs internal event subscribers one event per
 //!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
 
 pub mod bootstrap;
 pub mod change;
 mod error_map;
+pub mod jobs;
 mod migrate;
 mod migrator;
 mod options;
 mod pool;
 #[cfg(test)]
 mod schema_tests;
+// ── C8 ──
+pub mod seal;
+// ── end C8 ──
 pub mod sequencer;
 // ── C5: event subscribers and DerivedTx (ADR-0016 §6, §7) ──
 pub mod subscribers;

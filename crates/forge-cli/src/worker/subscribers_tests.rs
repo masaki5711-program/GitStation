@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicI64, Ordering as Atomic};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::subscribers::{
     states, DerivedTx, HandleFuture, Ordering, Registry, SourceEvent, Subscriber,
 };
@@ -13,6 +14,7 @@ use forge_db::test_support::FreshDb;
 use tokio::sync::watch;
 
 use super::super::run_with;
+use super::super::seal_tests::seal_keys;
 
 /// Counts the events it handles.
 struct Counting(AtomicI64);
@@ -57,7 +59,18 @@ async fn the_worker_feeds_registered_subscribers_the_events_it_numbers() {
     let registry = Registry::new().with(counting.clone()).expect("registry");
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run_with(&db, &registry, stopped).await });
+    let runner = JobRunner::new(t.db.clone(), WorkerId::generate()); // clone: pool handles
+    let worker = tokio::spawn(async move {
+        run_with(
+            &db,
+            runner,
+            registry,
+            Duration::from_secs(5),
+            seal_keys(),
+            stopped,
+        )
+        .await
+    });
     // Registered at the head: only events written from now on reach it.
     let deadline = Instant::now() + Duration::from_secs(30);
     while states(&t.db)

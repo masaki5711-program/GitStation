@@ -23,7 +23,7 @@ const TASK: &str = "scripted";
 /// The JSON log lines written on this thread while installed (the tests run
 /// on a current-thread runtime, so the spawned tasks log here too).
 #[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
+pub(super) struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Captured {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -36,7 +36,7 @@ impl std::io::Write for Captured {
 }
 
 impl Captured {
-    fn install(&self) -> tracing::subscriber::DefaultGuard {
+    pub(super) fn install(&self) -> tracing::subscriber::DefaultGuard {
         let writer = self.clone();
         let subscriber = tracing_subscriber::fmt()
             .json()
@@ -56,7 +56,7 @@ impl Captured {
     }
 
     /// The failure events (telemetry::log_failure: they carry error_code).
-    fn failures(&self) -> Vec<Value> {
+    pub(super) fn failures(&self) -> Vec<Value> {
         self.events()
             .into_iter()
             .filter(|e| e["fields"]["error_code"].is_string())
@@ -72,7 +72,7 @@ impl Captured {
 }
 
 /// `key` of the space-separated `context` field of a failure event.
-fn context(event: &Value, key: &str) -> Option<String> {
+pub(super) fn context(event: &Value, key: &str) -> Option<String> {
     let prefix = format!("{key}=");
     event["fields"]["context"]
         .as_str()?
@@ -80,7 +80,7 @@ fn context(event: &Value, key: &str) -> Option<String> {
         .find_map(|kv| kv.strip_prefix(prefix.as_str()).map(str::to_owned))
 }
 
-fn request_id(event: &Value) -> String {
+pub(super) fn request_id(event: &Value) -> String {
     event["fields"]["request_id"]
         .as_str()
         .expect("request_id")
