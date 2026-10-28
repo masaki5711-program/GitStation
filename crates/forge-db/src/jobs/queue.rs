@@ -258,6 +258,11 @@ type ReapRow = (i64, String, Option<String>, i32, i32, String, bool);
 /// `queued`, ready now, `attempts - 1` (a shutdown is not the job's fault),
 /// no lease — only while this worker still holds the lease of this attempt
 /// (`Ok(false)`: fenced, nothing changed).
+///
+/// `attempts - 1` makes the attempt number reusable: the next claim gets
+/// the same attempt again. That is safe only because the caller releases
+/// after the handler's task has ended — no run of the old attempt can still
+/// write with that number. Never release a job whose handler may run.
 pub async fn release(db: &Db, job: &ClaimedJob) -> Result<bool, ForgeError> {
     let lease = &job.lease;
     let done = db

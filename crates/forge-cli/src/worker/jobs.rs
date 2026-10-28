@@ -13,6 +13,12 @@
 //! (`queued`, ready now, the attempt not counted — a shutdown is not the
 //! job's fault; `FG-DB-0007 reason=released_on_shutdown`). See
 //! `forge_db::jobs::JobRunner::run_once_until`.
+//!
+//! Worst case a stop waits for the job runner: [`SHUTDOWN_GRACE`] (10 s) +
+//! the abort wait (`forge_db::jobs::ABORT_WAIT`, 5 s) + the hand-back
+//! (`forge_db::jobs::RELEASE_TIMEOUT`, 5 s) ≈ 20 s. A handler that does not
+//! end after the abort keeps its job leased (`left_leased`) instead of
+//! being released, so it can never overlap the next attempt.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,7 +65,8 @@ pub(crate) async fn run_job(
             | Ran::Dead { .. }
             | Ran::Fenced(_)
             | Ran::Released { .. }
-            | Ran::LeftLeased { .. },
+            | Ran::LeftLeased { .. }
+            | Ran::Unrecorded { .. },
         ) => Next::Immediately,
         None => Next::AfterPeriod,
     })

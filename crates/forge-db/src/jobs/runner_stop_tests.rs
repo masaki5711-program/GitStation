@@ -21,7 +21,7 @@ const T: Duration = Duration::from_secs(5);
 
 /// JSON log lines written on this thread while installed.
 #[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Captured {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -34,7 +34,7 @@ impl std::io::Write for Captured {
 }
 
 impl Captured {
-    fn install(&self) -> tracing::subscriber::DefaultGuard {
+    pub(crate) fn install(&self) -> tracing::subscriber::DefaultGuard {
         let writer = self.clone();
         let subscriber = tracing_subscriber::fmt()
             .json()
@@ -45,7 +45,7 @@ impl Captured {
     }
 
     /// The failure events (they carry error_code).
-    fn failures(&self) -> Vec<Value> {
+    pub(crate) fn failures(&self) -> Vec<Value> {
         let bytes = self.0.lock().expect("log buffer").clone();
         String::from_utf8(bytes)
             .expect("utf-8 logs")
@@ -108,51 +108,6 @@ async fn a_timed_out_handler_is_drained_before_the_job_is_settled() {
         "the handler's future was dropped"
     );
     assert_eq!(state(&t, id).await.0, "queued");
-    t.drop_now().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_handler_that_does_not_end_after_abort_is_logged_and_the_job_settled() {
-    let t = FreshDb::migrated().await;
-    let id = queued(&t, &new_job("test.a", None, 3, Duration::from_millis(100))).await;
-    let (finished, dropped) = (
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicBool::new(false)),
-    );
-    let r = runner(
-        &t,
-        "test.a",
-        blocking_handler(Duration::from_millis(1500), Arc::clone(&finished), dropped),
-    )
-    .with_abort_wait(Duration::from_millis(100));
-    let logs = Captured::default();
-    let ran = {
-        let _guard = logs.install();
-        r.run_once().await.expect("run")
-    };
-    assert!(matches!(ran, Some(Ran::Retrying { .. })), "{ran:?}");
-    assert!(
-        !finished.load(Ordering::SeqCst),
-        "the handler is still blocking"
-    );
-    let pending: Vec<Value> = logs
-        .failures()
-        .into_iter()
-        .filter(|e| {
-            e["fields"]["error_code"] == "FG-DB-0007"
-                && e["fields"]["context"]
-                    .as_str()
-                    .is_some_and(|c| c.contains("reason=abort_pending"))
-        })
-        .collect();
-    assert_eq!(pending.len(), 1, "{:?}", logs.failures());
-    let context = pending[0]["fields"]["context"].as_str().unwrap_or_default();
-    assert!(
-        context.contains(&format!("job_id={}", id.get())),
-        "{context}"
-    );
-    assert!(context.contains("kind=test.a"), "{context}");
-    assert_eq!(pending[0]["fields"]["request_id"], "req-job-origin");
     t.drop_now().await;
 }
 

@@ -25,8 +25,14 @@
    - `FG-DB-0007` `reason=execution_timeout`: ハンドラーがジョブの `timeout_ms` を超えた（外部の呼び出しが返らない、件数が多すぎる）。
      `reason=abort_pending` が同じ `job_id` で出ていれば、ハンドラーが await せずに止まっている（同期の待ち）
    - `FG-DB-0007` `reason=lease_expired`: worker が実行中に落ちた・強制終了された（ログの `forge.worker.stopped`、プロセスの再起動を確かめる）。
-     通常の停止では実行中のジョブは `released_on_shutdown` で返され、試行回数を使わない
-   - `FG-SYS-0001` `reason=job_panicked`: ハンドラーの不具合 → `internal-error.md`
+     通常の停止では実行中のジョブは `released_on_shutdown` で返され、試行回数を使わない。停止が worker を待つのは最大でおよそ 20 秒
+     （猶予 10 秒 + 中断の待ち 5 秒 + 返却 5 秒）。それより早く強制終了（`systemctl kill`、`TimeoutStopSec` が短い）すると `lease_expired` になる
+   - `FG-SYS-0001`: 実行器の側の失敗。`last_error` の `reason` を見る
+     - `job_panicked`: ハンドラーの不具合（panic）→ `internal-error.md`
+     - `job_cancelled`: ハンドラーのタスクが実行器の外で取り消された（実行時の停止など）
+     - `no_handler`: 取ったジョブの種類のハンドラーがこの版にない。実行器は自分の種類しか取らないので通常は起きない。
+       同じ種類がほかの worker で待っていれば `FG-DB-0017 reason=queue_wait` も出る → `job-queue-backlog.md`
+   - `FG-DB-0007` `reason=left_leased`: 中断したハンドラーが 5 秒で終わらず、リースを残した（`abort_pending` が先に出る）。リース切れの後に回収された
    - `reason=permanent_failure`: ハンドラーが「やり直しても成功しない」と判断した（対象が消えたなど）。原因の行の `reason` を読む
 
 ## Mitigate

@@ -33,7 +33,8 @@ const SAFE_CONTEXT: &[&str] = &[
     "unsequenced_audit",
     "heartbeat_age_ms",
     "lock_holder_pid",
-    // C6 — FG-DB-0006 / FG-DB-0007 (job-dead-lettered runbook): ids, counts,
+    // C6 — FG-DB-0006 / 0007 (job-dead-lettered runbook) and FG-DB-0017
+    // (job-queue-backlog: kind, ready, oldest_wait_ms, expired_leases, …): ids, counts,
     // ages, code-chosen kinds and error codes, a request id to search the
     // log for. Never the payload or last_error.
     "job_id",

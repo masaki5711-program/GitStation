@@ -56,7 +56,8 @@ pub use doctor::{health, ExpiredLease, JobsHealth, KindDepth, NewestDead};
 pub use doctor::{DEAD_WINDOW, LEASE_GRACE, QUEUE_DEPTH_ALERT, QUEUE_WAIT_ALERT};
 pub(crate) use queue::enqueue_on;
 pub use queue::{claim, complete, enqueue, fail, reap, release, REAP_BATCH};
-pub use runner::{JobFuture, JobHandler, JobRunner, Ran, Reported, ABORT_WAIT};
+pub use reports::{Ran, Reported};
+pub use runner::{JobFuture, JobHandler, JobRunner, ABORT_WAIT, RELEASE_TIMEOUT};
 
 /// How long a lease outlives the job's own timeout (ADR-0016 §7), in ms.
 pub const LEASE_SLACK_MS: i32 = 30_000;
@@ -300,6 +301,8 @@ mod boundary_tests;
 mod doctor_tests;
 #[cfg(test)]
 mod queue_edge_tests;
+#[cfg(test)]
+mod runner_abort_tests;
 #[cfg(test)]
 mod runner_stop_tests;
 #[cfg(test)]

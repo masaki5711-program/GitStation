@@ -195,15 +195,15 @@ pub async fn health(db: &Db) -> Result<Option<JobsHealth>, ForgeError> {
         // Each kind with ready jobs (a skip scan over jobs_ready_kind), then
         // per kind a bounded count and its oldest ready job.
         let depth: Vec<(String, i64, i64)> = sqlx::query_as(
-            "WITH RECURSIVE kinds(kind) AS ( \
-                 (SELECT j.kind FROM ONLY forge.jobs AS j \
+            "WITH RECURSIVE kinds(kind, n) AS ( \
+                 (SELECT j.kind, 1 FROM ONLY forge.jobs AS j \
                    WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
                    ORDER BY j.kind LIMIT 1) \
                  UNION ALL \
                  SELECT (SELECT j.kind FROM ONLY forge.jobs AS j \
                           WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
-                            AND j.kind > k.kind ORDER BY j.kind LIMIT 1) \
-                   FROM kinds AS k WHERE k.kind IS NOT NULL) \
+                            AND j.kind > k.kind ORDER BY j.kind LIMIT 1), k.n + 1 \
+                   FROM kinds AS k WHERE k.kind IS NOT NULL AND k.n < $2) \
              SELECT k.kind, \
                     (SELECT pg_catalog.count(*) FROM (SELECT 1 FROM ONLY forge.jobs AS j \
                       WHERE j.state = 'queued' AND j.kind = k.kind \

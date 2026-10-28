@@ -6,9 +6,10 @@
 //! The handler runs in its own task. `abort()` takes effect only at the
 //! handler's next `.await`, so after a timeout or a stop the runner waits up
 //! to [`ABORT_WAIT`] for the task to end before it settles or releases the
-//! job (otherwise the job could be claimed again while the old run still
-//! works). A handler that does not end in time is logged
-//! (`FG-DB-0007 reason=abort_pending`).
+//! job. A handler that does not end in time is logged
+//! (`FG-DB-0007 reason=abort_pending`) and its job is left leased
+//! ([`Ran::LeftLeased`]): only the reaper, after the lease, makes it
+//! claimable again — never while the old run may still work.
 //!
 //! Cancel-safety (the `forge worker` Runner contract): dropping a run aborts
 //! the handler's task (it cannot be awaited from a drop). The job stays
@@ -25,17 +26,19 @@ use forge_core::telemetry;
 use forge_errors::{ErrorCode, ForgeError};
 use tokio::task::JoinHandle;
 
-use super::reports::{dead_lettered, finished, job_error, log_outcome, report_reaped};
+use super::reports::{
+    dead_lettered, finished, job_error, log_outcome, report_reaped, with_job_context, Ran, Reported,
+};
 use super::{
-    claim, complete, fail, reap, release, ClaimedJob, Completed, Failed, JobFailure, JobId,
-    JobKind, Retry, WorkerId,
+    claim, complete, fail, reap, release, ClaimedJob, Completed, Failed, JobFailure, JobKind,
+    Retry, WorkerId,
 };
 use crate::Db;
 
 /// How long an aborted handler may take to end before the job is settled.
 pub const ABORT_WAIT: Duration = Duration::from_secs(5);
 /// Bound for handing a job back at shutdown.
-const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One run of a job's handler.
 pub type JobFuture = Pin<Box<dyn Future<Output = Result<(), JobFailure>> + Send + 'static>>;
@@ -43,56 +46,15 @@ pub type JobFuture = Pin<Box<dyn Future<Output = Result<(), JobFailure>> + Send 
 /// Runs the jobs of one kind.
 ///
 /// Delivery is at-least-once: a run may be repeated after a crash, an
-/// expired lease or a lost answer, and an aborted run may still be alive
-/// for up to [`ABORT_WAIT`] (longer if it blocks without awaiting) while
-/// the next attempt starts. Every side effect must therefore be idempotent
-/// or fenced by `job.lease.attempt` (e.g. a conditional write that only
-/// applies for the newest attempt). Never swallow a failure: return a
-/// [`JobFailure`].
+/// expired lease or a lost answer. Every side effect must therefore be
+/// idempotent or fenced by `job.lease.attempt` (e.g. a conditional write
+/// that only applies for the newest attempt). A handler should await
+/// regularly: an abort only takes effect at an `.await`, and a handler that
+/// does not end within [`ABORT_WAIT`] keeps its job leased until the lease
+/// expires. Never swallow a failure: return a [`JobFailure`].
 pub trait JobHandler: Send + Sync {
     fn kind(&self) -> JobKind;
     fn run(&self, job: ClaimedJob) -> JobFuture;
-}
-
-/// What [`JobRunner::run_once`] did with the job it claimed.
-#[derive(Debug)]
-pub enum Ran {
-    Succeeded(JobId),
-    /// The run failed and the job is queued again (the failure was logged).
-    Retrying {
-        job_id: JobId,
-        failure: ForgeError,
-        retry_in: Duration,
-    },
-    /// The job is dead: `FG-DB-0006` (logged, alert).
-    Dead {
-        job_id: JobId,
-        report: ForgeError,
-    },
-    /// The lease was lost before the result was recorded: `FG-DB-0007`
-    /// (logged); the result is discarded.
-    Fenced(ForgeError),
-    /// Stopped before it finished and handed back without counting the
-    /// attempt: `FG-DB-0007 reason=released_on_shutdown` (logged).
-    Released {
-        job_id: JobId,
-        report: ForgeError,
-    },
-    /// Stopped, but the handler did not end in time: the job keeps its lease
-    /// (reap queues it after expiry): `FG-DB-0007 reason=left_leased`.
-    LeftLeased {
-        job_id: JobId,
-        report: ForgeError,
-    },
-}
-
-/// What [`JobRunner::reap_and_report`] logged for one expired lease.
-#[derive(Debug)]
-pub enum Reported {
-    /// `FG-DB-0007 reason=lease_expired` (warn): queued again.
-    Requeued(ForgeError),
-    /// `FG-DB-0006 reason=lease_expired` (alert): attempts used up.
-    Dead(ForgeError),
 }
 
 pub struct JobRunner {
@@ -100,6 +62,7 @@ pub struct JobRunner {
     worker: WorkerId,
     handlers: BTreeMap<JobKind, Arc<dyn JobHandler>>,
     abort_wait: Duration,
+    release_timeout: Duration,
 }
 
 /// Aborts the handler's task when the run is dropped.
@@ -111,13 +74,28 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Why a handler was aborted.
+#[derive(Debug, Clone, Copy)]
+enum Cut {
+    Timeout,
+    Shutdown,
+}
+
 /// How the handler's run ended.
 enum Exec {
+    /// The handler ended by itself (also when it won a race with an abort).
     Finished(Result<(), JobFailure>),
-    /// Stopped after the grace; `drained`: the handler's task has ended.
-    Stopped {
-        drained: bool,
-    },
+    /// Aborted for `Cut`; the handler's task has ended.
+    Aborted(Cut),
+    /// Aborted for `Cut`, but the task did not end within the abort wait.
+    StillRunning(Cut),
+}
+
+/// What waiting for an aborted handler found.
+enum Drain {
+    Ended(Result<(), JobFailure>),
+    Aborted,
+    Pending,
 }
 
 impl JobRunner {
@@ -127,12 +105,19 @@ impl JobRunner {
             worker,
             handlers: BTreeMap::new(),
             abort_wait: ABORT_WAIT,
+            release_timeout: RELEASE_TIMEOUT,
         }
     }
 
     /// Another bound for an aborted handler to end (tests).
     pub fn with_abort_wait(mut self, wait: Duration) -> Self {
         self.abort_wait = wait;
+        self
+    }
+
+    /// Another bound for the hand-back at shutdown (tests).
+    pub fn with_release_timeout(mut self, timeout: Duration) -> Self {
+        self.release_timeout = timeout;
         self
     }
 
@@ -159,8 +144,8 @@ impl JobRunner {
     }
 
     /// Claim and run one job. `Ok(None)`: nothing ready (always, without
-    /// handlers). `Err`: a queue statement failed (the caller logs it and
-    /// retries; a claimed job whose result could not be recorded is reaped).
+    /// handlers). `Err`: the claim failed (the caller logs it and retries).
+    /// A result that cannot be recorded is [`Ran::Unrecorded`].
     pub async fn run_once(&self) -> Result<Option<Ran>, ForgeError> {
         self.run_once_until(std::future::pending(), Duration::ZERO)
             .await
@@ -178,28 +163,17 @@ impl JobRunner {
             return Ok(None);
         };
         let request_id = job.request_id();
-        let outcome = match self.execute(&job, stop, grace).await {
-            Exec::Finished(Ok(())) => match complete(&self.db, &job).await? {
-                Completed::Applied => {
-                    tracing::debug!(
-                        target: "forge_db",
-                        request_id = %request_id,
-                        job_id = job.lease.job_id.get(),
-                        kind = job.kind.as_str(),
-                        attempt = job.lease.attempt,
-                        "forge.jobs.succeeded"
-                    );
-                    Ran::Succeeded(job.lease.job_id)
-                }
-                Completed::Fenced(e) => Ran::Fenced(e),
-            },
-            Exec::Finished(Err(failure)) => self.settle_failure(&job, failure).await?,
-            Exec::Stopped { drained: true } => self.release(&job).await?,
-            Exec::Stopped { drained: false } => Ran::LeftLeased {
-                job_id: job.lease.job_id,
-                report: job_error(&job, "jobs.stop", "left_leased"),
-            },
+        let settled = match self.execute(&job, stop, grace).await {
+            Exec::Finished(Ok(())) => self.complete(&job).await,
+            Exec::Finished(Err(failure)) => self.settle_failure(&job, failure).await,
+            Exec::Aborted(Cut::Timeout) => self.settle_failure(&job, timed_out(&job)).await,
+            Exec::Aborted(Cut::Shutdown) => self.release(&job).await,
+            Exec::StillRunning(cut) => Ok(self.left_leased(&job, cut)),
         };
+        let outcome = settled.unwrap_or_else(|e| Ran::Unrecorded {
+            job_id: job.lease.job_id,
+            error: with_job_context(e, &job),
+        });
         log_outcome(&outcome, &request_id);
         Ok(Some(outcome))
     }
@@ -222,37 +196,69 @@ impl JobRunner {
         let input = job.clone(); // clone: the handler's task owns its copy
         let mut task = AbortOnDrop(tokio::spawn(async move { handler.run(input).await }));
         tokio::pin!(stop);
-        let joined = tokio::select! {
-            joined = &mut task.0 => joined,
-            () = tokio::time::sleep(job.timeout.get()) => {
-                self.drain(&mut task, job).await;
-                return Exec::Finished(Err(JobFailure::retry(
-                    ForgeError::new(ErrorCode::JobLeaseExpired)
-                        .with_context("operation", "jobs.run")
-                        .with_context("reason", "execution_timeout")
-                        .with_context("timeout_ms", job.timeout.get().as_millis()),
-                )));
-            }
+        let cut = tokio::select! {
+            joined = &mut task.0 => return Exec::Finished(finished(joined)),
+            () = tokio::time::sleep(job.timeout.get()) => Cut::Timeout,
             () = &mut stop => match tokio::time::timeout(grace, &mut task.0).await {
-                Ok(joined) => joined,
-                Err(_) => return Exec::Stopped { drained: self.drain(&mut task, job).await },
+                Ok(joined) => return Exec::Finished(finished(joined)),
+                Err(_) => Cut::Shutdown,
             },
         };
-        Exec::Finished(finished(joined))
+        match self.drain(&mut task, job).await {
+            Drain::Ended(result) => Exec::Finished(result),
+            Drain::Aborted => Exec::Aborted(cut),
+            Drain::Pending => Exec::StillRunning(cut),
+        }
     }
 
     /// Abort the handler and wait (bounded) until its task has ended.
-    async fn drain(&self, task: &mut AbortOnDrop, job: &ClaimedJob) -> bool {
+    async fn drain(&self, task: &mut AbortOnDrop, job: &ClaimedJob) -> Drain {
         task.0.abort();
         match tokio::time::timeout(self.abort_wait, &mut task.0).await {
-            Ok(_) => true,
+            Ok(Err(e)) if e.is_cancelled() => Drain::Aborted,
+            // It ended on its own before the abort took effect.
+            Ok(joined) => Drain::Ended(finished(joined)),
             Err(_) => {
                 let e = job_error(job, "jobs.abort", "abort_pending")
                     .with_context("wait_ms", self.abort_wait.as_millis());
                 telemetry::log_failure(&e, &job.request_id());
-                false
+                Drain::Pending
             }
         }
+    }
+
+    /// The handler may still run: keep the lease (the reaper requeues it
+    /// after expiry). A timeout is logged as such first.
+    fn left_leased(&self, job: &ClaimedJob, cut: Cut) -> Ran {
+        let after = match cut {
+            Cut::Timeout => {
+                let timeout = with_job_context(timed_out(job).error, job);
+                telemetry::log_failure(&timeout, &job.request_id());
+                "execution_timeout"
+            }
+            Cut::Shutdown => "shutdown",
+        };
+        Ran::LeftLeased {
+            job_id: job.lease.job_id,
+            report: job_error(job, "jobs.abort", "left_leased").with_context("after", after),
+        }
+    }
+
+    async fn complete(&self, job: &ClaimedJob) -> Result<Ran, ForgeError> {
+        Ok(match complete(&self.db, job).await? {
+            Completed::Applied => {
+                tracing::debug!(
+                    target: "forge_db",
+                    request_id = %job.request_id(),
+                    job_id = job.lease.job_id.get(),
+                    kind = job.kind.as_str(),
+                    attempt = job.lease.attempt,
+                    "forge.jobs.succeeded"
+                );
+                Ran::Succeeded(job.lease.job_id)
+            }
+            Completed::Fenced(e) => Ran::Fenced(e),
+        })
     }
 
     async fn settle_failure(
@@ -304,10 +310,11 @@ impl JobRunner {
         })
     }
 
-    /// Hand the stopped job back (bounded).
+    /// Hand the stopped job back (bounded). Runs only after the handler's
+    /// task has ended, which is what makes reusing the attempt safe.
     async fn release(&self, job: &ClaimedJob) -> Result<Ran, ForgeError> {
         let job_id = job.lease.job_id;
-        match tokio::time::timeout(RELEASE_TIMEOUT, release(&self.db, job)).await {
+        match tokio::time::timeout(self.release_timeout, release(&self.db, job)).await {
             Ok(Ok(true)) => Ok(Ran::Released {
                 job_id,
                 report: job_error(job, "jobs.release", "released_on_shutdown"),
@@ -317,7 +324,7 @@ impl JobRunner {
             Err(_) => Ok(Ran::LeftLeased {
                 job_id,
                 report: job_error(job, "jobs.release", "release_timeout")
-                    .with_context("timeout_ms", RELEASE_TIMEOUT.as_millis()),
+                    .with_context("timeout_ms", self.release_timeout.as_millis()),
             }),
         }
     }
@@ -328,4 +335,14 @@ impl JobRunner {
         let reaped = reap(&self.db).await?;
         Ok(reaped.iter().map(report_reaped).collect())
     }
+}
+
+/// The failure of a run aborted at its timeout (retried).
+fn timed_out(job: &ClaimedJob) -> JobFailure {
+    JobFailure::retry(
+        ForgeError::new(ErrorCode::JobLeaseExpired)
+            .with_context("operation", "jobs.run")
+            .with_context("reason", "execution_timeout")
+            .with_context("timeout_ms", job.timeout.get().as_millis()),
+    )
 }
