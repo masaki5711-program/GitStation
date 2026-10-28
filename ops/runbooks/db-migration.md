@@ -46,6 +46,13 @@
    - 直す方針（新しいマイグレーションを出す、記録を修正する）は、DB の担当者と決めて承認を取る。`[MUTATING — needs approval]`
 4. `locked` の場合: もう一方の `forge db migrate` が終わるのを待ってから、再実行する（`forge db status` で確認する）
 
+### 版ごとの注意（移行の前に読む）
+
+- `20261027120000_jobs_dedup_live_only`（C6）: `forge.jobs` の索引を作り直す（`DROP INDEX` は ACCESS EXCLUSIVE、`CREATE INDEX` は SHARE のロックを
+  作り直しの間ずっと持つ）。その間ジョブの待ち行列は止まる。**`forge worker` を止めてから**適用する（`systemctl stop forge-worker` → `forge db migrate` →
+  `systemctl start forge-worker`、それぞれ `[MUTATING — needs approval]`、ロールバック: worker を起動し直す）。内部の仕事だけの小さな表なので数秒で終わる。
+  ロックの待ちは移行のセッションの `lock_timeout`（`database.lock_timeout_ms`、既定 5 秒）で打ち切られ、`FG-DB-0003` になる。その場合は worker が止まっていることを確かめて再実行する。
+
 ## Verify
 
 - `forge db status --check` が終了コード 0 で終わる（`serve` の行が `compatible`）

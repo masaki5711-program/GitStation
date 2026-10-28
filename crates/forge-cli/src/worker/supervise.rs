@@ -43,9 +43,14 @@ pub(crate) type RunFuture = Pin<Box<dyn Future<Output = Result<Next, ForgeError>
 ///   state): the supervisor aborts every task at its next `.await` when one
 ///   panics or loses its shutdown channel, and the process may stop at any
 ///   time. Work that must be all-or-nothing belongs in one database
-///   transaction, which a dropped connection rolls back.
+///   transaction, which a dropped connection rolls back. The job runner
+///   holds this through its lease instead: its claim commits at once, so a
+///   dropped run leaves the job `running` until the lease expires and the
+///   reaper queues it again — no partial state is lost, the job runs again,
+///   which job handlers must tolerate (idempotent or fenced by the attempt).
 /// - A run bounds itself with its own timeout: shutdown waits for a run in
-///   progress.
+///   progress. (The job runner watches shutdown itself: a job may run for
+///   an hour, so it gets a grace and is then released, see `worker::jobs`.)
 /// - A failure is returned, never swallowed: the supervisor logs it (with
 ///   `task`, `failures`, `retry_in_ms`) and retries after a backoff.
 pub(crate) struct Runner {

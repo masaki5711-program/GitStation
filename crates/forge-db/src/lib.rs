@@ -17,10 +17,13 @@
 //! - [`seal`] seals the audit log (`forge.audit_seal`, the `audit.seal`
 //!   job), verifies seals and reports the seal backlog (`FG-DB-0011`,
 //!   `FG-DB-0015`).
+//! - [`jobs`] is the job queue with fenced leases and its runner
+//!   (`FG-DB-0006` / `FG-DB-0007`).
 
 pub mod bootstrap;
 pub mod change;
 mod error_map;
+pub mod jobs;
 mod migrate;
 mod migrator;
 mod options;

@@ -59,6 +59,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         // C8: nothing sealed yet, nothing to verify (no keys configured).
         "ok    audit.seal_backlog nothing sealed yet",
         "ok    audit.seal_verify 0 seals",
+        "ok    jobs.dead",
+        "ok    jobs.expired_leases",
+        "ok    jobs.queue_depth",
         "ok    storage",
         "ok    git",
     ] {
@@ -196,6 +199,60 @@ fn serve_refuses_a_configuration_with_the_migration_password() {
     assert!(err.contains("not_for_this_command"), "{err}");
     assert!(err.contains("database.migrate_password_file"), "{err}");
 }
+
+// ── C6: the job queue ────────────────────────────────────────────────────
+#[test]
+fn doctor_reports_a_recent_dead_job_and_an_unreaped_lease() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    rt.block_on(t.exec_superuser(
+        "INSERT INTO forge.jobs (kind, payload, state, attempts, max_attempts, timeout_ms, \
+         origin_request_id, last_error_code, last_error, finished_at) VALUES \
+         ('audit.seal', '{\"secret_marker\": 1}', 'dead', 3, 3, 1000, 'req-dead-1', \
+          'FG-DB-0002', '{\"code\": \"FG-DB-0002\"}', now()); \
+         INSERT INTO forge.jobs (kind, payload, state, attempts, max_attempts, timeout_ms, \
+         origin_request_id, worker_id, lease_until) VALUES ('audit.seal', '{}', 'running', \
+         1, 3, 1000, 'r-2', 'w1-gone', now() - interval '5 minutes')",
+    ));
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = |name: &str| {
+        text.lines()
+            .find(|l| l.starts_with(&format!("FAIL  {name}")))
+            .unwrap_or_else(|| panic!("no {name} failure in:\n{text}"))
+            .to_owned()
+    };
+    let dead = line("jobs.dead");
+    for part in [
+        "FG-DB-0006",
+        "reason=dead_lettered",
+        "kind=audit.seal",
+        "attempts=3",
+        "last_error_code=FG-DB-0002",
+        "origin_request_id=req-dead-1",
+    ] {
+        assert!(dead.contains(part), "missing {part:?} in {dead:?}");
+    }
+    let leases = line("jobs.expired_leases");
+    for part in ["FG-DB-0017", "reason=reaper_behind", "worker_id=w1-gone"] {
+        assert!(leases.contains(part), "missing {part:?} in {leases:?}");
+    }
+    assert!(text.contains("ok    jobs.queue_depth"), "{text}");
+    assert!(
+        !text.contains("secret_marker"),
+        "payloads stay out:\n{text}"
+    );
+    // Both alert; the earlier check (jobs.dead) is the one printed.
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("[FG-DB-0006]"), "{err}");
+    rt.block_on(t.drop_now());
+}
+// ── end C6 ───────────────────────────────────────────────────────────────
 
 #[test]
 fn doctor_reports_a_stale_sequencer_with_a_backlog_as_outbox_sequencer_lag() {

@@ -80,7 +80,9 @@ async fn a_gone_shutdown_sender_stops_the_worker_with_an_internal_error() {
     assert!(
         err.context()
             .iter()
-            .any(|(k, v)| *k == "task" && v == "sequencer"),
+            // Whichever task notices first (every task loses the channel).
+            .any(|(k, v)| *k == "task"
+                && ["sequencer", "job_runner", "job_reaper"].contains(&v.as_str())),
         "{err}"
     );
     t.drop_now().await;
