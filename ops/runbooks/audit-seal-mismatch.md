@@ -3,7 +3,8 @@
 ## Trigger
 
 - `forge doctor` の `audit.seal_verify` が `FG-DB-0011` AuditSealMismatch で失敗した（直近 24 時間の封印の再計算）
-- `forge worker` の `audit.seal` ジョブのログに `FG-DB-0011` `reason=gap` が出た（封印しようとした範囲に欠番がある。何も封印していない）
+- `forge worker` の封印のタスク（`task=audit_seal`）のログに `FG-DB-0011` が出た: `reason=gap`（封印しようとした範囲に欠番がある）、`reason=chain` の `feed_state_missing` / `audit_high_below_seal`（下記）。いずれも何も封印していない。失敗の続く間、ログは 1 回（同じ `request_id`、1 分ごとに再掲）
+- `forge doctor` の `audit.seal_verify` が `warn … HMAC not checked`: そのホストに鍵ファイルがなく、HMAC を照合していない。**監視のホスト（doctor を定期実行するホスト）には `audit.seal_keys_file` を置く**（worker と同じ鍵ファイル、所有者だけが読める）。不一致ではないが、そのままでは封印の値と鎖しか確かめていない
 - C9 以降: 送出先との突き合わせ（`reason=sink_mismatch` / `sink_missing` / `db_behind_sink`）。この Runbook の C8 の版はそれらの手順をまだ持たない
 
 ## Impact
@@ -18,9 +19,11 @@
 2. `context` を読む:
    - `reason` と `detail`:
      - `recompute` / `rows_sha256`: 封印済みの行の **封印の対象の列**（`seq`、`occurred_at`、`actor_*`、`credential_id`、`act_as_*`、`via_assertion_id`、`effective_scope`、`action`、`outcome`、`resource_*`、`project_id`、`request_id`、`error_code`、`occurrences`、`details`）が変わった。個人情報の列（`actor_label`・`source_ip`・`user_agent`）の伏せ字では起きない
-     - `recompute` / `seal_sha256`: 封印の行そのものの値（`rows_sha256`、範囲、`events_high_seq` など）が、その `seal_sha256` と合わない（封印の行の書き換え）
-     - `recompute` / `hash_version`: このバイナリの知らないハッシュの版
+     - `recompute` / `seal_sha256`: 封印の行そのものの値（`rows_sha256`、範囲、`events_high_seq`、`kind`、`key_id` など）が、その `seal_sha256` と合わない（封印の行の書き換え）
+     - `recompute` / `hash_version`: このバイナリの知らないハッシュの版。`recompute` / `kind`: 知らない `kind`
      - `chain` / `prev_seal_sha256`: 前の封印の `seal_sha256` とつながらない。`chain` / `first_seq`: 直前の範囲の封印がない
+     - `chain` / `feed_state_missing`（封印のタスク）: `forge.event_feed_state` の行がないのに、番号付きの監査の行か封印がある（行の削除はガードが拒む: 所有者か superuser の操作、または誤った復元）
+     - `chain` / `audit_high_below_seal`（封印のタスク、`last_sealed_seq` / `audit_high_seq` 付き）: `audit_high_seq` が最後の封印の `last_seq` より小さい（`audit_high_seq` は減らない: 状態の書き換えか、封印より古い時点への巻き戻し。C9 の `db_behind_sink` の DB の中だけの版）
      - `hmac` / `mismatch`: 鍵 `key_id` で HMAC が合わない（封印の値を書き換えて計算し直した、または鍵ファイルの鍵の値が違う）
      - `hmac` / `unknown_key_id`: 鍵ファイル（`audit.seal_keys_file`）にその `key_id` がない（鍵を消した・別の鍵ファイルを使っている）
      - `gap` / `missing_rows`: 範囲の行が DB にない。`missing_seq` が最初の欠けた番号。`seal_id` があれば封印済みの行が消えた、なければ封印前の範囲の番号が飛んでいる（シーケンサーの不具合か、`forge_seq` の権限での手作業）
@@ -36,7 +39,9 @@
 
 - 封印は **防止ではなく検知**。所有者か superuser は行も封印も変えられる。HMAC の鍵は DB の外にあるので、封印を作り直すには鍵も要る。
 - 送出先（`forge seal-sink`、C9）がまだないので、封印の行を **すべて消して作り直す** 改ざんは、C8 の範囲では鍵を持つ者にしかできないが、検知は C9 の突き合わせからになる。
-- `audit.seal_verify` は直近 24 時間の封印だけを再計算する。古い範囲の再計算（7 日で一巡）は C9 の `audit.seal_reverify`。
+- `audit.seal_verify` は直近 24 時間（`sealed_at`）の封印だけを再計算する。古い範囲の再計算（7 日で一巡）は C9 の `audit.seal_reverify`。
+- `sealed_at` は `seal_sha256` にも HMAC にも含まれない（ガードが決める値）。ガードを外せる者は `sealed_at` を古くして、その封印を 24 時間の窓から外せる。その範囲は C9 の全件の再計算で見つかる（新しい封印の鎖はその封印の `seal_sha256` に結び付いたまま）。
+- 1 回の検査は最大 5000 個の封印（`warn … only the oldest 5000 checked`）。
 
 ## Mitigate
 

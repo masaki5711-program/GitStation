@@ -84,6 +84,7 @@ pub(super) fn text(checks: &[Check]) -> String {
         // Writing to a String cannot fail.
         let _ = match &c.outcome {
             Outcome::Ok(detail) => writeln!(out, "ok    {:<14} {detail}", c.name),
+            Outcome::Warn(detail) => writeln!(out, "warn  {:<14} {detail}", c.name),
             Outcome::Fail(e) => writeln!(out, "FAIL  {:<14} {}", c.name, summary(e)),
             Outcome::Skip(why) => writeln!(out, "skip  {:<14} {why}", c.name),
         };
@@ -96,6 +97,7 @@ pub(super) fn json(checks: &[Check]) -> String {
         .iter()
         .map(|c| match &c.outcome {
             Outcome::Ok(detail) => json!({ "name": c.name, "status": "ok", "detail": detail }),
+            Outcome::Warn(detail) => json!({ "name": c.name, "status": "warn", "detail": detail }),
             Outcome::Fail(e) => json!({
                 "name": c.name,
                 "status": "fail",

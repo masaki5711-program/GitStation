@@ -22,10 +22,10 @@
    - `audit_sequencing`: `on` / `off`（`forge.event_feed_state.audit_sequencing_enabled`）
 2. `unsequenced > 0` で `audit_sequencing=off`: 監査の番号付けが止まっている。導入の直後か、再同期の待ちかを確かめる（C9 の `feed.rollback_check`）。封印のジョブの問題ではない。
 3. `unsequenced > 0` で `audit_sequencing=on`: シーケンサーが止まっている → Runbook `outbox-sequencer-lag.md`（`FG-DB-0005` も出ているはず）。
-4. `unsealed_numbered > 0`: 封印のジョブ（`audit.seal`）が動いていない・失敗している。`forge worker` が動いているか（`systemctl status forge-worker`）、worker のログの `audit.seal` の失敗の `error_code` を読む:
-   - `FG-DB-0011` `reason=gap`: 欠番 → Runbook `audit-seal-mismatch.md`
-   - `FG-SYS-0002` `config_key=audit.seal_keys_file`: worker に鍵ファイルがない・読めない・形式が違う（`reason`、`line`）
-   - `FG-SYS-0001` `operation=seal.v1`（`seq` 付き）: 版 1 で表せない行（`details` の jsonb が倍精度の範囲を超える数など。生の SQL でしか書けない）
+4. `unsealed_numbered > 0`: 封印のタスク（`forge worker` の `task=audit_seal`。10 秒ごとに見て、前の封印から 1 分たつか 1000 行を超えたら封印する）が動いていない・失敗している。`forge worker` が動いているか（`systemctl status forge-worker`）、worker のログの `task=audit_seal` の失敗の `error_code` を読む（失敗の続く間は 1 回、同じ `request_id` で 1 分ごとに再掲）:
+   - `FG-DB-0011` `reason=gap` / `reason=chain`: 欠番・状態の不一致 → Runbook `audit-seal-mismatch.md`
+   - `FG-SYS-0002` `config_key=audit.seal_keys_file`: worker の鍵ファイルがない（`reason=missing`: **worker は起動しない**。起動のログに出る）・読めない・形式が違う（`reason`、`line`）
+   - `FG-SYS-0001` `operation=seal.v1` `reason=details_unreadable`（`seq` 付き）: 版 1 で表せない行。`details` の jsonb の入れ子が 128 段を超える（serde_json の上限。jsonb はそれ以上を許すが、アプリは書かない。生の SQL でしか書けない）。その行で封印が止まる。行は変えず、開発者（Claude のセッション）と対処を決める
    - `FG-DB-0001` / `FG-DB-0002`: DB の接続・文の失敗 → Runbook `db-unavailable.md` など
 5. 封印の状態を読む（読み取りのみ）:
    `SELECT max(last_seq), max(sealed_at) FROM forge.audit_seal;` と
@@ -34,8 +34,8 @@
 ### 受け入れているリスク
 
 - 封印のジョブは `pg_try_advisory_xact_lock(1718579815, 8)` を取れなければ何もしない。別のセッションがその lock を持ち続けると封印が止まる（`pg_locks` の `classid = 1718579815 AND objid = 8 AND objsubid = 2` で持ち主の pid が分かる）。
-- 1 回の封印は最大 5000 行。溜まった行は複数回に分けて封印される。
-- C8 の時点では `audit.seal` をジョブの待ち行列に登録していない（C6 の後に主セッションが登録する）。登録の前はこの警報が出続ける。
+- 1 回の封印は最大 5000 行。溜まった行は複数回に分けて、間を空けずに封印される。
+- 封印は C6 のジョブの待ち行列ではなく `forge worker` の常駐のタスク（ADR-0018 の C8 の Amendment）。worker が止まると封印も止まる。
 
 ## Mitigate
 

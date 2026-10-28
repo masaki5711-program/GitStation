@@ -169,7 +169,7 @@ fn main() -> ExitCode {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)
         }),
-        Command::Worker => config().and_then(|cfg| worker::worker(&cfg.database)),
+        Command::Worker => config().and_then(|cfg| worker::worker(&cfg)),
         Command::Db {
             command: DbCommand::Status { check },
         } => config().and_then(|cfg| db::status(&cfg.database, check)),

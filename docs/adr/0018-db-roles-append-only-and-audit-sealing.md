@@ -290,3 +290,20 @@ ADR-0016 の表の台帳（audited / derived、`ro_columns`、守る対象）へ
 | LISTEN の接続 | `Db::listen_options()` は最初の利用者（worker、段階 C4）と一緒に入れる | 利用者のない API を先に作らない。sqlx 0.8 には TCP keepalive の設定がないため、そのときに方法を決める |
 | `guarded_objects` | 導入の手順のオブジェクトの行を 03 が入れる。行の変更・削除は拒否する（追記のみ）。守る対象から外す（オブジェクトを廃止する）方法は、最初に必要になる段階で、取り消しの行を追記する形で決める | 行を消すと保護の対象から外れてしまう |
 | `forge_ro` の列の権限 | C1 では記録の表に表全体の SELECT を与える。表の台帳（ADR-0016 §1、C2）ができた時点で、`ro_columns` の列単位の GRANT に置き換える | 台帳がまだない |
+
+## Amendment 2026-10-28: 監査ログの封印（C8）の実装とそのレビューで決めた点
+
+実装の段階 C8（封印の作成と検証。送出先は C9）と、そのレビュー（DB・セキュリティ・Rust・テストとエラーの契約の評価）で、本文 §4 と異なる、または本文が決めていなかった点を次のとおり決めた。
+本番の封印はまだないので、版 1 はこの Amendment の形で固定する（以後の変更は版 2）。§4 の該当する記述（`details` の数を文字列にする、`seal_sha256` の式）は、この表で置き換える。
+
+| 点 | 決定 | 理由 |
+|---|---|---|
+| `audit.seal` の動かし方 | C6 のジョブの待ち行列ではなく、`forge worker` の常駐のタスク `audit_seal`（`worker::Task::AuditSeal`、監督（supervise）の仕組み）。10 秒ごとに見て、前の封印から 1 分たったか、未封印の番号付きの行が 1,000 を超えたときに封印する（`forge_db::seal::seal_due`、`SealPolicy::WORKER`）。封印の後に行が残れば（`more`）、間を空けずに方針なしで続けて封印する（`seal_pending`） | 定期に動く 1 つだけの仕事で、二重の封印は `pg_try_advisory_xact_lock` が防ぐ。ジョブにすると毎分の投入（スケジューラー）が要り、1 件ずつ動く `JobRunner` で他のジョブの後ろに待たされる。失敗の記録（失敗の続く間は 1 回、`error_code`・`task`・`request_id`）と backoff はタスクの監督がすでに持つ |
+| 鍵ファイルがないとき | `forge worker` は `audit.seal_keys_file` がなければ起動しない（`FG-SYS-0002 config_key=audit.seal_keys_file reason=missing`。DB に接続する前）。`forge doctor audit.seal_verify` は、鍵がなく封印があるとき HMAC を照合せず、値と鎖だけを確かめて `warn`（`ok` にしない）。鍵ファイルが読めない・形式が違うときは失敗。**監視のホストには worker と同じ鍵ファイルを置く**（Runbook `audit-seal-mismatch.md`） | 鍵なしで動く worker は封印を作れず、5 分後に `FG-DB-0015` を出し続けるだけになる。鍵のない監視が `ok` を返すと、HMAC で守る改ざん（封印の値を計算し直す）を見逃したまま安心させる |
+| 版 1 の `details` の数 | ±2^53 − 1 の整数だけを数にし、それ以外の数は `{"$n":"<PostgreSQL の表記そのまま>"}`、`$` で始まるオブジェクトのキーには `$` を 1 つ足す（`"$n"` → `"$$n"`）。正規化は `seal::v1::encode_details` の 1 か所。入れ子が 128 段を超える `details` は読めず `FG-SYS-0001 operation=seal.v1 reason=details_unreadable`（その行で封印が止まる。アプリは書かない） | 文字列にすると jsonb の `1.5` と `"1.5"` が同じハッシュになる（単射でない）。書き換えた後のキーが `$` で始まるのは `$$` で始まるときだけなので、キーが `$n` だけのオブジェクトは必ず数の印で、逆の変換が一意にある（単射）。倍精度の範囲を超える数も表記のまま封印できる |
+| `seal_sha256` の式 | `sha256(be16(hash_version) ‖ be16(seal_epoch) ‖ be16(key_id) ‖ be16(len(kind)) ‖ kind（UTF-8） ‖ be64(first_seq) ‖ be64(last_seq) ‖ be64(events_high_seq) ‖ rows_sha256 ‖ prev_seal_sha256)`。golden vector（`audit_seal_v1_golden_vector`）は独立の Python のスクリプト（`tests/fixtures/audit_seal_v1_golden.py`）で計算し直した | C9 は `kind = 'imported'` の封印で欠番の検査を緩めるので、`kind` を変えても再計算で見つからなければならない。`key_id` も封印の値に含め、別の鍵の HMAC への付け替えを値の不一致としても見つける |
+| 封印のタスクの失敗 | 範囲の欠番は `FG-DB-0011 reason=gap`。`event_feed_state` の行がないのに番号付きの行か封印がある（`detail=feed_state_missing`）、`audit_high_seq` が最後の封印の `last_seq` より小さい（`detail=audit_high_below_seal`）は `FG-DB-0011 reason=chain`。いずれも何も封印しない。`event_feed_state` がなく、番号付きの行も封印もないときだけ「封印済み」（導入の直後） | レビューの指摘: どちらも黙って「封印済み」と扱っていた。`audit_high_seq` は減らない（`forge_seq` のガード）ので、下がったのは状態の書き換えか封印より古い時点への巻き戻し（C9 の `db_behind_sink` の DB の中だけの版） |
+| 検証のトランザクション | 書き込みのプールで、封印ごとに 1 つの SELECT だけのトランザクション（`search_path = pg_catalog, pg_temp`、READ COMMITTED、常に rollback）。READ ONLY・REPEATABLE READ にはしない。一覧は最大 5,000 件（`MAX_VERIFY_SEALS`、超えたら doctor は `warn`） | 封印の対象の act-as の列は `forge_ro` から読めない。ルートのゲート db-write-boundary が `SET TRANSACTION` を ChangeTx の外で禁じる（受け入れた制約。封印の範囲の行と封印の行は正当には変わらない。C9 の全件の再計算で必要ならゲートを見直す） |
+| `sealed_at` | `seal_sha256` にも HMAC にも含めない（ガードが決める）。doctor の窓は `sealed_at` の直近 24 時間 | ガードを外せる者は `sealed_at` を古くして封印を窓から外せるが、その範囲は C9 の `audit.seal_reverify`（全件、7 日で一巡）で見つかり、新しい封印の鎖はその封印の `seal_sha256` に結び付いたまま。Runbook とコードに書く |
+| 計算の場所 | 行の正規化とハッシュは `spawn_blocking`（1 回は最大 5,000 行）。呼び出しを取り消しても結果を捨てるだけで副作用はない。コミットの時間切れは結果が分からないが、呼び直しは常に安全（最後に確定した封印の後から始まる） | tokio の worker を CPU の仕事で止めない |
+| 延期 | 鍵のメモリーの消去（`zeroize`）は新しいクレートなので延期（鍵は worker のプロセスの間ずっと持つ）。`cargo deny` / `cargo audit` はこの環境に入っておらず、`deny.toml` もない（`hmac 0.12`・`serde_json_canonicalizer 0.4.1` の確認は CI の導入のときに） | 依存を増やす判断は別に行う |

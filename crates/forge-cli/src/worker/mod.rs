@@ -10,16 +10,19 @@
 //! Tasks today: the outbox sequencer (every 200 ms, at once again after a
 //! full batch so a backlog drains without a pause), the job runner and the
 //! job reaper (`jobs`: the runner is the one task that reacts to shutdown
-//! mid-run, after a grace). The audit seal job (C8) becomes a further
-//! [`Task`] variant with its arm in [`Task::run`] and its entry in [`tasks`].
+//! mid-run, after a grace), and the audit seal (`seal`: looks every 10 s,
+//! seals a minute after the last seal or when more than 1000 rows wait).
 //!
-//! Before the first run the database is connected and the schema checked
+//! Before the first run the seal keys are read (`audit.seal_keys_file` is
+//! required: without it the worker does not start, `FG-SYS-0002
+//! reason=missing`), the database is connected and the schema checked
 //! (ADR-0014): the worker never migrates.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::DatabaseConfig;
+use forge_core::config::{Config, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::{Db, MIGRATOR};
@@ -30,6 +33,7 @@ use crate::runtime::block_on;
 
 mod backoff;
 mod jobs;
+mod seal;
 mod supervise;
 
 use supervise::{supervise, Next, Runner};
@@ -39,10 +43,13 @@ const SEQUENCER_PERIOD: Duration = Duration::from_millis(200);
 /// The longest wait after repeated failures.
 const MAX_BACKOFF: Duration = Duration::from_secs(5);
 
-pub fn worker(database: &DatabaseConfig) -> Result<String, ForgeError> {
+pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
+    let database = &cfg.database;
     // Like serve: the migration and maintenance credentials stay out of the
     // long-running processes (ADR-0018).
     database.reject_privileged_logins()?;
+    // The worker seals the audit log: no keys, no start (ADR-0018 §4).
+    let keys = Arc::new(cfg.audit.require_seal_keys()?);
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -53,7 +60,7 @@ pub fn worker(database: &DatabaseConfig) -> Result<String, ForgeError> {
             let _ = stop.send(true);
         });
         tracing::info!(db_target = %db.target(), "forge.worker.started");
-        let result = run(&db, stopped).await;
+        let result = run(&db, keys, stopped).await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -71,11 +78,18 @@ enum Task {
     JobRunner,
     /// Expired leases (forge-db `jobs::JobRunner::reap_and_report`).
     JobReaper,
+    /// The audit seal (forge-db `seal::seal_due`, ADR-0018 §4).
+    AuditSeal,
 }
 
 /// Every task of this worker.
-fn tasks() -> [Task; 3] {
-    [Task::Sequencer, Task::JobRunner, Task::JobReaper]
+fn tasks() -> [Task; 4] {
+    [
+        Task::Sequencer,
+        Task::JobRunner,
+        Task::JobReaper,
+        Task::AuditSeal,
+    ]
 }
 
 /// What the runs of the tasks share.
@@ -86,6 +100,9 @@ struct Shared {
     /// How long a job in progress may finish after a shutdown request.
     grace: Duration,
     shutdown: watch::Receiver<bool>,
+    seal_keys: Arc<SealKeys>,
+    /// The last seal left rows: the next one seals at once.
+    seal_draining: Arc<AtomicBool>,
 }
 
 impl Task {
@@ -94,6 +111,7 @@ impl Task {
             Self::Sequencer => "sequencer",
             Self::JobRunner => "job_runner",
             Self::JobReaper => "job_reaper",
+            Self::AuditSeal => "audit_seal",
         }
     }
 
@@ -102,6 +120,7 @@ impl Task {
             Self::Sequencer => SEQUENCER_PERIOD,
             Self::JobRunner => jobs::JOB_POLL_PERIOD,
             Self::JobReaper => jobs::REAP_PERIOD,
+            Self::AuditSeal => seal::SEAL_POLL_PERIOD,
         }
     }
 
@@ -128,6 +147,7 @@ impl Task {
                 jobs::run_job(&shared.jobs, shared.grace, stop).await
             }
             Self::JobReaper => jobs::reap(&shared.jobs).await,
+            Self::AuditSeal => seal::run_seal(db, &shared.seal_keys, &shared.seal_draining).await,
             Self::Sequencer => {
                 // Audit rows are not numbered yet: ADR-0018 §5 allows it only
                 // after this process's own sink comparison succeeded, and
@@ -161,12 +181,16 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
 
 /// Run every task until `shutdown` turns true (see `supervise`), with the
 /// job handlers of this build.
-pub(crate) async fn run(db: &Db, shutdown: watch::Receiver<bool>) -> Result<(), ForgeError> {
+pub(crate) async fn run(
+    db: &Db,
+    keys: Arc<SealKeys>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
     for handler in jobs::handlers() {
         runner.register(handler)?;
     }
-    run_with(db, runner, jobs::SHUTDOWN_GRACE, shutdown).await
+    run_with(db, runner, jobs::SHUTDOWN_GRACE, keys, shutdown).await
 }
 
 /// [`run`] with a given job runner and shutdown grace (tests).
@@ -174,6 +198,7 @@ pub(crate) async fn run_with(
     db: &Db,
     runner: JobRunner,
     grace: Duration,
+    keys: Arc<SealKeys>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -186,6 +211,8 @@ pub(crate) async fn run_with(
         jobs: Arc::new(runner),
         grace,
         shutdown: shutdown.clone(), // clone: the job runner's own receiver
+        seal_keys: keys,
+        seal_draining: Arc::new(AtomicBool::new(false)),
     };
     let runners = tasks()
         .into_iter()
@@ -198,5 +225,7 @@ pub(crate) async fn run_with(
 mod jobs_tests;
 #[cfg(test)]
 mod loop_tests;
+#[cfg(test)]
+mod seal_tests;
 #[cfg(test)]
 mod tests;

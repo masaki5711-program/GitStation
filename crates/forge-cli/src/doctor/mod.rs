@@ -19,17 +19,21 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, jobs, seal, sequencer, Db, MIGRATOR};
+use forge_db::{bootstrap, jobs, sequencer, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
 mod render;
+mod seal;
 
 /// The outcome of one check.
 enum Outcome {
     Ok(String),
+    /// Passed, but not fully checked (no FG code: the exit code stays 0;
+    /// `--json` reports `"status": "warn"` and `"ok": false`).
+    Warn(String),
     Fail(ForgeError),
     Skip(&'static str),
 }
@@ -156,7 +160,7 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
     };
     let [unsequenced, lag] = outbox_checks(db).await;
     // ── C8 ──
-    let [seal_backlog, seal_verify] = seal_checks(db, cfg).await;
+    let [seal_backlog, seal_verify] = seal::seal_checks(db, cfg).await;
     // ── end C8 ──
     let [dead, leases, depth] = job_checks(db).await;
     vec![
@@ -172,59 +176,6 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         depth,
     ]
 }
-
-// ── C8 ──
-/// `audit.seal_backlog` (`FG-DB-0015`) and `audit.seal_verify`
-/// (`FG-DB-0011`: the seals of the last 24 hours recomputed, read-only;
-/// HMACs only where `audit.seal_keys_file` is configured).
-async fn seal_checks(db: &Db, cfg: &Config) -> [Check; 2] {
-    let backlog = match seal::backlog(db).await {
-        Ok(Some(b)) => match b.check() {
-            Ok(()) => ok("audit.seal_backlog", &seal_backlog_detail(&b)),
-            Err(e) => fail("audit.seal_backlog", e),
-        },
-        Ok(None) => skip("audit.seal_backlog", "schema not migrated"),
-        Err(e) => fail("audit.seal_backlog", e),
-    };
-    let migrated = !matches!(backlog.outcome, Outcome::Skip(_));
-    let verify = if !migrated {
-        skip("audit.seal_verify", "schema not migrated")
-    } else {
-        match cfg.audit.seal_keys() {
-            Err(e) => fail("audit.seal_verify", e),
-            Ok(keys) => {
-                let scope = seal::VerifyScope::SealedWithin(seal::DOCTOR_WINDOW);
-                match seal::verify_range(db, keys.as_ref(), scope).await {
-                    Ok(v) => ok("audit.seal_verify", &seal_verify_detail(&v)),
-                    Err(e) => fail("audit.seal_verify", e),
-                }
-            }
-        }
-    };
-    [backlog, verify]
-}
-
-fn seal_backlog_detail(b: &seal::SealBacklog) -> String {
-    let sealed = b.last_sealed_seq.map_or_else(
-        || "nothing sealed yet".to_owned(),
-        |s| format!("sealed to {s}"),
-    );
-    format!(
-        "{sealed}, {} numbered and {} unnumbered rows waiting, audit sequencing {}",
-        sequencer::shown(b.unsealed_numbered),
-        sequencer::shown(b.unsequenced),
-        if b.audit_sequencing { "on" } else { "off" }
-    )
-}
-
-fn seal_verify_detail(v: &seal::Verified) -> String {
-    let hmac = match v.hmac {
-        seal::HmacCheck::Checked => "HMAC checked",
-        seal::HmacCheck::NoKeys => "HMAC not checked (audit.seal_keys_file not set)",
-    };
-    format!("{} seals, {} rows in 24 h, {hmac}", v.seals, v.rows)
-}
-// ── end C8 ──
 
 // ── C6: the job queue ────────────────────────────────────────────────────
 /// `jobs.dead` (`FG-DB-0006`), `jobs.expired_leases` and `jobs.queue_depth`
@@ -332,6 +283,13 @@ fn ok(name: &'static str, detail: &str) -> Check {
     }
 }
 
+fn warn(name: &'static str, detail: &str) -> Check {
+    Check {
+        name,
+        outcome: Outcome::Warn(detail.to_owned()),
+    }
+}
+
 fn fail(name: &'static str, e: ForgeError) -> Check {
     Check {
         name,
@@ -359,7 +317,7 @@ fn most_severe(checks: Vec<Check>) -> Option<ForgeError> {
         .into_iter()
         .filter_map(|c| match c.outcome {
             Outcome::Fail(e) => Some(e),
-            Outcome::Ok(_) | Outcome::Skip(_) => None,
+            Outcome::Ok(_) | Outcome::Warn(_) | Outcome::Skip(_) => None,
         })
         // The first of the most severe: earlier checks are more fundamental.
         .rev()
