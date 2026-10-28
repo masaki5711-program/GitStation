@@ -14,11 +14,13 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
+mod audit;
 mod database;
 mod keys;
 mod secret;
 mod tls;
 
+pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
@@ -27,7 +29,12 @@ pub use tls::TlsMode;
 /// Environment prefixes owned by the configuration: an unknown variable
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
 /// ones forge passes to git hooks) are not configuration and are ignored.
-const NAMESPACES: &[&str] = &["FORGE_SERVER_", "FORGE_STORAGE_", "FORGE_DATABASE_"];
+const NAMESPACES: &[&str] = &[
+    "FORGE_SERVER_",
+    "FORGE_STORAGE_",
+    "FORGE_DATABASE_",
+    "FORGE_AUDIT_",
+];
 
 /// Variables that used to be configuration: setting one fails instead of
 /// being ignored (old name, new name).
@@ -105,6 +112,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub database: DatabaseConfig,
+    pub audit: AuditConfig,
 }
 
 impl Config {
@@ -286,6 +294,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
                 600_000,
             )?,
         },
+        audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
     })
 }
 

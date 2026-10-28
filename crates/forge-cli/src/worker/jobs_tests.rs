@@ -15,6 +15,7 @@ use forge_db::jobs::{
 use forge_db::test_support::FreshDb;
 use tokio::sync::{watch, Notify};
 
+use super::seal_tests::seal_keys;
 use super::{run, run_with};
 
 fn job(kind: &str) -> NewJob {
@@ -71,7 +72,7 @@ async fn the_worker_reaps_at_startup_and_stops_cleanly() {
     assert_eq!(health_of(&t).await.expired_leases, 1);
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run(&db, stopped).await });
+    let worker = tokio::spawn(async move { run(&db, seal_keys(), stopped).await });
     until(&t, "the reaper never ran", |h| h.oldest_expired.is_none()).await;
     stopped_cleanly(stop, worker).await;
     t.drop_now().await;
@@ -114,8 +115,9 @@ async fn the_runner_works_its_kinds_and_leaves_unhandled_ones_queued() {
         .expect("register");
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker =
-        tokio::spawn(async move { run_with(&db, runner, Duration::from_secs(5), stopped).await });
+    let worker = tokio::spawn(async move {
+        run_with(&db, runner, Duration::from_secs(5), seal_keys(), stopped).await
+    });
     tokio::time::timeout(Duration::from_secs(20), ran.notified())
         .await
         .expect("the handled job ran");
@@ -180,10 +182,16 @@ async fn a_job_in_progress_at_shutdown_is_released_after_the_grace() {
         .expect("register");
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker =
-        tokio::spawn(
-            async move { run_with(&db, runner, Duration::from_millis(200), stopped).await },
-        );
+    let worker = tokio::spawn(async move {
+        run_with(
+            &db,
+            runner,
+            Duration::from_millis(200),
+            seal_keys(),
+            stopped,
+        )
+        .await
+    });
     tokio::time::timeout(Duration::from_secs(10), started.notified())
         .await
         .expect("the job started");

@@ -33,6 +33,21 @@ const SAFE_CONTEXT: &[&str] = &[
     "unsequenced_audit",
     "heartbeat_age_ms",
     "lock_holder_pid",
+    // ── C8: FG-DB-0011 / FG-DB-0015 (audit-seal-* runbooks): ids, numbers, an age.
+    "detail",
+    "seal_id",
+    "first_seq",
+    "last_seq",
+    "missing_seq",
+    "key_id",
+    "hash_version",
+    "oldest_age_s",
+    "last_sealed_seq",
+    "audit_high_seq",
+    "unsealed_numbered",
+    "unsequenced",
+    "audit_sequencing",
+    // ── end C8 ──
     // C6 — FG-DB-0006 / 0007 (job-dead-lettered runbook) and FG-DB-0017
     // (job-queue-backlog: kind, ready, oldest_wait_ms, expired_leases, …): ids, counts,
     // ages, code-chosen kinds and error codes, a request id to search the
@@ -69,6 +84,7 @@ pub(super) fn text(checks: &[Check]) -> String {
         // Writing to a String cannot fail.
         let _ = match &c.outcome {
             Outcome::Ok(detail) => writeln!(out, "ok    {:<14} {detail}", c.name),
+            Outcome::Warn(detail) => writeln!(out, "warn  {:<14} {detail}", c.name),
             Outcome::Fail(e) => writeln!(out, "FAIL  {:<14} {}", c.name, summary(e)),
             Outcome::Skip(why) => writeln!(out, "skip  {:<14} {why}", c.name),
         };
@@ -81,6 +97,7 @@ pub(super) fn json(checks: &[Check]) -> String {
         .iter()
         .map(|c| match &c.outcome {
             Outcome::Ok(detail) => json!({ "name": c.name, "status": "ok", "detail": detail }),
+            Outcome::Warn(detail) => json!({ "name": c.name, "status": "warn", "detail": detail }),
             Outcome::Fail(e) => json!({
                 "name": c.name,
                 "status": "fail",

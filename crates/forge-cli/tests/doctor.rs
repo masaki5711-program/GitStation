@@ -56,6 +56,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    schema",
         "ok    outbox.unsequenced_count",
         "ok    outbox.sequencer_lag",
+        // C8: nothing sealed yet, nothing to verify (no keys configured).
+        "ok    audit.seal_backlog nothing sealed yet",
+        "ok    audit.seal_verify 0 seals",
         "ok    jobs.dead",
         "ok    jobs.expired_leases",
         "ok    jobs.queue_depth",
@@ -314,11 +317,19 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
     let _lock = rt.block_on(ClusterLock::shared());
     let t = rt.block_on(FreshDb::new());
     let (vars, _pw) = t.env();
-    let app_only: Vec<(String, String)> = vars
+    let mut app_only: Vec<(String, String)> = vars
         .iter()
         .filter(|(k, _)| !k.starts_with("FORGE_DATABASE_MIGRATE_"))
         .cloned()
         .collect();
+    // The worker needs its seal keys before it looks at the database.
+    let keys_dir = tempfile::tempdir().expect("keys dir");
+    let keys = keys_dir.path().join("audit_seal_keys");
+    std::fs::write(&keys, format!("1 {}\n", "42".repeat(32))).expect("keys");
+    app_only.push((
+        "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
+        keys.to_string_lossy().into_owned(),
+    ));
     let out = forge_bounded(&["worker"], &app_only);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{HINT}\n{err}");

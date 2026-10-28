@@ -51,11 +51,13 @@ AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-
 OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`), FG-DB-0006
 JobDeadLettered (`job_id`, `kind`, `attempts`, `last_error_code`, `origin_request_id`;
 `reason`), FG-DB-0007 JobLeaseExpired (`job_id`, `kind`, `worker_id`, `attempt`; `reason`), FG-DB-0017 JobQueueBacklog (`kind`, `ready`,
-`oldest_wait_ms`; `reason`).
+`oldest_wait_ms`; `reason`), FG-DB-0011 AuditSealMismatch (`reason` recompute / chain /
+hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
+`audit_sequencing`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
-`job-queue-backlog.md`.
+`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -142,6 +144,39 @@ when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
 `forge doctor` (`outbox.unsequenced_count`, `outbox.sequencer_lag`,
 FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
 `bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).
+
+**Audit seal** (ADR-0018 §4, step C8): `forge.audit_seal` (migration
+`20261027130000`; its guard lets only `shipped_at` go NULL → value once,
+forces `sealed_at`, requires each insert to continue the chain and end at or
+below `audit_high_seq`; no DELETE / TRUNCATE) holds one row per sealed range.
+`seal::v1` is the single definition of hash version 1 (columns, SELECT,
+RFC 8785 row bytes; details numbers other than safe integers as
+`{"$n":"<text>"}`, keys starting with `$` get one more `$` — injective;
+golden vector `tests/fixtures/audit_seal_v1_golden.py`, run with
+`py -X utf8 -I`). `seal_sha256` covers `kind` and `key_id` (`seal::chain`).
+`seal::seal_due(&db, &SealKeys, SealPolicy::WORKER)` is the body of the
+`audit_seal` task of `forge worker` (a minute after the last seal, or when
+more than 1000 rows wait; `seal_pending` seals without the policy — the
+drain after `more`): try-lock `(1718579815, 8)` (`Busy` for the loser),
+≤ 5000 rows per seal, hashing on the blocking pool, cancel-safe and
+idempotent (a commit timeout's outcome is unknown; calling again is safe).
+Errors: gap → FG-DB-0011 reason=gap; the feed-state row gone while rows
+are numbered, or `audit_high_seq` below the last seal → reason=chain
+(`feed_state_missing` / `audit_high_below_seal`); a row v1 cannot read
+(details nested past 128) → FG-SYS-0001 `operation=seal.v1`.
+`seal::verify_range` recomputes seals on the write pool (the sealed act-as
+columns are not readable by forge_ro), each in its own SELECT-only
+transaction that always rolls back under `search_path = pg_catalog,
+pg_temp` — **not** READ ONLY / REPEATABLE READ: the root gate
+db-write-boundary keeps `SET TRANSACTION` inside ChangeTx (limitation; C9's
+full reverify may need the gate to allow it). Lists are capped at
+`MAX_VERIFY_SEALS` (`Verified::truncated`). `forge doctor
+audit.seal_verify` checks the last 24 h by `sealed_at`, which is not
+authenticated (the full walk is C9's reverify); `warn` when seals exist
+but no keys are configured. `seal::backlog` feeds `audit.seal_backlog`
+(FG-DB-0015 past 5 minutes). The HMAC keys come from
+`audit.seal_keys_file` (`forge_core::config::SealKeys`; not zeroized on
+drop — deferred, new crate).
 
 **Job queue** (ADR-0016 §7, step C6; `src/jobs/`): `forge.jobs` with fenced
 leases, for internal work only — never one job per edge device (plan 01

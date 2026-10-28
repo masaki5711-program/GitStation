@@ -122,12 +122,27 @@ impl std::fmt::Debug for DatabaseUrl {
 }
 
 /// Read a password file (`database.password_file` and the other
-/// `*_password_file` keys, named by `key`): an absolute path, readable only by its
-/// owner on Unix (production runs on Linux; on Windows the ACL is the
-/// operator's responsibility, ADR-0013), at most 4 KiB, with the trailing
-/// newline trimmed. The file is opened once; the permission check and the
-/// read use the same handle.
+/// `*_password_file` keys, named by `key`): see [`read_secret_text`]; at
+/// most 4 KiB, with the trailing newline trimmed.
 pub(super) fn read_password(key: &'static str, path: &Path) -> Result<Secret, ForgeError> {
+    let text = read_secret_text(key, path, MAX_PASSWORD_BYTES)?;
+    let value = text.trim_end_matches(['\r', '\n']);
+    if value.is_empty() {
+        return Err(invalid(key, "empty"));
+    }
+    Ok(Secret(value.to_owned()))
+}
+
+/// Read a secret file named by `key`: an absolute path, readable only by its
+/// owner on Unix (production runs on Linux; on Windows the ACL is the
+/// operator's responsibility, ADR-0013), at most `max_bytes`. The file is
+/// opened once; the permission check and the read use the same handle. The
+/// content never enters an error.
+pub(super) fn read_secret_text(
+    key: &'static str,
+    path: &Path,
+    max_bytes: u64,
+) -> Result<String, ForgeError> {
     use std::io::Read as _;
     if !path.is_absolute() {
         return Err(invalid(key, "not_absolute"));
@@ -155,20 +170,16 @@ pub(super) fn read_password(key: &'static str, path: &Path) -> Result<Secret, Fo
                 .with_context("mode", format!("{mode:o}")));
         }
     }
-    if !meta.is_file() || meta.len() > MAX_PASSWORD_BYTES {
+    if !meta.is_file() || meta.len() > max_bytes {
         return Err(invalid(key, "invalid").with_context("path", path.display()));
     }
     let mut text = String::new();
     // `take` also bounds a file that grows after the size check.
-    file.take(MAX_PASSWORD_BYTES + 1)
+    file.take(max_bytes + 1)
         .read_to_string(&mut text)
         .map_err(unreadable)?;
-    if text.len() as u64 > MAX_PASSWORD_BYTES {
+    if text.len() as u64 > max_bytes {
         return Err(invalid(key, "invalid").with_context("path", path.display()));
     }
-    let value = text.trim_end_matches(['\r', '\n']);
-    if value.is_empty() {
-        return Err(invalid(key, "empty"));
-    }
-    Ok(Secret(value.to_owned()))
+    Ok(text)
 }

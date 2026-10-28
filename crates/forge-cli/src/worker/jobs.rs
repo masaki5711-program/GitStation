@@ -4,7 +4,7 @@
 //! once at startup so leases left by a crashed worker are ended early).
 //!
 //! Handlers are registered in [`handlers`]; none exist yet (the first ones
-//! arrive with the subscribers and the seal job), so the runner claims
+//! arrive with the subscribers; the audit seal is a task, `seal`), so the runner claims
 //! nothing — it must still run without error.
 //!
 //! Shutdown: a job may run for up to its timeout (≤ 1 h), longer than a

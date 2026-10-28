@@ -2,12 +2,14 @@
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
-//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the job queue
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
+//! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
-//! pool.
+//! pool, except `audit.seal_verify`, which reads the sealed act-as columns
+//! in a SELECT-only transaction on the write pool that always rolls back.
 //!
 //! A check that depends on an earlier failed one is `skip`. The command
 //! fails with the most severe error found (alert before warn before info),
@@ -24,10 +26,14 @@ use forge_git::{Git, GitConfig, StorageRoot};
 use crate::runtime::block_on;
 
 mod render;
+mod seal;
 
 /// The outcome of one check.
 enum Outcome {
     Ok(String),
+    /// Passed, but not fully checked (no FG code: the exit code stays 0;
+    /// `--json` reports `"status": "warn"` and `"ok": false`).
+    Warn(String),
     Fail(ForgeError),
     Skip(&'static str),
 }
@@ -44,12 +50,16 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 8] = [
+const DB_CHECKS: [&str; 10] = [
     "db.bootstrap",
     "db.connections",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
+    // ── C8 ──
+    "audit.seal_backlog",
+    "audit.seal_verify",
+    // ── end C8 ──
     // C6: the job queue.
     "jobs.dead",
     "jobs.expired_leases",
@@ -149,6 +159,9 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         Err(e) => fail("schema", e),
     };
     let [unsequenced, lag] = outbox_checks(db).await;
+    // ── C8 ──
+    let [seal_backlog, seal_verify] = seal::seal_checks(db, cfg).await;
+    // ── end C8 ──
     let [dead, leases, depth] = job_checks(db).await;
     vec![
         bootstrap,
@@ -156,6 +169,8 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         schema,
         unsequenced,
         lag,
+        seal_backlog,
+        seal_verify,
         dead,
         leases,
         depth,
@@ -268,6 +283,13 @@ fn ok(name: &'static str, detail: &str) -> Check {
     }
 }
 
+fn warn(name: &'static str, detail: &str) -> Check {
+    Check {
+        name,
+        outcome: Outcome::Warn(detail.to_owned()),
+    }
+}
+
 fn fail(name: &'static str, e: ForgeError) -> Check {
     Check {
         name,
@@ -295,7 +317,7 @@ fn most_severe(checks: Vec<Check>) -> Option<ForgeError> {
         .into_iter()
         .filter_map(|c| match c.outcome {
             Outcome::Fail(e) => Some(e),
-            Outcome::Ok(_) | Outcome::Skip(_) => None,
+            Outcome::Ok(_) | Outcome::Warn(_) | Outcome::Skip(_) => None,
         })
         // The first of the most severe: earlier checks are more fundamental.
         .rev()

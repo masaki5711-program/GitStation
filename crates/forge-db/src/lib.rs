@@ -14,6 +14,9 @@
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
 //! - [`sequencer`] numbers the outbox (`forge.assign_seq`, `forge worker`)
 //!   and reports its backlog / lag (`FG-DB-0005`).
+//! - [`seal`] seals the audit log (`forge.audit_seal`, the `audit.seal`
+//!   job), verifies seals and reports the seal backlog (`FG-DB-0011`,
+//!   `FG-DB-0015`).
 //! - [`jobs`] is the job queue with fenced leases and its runner
 //!   (`FG-DB-0006` / `FG-DB-0007`).
 
@@ -27,6 +30,9 @@ mod options;
 mod pool;
 #[cfg(test)]
 mod schema_tests;
+// ── C8 ──
+pub mod seal;
+// ── end C8 ──
 pub mod sequencer;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

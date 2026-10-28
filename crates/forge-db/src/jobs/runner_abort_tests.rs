@@ -170,6 +170,10 @@ async fn a_hand_back_that_does_not_answer_leaves_the_job_leased() {
     t.drop_now().await;
 }
 
+/// Bound for every wait of the fenced hand-back test, and for its held drop
+/// (below the runner's abort wait, so a lost `go` fails the test, not hangs).
+const HOLD: Duration = Duration::from_secs(15);
+
 /// Signals its drop, then holds the drop (and so the abort) until `go`.
 struct HeldDrop {
     dropping: Option<oneshot::Sender<()>>,
@@ -181,8 +185,23 @@ impl Drop for HeldDrop {
         if let Some(tx) = self.dropping.take() {
             let _ = tx.send(());
         }
-        let _ = self.go.recv();
+        // The drop runs on the worker that was parked on the IO/time driver
+        // (woken by the grace timer, it aborts and runs the cancellation from
+        // its LIFO slot). Blocking that worker in place leaves the driver
+        // unpolled — the other workers sleep on their condvars, and the test
+        // thread's timers and sockets wake none of them — so every later
+        // await hangs. `block_in_place` hands the worker's core to a new
+        // thread, which parks on the driver again. A closed or late `go`
+        // ends the hold; the result is then wrong and the test fails.
+        let _ = tokio::task::block_in_place(|| self.go.recv_timeout(HOLD));
     }
+}
+
+/// `fut`, failing the test instead of hanging past [`HOLD`].
+async fn bounded<F: std::future::Future>(what: &str, fut: F) -> F::Output {
+    tokio::time::timeout(HOLD, fut)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: no answer within {HOLD:?}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
@@ -222,19 +241,22 @@ async fn a_hand_back_after_a_newer_claim_is_fenced() {
         })
     };
     // The abort is held: meanwhile the lease is lost and the job re-claimed.
-    tokio::time::timeout(Duration::from_secs(10), dropping)
+    bounded("the handler is being dropped", dropping)
         .await
-        .expect("the handler is being dropped")
         .expect("signal");
-    expire(&t, id).await;
-    assert_eq!(reap(&t.db).await.expect("reap").len(), 1);
-    ready_now(&t, id).await;
-    let newer = claim(&t.db, &WorkerId::generate(), &[kind("test.a")])
-        .await
-        .expect("claim")
-        .expect("ready");
+    bounded("expire", expire(&t, id)).await;
+    let reaped = bounded("reap", reap(&t.db)).await.expect("reap");
+    assert_eq!(reaped.len(), 1);
+    bounded("ready_now", ready_now(&t, id)).await;
+    let newer = bounded(
+        "claim",
+        claim(&t.db, &WorkerId::generate(), &[kind("test.a")]),
+    )
+    .await
+    .expect("claim")
+    .expect("ready");
     go.send(()).expect("let the drop finish");
-    match run.await.expect("no panic").expect("run") {
+    match bounded("run", run).await.expect("no panic").expect("run") {
         Some(Ran::Fenced(e)) => {
             assert_reason(&e, ErrorCode::JobLeaseExpired, "fenced");
             assert!(has(&e, "operation", "jobs.release"), "{e}");
@@ -242,10 +264,10 @@ async fn a_hand_back_after_a_newer_claim_is_fenced() {
         other => panic!("{other:?}"),
     }
     // The newer claim is untouched.
-    let (st, attempts, worker, _) = state(&t, id).await;
+    let (st, attempts, worker, _) = bounded("state", state(&t, id)).await;
     assert_eq!((st.as_str(), attempts), ("running", 2));
     assert_eq!(worker.as_deref(), Some(newer.lease.worker_id.as_str()));
-    t.drop_now().await;
+    bounded("drop the test database", t.drop_now()).await;
 }
 
 #[tokio::test]
@@ -292,8 +314,17 @@ async fn a_result_that_cannot_be_recorded_is_logged_once_with_the_job() {
         }
         other => panic!("{other:?}"),
     }
-    let logged = logs.failures();
-    assert_eq!(logged.len(), 1, "{logged:?}");
+    // Only this job's events: under load the pool may log unrelated warnings.
+    let logged: Vec<Value> = logs
+        .failures()
+        .into_iter()
+        .filter(|e| {
+            e["fields"]["context"]
+                .as_str()
+                .is_some_and(|c| c.split(' ').any(|kv| kv == format!("job_id={}", id.get())))
+        })
+        .collect();
+    assert_eq!(logged.len(), 1, "{:?}", logs.failures());
     assert_eq!(logged[0]["fields"]["error_code"], "FG-DB-0002");
     assert_eq!(logged[0]["fields"]["request_id"], "req-job-origin");
     t.exec_superuser("GRANT UPDATE ON forge.jobs TO forge_app")
