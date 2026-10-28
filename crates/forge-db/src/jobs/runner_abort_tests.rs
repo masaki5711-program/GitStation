@@ -314,8 +314,17 @@ async fn a_result_that_cannot_be_recorded_is_logged_once_with_the_job() {
         }
         other => panic!("{other:?}"),
     }
-    let logged = logs.failures();
-    assert_eq!(logged.len(), 1, "{logged:?}");
+    // Only this job's events: under load the pool may log unrelated warnings.
+    let logged: Vec<Value> = logs
+        .failures()
+        .into_iter()
+        .filter(|e| {
+            e["fields"]["context"]
+                .as_str()
+                .is_some_and(|c| c.split(' ').any(|kv| kv == format!("job_id={}", id.get())))
+        })
+        .collect();
+    assert_eq!(logged.len(), 1, "{:?}", logs.failures());
     assert_eq!(logged[0]["fields"]["error_code"], "FG-DB-0002");
     assert_eq!(logged[0]["fields"]["request_id"], "req-job-origin");
     t.exec_superuser("GRANT UPDATE ON forge.jobs TO forge_app")
