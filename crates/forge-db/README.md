@@ -48,10 +48,14 @@ connection, mapping driver errors to registered codes, migrations
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
 MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
 AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-0005
-OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`).
+OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`),
+FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined / fanout_limit,
+`subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0010 ChangeRejected,
+FG-DB-0013 AuditMissing (`reason` no_audit_row / derived_lineage / derived_depth /
+derived_fanout / derived_progress).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
-`append-only-violation.md`, `outbox-sequencer-lag.md`.
+`append-only-violation.md`, `outbox-sequencer-lag.md`, `subscriber-lag.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -109,8 +113,8 @@ timeout there is FG-DB-0002 `commit_outcome_unknown`). A repeated
 `dedup_key` rolls the whole change back (`Committed::Deduped`). Invalid
 changes are FG-DB-0010 before anything is written (rules in
 `change/validate.rs`; client-supplied values are cut, never refused);
-an event committed without an audit row in its transaction — derived events
-included until C5 — is FG-DB-0013 (deferred trigger `events_audit_present`).
+a plain event committed without an audit row in its transaction is
+FG-DB-0013 (deferred trigger `events_audit_present`, `WHEN caused_by_seq IS NULL`).
 The typed commands (step D) are its only callers.
 
 **Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
@@ -138,3 +142,22 @@ when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
 `forge doctor` (`outbox.unsequenced_count`, `outbox.sequencer_lag`,
 FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
 `bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).
+
+**Subscribers** (ADR-0016 §6, §7, step C5): `subscribers::Subscriber` (name,
+`Ordering::Ordered` / `Independent`, `handle(&SourceEvent, &mut DerivedTx)`),
+`Registry`, `register(&db, sub, Start::Head)`, `run_once(&db, sub)` — one event
+(`last_seq + 1`) per write-pool transaction: `SELECT … FOR UPDATE NOWAIT` (55P03 =
+`Progress::Busy`, debug log only), the handler inside a savepoint (20 s), then
+`last_seq` / `last_txid` advance monotonically. Five failures in a row stop an
+ordered subscriber (FG-DB-0008 `stuck`, retried, never skipped) or quarantine
+the event of an independent one (`subscriber_dead_letters`, `quarantined`);
+the derivation limits (depth 8, 100 per root) are `fanout_limit` at once.
+`DerivedTx` writes derived tables (`conn()`) and derived events (`emit`: actor
+`system`, the source request id, lineage set; no audit row). Migration
+`20261027140000` checks derived events (`events_lineage` BEFORE INSERT,
+`events_derived_progress` deferred; XF002 → FG-DB-0013). `Dispatcher` runs
+every registered subscriber for `forge worker` and waits on `Wake` (LISTEN
+`forge_events_sequenced` on the dedicated connection `Db::listen_options` — no
+statement / idle timeout, server-side TCP keepalive, a bounded `SELECT 1` at
+every 5 s poll). `states` / `check_lag` / `dead_letters` feed `forge doctor`
+(`subscribers.lag`, `subscribers.dead_letters`).

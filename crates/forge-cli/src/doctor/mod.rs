@@ -2,7 +2,8 @@
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
-//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), storage root and
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the event
+//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
@@ -16,7 +17,7 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, sequencer, Db, MIGRATOR};
+use forge_db::{bootstrap, sequencer, subscribers, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
@@ -43,12 +44,16 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 5] = [
+const DB_CHECKS: [&str; 7] = [
     "db.bootstrap",
     "db.connections",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
+    // ── C5 ──
+    "subscribers.lag",
+    "subscribers.dead_letters",
+    // ── end C5 ──
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -144,8 +149,49 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         Err(e) => fail("schema", e),
     };
     let [unsequenced, lag] = outbox_checks(db).await;
-    vec![bootstrap, connections, schema, unsequenced, lag]
+    let mut checks = vec![bootstrap, connections, schema, unsequenced, lag];
+    // ── C5 ──
+    checks.extend(subscriber_checks(db).await);
+    // ── end C5 ──
+    checks
 }
+
+// ── C5: event subscribers (ADR-0016 §7, FG-DB-0008) ──
+/// `subscribers.lag` (stuck / behind) and `subscribers.dead_letters`
+/// (quarantined in the last 24 h).
+async fn subscriber_checks(db: &Db) -> [Check; 2] {
+    let lag = match subscribers::states(db).await {
+        Ok(Some(states)) => match subscribers::check_lag(&states) {
+            Ok(()) => {
+                let behind = states.iter().filter(|s| s.lag_events > 0).count();
+                let max = states.iter().map(|s| s.lag_events).max().unwrap_or(0);
+                ok(
+                    "subscribers.lag",
+                    &format!(
+                        "{} subscribers, {behind} with pending events (max {max})",
+                        states.len()
+                    ),
+                )
+            }
+            Err(e) => fail("subscribers.lag", e),
+        },
+        Ok(None) => skip("subscribers.lag", "schema not migrated"),
+        Err(e) => fail("subscribers.lag", e),
+    };
+    let letters = match subscribers::dead_letters(db).await {
+        Ok(Some(d)) => match d.check() {
+            Ok(()) => ok(
+                "subscribers.dead_letters",
+                &format!("{} quarantined, none in the last 24 h", d.total),
+            ),
+            Err(e) => fail("subscribers.dead_letters", e),
+        },
+        Ok(None) => skip("subscribers.dead_letters", "schema not migrated"),
+        Err(e) => fail("subscribers.dead_letters", e),
+    };
+    [lag, letters]
+}
+// ── end C5 ──
 
 /// `outbox.unsequenced_count` (what waits for a number) and
 /// `outbox.sequencer_lag` (`FG-DB-0005`, ADR-0016 §7).

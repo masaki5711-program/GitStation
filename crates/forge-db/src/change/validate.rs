@@ -11,14 +11,14 @@ const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 /// Stored-size bounds of the table CHECKs (`pg_column_size` of the jsonb,
 /// measured by the database: the text length can differ either way).
 const MAX_DETAILS_BYTES: i32 = 8192;
-const MAX_PAYLOAD_BYTES: i32 = 65536;
+pub(crate) const MAX_PAYLOAD_BYTES: i32 = 65536;
 /// Column lengths in characters (the table CHECKs use `length()`).
 const MAX_LABEL_CHARS: usize = 64;
 const MAX_USER_AGENT_CHARS: usize = 256;
 const MAX_ACT_AS_CHARS: usize = 128;
 const MAX_SCOPES: usize = 32;
 const MAX_SCOPE_CHARS: usize = 64;
-const MAX_DEDUP_KEY_CHARS: usize = 200;
+pub(crate) const MAX_DEDUP_KEY_CHARS: usize = 200;
 
 fn rejected(reason: &'static str, action: &str) -> ForgeError {
     ForgeError::new(ErrorCode::ChangeRejected)
@@ -27,7 +27,7 @@ fn rejected(reason: &'static str, action: &str) -> ForgeError {
 }
 
 /// `^[a-z][a-z_]*(\.[a-z][a-z_]*){1,3}$` (the events.event_type check).
-fn valid_event_type(name: &str) -> bool {
+pub(crate) fn valid_event_type(name: &str) -> bool {
     let parts: Vec<&str> = name.split('.').collect();
     (2..=4).contains(&parts.len())
         && parts.iter().all(|p| {
@@ -37,7 +37,7 @@ fn valid_event_type(name: &str) -> bool {
 }
 
 /// Every number in `value` is an integer within ±2^53−1 or a float.
-fn numbers_are_safe(value: &serde_json::Value) -> bool {
+pub(crate) fn numbers_are_safe(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(u) = n.as_u64() {

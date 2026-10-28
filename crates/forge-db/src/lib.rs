@@ -14,6 +14,8 @@
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
 //! - [`sequencer`] numbers the outbox (`forge.assign_seq`, `forge worker`)
 //!   and reports its backlog / lag (`FG-DB-0005`).
+//! - [`subscribers`] runs internal event subscribers one event per
+//!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
 
 pub mod bootstrap;
 pub mod change;
@@ -25,6 +27,9 @@ mod pool;
 #[cfg(test)]
 mod schema_tests;
 pub mod sequencer;
+// ── C5: event subscribers and DerivedTx (ADR-0016 §6, §7) ──
+pub mod subscribers;
+// ── end C5 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

@@ -25,6 +25,10 @@ mod validate;
 #[cfg_attr(not(test), allow(unused_imports))]
 // first production callers: typed commands (step D)
 pub(crate) use tx::ChangeTx;
+// The event checks DerivedTx shares (subscribers, C5).
+pub(crate) use validate::{
+    numbers_are_safe, valid_event_type, MAX_DEDUP_KEY_CHARS, MAX_PAYLOAD_BYTES,
+};
 
 /// At most this many events per change: a command that needs more emits one
 /// aggregate event instead.

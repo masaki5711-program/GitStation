@@ -721,8 +721,15 @@ async fn a_weakened_audit_presence_check_is_reported() {
             "guard=log_triggers",
             "trigger=events_audit_present",
         ),
+        // C5: the shipped trigger exempts derived events; one without the
+        // WHEN (or with another one) is a changed guard.
         (
-            recreate("DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.caused_by_seq IS NULL)"),
+            recreate("DEFERRABLE INITIALLY DEFERRED FOR EACH ROW"),
+            "guard=log_triggers",
+            "trigger=events_audit_present",
+        ),
+        (
+            recreate("DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.root_seq IS NULL)"),
             "guard=log_triggers",
             "trigger=events_audit_present",
         ),

@@ -177,7 +177,7 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     let (code, reason) = match class {
         Class::Unavailable(r) => (ErrorCode::DbUnavailable, r),
         Class::AppendOnly => (ErrorCode::AppendOnlyViolation, "rejected"),
-        Class::AuditMissing => (ErrorCode::AuditMissing, "no_audit_row"),
+        Class::AuditMissing => (ErrorCode::AuditMissing, audit_missing_reason(&e)),
         // Opening or checking a connection: never a statement error, but a
         // known reason (statement_timeout, serialization, …) is kept; only
         // the generic ones are renamed.
@@ -217,6 +217,19 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
             .with_context("db_message", db.message()),
         Some(s) => err.with_context("sqlstate", s),
         None => err,
+    }
+}
+
+/// XF002 comes from the audit-presence trigger (no constraint name) or from
+/// a derived-event check, which names itself in CONSTRAINT (migration
+/// 20261027140000).
+fn audit_missing_reason(e: &sqlx::Error) -> &'static str {
+    match e.as_database_error().and_then(|d| d.constraint()) {
+        Some("derived_lineage") => "derived_lineage",
+        Some("derived_depth") => "derived_depth",
+        Some("derived_fanout") => "derived_fanout",
+        Some("derived_progress") => "derived_progress",
+        Some(_) | None => "no_audit_row",
     }
 }
 

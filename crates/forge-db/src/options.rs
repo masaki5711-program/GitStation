@@ -60,7 +60,7 @@ pub(crate) fn preflight(cfg: &DatabaseConfig, url: &DatabaseUrl) -> Result<Strin
 /// field it could have taken from the environment is set here (the
 /// environment itself is rejected by `reject_libpq_env`).
 pub(crate) fn connect_options(cfg: &DatabaseConfig, login: &Login<'_>) -> PgConnectOptions {
-    let mut settings = vec![
+    let settings = vec![
         ("statement_timeout", millis(cfg.statement_timeout)),
         ("lock_timeout", millis(cfg.lock_timeout)),
         (
@@ -68,6 +68,34 @@ pub(crate) fn connect_options(cfg: &DatabaseConfig, login: &Login<'_>) -> PgConn
             millis(cfg.idle_in_transaction_timeout),
         ),
     ];
+    with_settings(cfg, login, settings)
+}
+
+/// TCP keepalive of the LISTEN session, set on the server side (sqlx 0.8
+/// cannot set it on the client socket): the server drops a dead client
+/// after about idle + interval × count = 60 s. The client notices a dead
+/// link by its own bounded round trip (`subscribers::Wake`).
+const LISTEN_KEEPALIVE: &[(&str, &str)] = &[
+    ("tcp_keepalives_idle", "30"),
+    ("tcp_keepalives_interval", "10"),
+    ("tcp_keepalives_count", "3"),
+];
+
+/// The dedicated LISTEN connection (ADR-0018 §2): it idles for as long as
+/// no notification arrives, so it carries no statement_timeout and no
+/// idle_in_transaction_session_timeout (it never opens a transaction); the
+/// lock timeout stays (it takes no locks; a stray one is still bounded).
+pub(crate) fn listen_connect_options(cfg: &DatabaseConfig, login: &Login<'_>) -> PgConnectOptions {
+    let mut settings = vec![("lock_timeout", millis(cfg.lock_timeout))];
+    settings.extend(LISTEN_KEEPALIVE.iter().map(|(k, v)| (*k, (*v).to_owned())));
+    with_settings(cfg, login, settings)
+}
+
+fn with_settings(
+    cfg: &DatabaseConfig,
+    login: &Login<'_>,
+    mut settings: Vec<(&'static str, String)>,
+) -> PgConnectOptions {
     settings.extend(login.settings.iter().map(|(k, v)| (*k, (*v).to_owned())));
     let mut options = PgConnectOptions::new_without_pgpass()
         .host(login.url.host())
