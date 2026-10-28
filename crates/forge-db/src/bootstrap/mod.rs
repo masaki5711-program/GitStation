@@ -16,11 +16,12 @@ use sqlx::Connection as _;
 use crate::{read_query_error, Db};
 
 mod acl;
+pub(crate) mod audited;
 mod definer;
 mod objects;
 mod records;
 mod roles;
-mod schema;
+pub(crate) mod schema;
 
 #[cfg(test)]
 use roles::membership_drift;

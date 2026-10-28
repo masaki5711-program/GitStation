@@ -9,8 +9,25 @@
 #              log     — the outbox and the audit log themselves.
 #   ro_columns the columns the read pool (forge_ro) may select; "*" = all.
 #
+# kind = "audited" tables also carry (D1; they are the arguments of their
+# deferred trigger forge.audited_change_present, which doctor checks):
+#   audit_resource      the audit row's resource_type: a literal, or
+#                       "=column" to read it from the row
+#   audit_id_column     the column holding the audit row's resource_id
+#   unaudited_columns   changes to these alone need no audit row; they are
+#                       left out of the trigger's UPDATE OF list
+#   txn_audited_columns changes to these alone need any succeeded audit row
+#                       of the transaction (subtree path rewrites)
+# Every other column is audited, columns added later included.
+#
+# guarded_functions: functions that are guarded although no guarded table
+# uses them (the audit trigger function of state tables, which forge_app
+# writes and are therefore not guarded tables).
+#
 # Shape (validated by scripts/validate-migrations.js in the root repo):
 # [tables.<bare name>] with a boolean `guarded`.
+
+guarded_functions = ["audited_change_present"]
 
 [tables.events]
 guarded = true
