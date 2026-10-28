@@ -19,6 +19,10 @@ const GUARD_FUNCTIONS: &[&str] = &[
     // ── C8 ──
     "forge.audit_seal_guard()",
     // ── end C8 ──
+    // ── C5: derived-event checks (migration 20261027140000) ──
+    "forge.events_lineage()",
+    "forge.events_derived_progress()",
+    // ── end C5 ──
 ];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
@@ -37,12 +41,28 @@ const GUARDED_TRIGGERS: &[(&str, &[(&str, &str)])] = &[
                 "CREATE TRIGGER events_no_truncate BEFORE TRUNCATE ON forge.events FOR EACH \
                  STATEMENT EXECUTE FUNCTION forge.events_guard()",
             ),
+            // ── C5: plain events only again, plus the derived-event checks ──
             (
                 "events_audit_present",
                 "CREATE CONSTRAINT TRIGGER events_audit_present AFTER INSERT ON forge.events \
                  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW \
+                 WHEN ((new.caused_by_seq IS NULL)) \
                  EXECUTE FUNCTION forge.events_audit_present()",
             ),
+            (
+                "events_lineage",
+                "CREATE TRIGGER events_lineage BEFORE INSERT ON forge.events FOR EACH ROW \
+                 WHEN ((new.caused_by_seq IS NOT NULL)) \
+                 EXECUTE FUNCTION forge.events_lineage()",
+            ),
+            (
+                "events_derived_progress",
+                "CREATE CONSTRAINT TRIGGER events_derived_progress AFTER INSERT ON \
+                 forge.events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW \
+                 WHEN ((new.caused_by_seq IS NOT NULL)) \
+                 EXECUTE FUNCTION forge.events_derived_progress()",
+            ),
+            // ── end C5 ──
         ],
     ),
     (

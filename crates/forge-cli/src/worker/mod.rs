@@ -11,7 +11,9 @@
 //! full batch so a backlog drains without a pause), the job runner and the
 //! job reaper (`jobs`: the runner is the one task that reacts to shutdown
 //! mid-run, after a grace), and the audit seal (`seal`: looks every 10 s,
-//! seals a minute after the last seal or when more than 1000 rows wait).
+//! seals a minute after the last seal or when more than 1000 rows wait)
+//! and, when any subscriber is registered, the event subscribers
+//! (`subscribers`, C5: woken by the sequencer's NOTIFY or the 5 s poll).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -25,8 +27,9 @@ use std::time::Duration;
 use forge_core::config::{Config, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
+use forge_db::subscribers::Registry;
 use forge_db::{Db, MIGRATOR};
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 use tokio::sync::watch;
 
 use crate::runtime::block_on;
@@ -34,6 +37,9 @@ use crate::runtime::block_on;
 mod backoff;
 mod jobs;
 mod seal;
+// ── C5: event subscribers ──
+mod subscribers;
+// ── end C5 ──
 mod supervise;
 
 use supervise::{supervise, Next, Runner};
@@ -80,17 +86,35 @@ enum Task {
     JobReaper,
     /// The audit seal (forge-db `seal::seal_due`, ADR-0018 §4).
     AuditSeal,
+    // ── C5: event subscribers ──
+    /// Every registered subscriber (forge-db `subscribers::Dispatcher`).
+    Subscribers,
+    // ── end C5 ──
 }
 
 /// Every task of this worker.
-fn tasks() -> [Task; 4] {
-    [
+fn tasks(registry: &Registry) -> Vec<Task> {
+    let mut tasks = vec![
         Task::Sequencer,
         Task::JobRunner,
         Task::JobReaper,
         Task::AuditSeal,
-    ]
+    ];
+    // ── C5: no subscriber, no task (and no LISTEN connection) ──
+    if !registry.is_empty() {
+        tasks.push(Task::Subscribers);
+    }
+    // ── end C5 ──
+    tasks
 }
+
+// ── C5: the registered subscribers ──
+/// The subscribers this worker runs. None yet: the concrete ones (`notify`,
+/// `webhook-dispatch`, `work-item-sync`, …) are added with their features.
+fn registry() -> Registry {
+    Registry::new()
+}
+// ── end C5 ──
 
 /// What the runs of the tasks share.
 #[derive(Clone)]
@@ -103,6 +127,10 @@ struct Shared {
     seal_keys: Arc<SealKeys>,
     /// The last seal left rows: the next one seals at once.
     seal_draining: Arc<AtomicBool>,
+    // ── C5 ──
+    /// The subscribers of the `subscribers` task.
+    registry: Registry,
+    // ── end C5 ──
 }
 
 impl Task {
@@ -112,6 +140,7 @@ impl Task {
             Self::JobRunner => "job_runner",
             Self::JobReaper => "job_reaper",
             Self::AuditSeal => "audit_seal",
+            Self::Subscribers => subscribers::NAME,
         }
     }
 
@@ -121,11 +150,17 @@ impl Task {
             Self::JobRunner => jobs::JOB_POLL_PERIOD,
             Self::JobReaper => jobs::REAP_PERIOD,
             Self::AuditSeal => seal::SEAL_POLL_PERIOD,
+            Self::Subscribers => subscribers::PERIOD,
         }
     }
 
     /// The task as the supervisor runs it, with its own handles.
     fn runner(self, shared: &Shared) -> Runner {
+        // ── C5: the dispatcher keeps state between runs ──
+        if self == Self::Subscribers {
+            return subscribers::runner(&shared.db, &shared.registry);
+        }
+        // ── end C5 ──
         let shared = shared.clone(); // clone: pool handles and Arcs, one set per task
         Runner {
             name: self.name(),
@@ -148,6 +183,11 @@ impl Task {
             }
             Self::JobReaper => jobs::reap(&shared.jobs).await,
             Self::AuditSeal => seal::run_seal(db, &shared.seal_keys, &shared.seal_draining).await,
+            // `runner` hands this task its own runner: reaching this is a bug.
+            Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("operation", "worker_task")
+                .with_context("task", self.name())
+                .with_context("reason", "subscribers_without_dispatcher")),
             Self::Sequencer => {
                 // Audit rows are not numbered yet: ADR-0018 §5 allows it only
                 // after this process's own sink comparison succeeded, and
@@ -180,7 +220,7 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
 }
 
 /// Run every task until `shutdown` turns true (see `supervise`), with the
-/// job handlers of this build.
+/// job handlers and subscribers of this build.
 pub(crate) async fn run(
     db: &Db,
     keys: Arc<SealKeys>,
@@ -190,13 +230,14 @@ pub(crate) async fn run(
     for handler in jobs::handlers() {
         runner.register(handler)?;
     }
-    run_with(db, runner, jobs::SHUTDOWN_GRACE, keys, shutdown).await
+    run_with(db, runner, registry(), jobs::SHUTDOWN_GRACE, keys, shutdown).await
 }
 
-/// [`run`] with a given job runner and shutdown grace (tests).
+/// [`run`] with a given job runner, subscribers and shutdown grace (tests).
 pub(crate) async fn run_with(
     db: &Db,
     runner: JobRunner,
+    registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
     shutdown: watch::Receiver<bool>,
@@ -213,8 +254,9 @@ pub(crate) async fn run_with(
         shutdown: shutdown.clone(), // clone: the job runner's own receiver
         seal_keys: keys,
         seal_draining: Arc::new(AtomicBool::new(false)),
+        registry,
     };
-    let runners = tasks()
+    let runners = tasks(&shared.registry)
         .into_iter()
         .map(|task| task.runner(&shared))
         .collect();
@@ -227,5 +269,6 @@ mod jobs_tests;
 mod loop_tests;
 #[cfg(test)]
 mod seal_tests;
+// ── C5: the subscribers task's tests live in subscribers_tests.rs ──
 #[cfg(test)]
 mod tests;

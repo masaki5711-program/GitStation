@@ -500,11 +500,14 @@ async fn every_actor_variant_records_its_columns() {
     t.drop_now().await;
 }
 
+/// C5: a derived event needs no audit row, but an origin that does not
+/// exist is refused at the insert (the lineage check; subscribers' own
+/// tests cover the rest).
 #[tokio::test]
-async fn a_derived_event_without_an_audit_row_cannot_commit_either() {
+async fn a_derived_event_of_an_unknown_origin_is_refused() {
     let t = FreshDb::migrated().await;
     let mut tx = t.db.write_pool().begin().await.expect("begin");
-    sqlx::query(
+    let err = sqlx::query(
         "INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
          aggregate_id, actor_kind, request_id, caused_by_seq, root_seq, causation_depth, \
          payload) VALUES (gen_random_uuid(), 'repository.deleted', 1, 'repository', 1, \
@@ -512,13 +515,10 @@ async fn a_derived_event_without_an_audit_row_cannot_commit_either() {
     )
     .execute(&mut *tx)
     .await
-    .expect("insert (checked at commit)");
-    let err = tx
-        .commit()
-        .await
-        .map_err(|e| query_error("test.derived", e))
-        .expect_err("no audit row");
-    assert_reason(&err, ErrorCode::AuditMissing, "no_audit_row");
+    .map_err(|e| query_error("test.derived", e))
+    .expect_err("unknown origin");
+    assert_reason(&err, ErrorCode::AuditMissing, "derived_lineage");
+    drop(tx);
     t.drop_now().await;
 }
 

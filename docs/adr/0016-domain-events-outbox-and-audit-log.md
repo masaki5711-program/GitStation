@@ -628,3 +628,39 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   `queue_wait` の警報で見える。見直しの候補は種類ごとの実行器か、上限付きの並行実行。
 - **規模**（plan 01 §3.10）: 内部の仕事用。エッジ端末 1 台ごとにジョブを作らない（`queue_depth` の警報がその誤用を捕まえる）。
 - **`supervise.rs` の Runner の契約**: ジョブの実行器はトランザクションではなくリースと冪等性で契約を満たす（中断された実行のジョブはリース切れの後に再実行される）。
+## Amendment（2026-10-28、手順 C5: 購読者と `DerivedTx`）
+
+- **派生イベントの検査**（migration `20261027140000`）: `events_lineage`（`BEFORE INSERT WHEN (NEW.caused_by_seq IS NOT NULL)`。元が番号付け済み、元の深さが 8 未満、
+  `root_seq = coalesce(元.root_seq, 元.seq)`、`causation_depth = 元 + 1`、根あたりの派生が 100 件未満）と `events_derived_progress`（遅延の `AFTER INSERT`。
+  同じトランザクションで `last_seq = caused_by_seq`・`last_txid = pg_current_xact_id()` に進めた購読者があること）。どちらも `XF002` で、`CONSTRAINT` に
+  `derived_lineage` / `derived_depth` / `derived_fanout` / `derived_progress` を入れ、`FG-DB-0013` の `reason` になる。C3 の Amendment どおり
+  `events_audit_present` に `WHEN (NEW.caused_by_seq IS NULL)` を戻し、`forge doctor` の期待値もそれに合わせた。トリガー関数は他の保護の関数と同じく
+  `forge_owner` の所有で `SECURITY DEFINER` ではない（挿入するロールの権限で `events` と `event_subscribers` を読む）。
+- **派生イベントの主体と要求**: 派生イベントは `actor_kind = 'system'` で、元のイベントの `request_id` を引き継ぐ（購読者が行ったことで、利用者の操作ではない。
+  `request_id` で元の要求に辿れる）。
+- **1 回の処理**: ハンドラーはセーブポイントの中で動き、20 秒で打ち切って失敗に数える（`reason=handler_timeout`）。処理の全体は 30 秒、COMMIT は 10 秒
+  （`commit_outcome_unknown`）。失敗はセーブポイントを戻してから、同じトランザクションで `failures` / `failing_since` / `last_error_code` を記録する。
+- **止まる・隔離する**: 続けて 5 回の失敗で、`ordered` は `FG-DB-0008 reason=stuck`（同じイベントを再試行し続け、自分では飛ばさない）、`independent` は
+  `subscriber_dead_letters` に隔離して進む（`reason=quarantined`）。派生の上限（深さ・根あたり 100 件）は 1 回目で `reason=fanout_limit`（`limit` = `depth` / `per_root`）。
+  `DerivedTx` は上限に達したことを覚えていて、ハンドラーがエラーを握りつぶしても上限として扱う。
+- **worker**: 購読者のタスク（`subscribers`）は登録された購読者があるときだけ動く（今は具体的な購読者がないので、LISTEN の接続も開かない）。
+  1 回の実行 = 遅れている購読者ごとに最大 100 件、その後 NOTIFY か 5 秒の確認まで待つ。失敗を続ける購読者は、その購読者だけ 200 ms から倍々・最大 60 秒の間隔で再試行する
+  （他の購読者を待たせず、ログも 1 分に 1 回程度に抑える）。shutdown は待ちの最大 5 秒の後に効く。
+- **LISTEN の接続**（ADR-0018 §2、C4 から送られた分）: `Db::listen_options()` は `statement_timeout`・`idle_in_transaction_session_timeout` を付けない。
+  sqlx 0.8 はクライアントのソケットに TCP keepalive を設定できないため、サーバー側の `tcp_keepalives_idle = 30`・`interval = 10`・`count = 3` を起動のパケットで送る。
+  クライアント側は 5 秒の確認ごとに上限付きの `SELECT 1` で半分切れた接続を見つけ、切れたら作り直し、作り直した直後に必ず状態を確かめる（`Woken::Connected`）。
+- **`forge doctor`**: `subscribers.lag`（`ordered` で失敗 5 回 → `stuck`、次のイベントの番号付けから 60 秒超 → `behind`）、`subscribers.dead_letters`
+  （直近 24 時間の隔離 → `quarantined`。それより古いものは数だけ）。
+- **見送り**: `forge admin subscriber skip` は設計だけ（Runbook `subscriber-lag.md`: `forge_maint` だけが実行できる `forge_owner` 所有の `SECURITY DEFINER`
+  関数 `forge.subscriber_skip(name, seq, reason)` が、隔離の行・カーソルの前進・`subscriber.skipped` の監査の行を 1 つのトランザクションで書く）。
+  `forge_maint` の接続が `forge-db` にまだないため、それを入れる段階で実装する。`reason=retention_overrun` は保持（C7）。
+- **受け入れたリスク**: 根あたりの件数の数え方は 1 つの文の中だけで、同じ根から 2 つのトランザクションが同時に派生すると合計で 100 件をわずかに超えうる（事故の水準）。
+- **レビュー後の修正（C5）**: イベントに数える失敗を広げた — ハンドラーの失敗・タイムアウト・派生の上限に加えて、復号できないイベント（`FG-SYS-0001 reason=decode`）、
+  ハンドラーが中断状態にしたセーブポイントの RELEASE の失敗、COMMIT で派生イベントの検査に拒まれたこと（`FG-DB-0013 reason=derived_*`。新しいトランザクションで数える）。
+  どれも 5 回で `stuck` / 隔離になる。DB の障害・購読者の行がない・`ordering` の不一致・`high_seq` より下のイベントがない・カーソルが動いた、は購読者の再試行（バックオフ）で、
+  イベントには数えない。隔離の行と `last_error_code` には、上限で止まったときもハンドラー自身のコードを残す。1 回の round は 30 秒を過ぎたら新しい処理を始めず
+  `more` を返す（最長は 30 秒 + 処理中の 1 件）。LISTEN の待ちの失敗はタスクの失敗にせず、1 回記録して 5 秒待ってから次の round に進む。
+  XF002 で知らない `CONSTRAINT` 名は `no_audit_row` ではなく `xf002_unknown`。
+- **後で見直す（migration を足すとき）**: (1) 上の根あたりの数え超え — 根の `seq` で advisory lock を取れば防げる。(2) `events_audit_present` は同じ `txid` の監査の行が
+  あるかだけを見ている（行の中身との対応までは見ない）。(3) 上限に達した状態で同じ `dedup_key` の派生イベントを出し直すと、`ON CONFLICT` の前に上限のエラーになる
+  （出し直しが冪等にならない）。

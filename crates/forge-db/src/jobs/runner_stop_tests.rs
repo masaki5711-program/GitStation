@@ -20,6 +20,11 @@ use crate::test_support::*;
 const T: Duration = Duration::from_secs(5);
 
 /// JSON log lines written on this thread while installed.
+///
+/// One global subscriber writes to the capture installed on the current
+/// thread. Thread-local subscribers (`set_default`) are not used: a callsite
+/// first hit by a parallel test while no capture was alive stays cached as
+/// "never", and its events are lost (2026-10-28, FG-DB-0002 event missing).
 #[derive(Clone, Default)]
 pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 
@@ -33,15 +38,48 @@ impl std::io::Write for Captured {
     }
 }
 
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Captured>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Writes to this thread's capture, or nowhere.
+struct ThreadSink;
+
+impl std::io::Write for ThreadSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        SINK.with(|s| match s.borrow_mut().as_mut() {
+            Some(c) => c.write(buf),
+            None => Ok(buf.len()),
+        })
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Clears this thread's capture on drop.
+pub(crate) struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        SINK.with(|s| s.borrow_mut().take());
+    }
+}
+
 impl Captured {
-    pub(crate) fn install(&self) -> tracing::subscriber::DefaultGuard {
-        let writer = self.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(move || writer.clone())
-            .finish();
-        tracing::subscriber::set_default(subscriber)
+    pub(crate) fn install(&self) -> CaptureGuard {
+        static GLOBAL: std::sync::Once = std::sync::Once::new();
+        GLOBAL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(|| ThreadSink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("the only global subscriber");
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(self.clone()));
+        CaptureGuard
     }
 
     /// The failure events (they carry error_code).

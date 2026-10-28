@@ -4,7 +4,8 @@
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
 //! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
 //! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
-//! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), storage root and
+//! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
+//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
@@ -27,6 +28,9 @@ use crate::runtime::block_on;
 
 mod render;
 mod seal;
+// ── C5 ──
+mod subscribers;
+// ── end C5 ──
 
 /// The outcome of one check.
 enum Outcome {
@@ -50,7 +54,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 10] = [
+const DB_CHECKS: [&str; 12] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -64,6 +68,10 @@ const DB_CHECKS: [&str; 10] = [
     "jobs.dead",
     "jobs.expired_leases",
     "jobs.queue_depth",
+    // ── C5 ──
+    "subscribers.lag",
+    "subscribers.dead_letters",
+    // ── end C5 ──
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -163,6 +171,9 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
     let [seal_backlog, seal_verify] = seal::seal_checks(db, cfg).await;
     // ── end C8 ──
     let [dead, leases, depth] = job_checks(db).await;
+    // ── C5 ──
+    let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
+    // ── end C5 ──
     vec![
         bootstrap,
         connections,
@@ -174,6 +185,8 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         dead,
         leases,
         depth,
+        subscriber_lag,
+        dead_letters,
     ]
 }
 

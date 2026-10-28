@@ -19,6 +19,8 @@
 //!   `FG-DB-0015`).
 //! - [`jobs`] is the job queue with fenced leases and its runner
 //!   (`FG-DB-0006` / `FG-DB-0007`).
+//! - [`subscribers`] runs internal event subscribers one event per
+//!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
 
 pub mod bootstrap;
 pub mod change;
@@ -34,6 +36,9 @@ mod schema_tests;
 pub mod seal;
 // ── end C8 ──
 pub mod sequencer;
+// ── C5: event subscribers and DerivedTx (ADR-0016 §6, §7) ──
+pub mod subscribers;
+// ── end C5 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

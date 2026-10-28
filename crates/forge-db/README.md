@@ -53,11 +53,15 @@ JobDeadLettered (`job_id`, `kind`, `attempts`, `last_error_code`, `origin_reques
 `reason`), FG-DB-0007 JobLeaseExpired (`job_id`, `kind`, `worker_id`, `attempt`; `reason`), FG-DB-0017 JobQueueBacklog (`kind`, `ready`,
 `oldest_wait_ms`; `reason`), FG-DB-0011 AuditSealMismatch (`reason` recompute / chain /
 hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
-`audit_sequencing`).
+`audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
+fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
+(`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
+derived_progress).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
-`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`.
+`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`,
+`subscriber-lag.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -115,8 +119,8 @@ timeout there is FG-DB-0002 `commit_outcome_unknown`). A repeated
 `dedup_key` rolls the whole change back (`Committed::Deduped`). Invalid
 changes are FG-DB-0010 before anything is written (rules in
 `change/validate.rs`; client-supplied values are cut, never refused);
-an event committed without an audit row in its transaction — derived events
-included until C5 — is FG-DB-0013 (deferred trigger `events_audit_present`).
+a plain event committed without an audit row in its transaction is
+FG-DB-0013 (deferred trigger `events_audit_present`, `WHEN caused_by_seq IS NULL`).
 The typed commands (step D) are its only callers.
 
 **Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
@@ -208,3 +212,31 @@ feeds `forge doctor` (`jobs.dead` → FG-DB-0006; `jobs.expired_leases`,
 `jobs.queue_depth` → FG-DB-0017 JobQueueBacklog, counted per kind via
 `jobs_ready_kind`). `forge worker` runs the runner (1 s idle poll, 10 s
 shutdown grace) and the reaper (30 s, also at startup).
+**Subscribers** (ADR-0016 §6, §7, step C5): `subscribers::Subscriber` (name,
+`Ordering::Ordered` / `Independent`, `handle(&SourceEvent, &mut DerivedTx)`),
+`Registry`, `register(&db, sub, Start::Head)`, `run_once(&db, sub)` — one event
+(`last_seq + 1`) per write-pool transaction: `SELECT … FOR UPDATE NOWAIT` (55P03 =
+`Progress::Busy`, debug log only), the handler inside a savepoint (20 s), then
+`last_seq` / `last_txid` advance monotonically. Five failures in a row stop an
+ordered subscriber (FG-DB-0008 `stuck`, retried, never skipped) or quarantine
+the event of an independent one (`subscriber_dead_letters`, `quarantined`);
+the derivation limits (depth 8, 100 per root) are `fanout_limit` at once.
+Counted as failures too: an undecodable event (FG-SYS-0001 `decode`), a
+failed savepoint RELEASE, and derived writes refused at COMMIT (FG-DB-0013
+`derived_*`, counted in a fresh transaction); the stored code is the
+handler's own (`src/subscribers/count.rs`). Not counted (step errors,
+retried with backoff): DB failures, `subscriber_not_registered`,
+`ordering_mismatch`, `event_missing`, `cursor_moved` (`cursor.rs`).
+`DerivedTx` writes derived tables (`conn()` — a trust boundary, see the
+`Subscriber` docs) and derived events (`emit`: actor
+`system`, the source request id, lineage set; no audit row). Migration
+`20261027140000` checks derived events (`events_lineage` BEFORE INSERT,
+`events_derived_progress` deferred; XF002 → FG-DB-0013; an unknown
+CONSTRAINT name is `xf002_unknown`). `Dispatcher` runs
+every registered subscriber for `forge worker` (a round starts no step
+after `ROUND_BUDGET` = 30 s, then `more`) and waits on the crate-private
+`Wake` (LISTEN
+`forge_events_sequenced` on the dedicated connection `Db::listen_options` — no
+statement / idle timeout, server-side TCP keepalive, a bounded `SELECT 1` at
+every 5 s poll). `states` / `check_lag` / `dead_letters` feed `forge doctor`
+(`subscribers.lag`, `subscribers.dead_letters`).

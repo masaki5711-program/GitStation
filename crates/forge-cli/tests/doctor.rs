@@ -62,6 +62,8 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    jobs.dead",
         "ok    jobs.expired_leases",
         "ok    jobs.queue_depth",
+        "ok    subscribers.lag",
+        "ok    subscribers.dead_letters",
         "ok    storage",
         "ok    git",
     ] {
@@ -456,6 +458,8 @@ fn doctor_reports_an_unreachable_database_and_a_missing_storage_root() {
     assert!(text.contains("skip  schema"), "{text}");
     assert!(text.contains("skip  outbox.unsequenced_count"), "{text}");
     assert!(text.contains("skip  outbox.sequencer_lag"), "{text}");
+    assert!(text.contains("skip  subscribers.lag"), "{text}");
+    assert!(text.contains("skip  subscribers.dead_letters"), "{text}");
     assert!(text.contains("FAIL  storage"), "{text}");
     assert!(
         !text.contains("not-there"),

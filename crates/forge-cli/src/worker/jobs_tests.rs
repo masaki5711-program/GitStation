@@ -12,6 +12,7 @@ use forge_db::jobs::{
     enqueue, health, ClaimedJob, JobFuture, JobHandler, JobKind, JobRunner, JobTimeout, JobsHealth,
     MaxAttempts, NewJob, WorkerId,
 };
+use forge_db::subscribers::Registry;
 use forge_db::test_support::FreshDb;
 use tokio::sync::{watch, Notify};
 
@@ -116,7 +117,15 @@ async fn the_runner_works_its_kinds_and_leaves_unhandled_ones_queued() {
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
     let worker = tokio::spawn(async move {
-        run_with(&db, runner, Duration::from_secs(5), seal_keys(), stopped).await
+        run_with(
+            &db,
+            runner,
+            Registry::new(),
+            Duration::from_secs(5),
+            seal_keys(),
+            stopped,
+        )
+        .await
     });
     tokio::time::timeout(Duration::from_secs(20), ran.notified())
         .await
@@ -186,6 +195,7 @@ async fn a_job_in_progress_at_shutdown_is_released_after_the_grace() {
         run_with(
             &db,
             runner,
+            Registry::new(),
             Duration::from_millis(200),
             seal_keys(),
             stopped,

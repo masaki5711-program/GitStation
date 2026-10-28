@@ -177,7 +177,10 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     let (code, reason) = match class {
         Class::Unavailable(r) => (ErrorCode::DbUnavailable, r),
         Class::AppendOnly => (ErrorCode::AppendOnlyViolation, "rejected"),
-        Class::AuditMissing => (ErrorCode::AuditMissing, "no_audit_row"),
+        Class::AuditMissing => (
+            ErrorCode::AuditMissing,
+            audit_missing_reason(e.as_database_error().and_then(|d| d.constraint())),
+        ),
         // Opening or checking a connection: never a statement error, but a
         // known reason (statement_timeout, serialization, …) is kept; only
         // the generic ones are renamed.
@@ -220,6 +223,21 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     }
 }
 
+/// XF002 comes from the audit-presence trigger (no constraint name) or from
+/// a derived-event check, which names itself in CONSTRAINT (migration
+/// 20261027140000). Any other name is a check this build does not know
+/// (`xf002_unknown`; `constraint` and `db_message` stay in the context).
+fn audit_missing_reason(constraint: Option<&str>) -> &'static str {
+    match constraint {
+        None => "no_audit_row",
+        Some("derived_lineage") => "derived_lineage",
+        Some("derived_depth") => "derived_depth",
+        Some("derived_fanout") => "derived_fanout",
+        Some("derived_progress") => "derived_progress",
+        Some(_) => "xf002_unknown",
+    }
+}
+
 pub(crate) fn unavailable(target: &str, reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::DbUnavailable)
         .with_context("target", target)
@@ -244,130 +262,5 @@ pub fn read_query_error(query: &'static str, e: sqlx::Error) -> ForgeError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn reason_of(err: &ForgeError) -> String {
-        err.to_string()
-            .split(' ')
-            .find_map(|kv| kv.strip_prefix("reason="))
-            .unwrap_or_default()
-            .trim_end_matches(':')
-            .to_owned()
-    }
-
-    #[test]
-    fn transport_errors_are_unavailable_with_their_reason() {
-        for (kind, reason) in [
-            (ErrorKind::ConnectionRefused, "connect_refused"),
-            (ErrorKind::TimedOut, "connect_timeout"),
-            (ErrorKind::ConnectionReset, "connection_lost"),
-            (ErrorKind::BrokenPipe, "connection_lost"),
-        ] {
-            let err = query_error("t.q", sqlx::Error::Io(std::io::Error::from(kind)));
-            assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
-            assert_eq!(reason_of(&err), reason, "{err}");
-        }
-        for (e, reason) in [
-            (sqlx::Error::PoolTimedOut, "acquire_timeout"),
-            (sqlx::Error::PoolClosed, "pool_closed"),
-            (sqlx::Error::WorkerCrashed, "connection_lost"),
-            (sqlx::Error::Protocol("x".into()), "connection_lost"),
-        ] {
-            let err = query_error("t.q", e);
-            assert_eq!(err.code(), ErrorCode::DbUnavailable, "{err}");
-            assert_eq!(reason_of(&err), reason, "{err}");
-        }
-    }
-
-    #[test]
-    fn a_decode_error_never_carries_the_value() {
-        let e = sqlx::Error::ColumnDecode {
-            index: "\"kind\"".to_owned(),
-            source: "invalid value \"tok-5e1f-secret\" for enum Kind".into(),
-        };
-        let err = query_error("t.q", e);
-        assert_eq!(err.code(), ErrorCode::DbQueryFailed);
-        let text = err.to_string();
-        assert!(!text.contains("tok-5e1f-secret"), "{text}");
-        assert!(text.contains("driver_error=column_decode"), "{text}");
-        assert!(text.contains("column=\"kind\""), "{text}");
-        assert!(std::error::Error::source(&err).is_none());
-        let err = query_error(
-            "t.q",
-            sqlx::Error::Decode("value \"x-9\" out of range".into()),
-        );
-        assert!(!err.to_string().contains("x-9"), "{err}");
-    }
-
-    #[test]
-    fn row_not_found_is_a_query_failure_with_its_own_reason() {
-        let err = query_error("t.q", sqlx::Error::RowNotFound);
-        assert_eq!(err.code(), ErrorCode::DbQueryFailed);
-        assert_eq!(reason_of(&err), "row_not_found");
-    }
-
-    #[test]
-    fn sqlstates_map_to_the_documented_reasons() {
-        for (state, unavailable, reason) in [
-            ("57014", false, "statement_timeout"),
-            ("55P03", false, "lock_timeout"),
-            ("40001", false, "serialization"),
-            ("40P01", false, "deadlock"),
-            ("23505", false, "constraint"),
-            ("42P01", false, "server_error"),
-            ("57P01", true, "server_shutdown"),
-            ("57P03", true, "server_shutdown"),
-            ("53300", true, "too_many_connections"),
-            ("08006", true, "connection_lost"),
-            ("53100", true, "resource_exhausted"),
-            ("53200", true, "resource_exhausted"),
-            ("58030", true, "server_fault"),
-            ("XX000", true, "server_fault"),
-            ("25006", true, "read_only"),
-            ("25P03", false, "idle_in_transaction_timeout"),
-            ("28P01", true, "auth_failed"),
-            ("42501", false, "permission_denied"),
-            ("XF001", false, "append_only"),
-            ("XF002", false, "audit_missing"),
-        ] {
-            let class = by_sqlstate(state, On::Write);
-            let (is_unavailable, r) = match class {
-                Class::Unavailable(r) => (true, r),
-                Class::Query(r) => (false, r),
-                Class::AppendOnly => (false, "append_only"),
-                Class::AuditMissing => (false, "audit_missing"),
-            };
-            assert_eq!((is_unavailable, r), (unavailable, reason), "{state}");
-        }
-    }
-
-    #[test]
-    fn a_read_only_rejection_depends_on_the_pool() {
-        assert!(matches!(
-            by_sqlstate("25006", On::Read),
-            Class::Query("write_on_read_pool")
-        ));
-        assert!(matches!(
-            by_sqlstate("25006", On::Write),
-            Class::Unavailable("read_only")
-        ));
-        assert!(matches!(
-            by_sqlstate("42501", On::Read),
-            Class::Query("permission_denied")
-        ));
-    }
-
-    #[test]
-    fn only_data_free_classes_keep_the_server_message() {
-        assert!(message_is_safe("42P01"));
-        assert!(message_is_safe("57P01"));
-        assert!(!message_is_safe("42601"), "a syntax error quotes the token");
-        assert!(!message_is_safe("55006"), "object in use may name data");
-        assert!(
-            !message_is_safe("23505"),
-            "unique violation detail quotes the key"
-        );
-        assert!(!message_is_safe("22P02"), "invalid input quotes the value");
-    }
-}
+#[path = "error_map_tests.rs"]
+mod tests;

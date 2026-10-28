@@ -23,7 +23,10 @@ use sqlx::Postgres;
 use sqlx::{ConnectOptions as _, Connection as _};
 
 use crate::error_map::{connect_error, read_query_error, unavailable};
-use crate::options::{connect_options, preflight, server_version, Login, MIN_SERVER_VERSION_NUM};
+use crate::options::{
+    connect_options, listen_connect_options, preflight, server_version, Login,
+    MIN_SERVER_VERSION_NUM,
+};
 
 /// Bound for closing the pools.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,6 +55,8 @@ impl ReadPool {
 pub struct Db {
     write: PgPool,
     read: ReadPool,
+    /// The options of the dedicated LISTEN connection (ADR-0018 §2).
+    listen: PgConnectOptions,
     target: String,
     /// Client-side bound for the readiness round trip.
     ping_timeout: Duration,
@@ -85,6 +90,7 @@ impl Db {
         };
         let write_options = connect_options(cfg, &login(&[]));
         let read_options = connect_options(cfg, &login(READ_SETTINGS));
+        let listen = listen_connect_options(cfg, &login(&[]));
         // One direct connection per pool first: the pool retries refused /
         // starting servers until acquire_timeout and would report every
         // cause as a timeout. The probes report the real one, check the
@@ -122,6 +128,7 @@ impl Db {
         Ok(Self {
             write,
             read,
+            listen,
             target,
             ping_timeout: cfg.acquire_timeout,
             op_timeout: cfg.acquire_timeout.saturating_add(cfg.statement_timeout),
@@ -136,6 +143,18 @@ impl Db {
     /// The write pool: typed commands and the sequencer, inside this crate only.
     pub(crate) fn write_pool(&self) -> &PgPool {
         &self.write
+    }
+
+    /// The options of the dedicated LISTEN connection (ADR-0018 §2):
+    /// forge_app, no statement / idle-in-transaction timeout, server-side
+    /// TCP keepalive. Used by `subscribers::Wake`, inside this crate only.
+    pub(crate) fn listen_options(&self) -> &PgConnectOptions {
+        &self.listen
+    }
+
+    /// Client-side bound for one round trip (`database.acquire_timeout_ms`).
+    pub(crate) fn round_trip_timeout(&self) -> Duration {
+        self.ping_timeout
     }
 
     /// `host:port/dbname` — safe to log.
