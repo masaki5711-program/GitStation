@@ -33,6 +33,21 @@ const SAFE_CONTEXT: &[&str] = &[
     "unsequenced_audit",
     "heartbeat_age_ms",
     "lock_holder_pid",
+    // C6 — FG-DB-0006 / FG-DB-0007 (job-dead-lettered runbook): ids, counts,
+    // ages, code-chosen kinds and error codes, a request id to search the
+    // log for. Never the payload or last_error.
+    "job_id",
+    "kind",
+    "attempts",
+    "attempt",
+    "last_error_code",
+    "origin_request_id",
+    "worker_id",
+    "dead_recent",
+    "expired_leases",
+    "expired_ms",
+    "ready",
+    "oldest_wait_ms",
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

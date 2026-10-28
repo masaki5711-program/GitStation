@@ -15,6 +15,7 @@ use sqlx::Transaction;
 
 use super::validate::{fit_sizes, fitted, sanitized, validate};
 use super::{ChangeContext, ChangeRecord, Committed, DomainEvent};
+use crate::jobs::{enqueue_on, Enqueued, NewJob};
 use crate::{query_error, Db};
 
 /// A change never takes longer than this, start to COMMIT.
@@ -78,6 +79,13 @@ impl ChangeTx {
         step: impl std::future::Future<Output = Result<T, ForgeError>>,
     ) -> Result<T, ForgeError> {
         bounded(self.deadline, self.timeout, step).await
+    }
+
+    /// Enqueue a job inside the change (ADR-0016 §7): it exists only if the
+    /// change commits, and the insert counts against the change's deadline.
+    pub(crate) async fn enqueue_job(&mut self, job: &NewJob) -> Result<Enqueued, ForgeError> {
+        let (deadline, timeout) = (self.deadline, self.timeout);
+        bounded(deadline, timeout, enqueue_on(&mut self.tx, job)).await
     }
 
     /// Write the audit row and the events, then commit. A `dedup_key` that

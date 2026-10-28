@@ -2,7 +2,8 @@
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
-//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), storage root and
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the job queue
+//! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
@@ -16,7 +17,7 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, sequencer, Db, MIGRATOR};
+use forge_db::{bootstrap, jobs, sequencer, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
@@ -43,12 +44,16 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 5] = [
+const DB_CHECKS: [&str; 8] = [
     "db.bootstrap",
     "db.connections",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
+    // C6: the job queue.
+    "jobs.dead",
+    "jobs.expired_leases",
+    "jobs.queue_depth",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -144,8 +149,67 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         Err(e) => fail("schema", e),
     };
     let [unsequenced, lag] = outbox_checks(db).await;
-    vec![bootstrap, connections, schema, unsequenced, lag]
+    let [dead, leases, depth] = job_checks(db).await;
+    vec![
+        bootstrap,
+        connections,
+        schema,
+        unsequenced,
+        lag,
+        dead,
+        leases,
+        depth,
+    ]
 }
+
+// ── C6: the job queue ────────────────────────────────────────────────────
+/// `jobs.dead` (`FG-DB-0006`), `jobs.expired_leases` (`FG-DB-0007`) and
+/// `jobs.queue_depth` (`FG-DB-0006`), ADR-0016 §7.
+async fn job_checks(db: &Db) -> [Check; 3] {
+    const NAMES: [&str; 3] = ["jobs.dead", "jobs.expired_leases", "jobs.queue_depth"];
+    let h = match jobs::health(db).await {
+        Ok(Some(h)) => h,
+        Ok(None) => return NAMES.map(|n| skip(n, "schema not migrated")),
+        Err(e) => {
+            return [
+                fail(NAMES[0], e),
+                skip(NAMES[1], "job health unavailable"),
+                skip(NAMES[2], "job health unavailable"),
+            ]
+        }
+    };
+    let dead = match h.check_dead() {
+        Ok(()) => ok(
+            NAMES[0],
+            &format!(
+                "none in the last 24 h ({} in total)",
+                sequencer::shown(h.dead_total)
+            ),
+        ),
+        Err(e) => fail(NAMES[0], e),
+    };
+    let leases = match h.check_expired_leases() {
+        Ok(()) => ok(NAMES[1], "none unreaped"),
+        Err(e) => fail(NAMES[1], e),
+    };
+    let depth = match h.check_queue_depth() {
+        Ok(()) => ok(NAMES[2], &depth_detail(&h.depth)),
+        Err(e) => fail(NAMES[2], e),
+    };
+    [dead, leases, depth]
+}
+
+fn depth_detail(depth: &[jobs::KindDepth]) -> String {
+    if depth.is_empty() {
+        return "no ready jobs".to_owned();
+    }
+    depth
+        .iter()
+        .map(|k| format!("{} {}", k.kind, sequencer::shown(k.ready)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+// ── end C6 ───────────────────────────────────────────────────────────────
 
 /// `outbox.unsequenced_count` (what waits for a number) and
 /// `outbox.sequencer_lag` (`FG-DB-0005`, ADR-0016 §7).

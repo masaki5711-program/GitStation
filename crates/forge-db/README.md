@@ -3,7 +3,7 @@
 **Responsibility**: the PostgreSQL layer (ADR-0002, ADR-0018) — connecting with TLS and
 every timeout applied, the write / read pool split and the migration
 connection, mapping driver errors to registered codes, migrations
-(ADR-0014) and the bootstrap checks. Later: the Outbox and the job queue.
+(ADR-0014) and the bootstrap checks. The Outbox sequencer and the job queue.
 
 **Public API**
 - `Db::connect(&DatabaseConfig) -> Result<Db, ForgeError>` — pool from
@@ -48,10 +48,12 @@ connection, mapping driver errors to registered codes, migrations
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
 MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
 AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-0005
-OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`).
+OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`), FG-DB-0006
+JobDeadLettered (`job_id`, `kind`, `attempts`, `last_error_code`, `origin_request_id`;
+`reason`), FG-DB-0007 JobLeaseExpired (`job_id`, `kind`, `worker_id`, `attempt`; `reason`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
-`append-only-violation.md`, `outbox-sequencer-lag.md`.
+`append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -138,3 +140,26 @@ when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
 `forge doctor` (`outbox.unsequenced_count`, `outbox.sequencer_lag`,
 FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
 `bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).
+
+**Job queue** (ADR-0016 §7, step C6; `src/jobs/`): `forge.jobs` with fenced
+leases, for internal work only — never one job per edge device (plan 01
+§3.10: fleet-wide work is one job that walks its targets). `jobs::enqueue`
+(write pool) or `ChangeTx::enqueue_job` (inside a change, rolled back with
+it); `dedup_key` is unique per kind while the row exists. `jobs::claim` is
+ONE autocommit `FOR UPDATE SKIP LOCKED` statement (`running`, `attempts +
+1`, `worker_id`, `lease_until = now() + timeout + 30 s`) for the given
+kinds only. `complete` / `fail` are fenced by `(id, running, worker_id,
+attempts)` — a lost lease returns `Fenced(FG-DB-0007 reason=fenced)` and
+changes nothing. `fail` requeues after 10 s × 2^(attempt − 1) (≤ 1 h) or
+deads (attempts used up, `Retry::Never`). `jobs::reap` is ONE statement for
+up to 1000 expired leases (dead with `last_error_code = FG-DB-0007` when the
+attempts are used up, else requeued with the backoff). `JobRunner`
+(`JobHandler` per kind, one job at a time, handler in its own task under
+`timeout_ms` — `execution_timeout` → FG-DB-0007 and retry, a panic →
+FG-SYS-0001 and retry; dropped run → the task is aborted, the lease
+expires, reap requeues it) logs dead jobs (FG-DB-0006) and lost leases
+(FG-DB-0007) with the job's origin request id. Delivery is at-least-once:
+handlers must be idempotent. `jobs::health` feeds `forge doctor`
+(`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`). `forge worker`
+runs the runner (1 s idle poll, 10 s shutdown grace) and the reaper (30 s,
+also at startup).
