@@ -2,12 +2,14 @@
 //!
 //! - `rows_sha256` = SHA-256 of the row hashes concatenated in seq order;
 //! - `seal_sha256` = SHA-256 of `be16(hash_version) ‖ be16(seal_epoch) ‖
-//!   be64(first_seq) ‖ be64(last_seq) ‖ be64(events_high_seq) ‖ rows_sha256
-//!   ‖ prev_seal_sha256`;
+//!   be16(key_id) ‖ be16(len(kind)) ‖ kind (UTF-8) ‖ be64(first_seq) ‖
+//!   be64(last_seq) ‖ be64(events_high_seq) ‖ rows_sha256 ‖
+//!   prev_seal_sha256` (ADR-0018 C8 amendment: `kind` and `key_id` are
+//!   covered, so neither can change — C9 relaxes the gap check for
+//!   `kind = 'imported'` — without the recomputation noticing);
 //! - the first seal's `prev_seal_sha256` = SHA-256 of `forge-audit-genesis`
 //!   (the guard of forge.audit_seal uses the same value);
-//! - `hmac` = HMAC-SHA256(key[key_id], seal_sha256). `key_id` is not in
-//!   `seal_sha256`.
+//! - `hmac` = HMAC-SHA256(key[key_id], seal_sha256).
 
 use forge_core::config::SealKey;
 use forge_errors::{ErrorCode, ForgeError};
@@ -30,11 +32,40 @@ pub fn rows_sha256<'a>(row_hashes: impl IntoIterator<Item = &'a Digest32>) -> Di
     h.finalize().into()
 }
 
+/// `audit_seal.kind` (the table CHECK allows exactly these).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SealKind {
+    /// Written by the `audit.seal` job.
+    Normal,
+    /// Taken over from the sink by the resync (C9).
+    Imported,
+    /// The first normal seal after a resync (C9).
+    Restore,
+}
+
+impl SealKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Imported => "imported",
+            Self::Restore => "restore",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        [Self::Normal, Self::Imported, Self::Restore]
+            .into_iter()
+            .find(|k| k.as_str() == text)
+    }
+}
+
 /// The fields `seal_sha256` covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SealFields {
     pub hash_version: i16,
     pub seal_epoch: i16,
+    pub key_id: i16,
+    pub kind: SealKind,
     pub first_seq: i64,
     pub last_seq: i64,
     pub events_high_seq: i64,
@@ -47,6 +78,11 @@ impl SealFields {
         let mut h = Sha256::new();
         h.update(self.hash_version.to_be_bytes());
         h.update(self.seal_epoch.to_be_bytes());
+        h.update(self.key_id.to_be_bytes());
+        let kind = self.kind.as_str().as_bytes();
+        // A few ASCII bytes: the length always fits.
+        h.update(u16::try_from(kind.len()).unwrap_or(u16::MAX).to_be_bytes());
+        h.update(kind);
         h.update(self.first_seq.to_be_bytes());
         h.update(self.last_seq.to_be_bytes());
         h.update(self.events_high_seq.to_be_bytes());

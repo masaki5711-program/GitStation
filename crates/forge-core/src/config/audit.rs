@@ -43,6 +43,13 @@ impl AuditConfig {
             .map(read_seal_keys)
             .transpose()
     }
+
+    /// Read `audit.seal_keys_file`, which this command needs (`forge
+    /// worker` seals): not configured is `FG-SYS-0002
+    /// config_key=audit.seal_keys_file reason=missing`.
+    pub fn require_seal_keys(&self) -> Result<SealKeys, ForgeError> {
+        self.seal_keys()?.ok_or_else(|| invalid(KEY, "missing"))
+    }
 }
 
 fn read_seal_keys(path: &Path) -> Result<SealKeys, ForgeError> {
@@ -50,7 +57,9 @@ fn read_seal_keys(path: &Path) -> Result<SealKeys, ForgeError> {
     SealKeys::parse(&text).map_err(|e| e.with_context("path", path.display()))
 }
 
-/// One HMAC key of the audit seal. Never printed.
+/// One HMAC key of the audit seal. Never printed. The bytes are not wiped
+/// from memory on drop (zeroize is deferred: it is a new dependency, and
+/// the key lives for the whole worker process anyway).
 pub struct SealKey {
     id: i16,
     bytes: Vec<u8>,
@@ -132,7 +141,8 @@ impl SealKeys {
 }
 
 fn decode_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    // Digits only: from_str_radix alone would take a pair like "+a".
+    if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     hex.as_bytes()
@@ -173,6 +183,7 @@ mod tests {
         let long = format!("1 {}", key("ab", 65));
         let odd = format!("1 {}a", key("ab", 32));
         let not_hex = format!("1 {}zz", key("ab", 32));
+        let plus = format!("1 +a{}", key("ab", 31));
         let dup = format!("1 {}\n1 {}", key("ab", 32), key("cd", 32));
         let cases: &[(&str, &str)] = &[
             ("", "empty"),
@@ -182,6 +193,7 @@ mod tests {
             (&long, "invalid_key"),
             (&odd, "invalid_key"),
             (&not_hex, "invalid_key"),
+            (&plus, "invalid_key"),
             (&dup, "duplicate"),
         ];
         for (text, reason) in cases {

@@ -12,7 +12,7 @@ use super::*;
 use crate::test_support::*;
 
 /// Two seals over migration rows plus 3 + 2 audit rows.
-async fn sealed_twice() -> FreshDb {
+pub(super) async fn sealed_twice() -> FreshDb {
     let t = FreshDb::migrated().await;
     for n in [3, 2] {
         insert_audit(&t, n).await;
@@ -22,7 +22,7 @@ async fn sealed_twice() -> FreshDb {
     t
 }
 
-fn assert_mismatch(err: &ForgeError, reason: &str, detail: &str) {
+pub(super) fn assert_mismatch(err: &ForgeError, reason: &str, detail: &str) {
     assert_reason(err, ErrorCode::AuditSealMismatch, reason);
     assert!(
         err.to_string().contains(&format!("detail={detail}")),
@@ -41,8 +41,10 @@ async fn state_of(conn: &mut PgConnection, sql: &str) -> Option<String> {
     }
 }
 
-const SEAL_GUARD_OFF: &str = "ALTER TABLE forge.audit_seal DISABLE TRIGGER audit_seal_append_only";
-const LOG_GUARD_OFF: &str = "ALTER TABLE forge.audit_log DISABLE TRIGGER audit_log_append_only";
+pub(super) const SEAL_GUARD_OFF: &str =
+    "ALTER TABLE forge.audit_seal DISABLE TRIGGER audit_seal_append_only";
+pub(super) const LOG_GUARD_OFF: &str =
+    "ALTER TABLE forge.audit_log DISABLE TRIGGER audit_log_append_only";
 
 #[tokio::test]
 async fn a_tampered_sealed_column_is_audit_seal_mismatch_recompute() {
@@ -135,7 +137,7 @@ async fn a_wrong_key_is_an_hmac_mismatch() {
     .expect_err("hmac");
     assert_mismatch(&err, "hmac", "mismatch");
     assert!(err.to_string().contains("key_id=1"), "{err}");
-    // A key file that lacks the seal's key_id (key_id is not in seal_sha256).
+    // A key file that lacks the seal's key_id: the HMAC is checked first.
     let rotated = SealKeys::parse(&format!("2 {}", "42".repeat(32))).expect("keys");
     let err = verify_range(
         &t.db,

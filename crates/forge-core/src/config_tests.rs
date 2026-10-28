@@ -680,6 +680,20 @@ fn the_seal_keys_file_is_checked_at_load_and_read_on_use() {
 
     let none = load(None, &env(&[])).expect("defaults");
     assert!(none.audit.seal_keys().expect("unset").is_none());
+    // The worker needs them: not configured is a named error.
+    assert_invalid(
+        &none.audit.require_seal_keys().expect_err("required"),
+        "audit.seal_keys_file",
+        "missing",
+    );
+    assert_eq!(
+        cfg.audit
+            .require_seal_keys()
+            .expect("required")
+            .signing()
+            .id(),
+        2
+    );
     let err = load(
         None,
         &env(&[("FORGE_AUDIT_SEAL_KEYS_FILE", "relative/keys")]),

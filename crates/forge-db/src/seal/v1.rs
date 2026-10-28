@@ -8,14 +8,21 @@
 //! (JCS): `bigint` as a decimal string; `smallint` / `integer` as numbers;
 //! `timestamptz` as UTC ISO 8601 with microseconds (`…T…​.ffffffZ`, by the
 //! database's `to_char`); `text` as strings; `text[]` as an array in stored
-//! order; `jsonb` (details) re-read from its text and canonicalized, where
-//! only integers within ±2^53−1 stay numbers and every other number —
-//! fractions, exponents, larger integers, `-0` — becomes the string
-//! PostgreSQL prints for it (exact for any stored value: a jsonb numeric
-//! can hold more digits than a double, and a rounded value would let a
-//! change go unseen); NULL as `null`. The personal columns
-//! (`actor_label`, `source_ip`, `user_agent`) are not sealed: redacting them
-//! keeps a seal valid.
+//! order; `jsonb` (details) re-read from its text through [`encode_details`]
+//! and canonicalized: only integers within ±2^53−1 stay numbers, every
+//! other number — fractions, exponents, larger integers, `-0` — becomes
+//! `{"$n":"<the text PostgreSQL prints>"}` (exact for any stored value: a
+//! jsonb numeric can hold more digits than a double, and a rounded value
+//! would let a change go unseen), and object keys starting with `$` get one
+//! more `$`, so the number 1.5 and the string "1.5" — or an object that
+//! looks like a marker — never hash alike; NULL as `null`. The personal
+//! columns (`actor_label`, `source_ip`, `user_agent`) are not sealed:
+//! redacting them keeps a seal valid.
+//!
+//! Limit: `details` nested deeper than serde_json's recursion limit (128;
+//! jsonb allows more, the application never writes it) cannot be read:
+//! such a row is `FG-SYS-0001 operation=seal.v1 reason=details_unreadable`
+//! and sealing stops at that row.
 
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{Map, Value};
@@ -123,7 +130,7 @@ impl Row {
     pub fn canonical(&self) -> Result<Vec<u8>, ForgeError> {
         let big = |v: Option<i64>| v.map_or(Value::Null, |n| Value::String(n.to_string()));
         let text = |v: Option<&str>| v.map_or(Value::Null, Value::from);
-        let details: Value = serde_json::from_str(&quote_unsafe_numbers(&self.details))
+        let details: Value = serde_json::from_str(&encode_details(&self.details))
             .map_err(|e| unserializable(self.seq, "details_unreadable").with_source(e))?;
         let scope = self.effective_scope.as_ref().map_or(Value::Null, |items| {
             Value::Array(items.iter().map(|i| text(i.as_deref())).collect())
@@ -164,53 +171,115 @@ impl Row {
     }
 }
 
-/// JSON text (as PostgreSQL prints a jsonb) with every number token that is
-/// not an integer within ±2^53−1 put in quotes, verbatim. Strings (keys and
-/// values) are copied unchanged, escapes included.
-pub fn quote_unsafe_numbers(json: &str) -> String {
-    let mut out = String::with_capacity(json.len() + 8);
+/// The marker key of a number kept as its exact text: `{"$n":"1.5"}`.
+pub const NUMBER_MARK: &str = "$n";
+
+/// JSON text (as PostgreSQL prints a jsonb) rewritten so that it parses
+/// into a value hash version 1 can canonicalize without losing anything,
+/// and injectively (two different inputs never give the same output):
+///
+/// - a number token that is an integer within ±2^53−1 stays a number;
+///   every other number token becomes `{"$n":"<token verbatim>"}`;
+/// - every object key that starts with `$` gets one more `$` in front
+///   (`"$n"` → `"$$n"`, `"$$x"` → `"$$$x"`); other keys and every string
+///   value are copied unchanged, escapes included.
+///
+/// Why injective: a rewritten key starts with `$` only if it starts with
+/// `$$`, so no rewritten key is ever `$n` — an object whose only key is
+/// `$n` is a marker and nothing else; a marker holds the number's text
+/// verbatim; a string value stays a string (never an object). Undo: a
+/// marker → the number; otherwise drop one leading `$` of each key that
+/// has one.
+pub fn encode_details(json: &str) -> String {
+    let mut out = String::with_capacity(json.len() + 16);
     let mut chars = json.char_indices().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
+    // true: the container is an object.
+    let mut stack: Vec<bool> = Vec::new();
+    let mut expect_key = false;
     while let Some((i, c)) = chars.next() {
-        if in_string {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
+        match c {
+            '"' => {
+                out.push('"');
+                let rest = json.get(i + 1..).unwrap_or_default();
+                if expect_key && starts_with_dollar(rest) {
+                    out.push('$');
+                }
+                expect_key = false;
+                copy_string_body(&mut chars, &mut out);
             }
-            continue;
-        }
-        if c == '"' {
-            in_string = true;
-            out.push(c);
-            continue;
-        }
-        if c != '-' && !c.is_ascii_digit() {
-            out.push(c);
-            continue;
-        }
-        let mut end = i + c.len_utf8();
-        while let Some(&(j, d)) = chars.peek() {
-            if !(d.is_ascii_digit() || matches!(d, '.' | 'e' | 'E' | '+' | '-')) {
-                break;
+            '{' => {
+                stack.push(true);
+                expect_key = true;
+                out.push(c);
             }
-            end = j + d.len_utf8();
-            chars.next();
-        }
-        let token = json.get(i..end).unwrap_or_default();
-        if is_safe_integer(token) {
-            out.push_str(token);
-        } else {
-            out.push('"');
-            out.push_str(token);
-            out.push('"');
+            '[' => {
+                stack.push(false);
+                expect_key = false;
+                out.push(c);
+            }
+            '}' | ']' => {
+                stack.pop();
+                expect_key = false;
+                out.push(c);
+            }
+            ',' => {
+                expect_key = stack.last().copied().unwrap_or(false);
+                out.push(c);
+            }
+            '-' | '0'..='9' => {
+                let mut end = i + c.len_utf8();
+                while let Some(&(j, d)) = chars.peek() {
+                    if !(d.is_ascii_digit() || matches!(d, '.' | 'e' | 'E' | '+' | '-')) {
+                        break;
+                    }
+                    end = j + d.len_utf8();
+                    chars.next();
+                }
+                let token = json.get(i..end).unwrap_or_default();
+                if is_safe_integer(token) {
+                    out.push_str(token);
+                } else {
+                    out.push_str("{\"");
+                    out.push_str(NUMBER_MARK);
+                    out.push_str("\":\"");
+                    out.push_str(token);
+                    out.push_str("\"}");
+                }
+            }
+            // ':' (a value follows), whitespace, true / false / null.
+            _ => {
+                if c == ':' {
+                    expect_key = false;
+                }
+                out.push(c);
+            }
         }
     }
     out
+}
+
+/// Whether a JSON string whose body starts at `rest` decodes to a string
+/// starting with `$` (written raw or as the escape `$`).
+fn starts_with_dollar(rest: &str) -> bool {
+    rest.starts_with('$')
+        || rest
+            .get(..6)
+            .is_some_and(|e| e.eq_ignore_ascii_case("\\u0024"))
+}
+
+/// Copy a string's body up to and including its closing quote.
+fn copy_string_body(chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>, out: &mut String) {
+    let mut escaped = false;
+    for (_, c) in chars.by_ref() {
+        out.push(c);
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            return;
+        }
+    }
 }
 
 /// `-?(0|[1-9][0-9]*)` within ±2^53−1, not `-0`.
@@ -223,9 +292,8 @@ fn is_safe_integer(token: &str) -> bool {
     canonical && digits.parse::<u64>().is_ok_and(|n| n <= MAX_SAFE_INTEGER)
 }
 
-/// A stored row that hash version 1 cannot express (a jsonb number beyond
-/// the range of a double, for example — only a raw SQL insert can store
-/// one). Sealing stops at that row; the runbook names the cause.
+/// A stored row that hash version 1 cannot express (details nested deeper
+/// than serde_json reads — only a raw SQL insert can store one). Sealing stops at that row; the runbook names the cause.
 fn unserializable(seq: i64, reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
         .with_context("operation", "seal.v1")

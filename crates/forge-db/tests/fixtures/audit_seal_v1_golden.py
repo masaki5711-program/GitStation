@@ -1,6 +1,10 @@
 # Independent computation of the audit seal v1 golden vector (ADR-0018 §4).
-# JCS for these inputs: sorted ASCII keys, no whitespace, UTF-8, integers and
-# 0.5 print identically in Python and ECMAScript.
+# JCS for these inputs: sorted ASCII keys, no whitespace, UTF-8, safe
+# integers print identically in Python and ECMAScript. details numbers other
+# than integers within +-(2^53-1) are {"$n": "<PostgreSQL text>"} and object
+# keys starting with "$" get one more "$" (seal::v1::encode_details), written
+# out by hand below. seal_sha256 covers key_id and kind (ADR-0018 C8
+# amendment).
 import hashlib, hmac, json, struct
 
 def jcs(o):
@@ -21,8 +25,8 @@ rows = [
          effective_scope=["api", None], action="repository.pushed", outcome="denied",
          resource_type="repository", resource_id="7", project_id="3", request_id="req-golden-2",
          error_code="FG-AUTH-0002", occurrences=3,
-         details={"big": "9007199254740993", "neg": -9007199254740991, "ratio": "0.5",
-                  "z": [1, None, True]}),
+         details={"$$n": "lit", "big": {"$n": "9007199254740993"}, "neg": -9007199254740991,
+                  "ratio": {"$n": "0.5"}, "z": [1, None, True]}),
     dict(base, seq="3", occurred_at="2026-10-27T23:59:59.000000Z", actor_kind="system",
          action="system.started", outcome="succeeded", resource_type="instance",
          request_id="boot-1", occurrences=1, details={}),
@@ -33,7 +37,9 @@ for r, h in zip(rows, row_hashes):
     print("    ", h.hex())
 rows_sha = hashlib.sha256(b"".join(row_hashes)).digest()
 genesis = hashlib.sha256(b"forge-audit-genesis").digest()
-seal = hashlib.sha256(struct.pack(">hhqqq", 1, 1, 1, 3, 10) + rows_sha + genesis).digest()
+kind = b"normal"
+seal = hashlib.sha256(struct.pack(">hhhH", 1, 1, 1, len(kind)) + kind
+                      + struct.pack(">qqq", 1, 3, 10) + rows_sha + genesis).digest()
 mac = hmac.new(bytes([0x42]) * 32, seal, hashlib.sha256).digest()
 print("rows_sha256", rows_sha.hex())
 print("genesis    ", genesis.hex())

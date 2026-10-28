@@ -14,13 +14,13 @@ use crate::test_support::*;
 
 const ROW_HASHES: [&str; 3] = [
     "ffdc239bc22901264327d72531b72e620002f558eb96b28021a85d3a94c78fbe",
-    "1403b4bd9017f6a771420b8aca2b087eb77d3ed247215b9ecdef69fa1a6b7baa",
+    "12f28f808d6617185f0a1c14a0a362d1eaa27e2df1e4f1a08ce5b7b27e6b11a6",
     "460370d730a7781f6b6337477ec6e666386ebb7d8501063f65b9186ba1946497",
 ];
-const ROWS_SHA256: &str = "75efaadedd87f004835d6b1c88c00988b5cf3fe8da28a74de45cca5ffdc27bc6";
+const ROWS_SHA256: &str = "b91a3c539539130485addc12fc688e3792a28ce3937bb3c0e65b389ca06a98fc";
 const GENESIS: &str = "ae80e7261da7b20e1b8233263db92262ca20faaa878236f899f103a3b9cf80e1";
-const SEAL_SHA256: &str = "3f1e3aada435f3aa0c0520b40375eb63f75af89f62bb7d6d8bf8f50eb14e1b11";
-const HMAC: &str = "1c7e748919da333d69b7aed65783ca8546c95c658637de1e5834cea7bda026da";
+const SEAL_SHA256: &str = "637193f5c928694172f5862d6dda5b89647b231b67edef3760b20f738146d5bf";
+const HMAC: &str = "a8e7a42f9e3a3a26841fb3ec804e8873b6a44bb51a49f3df6fda9ab44f79e46c";
 /// The script's key: 32 bytes of 0x42, key_id 1.
 pub(crate) fn golden_keys() -> SealKeys {
     SealKeys::parse(&format!("1 {}", "42".repeat(32))).expect("golden key")
@@ -85,7 +85,7 @@ fn row(seq: i64) -> Row {
             error_code: Some(s("FG-AUTH-0002")),
             occurrences: 3,
             details: s(
-                r#"{"z": [1, null, true], "big": 9007199254740993, "neg": -9007199254740991, "ratio": 0.5}"#,
+                r#"{"z": [1, null, true], "$n": "lit", "big": 9007199254740993, "neg": -9007199254740991, "ratio": 0.5}"#,
             ),
             ..base
         },
@@ -104,6 +104,8 @@ fn golden_fields(rows_sha256: chain::Digest32) -> SealFields {
     SealFields {
         hash_version: v1::VERSION,
         seal_epoch: 1,
+        key_id: 1,
+        kind: chain::SealKind::Normal,
         first_seq: 1,
         last_seq: 3,
         events_high_seq: 10,
@@ -168,7 +170,19 @@ fn audit_details_numbers_are_jcs_safe() {
         details(
             r#"{"big": 9007199254740992, "neg": -9007199254740992, "f": 1.0, "e": 1.5e+300, "z": -0}"#
         ),
-        r#"{"big":"9007199254740992","e":"1.5e+300","f":"1.0","neg":"-9007199254740992","z":"-0"}"#
+        r#"{"big":{"$n":"9007199254740992"},"e":{"$n":"1.5e+300"},"f":{"$n":"1.0"},"neg":{"$n":"-9007199254740992"},"z":{"$n":"-0"}}"#
+    );
+    // Beyond a double's range is still expressible (kept as text).
+    assert_eq!(details(r#"{"x": 1e400}"#), r#"{"x":{"$n":"1e400"}}"#);
+    // Keys starting with `$` (raw or escaped) get one more `$`; values and
+    // other keys stay; nested containers too.
+    assert_eq!(
+        details(r#"{"$n": "1.5", "$$a": 1, "$b": 2, "a$": 3, "k": "$n"}"#),
+        r#"{"$$$a":1,"$$b":2,"$$n":"1.5","a$":3,"k":"$n"}"#
+    );
+    assert_eq!(
+        details(r#"{"a": [{"$x": [1.5, {"y": -0.0}]}]}"#),
+        r#"{"a":[{"$$x":[{"$n":"1.5"},{"y":{"$n":"-0.0"}}]}]}"#
     );
     // Digits a double would round away still change the hash.
     let long = |last: char| {
@@ -199,6 +213,34 @@ fn audit_details_numbers_are_jcs_safe() {
     );
     // Key order and whitespace of the stored text do not matter.
     assert_eq!(precise(r#"{"a": 1, "b": 2}"#), precise(r#"{"b":2,"a":1}"#));
+    // Injective: a number never hashes like the equal string, nor like an
+    // object that spells its marker; a safe integer never like its string.
+    let number = precise(r#"{"x": 1.5}"#);
+    assert_ne!(number, precise(r#"{"x": "1.5"}"#));
+    assert_ne!(number, precise(r#"{"x": {"$n": "1.5"}}"#));
+    assert_ne!(number, precise(r#"{"x": {"$$n": "1.5"}}"#));
+    assert_ne!(precise(r#"{"x": 7}"#), precise(r#"{"x": "7"}"#));
+    assert_ne!(
+        precise(r#"{"$a": 1}"#),
+        precise(r#"{"$$a": 1}"#),
+        "escaped keys stay distinct"
+    );
+}
+
+#[test]
+fn details_v1_cannot_read_is_internal_with_its_seq() {
+    let deep = format!("{}1{}", "[".repeat(200), "]".repeat(200));
+    let err = Row {
+        details: format!(r#"{{"x": {deep}}}"#),
+        ..row(3)
+    }
+    .sha256()
+    .expect_err("too deep");
+    assert_eq!(err.code(), ErrorCode::Internal);
+    let text = err.to_string();
+    for part in ["operation=seal.v1", "reason=details_unreadable", "seq=3"] {
+        assert!(text.contains(part), "{text}");
+    }
 }
 
 /// The same rows stored in the database: v1's SELECT reads them back into
@@ -218,7 +260,7 @@ async fn the_database_reads_and_seals_the_golden_rows_into_the_golden_values() {
              resource_type, resource_id, project_id, request_id, error_code, occurrences, details) \
          VALUES ('user_via_service_account', 43, 5, 900, 'alice', 2, 'va-1', ARRAY['api', NULL], \
              'repository.pushed', 'denied', 'repository', 7, 3, 'req-golden-2', 'FG-AUTH-0002', 3, \
-             '{\"big\": 9007199254740993, \"neg\": -9007199254740991, \"ratio\": 0.5, \
+             '{\"$n\": \"lit\", \"big\": 9007199254740993, \"neg\": -9007199254740991, \"ratio\": 0.5, \
                \"z\": [1, null, true]}'); \
          INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
          VALUES ('system', 'system.started', 'succeeded', 'instance', 'boot-1'); \

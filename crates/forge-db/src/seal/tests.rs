@@ -45,7 +45,7 @@ pub(crate) async fn seal_all(t: &FreshDb) -> Vec<Sealed> {
         match seal_pending(&t.db, &golden_keys()).await.expect("seal") {
             SealOutcome::Sealed(s) => out.push(s),
             SealOutcome::UpToDate => return out,
-            SealOutcome::Busy => panic!("nobody else seals"),
+            SealOutcome::Busy | SealOutcome::NotDue => panic!("nobody else seals, no policy"),
         }
     }
 }
@@ -178,32 +178,62 @@ async fn concurrent_seal_pending_callers_do_not_double_seal() {
     let t = FreshDb::migrated().await;
     insert_audit(&t, 50).await;
     number_all(&t).await;
+    // Another session holds the seal lock while every caller starts at the
+    // same moment: all of them must see Busy (and write nothing) first.
+    let mut holder = t.superuser().await;
+    sqlx::raw_sql("BEGIN; SELECT pg_advisory_xact_lock(1718579815, 8);")
+        .execute(&mut holder)
+        .await
+        .expect("hold the seal lock");
+    const CALLERS: usize = 8;
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(CALLERS + 1));
+    let first_round = std::sync::Arc::new(tokio::sync::Barrier::new(CALLERS + 1));
     let mut set = tokio::task::JoinSet::new();
-    for _ in 0..8 {
+    for _ in 0..CALLERS {
         let db = t.db.clone(); // clone: each task holds the pool handles
+        let (start, first_round) = (start.clone(), first_round.clone()); // clone: Arcs
         set.spawn(async move {
             let keys = golden_keys();
-            let mut got = Vec::new();
-            for _ in 0..20 {
+            start.wait().await;
+            let first = seal_pending(&db, &keys).await.expect("seal");
+            first_round.wait().await;
+            let (mut busy, mut got) = (usize::from(first == SealOutcome::Busy), Vec::new());
+            for _ in 0..50 {
                 match seal_pending(&db, &keys).await.expect("seal") {
                     SealOutcome::Sealed(s) => got.push(s.range),
-                    SealOutcome::Busy => tokio::task::yield_now().await,
+                    SealOutcome::Busy => {
+                        busy += 1;
+                        tokio::task::yield_now().await;
+                    }
                     SealOutcome::UpToDate => break,
+                    SealOutcome::NotDue => panic!("no policy"),
                 }
             }
-            got
+            (first, busy, got)
         });
     }
-    let mut seen = BTreeSet::new();
-    while let Some(ranges) = set.join_next().await {
-        for r in ranges.expect("task") {
+    start.wait().await;
+    first_round.wait().await;
+    sqlx::raw_sql("COMMIT")
+        .execute(&mut holder)
+        .await
+        .expect("release");
+    let (mut seen, mut busy) = (BTreeSet::new(), 0);
+    while let Some(joined) = set.join_next().await {
+        let (first, b, ranges) = joined.expect("task");
+        assert_eq!(first, SealOutcome::Busy, "the lock was held");
+        busy += b;
+        for r in ranges {
             for seq in r.first()..=r.last() {
                 assert!(seen.insert(seq), "seq {seq} sealed twice");
             }
         }
     }
-    // Every numbered row is sealed exactly once (a final call finishes a
-    // range a Busy loser left).
+    assert!(
+        busy >= CALLERS,
+        "every caller saw Busy at least once: {busy}"
+    );
+    // Every numbered row is sealed exactly once.
     seal_all(&t).await;
     let high = scalar(&t, "SELECT audit_high_seq FROM forge.event_feed_state").await;
     assert_eq!(
