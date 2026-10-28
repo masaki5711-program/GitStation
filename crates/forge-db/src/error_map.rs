@@ -223,13 +223,18 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     }
 }
 
-/// XF002 comes from the audit-presence trigger (no constraint name) or from
-/// a derived-event check, which names itself in CONSTRAINT (migration
-/// 20261027140000). Any other name is a check this build does not know
-/// (`xf002_unknown`; `constraint` and `db_message` stay in the context).
+/// XF002 comes from the audit-presence trigger of events (no constraint
+/// name), from the audit trigger of a state table (`audited_change`, or
+/// `audited_change_config` for a trigger the ledger does not describe;
+/// migration 20261028100000) or from a derived-event check, which names
+/// itself in CONSTRAINT (migration 20261027140000). Any other name is a
+/// check this build does not know (`xf002_unknown`; `constraint` and
+/// `db_message` stay in the context).
 fn audit_missing_reason(constraint: Option<&str>) -> &'static str {
     match constraint {
         None => "no_audit_row",
+        Some("audited_change") => "audited_change",
+        Some("audited_change_config") => "audited_change_config",
         Some("derived_lineage") => "derived_lineage",
         Some("derived_depth") => "derived_depth",
         Some("derived_fanout") => "derived_fanout",

@@ -12,6 +12,18 @@ fn reason_of(err: &ForgeError) -> String {
 }
 
 #[test]
+fn xf002_from_an_audited_table_trigger_has_its_own_reason() {
+    assert_eq!(
+        audit_missing_reason(Some("audited_change")),
+        "audited_change"
+    );
+    assert_eq!(
+        audit_missing_reason(Some("audited_change_config")),
+        "audited_change_config"
+    );
+}
+
+#[test]
 fn xf002_reasons_follow_the_constraint_and_an_unknown_one_is_not_no_audit_row() {
     assert_eq!(audit_missing_reason(None), "no_audit_row");
     assert_eq!(

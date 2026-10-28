@@ -3,7 +3,7 @@
 ## Trigger
 
 - `error_code=FG-DB-0009` AppendOnlyViolation（ログ、または `forge doctor` の `db.bootstrap`）
-- `error_code=FG-DB-0013` AuditMissing（ログ）: イベントが、同じトランザクションの監査の行なしにコミットされようとして、遅延制約トリガー（`events_audit_present`）が拒否した（SQLSTATE `XF002`）
+- `error_code=FG-DB-0013` AuditMissing（ログ）: イベントが、同じトランザクションの監査の行なしにコミットされようとして、遅延制約トリガー（`events_audit_present`）が拒否した（SQLSTATE `XF002`）。`reason=audited_change` は状態の表（`tables.toml` の kind = audited）への INSERT / UPDATE / DELETE が、同じトランザクションに同じリソースの成功した監査の行を持たず、`audited_change_present` トリガーに拒否された（`table` に表の名前）
 - `forge doctor` が `FAIL  db.bootstrap  FG-DB-0009 …` を出した
 
 ## Impact
@@ -23,6 +23,7 @@
        または `forge_app` / `forge_maint` が `forge_owner`・`forge_seq`・`forge_purge` に届く（ログに `role` と `member_of`）
      - `object_owner`: スキーマ `forge_audit` か、記録の表の所有者が `forge_audit` でない、または表にルールや行のポリシーがある（`object`）
      - `log_triggers`: 記録の表の保護のトリガーがない、別の関数を呼んでいる、種類が違う、`ENABLE ALWAYS` でない、または余分なトリガーがある（`trigger`）
+     - `audited_trigger`: 状態の表の監査トリガー（`forge.audited_change_present`）がない、遅延制約トリガーでない、`ENABLE ALWAYS` でない、`UPDATE OF` の列が「全列から台帳の `unaudited_columns` を除いたもの」と違う、または引数が `tables.toml` と違う（`table`、`detail` に最初に見つかった違い: table_missing / id_column / ledger_column / missing / extra / name / not_deferred_constraint / not_always / when / events / arguments / update_of）。列を足したのにトリガーの列を直さなかったときは `update_of` になる。`guard=privileges` に `detail=audited_table_unlisted` が付くのは、台帳の監査対象の表が doctor の表一覧（`LATER_TABLES` と `expectations()`）にないとき。ビルドの不具合なので `src/bootstrap/schema.rs` を直す
      - `event_triggers`: DDL の記録のイベントトリガーがない、無効、別の関数を呼んでいる、所有者が superuser でない（`trigger`）
      - `function_owner` / `function_body`: 保護の関数の所有者（`forge_audit`、`cluster_identity` は superuser）か本文が出荷したものと違う（`function`）
      - `function_privilege`: 保護の関数の EXECUTE が出荷した状態と違う（`cluster_identity()` は `forge_app`・`forge_seq` だけ、ほかの 2 つはどの forge のロールにもない。`function`・`role`）
@@ -45,7 +46,7 @@
    `SELECT occurred_at, session_user_name, application_name, command_tag, object_type, object_identity FROM forge_audit.ddl_audit ORDER BY id DESC LIMIT 50;`
    同じ `txid` に `forge_audit.bootstrap_log` の行があれば導入の手順の変更。`forge-migrate` で `forge_migrator` ならマイグレーション。それ以外は想定外の変更。
 
-   - FG-DB-0013: `query`（コミットした文の名前）を出したコードを探す。`forge.events` への INSERT は forge-db の `ChangeTx::commit` だけが行う。それ以外の経路は不具合。変更はロールバックされている
+   - FG-DB-0013: `query`（コミットした文の名前）を出したコードを探す。`forge.events` への INSERT は forge-db の `ChangeTx::commit` だけが行う。それ以外の経路は不具合。変更はロールバックされている。`reason=audited_change` なら `table` の表への書き込みを探す。forge-db の型付きコマンド（ChangeTx 経由）以外の経路は不具合。`reason=audited_change_config` はトリガー自体が台帳と合っていない（引数の数、ID 列が整数でない）。書き込みの経路ではなくスキーマの不具合なので、`forge doctor` の `guard=audited_trigger` を見る
 
 ## Mitigate
 

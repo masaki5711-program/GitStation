@@ -7,11 +7,12 @@ use forge_errors::ForgeError;
 use sqlx::postgres::PgConnection;
 
 use super::acl::{compare, table_grants_sql};
+use super::audited::{check_audited_triggers, Ledger};
 use super::guard_missing;
 use crate::read_query_error;
 
 /// The guard functions of the migrated schema.
-const GUARD_FUNCTIONS: &[&str] = &[
+pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.events_guard()",
     "forge.audit_log_guard()",
     "forge.event_feed_state_guard()",
@@ -23,6 +24,8 @@ const GUARD_FUNCTIONS: &[&str] = &[
     "forge.events_lineage()",
     "forge.events_derived_progress()",
     // ── end C5 ──
+    // ── D1: the audit trigger of state tables (migration 20261028100000) ──
+    "forge.audited_change_present()",
 ];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
@@ -368,6 +371,15 @@ pub(super) async fn schema_applied(conn: &mut PgConnection) -> Result<bool, Forg
 }
 
 pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), ForgeError> {
+    check_schema_objects_with(conn, &Ledger::embedded()?).await
+}
+
+/// `check_schema_objects` against a given ledger (tests inject one with
+/// audited probe tables).
+pub(crate) async fn check_schema_objects_with(
+    conn: &mut PgConnection,
+    ledger: &Ledger,
+) -> Result<(), ForgeError> {
     if !schema_applied(conn).await? {
         return Ok(());
     }
@@ -407,6 +419,22 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
     for function in GUARD_FUNCTIONS {
         check_guard_function(conn, function).await?;
     }
+    // D1: the audit trigger of every state table, against the ledger.
+    check_audited_triggers(conn, ledger).await?;
+    // An audited table's owner, rules, row security and exact ACL are
+    // checked like every table's: it must be listed here, or a TRUNCATE
+    // grant (which bypasses its row trigger) would go unnoticed.
+    let expected = expectations();
+    for table in &ledger.audited {
+        let object = format!("forge.{}", table.name);
+        let listed = LATER_TABLES.contains(&table.name.as_str())
+            && expected.iter().any(|(name, _)| *name == object);
+        if !listed {
+            return Err(guard_missing("privileges")
+                .with_context("object", object)
+                .with_context("detail", "audited_table_unlisted"));
+        }
+    }
     for (table, expected) in GUARDED_TRIGGERS {
         // The whole definition (timing, events, level, WHEN, columns,
         // deferral, function) as PostgreSQL prints it, and enabled ALWAYS.
@@ -433,8 +461,8 @@ pub(super) async fn check_schema_objects(conn: &mut PgConnection) -> Result<(), 
             return Err(guard_missing("log_triggers").with_context("trigger", extra));
         }
     }
-    for (table, expected) in expectations() {
-        compare(conn, table, &table_grants_sql(table), &expected).await?;
+    for (table, grants) in expected {
+        compare(conn, table, &table_grants_sql(table), &grants).await?;
     }
     Ok(())
 }

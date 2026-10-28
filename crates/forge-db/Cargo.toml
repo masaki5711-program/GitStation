@@ -20,6 +20,8 @@ sha2.workspace = true
 hmac.workspace = true
 serde_json_canonicalizer.workspace = true
 # ── end C8 ──
+# D1: the table ledger is parsed in production (doctor).
+toml.workspace = true
 tempfile = { workspace = true, optional = true }
 
 [features]
@@ -28,7 +30,6 @@ test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 tempfile.workspace = true
-toml.workspace = true
 # C6: captured JSON logs in the job runner tests.
 tracing-subscriber.workspace = true
 

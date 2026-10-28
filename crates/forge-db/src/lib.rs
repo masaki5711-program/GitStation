@@ -22,6 +22,12 @@
 //! - [`subscribers`] runs internal event subscribers one event per
 //!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
 
+#[cfg(test)]
+mod audited_doctor_tests;
+#[cfg(test)]
+mod audited_edge_tests;
+#[cfg(test)]
+mod audited_tests;
 pub mod bootstrap;
 pub mod change;
 mod error_map;

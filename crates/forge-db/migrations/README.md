@@ -24,3 +24,21 @@ forge_owner (ADR-0018). The root gate `migrations` checks every file:
 A new table also needs its privileges in `src/bootstrap/schema.rs` (doctor
 compares them exactly); a new or replaced guard function is compared with
 its last `CREATE [OR REPLACE] FUNCTION` in these files.
+
+**A state table** (`kind = "audited"`, step D1): declare `audit_resource`,
+`audit_id_column`, `unaudited_columns` and `txn_audited_columns` in the
+ledger, then attach the audit trigger in the same file:
+
+```sql
+CREATE CONSTRAINT TRIGGER audited_change_present
+    AFTER INSERT OR DELETE OR UPDATE OF <every column but unaudited_columns> ON forge.<table>
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION forge.audited_change_present('<audit_resource>', '<audit_id_column>',
+        '<unaudited, comma separated>', '<txn-audited, comma separated>');
+ALTER TABLE forge.<table> ENABLE ALWAYS TRIGGER audited_change_present;
+```
+
+A later migration that adds a column must re-create the trigger with the
+new column in `UPDATE OF` (or list the column as unaudited in the ledger):
+doctor reports `guard=audited_trigger` otherwise. Name the trigger in
+`guarded_changes` as `forge.<table>.audited_change_present`.

@@ -56,7 +56,7 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 `audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
-derived_progress).
+derived_progress / audited_change with `table`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
@@ -122,6 +122,28 @@ changes are FG-DB-0010 before anything is written (rules in
 a plain event committed without an audit row in its transaction is
 FG-DB-0013 (deferred trigger `events_audit_present`, `WHEN caused_by_seq IS NULL`).
 The typed commands (step D) are its only callers.
+
+**State tables** (step D1, ADR-0016 §1): a `tables.toml` entry with
+`kind = "audited"` declares `audit_resource` (literal or `=column`),
+`audit_id_column`, `unaudited_columns` and `txn_audited_columns`. The table
+carries the deferred constraint trigger `forge.audited_change_present` with
+those four arguments and `UPDATE OF` every other column, `ENABLE ALWAYS`: a
+change commits only with a succeeded audit row for the same resource in its
+transaction (txn-audited columns alone: a succeeded audit row of the same
+resource type; a changed
+id or `=column` value: audit rows for the old and the new resource), else
+FG-DB-0013 `reason=audited_change` (`audited_change_config`: the trigger
+does not match the ledger). The id column is an integer column.
+`bootstrap::check` compares each table and trigger with the ledger
+(`bootstrap/audited.rs`; FG-DB-0009 `guard=audited_trigger`, `table`,
+`detail`). The root gate validate-migrations requires the trigger at the end
+of the migration sequence. TRUNCATE bypasses row triggers: an audited table
+must grant it to no role — the table goes into `LATER_TABLES` and its exact
+ACL into `expectations()` in `src/bootstrap/schema.rs` in the migration's
+commit; doctor reports an audited table missing there (FG-DB-0009
+`guard=privileges`, `detail=audited_table_unlisted`).
+The ledger refuses resource columns that are unaudited or txn-audited, and a
+column that is both.
 
 **Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
 `forge.event_feed_state`, `forge.event_subscribers`,
