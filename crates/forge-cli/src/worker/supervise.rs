@@ -2,12 +2,22 @@
 //! [`Runner`] is one run of a task (in production a [`super::Task`] on the
 //! database, in tests a scripted closure).
 //!
-//! Each runner loops: wait (its period, or the backoff after a failure),
-//! then run. Shutdown is noticed while waiting, also in the middle of a
-//! backoff, so an in-flight run (bounded by its own timeout) finishes first
-//! and nothing waits for the rest of a sleep. A dropped shutdown sender
-//! without a shutdown request is an error, not a clean stop: nothing could
-//! stop the worker any more. A task that fails (or panics) stops the others.
+//! Each runner loops: run, then wait — its period, nothing when the run
+//! returned [`Next::Immediately`] (a bounded number of times in a row, see
+//! `backoff`), or the backoff after a failure — then run again. A failed
+//! run is logged by the failure policy (`backoff`) and retried; it never
+//! stops its task or the others.
+//!
+//! Shutdown is noticed only while waiting, also in the middle of a backoff,
+//! so nothing waits for the rest of a sleep; a run in progress when shutdown
+//! is requested finishes first (bounded by its own timeout). A dropped
+//! shutdown sender without a shutdown request is an error, not a clean
+//! stop: nothing could stop the worker any more.
+//!
+//! Only two things end a task with an error: that closed shutdown channel
+//! and a panic. Either one aborts every other task (`JoinSet::abort_all`),
+//! which cancels a sibling's run mid-run at its next `.await` — hence the
+//! cancel-safety requirement of the [`Runner`] contract.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,21 +30,34 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
+pub(crate) use super::backoff::Next;
 use super::backoff::{Backoff, Decision, Signature};
 
-/// One run of a task.
-pub(crate) type RunFuture = Pin<Box<dyn Future<Output = Result<(), ForgeError>> + Send>>;
+/// One run of a task; on success it says when the next run should start.
+pub(crate) type RunFuture = Pin<Box<dyn Future<Output = Result<Next, ForgeError>> + Send>>;
 
 /// A periodic task as the supervisor sees it.
+///
+/// Contract for `run`:
+/// - A run must be cancel-safe (dropping it mid-run must leave no partial
+///   state): the supervisor aborts every task at its next `.await` when one
+///   panics or loses its shutdown channel, and the process may stop at any
+///   time. Work that must be all-or-nothing belongs in one database
+///   transaction, which a dropped connection rolls back.
+/// - A run bounds itself with its own timeout: shutdown waits for a run in
+///   progress.
+/// - A failure is returned, never swallowed: the supervisor logs it (with
+///   `task`, `failures`, `retry_in_ms`) and retries after a backoff.
 pub(crate) struct Runner {
     pub name: &'static str,
     pub period: Duration,
     pub run: Box<dyn FnMut() -> RunFuture + Send>,
 }
 
-/// Run every runner until `shutdown` turns true. The first task error (a
-/// closed shutdown channel, a panic) aborts the other tasks and is returned
-/// for the caller to log once.
+/// Run every runner until `shutdown` turns true. A failed run is retried
+/// inside its task; only a task error (a closed shutdown channel, a panic)
+/// ends a task early. The first one aborts the other tasks — cancelling a
+/// run in progress — and is returned for the caller to log once.
 pub(crate) async fn supervise(
     runners: Vec<Runner>,
     max_backoff: Duration,
@@ -105,7 +128,7 @@ async fn task_loop(
             () = tokio::time::sleep(delay) => {}
         }
         let decision = match (runner.run)().await {
-            Ok(()) => backoff.success(),
+            Ok(next) => backoff.success(next),
             Err(e) => {
                 let d = backoff.failure(Signature::of(&e), Instant::now());
                 if d.log_failure {
@@ -127,10 +150,11 @@ async fn task_loop(
 fn log_recovery(task: &'static str, decision: &Decision, streak_id: &mut Option<RequestId>) {
     if let Some(failures) = decision.recovered_after {
         let id = streak_id.take();
+        // The field is left out (not empty) when the streak has no id.
         tracing::info!(
             task,
             failures,
-            request_id = id.as_ref().map(|r| r.to_string()).unwrap_or_default(),
+            request_id = id.as_ref().map(tracing::field::display),
             "forge.worker.task_recovered"
         );
     }

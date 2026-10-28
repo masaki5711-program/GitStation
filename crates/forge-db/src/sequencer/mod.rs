@@ -176,4 +176,6 @@ mod doctor_tests;
 #[cfg(test)]
 mod failure_tests;
 #[cfg(test)]
+mod idle_tests;
+#[cfg(test)]
 pub(crate) mod tests;

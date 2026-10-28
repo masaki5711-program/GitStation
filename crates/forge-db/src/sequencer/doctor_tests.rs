@@ -212,3 +212,20 @@ async fn audit_rows_count_only_while_audit_sequencing_is_on() {
     assert_eq!(err.code(), ErrorCode::OutboxSequencerLag);
     t.drop_now().await;
 }
+
+#[tokio::test]
+async fn the_backlog_stops_counting_above_the_cap_and_lag_shows_a_floor() {
+    let t = FreshDb::migrated().await;
+    // No sequencer has run: COUNT_CAP + 2 events wait, no heartbeat.
+    insert_events(&t, COUNT_CAP + 2).await;
+    let b = backlog(&t.db).await.expect("backlog").expect("migrated");
+    assert_eq!(
+        b.unsequenced_events,
+        COUNT_CAP + 1,
+        "counting stops at the cap + 1"
+    );
+    let text = b.check_lag().expect_err("lag").to_string();
+    assert!(text.contains("unsequenced_count=100000+"), "{text}");
+    assert!(text.contains("unsequenced_events=100000+"), "{text}");
+    t.drop_now().await;
+}

@@ -1,6 +1,7 @@
 //! The task loop's failure path with scripted runs instead of a database:
 //! what is logged (captured JSON tracing output), when it is logged again,
-//! recovery, shutdown in the middle of a backoff, and a panicking task.
+//! recovery, shutdown in the middle of a backoff, a panicking task, and a
+//! backlog drained in full batches without a period between them.
 //! Time is paused (tokio test-util): no real sleeps.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +13,8 @@ use serde_json::Value;
 use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
 
-use super::supervise::{supervise, RunFuture, Runner};
+use super::after_sequencing;
+use super::supervise::{supervise, Next, RunFuture, Runner};
 
 const PERIOD: Duration = Duration::from_millis(200);
 const MAX: Duration = Duration::from_secs(5);
@@ -97,7 +99,7 @@ fn scripted(mut script: impl FnMut(u32) -> Result<(), ForgeError> + Send + 'stat
         period: PERIOD,
         run: Box::new(move || -> RunFuture {
             n += 1;
-            let result = script(n);
+            let result = script(n).map(|()| Next::AfterPeriod);
             Box::pin(async move { result })
         }),
     }
@@ -265,7 +267,7 @@ async fn a_panicking_task_is_internal_and_aborts_the_other_tasks() {
                     let _flag = flag;
                     started.notify_one();
                     std::future::pending::<()>().await;
-                    Ok(())
+                    Ok(Next::AfterPeriod)
                 })
             }),
         }
@@ -283,4 +285,52 @@ async fn a_panicking_task_is_internal_and_aborts_the_other_tasks() {
     assert!(has("task", "panics"), "{err}");
     assert!(has("reason", "task_panicked"), "{err}");
     assert!(aborted.load(Ordering::SeqCst), "the other task was aborted");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_backlog_larger_than_a_batch_drains_without_waiting_a_period_between_full_batches() {
+    use forge_db::sequencer::{Assigned, BatchSize, SeqRange};
+
+    let batch = BatchSize::MAX;
+    let start = Instant::now();
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let sequencer = {
+        let runs = Arc::clone(&runs);
+        // 2500 waiting rows: two full batches, then 500, then idle.
+        let mut high: i64 = 0;
+        let backlog: i64 = 2500;
+        Runner {
+            name: "sequencer",
+            period: PERIOD,
+            run: Box::new(move || -> RunFuture {
+                let take = (backlog - high).min(i64::from(batch.get()));
+                let assigned = Assigned {
+                    events: SeqRange::new(high + 1, high + take),
+                    audit: None,
+                };
+                high += take;
+                runs.lock()
+                    .expect("runs")
+                    .push((Instant::now().duration_since(start), take));
+                Box::pin(async move { Ok(after_sequencing(assigned, batch)) })
+            }),
+        }
+    };
+    run_for(vec![sequencer], Duration::from_millis(500))
+        .await
+        .expect("clean stop");
+    let runs = runs.lock().expect("runs").clone();
+    assert_eq!(
+        runs.get(..4),
+        Some(
+            &[
+                (Duration::ZERO, 1000),
+                (Duration::ZERO, 1000),
+                (Duration::ZERO, 500),
+                // Not a full batch: back to the period.
+                (PERIOD, 0),
+            ][..]
+        ),
+        "{runs:?}"
+    );
 }

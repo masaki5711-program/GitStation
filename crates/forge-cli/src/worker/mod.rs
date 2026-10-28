@@ -1,10 +1,14 @@
 //! `forge worker` — the background tasks of ADR-0016 §7, until SIGINT /
 //! SIGTERM. Each [`Task`] runs in its own loop (`supervise`): one run, then
-//! a wait (its period, or the backoff after a failure); shutdown is noticed
-//! while waiting, so an in-flight run (bounded by its own timeout) finishes
-//! first. Failure logging and backoff: `backoff`.
+//! a wait (its period, none when the run asked to go on at once, or the
+//! backoff after a failure). A failed run is logged and retried. Shutdown is
+//! noticed while waiting, so a run in progress (bounded by its own timeout)
+//! finishes first; only a panic or a lost shutdown channel aborts the other
+//! tasks mid-run, so every run must be cancel-safe (see `supervise::Runner`).
+//! Failure logging and backoff: `backoff`.
 //!
-//! Tasks today: the outbox sequencer (every 200 ms). The job runner (C6)
+//! Tasks today: the outbox sequencer (every 200 ms, at once again after a
+//! full batch so a backlog drains without a pause). The job runner (C6)
 //! and the audit seal job (C8) become further [`Task`] variants with their
 //! arm in [`Task::run`] and their entry in [`tasks`].
 //!
@@ -14,7 +18,7 @@
 use std::time::Duration;
 
 use forge_core::config::DatabaseConfig;
-use forge_db::sequencer::{self, AuditSequencing, BatchSize};
+use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
 use tokio::sync::watch;
@@ -24,7 +28,7 @@ use crate::runtime::block_on;
 mod backoff;
 mod supervise;
 
-use supervise::{supervise, Runner};
+use supervise::{supervise, Next, Runner};
 
 /// The sequencer's period (ADR-0016 §7).
 const SEQUENCER_PERIOD: Duration = Duration::from_millis(200);
@@ -93,7 +97,7 @@ impl Task {
     }
 
     /// One run, bounded by the callee's own timeout.
-    async fn run(self, db: &Db) -> Result<(), ForgeError> {
+    async fn run(self, db: &Db) -> Result<Next, ForgeError> {
         match self {
             Self::Sequencer => {
                 // Audit rows are not numbered yet: ADR-0018 §5 allows it only
@@ -109,9 +113,20 @@ impl Task {
                         "forge.worker.sequenced"
                     );
                 }
-                Ok(())
+                Ok(after_sequencing(assigned, BatchSize::MAX))
             }
         }
+    }
+}
+
+/// A full batch (of events or audit rows) means more rows may wait: run
+/// again at once instead of after the period.
+fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
+    let full = |r: Option<SeqRange>| r.is_some_and(|r| r.count() >= i64::from(batch.get()));
+    if full(assigned.events) || full(assigned.audit) {
+        Next::Immediately
+    } else {
+        Next::AfterPeriod
     }
 }
 

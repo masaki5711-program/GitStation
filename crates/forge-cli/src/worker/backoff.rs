@@ -5,6 +5,11 @@
 //! visible in the log without flooding it. The next run waits twice as long
 //! each time up to a cap; the first success after a streak is logged and
 //! restores the normal period.
+//!
+//! A successful run may ask for the next one at once ([`Next::Immediately`],
+//! e.g. the sequencer after a full batch); at most [`MAX_IMMEDIATE`] runs in
+//! a row skip the period, then one period is waited, so a task that always
+//! has more work cannot spin.
 
 use std::time::Duration;
 
@@ -14,8 +19,25 @@ use tokio::time::Instant;
 /// A persisting failure is logged again after this long.
 pub(crate) const RELOG_EVERY: Duration = Duration::from_secs(60);
 
+/// Consecutive runs that may start without waiting the period.
+pub(crate) const MAX_IMMEDIATE: u32 = 50;
+
+/// When the next run starts after a successful one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Next {
+    /// After the task's period (the normal case).
+    AfterPeriod,
+    /// At once: the run left work behind (bounded by [`MAX_IMMEDIATE`]).
+    Immediately,
+}
+
 /// What makes two failures "the same" for logging: the code and the context
 /// that names where and why it failed.
+///
+/// Only `operation` / `query` / `reason` take part, and those keys carry a
+/// fixed vocabulary (query names and reason slugs chosen in code, never ids,
+/// counts or user input): otherwise every failure would look new and the
+/// re-log limit would not hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Signature {
     code: ErrorCode,
@@ -58,6 +80,8 @@ pub(crate) struct Backoff {
     failures: u32,
     last: Option<Signature>,
     logged_at: Option<Instant>,
+    /// Runs in a row that started without waiting the period.
+    immediate: u32,
 }
 
 impl Backoff {
@@ -68,16 +92,27 @@ impl Backoff {
             failures: 0,
             last: None,
             logged_at: None,
+            immediate: 0,
         }
     }
 
-    pub(crate) fn success(&mut self) -> Decision {
+    pub(crate) fn success(&mut self, next: Next) -> Decision {
         let recovered_after = (self.failures > 0).then_some(self.failures);
         self.failures = 0;
         self.last = None;
         self.logged_at = None;
+        let delay = match next {
+            Next::Immediately if self.immediate < MAX_IMMEDIATE => {
+                self.immediate += 1;
+                Duration::ZERO
+            }
+            Next::Immediately | Next::AfterPeriod => {
+                self.immediate = 0;
+                self.period
+            }
+        };
         Decision {
-            delay: self.period,
+            delay,
             log_failure: false,
             failures: 0,
             recovered_after,
@@ -95,6 +130,7 @@ impl Backoff {
         }
         self.failures = self.failures.saturating_add(1);
         self.last = Some(signature);
+        self.immediate = 0;
         // period × 2^failures, capped (the shift is bounded before it overflows).
         let factor = 1u32 << self.failures.min(16);
         Decision {
@@ -205,14 +241,35 @@ mod tests {
     fn the_first_success_ends_the_streak_and_restores_the_period() {
         let now = Instant::now();
         let mut b = Backoff::new(PERIOD, MAX);
-        assert_eq!(b.success().recovered_after, None);
+        assert_eq!(b.success(Next::AfterPeriod).recovered_after, None);
         let s = sig(ErrorCode::DbUnavailable, "connect_refused");
         b.failure(s.clone(), now);
         b.failure(s.clone(), now);
-        let ok = b.success();
+        let ok = b.success(Next::AfterPeriod);
         assert_eq!(ok.recovered_after, Some(2));
         assert_eq!(ok.delay, PERIOD);
         assert_eq!(ok.failures, 0);
         assert!(b.failure(s, now).log_failure);
+    }
+
+    #[test]
+    fn immediate_runs_skip_the_period_a_bounded_number_of_times_in_a_row() {
+        let now = Instant::now();
+        let mut b = Backoff::new(PERIOD, MAX);
+        for _ in 0..MAX_IMMEDIATE {
+            assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+        }
+        // The bound: one period is waited, then the count starts again.
+        assert_eq!(b.success(Next::Immediately).delay, PERIOD);
+        assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+        // A normal run resets the count.
+        assert_eq!(b.success(Next::AfterPeriod).delay, PERIOD);
+        for _ in 0..MAX_IMMEDIATE {
+            assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
+        }
+        // So does a failure, whose backoff is never skipped.
+        let s = sig(ErrorCode::DbUnavailable, "connect_refused");
+        assert_eq!(b.failure(s, now).delay, Duration::from_millis(400));
+        assert_eq!(b.success(Next::Immediately).delay, Duration::ZERO);
     }
 }
