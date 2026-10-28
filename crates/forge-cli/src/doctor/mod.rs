@@ -154,20 +154,14 @@ async fn outbox_checks(db: &Db) -> [Check; 2] {
         Ok(Some(b)) => {
             let audit = b.unsequenced_audit.map_or_else(
                 || "audit sequencing off".to_owned(),
-                |n| format!("{n} audit"),
+                |n| format!("{} audit", sequencer::shown(n)),
             );
             let count = ok(
                 "outbox.unsequenced_count",
-                &format!("{} events, {audit}", b.unsequenced_events),
+                &format!("{} events, {audit}", sequencer::shown(b.unsequenced_events)),
             );
             let lag = match b.check_lag() {
-                Ok(()) => ok(
-                    "outbox.sequencer_lag",
-                    &match b.heartbeat_age_ms {
-                        Some(age) => format!("heartbeat {age} ms ago"),
-                        None => "no backlog, no sequencer run yet".to_owned(),
-                    },
-                ),
+                Ok(()) => ok("outbox.sequencer_lag", &lag_ok_detail(&b)),
                 Err(e) => fail("outbox.sequencer_lag", e),
             };
             [count, lag]
@@ -180,6 +174,17 @@ async fn outbox_checks(db: &Db) -> [Check; 2] {
             fail("outbox.unsequenced_count", e),
             skip("outbox.sequencer_lag", "backlog unavailable"),
         ],
+    }
+}
+
+/// The ok detail of `outbox.sequencer_lag`. Without a backlog a stale or
+/// missing heartbeat is not lag, but it is not a running worker either: say
+/// so, so an operator does not read "ok" as "the worker runs".
+fn lag_ok_detail(b: &sequencer::Backlog) -> String {
+    match (b.heartbeat_stale(), b.heartbeat_age_ms) {
+        (false, Some(age)) => format!("heartbeat {age} ms ago"),
+        (true, Some(age)) => format!("no backlog, worker not observed (heartbeat {age} ms ago)"),
+        (_, None) => "no backlog, worker not observed (no heartbeat yet)".to_owned(),
     }
 }
 
@@ -249,5 +254,27 @@ mod tests {
         ];
         let worst = most_severe(checks).expect("a failure");
         assert_eq!(worst.code(), ErrorCode::DbUnavailable);
+    }
+
+    fn backlog(age: Option<i64>) -> sequencer::Backlog {
+        sequencer::Backlog {
+            unsequenced_events: 0,
+            unsequenced_audit: None,
+            heartbeat_age_ms: age,
+            lock_holder_pid: None,
+        }
+    }
+
+    #[test]
+    fn an_idle_lag_check_says_when_the_worker_is_not_observed() {
+        assert_eq!(lag_ok_detail(&backlog(Some(1200))), "heartbeat 1200 ms ago");
+        assert_eq!(
+            lag_ok_detail(&backlog(Some(90_000))),
+            "no backlog, worker not observed (heartbeat 90000 ms ago)"
+        );
+        assert_eq!(
+            lag_ok_detail(&backlog(None)),
+            "no backlog, worker not observed (no heartbeat yet)"
+        );
     }
 }

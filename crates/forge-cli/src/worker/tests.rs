@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use forge_db::sequencer::backlog;
 use forge_db::test_support::FreshDb;
+use forge_errors::ErrorCode;
 use tokio::sync::watch;
 
 use super::run;
@@ -59,13 +60,28 @@ async fn the_worker_numbers_events_until_it_is_told_to_stop() {
 }
 
 #[tokio::test]
-async fn the_worker_stops_when_the_shutdown_sender_is_gone() {
+async fn a_gone_shutdown_sender_stops_the_worker_with_an_internal_error() {
     let t = FreshDb::migrated().await;
     let (stop, stopped) = watch::channel(false);
     drop(stop);
-    tokio::time::timeout(Duration::from_secs(10), run(&t.db, stopped))
+    // Nothing could stop the worker any more: that is a failure, not a
+    // clean shutdown (exit 0 would hide it).
+    let err = tokio::time::timeout(Duration::from_secs(10), run(&t.db, stopped))
         .await
         .expect("stops in time")
-        .expect("clean stop");
+        .expect_err("a closed shutdown channel is an error");
+    assert_eq!(err.code(), ErrorCode::Internal);
+    assert!(
+        err.context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "shutdown_channel_closed"),
+        "{err}"
+    );
+    assert!(
+        err.context()
+            .iter()
+            .any(|(k, v)| *k == "task" && v == "sequencer"),
+        "{err}"
+    );
     t.drop_now().await;
 }

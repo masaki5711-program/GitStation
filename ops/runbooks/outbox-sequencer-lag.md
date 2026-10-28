@@ -20,7 +20,10 @@
    - `heartbeat_age_ms`: 最後にシーケンサーが動いてからの時間。`none` はこの DB で一度も動いていない（導入の直後に `forge worker` を起動していない）
    - `lock_holder_pid`: シーケンサーの advisory lock を持っているセッション。`none` なら誰も持っていない
 2. `forge worker` のプロセスが動いているかを見る（本番: `systemctl status forge-worker`、unit がなければ `ps -ef | grep 'forge worker'`、開発機: 起動したターミナル）。
-3. worker のログを読む。失敗は連続の最初の 1 回だけ記録される（`context` に `task=sequencer` と `retry_in_ms`）。その `error_code` で分ける:
+3. worker のログを読む。失敗は連続の始まりに 1 回、`error_code` か `context` の `operation` / `query` / `reason` が変わったとき、
+   同じ失敗が続く間は 60 秒ごとに記録される（`context` に `task=sequencer`、`failures`（連続の回数）、`retry_in_ms`。同じ連続の行は同じ `request_id`）。
+   `forge worker` が終了コード 1 で止まり `FG-SYS-0001` `reason=shutdown_channel_closed` または `reason=task_panicked` を記録していたら、worker 自体の不具合 → Runbook `internal-error.md`。
+   その `error_code` で分ける:
    - `FG-DB-0001`: DB に接続できない → Runbook `db-unavailable.md`
    - `FG-DB-0002` `query=sequencer.assign_seq` `reason=lock_timeout`: 別のセッションが advisory lock を持ったまま。`lock_holder_pid` を
      `SELECT pid, state, now() - xact_start AS in_tx, application_name FROM pg_stat_activity WHERE pid = <lock_holder_pid>;` で確かめる（`query` 列は表示しない）
@@ -29,6 +32,16 @@
    - 復旧すると `forge.worker.task_recovered`（`failures` 付き）が出る
 4. 番号付けの状態を読む（読み取りのみ）:
    `SELECT high_seq, audit_high_seq, audit_sequencing_enabled, now() - sequencer_heartbeat AS age FROM forge.event_feed_state;`
+
+### 受け入れているリスク（ADR-0016 C4 の Amendment）
+
+- advisory lock（`pg_advisory_xact_lock(1718579815, 1)`）は `forge_app` のどのセッションからも取れる。worker 以外がそれを持ち続けると番号付けが止まる。
+  そのセッションは `lock_holder_pid` に出るので、手順 3 の `pg_stat_activity` で確かめる。
+- `include_audit`（監査の行も番号付けするか）は呼び出し側が決める（ADR-0018 §5）。C9 までは worker が常に `false` を渡す。
+- heartbeat は番号を振ったとき、または 5 秒より古いときだけ書かれる（migration `20261027110100`）。動いている worker の heartbeat は最大で約 5 秒古く、
+  `heartbeat … ms ago` が数秒でも異常ではない（遅れの判定は 30 秒）。
+- `outbox.sequencer_lag` が `ok … worker not observed` のとき、番号を待つ行はないが worker は 30 秒以上動いていない（または一度も動いていない）。
+  worker を常駐させる環境なら手順 2 を確かめる。
 
 ## Mitigate
 

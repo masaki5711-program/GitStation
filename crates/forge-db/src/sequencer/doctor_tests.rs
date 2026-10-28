@@ -123,8 +123,70 @@ async fn a_stale_sequencer_with_a_backlog_is_outbox_sequencer_lag() {
     assert_eq!(err.code(), ErrorCode::OutboxSequencerLag);
     let text = err.to_string();
     assert!(text.contains("unsequenced_count=1"), "{text}");
-    assert!(text.contains("heartbeat_age_ms=6"), "{text}");
+    let age: i64 = text
+        .split("heartbeat_age_ms=")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no heartbeat_age_ms in {text}"));
+    assert!(age >= 60_000, "{text}");
+    assert_eq!(b.heartbeat_age_ms, Some(age));
     t.drop_now().await;
+}
+
+#[tokio::test]
+async fn lock_holder_pid_names_the_session_holding_the_sequencer_lock() {
+    let t = FreshDb::migrated().await;
+    let b = backlog(&t.db).await.expect("backlog").expect("migrated");
+    assert_eq!(b.lock_holder_pid, None);
+    let mut holder = t.superuser().await;
+    let mut tx = holder.begin().await.expect("begin");
+    let pid: i32 = sqlx::query_scalar(
+        "SELECT pg_backend_pid() FROM (SELECT pg_advisory_xact_lock(1718579815, 1)) AS l",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .expect("hold the sequencer lock");
+    let b = backlog(&t.db).await.expect("backlog").expect("migrated");
+    assert_eq!(b.lock_holder_pid, Some(pid));
+    // Another advisory lock (same first key, other second key) is not it.
+    tx.commit().await.expect("release");
+    let mut tx = holder.begin().await.expect("begin");
+    sqlx::query("SELECT pg_advisory_xact_lock(1718579815, 2)")
+        .execute(&mut *tx)
+        .await
+        .expect("another lock");
+    let b = backlog(&t.db).await.expect("backlog").expect("migrated");
+    assert_eq!(b.lock_holder_pid, None);
+    tx.commit().await.expect("release");
+    let b = backlog(&t.db).await.expect("backlog").expect("migrated");
+    assert_eq!(b.lock_holder_pid, None);
+    // It reaches the lag error too.
+    insert_events(&t, 1).await;
+    let mut tx = holder.begin().await.expect("begin");
+    sqlx::query("SELECT pg_advisory_xact_lock(1718579815, 1)")
+        .execute(&mut *tx)
+        .await
+        .expect("hold again");
+    let err = backlog(&t.db)
+        .await
+        .expect("backlog")
+        .expect("migrated")
+        .check_lag()
+        .expect_err("never ran, rows wait");
+    assert!(
+        err.to_string().contains(&format!("lock_holder_pid={pid}")),
+        "{err}"
+    );
+    tx.commit().await.expect("release");
+    t.drop_now().await;
+}
+
+#[test]
+fn counts_above_the_cap_are_shown_as_a_floor() {
+    assert_eq!(shown(5), "5");
+    assert_eq!(shown(COUNT_CAP), "100000");
+    assert_eq!(shown(COUNT_CAP + 1), "100000+");
 }
 
 #[tokio::test]

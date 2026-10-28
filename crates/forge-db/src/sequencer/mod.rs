@@ -15,7 +15,7 @@ use crate::{query_error, Db};
 
 mod lag;
 
-pub use lag::{backlog, Backlog, LAG_AFTER};
+pub use lag::{backlog, shown, Backlog, COUNT_CAP, LAG_AFTER};
 
 /// The channel `run_once` notifies; the payload is the batch's last seq.
 pub const CHANNEL: &str = "forge_events_sequenced";
@@ -173,5 +173,7 @@ fn range_of(
 
 #[cfg(test)]
 mod doctor_tests;
+#[cfg(test)]
+mod failure_tests;
 #[cfg(test)]
 pub(crate) mod tests;

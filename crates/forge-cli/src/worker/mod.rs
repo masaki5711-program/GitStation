@@ -1,7 +1,8 @@
 //! `forge worker` — the background tasks of ADR-0016 §7, until SIGINT /
-//! SIGTERM. Each [`Task`] runs in its own loop: one run, then a wait (its
-//! period, or the backoff after a failure); shutdown is noticed between
-//! runs, so an in-flight run (bounded by its own timeout) finishes first.
+//! SIGTERM. Each [`Task`] runs in its own loop (`supervise`): one run, then
+//! a wait (its period, or the backoff after a failure); shutdown is noticed
+//! while waiting, so an in-flight run (bounded by its own timeout) finishes
+//! first. Failure logging and backoff: `backoff`.
 //!
 //! Tasks today: the outbox sequencer (every 200 ms). The job runner (C6)
 //! and the audit seal job (C8) become further [`Task`] variants with their
@@ -13,18 +14,17 @@
 use std::time::Duration;
 
 use forge_core::config::DatabaseConfig;
-use forge_core::{telemetry, RequestId};
 use forge_db::sequencer::{self, AuditSequencing, BatchSize};
 use forge_db::{Db, MIGRATOR};
-use forge_errors::{ErrorCode, ForgeError};
+use forge_errors::ForgeError;
 use tokio::sync::watch;
-use tokio::task::JoinSet;
 
 use crate::runtime::block_on;
 
 mod backoff;
+mod supervise;
 
-use backoff::{Backoff, Decision};
+use supervise::{supervise, Runner};
 
 /// The sequencer's period (ADR-0016 §7).
 const SEQUENCER_PERIOD: Duration = Duration::from_millis(200);
@@ -49,6 +49,7 @@ pub fn worker(database: &DatabaseConfig) -> Result<String, ForgeError> {
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
+        // A failure is logged once by the CLI boundary (main::report).
         result.map(|()| String::new())
     })
 }
@@ -78,6 +79,19 @@ impl Task {
         }
     }
 
+    /// The task as the supervisor runs it, with its own pool handles.
+    fn runner(self, db: &Db) -> Runner {
+        let db = db.clone(); // clone: pool handles (Arc inside), one per task
+        Runner {
+            name: self.name(),
+            period: self.period(),
+            run: Box::new(move || {
+                let db = db.clone(); // clone: each run future owns a pool handle
+                Box::pin(async move { self.run(&db).await })
+            }),
+        }
+    }
+
     /// One run, bounded by the callee's own timeout.
     async fn run(self, db: &Db) -> Result<(), ForgeError> {
         match self {
@@ -101,78 +115,13 @@ impl Task {
     }
 }
 
-/// Run every task until `shutdown` turns true (or its sender is gone).
+/// Run every task until `shutdown` turns true (see `supervise`).
 pub(crate) async fn run(db: &Db, shutdown: watch::Receiver<bool>) -> Result<(), ForgeError> {
-    let mut set = JoinSet::new();
-    for task in tasks() {
-        let db = db.clone(); // clone: pool handles (Arc inside), one per task
-        let shutdown = shutdown.clone(); // clone: one receiver per task
-        set.spawn(task_loop(task, db, shutdown));
-    }
-    let mut outcome = Ok(());
-    while let Some(joined) = set.join_next().await {
-        if let Err(e) = joined {
-            // A task panicked: stop the others and report it.
-            set.abort_all();
-            if outcome.is_ok() && !e.is_cancelled() {
-                outcome = Err(ForgeError::new(ErrorCode::Internal)
-                    .with_context("operation", "worker_task")
-                    .with_source(e));
-            }
-        }
-    }
-    outcome
+    let runners = tasks().into_iter().map(|task| task.runner(db)).collect();
+    supervise(runners, MAX_BACKOFF, shutdown).await
 }
 
-async fn task_loop(task: Task, db: Db, mut shutdown: watch::Receiver<bool>) {
-    let mut backoff = Backoff::new(task.period(), MAX_BACKOFF);
-    // Logs of one failure streak share a request id.
-    let mut streak_id: Option<RequestId> = None;
-    let mut delay = Duration::ZERO;
-    loop {
-        if *shutdown.borrow() {
-            return;
-        }
-        tokio::select! {
-            // Cancel-safe: changed() only marks the value seen; sleep restarts.
-            changed = shutdown.changed() => {
-                if changed.is_err() {
-                    return;
-                }
-                continue;
-            }
-            () = tokio::time::sleep(delay) => {}
-        }
-        let decision = match task.run(&db).await {
-            Ok(()) => backoff.success(),
-            Err(e) => {
-                let d = backoff.failure(e.code());
-                if d.log_failure {
-                    let id = streak_id.get_or_insert_with(RequestId::generate);
-                    let e = e
-                        .with_context("task", task.name())
-                        .with_context("retry_in_ms", d.delay.as_millis());
-                    telemetry::log_failure(&e, id);
-                }
-                d
-            }
-        };
-        log_recovery(task, &decision, &mut streak_id);
-        delay = decision.delay;
-    }
-}
-
-fn log_recovery(task: Task, decision: &Decision, streak_id: &mut Option<RequestId>) {
-    if let Some(failures) = decision.recovered_after {
-        let id = streak_id.take();
-        tracing::info!(
-            task = task.name(),
-            failures,
-            request_id = id.as_ref().map(|r| r.to_string()).unwrap_or_default(),
-            "forge.worker.task_recovered"
-        );
-    }
-}
-
+#[cfg(test)]
+mod loop_tests;
 #[cfg(test)]
 mod tests;

@@ -171,7 +171,7 @@ async fn audit_rows_are_numbered_only_when_enabled_and_requested() {
 }
 
 #[tokio::test]
-async fn the_first_run_creates_the_feed_state_and_every_run_beats_the_heartbeat() {
+async fn the_first_run_creates_the_feed_state_and_a_stale_heartbeat_is_beaten_even_when_idle() {
     let t = FreshDb::migrated().await;
     assert_eq!(
         scalar(&t, "SELECT count(*) FROM forge.event_feed_state").await,

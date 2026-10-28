@@ -600,3 +600,11 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - **`event_feed_state` の行は `assign_seq` の最初の呼び出しが作る**（advisory lock の中で、`forge_audit.cluster_identity()` と新しい `epoch`）。その表の保護のトリガーは UPDATE・DELETE だけを見るので、
   `forge_seq` の INSERT は通る（行は主キーで 1 行だけ）。`forge_app` は INSERT を持たない。
 - **LISTEN の接続（`Db::listen_options()`）は C5 に送る**: シーケンサーは LISTEN しない。最初の LISTEN の利用者は購読者（C5）。
+- **C4 のレビューの後（2026-10-28）**:
+  - 何も待っていない間はシーケンサーは書かない: `forge.assign_seq` は待つ行がなく heartbeat が 5 秒より新しいとき、`event_feed_state` を更新せずに戻る
+    （migration `20261027110100_outbox_sequencer_idle.sql`。関数の所有者 `forge_seq` として置き換える）。heartbeat は番号を振ったときか 5 秒より古いときだけ書かれる。
+  - worker の失敗の記録: 連続の始まり、コードか `operation` / `query` / `reason` が変わったとき、同じ失敗が続く間は 60 秒ごと（`failures` と同じ `request_id`）。
+    shutdown の送り手が shutdown を要求せずに消えたら `FG-SYS-0001` `reason=shutdown_channel_closed` で終了コード 1（正常終了にしない）。
+  - **受け入れたリスク**: (1) advisory lock は `forge_app` のどのセッションからも取れるので、worker 以外が持ち続けると番号付けが止まる。
+    `lock_holder_pid`（`forge doctor` と FG-DB-0005 の `context`）で見える。(2) `include_audit` は呼び出し側が決める（ADR-0018 §5、C9 までは常に `false`）。
+    (3) heartbeat は最大で約 5 秒古い（遅れの判定 30 秒に対して十分小さい）。
