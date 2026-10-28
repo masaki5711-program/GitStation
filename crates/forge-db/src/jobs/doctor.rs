@@ -2,13 +2,14 @@
 //!
 //! - `jobs.dead` — `FG-DB-0006 reason=dead_lettered` when a job died within
 //!   [`DEAD_WINDOW`] (older dead rows are only counted).
-//! - `jobs.expired_leases` — `FG-DB-0007 reason=reaper_behind` when a lease
+//! - `jobs.expired_leases` — `FG-DB-0017 reason=reaper_behind` when a lease
 //!   expired more than [`LEASE_GRACE`] ago and is still `running`: no reaper
 //!   runs (it would have reaped it within 30 s).
-//! - `jobs.queue_depth` — `FG-DB-0006 reason=queue_depth` when a kind has
+//! - `jobs.queue_depth` — `FG-DB-0017 reason=queue_depth` when a kind has
 //!   more than [`QUEUE_DEPTH_ALERT`] ready jobs (the queue is misused, see
 //!   the module docs), `reason=queue_wait` when its oldest ready job waits
-//!   longer than [`QUEUE_WAIT_ALERT`] (no runner claims the kind).
+//!   longer than [`QUEUE_WAIT_ALERT`] (no runner claims the kind). Counted
+//!   per kind (bounded), the oldest ready job per kind via `jobs_ready_kind`.
 
 use std::time::Duration;
 
@@ -25,6 +26,8 @@ pub const LEASE_GRACE: Duration = Duration::from_secs(60);
 pub const QUEUE_DEPTH_ALERT: i64 = 1000;
 /// A ready job waiting longer than this is an alert.
 pub const QUEUE_WAIT_ALERT: Duration = Duration::from_secs(600);
+/// At most this many kinds are read (the queue has tens).
+const KINDS_CAP: i64 = 200;
 
 /// The newest dead job of the window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +53,7 @@ pub struct ExpiredLease {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindDepth {
     pub kind: String,
-    /// At most `COUNT_CAP + 1` over all kinds.
+    /// At most `COUNT_CAP + 1` per kind.
     pub ready: i64,
     pub oldest_wait_ms: i64,
 }
@@ -91,7 +94,7 @@ impl JobsHealth {
         let Some(oldest) = self.oldest_expired.as_ref() else {
             return Ok(());
         };
-        Err(ForgeError::new(ErrorCode::JobLeaseExpired)
+        Err(ForgeError::new(ErrorCode::JobQueueBacklog)
             .with_context("reason", "reaper_behind")
             .with_context("expired_leases", shown(self.expired_leases))
             .with_context("job_id", oldest.job_id)
@@ -104,7 +107,7 @@ impl JobsHealth {
     /// The first kind over a threshold (depth before wait).
     pub fn check_queue_depth(&self) -> Result<(), ForgeError> {
         let over = |reason: &'static str, k: &KindDepth| {
-            ForgeError::new(ErrorCode::JobDeadLettered)
+            ForgeError::new(ErrorCode::JobQueueBacklog)
                 .with_context("reason", reason)
                 .with_context("kind", &k.kind)
                 .with_context("ready", shown(k.ready))
@@ -189,14 +192,31 @@ pub async fn health(db: &Db) -> Result<Option<JobsHealth>, ForgeError> {
         .fetch_one(&mut *conn)
         .await
         .map_err(|e| read_query_error("jobs.health_leases", e))?;
+        // Each kind with ready jobs (a skip scan over jobs_ready_kind), then
+        // per kind a bounded count and its oldest ready job.
         let depth: Vec<(String, i64, i64)> = sqlx::query_as(
-            "SELECT kind, pg_catalog.count(*), \
-                    (EXTRACT(epoch FROM pg_catalog.now() - min(run_after)) * 1000)::bigint \
-             FROM (SELECT kind, run_after FROM ONLY forge.jobs \
-                   WHERE state = 'queued' AND run_after <= pg_catalog.now() LIMIT $1) AS r \
-             GROUP BY kind ORDER BY kind",
+            "WITH RECURSIVE kinds(kind) AS ( \
+                 (SELECT j.kind FROM ONLY forge.jobs AS j \
+                   WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
+                   ORDER BY j.kind LIMIT 1) \
+                 UNION ALL \
+                 SELECT (SELECT j.kind FROM ONLY forge.jobs AS j \
+                          WHERE j.state = 'queued' AND j.run_after <= pg_catalog.now() \
+                            AND j.kind > k.kind ORDER BY j.kind LIMIT 1) \
+                   FROM kinds AS k WHERE k.kind IS NOT NULL) \
+             SELECT k.kind, \
+                    (SELECT pg_catalog.count(*) FROM (SELECT 1 FROM ONLY forge.jobs AS j \
+                      WHERE j.state = 'queued' AND j.kind = k.kind \
+                        AND j.run_after <= pg_catalog.now() LIMIT $1) AS w), \
+                    (SELECT (EXTRACT(epoch FROM pg_catalog.now() - j.run_after) * 1000)::bigint \
+                       FROM ONLY forge.jobs AS j \
+                      WHERE j.state = 'queued' AND j.kind = k.kind \
+                        AND j.run_after <= pg_catalog.now() \
+                      ORDER BY j.run_after LIMIT 1) \
+             FROM kinds AS k WHERE k.kind IS NOT NULL ORDER BY k.kind LIMIT $2",
         )
         .bind(cap)
+        .bind(KINDS_CAP)
         .fetch_all(&mut *conn)
         .await
         .map_err(|e| read_query_error("jobs.health_depth", e))?;

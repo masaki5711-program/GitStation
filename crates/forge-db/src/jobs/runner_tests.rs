@@ -13,11 +13,11 @@ use super::tests::{expire, kind, new_job, queued, ready_now, state};
 use super::*;
 use crate::test_support::*;
 
-type Script = Arc<dyn Fn(ClaimedJob) -> JobFuture + Send + Sync>;
+pub(crate) type Script = Arc<dyn Fn(ClaimedJob) -> JobFuture + Send + Sync>;
 
-struct Scripted {
-    kind: JobKind,
-    run: Script,
+pub(crate) struct Scripted {
+    pub(crate) kind: JobKind,
+    pub(crate) run: Script,
 }
 
 impl JobHandler for Scripted {
@@ -29,14 +29,14 @@ impl JobHandler for Scripted {
     }
 }
 
-fn runner(t: &FreshDb, k: &str, run: Script) -> JobRunner {
+pub(crate) fn runner(t: &FreshDb, k: &str, run: Script) -> JobRunner {
     let mut r = JobRunner::new(t.db.clone(), WorkerId::generate());
     r.register(Arc::new(Scripted { kind: kind(k), run }))
         .expect("register");
     r
 }
 
-fn has(err: &ForgeError, key: &str, value: &str) -> bool {
+pub(crate) fn has(err: &ForgeError, key: &str, value: &str) -> bool {
     err.context().iter().any(|(k, v)| *k == key && v == value)
 }
 
@@ -183,7 +183,7 @@ async fn a_job_that_fails_max_attempts_times_is_dead_and_reported() {
 }
 
 /// Sets the flag when dropped (the handler's future was dropped).
-struct DropFlag(Arc<AtomicBool>);
+pub(crate) struct DropFlag(pub(crate) Arc<AtomicBool>);
 
 impl Drop for DropFlag {
     fn drop(&mut self) {
@@ -238,6 +238,8 @@ async fn a_dropped_run_leaves_its_job_to_the_reaper() {
             assert_reason(e, ErrorCode::JobLeaseExpired, "lease_expired");
             assert!(has(e, "worker_id", r.worker_id().as_str()), "{e}");
             assert!(has(e, "attempt", "1"), "{e}");
+            assert!(has(e, "job_id", &again.get().to_string()), "{e}");
+            assert!(has(e, "origin_request_id", "req-job-origin"), "{e}");
         }
         other => panic!("{other:?}"),
     }
@@ -258,8 +260,38 @@ async fn a_dropped_run_leaves_its_job_to_the_reaper() {
             assert_reason(e, ErrorCode::JobDeadLettered, "lease_expired");
             assert!(has(e, "last_error_code", "FG-DB-0007"), "{e}");
             assert!(has(e, "job_id", &last.get().to_string()), "{e}");
+            assert!(has(e, "origin_request_id", "req-job-origin"), "{e}");
         }
         other => panic!("{other:?}"),
     }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_permanent_failure_is_dead_at_the_first_attempt() {
+    let t = FreshDb::migrated().await;
+    let id = queued(&t, &new_job("test.a", None, 5, T)).await;
+    let r = runner(
+        &t,
+        "test.a",
+        Arc::new(|_| {
+            Box::pin(async {
+                Err(JobFailure::permanent(
+                    ForgeError::new(ErrorCode::Internal).with_context("reason", "target_gone"),
+                ))
+            })
+        }),
+    );
+    match r.run_once().await.expect("run") {
+        Some(Ran::Dead { job_id, report }) => {
+            assert_eq!(job_id, id);
+            assert_reason(&report, ErrorCode::JobDeadLettered, "permanent_failure");
+            assert!(has(&report, "attempts", "1"), "{report}");
+            assert!(has(&report, "last_error_code", "FG-SYS-0001"), "{report}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let (st, attempts, _, _) = state(&t, id).await;
+    assert_eq!((st.as_str(), attempts), ("dead", 1));
     t.drop_now().await;
 }

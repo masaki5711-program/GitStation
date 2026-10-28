@@ -42,7 +42,10 @@ pub async fn enqueue(db: &Db, job: &NewJob) -> Result<Enqueued, ForgeError> {
 }
 
 /// Insert a queued job on `conn` (inside the caller's transaction, e.g.
-/// `ChangeTx::enqueue_job`: rolled back with it).
+/// `ChangeTx::enqueue_job`: rolled back with it). A key held by a queued,
+/// running or succeeded job of the kind dedups; a dead one does not, so the
+/// work of a dead job can be enqueued again (index `jobs_dedup`, migration
+/// `20261027120000`).
 pub(crate) async fn enqueue_on(
     conn: &mut PgConnection,
     job: &NewJob,
@@ -51,7 +54,8 @@ pub(crate) async fn enqueue_on(
         "INSERT INTO forge.jobs (kind, payload, state, max_attempts, timeout_ms, dedup_key, \
          origin_request_id, origin_event_seq) \
          VALUES ($1, $2::jsonb, 'queued', $3, $4, $5, $6, $7) \
-         ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING \
+         ON CONFLICT (kind, dedup_key) WHERE dedup_key IS NOT NULL AND state <> 'dead' \
+         DO NOTHING \
          RETURNING id",
     )
     .bind(job.kind.as_str())
@@ -113,7 +117,7 @@ pub(crate) async fn claim_on(
     )
     .bind(worker.as_str())
     .bind(&kinds)
-    .bind(i32::try_from(super::LEASE_SLACK.as_millis()).unwrap_or(30_000))
+    .bind(super::LEASE_SLACK_MS)
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("jobs.claim", e))?;
@@ -250,10 +254,40 @@ pub async fn fail(db: &Db, job: &ClaimedJob, failure: &JobFailure) -> Result<Fai
 
 type ReapRow = (i64, String, Option<String>, i32, i32, String, bool);
 
+/// Hand a claimed job back at shutdown, as if it had not been claimed:
+/// `queued`, ready now, `attempts - 1` (a shutdown is not the job's fault),
+/// no lease — only while this worker still holds the lease of this attempt
+/// (`Ok(false)`: fenced, nothing changed).
+pub async fn release(db: &Db, job: &ClaimedJob) -> Result<bool, ForgeError> {
+    let lease = &job.lease;
+    let done = db
+        .within("jobs.release", async {
+            sqlx::query(
+                "UPDATE ONLY forge.jobs SET state = 'queued', lease_until = NULL, \
+                        worker_id = NULL, run_after = pg_catalog.now(), attempts = attempts - 1 \
+                  WHERE id = $1 AND state = 'running' AND worker_id = $2 AND attempts = $3",
+            )
+            .bind(lease.job_id.get())
+            .bind(lease.worker_id.as_str())
+            .bind(lease.attempt)
+            .execute(db.write_pool())
+            .await
+            .map_err(|e| query_error("jobs.release", e))
+        })
+        .await?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// End expired leases in ONE statement: dead when the attempts are used up
 /// (`last_error_code = FG-DB-0007`), otherwise queued after the backoff.
 /// Rows a worker is settling right now (locked) are left for the next run.
+/// At most [`REAP_BATCH`] per call.
 pub async fn reap(db: &Db) -> Result<Vec<ReapedJob>, ForgeError> {
+    reap_at_most(db, REAP_BATCH).await
+}
+
+/// [`reap`] with another limit (tests).
+pub(crate) async fn reap_at_most(db: &Db, limit: i64) -> Result<Vec<ReapedJob>, ForgeError> {
     let rows: Vec<ReapRow> = db
         .within("jobs.reap", async {
             sqlx::query_as(concat!(
@@ -277,7 +311,7 @@ pub async fn reap(db: &Db) -> Result<Vec<ReapedJob>, ForgeError> {
                  RETURNING j.id, j.kind, j.worker_id, j.attempts, j.max_attempts, \
                            j.origin_request_id, j.state = 'dead'"
             ))
-            .bind(REAP_BATCH)
+            .bind(limit)
             .fetch_all(db.write_pool())
             .await
             .map_err(|e| query_error("jobs.reap", e))

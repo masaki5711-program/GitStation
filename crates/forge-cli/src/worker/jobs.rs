@@ -8,10 +8,11 @@
 //! nothing — it must still run without error.
 //!
 //! Shutdown: a job may run for up to its timeout (≤ 1 h), longer than a
-//! stop should wait. A job in progress gets [`SHUTDOWN_GRACE`]; after that
-//! its run is dropped (the handler's task is aborted, see
-//! `forge_db::jobs::JobRunner`). The job keeps its lease, which expires, and
-//! the next reaper queues it again — the attempt counts.
+//! stop should wait. A job in progress gets [`SHUTDOWN_GRACE`]; then its
+//! handler is aborted and, once it has ended, the job is handed back
+//! (`queued`, ready now, the attempt not counted — a shutdown is not the
+//! job's fault; `FG-DB-0007 reason=released_on_shutdown`). See
+//! `forge_db::jobs::JobRunner::run_once_until`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,44 +35,32 @@ pub(crate) fn handlers() -> Vec<Arc<dyn JobHandler>> {
     Vec::new()
 }
 
-/// One run of the job runner: one job (or none), bounded on shutdown by
-/// `grace`.
+/// One run of the job runner: one job (or none); a shutdown request gives
+/// the job in progress `grace`, then releases it.
 pub(crate) async fn run_job(
     jobs: &JobRunner,
     grace: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<Next, ForgeError> {
-    let run = jobs.run_once();
-    tokio::pin!(run);
-    // `false`: the channel closed without a request (the task loop reports
-    // it); the watch guard is dropped inside, never held across an await.
-    let stop_requested = async move { shutdown.wait_for(|stop| *stop).await.is_ok() };
-    tokio::select! {
-        ran = &mut run => after_job(ran?),
-        // A closed channel disables this branch.
-        true = stop_requested => {
-            match tokio::time::timeout(grace, &mut run).await {
-                Ok(ran) => after_job(ran?),
-                Err(_) => {
-                    tracing::info!(
-                        task = "job_runner",
-                        worker_id = jobs.worker_id().as_str(),
-                        grace_ms = grace.as_millis(),
-                        "forge.worker.job_abandoned"
-                    );
-                    Ok(Next::AfterPeriod)
-                }
-            }
+    let stop = async move {
+        // The watch guard is dropped inside this statement, never held
+        // across an await. A closed channel without a request never stops
+        // the run (the task loop reports the channel).
+        let closed = shutdown.wait_for(|stop| *stop).await.is_err();
+        if closed {
+            std::future::pending::<()>().await;
         }
-    }
-}
-
-/// A job ran: more may be ready, look again at once.
-fn after_job(ran: Option<Ran>) -> Result<Next, ForgeError> {
-    Ok(match ran {
-        Some(Ran::Succeeded(_) | Ran::Retrying { .. } | Ran::Dead { .. } | Ran::Fenced(_)) => {
-            Next::Immediately
-        }
+    };
+    Ok(match jobs.run_once_until(stop, grace).await? {
+        // A job ran: more may be ready, look again at once.
+        Some(
+            Ran::Succeeded(_)
+            | Ran::Retrying { .. }
+            | Ran::Dead { .. }
+            | Ran::Fenced(_)
+            | Ran::Released { .. }
+            | Ran::LeftLeased { .. },
+        ) => Next::Immediately,
         None => Next::AfterPeriod,
     })
 }

@@ -163,8 +163,8 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
 }
 
 // ── C6: the job queue ────────────────────────────────────────────────────
-/// `jobs.dead` (`FG-DB-0006`), `jobs.expired_leases` (`FG-DB-0007`) and
-/// `jobs.queue_depth` (`FG-DB-0006`), ADR-0016 §7.
+/// `jobs.dead` (`FG-DB-0006`), `jobs.expired_leases` and `jobs.queue_depth`
+/// (`FG-DB-0017`), ADR-0016 §7.
 async fn job_checks(db: &Db) -> [Check; 3] {
     const NAMES: [&str; 3] = ["jobs.dead", "jobs.expired_leases", "jobs.queue_depth"];
     let h = match jobs::health(db).await {

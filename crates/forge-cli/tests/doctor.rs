@@ -236,7 +236,7 @@ fn doctor_reports_a_recent_dead_job_and_an_unreaped_lease() {
         assert!(dead.contains(part), "missing {part:?} in {dead:?}");
     }
     let leases = line("jobs.expired_leases");
-    for part in ["FG-DB-0007", "reason=reaper_behind", "worker_id=w1-gone"] {
+    for part in ["FG-DB-0017", "reason=reaper_behind", "worker_id=w1-gone"] {
         assert!(leases.contains(part), "missing {part:?} in {leases:?}");
     }
     assert!(text.contains("ok    jobs.queue_depth"), "{text}");
@@ -244,7 +244,7 @@ fn doctor_reports_a_recent_dead_job_and_an_unreaped_lease() {
         !text.contains("secret_marker"),
         "payloads stay out:\n{text}"
     );
-    // The alert outranks the warning.
+    // Both alert; the earlier check (jobs.dead) is the one printed.
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("[FG-DB-0006]"), "{err}");
     rt.block_on(t.drop_now());

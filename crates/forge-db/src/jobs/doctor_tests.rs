@@ -1,6 +1,6 @@
 //! What `forge doctor` reports about the queue: recent dead jobs
-//! (FG-DB-0006), expired leases nobody reaped (FG-DB-0007), queue depth and
-//! wait per kind (FG-DB-0006).
+//! (FG-DB-0006); unreaped leases and queue depth and wait per kind
+//! (FG-DB-0017).
 
 use std::time::Duration;
 
@@ -90,7 +90,7 @@ async fn a_lease_nobody_reaped_is_reported() {
         .await
         .check_expired_leases()
         .expect_err("expired");
-    assert_reason(&err, ErrorCode::JobLeaseExpired, "reaper_behind");
+    assert_reason(&err, ErrorCode::JobQueueBacklog, "reaper_behind");
     let text = err.to_string();
     assert!(
         text.contains(&format!("worker_id={}", w.as_str())),
@@ -124,7 +124,7 @@ async fn a_deep_or_waiting_queue_is_reported_per_kind() {
         .await
         .check_queue_depth()
         .expect_err("too deep");
-    assert_reason(&err, ErrorCode::JobDeadLettered, "queue_depth");
+    assert_reason(&err, ErrorCode::JobQueueBacklog, "queue_depth");
     assert!(err.to_string().contains("kind=test.fleet"), "{err}");
     t.exec_superuser("DELETE FROM forge.jobs WHERE kind = 'test.fleet'")
         .await;
@@ -133,7 +133,22 @@ async fn a_deep_or_waiting_queue_is_reported_per_kind() {
         .await
         .check_queue_depth()
         .expect_err("waits too long");
-    assert_reason(&err, ErrorCode::JobDeadLettered, "queue_wait");
+    assert_reason(&err, ErrorCode::JobQueueBacklog, "queue_wait");
     assert!(err.to_string().contains("kind=test.stuck"), "{err}");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn depth_and_oldest_wait_are_exact_per_kind() {
+    let t = FreshDb::migrated().await;
+    // A big young kind must not hide a small old one.
+    ready_rows(&t, "test.big", 1500, 1).await;
+    ready_rows(&t, "test.old", 1, 7200).await;
+    ready_rows(&t, "test.old", 2, 5).await;
+    let h = health_of(&t).await;
+    let by_kind: Vec<(&str, i64)> = h.depth.iter().map(|k| (k.kind.as_str(), k.ready)).collect();
+    assert_eq!(by_kind, vec![("test.big", 1500), ("test.old", 3)]);
+    assert!(h.depth[0].oldest_wait_ms < 60_000, "{h:?}");
+    assert!(h.depth[1].oldest_wait_ms >= 7_200_000, "{h:?}");
     t.drop_now().await;
 }

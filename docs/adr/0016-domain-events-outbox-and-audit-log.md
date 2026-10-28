@@ -382,8 +382,9 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 | コード | 名前 | 重大度 | HTTP | 内容と文脈の項目 |
 |---|---|---|---|---|
 | FG-DB-0005 | OutboxSequencerLag | alert | — | 未採番の行があり心拍が 30 秒より古い。`unsequenced_count`、`heartbeat_age_ms`、`lock_holder_pid` |
-| FG-DB-0006 | JobDeadLettered | alert | — | 内部のジョブが上限に達した。`job_id`、`kind`、`attempts`、`last_error_code`、`origin_request_id` |
-| FG-DB-0007 | JobLeaseExpired | warn | — | リース切れの回収、またはフェンシングで結果を捨てた。`job_id`、`kind`、`worker_id`、`attempt` |
+| FG-DB-0006 | JobDeadLettered | alert | — | 内部のジョブが `dead` になった。`reason` = `attempts_exhausted` / `permanent_failure` / `lease_expired` / `dead_lettered`（doctor の `jobs.dead`、直近 24 時間）。`job_id`、`kind`、`attempts`、`last_error_code`、`origin_request_id` |
+| FG-DB-0007 | JobLeaseExpired | warn | — | リース・実行が通常でない形で終わった。`reason` = `lease_expired`（回収）/ `fenced`（結果を捨てた）/ `execution_timeout`（`timeout_ms` を超えて中断、再試行）/ `abort_pending`（中断したハンドラーが 5 秒で終わらない）/ `released_on_shutdown`（停止で返した、試行回数を戻す）/ `left_leased`・`release_timeout`（停止時に返せずリースが残る）。`job_id`、`kind`、`worker_id`、`attempt`、`origin_request_id` |
+| FG-DB-0017 | JobQueueBacklog | alert | — | （C6 で追加）doctor の待ち行列の検査。`reason` = `queue_depth`（種類ごとの実行可能なジョブが 1000 件超）/ `queue_wait`（最も古いものが 10 分超）/ `reaper_behind`（リース切れが 60 秒超回収されない）。`kind`、`ready`、`oldest_wait_ms`（`reaper_behind` は `expired_leases`、`job_id`、`worker_id`） |
 | FG-DB-0008 | SubscriberLag | alert | — | `reason` = `stuck` / `behind` / `retention_overrun` / `quarantined` / `fanout_limit`。`subscriber`、`seq`、`event_type`、`lag_events` |
 | FG-DB-0010 | EventRejected | alert | 500 | 上限超過、`too_many_events`、直列化の失敗、`unknown_version`。`event_type`、`schema_version`、`reason` |
 | FG-DB-0013 | ChangeWithoutAudit | alert | 500 | 遅延制約トリガーが、同じリソースの監査のないコミットや、系譜の合わない派生イベントを拒否した（`XF002`）。`table`、`check`。必ず不具合 |
@@ -489,8 +490,8 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 
 ## Error codes and runbooks affected
 
-- 新規の登録（実装時、テストと同じコミット）: FG-DB-0005〜0008、0010、0013、0014、0016、FG-INT-0004〜0012（0006 は既存の定義を確定）。ADR-0018 の分は ADR-0018 §6。
-- 新しい Runbook（alert のもの）: `outbox-sequencer-lag.md`、`job-dead-letter.md`、`subscriber-stuck.md`、`event-rejected.md`、`change-without-audit.md`。
+- 新規の登録（実装時、テストと同じコミット）: FG-DB-0005〜0008、0010、0013、0014、0016、0017（C6 で追加）、FG-INT-0004〜0012（0006 は既存の定義を確定）。ADR-0018 の分は ADR-0018 §6。
+- 新しい Runbook（alert のもの）: `outbox-sequencer-lag.md`、`job-dead-lettered.md`、`job-queue-backlog.md`、`subscriber-stuck.md`、`event-rejected.md`、`change-without-audit.md`。
   ほかに `user-anonymization.md`、`webhook-allowed-targets.md`（許可リストの登録）。ADR-0018 の Runbook は ADR-0018 §6。
 - 更新する Runbook: 復元の手順（`forge admin events new-epoch` と、送出先との比較・`seal-resync` を必須に、M1）、ADR-0008 の FG-GIT-0012 の再投入。
 - README の更新（実装時）: `forge-db`（型付きのコマンド、`DerivedTx`、`ReadPool` と `ReadSnapshot`、`feed::read`、接続の種類、Outbox・ジョブ・監査、表の台帳、所有するコード）、
@@ -608,3 +609,22 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   - **受け入れたリスク**: (1) advisory lock は `forge_app` のどのセッションからも取れるので、worker 以外が持ち続けると番号付けが止まる。
     `lock_holder_pid`（`forge doctor` と FG-DB-0005 の `context`）で見える。(2) `include_audit` は呼び出し側が決める（ADR-0018 §5、C9 までは常に `false`）。
     (3) heartbeat は最大で約 5 秒古い（遅れの判定 30 秒に対して十分小さい）。
+
+## Amendment（2026-10-28、手順 C6: ジョブの待ち行列）
+
+- **実装**: `forge-db` の `jobs`（`enqueue` / `ChangeTx::enqueue_job`、`claim`、`complete` / `fail` / `release`、`reap`、`JobRunner`、`health`）、`forge worker` の `job_runner` と `job_reaper`。
+  §7 のとおり `claim` は `FOR UPDATE SKIP LOCKED` の 1 文、完了・失敗・返却は `(id, state = 'running', worker_id, attempts)` でフェンシング、`reap` は 1 文（1 回に最大 1000 件）。
+- **バックオフ**: 失敗・リース切れの後 10 秒 × 2^(attempt − 1)、上限 1 時間。
+- **配信は少なくとも 1 回**: ハンドラーの副作用は冪等にするか `lease.attempt` でフェンシングする。`abort()` はハンドラーの次の `.await` まで効かないので、
+  タイムアウト・停止の後は実行器がハンドラーのタスクの終了を最大 5 秒待ってから記録・返却する（終わらなければ `FG-DB-0007 reason=abort_pending` を記録して進む）。
+- **実行のタイムアウトは `FG-DB-0007 reason=execution_timeout`**（新しいコードにしない）: リースが切れる前に実行器がリースを終わらせるもので、性質がリース切れと同じ。再試行する。
+- **停止時の返却**: `forge worker` の停止の要求で、実行中のジョブは 10 秒の猶予の後に中断し、ハンドラーが終わったら 1 つのフェンシング付きの UPDATE で
+  `queued`・`run_after = now()`・`attempts - 1`・リースなしに戻す（`FG-DB-0007 reason=released_on_shutdown`）。停止はジョブの責任ではないので試行回数を使わない
+  （再起動を繰り返しても健全なジョブが `dead` にならない）。ハンドラーが終わらない・返却が 5 秒で答えないときはリースを残し、リース切れの回収に任せる。
+- **重複の防止と `dead`**: `jobs_dedup` を `state <> 'dead'` の部分一意索引にした（migration `20261027120000`）。`queued` / `running` / `succeeded` のジョブはキーを持ち続け、
+  `dead` のジョブの仕事は同じキーで再投入できる（Runbook `job-dead-lettered.md` の回復手順）。同じ migration で doctor 用の `jobs_ready_kind (kind, run_after) WHERE state = 'queued'`。
+- **待ち行列の警報は専用の `FG-DB-0017` JobQueueBacklog**（§11）: `FG-DB-0006` は「ジョブが死んだ」だけに使う。0011 / 0012 / 0014〜0016 は ADR が予約済みのため 0017。
+- **受け入れた制限（C8・保持期間のジョブの前に見直す）**: 1 つの worker は 1 度に 1 件だけ実行する（head-of-line）。長いジョブがほかの種類を待たせる。
+  `queue_wait` の警報で見える。見直しの候補は種類ごとの実行器か、上限付きの並行実行。
+- **規模**（plan 01 §3.10）: 内部の仕事用。エッジ端末 1 台ごとにジョブを作らない（`queue_depth` の警報がその誤用を捕まえる）。
+- **`supervise.rs` の Runner の契約**: ジョブの実行器はトランザクションではなくリースと冪等性で契約を満たす（中断された実行のジョブはリース切れの後に再実行される）。
