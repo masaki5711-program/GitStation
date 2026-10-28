@@ -20,4 +20,5 @@
 | [0014](0014-migration-policy.md) | マイグレーションの方針 — 明示的に適用し、起動時に検査し、前に向かってだけ直す | accepted | 2026-10-26 |
 | [0015](0015-url-and-namespace-scheme.md) | URL と名前空間の設計 — GitHub の語彙を `/-/` の後ろに置き、入れ子のグループと両立させる | accepted | 2026-10-27 |
 | [0016](0016-domain-events-outbox-and-audit-log.md) | ドメインイベントの Outbox、カーソル方式のイベントの履歴、監査ログ | accepted | 2026-10-27 |
+| [0017](0017-local-ai-autofix-loop.md) | ローカル LLM による MR の自動修正ループと、kanflow からの承認・マージ | accepted | 2026-10-28 |
 | [0018](0018-db-roles-append-only-and-audit-sealing.md) | DB のロール、追記のみの強制、監査ログの封印 | accepted | 2026-10-27 |
