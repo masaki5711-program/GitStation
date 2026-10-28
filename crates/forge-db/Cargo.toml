@@ -24,6 +24,8 @@ test-support = ["dep:tempfile"]
 [dev-dependencies]
 tempfile.workspace = true
 toml.workspace = true
+# C6: captured JSON logs in the job runner tests.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

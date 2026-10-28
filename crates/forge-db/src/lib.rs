@@ -14,10 +14,13 @@
 //! - [`bootstrap`] checks what `ops/db/bootstrap/` set up (`forge doctor`).
 //! - [`sequencer`] numbers the outbox (`forge.assign_seq`, `forge worker`)
 //!   and reports its backlog / lag (`FG-DB-0005`).
+//! - [`jobs`] is the job queue with fenced leases and its runner
+//!   (`FG-DB-0006` / `FG-DB-0007`).
 
 pub mod bootstrap;
 pub mod change;
 mod error_map;
+pub mod jobs;
 mod migrate;
 mod migrator;
 mod options;

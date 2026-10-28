@@ -8,16 +8,19 @@
 //! Failure logging and backoff: `backoff`.
 //!
 //! Tasks today: the outbox sequencer (every 200 ms, at once again after a
-//! full batch so a backlog drains without a pause). The job runner (C6)
-//! and the audit seal job (C8) become further [`Task`] variants with their
-//! arm in [`Task::run`] and their entry in [`tasks`].
+//! full batch so a backlog drains without a pause), the job runner and the
+//! job reaper (`jobs`: the runner is the one task that reacts to shutdown
+//! mid-run, after a grace). The audit seal job (C8) becomes a further
+//! [`Task`] variant with its arm in [`Task::run`] and its entry in [`tasks`].
 //!
 //! Before the first run the database is connected and the schema checked
 //! (ADR-0014): the worker never migrates.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::DatabaseConfig;
+use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
@@ -26,6 +29,7 @@ use tokio::sync::watch;
 use crate::runtime::block_on;
 
 mod backoff;
+mod jobs;
 mod supervise;
 
 use supervise::{supervise, Next, Runner};
@@ -63,42 +67,67 @@ pub fn worker(database: &DatabaseConfig) -> Result<String, ForgeError> {
 enum Task {
     /// `forge.assign_seq` + NOTIFY (forge-db `sequencer::run_once`).
     Sequencer,
+    /// One job at a time (forge-db `jobs::JobRunner::run_once`).
+    JobRunner,
+    /// Expired leases (forge-db `jobs::JobRunner::reap_and_report`).
+    JobReaper,
 }
 
 /// Every task of this worker.
-fn tasks() -> [Task; 1] {
-    [Task::Sequencer]
+fn tasks() -> [Task; 3] {
+    [Task::Sequencer, Task::JobRunner, Task::JobReaper]
+}
+
+/// What the runs of the tasks share.
+#[derive(Clone)]
+struct Shared {
+    db: Db,
+    jobs: Arc<JobRunner>,
+    /// How long a job in progress may finish after a shutdown request.
+    grace: Duration,
+    shutdown: watch::Receiver<bool>,
 }
 
 impl Task {
     fn name(self) -> &'static str {
         match self {
             Self::Sequencer => "sequencer",
+            Self::JobRunner => "job_runner",
+            Self::JobReaper => "job_reaper",
         }
     }
 
     fn period(self) -> Duration {
         match self {
             Self::Sequencer => SEQUENCER_PERIOD,
+            Self::JobRunner => jobs::JOB_POLL_PERIOD,
+            Self::JobReaper => jobs::REAP_PERIOD,
         }
     }
 
-    /// The task as the supervisor runs it, with its own pool handles.
-    fn runner(self, db: &Db) -> Runner {
-        let db = db.clone(); // clone: pool handles (Arc inside), one per task
+    /// The task as the supervisor runs it, with its own handles.
+    fn runner(self, shared: &Shared) -> Runner {
+        let shared = shared.clone(); // clone: pool handles and Arcs, one set per task
         Runner {
             name: self.name(),
             period: self.period(),
             run: Box::new(move || {
-                let db = db.clone(); // clone: each run future owns a pool handle
-                Box::pin(async move { self.run(&db).await })
+                let shared = shared.clone(); // clone: each run future owns its handles
+                Box::pin(async move { self.run(&shared).await })
             }),
         }
     }
 
-    /// One run, bounded by the callee's own timeout.
-    async fn run(self, db: &Db) -> Result<Next, ForgeError> {
+    /// One run, bounded by the callee's own timeout (the job runner also by
+    /// the shutdown grace).
+    async fn run(self, shared: &Shared) -> Result<Next, ForgeError> {
+        let db = &shared.db;
         match self {
+            Self::JobRunner => {
+                let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
+                jobs::run_job(&shared.jobs, shared.grace, stop).await
+            }
+            Self::JobReaper => jobs::reap(&shared.jobs).await,
             Self::Sequencer => {
                 // Audit rows are not numbered yet: ADR-0018 §5 allows it only
                 // after this process's own sink comparison succeeded, and
@@ -130,12 +159,43 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
     }
 }
 
-/// Run every task until `shutdown` turns true (see `supervise`).
+/// Run every task until `shutdown` turns true (see `supervise`), with the
+/// job handlers of this build.
 pub(crate) async fn run(db: &Db, shutdown: watch::Receiver<bool>) -> Result<(), ForgeError> {
-    let runners = tasks().into_iter().map(|task| task.runner(db)).collect();
+    let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
+    for handler in jobs::handlers() {
+        runner.register(handler)?;
+    }
+    run_with(db, runner, jobs::SHUTDOWN_GRACE, shutdown).await
+}
+
+/// [`run`] with a given job runner and shutdown grace (tests).
+pub(crate) async fn run_with(
+    db: &Db,
+    runner: JobRunner,
+    grace: Duration,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ForgeError> {
+    tracing::info!(
+        worker_id = runner.worker_id().as_str(),
+        job_kinds = runner.kinds().len(),
+        "forge.worker.jobs"
+    );
+    let shared = Shared {
+        db: db.clone(), // clone: pool handles
+        jobs: Arc::new(runner),
+        grace,
+        shutdown: shutdown.clone(), // clone: the job runner's own receiver
+    };
+    let runners = tasks()
+        .into_iter()
+        .map(|task| task.runner(&shared))
+        .collect();
     supervise(runners, MAX_BACKOFF, shutdown).await
 }
 
+#[cfg(test)]
+mod jobs_tests;
 #[cfg(test)]
 mod loop_tests;
 #[cfg(test)]
