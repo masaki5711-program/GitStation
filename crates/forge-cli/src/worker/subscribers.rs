@@ -4,15 +4,20 @@
 //! `high_seq` handles up to a batch of events, one per transaction — then,
 //! unless a batch was full, a wait for the next NOTIFY (or the 5 s poll) on
 //! the dedicated LISTEN connection. Either way the next run starts at once:
-//! the wait is the pacing. A shutdown request is therefore noticed within
-//! one poll (≤ 5 s) plus the round in progress.
+//! the wait is the pacing. A round starts no new step after 30 s
+//! (`ROUND_BUDGET`, then it asks for more), so a shutdown request is
+//! noticed within one poll (≤ 5 s) or one round (≤ 30 s plus the step in
+//! progress, itself ≤ 40 s).
 //!
 //! This task is the logging boundary of a round: each incident (a failed
 //! handler, a stopped or quarantining subscriber — `FG-DB-0008`) is logged
 //! once with the source event's request id. A subscriber that keeps failing
 //! is retried with its own backoff inside the dispatcher (≤ 1 per minute),
 //! so its log lines stay bounded too. The task itself fails (and backs
-//! off) only when the round or the wait cannot run at all.
+//! off) only when the round cannot run at all. A failed wait (the LISTEN
+//! connection: `FG-DB-0001` / `FG-DB-0002`) is logged once here, then the
+//! run sleeps one poll interval and asks for the next round — the 5 s poll
+//! goes on without notifications, and the next wait reconnects.
 //!
 //! Cancel-safe: the dispatcher's steps are single transactions, and the
 //! state kept between runs (cursor backoff, the listener) is valid at every
@@ -22,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::{telemetry, RequestId};
-use forge_db::subscribers::{Dispatcher, Registry};
+use forge_db::subscribers::{Dispatcher, Registry, POLL};
 use forge_db::Db;
 use forge_errors::ForgeError;
 use tokio::sync::Mutex;
@@ -69,6 +74,9 @@ async fn run(
         if let Some(seq) = incident.seq {
             error = error.with_context("source_seq", seq);
         }
+        if let Some(event_id) = incident.event_id {
+            error = error.with_context("source_event_id", event_id);
+        }
         telemetry::log_failure(&error, &request_id);
     }
     if round.handled > 0 {
@@ -81,8 +89,10 @@ async fn run(
     if round.more {
         return Ok(Next::Immediately);
     }
-    let woken = dispatcher.wait(db).await?;
-    tracing::debug!(task = NAME, woken = ?woken, "forge.worker.subscribers_woken");
+    if let Err(e) = dispatcher.wait(db).await {
+        telemetry::log_failure(&e.with_context("task", NAME), &RequestId::generate());
+        tokio::time::sleep(POLL).await;
+    }
     Ok(Next::Immediately)
 }
 

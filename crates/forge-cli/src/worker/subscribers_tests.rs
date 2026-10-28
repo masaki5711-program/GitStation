@@ -1,6 +1,7 @@
 //! The worker with a registered subscriber, against a migrated database:
 //! the subscriber is registered at the head, gets every event the
-//! sequencer numbers afterwards, and the worker still stops on shutdown.
+//! sequencer numbers afterwards, and the worker still stops on shutdown;
+//! a stuck subscriber is logged once, with the source event's request id.
 
 use std::sync::atomic::{AtomicI64, Ordering as Atomic};
 use std::sync::Arc;
@@ -8,13 +9,17 @@ use std::time::{Duration, Instant};
 
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::subscribers::{
-    states, DerivedTx, HandleFuture, Ordering, Registry, SourceEvent, Subscriber,
+    register, run_once, states, DerivedTx, HandleFuture, Ordering, Progress, Registry, SourceEvent,
+    Start, Subscriber,
 };
 use forge_db::test_support::FreshDb;
+use forge_errors::{ErrorCode, ForgeError};
 use tokio::sync::watch;
 
+use super::super::loop_tests::{context, request_id, Captured};
 use super::super::run_with;
 use super::super::seal_tests::seal_keys;
+use super::NAME;
 
 /// Counts the events it handles.
 struct Counting(AtomicI64);
@@ -96,5 +101,77 @@ async fn the_worker_feeds_registered_subscribers_the_events_it_numbers() {
     let s = states(&t.db).await.expect("states").expect("migrated");
     assert_eq!((s[0].name.as_str(), s[0].lag_events), ("worker-test", 0));
     assert_eq!(counting.0.load(Atomic::SeqCst), 4);
+    t.drop_now().await;
+}
+
+/// Always fails.
+struct Failing;
+
+impl Subscriber for Failing {
+    fn name(&self) -> &'static str {
+        "worker-stuck"
+    }
+
+    fn ordering(&self) -> Ordering {
+        Ordering::Ordered
+    }
+
+    fn handle<'a>(
+        &'a self,
+        _event: &'a SourceEvent,
+        _tx: &'a mut DerivedTx<'_>,
+    ) -> HandleFuture<'a> {
+        Box::pin(async {
+            Err(ForgeError::new(ErrorCode::GitUnavailable).with_context("reason", "test_failure"))
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_stuck_subscriber_is_logged_once_with_the_source_request_id() {
+    let t = FreshDb::migrated().await;
+    let failing = Arc::new(Failing);
+    register(&t.db, failing.as_ref(), Start::Beginning)
+        .await
+        .expect("register");
+    insert_events(&t, 1).await;
+    forge_db::sequencer::run_once(
+        &t.db,
+        forge_db::sequencer::BatchSize::MAX,
+        forge_db::sequencer::AuditSequencing::Skip,
+    )
+    .await
+    .expect("sequencer");
+    // Four failures already counted: the task's round makes the fifth.
+    for _ in 0..4 {
+        let progress = run_once(&t.db, failing.as_ref()).await.expect("step");
+        assert!(matches!(progress, Progress::Failed(_)), "{progress:?}");
+    }
+    let registry = Registry::new().with(failing).expect("registry");
+    let state = tokio::sync::Mutex::new(None);
+    let logs = Captured::default();
+    let guard = logs.install();
+    // The round logs the stuck subscriber; the first wait only connects.
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        super::run(&t.db, &registry, &state),
+    )
+    .await
+    .expect("one run is bounded")
+    .expect("the run itself succeeds");
+    drop(guard);
+    let stuck: Vec<_> = logs
+        .failures()
+        .into_iter()
+        .filter(|e| context(e, "reason").as_deref() == Some("stuck"))
+        .collect();
+    assert_eq!(stuck.len(), 1, "{stuck:?}");
+    let e = &stuck[0];
+    assert_eq!(e["fields"]["error_code"], "FG-DB-0008");
+    assert_eq!(request_id(e), "r-1");
+    assert_eq!(context(e, "task").as_deref(), Some(NAME));
+    assert_eq!(context(e, "source_seq").as_deref(), Some("1"));
+    assert_eq!(context(e, "subscriber").as_deref(), Some("worker-stuck"));
+    assert!(context(e, "source_event_id").is_some(), "{e}");
     t.drop_now().await;
 }

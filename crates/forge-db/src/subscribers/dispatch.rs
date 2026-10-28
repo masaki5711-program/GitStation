@@ -4,8 +4,12 @@
 //! runs up to [`BATCH_PER_ROUND`] steps for each. A subscriber whose step
 //! failed waits (in memory) before its next attempt — 200 ms doubling up
 //! to [`MAX_RETRY_DELAY`] — so a stuck one is retried, and alerts, about
-//! once a minute without holding the others back. [`Dispatcher::wait`]
-//! waits for the next NOTIFY or the [`POLL`] interval.
+//! once a minute without holding the others back. A round ends after
+//! [`ROUND_BUDGET`] (then `more`), so it never holds the worker for
+//! long: at most the budget plus the step in progress (≤ 40 s). A round is
+//! not interrupted by a shutdown request; the budget bounds the wait.
+//! [`Dispatcher::wait`] waits for the next NOTIFY or the [`POLL`]
+//! interval.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +26,8 @@ use crate::{read_query_error, Db};
 pub const POLL: Duration = Duration::from_secs(5);
 /// Steps per subscriber per round (then the round reports `more`).
 pub const BATCH_PER_ROUND: u32 = 100;
+/// A round starts no new step after this (and reports `more`).
+pub const ROUND_BUDGET: Duration = Duration::from_secs(30);
 const FIRST_RETRY_DELAY: Duration = Duration::from_millis(200);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
@@ -91,8 +97,20 @@ impl Dispatcher {
     }
 
     pub async fn round(&mut self, db: &Db) -> Result<Round, ForgeError> {
+        self.round_within(db, ROUND_BUDGET).await
+    }
+
+    /// [`Dispatcher::round`] with a given budget (tests shorten it). The
+    /// first step always runs, so every round makes progress.
+    pub(crate) async fn round_within(
+        &mut self,
+        db: &Db,
+        budget: Duration,
+    ) -> Result<Round, ForgeError> {
+        let deadline = Instant::now() + budget;
         let behind = behind(db).await?;
         let mut round = Round::default();
+        let mut stepped = false;
         for entry in &mut self.entries {
             let name = entry.subscriber.name();
             if !behind.iter().any(|b| b == name) {
@@ -107,6 +125,11 @@ impl Dispatcher {
                     round.more = true;
                     break;
                 }
+                if stepped && Instant::now() >= deadline {
+                    round.more = true;
+                    return Ok(round);
+                }
+                stepped = true;
                 steps += 1;
                 match run_once(db, entry.subscriber.as_ref()).await {
                     Ok(Progress::Handled { .. }) => {
@@ -127,6 +150,7 @@ impl Dispatcher {
                     Err(error) => {
                         round.incidents.push(Incident {
                             seq: None,
+                            event_id: None,
                             request_id: None,
                             error,
                         });
@@ -139,8 +163,17 @@ impl Dispatcher {
         Ok(round)
     }
 
-    /// Wait for the next notification, at most [`POLL`].
-    pub async fn wait(&mut self, db: &Db) -> Result<Woken, ForgeError> {
+    /// Wait for the next notification, at most [`POLL`]. A failure
+    /// (`FG-DB-0001` / `FG-DB-0002` of the LISTEN connection) is returned
+    /// at once; the next call reconnects.
+    pub async fn wait(&mut self, db: &Db) -> Result<(), ForgeError> {
+        let woken = self.wait_for(db).await?;
+        tracing::debug!(target: "forge_db", woken = ?woken, "subscribers woken");
+        Ok(())
+    }
+
+    /// [`Dispatcher::wait`], saying why it returned (tests).
+    pub(crate) async fn wait_for(&mut self, db: &Db) -> Result<Woken, ForgeError> {
         self.wake.wait(db, POLL).await
     }
 }

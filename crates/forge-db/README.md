@@ -221,11 +221,21 @@ shutdown grace) and the reaper (30 s, also at startup).
 ordered subscriber (FG-DB-0008 `stuck`, retried, never skipped) or quarantine
 the event of an independent one (`subscriber_dead_letters`, `quarantined`);
 the derivation limits (depth 8, 100 per root) are `fanout_limit` at once.
-`DerivedTx` writes derived tables (`conn()`) and derived events (`emit`: actor
+Counted as failures too: an undecodable event (FG-SYS-0001 `decode`), a
+failed savepoint RELEASE, and derived writes refused at COMMIT (FG-DB-0013
+`derived_*`, counted in a fresh transaction); the stored code is the
+handler's own (`src/subscribers/count.rs`). Not counted (step errors,
+retried with backoff): DB failures, `subscriber_not_registered`,
+`ordering_mismatch`, `event_missing`, `cursor_moved` (`cursor.rs`).
+`DerivedTx` writes derived tables (`conn()` — a trust boundary, see the
+`Subscriber` docs) and derived events (`emit`: actor
 `system`, the source request id, lineage set; no audit row). Migration
 `20261027140000` checks derived events (`events_lineage` BEFORE INSERT,
-`events_derived_progress` deferred; XF002 → FG-DB-0013). `Dispatcher` runs
-every registered subscriber for `forge worker` and waits on `Wake` (LISTEN
+`events_derived_progress` deferred; XF002 → FG-DB-0013; an unknown
+CONSTRAINT name is `xf002_unknown`). `Dispatcher` runs
+every registered subscriber for `forge worker` (a round starts no step
+after `ROUND_BUDGET` = 30 s, then `more`) and waits on the crate-private
+`Wake` (LISTEN
 `forge_events_sequenced` on the dedicated connection `Db::listen_options` — no
 statement / idle timeout, server-side TCP keepalive, a bounded `SELECT 1` at
 every 5 s poll). `states` / `check_lag` / `dead_letters` feed `forge doctor`

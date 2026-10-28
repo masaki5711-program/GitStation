@@ -41,6 +41,10 @@
    `SELECT seq, event_type, aggregate_type, aggregate_id, project_id, request_id, root_seq, causation_depth FROM forge.events WHERE seq = <seq>;`
 5. worker のログでハンドラー自身の失敗を見る（`task=subscribers`、`subscriber=…`、`source_seq=…`、ハンドラーの `error_code`）。
    失敗の行は購読者ごとの再試行の間隔（200 ms から倍々、最大 60 秒）ごとに 1 回までしか出ない。
+   ハンドラーの外の失敗もイベントに数える: 復号できないイベント（`FG-SYS-0001 reason=decode`、`column`）、セーブポイントの RELEASE の失敗
+   （`query=subscribers.release`。ハンドラーが SQL のエラーを握りつぶした）、COMMIT で派生イベントの検査に拒まれた（`FG-DB-0013 reason=derived_*`）。
+   `source_event_id` も付く。イベントに数えない失敗（`subscriber_not_registered`、`ordering_mismatch`、`event_missing`、`cursor_moved`、DB の障害）は
+   `source_seq` なしで出て、`failures` は増えない。
 6. `behind` のとき: `forge worker` が動いているか（`systemctl status forge-worker`）、`outbox.sequencer_lag` も失敗していないか（番号付けが止まっていれば購読者も止まる → Runbook `outbox-sequencer-lag.md`）。
    worker のログに `FG-DB-0001`（DB に届かない）や LISTEN の失敗（`query=subscribers.listen*`）があれば、購読者は 5 秒ごとの確認と再接続で続く。
 

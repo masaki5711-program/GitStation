@@ -24,7 +24,7 @@ use crate::{query_error, Db};
 
 /// Why [`Wake::wait`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Woken {
+pub(crate) enum Woken {
     /// The sequencer numbered events.
     Notified,
     /// The poll interval passed without a notification.
@@ -35,7 +35,7 @@ pub enum Woken {
 }
 
 #[derive(Default)]
-pub struct Wake {
+pub(crate) struct Wake {
     listener: Option<PgListener>,
 }
 
@@ -48,7 +48,7 @@ impl std::fmt::Debug for Wake {
 }
 
 impl Wake {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -56,7 +56,7 @@ impl Wake {
     /// after a failure) returns [`Woken::Connected`] at once. A failure
     /// drops the connection (the next call reconnects) and is returned:
     /// `FG-DB-0001` for the link, `FG-DB-0002` for a refused statement.
-    pub async fn wait(&mut self, db: &Db, max: Duration) -> Result<Woken, ForgeError> {
+    pub(crate) async fn wait(&mut self, db: &Db, max: Duration) -> Result<Woken, ForgeError> {
         let Some(listener) = self.listener.as_mut() else {
             self.listener = Some(connect(db).await?);
             return Ok(Woken::Connected);

@@ -11,18 +11,20 @@
 //!    (`… WHERE name = $1 AND last_seq = $prev`, monotonic) — the
 //!    derived-event trigger checks exactly that (migration 20261027140000).
 //!
-//! A failed handler is rolled back (savepoint) and counted. An `ordered`
-//! subscriber stops after [`FAILURES_BEFORE_STOP`] failures in a row
-//! (`FG-DB-0008 reason=stuck`) and keeps retrying the same event — it never
-//! skips by itself (`forge admin subscriber skip`, a runbook step, is
-//! designed in `ops/runbooks/subscriber-lag.md`). An `independent` one
+//! A failed handler is rolled back (savepoint) and counted (so are an
+//! undecodable event, a failed savepoint RELEASE and derived writes refused
+//! at COMMIT — see `run`). An `ordered` subscriber stops after
+//! [`FAILURES_BEFORE_STOP`] failures in a row (`FG-DB-0008 reason=stuck`)
+//! and keeps retrying the same event — it never skips by itself
+//! (`forge admin subscriber skip` is not yet implemented; its design is
+//! step 4 of `ops/runbooks/subscriber-lag.md`). An `independent` one
 //! quarantines the event into `forge.subscriber_dead_letters` and moves on
 //! (`reason=quarantined`). Deriving more than [`MAX_DERIVED_PER_ROOT`]
 //! events from one root, or deriving from an event at [`MAX_DEPTH`], is
 //! `reason=fanout_limit` at once (stop / quarantine).
 //!
 //! [`run_once`] is one such step; [`Dispatcher`] runs every registered
-//! subscriber for `forge worker` and waits on [`Wake`] (NOTIFY
+//! subscriber for `forge worker` and waits on `wake::Wake` (NOTIFY
 //! `forge_events_sequenced` on the dedicated LISTEN connection, or the
 //! 5-second poll). [`states`] / [`dead_letters`] feed `forge doctor`
 //! (`subscribers.lag`, `subscribers.dead_letters`).
@@ -40,6 +42,8 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{query_error, Db};
 
+mod count;
+mod cursor;
 mod derived;
 mod dispatch;
 mod lag;
@@ -47,10 +51,9 @@ mod run;
 mod wake;
 
 pub use derived::{DerivedTx, Limit};
-pub use dispatch::{Dispatcher, Round, POLL};
+pub use dispatch::{Dispatcher, Round, BATCH_PER_ROUND, POLL, ROUND_BUDGET};
 pub use lag::{check_lag, dead_letters, states, DeadLetters, SubscriberState, BEHIND_AFTER};
 pub use run::{run_once, Incident, Progress};
-pub use wake::{Wake, Woken};
 
 /// An `ordered` subscriber stops (and an `independent` one quarantines the
 /// event) after this many failures in a row on one event.
@@ -123,6 +126,15 @@ pub type HandleFuture<'a> = Pin<Box<dyn Future<Output = Result<(), ForgeError>> 
 /// be idempotent per event only in the sense that a failed attempt leaves
 /// nothing behind (external calls belong in jobs, never in `handle`).
 /// Match event types exhaustively (ADR-0016 §5) — no `_` arm.
+///
+/// **Trust boundary**: [`DerivedTx::conn`] is the step's raw connection
+/// with forge_app's privileges. forge-db does not check what a handler
+/// writes through it beyond the database's own guards (append-only
+/// triggers, the derived-event checks at COMMIT): it must write derived
+/// tables only — never audited state or forge.events directly — and never
+/// issue transaction control (COMMIT, ROLLBACK, SAVEPOINT). A handler that
+/// leaves its savepoint aborted (a swallowed SQL error) is counted as a
+/// failure. Review every handler against this.
 pub trait Subscriber: Send + Sync + 'static {
     /// `^[a-z][a-z0-9-]{0,62}$`, unique; the row in forge.event_subscribers.
     fn name(&self) -> &'static str;
@@ -244,26 +256,12 @@ pub async fn register(
     .await
 }
 
-/// `FG-DB-0008` about one subscriber and one source event.
-pub(crate) fn lag_error(
-    reason: &'static str,
-    subscriber: &str,
-    event: &SourceEvent,
-    lag_events: i64,
-) -> ForgeError {
-    ForgeError::new(ErrorCode::SubscriberLag)
-        .with_context("reason", reason)
-        .with_context("subscriber", subscriber)
-        .with_context("seq", event.seq)
-        .with_context("event_id", event.event_id)
-        .with_context("event_type", &event.event_type)
-        .with_context("lag_events", lag_events)
-}
-
 #[cfg(test)]
 mod derived_tests;
 #[cfg(test)]
 mod doctor_tests;
+#[cfg(test)]
+mod poison_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 #[cfg(test)]
