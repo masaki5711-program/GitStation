@@ -551,6 +551,22 @@ diagnosis = "The event carries `reason` (too_many_events with `count`, invalid_e
 fix = "Fix the command named by `action`: emit one aggregate event instead of many, use a registered event type, give the change a non-anonymous actor, publish events only for a succeeded change and for the audited project, pass large ids as strings, or keep the field within its bound. Build dedup_key from server-side ids only (it is unique instance-wide)."
 test = "a_change_with_too_many_events_is_rejected_before_writing"
 
+# ── C8: the audit seal (ADR-0018 §4) ─────────────────────────────────────
+[[error]]
+code = "FG-DB-0011"
+name = "AuditSealMismatch"
+http_status = 500
+severity = "alert"
+user_message_ja = "監査ログの封印の検証に失敗しました。管理者に連絡してください。"
+user_message_en = "The audit log seal could not be verified. Contact the administrator."
+user_message_id = "Segel log audit tidak dapat diverifikasi. Hubungi administrator."
+cause = "The audit log no longer matches its seals (forge.audit_seal, ADR-0018 §4), or a range to seal is not contiguous: a sealed column of a sealed audit row was changed (recompute), a seal row's own fields no longer give its seal_sha256, or its range does not continue the previous seal (chain), the HMAC does not match the key named by key_id or that key is not in audit.seal_keys_file (hmac), or rows of a range are missing — sealed rows deleted, or the audit.seal job found a hole in the numbers it was about to seal (gap). Only the database owner or a superuser can do this past the guards (or a sequencer bug, for gap), so treat it as possible tampering until explained. The sink reasons (sink_mismatch, sink_missing, db_behind_sink) arrive with the seal sink in step C9."
+diagnosis = "The event carries `reason` (recompute, chain, hmac, gap), `detail` (recompute: rows_sha256 | seal_sha256; chain: prev_seal_sha256 | first_seq; hmac: mismatch | unknown_key_id; gap: missing_rows), `seal_id` (absent for a gap found while sealing), `first_seq` / `last_seq` (the seal's range), and for gap `missing_seq` (the first missing number) and for hmac `key_id`. It comes from forge doctor audit.seal_verify (the seals of the last 24 hours, read-only) or from the audit.seal job of forge worker (gap: nothing was sealed). Compare the range with forge_audit.ddl_audit and the PostgreSQL log for the time of the change; `SELECT id, kind, key_id, first_seq, last_seq, sealed_at, shipped_at FROM forge.audit_seal WHERE id = <seal_id>` (read-only)."
+fix = "Never re-seal or edit seals to make the alert go away. Follow the runbook: preserve the evidence, find who changed the rows (the database owner or a superuser), and restore the rows from a backup if needed. hmac with unknown_key_id: the key file lost a key that signed seals — put the retired key back (keys are only ever added). gap while sealing: sealing stops until the missing rows are explained."
+runbook = "audit-seal-mismatch"
+test = "a_tampered_sealed_column_is_audit_seal_mismatch_recompute"
+# ── end C8 ───────────────────────────────────────────────────────────────
+
 [[error]]
 code = "FG-DB-0013"
 name = "AuditMissing"
@@ -564,3 +580,19 @@ diagnosis = "The event carries `query` (the statement that committed, or the ins
 fix = "Route the write through ChangeTx (forge-db typed command). Never disable the trigger; the change was rolled back and can be retried once fixed."
 runbook = "append-only-violation"
 test = "an_event_without_an_audit_row_cannot_commit"
+
+# ── C8: the audit seal backlog (ADR-0018 §4) ─────────────────────────────
+[[error]]
+code = "FG-DB-0015"
+name = "AuditSealBacklog"
+http_status = 500
+severity = "alert"
+user_message_ja = "監査ログの封印が遅れています。管理者に連絡してください。"
+user_message_en = "Sealing of the audit log is delayed. Contact the administrator."
+user_message_id = "Penyegelan log audit tertunda. Hubungi administrator."
+cause = "An audit row older than 5 minutes is not covered by a seal (ADR-0018 §4): the audit.seal job of forge worker is not running or keeps failing (for example FG-DB-0011 reason=gap), the worker has no audit.seal_keys_file, or audit rows wait for their number because audit sequencing is off (a fresh installation before the first sink comparison of step C9, or a rollback detected and a seal resync pending — then this alert is expected until the runbook's resync step)."
+diagnosis = "forge doctor audit.seal_backlog reports it with `oldest_age_s` (age of the oldest unsealed row), `last_sealed_seq` (`none` = nothing sealed yet), `audit_high_seq`, `unsealed_numbered` (numbered rows after the last seal, capped at 100000+), `unsequenced` (rows still waiting for a number) and `audit_sequencing` (on / off). unsequenced > 0 with audit_sequencing=off: numbering is stopped — see runbook audit-seal-mismatch (resync) or wait for the first sink comparison. unsealed_numbered > 0: read the forge worker log for the audit.seal job (its error_code names the failure)."
+fix = "Start or repair forge worker and its audit.seal_keys_file; fix the failure its log names (FG-DB-0011 reason=gap: follow audit-seal-mismatch first). Never insert seals by hand."
+runbook = "audit-seal-backlog"
+test = "an_old_unsealed_row_is_audit_seal_backlog"
+# ── end C8 ───────────────────────────────────────────────────────────────

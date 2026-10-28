@@ -56,6 +56,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    schema",
         "ok    outbox.unsequenced_count",
         "ok    outbox.sequencer_lag",
+        // C8: nothing sealed yet, nothing to verify (no keys configured).
+        "ok    audit.seal_backlog nothing sealed yet",
+        "ok    audit.seal_verify 0 seals",
         "ok    storage",
         "ok    git",
     ] {

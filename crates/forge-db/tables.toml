@@ -49,6 +49,13 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 
+# ── C8: the audit seal (ADR-0018 §4) ──
+[tables.audit_seal]
+guarded = true
+kind = "log"
+ro_columns = ["*"]
+# ── end C8 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

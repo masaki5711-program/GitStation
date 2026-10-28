@@ -33,6 +33,21 @@ const SAFE_CONTEXT: &[&str] = &[
     "unsequenced_audit",
     "heartbeat_age_ms",
     "lock_holder_pid",
+    // ── C8: FG-DB-0011 / FG-DB-0015 (audit-seal-* runbooks): ids, numbers, an age.
+    "detail",
+    "seal_id",
+    "first_seq",
+    "last_seq",
+    "missing_seq",
+    "key_id",
+    "hash_version",
+    "oldest_age_s",
+    "last_sealed_seq",
+    "audit_high_seq",
+    "unsealed_numbered",
+    "unsequenced",
+    "audit_sequencing",
+    // ── end C8 ──
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

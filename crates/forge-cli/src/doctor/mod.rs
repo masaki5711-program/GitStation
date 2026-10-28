@@ -2,11 +2,13 @@
 //! configuration, database (reachable, TLS, version, read role), the
 //! bootstrap guards of ADR-0018 (`db.bootstrap`), the connection budget
 //! (`db.connections`), schema, the outbox backlog and sequencer lag
-//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), storage root and
+//! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
+//! (`audit.seal_backlog`, `audit.seal_verify`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
-//! pool.
+//! pool, except `audit.seal_verify`, which reads the sealed act-as columns
+//! in a SELECT-only transaction on the write pool that always rolls back.
 //!
 //! A check that depends on an earlier failed one is `skip`. The command
 //! fails with the most severe error found (alert before warn before info),
@@ -16,7 +18,7 @@ use std::path::Path;
 
 use forge_core::config::{self, Config};
 use forge_core::{telemetry, RequestId};
-use forge_db::{bootstrap, sequencer, Db, MIGRATOR};
+use forge_db::{bootstrap, seal, sequencer, Db, MIGRATOR};
 use forge_errors::{ForgeError, Severity};
 use forge_git::{Git, GitConfig, StorageRoot};
 
@@ -43,12 +45,16 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 5] = [
+const DB_CHECKS: [&str; 7] = [
     "db.bootstrap",
     "db.connections",
     "schema",
     "outbox.unsequenced_count",
     "outbox.sequencer_lag",
+    // ── C8 ──
+    "audit.seal_backlog",
+    "audit.seal_verify",
+    // ── end C8 ──
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -144,8 +150,72 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         Err(e) => fail("schema", e),
     };
     let [unsequenced, lag] = outbox_checks(db).await;
-    vec![bootstrap, connections, schema, unsequenced, lag]
+    // ── C8 ──
+    let [seal_backlog, seal_verify] = seal_checks(db, cfg).await;
+    // ── end C8 ──
+    vec![
+        bootstrap,
+        connections,
+        schema,
+        unsequenced,
+        lag,
+        seal_backlog,
+        seal_verify,
+    ]
 }
+
+// ── C8 ──
+/// `audit.seal_backlog` (`FG-DB-0015`) and `audit.seal_verify`
+/// (`FG-DB-0011`: the seals of the last 24 hours recomputed, read-only;
+/// HMACs only where `audit.seal_keys_file` is configured).
+async fn seal_checks(db: &Db, cfg: &Config) -> [Check; 2] {
+    let backlog = match seal::backlog(db).await {
+        Ok(Some(b)) => match b.check() {
+            Ok(()) => ok("audit.seal_backlog", &seal_backlog_detail(&b)),
+            Err(e) => fail("audit.seal_backlog", e),
+        },
+        Ok(None) => skip("audit.seal_backlog", "schema not migrated"),
+        Err(e) => fail("audit.seal_backlog", e),
+    };
+    let migrated = !matches!(backlog.outcome, Outcome::Skip(_));
+    let verify = if !migrated {
+        skip("audit.seal_verify", "schema not migrated")
+    } else {
+        match cfg.audit.seal_keys() {
+            Err(e) => fail("audit.seal_verify", e),
+            Ok(keys) => {
+                let scope = seal::VerifyScope::SealedWithin(seal::DOCTOR_WINDOW);
+                match seal::verify_range(db, keys.as_ref(), scope).await {
+                    Ok(v) => ok("audit.seal_verify", &seal_verify_detail(&v)),
+                    Err(e) => fail("audit.seal_verify", e),
+                }
+            }
+        }
+    };
+    [backlog, verify]
+}
+
+fn seal_backlog_detail(b: &seal::SealBacklog) -> String {
+    let sealed = b.last_sealed_seq.map_or_else(
+        || "nothing sealed yet".to_owned(),
+        |s| format!("sealed to {s}"),
+    );
+    format!(
+        "{sealed}, {} numbered and {} unnumbered rows waiting, audit sequencing {}",
+        sequencer::shown(b.unsealed_numbered),
+        sequencer::shown(b.unsequenced),
+        if b.audit_sequencing { "on" } else { "off" }
+    )
+}
+
+fn seal_verify_detail(v: &seal::Verified) -> String {
+    let hmac = match v.hmac {
+        seal::HmacCheck::Checked => "HMAC checked",
+        seal::HmacCheck::NoKeys => "HMAC not checked (audit.seal_keys_file not set)",
+    };
+    format!("{} seals, {} rows in 24 h, {hmac}", v.seals, v.rows)
+}
+// ── end C8 ──
 
 /// `outbox.unsequenced_count` (what waits for a number) and
 /// `outbox.sequencer_lag` (`FG-DB-0005`, ADR-0016 §7).

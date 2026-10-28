@@ -48,10 +48,13 @@ connection, mapping driver errors to registered codes, migrations
 FG-DB-0002 DbQueryFailed (`query`, `sqlstate`, `reason`), FG-DB-0003
 MigrationFailed, FG-DB-0004 SchemaIncompatible, FG-DB-0009
 AppendOnlyViolation (XF001 and the bootstrap guards, `reason` / `guard`), FG-DB-0005
-OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`).
+OutboxSequencerLag (`unsequenced_count`, `heartbeat_age_ms`, `lock_holder_pid`),
+FG-DB-0011 AuditSealMismatch (`reason` recompute / chain / hmac / gap, `detail`,
+`seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`, `audit_sequencing`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
-`append-only-violation.md`, `outbox-sequencer-lag.md`.
+`append-only-violation.md`, `outbox-sequencer-lag.md`, `audit-seal-mismatch.md`,
+`audit-seal-backlog.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -138,3 +141,16 @@ when it numbered events. `sequencer::backlog` / `Backlog::check_lag` feed
 `forge doctor` (`outbox.unsequenced_count`, `outbox.sequencer_lag`,
 FG-DB-0005 when rows wait and the heartbeat is older than 30 s).
 `bootstrap::check` verifies the function exactly (`bootstrap/definer.rs`).
+
+**Audit seal** (ADR-0018 §4, step C8): `forge.audit_seal` (migration
+`20261027130000`; its guard lets only `shipped_at` go NULL → value once,
+forces `sealed_at`, requires each insert to continue the chain and end at or
+below `audit_high_seq`; no DELETE / TRUNCATE) holds one row per sealed range.
+`seal::v1` is the single definition of hash version 1 (columns, SELECT,
+RFC 8785 row bytes; golden vector `tests/fixtures/audit_seal_v1_golden.py`).
+`seal::seal_pending(&db, &SealKeys)` is the `audit.seal` job body (try-lock
+`(1718579815, 8)`, ≤ 5000 rows per seal, `more` when rows remain, gap →
+FG-DB-0011). `seal::verify_range` recomputes seals in READ ONLY
+transactions on the write pool (`forge doctor audit.seal_verify`, 24 h);
+`seal::backlog` feeds `audit.seal_backlog` (FG-DB-0015 past 5 minutes). The
+HMAC keys come from `audit.seal_keys_file` (`forge_core::config::SealKeys`).
