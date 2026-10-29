@@ -26,6 +26,8 @@ tower.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+# D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
+forge-db = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true
 
 [lints]

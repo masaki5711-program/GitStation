@@ -23,6 +23,9 @@
 //!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
 //! - [`users`] creates (with the personal namespace) and disables users
 //!   (`FG-REPO-0007`..`0009`, `FG-AUTH-0005`..`0007`).
+//! - [`groups`] creates groups and changes their direct members; [`roles`]
+//!   loads a user's roles on a group (`MemberRoles`, the one role
+//!   computation, ADR-0010).
 
 #[cfg(test)]
 mod audited_doctor_tests;
@@ -59,6 +62,7 @@ mod users_schema_tests;
 pub mod groups;
 #[cfg(test)]
 mod groups_schema_tests;
+pub mod roles;
 // ── end D2 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

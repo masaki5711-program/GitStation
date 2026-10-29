@@ -201,7 +201,7 @@ user_message_ja = "指定されたプロジェクトまたはリポジトリが�
 user_message_en = "The project or repository was not found."
 user_message_id = "Proyek atau repositori tidak ditemukan."
 cause = "The resource does not exist, or the caller may not see it. Both cases return the same code so that private resources do not leak their existence (ADR-0010)."
-diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group; `resource=namespace`: a group create under an unknown parent)."
+diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group, or roles::load_group_roles on a group id without a namespace; `resource=namespace`: a group create under an unknown parent, or roles::load_namespace_roles on an unknown namespace id)."
 fix = "Check the path; add the user to the project or group if they should see it."
 test = "invisible_private_project_is_not_found"
 
@@ -671,6 +671,22 @@ runbook = "job-queue-backlog"
 test = "a_deep_or_waiting_queue_is_reported_per_kind"
 # ── end C6 ───────────────────────────────────────────────────────────────
 # ── C5: event subscribers (ADR-0016 §7) ───────────────────────────────────
+# ── D2: membership data that breaks a schema invariant ──────────────────
+[[error]]
+code = "FG-DB-0018"
+name = "MembershipDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "所属の情報を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The membership data could not be read. Contact the administrator with the request ID."
+user_message_id = "Data keanggotaan tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Loading a user's roles (forge_db::roles, the one role computation of ADR-0010) found membership or namespace rows that the schema and the forge-db commands never write: the parent chain of a namespace is longer than 20 steps (a cycle in namespaces.parent_id, or a depth the CHECK should have refused), or a group_members.role outside the five roles. The data was changed outside forge-db (a manual change, a restored dump, a disabled trigger or constraint). No role is returned, so the request is refused rather than decided on a partial role."
+diagnosis = "The log event carries `reason` (namespace_chain_too_deep or unknown_role), `resource` (group / namespace) and `id` (the group or namespace id the load started from), `user` (the user id whose roles were loaded) and, for unknown_role, `raw` (the stored value). Read the chain read-only: WITH RECURSIVE c(id, parent_id, step) AS (SELECT id, parent_id, 1 FROM forge.namespaces WHERE id = <id> UNION ALL SELECT n.id, n.parent_id, c.step + 1 FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < 25) SELECT * FROM c; a repeated id is a cycle. For unknown_role: SELECT group_id, user_id, role FROM forge.group_members WHERE role NOT IN ('guest','reporter','developer','maintainer','owner'); then check pg_constraint for group_members_role and forge_audit.ddl_audit for who dropped or altered it."
+fix = "Restore the rows from the audit log (forge.audit_log group.* / member.* rows) or a backup through an approved runbook step; restore the dropped constraint or trigger. Never patch the rows by hand without approval."
+runbook = "membership-data"
+test = "a_namespace_chain_beyond_the_cap_is_membership_data_invalid"
+# ── end D2 ──────────────────────────────────────────────────────────────
+
 [[error]]
 code = "FG-DB-0008"
 name = "SubscriberLag"

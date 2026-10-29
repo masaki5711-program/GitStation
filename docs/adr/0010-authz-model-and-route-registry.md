@@ -86,3 +86,35 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
   `ProjectUpdate` request type has no visibility or protection fields (those go
   through `ProjectVisibilityChange` / `ProtectedRefManage`), checked by a test
   when the route lands.
+
+## Amendment (2026-10-29, step D2: loading roles)
+
+- **One role computation.** `forge_db::roles::{load_group_roles,
+  load_namespace_roles}` are the only code that turns membership rows into a
+  role; callers feed their result into `authorize()` and never compute or
+  compare roles themselves. They return `MemberRoles { native, direct }`:
+  `native` is the highest direct role over the group and its ancestor groups
+  (one recursive query on the read pool, capped at `MAX_DEPTH` = 20 steps),
+  `direct` the role in that group alone. Only **active** users hold a role (a
+  disabled member stays a row, without a role). Projects join in step D4. The
+  key is the `UserId`, not the credential.
+- A chain longer than the cap (a cycle or corrupt data) or an unknown stored
+  role is `FG-DB-0018` MembershipDataInvalid (`namespace_chain_too_deep` /
+  `unknown_role`, runbook `membership-data`), never a silently shortened
+  role. A personal namespace carries no group role (its owner is decided by
+  `Resource::Namespace`); a project namespace gets only the ancestor groups'
+  role until D4 adds project members.
+- The permission matrix feeds roles by hand and cannot catch an inheritance
+  bug; `crates/forge-web/tests/member_roles.rs`
+  (`ancestor_owner_may_manage_subgroup_members`, `ancestor_reporter_may_not`,
+  `a_direct_role_below_the_inherited_one_does_not_cap_it`,
+  `a_disabled_ancestor_owner_may_not`, `a_non_member_may_not`) loads the
+  caller's role from the database and decides with it.
+- Two gates on one fact, both intentional: `Principal.active` refuses a
+  disabled caller (`FG-AUTH-0004`), and the loader gives a disabled member
+  no role — so a stale principal still gets none. An absent group is
+  `FG-REPO-0005` and a group without a role is a 403: groups are visible to
+  every signed-in user (`GroupRead`), so this reveals nothing. Project
+  routes (D4) must answer an absent and an invisible project with the same
+  404, as the visibility check already does.
+  `authorize()` and the matrix rows are unchanged.
