@@ -20,10 +20,16 @@
 | [FG-REPO-0004](FG-REPO-0004.md) | 500 | alert | Something already exists at the storage path of a repository being created |
 | [FG-REPO-0005](FG-REPO-0005.md) | 404 | info | The resource does not exist, or the caller may not see it |
 | [FG-REPO-0006](FG-REPO-0006.md) | 410 | info | The project was deleted and is inside its grace period; only restore (or the purge job) may act on it. |
+| [FG-REPO-0007](FG-REPO-0007.md) | 400 | info | A user, group or project name (a namespace path segment) breaks the rules of ADR-0015: 1 to 64 characters matching ^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$, no '..', not ending in .git / .atom / .wiki, and not a Windows device name (con, prn, aux, nul, com1-9, lpt1-9), also not when only the part before the first dot is one. |
+| [FG-REPO-0008](FG-REPO-0008.md) | 400 | info | A top-level name (a user name or a top-level group) is on the reserved list of ADR-0015 (forge_core RESERVED_TOP_LEVEL): it would shadow a route or a static file. |
+| [FG-REPO-0009](FG-REPO-0009.md) | 409 | info | The path is used by a sibling (user, group or project under the same parent) or blocked by a tombstone of a renamed, moved or deleted namespace (ADR-0015); a tombstone blocks the path until it is released. |
 | [FG-AUTH-0001](FG-AUTH-0001.md) | 401 | info | The request carried no valid credentials; forge has no anonymous access. |
 | [FG-AUTH-0002](FG-AUTH-0002.md) | 403 | info | The caller authenticated with a token whose scopes do not include the scope the action requires |
 | [FG-AUTH-0003](FG-AUTH-0003.md) | 403 | info | The caller can see the resource but their role is below what the action requires (or the action needs an administrator). |
 | [FG-AUTH-0004](FG-AUTH-0004.md) | 403 | info | The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins). |
+| [FG-AUTH-0005](FG-AUTH-0005.md) | 409 | info | A human user with the same email address (compared ignoring case) already exists; forge.users has a unique index on lower(email). |
+| [FG-AUTH-0006](FG-AUTH-0006.md) | 400 | info | A request to create a user broke a rule of forge.users before anything was written: a human without an email, or a field that is empty, too long or holds a NUL character (display_name 1 to 255, email 1 to 320, employee_number 1 to 64, external_id 1 to 255 characters). |
+| [FG-AUTH-0007](FG-AUTH-0007.md) | 409 | info | Another user already has the same employee_number, or the same external_id for the same auth_source (unique indexes users_employee_number and users_external_id on forge.users). |
 | [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |

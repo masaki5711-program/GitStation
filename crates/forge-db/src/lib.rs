@@ -21,6 +21,8 @@
 //!   (`FG-DB-0006` / `FG-DB-0007`).
 //! - [`subscribers`] runs internal event subscribers one event per
 //!   transaction with [`subscribers::DerivedTx`] (`FG-DB-0008`).
+//! - [`users`] creates (with the personal namespace) and disables users
+//!   (`FG-REPO-0007`..`0009`, `FG-AUTH-0005`..`0007`).
 
 #[cfg(test)]
 mod audited_doctor_tests;
@@ -45,6 +47,14 @@ pub mod sequencer;
 // ── C5: event subscribers and DerivedTx (ADR-0016 §6, §7) ──
 pub mod subscribers;
 // ── end C5 ──
+// ── D1: users and namespaces ──
+mod namespaces;
+pub mod users;
+#[cfg(test)]
+mod users_constraint_tests;
+#[cfg(test)]
+mod users_schema_tests;
+// ── end D1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 

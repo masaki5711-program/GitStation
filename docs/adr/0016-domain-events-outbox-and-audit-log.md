@@ -664,3 +664,22 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - **後で見直す（migration を足すとき）**: (1) 上の根あたりの数え超え — 根の `seq` で advisory lock を取れば防げる。(2) `events_audit_present` は同じ `txid` の監査の行が
   あるかだけを見ている（行の中身との対応までは見ない）。(3) 上限に達した状態で同じ `dedup_key` の派生イベントを出し直すと、`ON CONFLICT` の前に上限のエラーになる
   （出し直しが冪等にならない）。
+
+## Amendment（2026-10-28、手順 D1: 状態の表の台帳と `forge.audited_change_present`）
+
+- **台帳の 4 つの列**（`crates/forge-db/tables.toml`、`kind = "audited"` の表に必須。`bootstrap::check` が実際の表とトリガーを突き合わせる）:
+  - `audit_resource`: 監査のリソースの種類。リテラル（例 `"user"`）か、`=列名`（その列の値を種類にする。例 `namespaces` は `=kind`）。
+  - `audit_id_column`: リソースの ID の列。整数列でなければならない。
+  - `unaudited_columns`: 変わっても監査の行を求めない列（例 `updated_at`）。トリガーの `UPDATE OF` は、この列以外のすべての列である。
+    列を足したらトリガーを作り直す（足したまま作り直さないと、doctor が `FG-DB-0009 guard=audited_trigger` の `detail=update_of` で検出する）。
+  - `txn_audited_columns`: 変わったら、同じ種類の監査の行が同じトランザクションにあることだけを求める列（ID は変えない。例 `namespaces` の部分木の書き換えの `full_path`・`depth`）。
+- **トリガーの関数** `forge.audited_change_present(audit_resource, audit_id_column, unaudited_columns, txn_audited_columns)`（migration `20261028100000_audited_change_present.sql`、
+  product commit `bd28876`）。遅延の制約トリガー（`DEFERRABLE INITIALLY DEFERRED`、`ENABLE ALWAYS`）で、`WHEN` は付けない（`events_audit_present` の派生の例外とは別）。
+  - 行の ID が変わった、または `=列` の値が変わったときは、古いリソースと新しいリソースの両方の監査の行が要る。
+  - 変わったのが `txn_audited_columns` だけのときは、同じ種類の監査の行が 1 つあればよい。
+  - 満たさなければ `XF002`（`FG-DB-0013 reason=audited_change`）でコミットを失敗させる。台帳と違うトリガーは `reason=audited_change_config`。
+- **TRUNCATE**: 行のトリガーは TRUNCATE で迂回されるため、`kind = "audited"` の表には TRUNCATE を、どの役割にも与えない。
+  表は `src/bootstrap/schema.rs` の `LATER_TABLES` と `expectations()` に、移行と同じコミットで載せる（載せ忘れは doctor が `guard=privileges`、`detail=audited_table_unlisted` で検出する）。
+- **台帳の検査**: 台帳の解析は、リソースの列が `unaudited_columns` か `txn_audited_columns` にあること、同じ列が両方に入ることを拒否する。
+  `audit_id_column` が整数列であることは、`bootstrap::check` が実際の表に対して確かめる（`FG-DB-0009 guard=audited_trigger`、`detail=id_column`）。
+  テストは `every_table_is_in_the_ledger` と `guarded_objects_match_the_ledger`、D1 の表の検査は `users_schema_tests`。

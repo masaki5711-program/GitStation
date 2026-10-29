@@ -73,6 +73,42 @@ kind = "log"
 ro_columns = ["*"]
 # ── end C8 ──
 
+# ── D1: users and namespaces (ADR-0015, ADR-0016 §1) ──
+[tables.users]
+guarded = false
+kind = "audited"
+# Not email, employee_number or external_id (personal data).
+ro_columns = [
+    "id", "kind", "username", "display_name", "auth_source", "state", "is_admin", "created_at",
+    "updated_at",
+]
+audit_resource = "user"
+audit_id_column = "id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.namespaces]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+# The owner's audit row covers its namespace (kind = user / group / project).
+audit_resource = "=kind"
+audit_id_column = "owner_id"
+unaudited_columns = []
+txn_audited_columns = ["full_path", "depth"]
+
+[tables.namespace_tombstones]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "=cause_type"
+audit_id_column = "cause_id"
+# Changed only by ON DELETE SET NULL when a namespace is purged (forge_app
+# has no UPDATE on this table).
+unaudited_columns = ["namespace_id", "parent_namespace_id"]
+txn_audited_columns = []
+# ── end D1 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

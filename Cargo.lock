@@ -530,6 +530,8 @@ version = "0.1.0"
 dependencies = [
  "forge-errors",
  "percent-encoding",
+ "proptest",
+ "serde_json",
  "tempfile",
  "toml",
  "tracing",

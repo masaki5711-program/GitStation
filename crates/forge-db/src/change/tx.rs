@@ -67,13 +67,17 @@ impl ChangeTx {
         self
     }
 
-    /// The connection for the change's state writes. Run each statement
-    /// through [`ChangeTx::within`] so it counts against the deadline.
+    /// The connection of the change, unbounded: commands write through
+    /// [`ChangeTx::step`], which counts against the deadline.
+    // Tests write through it directly.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn conn(&mut self) -> &mut PgConnection {
         &mut self.tx
     }
 
     /// Run one step of the change inside its deadline.
+    // Tests bound arbitrary steps with it; commands use `step`.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn within<T>(
         &self,
         step: impl std::future::Future<Output = Result<T, ForgeError>>,
@@ -81,8 +85,21 @@ impl ChangeTx {
         bounded(self.deadline, self.timeout, step).await
     }
 
+    /// Run one statement of the change on its connection, inside its
+    /// deadline (the typed commands' state writes).
+    pub(crate) async fn step<'s, T, F, Fut>(&'s mut self, step: F) -> Result<T, ForgeError>
+    where
+        F: FnOnce(&'s mut PgConnection) -> Fut,
+        Fut: std::future::Future<Output = Result<T, ForgeError>> + 's,
+    {
+        let (deadline, timeout) = (self.deadline, self.timeout);
+        bounded(deadline, timeout, step(&mut self.tx)).await
+    }
+
     /// Enqueue a job inside the change (ADR-0016 §7): it exists only if the
     /// change commits, and the insert counts against the change's deadline.
+    // First production caller: repository provisioning (step D4).
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) async fn enqueue_job(&mut self, job: &NewJob) -> Result<Enqueued, ForgeError> {
         let (deadline, timeout) = (self.deadline, self.timeout);
         bounded(deadline, timeout, enqueue_on(&mut self.tx, job)).await
