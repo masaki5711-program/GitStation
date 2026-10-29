@@ -20,7 +20,7 @@ A user, group or project name (a namespace path segment) breaks the rules of ADR
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database.
+The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; for a nested group also too_deep, more than 20 levels, and path_too_long, a full path over 255 characters) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database.
 
 ## 対処 (fix)
 

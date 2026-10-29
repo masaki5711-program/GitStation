@@ -20,7 +20,7 @@ The resource does not exist, or the caller may not see it. Both cases return the
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (for example `resource=user`: users::disable on an id that does not exist).
+The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group; `resource=namespace`: a group create under an unknown parent).
 
 ## 対処 (fix)
 

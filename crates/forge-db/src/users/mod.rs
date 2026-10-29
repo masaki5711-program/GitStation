@@ -8,8 +8,8 @@ use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Committed, Outcome};
-use crate::namespaces::{is_tombstoned, lock_path};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
 
 /// Where a user's credentials are checked.
@@ -79,10 +79,6 @@ pub enum DisableOutcome {
 /// The audit resource type of users (tables.toml `audit_resource`).
 const RESOURCE: &str = "user";
 
-fn path_taken(reason: &'static str) -> ForgeError {
-    ForgeError::new(ErrorCode::NamespacePathTaken).with_context("reason", reason)
-}
-
 /// A unique violation the caller can act on, by constraint name; anything
 /// else stays a query error. The key value (an email, an employee number)
 /// never enters the error.
@@ -137,17 +133,6 @@ fn validate(new: &NewUser) -> Result<(), ForgeError> {
         }
     }
     Ok(())
-}
-
-/// A commit of a change without events is never deduplicated; a `Deduped`
-/// would mean the change was rolled back, so it is not reported as success.
-fn recorded(committed: Committed, action: &'static str) -> Result<(), ForgeError> {
-    match committed {
-        Committed::Recorded { .. } => Ok(()),
-        Committed::Deduped => Err(ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "unexpected_dedup")
-            .with_context("action", action)),
-    }
 }
 
 /// Insert the user and their personal namespace (`kind = 'user'`,
@@ -220,8 +205,13 @@ pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Creat
         namespace_id: created.namespace_id,
         is_admin: new.is_admin,
     };
-    let committed = tx.commit(audit_only(&details, created.user_id)).await?;
-    recorded(committed, details.action())?;
+    tx.commit(ChangeRecord::audit_only(
+        &details,
+        RESOURCE,
+        created.user_id.get(),
+    ))
+    .await?
+    .require_recorded(details.action())?;
     Ok(created)
 }
 
@@ -267,25 +257,10 @@ pub async fn disable(
     })
     .await?;
     let details = AuditDetails::UserDisabled { kind };
-    let committed = tx.commit(audit_only(&details, user)).await?;
-    recorded(committed, details.action())?;
+    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, user.get()))
+        .await?
+        .require_recorded(details.action())?;
     Ok(DisableOutcome::Disabled)
-}
-
-/// The record of an audit-only user change.
-fn audit_only(details: &AuditDetails, user_id: UserId) -> ChangeRecord {
-    ChangeRecord {
-        audit: AuditEntry {
-            action: details.action(),
-            outcome: Outcome::Succeeded,
-            resource_type: RESOURCE,
-            resource_id: Some(user_id.get()),
-            project_id: None,
-            error_code: None,
-            details: details.to_value(),
-        },
-        events: Vec::new(),
-    }
 }
 
 #[cfg(test)]

@@ -339,6 +339,27 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         // ── end D1 ──
+        // ── D2: no DELETE on groups (Q11), TRUNCATE for no one ──
+        (
+            "forge.groups",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.group_members",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_app:DELETE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        // ── end D2 ──
     ]
 }
 
@@ -389,6 +410,10 @@ const LATER_TABLES: &[&str] = &[
     "namespaces",
     "namespace_tombstones",
     // ── end D1 ──
+    // ── D2: groups (migration 20261029100000) ──
+    "groups",
+    "group_members",
+    // ── end D2 ──
 ];
 
 /// Every table the first migration creates.

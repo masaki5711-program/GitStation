@@ -10,6 +10,7 @@ pub mod path_vectors;
 pub mod readiness;
 pub mod ref_name;
 pub mod request_id;
+pub mod role;
 pub mod telemetry;
 pub mod user_kind;
 
@@ -18,11 +19,14 @@ pub use ids::{GroupId, NamespaceId, ProjectId, RepoId, TombstoneId, UserId};
 pub use namespace_path::PathSegment;
 pub use ref_name::RefName;
 pub use request_id::RequestId;
+pub use role::{Role, Visibility};
 pub use user_kind::UserKind;
 
 #[cfg(test)]
 mod audit_details_tests;
 #[cfg(test)]
 mod namespace_path_tests;
+#[cfg(test)]
+mod role_tests;
 #[cfg(test)]
 mod user_kind_tests;

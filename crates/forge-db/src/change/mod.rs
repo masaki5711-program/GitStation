@@ -13,7 +13,7 @@ use std::net::IpAddr;
 
 use forge_core::ids::{ProjectId, UserId};
 use forge_core::RequestId;
-use forge_errors::ErrorCode;
+use forge_errors::{ErrorCode, ForgeError};
 
 mod tx;
 mod validate;
@@ -162,6 +162,30 @@ pub struct ChangeRecord {
     pub events: Vec<DomainEvent>,
 }
 
+impl ChangeRecord {
+    /// A change that publishes no event, only its succeeded audit row
+    /// (`user.*`, `group.*` and `member.*` are audit-only): the action and
+    /// JSON come from `details`, the resource from `resource_type` / `id`.
+    pub(crate) fn audit_only(
+        details: &forge_core::AuditDetails,
+        resource_type: &'static str,
+        resource_id: i64,
+    ) -> Self {
+        Self {
+            audit: AuditEntry {
+                action: details.action(),
+                outcome: Outcome::Succeeded,
+                resource_type,
+                resource_id: Some(resource_id),
+                project_id: None,
+                error_code: None,
+                details: details.to_value(),
+            },
+            events: Vec::new(),
+        }
+    }
+}
+
 /// The result of [`ChangeTx::commit`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Committed {
@@ -170,6 +194,20 @@ pub enum Committed {
     /// An event's `dedup_key` was already recorded: nothing was written
     /// (state writes of the change included).
     Deduped,
+}
+
+impl Committed {
+    /// For a change without events, which is never deduplicated: a
+    /// `Deduped` would mean the change was rolled back, so it is not
+    /// reported as success (`FG-SYS-0001`, `reason=unexpected_dedup`).
+    pub(crate) fn require_recorded(self, action: &'static str) -> Result<(), ForgeError> {
+        match self {
+            Self::Recorded { .. } => Ok(()),
+            Self::Deduped => Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "unexpected_dedup")
+                .with_context("action", action)),
+        }
+    }
 }
 
 #[cfg(test)]

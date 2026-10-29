@@ -109,6 +109,27 @@ unaudited_columns = ["namespace_id", "parent_namespace_id"]
 txn_audited_columns = []
 # ── end D1 ──
 
+# ── D2: groups and their members (ADR-0010, ADR-0016 §1) ──
+[tables.groups]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "group"
+audit_id_column = "id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.group_members]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+# A membership change is audited on its group (member.*).
+audit_resource = "group"
+audit_id_column = "group_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+# ── end D2 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true
