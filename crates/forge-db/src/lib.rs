@@ -57,6 +57,8 @@ mod users_schema_tests;
 // ── end D1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+#[cfg(test)]
+mod test_support_tests;
 
 pub use error_map::{query_error, read_query_error};
 pub use migrate::{check_schema, migrate, status, SchemaStatus, MIGRATOR};

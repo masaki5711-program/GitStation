@@ -359,14 +359,16 @@ impl Drop for ClusterLock {
 static CREATE_TURN: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 /// A bootstrapped database created for one test (`forge_t_<uuid>`), dropped
-/// by [`FreshDb::drop_now`]. A panicking test leaks it; the prefix makes
-/// such leftovers easy to find (`SELECT datname FROM pg_database WHERE
-/// datname LIKE 'forge_t_%'`).
+/// when the value goes away — after [`FreshDb::drop_now`], at the end of the
+/// test, or while a failing test unwinds. Only a killed test process leaks
+/// one; the prefix makes such leftovers easy to find (`SELECT datname FROM
+/// pg_database WHERE datname LIKE 'forge_t_%'`).
 pub struct FreshDb {
     /// Logged in as forge_app.
     pub db: Db,
     pub name: String,
-    app: TestConfig,
+    /// Keeps the forge_app password file alive as long as the pool.
+    _app: TestConfig,
 }
 
 impl FreshDb {
@@ -398,7 +400,11 @@ impl FreshDb {
         drop(cluster);
         let app = test_config(&url_as("forge_app", &name), APP_PASSWORD, &[]);
         let db = Db::connect(&app.db).await.expect("connect as forge_app");
-        Self { db, name, app }
+        Self {
+            db,
+            name,
+            _app: app,
+        }
     }
 
     /// A fresh database with the product migrations applied (as
@@ -476,14 +482,55 @@ impl FreshDb {
         superuser(&self.name).await
     }
 
+    /// Close the pool cleanly, then drop the database (`Drop`).
     pub async fn drop_now(self) {
         self.db.close().await;
-        drop(self.app);
-        let mut admin = superuser(&maintenance_db()).await;
-        sqlx::query(&format!("DROP DATABASE \"{}\" WITH (FORCE)", self.name))
-            .execute(&mut admin)
-            .await
-            .expect("drop test database");
+    }
+}
+
+/// How long dropping a test database may take (connect + DROP).
+const DROP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl Drop for FreshDb {
+    /// `Drop` cannot await, so a helper thread drops the database on its own
+    /// runtime (`WITH (FORCE)` ends connections the pool still holds), within
+    /// [`DROP_TIMEOUT`]. The calling thread blocks meanwhile (on a
+    /// multi-thread test runtime, one worker stalls for the drop). A failure
+    /// panics, except while the test already unwinds (a second panic would
+    /// abort): then it is printed.
+    fn drop(&mut self) {
+        let name = std::mem::take(&mut self.name);
+        // clone: the helper thread needs its own copy; `name` stays for the message.
+        let target = name.clone();
+        let dropped = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(async {
+                tokio::time::timeout(DROP_TIMEOUT, async {
+                    let mut admin = superuser(&maintenance_db()).await;
+                    sqlx::query(&format!(
+                        "DROP DATABASE IF EXISTS \"{target}\" WITH (FORCE)"
+                    ))
+                    .execute(&mut admin)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                })
+                .await
+                .unwrap_or_else(|_| Err(format!("timed out after {DROP_TIMEOUT:?}")))
+            })
+        })
+        .join()
+        .unwrap_or_else(|_| Err("the drop thread panicked".to_owned()));
+        if let Err(e) = dropped {
+            if std::thread::panicking() {
+                eprintln!("FreshDb: could not drop test database {name}: {e}");
+            } else {
+                panic!("FreshDb: could not drop test database {name}: {e}");
+            }
+        }
     }
 }
 
