@@ -8,10 +8,6 @@
 //! The types here describe a change: who made it ([`ChangeContext`]), what
 //! the audit log records ([`AuditEntry`]) and which events it publishes
 //! ([`DomainEvent`]), together a [`ChangeRecord`].
-// The first production callers are the typed commands (step D, users and
-// projects); until then only the tests use ChangeTx. `expect`: the build
-// warns once a caller exists, so this cannot outlive its reason.
-#![cfg_attr(not(test), expect(dead_code))]
 
 use std::net::IpAddr;
 
@@ -22,8 +18,6 @@ use forge_errors::ErrorCode;
 mod tx;
 mod validate;
 
-#[cfg_attr(not(test), allow(unused_imports))]
-// first production callers: typed commands (step D)
 pub(crate) use tx::ChangeTx;
 // The event checks DerivedTx shares (subscribers, C5).
 pub(crate) use validate::{

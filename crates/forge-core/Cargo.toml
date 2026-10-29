@@ -15,9 +15,16 @@ percent-encoding.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+# D1: AuditDetails serializes to the audit log's details.
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+proptest.workspace = true
+
+[features]
+# The shared accept/reject vectors of namespace path segments (forge-db tests).
+test-support = []
 
 [lints]
 workspace = true

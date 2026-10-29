@@ -576,15 +576,17 @@ async fn a_repeated_dedup_key_rolls_back_the_whole_change() {
     t.drop_now().await;
 }
 
+/// The budget leaves room for BEGIN on a loaded test cluster (300 ms flaked
+/// with the whole suite running).
 #[tokio::test]
 async fn a_change_that_exceeds_its_deadline_is_rolled_back() {
     let t = FreshDb::migrated().await;
-    let tx = ChangeTx::begin_within(&t.db, &ctx(Actor::System), Duration::from_millis(300))
+    let tx = ChangeTx::begin_within(&t.db, &ctx(Actor::System), Duration::from_millis(2000))
         .await
         .expect("begin");
     let err = tx
         .within(async {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
             Ok(())
         })
         .await

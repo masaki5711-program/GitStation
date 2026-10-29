@@ -449,3 +449,34 @@ impl<S> Registry<S> {
 - **3-7**: 許可リストの画像は、中身で確かめた形式に合う `Content-Type` と、`nosniff`、CSP の sandbox で返す。
 - **3-8**: ルート単位の結合テストの名前を `namespace_tombstone_routes`（`Git/crates/forge-web/tests/namespace_tombstone_routes.rs`）とし、`authz-coverage` がこのテストと行を確かめるとした。
 - **3-9（L1）**: 409 の `reason` が `tombstoned` か `sibling` かの違いは、受け入れる露出と明記した（作成する人は、親の名前空間で作成の権限をもともと持っている）。
+
+## Amendment（2026-10-28、手順 D1: ユーザーと名前空間の表）
+
+- **`namespaces` に `kind` と `owner_id` を足す**（migration `20261028100100_users_and_namespaces.sql`）: `kind` は `user` / `group` / `project`、
+  `owner_id` はその名前空間が指すユーザー・グループ・プロジェクトの ID である。監査の行のリソースは `(kind, owner_id)` なので、持ち主の 1 つの監査の行が、
+  その名前空間の変更（`segment`、`full_path`、`depth`、`parent_id` の変更を含む）を覆う。`full_path` と `depth` は部分木の書き換えで変わるため、
+  `tables.toml` では txn-audited（同じ種類の監査の行が同じトランザクションにあること）にする。
+  - `owner_id` は種類によって指す表が変わる（多態）ため、**外部キーを持たない**。持ち主との整合は、同じ監査の行が両方を覆うこと（作成は 1 トランザクション）と、
+    D5 の削除・パージのコマンドで保つ。
+  - **D5 への注意**: txn-audited の判定は「同じ **種類** の監査の行」なので、グループの名前を変えると、子孫のプロジェクト（`kind = project`）の `full_path` の書き換えは、
+    グループの監査の行では覆われない。D5 では、部分木に含まれる種類ごとに監査の行を書くか、トリガーの判定を「部分木の根の監査の行」に広げるかを決める（未決）。
+- **トップレベルの予約語に `edge`・`fleet`・`devices` と、Web のルートのファイル `favicon.ico`・`robots.txt` を足す**（計画 01 §3.10、エッジ端末の経路や静的ファイルと衝突しないため）。
+  上の一覧は、これらを含めて `forge-core` の `RESERVED_TOP_LEVEL` の 1 つの定数が正である。
+  既存の名前がこれらと衝突する場合の扱いは、上の「予約語の追加」と同じく `ReservedNameOccupied` の検査で見つける（検査そのものは未実装）。
+- **墓標の表**（`namespace_tombstones`）は、上の「名前の変更、移管、削除と墓標」の列（`old_path`、`parent_namespace_id`、`namespace_id`、
+  `kind`（`moved` / `deleted`）、`owner_at_write`、`created_at`）に、監査の行のリソースを示す `cause_type`（`user` / `group` / `project`）と `cause_id` を足したものである。
+  - `old_path` は一意で、アプリが挿入と削除だけを行う（更新はしない。`forge_app` に UPDATE の権限はない）。
+  - `namespace_id` と `parent_namespace_id` は `forge.namespaces` への外部キーで、`ON DELETE SET NULL` にする。名前空間をパージすると NULL になり、
+    行き先のない `moved` の墓標は `deleted` と同じに扱う（上の規則どおり）。この 2 列は、外部キーの動作でしか変わらないため、監査の対象外の列（`unaudited_columns`）にする。
+  - `owner_at_write` は `forge.users` への外部キーである（ユーザーは削除せず、無効にするだけなので、参照は残る）。
+- **パスのロック**: パスに名前空間を作るコマンドと、墓標を書く・解放するコマンド（D5 の名前の変更、移動、削除、解放）は、最初に
+  `pg_advisory_xact_lock(hashtextextended('namespace:' || full_path, 0))`（`forge-db` の `namespaces::lock_path`）を取る。
+  これで、作成が、同時に書かれた墓標を見落とすことはない（2 接続のテスト `a_tombstone_written_concurrently_blocks_the_create`）。
+  作成は、念のため INSERT の後にも墓標をもう一度確かめる。
+- **users の表**: `username` には `namespaces.segment` と同じ CHECK を付ける。トップレベルの名前空間では `full_path = segment` を CHECK で保証する。
+  `external_id` は `(auth_source, external_id)` で一意にする。入力の誤りは FG-AUTH-0006 `UserRequestInvalid`、社員番号と外部 ID の重複は
+  FG-AUTH-0007 `UserIdentifierTaken` にする（`DbQueryFailed` にしない）。
+- **メールアドレスの列挙**: FG-AUTH-0005（メールアドレスの重複）は、そのアドレスが登録済みであることを相手に知らせる。このため、ユーザーを作る操作（と、
+  メールアドレスでの検索）は **管理者だけ** に許す（D3 以降の route で `authorize()` の行にする）。アドレスは比較の時だけ小文字にし、保存は入力のままにする。
+- 新しい表の上限は、深さ 20（`MAX_DEPTH`）、全体の長さ 255（`MAX_FULL_PATH_LEN`）、セグメントの長さ 64 である。
+  DB の CHECK は `forge-core` の `PathSegment::parse` と同じ規則を持つ。

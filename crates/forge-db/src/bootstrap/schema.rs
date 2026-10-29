@@ -310,8 +310,51 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end C8 ──
+        // ── D1: no DELETE on users / namespaces yet, no UPDATE on tombstones,
+        // TRUNCATE for no one (it bypasses the audit trigger) ──
+        (
+            "forge.users",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:UPDATE"]),
+                columns("forge_ro", "SELECT", USERS_RO),
+            ]
+            .concat(),
+        ),
+        (
+            "forge.namespaces",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.namespace_tombstones",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:DELETE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        // ── end D1 ──
     ]
 }
+
+/// The read pool's columns of users (tables.toml `ro_columns`): not email,
+/// employee_number or external_id.
+const USERS_RO: &[&str] = &[
+    "id",
+    "kind",
+    "username",
+    "display_name",
+    "auth_source",
+    "state",
+    "is_admin",
+    "created_at",
+    "updated_at",
+];
 
 // ── C8 ──
 /// The columns forge_app and forge_seq may insert into forge.audit_seal
@@ -341,6 +384,11 @@ const LATER_TABLES: &[&str] = &[
     // ── C8 ──
     "audit_seal",
     // ── end C8 ──
+    // ── D1: state tables (migration 20261028100100) ──
+    "users",
+    "namespaces",
+    "namespace_tombstones",
+    // ── end D1 ──
 ];
 
 /// Every table the first migration creates.

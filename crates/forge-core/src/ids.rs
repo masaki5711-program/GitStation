@@ -44,6 +44,15 @@ id_type!(
     ProjectId
 );
 
+id_type!(
+    /// A row of forge.namespaces (the path a user, group or project owns).
+    NamespaceId
+);
+id_type!(
+    /// A row of forge.namespace_tombstones (a released-until path block).
+    TombstoneId
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

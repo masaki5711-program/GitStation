@@ -36,6 +36,13 @@ connection, mapping driver errors to registered codes, migrations
   — what `forge doctor` reports as `db.bootstrap` / `db.connections`.
   `bootstrap::FILES` embeds `ops/db/bootstrap/*.sql`; `BOOTSTRAP_VERSION` must
   match the version 03 writes (tested).
+- `users::create(&Db, &ChangeContext, &NewUser) -> Result<Created, ForgeError>`
+  and `users::disable(&Db, &ChangeContext, UserId) -> Result<DisableOutcome, ForgeError>`
+  (step D1; `NewUser::human`, `AuthSource`): one change each, with its `user.*`
+  audit row and no event. `create` also writes the personal namespace
+  (`kind = user`, `owner_id` = the user), under the path's advisory lock
+  (`namespaces::lock_path`, crate-private; D5 rename / move / delete / release take
+  it too). Disabling a disabled user writes nothing.
 - Feature `test-support` (dev-dependency of other crates only):
   `test_support::FreshDb` — a database bootstrapped with the real files,
   logins with synthetic passwords.
@@ -57,6 +64,12 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
 derived_progress / audited_change with `table`).
+Raised by `users::create` / `users::disable`: FG-REPO-0007 / 0008 (`PathSegment`),
+FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_taken`,
+ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
+(`reason=employee_number_taken` / `external_id_taken`), FG-REPO-0005 (`resource=user`,
+`reason=absent` on disable), FG-SYS-0001
+(`reason=unexpected_dedup`, `unknown_user_kind`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
@@ -121,7 +134,8 @@ changes are FG-DB-0010 before anything is written (rules in
 `change/validate.rs`; client-supplied values are cut, never refused);
 a plain event committed without an audit row in its transaction is
 FG-DB-0013 (deferred trigger `events_audit_present`, `WHEN caused_by_seq IS NULL`).
-The typed commands (step D) are its only callers.
+The typed commands (step D) are its only callers; their state writes go through
+`ChangeTx::step` (one statement at a time, each inside the deadline).
 
 **State tables** (step D1, ADR-0016 §1): a `tables.toml` entry with
 `kind = "audited"` declares `audit_resource` (literal or `=column`),
@@ -147,7 +161,10 @@ column that is both.
 
 **Schema** (ADR-0016 §1, step C2): `forge.events` (outbox), `forge.audit_log`,
 `forge.event_feed_state`, `forge.event_subscribers`,
-`forge.subscriber_dead_letters`, `forge.jobs`; the DDL-status decision is
+`forge.subscriber_dead_letters`, `forge.jobs`, and (step D1, migration `20261028100100`)
+`forge.users`, `forge.namespaces`, `forge.namespace_tombstones` (all `kind = "audited"`;
+`forge_ro` cannot read email, employee_number or external_id; tombstone targets are
+`ON DELETE SET NULL` foreign keys and unaudited); the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
 (`guarded`, `kind`, `ro_columns`); rules for new migrations are in
 `migrations/README.md`. events / audit_log are append-only (per-table guard

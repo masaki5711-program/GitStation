@@ -201,7 +201,7 @@ user_message_ja = "指定されたプロジェクトまたはリポジトリが�
 user_message_en = "The project or repository was not found."
 user_message_id = "Proyek atau repositori tidak ditemukan."
 cause = "The resource does not exist, or the caller may not see it. Both cases return the same code so that private resources do not leak their existence (ADR-0010)."
-diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer, `absent`."
+diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (for example `resource=user`: users::disable on an id that does not exist)."
 fix = "Check the path; add the user to the project or group if they should see it."
 test = "invisible_private_project_is_not_found"
 
@@ -217,6 +217,45 @@ cause = "The project was deleted and is inside its grace period; only restore (o
 diagnosis = "The log event carries `action`. The audit log has the `project.deleted` entry with who deleted it and when."
 fix = "An Owner (or an administrator) restores the project before the grace period ends, if the deletion was a mistake."
 test = "pending_deletion_blocks_everything_but_restore"
+
+[[error]]
+code = "FG-REPO-0007"
+name = "NamespacePathInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "この名前は使えません。小文字の英数字と . _ - だけを、1〜64 文字で指定してください。"
+user_message_en = "This name cannot be used. Use 1 to 64 lowercase letters, digits, '.', '_' or '-'."
+user_message_id = "Nama ini tidak dapat digunakan. Gunakan 1 sampai 64 huruf kecil, angka, '.', '_' atau '-'."
+cause = "A user, group or project name (a namespace path segment) breaks the rules of ADR-0015: 1 to 64 characters matching ^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$, no '..', not ending in .git / .atom / .wiki, and not a Windows device name (con, prn, aux, nul, com1-9, lpt1-9), also not when only the part before the first dot is one."
+diagnosis = "The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database."
+fix = "Choose a name that follows the rules."
+test = "path_segment_rules_match_adr_0015"
+
+[[error]]
+code = "FG-REPO-0008"
+name = "NamespacePathReserved"
+http_status = 400
+severity = "info"
+user_message_ja = "この名前は予約されているため、トップレベルでは使えません。"
+user_message_en = "This name is reserved and cannot be used at the top level."
+user_message_id = "Nama ini dicadangkan dan tidak dapat digunakan di tingkat teratas."
+cause = "A top-level name (a user name or a top-level group) is on the reserved list of ADR-0015 (forge_core RESERVED_TOP_LEVEL): it would shadow a route or a static file."
+diagnosis = "The log event carries `reason=reserved`; the name is not logged. Compare the request with RESERVED_TOP_LEVEL."
+fix = "Choose another name; to use a reserved word, place it below a group."
+test = "a_reserved_top_level_segment_is_rejected"
+
+[[error]]
+code = "FG-REPO-0009"
+name = "NamespacePathTaken"
+http_status = 409
+severity = "info"
+user_message_ja = "この名前はすでに使われています。別の名前を指定してください。"
+user_message_en = "This name is already in use. Choose another name."
+user_message_id = "Nama ini sudah digunakan. Pilih nama lain."
+cause = "The path is used by a sibling (user, group or project under the same parent) or blocked by a tombstone of a renamed, moved or deleted namespace (ADR-0015); a tombstone blocks the path until it is released."
+diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created` with the same request_id) before treating it as a conflict."
+fix = "Choose another name, or have the tombstone released by the current owner of its target (or an administrator) when the old path is meant to be reused."
+test = "a_reserved_or_taken_or_tombstoned_username_is_rejected"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
@@ -271,6 +310,45 @@ cause = "The user exists but is disabled (by an administrator, or locked after r
 diagnosis = "The log event carries `action`. The audit log records who disabled the account, or the lockout."
 fix = "An administrator re-enables the account if it should be active."
 test = "disabled_account_is_denied"
+
+[[error]]
+code = "FG-AUTH-0005"
+name = "UserEmailTaken"
+http_status = 409
+severity = "info"
+user_message_ja = "このメールアドレスはすでに登録されています。"
+user_message_en = "This email address is already registered."
+user_message_id = "Alamat email ini sudah terdaftar."
+cause = "A human user with the same email address (compared ignoring case) already exists; forge.users has a unique index on lower(email)."
+diagnosis = "The log event carries `reason=email_taken`; the address is not logged (personal data). Look the address up with a privileged query on forge.users (the read pool cannot see email)."
+fix = "Use another address, or sign in as the existing user; an administrator merges or disables duplicate accounts."
+test = "a_second_user_with_the_same_email_is_user_email_taken"
+
+[[error]]
+code = "FG-AUTH-0006"
+name = "UserRequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "ユーザーの情報が正しくありません。入力内容を確認してください。"
+user_message_en = "The user details are not valid. Check what was entered."
+user_message_id = "Data pengguna tidak valid. Periksa kembali isian Anda."
+cause = "A request to create a user broke a rule of forge.users before anything was written: a human without an email, or a field that is empty, too long or holds a NUL character (display_name 1 to 255, email 1 to 320, employee_number 1 to 64, external_id 1 to 255 characters)."
+diagnosis = "The log event carries `reason` (email_missing, display_name_length, email_length, employee_number_length, external_id_length, nul_character) and `len`; the value itself is not logged (personal data). The same limits are CHECK constraints of forge.users (migration 20261028100100), so a request forge-db accepts is never refused by the database."
+fix = "Correct the field named by `reason`; for LDAP accounts, fix the directory entry that fed it."
+test = "an_invalid_user_request_is_user_request_invalid"
+
+[[error]]
+code = "FG-AUTH-0007"
+name = "UserIdentifierTaken"
+http_status = 409
+severity = "info"
+user_message_ja = "この社員番号または外部 ID は、すでに別のユーザーに使われています。"
+user_message_en = "This employee number or external ID is already used by another user."
+user_message_id = "Nomor karyawan atau ID eksternal ini sudah digunakan oleh pengguna lain."
+cause = "Another user already has the same employee_number, or the same external_id for the same auth_source (unique indexes users_employee_number and users_external_id on forge.users)."
+diagnosis = "The log event carries `reason` (employee_number_taken or external_id_taken); the value is not logged (personal data). Find the other account with a privileged query on forge.users (the read pool cannot see these columns); a duplicate usually means a re-hired employee or an LDAP entry that was recreated."
+fix = "An administrator decides which account keeps the identifier: disable or correct the stale account, then retry."
+test = "a_taken_employee_number_or_external_id_is_user_identifier_taken"
 
 [[error]]
 code = "FG-GIT-0007"
