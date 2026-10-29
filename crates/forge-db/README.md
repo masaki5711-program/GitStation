@@ -51,6 +51,11 @@ connection, mapping driver errors to registered codes, migrations
   group row first; a top-level group keeps at least one direct active Owner;
   bots are never members. `change_member` to the same role is
   `MemberChange::Unchanged` and writes nothing.
+- `roles::{load_group_roles, load_namespace_roles}(&Db, id, UserId) -> Result<MemberRoles, ForgeError>`
+  (step D2, ADR-0010): the only role computation. `MemberRoles { native, direct }` —
+  `native` is the highest direct role over the group and its ancestor groups
+  (recursive query on the read pool, capped at 20 steps), `direct` the role in that
+  group alone; active users only; a personal namespace has no group role.
 - Feature `test-support` (dev-dependency of other crates only):
   `test_support::FreshDb` — a database bootstrapped with the real files,
   logins with synthetic passwords.
@@ -71,7 +76,7 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 `audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
-derived_progress / audited_change with `table`).
+derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`).
 Raised by `users::create` / `users::disable`: FG-REPO-0007 / 0008 (`PathSegment`),
 FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_taken`,
 ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
@@ -84,10 +89,13 @@ FG-REPO-0010 MembershipConflict (`already_member`, `not_member`, `last_owner`,
 `description_length`, `nul_character`, `parent_not_group`, `owner_inactive`),
 FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-SYS-0001
 (`unknown_role`, `unexpected_dedup`).
+Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace`, `reason=absent`),
+FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
+`id`, `user`, `raw`), FG-DB-0001 / 0002.
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
-`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`,
+`job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
 `subscriber-lag.md`.
 
 **Tests**: need the development database (ADR-0011) —

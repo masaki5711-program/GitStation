@@ -260,6 +260,7 @@ trigger（Outbox の購読者 autofix-trigger）
 - **ロールの読み方**: `ProjectView.role` のフィールドをやめ、アクセサ `native_role()`（forge の所属: プロジェクトの直接の所属と祖先のグループの最大値）と `role_for(action) -> (Option<Role>, RoleSource)` に分ける。
   `role_for` は `action.kanflow_grant_allowed()`（§4.4）のときだけ kanflow の出どころの能力を含めた最大値を返し、それ以外は `native_role()` を返す。`authorize()` の各 arm はどちらかを明示的に選ぶ（コンパイルで強制）。
   同じ値なら出どころは `Forge`。所属の変更（`MemberManage`）の `MembershipChange.from` と、呼び出した人の上限のロールは `native_role()` で判定する。
+  **注記（2026-10-29、手順 D2）**: `native_role()` の種は `forge_db::roles` の `MemberRoles.native`（グループとその祖先のグループでの直接のロールの最大値。有効なユーザーだけ。深さ 20 で打ち切り）。プロジェクトの直接の所属は D4 で足す。ロールの計算はこの読み込み関数だけが行う（ADR-0010 の Amendment 2026-10-29）。
 - **ボットの読み取りの範囲（ローダーの規則）**: `Bot(SpecLane)` の主体に対して、ローダーは **MR のプロジェクトと、対象ブランチ（MR の target の SHA）の `.forge/repo.yml` の `specs:` で固定された仕様のプロジェクトだけ** の
   `ProjectView` を、読み取りだけ（Reporter 相当、`role_for` は読み取りの Action だけに効く）で載せる。他のプロジェクトは view がなく 404。`Bot(Autofix)` は §2.3 のとおり作成者 ∩ enabler。
 - **セッションだけの Action**（`SessionOnly`）: `MergeConfirmView`、`MergeAssertionIssue`、`IntegrationMembershipSyncToggle`、`IntegrationMembershipSyncAcknowledge`、`IntegrationBindingManage`、`SpecConformanceWaive`、`TokenCreate`。セッション以外はすべて deny（生成した行）。
