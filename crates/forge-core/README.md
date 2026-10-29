@@ -24,6 +24,8 @@ component starting with `-`; `branch()`, `tag()`).
 `RESERVED_TOP_LEVEL`), `as_str`. `RESERVED_TOP_LEVEL` (the one list, including
 `edge`, `fleet`, `devices`), `MAX_DEPTH` (20), `MAX_FULL_PATH_LEN` (255).
 `UserKind` (`human`, `service_account`, `bot`; `ALL`, `as_str`, `parse`; no device kind).
+`Role` (`Guest < … < Owner`; `ALL`, `as_str`, `parse`) and `Visibility` (`private`, `internal`), moved
+from forge-auth in step D2 (forge-auth re-exports them).
 `AuditDetails` (typed `audit_log.details`: `action()`, `to_value()`; no personal data).
 Feature `test-support`: `path_vectors::accepted()` / `rejected()`, the shared
 segment vectors.

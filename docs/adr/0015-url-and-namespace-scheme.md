@@ -480,3 +480,11 @@ impl<S> Registry<S> {
   メールアドレスでの検索）は **管理者だけ** に許す（D3 以降の route で `authorize()` の行にする）。アドレスは比較の時だけ小文字にし、保存は入力のままにする。
 - 新しい表の上限は、深さ 20（`MAX_DEPTH`）、全体の長さ 255（`MAX_FULL_PATH_LEN`）、セグメントの長さ 64 である。
   DB の CHECK は `forge-core` の `PathSegment::parse` と同じ規則を持つ。
+
+## Amendment（2026-10-29、手順 D2: グループ）
+
+- **グループの名前空間は、トップレベルか、グループの下にだけ置ける**。ユーザーの名前空間の下にグループは作れない（FG-REPO-0011 `GroupRequestInvalid`、`reason=parent_not_group`）。
+  プロジェクト（D4）の置き場所は D4 で決める。
+- グループの作成は、ユーザーの作成と同じく、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。親の名前空間は `FOR SHARE` で読み、作成の確定まで動かないようにする。
+- 入れ子の上限（深さ 20、全体の長さ 255）を超える作成は、FG-REPO-0007 の `reason=too_deep` / `path_too_long` にする。
+- グループの名前空間の `owner_id` は `groups.id` で、`group` の監査の行 1 つが、グループ、名前空間、最初の Owner をまとめて覆う。

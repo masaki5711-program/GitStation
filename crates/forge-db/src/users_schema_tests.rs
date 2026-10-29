@@ -46,6 +46,20 @@ async fn every_audited_table_has_its_audit_trigger() {
         audited,
         vec![
             AuditedTable {
+                name: "group_members".into(),
+                audit_resource: AuditResource::Literal("group".into()),
+                audit_id_column: "group_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "groups".into(),
+                audit_resource: AuditResource::Literal("group".into()),
+                audit_id_column: "id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
                 name: "namespace_tombstones".into(),
                 audit_resource: AuditResource::Column("cause_type".into()),
                 audit_id_column: "cause_id".into(),

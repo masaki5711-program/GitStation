@@ -43,6 +43,14 @@ connection, mapping driver errors to registered codes, migrations
   (`kind = user`, `owner_id` = the user), under the path's advisory lock
   (`namespaces::lock_path`, crate-private; D5 rename / move / delete / release take
   it too). Disabling a disabled user writes nothing.
+- `groups::create(&Db, &ChangeContext, &NewGroup) -> Result<CreatedGroup, ForgeError>`
+  (step D2): the group, its namespace (`kind = group`, only at the top level or
+  under a group) and its first Owner, under the path lock, with one
+  `group.created` audit row. `groups::{add_member, change_member, remove_member}`:
+  one `member.*` audit row each on the group (audit-only); every one locks the
+  group row first; a top-level group keeps at least one direct active Owner;
+  bots are never members. `change_member` to the same role is
+  `MemberChange::Unchanged` and writes nothing.
 - Feature `test-support` (dev-dependency of other crates only):
   `test_support::FreshDb` — a database bootstrapped with the real files,
   logins with synthetic passwords.
@@ -70,6 +78,12 @@ ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
 (`reason=employee_number_taken` / `external_id_taken`), FG-REPO-0005 (`resource=user`,
 `reason=absent` on disable), FG-SYS-0001
 (`reason=unexpected_dedup`, `unknown_user_kind`).
+Raised by `groups`: FG-REPO-0007 (also `too_deep`, `path_too_long`) / 0008 / 0009,
+FG-REPO-0010 MembershipConflict (`already_member`, `not_member`, `last_owner`,
+`bot_member`), FG-REPO-0011 GroupRequestInvalid (`display_name_length`,
+`description_length`, `nul_character`, `parent_not_group`, `owner_inactive`),
+FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-SYS-0001
+(`unknown_role`, `unexpected_dedup`).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,

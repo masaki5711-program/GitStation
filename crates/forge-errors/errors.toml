@@ -201,7 +201,7 @@ user_message_ja = "指定されたプロジェクトまたはリポジトリが�
 user_message_en = "The project or repository was not found."
 user_message_id = "Proyek atau repositori tidak ditemukan."
 cause = "The resource does not exist, or the caller may not see it. Both cases return the same code so that private resources do not leak their existence (ADR-0010)."
-diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (for example `resource=user`: users::disable on an id that does not exist)."
+diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group; `resource=namespace`: a group create under an unknown parent)."
 fix = "Check the path; add the user to the project or group if they should see it."
 test = "invisible_private_project_is_not_found"
 
@@ -227,7 +227,7 @@ user_message_ja = "この名前は使えません。小文字の英数字と . _
 user_message_en = "This name cannot be used. Use 1 to 64 lowercase letters, digits, '.', '_' or '-'."
 user_message_id = "Nama ini tidak dapat digunakan. Gunakan 1 sampai 64 huruf kecil, angka, '.', '_' atau '-'."
 cause = "A user, group or project name (a namespace path segment) breaks the rules of ADR-0015: 1 to 64 characters matching ^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$, no '..', not ending in .git / .atom / .wiki, and not a Windows device name (con, prn, aux, nul, com1-9, lpt1-9), also not when only the part before the first dot is one."
-diagnosis = "The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database."
+diagnosis = "The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; for a nested group also too_deep, more than 20 levels, and path_too_long, a full path over 255 characters) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database."
 fix = "Choose a name that follows the rules."
 test = "path_segment_rules_match_adr_0015"
 
@@ -256,6 +256,32 @@ cause = "The path is used by a sibling (user, group or project under the same pa
 diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created` with the same request_id) before treating it as a conflict."
 fix = "Choose another name, or have the tombstone released by the current owner of its target (or an administrator) when the old path is meant to be reused."
 test = "a_reserved_or_taken_or_tombstoned_username_is_rejected"
+
+[[error]]
+code = "FG-REPO-0010"
+name = "MembershipConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "メンバーの変更が、今のメンバーの状態と合いません。画面を更新して確認してください。"
+user_message_en = "The membership change does not fit the current members. Refresh and check."
+user_message_id = "Perubahan anggota tidak sesuai dengan keadaan anggota saat ini. Muat ulang dan periksa."
+cause = "A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners; disabling the sole active Owner on its own, and disabling the ancestor owners a subgroup relies on, are not refused until step D3."
+diagnosis = "The log event carries `reason` (already_member, not_member, last_owner, bot_member) and `action`; ids only, no names. For last_owner, the event also carries `group_id`; list that group's direct owners with a privileged query on forge.group_members joined to forge.users (state = 'active'): a top-level group needs at least one; a subgroup relies on its ancestors' owners."
+fix = "Refresh and retry; for last_owner, first make another active user an Owner of the group."
+test = "removing_the_last_owner_is_refused_under_concurrency"
+
+[[error]]
+code = "FG-REPO-0011"
+name = "GroupRequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "グループの情報が正しくありません。入力内容を確認してください。"
+user_message_en = "The group details are not valid. Check what was entered."
+user_message_id = "Data grup tidak valid. Periksa kembali isian Anda."
+cause = "A request to create a group broke a rule before anything was written: the display name or description is empty, too long or holds a NUL character, the parent namespace is not a group (groups nest only under groups, ADR-0015 Amendment D2), or the first Owner is not an active user (a bot as first Owner is FG-REPO-0010 `bot_member`)."
+diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_group, owner_inactive) and `len` where it applies; values are not logged."
+fix = "Correct the field named by `reason`; create subgroups below a group, not below a user."
+test = "an_invalid_group_request_is_group_request_invalid"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 

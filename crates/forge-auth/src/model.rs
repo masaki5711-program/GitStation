@@ -5,29 +5,10 @@
 //! Inputs fail closed: a `Principal` cannot be built without stating how it
 //! authenticated and whether the account is active.
 
+// Role and Visibility live in forge-core (step D2: forge-db stores and loads
+// them); re-exported here so the authorization API is unchanged.
 use forge_core::{RefName, UserId};
-
-/// GitLab-style roles, ordered: `Guest < Reporter < Developer < Maintainer < Owner`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Role {
-    Guest,
-    Reporter,
-    Developer,
-    Maintainer,
-    Owner,
-}
-
-impl Role {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Role::Guest => "guest",
-            Role::Reporter => "reporter",
-            Role::Developer => "developer",
-            Role::Maintainer => "maintainer",
-            Role::Owner => "owner",
-        }
-    }
-}
+pub use forge_core::{Role, Visibility};
 
 /// What a token may be used for. Scopes only narrow a role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -132,14 +113,6 @@ impl Principal {
                 Credential::Token(scopes) => scopes.contains(&Scope::Admin),
             }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
-    /// Members only.
-    Private,
-    /// Every signed-in user may read.
-    Internal,
 }
 
 /// A project as seen by the caller.

@@ -1,7 +1,7 @@
 //! What every command that writes a namespace path shares (step D1 create;
 //! D5 rename, move, delete and tombstone release).
 
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use crate::query_error;
@@ -30,4 +30,10 @@ pub(crate) async fn is_tombstoned(conn: &mut PgConnection, path: &str) -> Result
     .fetch_one(conn)
     .await
     .map_err(|e| query_error("namespaces.tombstone", e))
+}
+
+/// `FG-REPO-0009`: the path is used by a sibling (`reason=sibling`) or
+/// blocked by a tombstone (`reason=tombstoned`); never the path itself.
+pub(crate) fn path_taken(reason: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::NamespacePathTaken).with_context("reason", reason)
 }

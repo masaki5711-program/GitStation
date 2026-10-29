@@ -55,6 +55,11 @@ mod users_constraint_tests;
 #[cfg(test)]
 mod users_schema_tests;
 // ── end D1 ──
+// ── D2: groups and their members ──
+pub mod groups;
+#[cfg(test)]
+mod groups_schema_tests;
+// ── end D2 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
