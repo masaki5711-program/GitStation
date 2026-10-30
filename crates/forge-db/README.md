@@ -253,7 +253,24 @@ column that is both.
 `forge.groups`, `forge.group_members` (audited, resource `group`; no DELETE on groups),
 (step D3, `20261030100000`) `forge.tokens` (audited on the owner, resource `user` /
 `user_id`; `last_used_at` unaudited; forge_app may INSERT and UPDATE only `revoked_at`,
-`revoked_reason`, `last_used_at`, never DELETE; `forge_ro` cannot read `secret_sha256`);
+`revoked_reason`, `last_used_at`, never DELETE; `forge_ro` cannot read `secret_sha256`),
+(step D4 MR1, `20261031100000`) `forge.projects`, `forge.repositories`,
+`forge.project_members`, `forge.protected_refs` (all audited on the project, resource
+`project` / `id` or `project_id`; `updated_at` unaudited). A project's path is its
+`namespaces` row (`kind = 'project'`, `owner_id = projects.id`; no `namespace_id`
+column); `deleted_at` / `purge_after` both or neither, no DELETE yet (D5).
+`repositories`: one per project (`project_id` UNIQUE), `kind` spec | system fixed —
+forge_app may UPDATE only `state` (provisioning | ready) and `ready_at` (set exactly
+when ready; the guard trigger `repositories_state_forward` — XF001, FG-DB-0009
+`rejected`, enabled ALWAYS, compared by doctor — allows only provisioning → ready and
+never changes `ready_at` once set), no DELETE; `provision_token` (uuid, default `gen_random_uuid()`) is not
+readable by `forge_ro`. `project_members`: PK (project_id, user_id), role CHECK, no
+bots (trigger `project_members_no_bot`), DELETE allowed. `protected_refs`: CHECKs
+`protected_refs_pattern_prefix` (`^refs/(heads|tags)/`) and `_length` (≤ 255 bytes) —
+the rest of `RefPattern::parse` is not in the database — `push_min_role` developer |
+maintainer | owner, unique index `protected_refs_project_pattern` on
+(project_id, lower(pattern)) (`pattern` is `COLLATE "C"`: ASCII case folding);
+tests `src/projects_schema_tests.rs`;
 the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
 (`guarded`, `kind`, `ro_columns`); rules for new migrations are in

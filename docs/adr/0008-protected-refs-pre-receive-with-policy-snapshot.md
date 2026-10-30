@@ -40,3 +40,25 @@ ref ごとの `update` フックでは、複数の ref の push が一部だけ�
 
 ### Risks
 - ref の更新後に DB が落ちると監査とイベントが残らない → `FG-GIT-0012` で ref の一覧をすべてログに残し、再投入の Runbook を用意する
+
+## Amendment（2026-10-31、手順 D4 MR1: 保護の規則の表とパターン）
+
+- 規則は `forge.protected_refs`（`project_id`、`pattern`、`push_min_role`）。`push_min_role` は `developer` / `maintainer` / `owner`
+  （Guest と Reporter はもともと push できないので、規則の値にしない）。プロジェクトの監査の行で覆う。
+- **パターン**（`forge-core` の `RefPattern::parse`、違反は FG-REPO-0013 `ProtectedRefRuleInvalid`）。次の順で調べ、最初の違反を返す。
+  1. 255 バイトまで（`too_long`。長さは文字数ではなくバイト数）。
+  2. `refs/heads/` か `refs/tags/` で始まる（`prefix`。大文字小文字を区別する）。
+  3. `*` は 1 つまで、最後のパスの部分の中だけ（`wildcard`。`refs/heads/release/*` は可、`refs/heads/*/x` は不可）。
+  4. `*` を普通の文字とみなして、`RefName` の規則（git の check-ref-format と、`-` で始まる部分の禁止。`check_ref_format`、失敗した規則を `rule`）。
+- **照合**（`RefPattern::matches`）は、両側を同じ規則で畳んで比べる（大文字小文字を区別しないファイルシステムでは `MAIN` と `main` が
+  同じファイルになるため）。畳み方は 1 文字ずつで、前後の文字に依らない（`char::to_lowercase` の後、語末の `ς` を `σ` にする）。文字列全体の
+  `to_lowercase` は語末の `Σ` を `ς` にするので、パターンと ref で畳み方が変わり、守られない ref が出る（レビューの HIGH）。
+  Unicode の正規化（NFC と NFD）は行わない。1 つの符号位置の `é` と、`e` + 結合文字は、別のパターン・別の ref である。`*` は空を含む任意の文字の並びに一致し、`/` もまたぐ（`refs/heads/release/*` は `refs/heads/release/1/hotfix` も守る）。
+  一致を広げても、守られる ref が増えるだけである（一致した規則のうち最も厳しいものが効く。`RefProtection::effective`）。
+- **DB の CHECK は接頭辞と長さだけ**（`protected_refs_pattern_prefix`、`protected_refs_pattern_length`）。残りの規則はパーサーだけが持ち、書き手は
+  必ず `RefPattern::parse` を通す。DB が拒否するのは、パーサーが `prefix` か `too_long` を返すときに限る（プロパティテスト
+  `the_db_check_agrees_with_the_ref_pattern_parser`）。
+- **重複**: 同じプロジェクトで、大文字小文字だけが違うパターンは 1 つまで。DB の裏付けは一意の索引 `protected_refs_project_pattern`
+  `(project_id, lower(pattern))` で、`pattern` は `COLLATE "C"` なので `lower()` は ASCII だけを畳む（サーバーのロケールに依らない）。
+  ASCII 以外の大文字小文字の違いは、D4 MR5 の書き込みが `RefPattern::key()` で調べる（`duplicate_pattern`）。規則の数の上限
+  （1 プロジェクト 100、`too_many_rules`）も MR5 で、アプリケーションだけが守る（DB には上限がない）。

@@ -12,6 +12,8 @@ pub mod namespace_path;
 pub mod path_vectors;
 pub mod readiness;
 pub mod ref_name;
+pub mod ref_pattern;
+pub mod repository;
 pub mod request_id;
 pub mod role;
 pub mod scope;
@@ -23,9 +25,11 @@ pub use audit_details::AuditDetails;
 pub use authenticator::{Authenticator, TokenIdentity};
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
-pub use ids::{GroupId, NamespaceId, ProjectId, RepoId, TombstoneId, UserId};
+pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 pub use namespace_path::PathSegment;
 pub use ref_name::RefName;
+pub use ref_pattern::RefPattern;
+pub use repository::{RepositoryKind, RepositoryState};
 pub use request_id::RequestId;
 pub use role::{Role, Visibility};
 pub use scope::Scope;
@@ -39,6 +43,10 @@ mod dedup_key_tests;
 mod event_type_tests;
 #[cfg(test)]
 mod namespace_path_tests;
+#[cfg(test)]
+mod ref_pattern_tests;
+#[cfg(test)]
+mod repository_tests;
 #[cfg(test)]
 mod role_tests;
 #[cfg(test)]

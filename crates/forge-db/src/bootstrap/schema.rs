@@ -26,7 +26,19 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── end C5 ──
     // ── D1: the audit trigger of state tables (migration 20261028100000) ──
     "forge.audited_change_present()",
+    // ── D4: repositories move only provisioning -> ready (20261031100000) ──
+    "forge.repositories_state_guard()",
 ];
+
+/// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
+/// each must exist with this exact definition, enabled ALWAYS. Unlike
+/// `GUARDED_TRIGGERS`, the table may have other triggers.
+const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[(
+    "repositories",
+    "repositories_state_forward",
+    "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
+     FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
+)];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
 /// (with `search_path = pg_catalog`): no other trigger may exist.
@@ -372,8 +384,43 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end D3 ──
+        // ── D4: no DELETE on projects / repositories yet (D5), repository
+        // kind fixed (UPDATE of state and ready_at only), the read pool
+        // without provision_token, TRUNCATE for no one ──
+        (
+            "forge.projects",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.repositories",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", &["state", "ready_at"]),
+                columns("forge_ro", "SELECT", REPOSITORIES_RO),
+            ]
+            .concat(),
+        ),
+        ("forge.project_members", operational()),
+        ("forge.protected_refs", operational()),
+        // ── end D4 ──
     ]
 }
+
+/// The read pool's columns of repositories (tables.toml `ro_columns`): not
+/// provision_token.
+const REPOSITORIES_RO: &[&str] = &[
+    "id",
+    "project_id",
+    "kind",
+    "state",
+    "created_at",
+    "ready_at",
+];
 
 /// The columns forge_app may update on forge.tokens.
 const TOKENS_APP_UPDATE: &[&str] = &["revoked_at", "revoked_reason", "last_used_at"];
@@ -448,6 +495,12 @@ const LATER_TABLES: &[&str] = &[
     // ── D3: tokens (migration 20261030100000) ──
     "tokens",
     // ── end D3 ──
+    // ── D4: projects (migration 20261031100000) ──
+    "projects",
+    "repositories",
+    "project_members",
+    "protected_refs",
+    // ── end D4 ──
 ];
 
 /// Every table the first migration creates.
@@ -566,6 +619,23 @@ pub(crate) async fn check_schema_objects_with(
             .find(|(n, ..)| !expected.iter().any(|(name, _)| name == n))
         {
             return Err(guard_missing("log_triggers").with_context("trigger", extra));
+        }
+    }
+    // D4: guard triggers of state tables. Other triggers may exist there
+    // (the audit trigger, checked against the ledger above).
+    for (table, name, definition) in STATE_GUARD_TRIGGERS {
+        let found: Option<(String, String)> = sqlx::query_as(&format!(
+            "SELECT t.tgenabled::text, pg_catalog.pg_get_triggerdef(t.oid) \
+             FROM pg_catalog.pg_trigger t \
+             WHERE t.tgrelid = 'forge.{table}'::regclass AND NOT t.tgisinternal \
+             AND t.tgname = $1"
+        ))
+        .bind(*name)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| read_query_error("bootstrap.schema_triggers", e))?;
+        if !found.is_some_and(|(enabled, def)| enabled == "A" && def == *definition) {
+            return Err(guard_missing("log_triggers").with_context("trigger", *name));
         }
     }
     for (table, grants) in expected {

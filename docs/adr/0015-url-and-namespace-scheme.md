@@ -488,3 +488,21 @@ impl<S> Registry<S> {
 - グループの作成は、ユーザーの作成と同じく、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。親の名前空間は `FOR SHARE` で読み、作成の確定まで動かないようにする。
 - 入れ子の上限（深さ 20、全体の長さ 255）を超える作成は、FG-REPO-0007 の `reason=too_deep` / `path_too_long` にする。
 - グループの名前空間の `owner_id` は `groups.id` で、`group` の監査の行 1 つが、グループ、名前空間、最初の Owner をまとめて覆う。
+
+## Amendment（2026-10-31、手順 D4 MR1: `projects` の表）
+
+- **`projects` に `namespace_id` の列を置かない**。D4 の計画は `projects.namespace_id UNIQUE` を挙げていたが、ユーザー・グループと同じく、
+  プロジェクトのパスは `namespaces` の行（`kind = 'project'`、`owner_id = projects.id`）が持つ。理由:
+  - 1 対 1 は、すでに一意の索引 `namespaces_owner (kind, owner_id)` が守る（D1 の Amendment）。
+  - `namespace_id NOT NULL` の外部キーを足すと、プロジェクトと名前空間がお互いの ID を先に必要とする。1 つのトランザクションで作るには、
+    ID の順序（sequence）を `forge_app` に直接使わせる権限が要り、その権限は doctor の ACL の比較の外にある。
+  - 1 つの `project` の監査の行が、プロジェクトと名前空間をまとめて覆う（グループと同じ形）。
+- `projects.deleted_at` と `purge_after` は、両方あるか両方ないか（CHECK `projects_deletion_pair`。`purge_after >= deleted_at`）。書き手は D5。
+  プロジェクトの DELETE の権限も D5 まで与えない。
+- `project_members` には、`group_members` と同じく、bot を入れないトリガー（`project_members_no_bot`）を DB の裏付けとして付ける。
+- **プロジェクト・名前空間・リポジトリの 1 対 1 対 1 は、DB だけでは守られない**（`namespaces.owner_id` は多態で外部キーがなく、
+  プロジェクトがリポジトリや名前空間を持つことを強制する制約もない）。このため:
+  - D4 MR2 の作成（`projects::create`）は、プロジェクト、名前空間（`kind = 'project'`）、リポジトリ（`provisioning`）を **1 つのトランザクション** で書く。
+  - MR2 は、作成の後に 3 つがそろっていること（どれかが欠けた作成は確定しないこと）を確かめるテストを持つ。
+  - 欠けた組（名前空間のないプロジェクト、プロジェクトのない `kind = 'project'` の名前空間、リポジトリのないプロジェクト）を doctor で検査するかは、
+    削除とパージを入れる D5 で決める。

@@ -67,6 +67,10 @@ pub mod roles;
 // ── D3: personal access tokens ──
 pub mod tokens;
 // ── end D3 ──
+// ── D4: projects, repositories, project members, protected refs ──
+#[cfg(test)]
+mod projects_schema_tests;
+// ── end D4 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

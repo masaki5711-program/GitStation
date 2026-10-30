@@ -550,6 +550,7 @@ dependencies = [
  "forge-core",
  "forge-errors",
  "hmac",
+ "proptest",
  "serde_json",
  "serde_json_canonicalizer",
  "sha2",

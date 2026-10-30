@@ -49,6 +49,10 @@ id_type!(
     NamespaceId
 );
 id_type!(
+    /// A row of forge.protected_refs (one protection rule of a project).
+    ProtectedRefId
+);
+id_type!(
     /// A row of forge.namespace_tombstones (a released-until path block).
     TombstoneId
 );
