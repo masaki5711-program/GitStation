@@ -10,6 +10,9 @@ use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
+// ── D4 MR3b ──
+mod admin_repo;
+// ── end D4 MR3b ──
 mod admin_token;
 mod admin_user;
 mod db;
@@ -66,9 +69,9 @@ enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
-    /// Operator commands. `token issue` / `token revoke`, `user disable` and
-    /// `bootstrap-admin` change data (in production: approved runbook steps);
-    /// the others only read.
+    /// Operator commands. `token issue` / `token revoke`, `user disable`,
+    /// `bootstrap-admin` and `repo reprovision` change data (in production:
+    /// approved runbook steps); the others only read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -112,7 +115,27 @@ enum AdminCommand {
         #[arg(long, requires = "create")]
         display_name: Option<String>,
     },
+    // ── D4 MR3b ──
+    /// Repositories (step D4).
+    Repo {
+        #[command(subcommand)]
+        command: RepoCommand,
+    },
+    // ── end D4 MR3b ──
 }
+
+// ── D4 MR3b ──
+#[derive(Subcommand)]
+enum RepoCommand {
+    /// Enqueue the provisioning job of a repository still `provisioning`
+    /// again (after its job died: `forge doctor` repositories.provisioning,
+    /// FG-REPO-0012). Refused for a ready repository.
+    Reprovision {
+        /// The repository id.
+        repo_id: i64,
+    },
+}
+// ── end D4 MR3b ──
 
 #[derive(Subcommand)]
 enum UserCommand {
@@ -204,7 +227,10 @@ fn main() -> ExitCode {
                 | AdminCommand::User {
                     command: UserCommand::Disable { .. },
                 }
-                | AdminCommand::BootstrapAdmin { .. },
+                | AdminCommand::BootstrapAdmin { .. }
+                | AdminCommand::Repo {
+                    command: RepoCommand::Reprovision { .. },
+                },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
         | Command::Errors { .. }
@@ -318,6 +344,12 @@ fn main() -> ExitCode {
                 },
             )
         }),
+        Command::Admin {
+            command:
+                AdminCommand::Repo {
+                    command: RepoCommand::Reprovision { repo_id },
+                },
+        } => config().and_then(|cfg| admin_repo::reprovision(&cfg.database, &request_id, repo_id)),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)
@@ -411,6 +443,23 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn repo_reprovision_takes_a_repository_id() {
+        let cli = parse(&["admin", "repo", "reprovision", "42"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Repo {
+                    command: RepoCommand::Reprovision { repo_id: 42 }
+                }
+            }
+        ));
+        assert!(parse(&["admin", "repo", "reprovision"]).is_err());
+        assert!(parse(&["admin", "repo", "reprovision", "x"]).is_err());
+        // The read-only repo-path command is unchanged.
+        assert!(parse(&["admin", "repo-path", "42"]).is_ok());
     }
 
     #[test]

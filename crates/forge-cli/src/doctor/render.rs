@@ -68,6 +68,22 @@ const SAFE_CONTEXT: &[&str] = &[
     "active_human_admins",
     "ownerless_groups",
     "group_ids",
+    // ── D4 MR3b — FG-REPO-0012 (repository-provisioning runbook) and
+    // FG-REPO-0002 from `repositories.storage` (repo-storage): ids, counts,
+    // ages, a job state. Never the path or the provision token.
+    "repo_id",
+    "project_id",
+    "stuck",
+    "age_ms",
+    "job_state",
+    "threshold_ms",
+    "missing",
+    "checked",
+    "truncated",
+    "other",
+    "job_not_live",
+    "too_old",
+    // ── end D4 MR3b ──
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

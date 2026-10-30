@@ -73,7 +73,13 @@ async fn the_worker_reaps_at_startup_and_stops_cleanly() {
     assert_eq!(health_of(&t).await.expired_leases, 1);
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run(&db, seal_keys(), stopped).await });
+    let worker = {
+        let (dir, storage) = super::provision::tests::storage();
+        tokio::spawn(async move {
+            let _root = dir;
+            run(&db, seal_keys(), &storage, stopped).await
+        })
+    };
     until(&t, "the reaper never ran", |h| h.oldest_expired.is_none()).await;
     stopped_cleanly(stop, worker).await;
     t.drop_now().await;

@@ -41,6 +41,10 @@ phases 9–10.
   `gc.auto=0`, fsck on; writes `forge.provisionToken=<token>`
   (`PROVISION_TOKEN_KEY`, the `repositories.provision_token`) last, before the
   rename, so a marked repository is a fully configured one.
+- `init_bare_or_adopt_until(&Git, RepoId, token, hooks_path, deadline: Instant)` (D4 MR3b):
+  the same under one deadline — each git call gets at most the time left, each
+  file-system step runs under it (blocking ones on the blocking pool); an overrun is
+  FG-GIT-0002 or FG-REPO-0003 `reason=deadline` (both retryable).
 - `init_bare_or_adopt(&Git, RepoId, token: Uuid, hooks_path) -> Provisioned`
   (`Created(path)` | `Adopted(path)`, `.path()` / `.into_path()`) — the
   idempotent form for the provisioning job (ADR-0009 amendment, D4). Adopts an

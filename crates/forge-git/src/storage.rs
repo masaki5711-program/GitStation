@@ -2,15 +2,17 @@
 //! of its `RepoId` — `<root>/repos/<shard>/<id>.git`, where `<shard>` is the
 //! first two hex digits of sha256(id). URL segments never reach a path.
 
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::Git;
+use crate::{Git, GitCommand};
 
 /// Repository config key that marks a repository with the provision token of
 /// the `repositories` row it was created for (D4). A provisioning retry
@@ -31,6 +33,92 @@ fn io_failed(operation: &'static str, e: io::Error) -> ForgeError {
     ForgeError::new(ErrorCode::StorageIoFailed)
         .with_context("operation", operation)
         .with_source(e)
+}
+
+/// The time left for one provisioning attempt
+/// ([`StorageRoot::init_bare_or_adopt_until`], D4 MR3b): every git call
+/// gets at most the remaining time and every file-system step runs under it,
+/// so an overrun names the step that hung — `FG-GIT-0002` for git,
+/// `FG-REPO-0003` (`operation`, `reason=deadline`) for the file system —
+/// instead of a generic job timeout. Both are retryable
+/// ([`provision_error_is_retryable`]). `None`: no deadline beyond each git
+/// call's own timeout (the file-system steps run as before).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Budget(Option<Instant>);
+
+impl Budget {
+    pub(crate) const NONE: Self = Self(None);
+
+    fn left(self) -> Option<Duration> {
+        self.0.map(|d| d.saturating_duration_since(Instant::now()))
+    }
+
+    /// `cmd` bounded by the time left (and never longer than its own timeout).
+    pub(crate) fn git(
+        self,
+        git: &Git,
+        cmd: GitCommand,
+        id: RepoId,
+    ) -> Result<GitCommand, ForgeError> {
+        match self.left() {
+            None => Ok(cmd),
+            Some(left) if left.is_zero() => Err(ForgeError::new(ErrorCode::GitTimeout)
+                .with_context("kind", "deadline")
+                .with_context("reason", "deadline")
+                .with_context("repo_id", id)),
+            Some(left) => Ok(cmd.timeout(left.min(git.config().timeout_total))),
+        }
+    }
+
+    /// An async file-system step under the time left.
+    pub(crate) async fn fs<T>(
+        self,
+        operation: &'static str,
+        id: RepoId,
+        step: impl Future<Output = Result<T, ForgeError>>,
+    ) -> Result<T, ForgeError> {
+        match self.left() {
+            None => step.await,
+            Some(left) if left.is_zero() => Err(fs_deadline(operation, id)),
+            Some(left) => match tokio::time::timeout(left, step).await {
+                Ok(result) => result,
+                Err(_) => Err(fs_deadline(operation, id)),
+            },
+        }
+    }
+
+    /// A blocking file-system step (`std::fs`) on the blocking pool under
+    /// the time left; without a deadline it runs inline, as before.
+    pub(crate) async fn blocking<T: Send + 'static>(
+        self,
+        operation: &'static str,
+        id: RepoId,
+        step: impl FnOnce() -> Result<T, ForgeError> + Send + 'static,
+    ) -> Result<T, ForgeError> {
+        let Some(left) = self.left() else {
+            return step();
+        };
+        if left.is_zero() {
+            return Err(fs_deadline(operation, id));
+        }
+        match tokio::time::timeout(left, tokio::task::spawn_blocking(step)).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(join)) => Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("operation", operation)
+                .with_context("reason", "blocking_task_failed")
+                .with_context("repo_id", id)
+                .with_source(join)),
+            // The blocking thread may still finish; nothing waits for it.
+            Err(_) => Err(fs_deadline(operation, id)),
+        }
+    }
+}
+
+fn fs_deadline(operation: &'static str, id: RepoId) -> ForgeError {
+    ForgeError::new(ErrorCode::StorageIoFailed)
+        .with_context("operation", operation)
+        .with_context("reason", "deadline")
+        .with_context("repo_id", id)
 }
 
 /// Strip the Windows verbatim prefix (`\\?\`) that `canonicalize` adds, so
@@ -157,28 +245,44 @@ impl StorageRoot {
         hooks_path: Option<&Path>,
     ) -> Result<PathBuf, ForgeError> {
         let hooks = hooks_value(hooks_path)?;
-        let (path, shard) = self.prepare_shard(id).await?;
-        if self.occupant(&path, id).await?.is_some() {
+        let budget = Budget::NONE;
+        let (path, shard) = self.prepare_shard(id, budget).await?;
+        if self.occupant(&path, id, budget).await?.is_some() {
             return Err(occupied(id, &path));
         }
-        self.create(git, id, token, hooks.as_deref(), &path, &shard)
+        self.create(git, id, token, hooks.as_deref(), &path, &shard, budget)
             .await
     }
 
     /// Create `repos/` and the shard one level at a time, verifying each
     /// level before going below it (never follow a planted symlink).
     /// Returns the repository path and its shard directory.
-    async fn prepare_shard(&self, id: RepoId) -> Result<(PathBuf, PathBuf), ForgeError> {
+    async fn prepare_shard(
+        &self,
+        id: RepoId,
+        budget: Budget,
+    ) -> Result<(PathBuf, PathBuf), ForgeError> {
         let path = self.path_for(id);
         let shard = path
             .parent()
             .ok_or_else(|| rejected("outside_root").with_context("repo_id", id))?
             .to_path_buf();
         for dir in [self.root.join("repos"), shard.clone()] {
-            self.ensure_real_dir(&dir, id).await?;
+            self.ensure_real_dir(&dir, id, budget).await?;
         }
-        self.ensure_inside(&shard, id)?;
+        let (root, inside) = (self.clone(), shard.clone()); // clone: owned by the blocking step
+        budget
+            .blocking("inspect", id, move || root.ensure_inside(&inside, id))
+            .await?;
         Ok((path, shard))
+    }
+
+    /// [`StorageRoot::existing`] under `budget`.
+    async fn existing_within(&self, id: RepoId, budget: Budget) -> Result<PathBuf, ForgeError> {
+        let root = self.clone(); // clone: owned by the blocking step
+        budget
+            .blocking("inspect", id, move || root.existing(id))
+            .await
     }
 
     /// What is at `path` without following a symlink; `None` when nothing is.
@@ -186,15 +290,24 @@ impl StorageRoot {
         &self,
         path: &Path,
         id: RepoId,
+        budget: Budget,
     ) -> Result<Option<std::fs::Metadata>, ForgeError> {
-        match tokio::fs::symlink_metadata(path).await {
-            Ok(meta) => Ok(Some(meta)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io_failed("inspect", e).with_context("repo_id", id)),
-        }
+        budget
+            .fs("inspect", id, async {
+                match tokio::fs::symlink_metadata(path).await {
+                    Ok(meta) => Ok(Some(meta)),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(io_failed("inspect", e).with_context("repo_id", id)),
+                }
+            })
+            .await
     }
 
     /// Initialize in a temporary sibling, then rename into `path`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one internal step, each value distinct"
+    )]
     async fn create(
         &self,
         git: &Git,
@@ -203,18 +316,25 @@ impl StorageRoot {
         hooks: Option<&str>,
         path: &Path,
         shard: &Path,
+        budget: Budget,
     ) -> Result<PathBuf, ForgeError> {
         // A fresh name per attempt: a temp directory left by a crashed
         // attempt never collides with a retry.
         let tmp = shard.join(format!(".tmp-{}-{}.git", id.get(), Uuid::new_v4().simple()));
-        let result = match self.init_into(git, &tmp, token, hooks).await {
-            Ok(()) => tokio::fs::rename(&tmp, path).await.map_err(|e| {
-                if e.kind() == io::ErrorKind::AlreadyExists || path.exists() {
-                    occupied(id, path)
-                } else {
-                    io_failed("rename", e).with_context("repo_id", id)
-                }
-            }),
+        let result = match self.init_into(git, id, &tmp, token, hooks, budget).await {
+            Ok(()) => {
+                budget
+                    .fs("rename", id, async {
+                        tokio::fs::rename(&tmp, path).await.map_err(|e| {
+                            if e.kind() == io::ErrorKind::AlreadyExists || path.exists() {
+                                occupied(id, path)
+                            } else {
+                                io_failed("rename", e).with_context("repo_id", id)
+                            }
+                        })
+                    })
+                    .await
+            }
             Err(e) => Err(e),
         };
         if let Err(err) = result {
@@ -228,12 +348,23 @@ impl StorageRoot {
                     .with_context("cleanup_error", e),
             });
         }
-        self.existing(id)
+        self.existing_within(id, budget).await
     }
 
     /// `dir` exists as a real directory afterwards (created if missing); a
     /// symlink or a file there is rejected, never followed.
-    async fn ensure_real_dir(&self, dir: &Path, id: RepoId) -> Result<(), ForgeError> {
+    async fn ensure_real_dir(
+        &self,
+        dir: &Path,
+        id: RepoId,
+        budget: Budget,
+    ) -> Result<(), ForgeError> {
+        budget
+            .fs("create_shard", id, self.ensure_real_dir_now(dir, id))
+            .await
+    }
+
+    async fn ensure_real_dir_now(&self, dir: &Path, id: RepoId) -> Result<(), ForgeError> {
         for attempt in 0..2 {
             match tokio::fs::symlink_metadata(dir).await {
                 Ok(meta) if meta.file_type().is_symlink() => {
@@ -264,27 +395,31 @@ impl StorageRoot {
     async fn init_into(
         &self,
         git: &Git,
+        id: RepoId,
         dir: &Path,
         token: Uuid,
         hooks: Option<&str>,
+        budget: Budget,
     ) -> Result<(), ForgeError> {
-        git.command("init")
+        let init = git
+            .command("init")
             .arg("--bare")
             .arg("--quiet")
             .arg("--initial-branch=main")
             // No template: nothing from the system template dir is copied.
             .arg("--template=")
-            .path(dir)
-            .output()
-            .await?;
+            .path(dir);
+        budget.git(git, init, id)?.output().await?;
         let config = dir.join("config");
-        configure(git, &config, hooks).await?;
+        configure(git, id, &config, hooks, budget).await?;
         // Written last: a marked repository is a fully configured one.
         set_config(
             git,
+            id,
             &config,
             PROVISION_TOKEN_KEY,
             &token.hyphenated().to_string(),
+            budget,
         )
         .await
     }
@@ -293,13 +428,19 @@ impl StorageRoot {
 /// Apply the server-side settings (and the hooks path) to the repository
 /// config file `config` (absolute). Idempotent: adoption runs it again on an
 /// existing repository.
-async fn configure(git: &Git, config: &Path, hooks: Option<&str>) -> Result<(), ForgeError> {
+async fn configure(
+    git: &Git,
+    id: RepoId,
+    config: &Path,
+    hooks: Option<&str>,
+    budget: Budget,
+) -> Result<(), ForgeError> {
     let settings = REPO_SETTINGS
         .iter()
         .copied()
         .chain(hooks.map(|h| ("core.hooksPath", h)));
     for (key, value) in settings {
-        set_config(git, config, key, value).await?;
+        set_config(git, id, config, key, value, budget).await?;
     }
     Ok(())
 }
@@ -308,18 +449,19 @@ async fn configure(git: &Git, config: &Path, hooks: Option<&str>) -> Result<(), 
 /// repository discovery, no `GIT_DIR`); callers check it is a regular file.
 async fn set_config(
     git: &Git,
+    id: RepoId,
     config: &Path,
     key: &'static str,
     value: &str,
+    budget: Budget,
 ) -> Result<(), ForgeError> {
-    git.command("config")
+    let cmd = git
+        .command("config")
         .arg("--file")
         .arg_owned(config)
         .arg(key)
-        .arg_owned(value)
-        .output()
-        .await
-        .map(|_| ())
+        .arg_owned(value);
+    budget.git(git, cmd, id)?.output().await.map(|_| ())
 }
 
 /// A lossy or relative hooks path would point git at a directory that does
@@ -378,3 +520,7 @@ mod adopt_tests;
 #[cfg(test)]
 #[path = "storage_adopt_hardening_tests.rs"]
 mod adopt_hardening_tests;
+
+#[cfg(test)]
+#[path = "storage_deadline_tests.rs"]
+mod deadline_tests;

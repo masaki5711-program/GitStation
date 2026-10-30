@@ -226,3 +226,54 @@ fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
         assert!(!found.iter().any(|k| k == pii), "{pii}");
     }
 }
+
+// ── D4 MR3b: repository provisioning ──
+#[test]
+fn repository_created_and_reprovision_requested_have_ids_only() {
+    use crate::ids::{ProjectId, RepoId};
+    use crate::{EventType, RepositoryKind};
+    let created = AuditDetails::RepositoryCreated {
+        project_id: ProjectId::new(21),
+        repository_id: RepoId::new(34),
+        kind: RepositoryKind::Spec,
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({"project_id": 21, "repository_id": 34, "kind": "spec"})
+    );
+    assert_eq!(created.action(), "repository.created");
+    assert_eq!(created.event_type(), Some(EventType::RepositoryCreated));
+    assert_eq!(
+        created.event_type().map(EventType::as_str),
+        Some(created.action())
+    );
+    let requested = AuditDetails::RepositoryReprovisionRequested {
+        repository_id: RepoId::new(34),
+        job_id: 9,
+        after_succeeded_job: None,
+    };
+    assert_eq!(
+        requested.to_value(),
+        json!({"repository_id": 34, "job_id": 9, "holder_job_id": null, "holder_state": "none"})
+    );
+    let after = AuditDetails::RepositoryReprovisionRequested {
+        repository_id: RepoId::new(34),
+        job_id: 10,
+        after_succeeded_job: Some(9),
+    };
+    assert_eq!(
+        after.to_value(),
+        json!({"repository_id": 34, "job_id": 10, "holder_job_id": 9, "holder_state": "succeeded"})
+    );
+    assert_eq!(requested.action(), "repository.reprovision_requested");
+    // An operator's recovery step: audit-only, no event.
+    assert_eq!(requested.event_type(), None);
+    for details in [created, requested] {
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii}");
+        }
+    }
+}
+// ── end D4 MR3b ──

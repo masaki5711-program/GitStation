@@ -6,8 +6,9 @@
 //! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
-//! administers forge (`users.administration`), storage root and
-//! the git binary. One line
+//! administers forge (`users.administration`), repository provisioning and
+//! storage (`repositories.provisioning`, `repositories.storage`), storage
+//! root and the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool, except `audit.seal_verify`, which reads the sealed act-as columns
@@ -28,6 +29,9 @@ use forge_git::{Git, GitConfig, StorageRoot};
 use crate::runtime::block_on;
 
 mod render;
+// ── D4 MR3b ──
+mod repositories;
+// ── end D4 MR3b ──
 mod seal;
 // ── C5 ──
 mod subscribers;
@@ -56,7 +60,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 13] = [
+const DB_CHECKS: [&str; 15] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -76,6 +80,10 @@ const DB_CHECKS: [&str; 13] = [
     // ── end C5 ──
     // D3 MR2: FG-AUTH-0010.
     "users.administration",
+    // ── D4 MR3b: FG-REPO-0012, FG-REPO-0002 ──
+    "repositories.provisioning",
+    "repositories.storage",
+    // ── end D4 MR3b ──
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -123,10 +131,12 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         return checks;
     };
 
+    // Opened first: `repositories.storage` (a database check) needs it.
+    let storage = cfg.storage_root().and_then(StorageRoot::open);
     match Db::connect(&cfg.database).await {
         Ok(db) => {
             checks.push(ok("database", db.target()));
-            checks.extend(database_checks(&db, &cfg).await);
+            checks.extend(database_checks(&db, &cfg, storage.as_ref().ok()).await);
             db.close().await;
         }
         Err(e) => {
@@ -137,18 +147,15 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         }
     }
 
-    checks.push(match cfg.storage_root() {
-        Ok(root) => match StorageRoot::open(root) {
-            Ok(opened) => ok("storage", &opened.path().display().to_string()),
-            Err(e) => fail("storage", e),
-        },
+    checks.push(match storage {
+        Ok(opened) => ok("storage", &opened.path().display().to_string()),
         Err(e) => fail("storage", e),
     });
     checks.push(git_check().await);
     checks
 }
 
-async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
+async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> Vec<Check> {
     let bootstrap = match bootstrap::check(db, &cfg.database.privileged_members).await {
         Ok(version) => ok("db.bootstrap", &format!("version {version}, guards intact")),
         Err(e) => fail("db.bootstrap", e),
@@ -179,6 +186,11 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
     let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
     // ── end C5 ──
     let administration = users::administration_check(db).await;
+    // ── D4 MR3b ──
+    let [provisioning, storage] =
+        repositories::repository_checks(db, root, forge_db::repositories::PROVISIONING_STUCK_AFTER)
+            .await;
+    // ── end D4 MR3b ──
     vec![
         bootstrap,
         connections,
@@ -193,6 +205,8 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         subscriber_lag,
         dead_letters,
         administration,
+        provisioning,
+        storage,
     ]
 }
 

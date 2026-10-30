@@ -9,12 +9,15 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 use uuid::Uuid;
 
-use super::{configure, hooks_value, io_failed, occupied, StorageRoot, PROVISION_TOKEN_KEY};
+use super::{
+    configure, hooks_value, io_failed, occupied, Budget, StorageRoot, PROVISION_TOKEN_KEY,
+};
 use crate::Git;
 
 /// Result of [`StorageRoot::init_bare_or_adopt`].
@@ -83,11 +86,42 @@ impl StorageRoot {
         token: Uuid,
         hooks_path: Option<&Path>,
     ) -> Result<Provisioned, ForgeError> {
+        self.provision(git, id, token, hooks_path, Budget::NONE)
+            .await
+    }
+
+    /// [`StorageRoot::init_bare_or_adopt`] that finishes by `deadline` (the
+    /// provisioning job's, D4 MR3b): each git call gets at most the time
+    /// left and each file-system step runs under it (blocking ones on the
+    /// blocking pool). An overrun is `FG-GIT-0002` (git) or `FG-REPO-0003`
+    /// with `operation` and `reason=deadline` (file system) — both
+    /// retryable, and naming the step that hung. A temporary directory the
+    /// overrun leaves behind is removed as for any failure, without a bound.
+    pub async fn init_bare_or_adopt_until(
+        &self,
+        git: &Git,
+        id: RepoId,
+        token: Uuid,
+        hooks_path: Option<&Path>,
+        deadline: Instant,
+    ) -> Result<Provisioned, ForgeError> {
+        self.provision(git, id, token, hooks_path, Budget(Some(deadline)))
+            .await
+    }
+
+    async fn provision(
+        &self,
+        git: &Git,
+        id: RepoId,
+        token: Uuid,
+        hooks_path: Option<&Path>,
+        budget: Budget,
+    ) -> Result<Provisioned, ForgeError> {
         let hooks = hooks_value(hooks_path)?;
-        let (path, shard) = self.prepare_shard(id).await?;
-        if self.occupant(&path, id).await?.is_none() {
+        let (path, shard) = self.prepare_shard(id, budget).await?;
+        if self.occupant(&path, id, budget).await?.is_none() {
             match self
-                .create(git, id, token, hooks.as_deref(), &path, &shard)
+                .create(git, id, token, hooks.as_deref(), &path, &shard, budget)
                 .await
             {
                 Ok(created) => return Ok(Provisioned::Created(created)),
@@ -96,7 +130,7 @@ impl StorageRoot {
                 Err(e) => return Err(e),
             }
         }
-        self.adopt(git, id, token, hooks.as_deref(), &path)
+        self.adopt(git, id, token, hooks.as_deref(), &path, budget)
             .await
             .map(Provisioned::Adopted)
     }
@@ -108,8 +142,9 @@ impl StorageRoot {
         token: Uuid,
         hooks: Option<&str>,
         path: &Path,
+        budget: Budget,
     ) -> Result<PathBuf, ForgeError> {
-        let Some(meta) = self.occupant(path, id).await? else {
+        let Some(meta) = self.occupant(path, id, budget).await? else {
             // It vanished after the rename race: a retry can create it.
             return Err(io_failed(
                 "inspect",
@@ -123,13 +158,13 @@ impl StorageRoot {
         if !meta.is_dir() {
             return Err(not_adoptable(id, path, "not_dir"));
         }
-        let path = self.existing(id)?;
-        let config = regular_config(id, &path).await?;
-        check_marker(git, id, token, &path, &config).await?;
+        let path = self.existing_within(id, budget).await?;
+        let config = regular_config(id, &path, budget).await?;
+        check_marker(git, id, token, &path, &config, budget).await?;
         // Re-check right before writing: `--file` writes the path given, and
         // a config swapped for a symlink since the first check is refused.
-        let config = regular_config(id, &path).await?;
-        configure(git, &config, hooks)
+        let config = regular_config(id, &path, budget).await?;
+        configure(git, id, &config, hooks, budget)
             .await
             .map_err(|e| permanent_git_failure(id, &path, "unwritable", e))?;
         Ok(path)
@@ -137,7 +172,11 @@ impl StorageRoot {
 }
 
 /// `<repo>/config` is a regular file (not a symlink out of the root).
-async fn regular_config(id: RepoId, path: &Path) -> Result<PathBuf, ForgeError> {
+async fn regular_config(id: RepoId, path: &Path, budget: Budget) -> Result<PathBuf, ForgeError> {
+    budget.fs("inspect", id, regular_config_now(id, path)).await
+}
+
+async fn regular_config_now(id: RepoId, path: &Path) -> Result<PathBuf, ForgeError> {
     let config = path.join("config");
     match tokio::fs::symlink_metadata(&config).await {
         Ok(meta) if meta.is_file() => Ok(config),
@@ -161,14 +200,17 @@ async fn check_marker(
     token: Uuid,
     path: &Path,
     config: &Path,
+    budget: Budget,
 ) -> Result<(), ForgeError> {
-    let listing = git
+    let list = git
         .command("config")
         .arg("--file")
         .arg_owned(config)
         .arg("--no-includes")
         .arg("--null")
-        .arg("--list")
+        .arg("--list");
+    let listing = budget
+        .git(git, list, id)?
         .output()
         .await
         .map_err(|e| permanent_git_failure(id, path, "unreadable", e))?
@@ -190,10 +232,12 @@ async fn check_marker(
         [_] => return Err(not_adoptable(id, path, "token_mismatch")),
         _ => return Err(not_adoptable(id, path, "duplicate_marker")),
     }
-    let bare = git
+    let rev_parse = git
         .command("rev-parse")
         .repo(path)
-        .arg("--is-bare-repository")
+        .arg("--is-bare-repository");
+    let bare = budget
+        .git(git, rev_parse, id)?
         .output()
         .await
         .map_err(|e| permanent_git_failure(id, path, "unreadable", e))?

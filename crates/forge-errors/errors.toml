@@ -159,7 +159,7 @@ user_message_ja = "リポジトリのデータが見つかりません。問い�
 user_message_en = "The repository data is missing. Contact the administrator with the request ID."
 user_message_id = "Data repositori tidak ditemukan. Hubungi administrator dengan menyertakan ID permintaan."
 cause = "The database knows the repository but its directory does not exist under the storage root."
-diagnosis = "The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early."
+diagnosis = "The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early. `forge doctor` (check `repositories.storage`) reports the first ready repository whose directory is missing, with `missing` (how many of the checked ones) and `checked`; it checks at most 10 000 ready repositories per run and says so (`truncated`)."
 fix = "Remount the storage volume or restore the repository from backup; then confirm with `forge admin repo-path <repo_id>` (state `exists`)."
 runbook = "repo-storage"
 test = "missing_repository_dir_is_storage_missing"
@@ -173,7 +173,7 @@ user_message_ja = "リポジトリの保存先の読み書きに失敗しまし�
 user_message_en = "Reading or writing repository storage failed. Contact the administrator."
 user_message_id = "Gagal membaca atau menulis penyimpanan repositori. Hubungi administrator."
 cause = "A file-system operation on the storage root failed: permission denied, disk full, or an I/O error while creating or inspecting a repository directory."
-diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
+diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. `reason=deadline` (with `operation`): the provisioning job's deadline ran out during that file-system step (the job retries); `operation=doctor_storage reason=check_timeout`: `forge doctor` `repositories.storage` did not finish its walk over the ready repositories in 60 s (`checked`, `missing`, `other` say how far it got) — a slow or hung storage volume. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
 fix = "Free disk space, restore ownership of the storage root to the forge service user, or replace the failing volume."
 runbook = "repo-storage"
 test = "unreadable_or_unwritable_storage_is_storage_io_failed"
@@ -283,7 +283,19 @@ diagnosis = "The log event carries `reason` (display_name_length, description_le
 fix = "Correct the field named by `reason`; create subgroups below a group, not below a user."
 test = "an_invalid_group_request_is_group_request_invalid"
 
-# FG-REPO-0012 is reserved for RepositoryProvisioningStuck (step D4 MR3b).
+[[error]]
+code = "FG-REPO-0012"
+name = "RepositoryProvisioningStuck"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリの準備が終わっていません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The repository is not ready yet. Contact the administrator with the request ID."
+user_message_id = "Repositori belum siap. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A repository has stayed in state `provisioning` (forge.repositories, step D4) for longer than 10 minutes, or its provisioning job (`repository.provision`, dedup key `repository_provision:<repo_id>`) is no longer queued or running: it is dead (a permanent failure such as FG-REPO-0004 `adopt_refused`, or its attempts were used up), missing, or it succeeded without the repository being marked ready. The job normally creates the bare directory (`init_bare_or_adopt`) and marks the repository ready within seconds; until then the project exists but cannot be cloned or pushed."
+diagnosis = "Reported by `forge doctor` (check `repositories.provisioning`) with `reason` of the first stuck repository (`job_not_live`: no queued or running provisioning job; `too_old`: the job is still live but the repository waits longer than the threshold), `stuck` and the counts per reason `job_not_live` / `too_old` (the 10 000 oldest provisioning repositories are classified; `truncated` when there are more), and the first one's `repo_id`, `project_id`, `age_ms`, `job_state` and `threshold_ms`. `job_not_live` repositories are listed before `too_old` ones, each oldest first. The job is the end of the repository's key chain: `repository_provision:<repo_id>`, then `repository_provision:<repo_id>:after:<job id>` for each reprovision behind a succeeded job. `job_state` is that job's state: `queued`, `running`, `succeeded` (it succeeded but the repository is not ready: a database restore or a manual change; the doctor line says so in `detail`) or `none` (dead or missing). Look up the jobs with a privileged query on forge.jobs (kind `repository.provision`, dedup_key `repository_provision:<repo_id>` or `repository_provision:<repo_id>:after:%`, newest first): `last_error_code` / `last_error` say why one died; the worker log has `forge.repo.provisioned` for each success and the job failure (FG-DB-0006) with the same origin request id. `too_old` with a queued job usually means no `forge worker` runs (doctor `outbox.sequencer_lag` says whether one was observed)."
+fix = "Follow the runbook: fix the cause the job reported (storage root permissions or space for FG-REPO-0003, a directory at the path for FG-REPO-0004: inspect it, never delete it blindly), make sure a `forge worker` runs, then run `forge admin repo reprovision <repo_id>` (an approved runbook step): it enqueues the job again after a dead or missing job, and after a succeeded one under the key `repository_provision:<repo_id>:after:<job id>`; it changes nothing while a job is queued or running."
+runbook = "repository-provisioning"
+test = "a_repository_stuck_in_provisioning_is_reported_by_doctor"
 
 [[error]]
 code = "FG-REPO-0013"
@@ -306,9 +318,9 @@ severity = "info"
 user_message_ja = "プロジェクトの情報が正しくありません。入力内容を確認してください。"
 user_message_en = "The project details are not valid. Check what was entered."
 user_message_id = "Data proyek tidak valid. Periksa kembali isian Anda."
-cause = "A request to create a project (forge_db::projects::create, step D4) broke a rule before anything was written: the display name (1 to 255 characters) or the description (at most 2000 characters) is out of range or holds a NUL character, the parent namespace is a project (projects live only under a personal namespace or a group, ADR-0015 Amendment D4), the parent is a personal namespace whose owner is not active (that owner would inherit Owner of the project), the creator, who becomes the first direct Owner, is not an active user, or the creator is not the acting user of the request (only the operator CLI and the worker, actor `system`, may create a project for another user). A bot as creator, or a bot's personal namespace as parent, is FG-REPO-0010 `bot_member`, as for groups. The path rules are FG-REPO-0007..0009."
-diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_owner_namespace, parent_owner_inactive, creator_inactive, creator_not_actor) and `len` where it applies; values are not logged."
-fix = "Correct the field named by `reason`; create the project below a user or a group, not below another project nor in the namespace of a disabled user; let an active user create it for themselves (creator_not_actor on a route means the route passed something other than its principal: a bug in that route)."
+cause = "A request to create a project (forge_db::projects::create, step D4) broke a rule before anything was written: the display name (1 to 255 characters) or the description (at most 2000 characters) is out of range or holds a NUL character, the parent namespace is a project (projects live only under a personal namespace or a group, ADR-0015 Amendment D4), the parent is a personal namespace whose owner is not active (that owner would inherit Owner of the project), the creator, who becomes the first direct Owner, is not an active user, or the creator is not the acting user of the request (only the operator CLI and the worker, actor `system`, may create a project for another user). A bot as creator, or a bot's personal namespace as parent, is FG-REPO-0010 `bot_member`, as for groups. The path rules are FG-REPO-0007..0009. Also: `forge admin repo reprovision` (step D4 MR3b) was asked to provision a repository that is already `ready` (reason `repository_ready`): there is nothing to provision."
+diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_owner_namespace, parent_owner_inactive, creator_inactive, creator_not_actor; repository_ready from `forge admin repo reprovision`, with `repo_id`) and `len` where it applies; values are not logged."
+fix = "Correct the field named by `reason`; create the project below a user or a group, not below another project nor in the namespace of a disabled user; let an active user create it for themselves (creator_not_actor on a route means the route passed something other than its principal: a bug in that route). For repository_ready: do not reprovision; if its directory is missing, that is FG-REPO-0002 (restore from backup, runbook repo-storage)."
 test = "an_invalid_project_request_is_project_request_invalid"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------

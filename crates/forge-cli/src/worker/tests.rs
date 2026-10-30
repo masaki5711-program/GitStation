@@ -46,7 +46,13 @@ async fn the_worker_numbers_events_until_it_is_told_to_stop() {
     insert_events(&t, 5).await;
     let (stop, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run(&db, seal_keys(), stopped).await });
+    let worker = {
+        let (dir, storage) = super::provision::tests::storage();
+        tokio::spawn(async move {
+            let _root = dir;
+            run(&db, seal_keys(), &storage, stopped).await
+        })
+    };
     until_sequenced(&t).await;
     // Events written while it runs are numbered too.
     insert_events(&t, 3).await;
@@ -67,10 +73,14 @@ async fn a_gone_shutdown_sender_stops_the_worker_with_an_internal_error() {
     drop(stop);
     // Nothing could stop the worker any more: that is a failure, not a
     // clean shutdown (exit 0 would hide it).
-    let err = tokio::time::timeout(Duration::from_secs(10), run(&t.db, seal_keys(), stopped))
-        .await
-        .expect("stops in time")
-        .expect_err("a closed shutdown channel is an error");
+    let (_root, storage) = super::provision::tests::storage();
+    let err = tokio::time::timeout(
+        Duration::from_secs(10),
+        run(&t.db, seal_keys(), &storage, stopped),
+    )
+    .await
+    .expect("stops in time")
+    .expect_err("a closed shutdown channel is an error");
     assert_eq!(err.code(), ErrorCode::Internal);
     assert!(
         err.context()

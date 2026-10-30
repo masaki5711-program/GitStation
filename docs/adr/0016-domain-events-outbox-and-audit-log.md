@@ -725,3 +725,30 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   `forge_core::DedupKey::new` で作ってから渡す（`repositories::provision_job`）。
 - `repository.provision` のジョブは、作成の変更の中で `ChangeTx::enqueue_job` で入れる（初めての本番の呼び出し元）。変更が確定したときだけジョブが存在する。
   新しいリポジトリの ID で `Deduped` になるのは不整合なので、`FG-SYS-0001 reason=unexpected_job_dedup` で作成全体を失敗させる。
+
+## Amendment（2026-10-30、手順 D4 MR3b: `repository.created` と作成のやり直し）
+
+- **`repository.created`** の書き手は `repositories::mark_ready`（`repository.provision` のジョブのハンドラーが呼ぶ）。一つの `ChangeTx` で、
+  リポジトリの行を `FOR UPDATE` で取り、`state = ready`・`ready_at = now()` にし、監査の行 `repository.created`（リソース `project` /
+  プロジェクトの ID、`project_id` 付き。行者は `system`、`request_id` はジョブの元の要求のもの）と、イベント `repository.created`
+  （分類 `integration`、集約 `repository` / `repositories.id`、`project_id` = そのプロジェクト、ペイロードは `AuditDetails::RepositoryCreated`
+  と同じ `{project_id, repository_id, kind}`、重複除去の鍵 `repository_created:<repo_id>`）を書く。範囲の規則（D4 MR2）を満たす。
+  既に `ready` なら何も書かない（`MarkReady::AlreadyReady`。2 回目のイベントは出ない）。行の鍵で並行する呼び出しは直列になり、
+  重複除去の鍵は最後の安全網である（行が `provisioning` なのに鍵が記録済みなら `FG-SYS-0001 reason=unexpected_dedup`）。
+- **`repository.reprovision_requested`**（監査のみ、イベントなし）: `forge admin repo reprovision <repo_id>` が、`provisioning` のままの
+  リポジトリの作成のジョブをもう一度入れたとき（ジョブと監査の行が一つの変更）。詳細は `{repository_id, job_id}`、リソースは `project`。
+  運用者の復旧の操作で、連携先に知らせることではないので監査だけにした。`ready` のリポジトリは `FG-REPO-0014 reason=repository_ready`
+  で断る（新しいコードは作らない）。同じ鍵の `queued` / `running` / `succeeded` のジョブがあれば何も書かない。
+- 作成のジョブのハンドラーは失敗を自分で記録しない（ジョブの実行器が一度だけ記録する）。成功だけを `forge.repo.provisioned` で 1 行記録する。
+- レビューを受けて次を加えた（同日）。
+  - **鍵の連なり**: `jobs_dedup` は `queued` / `running` / `succeeded` のジョブの鍵を持ち続け、`dead` だけが手放す（C6 の
+    Amendment。これは変えない）。そのため、`provisioning` のままなのに作成のジョブが `succeeded`（DB の復元、手の変更）だと、
+    同じ鍵では入れ直せなかった。`reprovision` は行の鍵の下で鍵の連なりの最後のジョブを読み、`queued` / `running` なら何もしない
+    （`AlreadyLive`。状態を返す）、`dead` / 無いならその鍵で、`succeeded` なら `repository_provision:<repo>:after:<そのジョブの id>`
+    （`DedupKey` で作る）で入れる。監査の詳細は `{repository_id, job_id, holder_job_id, holder_state}`。doctor も同じ SQL
+    （再帰の CTE、等号の検索だけ、最大 16 段）で連なりの最後を見る。
+  - `mark_ready` は `UPDATE` の行数が 1 でなければ `FG-SYS-0001 reason=unexpected_row_count`。`mark_ready_within` は変更の
+    上限を呼び出し側が渡す（作成のジョブは自分の残り時間を渡す）。同時の `mark_ready` 2 回、`mark_ready` と `reprovision` の
+    両方の順序をテストで固定した。
+  - doctor の `repositories.provisioning` は詰まったものを SQL で選ぶ（`job_not_live` を先、それぞれ古い順、古い 10 000 件を分類）。
+    理由ごとの件数 `job_not_live` / `too_old` を `FG-REPO-0012` の context に入れる。

@@ -128,6 +128,36 @@ connection, mapping driver errors to registered codes, migrations
   `projects::access(&Db, ProjectId) -> Result<ProjectAccess, ForgeError>`:
   `ProjectAccess { visibility, pending_deletion }` (`deleted_at` set) — with
   `load_project_roles`, what forge-auth's `ProjectView` needs (read pool).
+- `repositories` (step D4 MR3b, ADR-0009 / ADR-0016 Amendments D4 MR3b):
+  `provision_target(&Db, RepoId) -> ProvisionTarget { repo_id, project_id, state, token }`
+  (write pool — `forge_ro` cannot read `provision_token`; `Debug` redacts the token);
+  `provision_payload(&Value) -> RepoId` (the job's `{"repo_id"}`);
+  `mark_ready(&Db, &ChangeContext, RepoId) -> MarkReady::{Marked, AlreadyReady}` —
+  row `FOR UPDATE`, state `ready` + `ready_at`, one `repository.created` audit row on
+  resource (`project`, project id) with `project_id` set and one `repository.created`
+  event (integration, aggregate `repository`, payload `{project_id, repository_id,
+  kind}`, dedup `repository_created:<repo_id>`); an already ready repository writes
+  nothing (no second event); the UPDATE must touch exactly one row.
+  `mark_ready_within(.., timeout)` takes the change bound from the caller (the
+  provisioning job passes what is left of its own timeout).
+  **Key chain**: `jobs_dedup` keeps the key of queued, running and succeeded jobs, so the
+  current job of a repository is the end of `repository_provision:<id>` →
+  `repository_provision:<id>:after:<succeeded job>` → … (`CHAIN_CAP` 16 links, equality
+  lookups in a recursive CTE). `provisioning_report(&Db, stuck_after) ->
+  Option<ProvisioningReport>` (read pool; `None` before the D4 schema): repositories in
+  `provisioning` (count capped); the 10 000 oldest classified in SQL by their current job —
+  `job_not_live` (none, dead or succeeded) or `too_old` (live, older than `stuck_after`,
+  `PROVISIONING_STUCK_AFTER` = 10 min) — with per-reason counts and the first 100 stuck
+  (`job_not_live` first, each oldest first); `ProvisioningReport::check()` → FG-REPO-0012
+  (`reason`, `job_not_live`, `too_old`, `job_state`; `detail` for a succeeded job).
+  `ready_ids(&Db, after, limit)` — ready repository ids in id order, keyset pages of at
+  most `READY_PAGE_MAX` (1000). `reprovision(&Db, &ChangeContext, RepoId) ->
+  Reprovisioned::{Queued { project_id, job, after }, AlreadyLive { project_id, job, state }}`
+  — row locked, a ready repository is FG-REPO-0014 `repository_ready`; by the current job:
+  queued / running → `AlreadyLive` (nothing written), dead / none → a new job with that
+  link's key, succeeded → a new job keyed `…:after:<that job>`; the job plus an audit-only
+  `repository.reprovision_requested` row (on the project, `holder_job_id` /
+  `holder_state`) in one change. Concurrent calls serialize on the row lock.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events
@@ -189,11 +219,18 @@ or a bot's personal namespace as parent), FG-REPO-0005 (`resource=namespace` / `
 Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
+Raised by `repositories` (D4 MR3b): FG-REPO-0012 RepositoryProvisioningStuck (alert, from
+`ProvisioningReport::check`: `reason` job_not_live / too_old, `stuck`, `repo_id`,
+`project_id`, `age_ms`, `job_state`, `threshold_ms`), FG-REPO-0014 (`repository_ready`
+from `reprovision`), FG-REPO-0005 (`resource=repository`, `reason=absent`), FG-SYS-0001
+(`invalid_job_payload`, `unexpected_dedup`, `unknown_repository_state` /
+`unknown_repository_kind` / `invalid_provision_token` for a row outside its CHECKs).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
 `job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
-`subscriber-lag.md`, `credential-data.md`, `user-offboarding.md`.
+`subscriber-lag.md`, `credential-data.md`, `user-offboarding.md`,
+`repository-provisioning.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
