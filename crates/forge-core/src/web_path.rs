@@ -24,6 +24,11 @@ use crate::namespace_path::{LookupPath, RESERVED_TOP_LEVEL};
 /// `path_rejected` (`rule=too_long`) before any splitting or decoding.
 pub const MAX_RAW_PATH_LEN: usize = 8192;
 
+/// The longest raw query (bytes) the parser accepts; longer is
+/// `path_rejected` (`part=query`, `rule=too_long`) before any splitting,
+/// for every shape.
+pub const MAX_QUERY_LEN: usize = 2048;
+
 /// How much of a raw path [`log_safe_path`] keeps (characters).
 pub const LOG_PATH_MAX_CHARS: usize = 256;
 
@@ -174,7 +179,13 @@ impl InstanceRoute {
 /// The segments after a route word, each percent-decoded exactly once and
 /// validated, never case-folded (refs and file names are case-sensitive).
 /// Built only by [`TailSegments::decode`]. A segment is never empty, `.` or
-/// `..`, and never holds `/`, `\` or a control character.
+/// `..`, and never holds `/`, `\`, a control character or an invisible /
+/// bidi formatting character.
+///
+/// A segment **may start with `-`** (`--output=x` is a legal file or ref
+/// name). Whatever reaches a git argument vector from here must come after
+/// `--` / `--end-of-options`, or be a fully resolved ref name or oid
+/// (ADR-0015 "ref とパスの境目"; MR4 / phase 9 requirement).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct TailSegments(Vec<String>);
 
@@ -199,7 +210,9 @@ impl TailSegments {
     /// `/`), `malformed_escape` (`%` not followed by two hex digits),
     /// `invalid_utf8` (after decoding), `encoded_separator` (`%2F`, `%5C`,
     /// either case), `separator` (a raw `\`), `control` (NUL and every other
-    /// control character, C1 included), `dot_segment` (`.` or `..`, also
+    /// control character, C1 included), `invisible` (zero-width, bidi
+    /// controls, line / paragraph separators, word joiners, BOM, tag
+    /// characters: see [`is_invisible`]), `dot_segment` (`.` or `..`, also
     /// when encoded).
     pub fn decode(raw_segments: &[&str]) -> Result<Self, ForgeError> {
         raw_segments
@@ -268,6 +281,9 @@ fn decode_segment(raw: &str) -> Result<String, ForgeError> {
     }
     if decoded.chars().any(char::is_control) {
         return Err(rejected(PART, "control"));
+    }
+    if decoded.chars().any(is_invisible) {
+        return Err(rejected(PART, "invisible"));
     }
     if decoded == "." || decoded == ".." {
         return Err(rejected(PART, "dot_segment"));
@@ -344,7 +360,9 @@ impl ParsedPath {
 ///    segment in [`RESERVED_TOP_LEVEL`] (`api`, `admin`, `favicon.ico`, …)
 ///    is `unknown_route` — those are the server's own routes.
 ///
-/// The query is looked at only for `info/refs`.
+/// The query is capped at [`MAX_QUERY_LEN`] bytes and otherwise looked at
+/// only for `info/refs`. The HTTP method is not checked here: the route
+/// table (forge-web) pairs each shape with its verbs.
 ///
 /// ```
 /// use forge_core::web_path::{parse_web_path, GitRoute, ParsedPath, RouteWord};
@@ -363,6 +381,9 @@ impl ParsedPath {
 pub fn parse_web_path(raw_path: &str, query: Option<&str>) -> Result<ParsedPath, ForgeError> {
     if raw_path.len() > MAX_RAW_PATH_LEN {
         return Err(rejected("path", "too_long"));
+    }
+    if query.is_some_and(|q| q.len() > MAX_QUERY_LEN) {
+        return Err(rejected("query", "too_long"));
     }
     let Some(body) = raw_path.strip_prefix('/') else {
         return Err(rejected("path", "no_leading_slash"));
@@ -503,7 +524,7 @@ impl fmt::Display for LogSafePath<'_> {
             shown += 1;
             if c == '\\' {
                 f.write_str("\\\\")?;
-            } else if c.is_control() || is_invisible_format(c) {
+            } else if c.is_control() || is_invisible(c) || is_log_hidden(c) {
                 write!(f, "\\u{{{:x}}}", u32::from(c))?;
             } else {
                 write!(f, "{c}")?;
@@ -517,18 +538,28 @@ impl fmt::Display for LogSafePath<'_> {
     }
 }
 
-/// Zero-width, bidi-control and other invisible formatting characters that
-/// could disguise a log line.
-fn is_invisible_format(c: char) -> bool {
+/// Invisible and bidi formatting characters that could disguise a name:
+/// U+200B–U+200F (zero-width, LRM / RLM), U+2028 / U+2029 (line and
+/// paragraph separators), U+202A–U+202E (bidi embeddings and overrides),
+/// U+2060–U+2064 (word joiner, invisible operators), U+2066–U+2069 (bidi
+/// isolates), U+FEFF (BOM) and U+E0000–U+E007F (tags). Refused in tail
+/// segments (`rule=invisible`) and escaped by [`log_safe_path`].
+pub fn is_invisible(c: char) -> bool {
     matches!(
         c,
-        '\u{00ad}'
-            | '\u{061c}'
-            | '\u{180e}'
-            | '\u{200b}'..='\u{200f}'
+        '\u{200b}'..='\u{200f}'
             | '\u{2028}'..='\u{202e}'
-            | '\u{2060}'..='\u{206f}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
             | '\u{feff}'
-            | '\u{fff9}'..='\u{fffb}'
+            | '\u{e0000}'..='\u{e007f}'
+    )
+}
+
+/// Further formatting characters only escaped in logs (legal in names).
+fn is_log_hidden(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{206a}'..='\u{206f}' | '\u{fff9}'..='\u{fffb}'
     )
 }

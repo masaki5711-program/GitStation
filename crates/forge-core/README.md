@@ -53,22 +53,32 @@ It never chooses the scope (group / project): that follows resolution. `RouteWor
 `GitRoute` (`service`, `is_advertisement`, `is_push`) and `InstanceRoute` have `ALL`
 and `as_str`; route words are case-sensitive. `TailSegments::decode` decodes each
 segment once (strict escapes, valid UTF-8; refuses `%2F` `%5C` `\`, control
-characters, `.` `..`). Refusals are FG-WEB-0001 with `reason` `path_rejected` /
+characters, invisible / bidi formatting characters (`is_invisible`), `.` `..`).
+A tail segment may start with `-`: anything that reaches a git argument vector
+goes after `--` / `--end-of-options` or is a resolved ref / oid. Refusals are
+FG-WEB-0001 with `reason` `path_rejected` /
 `unknown_route` / `service_unsupported` plus `part` and `rule`, never the input:
 log the path through `log_safe_path` / `LogSafePath` (256 characters, controls and
-bidi / zero-width characters escaped). `MAX_RAW_PATH_LEN` (8192 bytes).
+bidi / zero-width characters escaped). `MAX_RAW_PATH_LEN` (8192 bytes),
+`MAX_QUERY_LEN` (2048 bytes, every shape). The HTTP method is not checked (the
+forge-web route table does).
 Shared vectors: `tests/fixtures/url-vectors.json` at the repository root
 (`form` = `both` / `browser` / `raw`; also for forge-web and the SPA).
 
 **Dispatcher data access** (`namespace_resolver`; implemented by forge-db, injected
-like `ReadinessProbe`): `NamespaceResolver::resolve(&LookupPath) -> Resolution`
-(`Live(Resolved)`, `Moved { resolved, tombstone, current: NamespacePath }`,
-`Deleted { tombstone }`, `Absent`; exact matches only), `Resolved { namespace_id,
-owner: NamespaceOwner }` (`User` / `Group` / `Project` with the typed id; `kind()`),
-`NamespaceKind` (`user`, `group`, `project`), `AccessLoader` (`project_access(ProjectId,
-UserId) -> ProjectAccess { visibility, role, pending_deletion }` — what forge-auth's
-`ProjectView` needs —, `group_role(GroupId, UserId) -> Option<Role>`). Boxed
-futures (`LookupFuture`); no forge-auth types.
+like `ReadinessProbe`): `NamespaceResolver::resolve(&LookupPath, viewer:
+Option<UserId>) -> Resolution` — one call resolves the path **and** loads the
+viewer's authorization inputs, and MUST issue the same statements whatever the
+outcome and whether or not the viewer may see the target (no timing oracle).
+`Resolution`: `Live(Resolved)`, `Moved { resolved, tombstone, current: NamespacePath }`,
+`Deleted { tombstone }`, `Absent` (exact matches only). `Resolved { namespace_id,
+target: ResolvedTarget }` with `ResolvedTarget::User(UserId)` / `Group { id,
+viewer_role }` / `Project { id, access: ProjectAccess { visibility, role,
+pending_deletion } }`; `owner() -> NamespaceOwner` (typed id), `kind()`.
+`NamespaceKind` (`user`, `group`, `project`). `ProjectAccessLoader::project_access(ProjectId,
+Option<UserId>) -> Option<ProjectAccess>` for routes that address a project by id
+(same contract). Boxed futures (`LookupFuture`); no forge-auth types (forge-web
+converts).
 `Role` (`Guest < … < Owner`; `ALL`, `as_str`, `parse`) and `Visibility` (`private`, `internal`), moved
 from forge-auth in step D2 (forge-auth re-exports them).
 `AuditDetails` (typed `audit_log.details`: `action()`, `to_value()`, `event_type()` —

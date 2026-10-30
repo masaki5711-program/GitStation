@@ -30,8 +30,8 @@ pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
-    AccessLoader, NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, Resolution,
-    Resolved,
+    NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
+    Resolution, Resolved, ResolvedTarget,
 };
 pub use ref_name::RefName;
 pub use ref_pattern::RefPattern;

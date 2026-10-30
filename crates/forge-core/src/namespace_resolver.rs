@@ -3,9 +3,13 @@
 //! them, so forge-web never depends on forge-db (CLAUDE.md §3-9; the same
 //! shape as [`crate::readiness::ReadinessProbe`] and
 //! [`crate::Authenticator`]). The types here are forge-core's own: forge-core
-//! sits below forge-auth, so the dispatcher builds forge-auth's
-//! `ProjectView` / `Resource::Group` from [`ProjectAccess`] and the group
-//! role.
+//! sits below forge-auth, so forge-web converts them into forge-auth's
+//! resource contexts.
+//!
+//! **One call answers both "what is at this path" and "what may this viewer
+//! do there"**: resolution and the authorization inputs come from the same
+//! call, so an absent, a private and a visible target cost the same
+//! statements (ADR-0015 step 6: no timing oracle).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -73,17 +77,55 @@ impl NamespaceOwner {
     }
 }
 
+/// What forge-auth's project view needs for one viewer and one project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectAccess {
+    pub visibility: Visibility,
+    /// The viewer's native effective role (direct, ancestor groups, owner
+    /// of the personal namespace); `None` = no role or no viewer.
+    pub role: Option<Role>,
+    /// Deleted and inside the grace period (`deleted_at` set, not purged).
+    pub pending_deletion: bool,
+}
+
+/// A live namespace with everything authorization needs about it for the
+/// viewer of the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedTarget {
+    /// A personal namespace (ownership is `Resource::Namespace { owner }`).
+    User(UserId),
+    /// A group and the viewer's effective role on it (`None` = no role or
+    /// no viewer).
+    Group {
+        id: GroupId,
+        viewer_role: Option<Role>,
+    },
+    /// A project and the viewer's access facts.
+    Project {
+        id: ProjectId,
+        access: ProjectAccess,
+    },
+}
+
 /// A live namespace a path leads to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved {
     /// The `forge.namespaces` row (logged as `namespace_id`).
     pub namespace_id: NamespaceId,
-    pub owner: NamespaceOwner,
+    pub target: ResolvedTarget,
 }
 
 impl Resolved {
+    pub fn owner(&self) -> NamespaceOwner {
+        match self.target {
+            ResolvedTarget::User(id) => NamespaceOwner::User(id),
+            ResolvedTarget::Group { id, .. } => NamespaceOwner::Group(id),
+            ResolvedTarget::Project { id, .. } => NamespaceOwner::Project(id),
+        }
+    }
+
     pub fn kind(&self) -> NamespaceKind {
-        self.owner.kind()
+        self.owner().kind()
     }
 }
 
@@ -97,7 +139,8 @@ pub enum Resolution {
     /// A `moved` tombstone whose target is live. `current` is the target's
     /// path now, rebuilt from its id and confirmed by an exact match on the
     /// live paths (it feeds the upload-pack `302` and the SPA's
-    /// `canonical_path`).
+    /// `canonical_path`). The caller must still authorize before revealing
+    /// it.
     Moved {
         resolved: Resolved,
         tombstone: TombstoneId,
@@ -111,43 +154,38 @@ pub enum Resolution {
     Absent,
 }
 
-/// Path → namespace, for the dispatcher (step 5) and
-/// `GET /api/v1/namespaces/resolve` (ADR-0015 PathResolve).
+/// Path → namespace + the viewer's authorization inputs, for the
+/// dispatcher (steps 5–6) and `GET /api/v1/namespaces/resolve`.
 pub trait NamespaceResolver: Send + Sync {
-    /// Exact matches only (see [`Resolution`]). Absence is
-    /// [`Resolution::Absent`], not an error; errors are store failures
-    /// (`FG-DB-…`) or rows that cannot be read. The caller bounds the call
-    /// with its own timeout. (`prefix=true` resolution arrives with the M2
-    /// rescue of GitHub-shaped URLs.)
-    fn resolve<'a>(&'a self, path: &'a LookupPath) -> LookupFuture<'a, Resolution>;
+    /// Exact matches only (see [`Resolution`]); `viewer` is the
+    /// authenticated user, `None` for an anonymous caller (the same path:
+    /// a public shell never calls this, a clone may).
+    ///
+    /// **Contract**: an implementation MUST issue the same statements, in
+    /// the same number, whatever the outcome (live, moved, deleted, absent;
+    /// user, group or project) and whether or not the viewer may see the
+    /// target — forge-db does it in one statement. Visibility is decided by
+    /// `authorize()`, never here. Absence is [`Resolution::Absent`], not an
+    /// error; errors are store failures (`FG-DB-…`) or rows that cannot be
+    /// read. The caller bounds the call with its own timeout.
+    /// (`prefix=true` resolution arrives with the M2 rescue of
+    /// GitHub-shaped URLs.)
+    fn resolve<'a>(
+        &'a self,
+        path: &'a LookupPath,
+        viewer: Option<UserId>,
+    ) -> LookupFuture<'a, Resolution>;
 }
 
-/// What forge-auth's `ProjectView` needs for one caller and one project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectAccess {
-    pub visibility: Visibility,
-    /// The caller's native effective role (direct, ancestor groups, owner
-    /// of the personal namespace); `None` = no role.
-    pub role: Option<Role>,
-    /// Deleted and inside the grace period (`deleted_at` set, not purged).
-    pub pending_deletion: bool,
-}
-
-/// Loads the authorization inputs of a resolved namespace (step 6) for an
-/// authenticated caller. Implementations issue the same statements whether
-/// or not the caller may see the target (ADR-0015 step 6: an invisible and
-/// an absent target answer alike, in time too).
-pub trait AccessLoader: Send + Sync {
-    /// `FG-REPO-0005` (`resource=project`, `reason=absent`) when the project
-    /// does not exist (it was purged after resolution).
+/// Project access by id, for routes that address a project by id
+/// (`GET /api/v1/projects/{id}`, the permalink's API).
+pub trait ProjectAccessLoader: Send + Sync {
+    /// `None` when the project does not exist. `viewer` as in
+    /// [`NamespaceResolver::resolve`], with the same contract: the same
+    /// statements whether the project exists, is visible or not.
     fn project_access<'a>(
         &'a self,
         project: ProjectId,
-        user: UserId,
-    ) -> LookupFuture<'a, ProjectAccess>;
-
-    /// The caller's effective role on `group` (`Resource::Group { role }`);
-    /// `FG-REPO-0005` (`resource=group`, `reason=absent`) when it does not
-    /// exist.
-    fn group_role<'a>(&'a self, group: GroupId, user: UserId) -> LookupFuture<'a, Option<Role>>;
+        viewer: Option<UserId>,
+    ) -> LookupFuture<'a, Option<ProjectAccess>>;
 }

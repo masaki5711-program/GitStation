@@ -6,10 +6,13 @@ use serde_json::{json, Value};
 
 use crate::namespace_path::{LookupPath, NamespacePath, MAX_DEPTH};
 use crate::web_path::{
-    log_safe_path, parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord, TailSegments,
-    LOG_PATH_MAX_CHARS,
+    is_invisible, log_safe_path, parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord,
+    TailSegments, LOG_PATH_MAX_CHARS, MAX_QUERY_LEN,
 };
-use crate::{GroupId, NamespaceKind, NamespaceOwner, ProjectId, Resolved, UserId};
+use crate::{
+    GroupId, NamespaceKind, NamespaceOwner, ProjectAccess, ProjectId, Resolved, ResolvedTarget,
+    Role, UserId, Visibility,
+};
 
 /// The shared vectors (ADR-0015): also read by forge-web and the SPA.
 const VECTORS: &str = include_str!(concat!(
@@ -414,6 +417,16 @@ fn tail_segments_decode_once_and_refuse_separators() {
         ("%4", "malformed_escape"),
         ("%zz", "malformed_escape"),
         ("%%41", "malformed_escape"),
+        ("a%E2%80%8Bb", "invisible"),
+        ("a%E2%80%8Fb", "invisible"),
+        ("a%E2%80%A8b", "invisible"),
+        ("a%E2%80%AEb", "invisible"),
+        ("a%E2%81%A0b", "invisible"),
+        ("a%E2%81%A9b", "invisible"),
+        ("%EF%BB%BFa", "invisible"),
+        ("a%F3%A0%80%81", "invisible"),
+        ("a%F3%A0%81%BF", "invisible"),
+        ("a\u{202e}b", "invisible"),
     ];
     for (raw, rule) in cases {
         let err = TailSegments::decode(&["main", raw]).expect_err(raw);
@@ -560,6 +573,32 @@ fn shapes_and_lookup_paths() {
 }
 
 #[test]
+fn an_overlong_query_is_refused_for_every_shape() {
+    let long = format!("service=git-upload-pack&{}", "a".repeat(MAX_QUERY_LEN));
+    for path in [
+        "/acme/x.git/info/refs",
+        "/acme/x.git/git-upload-pack",
+        "/acme/x",
+        "/-/projects/1",
+    ] {
+        let err = assert_reason(path, Some(&long), "path_rejected");
+        assert_eq!(ctx(&err, "part"), Some("query"), "{path}");
+        assert_eq!(ctx(&err, "rule"), Some("too_long"), "{path}");
+    }
+    let fits = format!("service=git-upload-pack&{}", "a".repeat(MAX_QUERY_LEN - 24));
+    assert_eq!(fits.len(), MAX_QUERY_LEN);
+    assert!(parse_web_path("/acme/x.git/info/refs", Some(&fits)).is_ok());
+}
+
+/// Tail segments may start with `-` (file names do); git argv safety is the
+/// caller's (`--` / `--end-of-options`).
+#[test]
+fn a_tail_segment_may_start_with_a_dash() {
+    let parsed = parse_web_path("/acme/x/-/blob/--output=x/-f", None).expect("dash");
+    assert_eq!(describe(&parsed)["rest"], json!(["--output=x", "-f"]));
+}
+
+#[test]
 fn an_overlong_raw_path_is_refused_before_parsing() {
     let path = format!("/acme/x/-/blob/main/{}", "a".repeat(9000));
     let err = assert_reason(&path, None, "path_rejected");
@@ -603,19 +642,40 @@ fn namespace_kinds_and_owners() {
         assert_eq!(NamespaceKind::parse(kind.as_str()), Some(*kind));
     }
     assert_eq!(NamespaceKind::parse("User"), None);
-    let owners = [
-        (NamespaceOwner::User(UserId::new(1)), NamespaceKind::User),
-        (NamespaceOwner::Group(GroupId::new(2)), NamespaceKind::Group),
+    let access = ProjectAccess {
+        visibility: Visibility::Private,
+        role: Some(Role::Guest),
+        pending_deletion: false,
+    };
+    let targets = [
         (
+            ResolvedTarget::User(UserId::new(1)),
+            NamespaceOwner::User(UserId::new(1)),
+            NamespaceKind::User,
+        ),
+        (
+            ResolvedTarget::Group {
+                id: GroupId::new(2),
+                viewer_role: None,
+            },
+            NamespaceOwner::Group(GroupId::new(2)),
+            NamespaceKind::Group,
+        ),
+        (
+            ResolvedTarget::Project {
+                id: ProjectId::new(3),
+                access,
+            },
             NamespaceOwner::Project(ProjectId::new(3)),
             NamespaceKind::Project,
         ),
     ];
-    for (i, (owner, kind)) in owners.into_iter().enumerate() {
+    for (i, (target, owner, kind)) in targets.into_iter().enumerate() {
         let resolved = Resolved {
             namespace_id: crate::NamespaceId::new(10),
-            owner,
+            target,
         };
+        assert_eq!(resolved.owner(), owner);
         assert_eq!(resolved.kind(), kind);
         assert_eq!(owner.raw_id(), i as i64 + 1);
     }
@@ -641,8 +701,25 @@ fn encoded_separator() -> impl Strategy<Value = &'static str> {
 /// Rejection vectors (tail fragments) that stay rejected wherever they sit.
 fn rejected_fragment() -> impl Strategy<Value = &'static str> {
     prop::sample::select(vec![
-        "%2F", "%2f", "%5C", "%5c", "%00", "%0A", "%7F", "%C2%85", "%FF", "%E6%97", "%zz", "%",
+        "%2F",
+        "%2f",
+        "%5C",
+        "%5c",
+        "%00",
+        "%0A",
+        "%7F",
+        "%C2%85",
+        "%FF",
+        "%E6%97",
+        "%zz",
+        "%",
         "\\",
+        "%E2%80%8B",
+        "%E2%80%AE",
+        "%E2%81%A6",
+        "%EF%BB%BF",
+        "%F3%A0%80%81",
+        "\u{202e}",
     ])
 }
 
@@ -673,6 +750,7 @@ proptest! {
                         prop_assert!(!s.is_empty() && s != "." && s != "..");
                         prop_assert!(!s.contains(['/', '\\']));
                         prop_assert!(!s.chars().any(char::is_control));
+                        prop_assert!(!s.chars().any(is_invisible));
                     }
                 }
             }

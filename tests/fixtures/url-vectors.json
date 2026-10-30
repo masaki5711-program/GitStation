@@ -403,6 +403,20 @@
       }
     },
     {
+      "name": "a tail segment may start with dashes",
+      "path": "/acme/x/-/blob/main/--output=x",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "--output=x"
+        ]
+      }
+    },
+    {
       "name": "three dots are a name",
       "path": "/acme/x/-/blob/main/...",
       "form": "both",
@@ -1066,6 +1080,68 @@
     {
       "name": "overlong UTF-8 for a slash",
       "path": "/acme/x/-/blob/main/%C0%AF",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded zero-width space in the tail",
+      "path": "/acme/x/-/blob/main/a%E2%80%8Bb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded right-to-left override in the tail",
+      "path": "/acme/x/-/blob/main/a%E2%80%AEb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded right-to-left override, browser form",
+      "path": "/acme/x/-/blob/main/a%E2%80%AEb.txt",
+      "form": "browser",
+      "browser_input": "/acme/x/-/blob/main/a‮b.txt",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "raw right-to-left override in the tail",
+      "path": "/acme/x/-/blob/main/a‮b",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded line separator in the tail",
+      "path": "/acme/x/-/blob/main/a%E2%80%A8b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded word joiner in the tail",
+      "path": "/acme/x/-/blob/main/a%E2%81%A0b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded first strong isolate in the tail",
+      "path": "/acme/x/-/blob/main/a%E2%81%A8b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded byte order mark in the tail",
+      "path": "/acme/x/-/blob/main/%EF%BB%BFa",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded tag character in the tail",
+      "path": "/acme/x/-/blob/main/a%F3%A0%80%81",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "query over 2048 bytes",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git-upload-pack&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "form": "both",
       "reason": "path_rejected"
     },
