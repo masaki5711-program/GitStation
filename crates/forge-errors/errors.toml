@@ -265,7 +265,7 @@ severity = "info"
 user_message_ja = "メンバーの変更が、今のメンバーの状態と合いません。画面を更新して確認してください。"
 user_message_en = "The membership change does not fit the current members. Refresh and check."
 user_message_id = "Perubahan anggota tidak sesuai dengan keadaan anggota saat ini. Muat ulang dan periksa."
-cause = "A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners; disabling the sole active Owner on its own, and disabling the ancestor owners a subgroup relies on, are not refused until step D3."
+cause = "A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners. Disabling the sole active Owner of a top-level group is refused by users::disable with FG-AUTH-0009 `last_owner` (step D3); disabling the ancestor owners a subgroup relies on is not refused (subgroups may be left to inherit)."
 diagnosis = "The log event carries `reason` (already_member, not_member, last_owner, bot_member) and `action`; ids only, no names. For last_owner, the event also carries `group_id`; list that group's direct owners with a privileged query on forge.group_members joined to forge.users (state = 'active'): a top-level group needs at least one; a subgroup relies on its ancestors' owners."
 fix = "Refresh and retry; for last_owner, first make another active user an Owner of the group."
 test = "removing_the_last_owner_is_refused_under_concurrency"
@@ -388,6 +388,34 @@ cause = "A personal access token could not be issued because the request breaks 
 diagnosis = "The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled or active_limit) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`."
 fix = "Correct the request. For active_limit revoke tokens that are no longer used. For owner_bot / owner_disabled / admin_scope_requires_admin the owner or the scope is the wrong choice; nothing was written."
 test = "expiry_over_365_or_under_1_day_is_token_request_invalid"
+
+[[error]]
+code = "FG-AUTH-0009"
+name = "AdministrationConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "この操作を行うと、管理者またはグループの Owner がいなくなります。先に別の管理者・Owner を用意してください。"
+user_message_en = "This would leave no administrator or group Owner. Make someone else an administrator or Owner first."
+user_message_id = "Tindakan ini akan membuat tidak ada administrator atau Owner grup. Jadikan orang lain administrator atau Owner terlebih dahulu."
+cause = "An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2). forge_db::users::disable refuses to disable the last active human administrator (bots, service accounts and disabled users do not count) or the last direct active Owner of a top-level group (subgroups inherit their ancestors' Owners and are not checked); a refused disable writes nothing and revokes no token. forge_db::users::bootstrap_admin (forge admin bootstrap-admin) is refused while an active human administrator exists, and for a user that is not a human or is disabled."
+diagnosis = "The log event carries `reason`: last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — and `ownerless_groups`, how many), admin_exists (with `active_human_admins`), not_human or user_disabled (with `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin."
+fix = "For last_admin / last_owner: first make another active human an administrator or an Owner of the group, then disable again; in an emergency (a leaked credential) disable with `forge admin user disable <username> --force` as an approved runbook step and recover afterwards (runbook user-offboarding). For admin_exists: bootstrap-admin is only for a forge without an active human administrator — an existing administrator grants the role instead. For not_human / user_disabled: name an active human, or use --create."
+runbook = "user-offboarding"
+test = "disabling_the_last_active_human_admin_is_administration_conflict"
+
+[[error]]
+code = "FG-AUTH-0010"
+name = "AdministrationOrphaned"
+http_status = 500
+severity = "warn"
+user_message_ja = "管理者またはグループの Owner がいない状態です。管理者に連絡してください。"
+user_message_en = "There is no administrator or a group has no Owner. Contact the administrator."
+user_message_id = "Tidak ada administrator atau sebuah grup tidak memiliki Owner. Hubungi administrator."
+cause = "forge doctor (check users.administration) found forge without an active human administrator, or a top-level group without a direct active Owner. This is what a forced disable (`forge admin user disable --force`) leaves behind, or a disable / demotion done outside forge-db. Nobody can then administer forge, or manage that group's members, until it is recovered. A forge with no users at all (a new install) is reported as `warn` without this code."
+diagnosis = "The doctor line carries `reason` (no_admin when there is no active human administrator, otherwise ownerless_group), `active_human_admins`, `ownerless_groups` (how many top-level groups have no direct active Owner) and `group_ids` (the first 10 of them). The audit log shows how it happened: SELECT created_at, actor_label, request_id, details FROM forge.audit_log WHERE action = 'user.disabled' AND details->>'forced' = 'true' ORDER BY id DESC."
+fix = "Follow runbook user-offboarding: as an approved step, run `forge admin bootstrap-admin --user <username>` (or `--create`) to restore an administrator, then make an active user an Owner of each listed group. Re-run forge doctor until users.administration is ok."
+runbook = "user-offboarding"
+test = "administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group"
 
 [[error]]
 code = "FG-GIT-0007"

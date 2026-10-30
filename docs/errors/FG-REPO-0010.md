@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners; disabling the sole active Owner on its own, and disabling the ancestor owners a subgroup relies on, are not refused until step D3.
+A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners. Disabling the sole active Owner of a top-level group is refused by users::disable with FG-AUTH-0009 `last_owner` (step D3); disabling the ancestor owners a subgroup relies on is not refused (subgroups may be left to inherit).
 
 ## 調べ方 (diagnosis)
 

@@ -64,6 +64,10 @@ const SAFE_CONTEXT: &[&str] = &[
     "expired_ms",
     "ready",
     "oldest_wait_ms",
+    // D3 MR2 — FG-AUTH-0010 (user-offboarding runbook): counts and group ids.
+    "active_human_admins",
+    "ownerless_groups",
+    "group_ids",
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

@@ -11,6 +11,9 @@ use crate::audited_tests::{audit, commit};
 use crate::change::Actor;
 use crate::test_support::*;
 
+mod administration;
+mod bootstrap;
+mod guard;
 mod race;
 mod request;
 
@@ -52,6 +55,22 @@ fn tombstone(path: &str, cause_id: i64) -> String {
         "INSERT INTO forge.namespace_tombstones (old_path, kind, cause_type, cause_id) \
          VALUES ('{path}', 'deleted', 'user', {cause_id})"
     )
+}
+
+/// An active user of `kind` named `name` (bots and service accounts have no
+/// email).
+async fn account(t: &FreshDb, name: &str, kind: UserKind, is_admin: bool) -> UserId {
+    let email = format!("{name}@example.test");
+    let new = NewUser {
+        kind,
+        email: (kind == UserKind::Human).then_some(email.clone()),
+        is_admin,
+        ..NewUser::human(name, name, &email)
+    };
+    create(&t.db, &ctx(&format!("req-user-{name}")), &new)
+        .await
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
+        .user_id
 }
 
 async fn create_alice(t: &FreshDb, request: &str) -> Created {
@@ -265,7 +284,16 @@ async fn user_disable_writes_one_audit_row_and_no_event() {
             .fetch_one(&mut su)
             .await
             .expect("details");
-    assert_eq!(details, json!({"kind": "human", "revoked_tokens": 0}));
+    assert_eq!(
+        details,
+        json!({
+            "kind": "human",
+            "revoked_tokens": 0,
+            "forced": false,
+            "ownerless_groups": 0,
+            "left_without_admin": false,
+        })
+    );
     assert_eq!(rows_of(&mut su, "events").await, 0);
     assert_eq!(
         rows_of(&mut su, "namespaces").await,

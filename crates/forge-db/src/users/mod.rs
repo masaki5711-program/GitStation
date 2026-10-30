@@ -3,7 +3,11 @@
 //! `ChangeTx`: the state rows and the one audit row commit together
 //! (`forge.audited_change_present` refuses anything else). `user.*` changes
 //! are audit-only: they publish no domain event (the `token.revoked` events of
-//! the tokens a disable revokes belong to the tokens, ADR-0019).
+//! the tokens a disable revokes belong to the tokens, ADR-0019). A disable
+//! that would leave forge without an active human administrator, or a
+//! top-level group without a direct active Owner, is refused unless forced
+//! ([`Guard`]); [`bootstrap_admin`] restores an administrator (D3 MR2,
+//! ADR-0019 §10–§11, `admin.rs`).
 
 use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
@@ -12,6 +16,11 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
+
+mod admin;
+
+pub(crate) use admin::lock_admin_set;
+pub use admin::{administration, bootstrap_admin, Administration, Bootstrap, Bootstrapped};
 
 /// Where a user's credentials are checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +82,29 @@ pub struct Created {
 pub enum DisableOutcome {
     /// `active` became `disabled`: one `user.disabled` audit row.
     Disabled,
+    /// Disabled with [`Guard::Force`] although the guard would have refused:
+    /// what it left behind (also in the audit row). `forge doctor` reports
+    /// it as `FG-AUTH-0010` until it is recovered.
+    DisabledPastGuard {
+        /// Top-level groups left without a direct active Owner.
+        ownerless_groups: i64,
+        /// No active human administrator is left.
+        left_without_admin: bool,
+    },
     /// Already disabled: nothing was written, not even an audit row.
     AlreadyDisabled,
+}
+
+/// Whether `disable` enforces the administration guard (ADR-0019 §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Guard {
+    /// Refuse a disable that would leave no active human administrator or a
+    /// top-level group without a direct active Owner (`FG-AUTH-0009`).
+    #[default]
+    Enforce,
+    /// Disable anyway and record it (`forced`). Only the operator CLI
+    /// (`forge admin user disable --force`) passes this; HTTP never does.
+    Force,
 }
 
 /// The audit resource type of users (tables.toml `audit_resource`).
@@ -101,6 +131,13 @@ fn conflict(query: &'static str, e: sqlx::Error) -> ForgeError {
         }
         _ => query_error(query, e),
     }
+}
+
+/// `FG-REPO-0005` for a user (`reason=absent`); the name never enters it.
+fn not_found() -> ForgeError {
+    ForgeError::new(ErrorCode::NotFound)
+        .with_context("resource", RESOURCE)
+        .with_context("reason", "absent")
 }
 
 fn request_invalid(reason: &'static str, len: usize) -> ForgeError {
@@ -149,8 +186,27 @@ fn validate(new: &NewUser) -> Result<(), ForgeError> {
 pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Created, ForgeError> {
     let segment = PathSegment::parse_top_level(&new.username)?;
     validate(new)?;
-    let path = segment.as_str();
     let mut tx = ChangeTx::begin(db, ctx).await?;
+    let created = insert(&mut tx, new, segment.as_str()).await?;
+    let details = AuditDetails::UserCreated {
+        kind: new.kind,
+        namespace_id: created.namespace_id,
+        is_admin: new.is_admin,
+    };
+    tx.commit(ChangeRecord::audit_only(
+        &details,
+        RESOURCE,
+        created.user_id.get(),
+    ))
+    .await?
+    .require_recorded(details.action())?;
+    Ok(created)
+}
+
+/// The writes of `create` (and of `bootstrap_admin`'s `Create`), inside the
+/// caller's change: the user and their personal namespace at `path` (a
+/// validated top-level segment). The caller commits with its audit row.
+async fn insert(tx: &mut ChangeTx, new: &NewUser, path: &str) -> Result<Created, ForgeError> {
     // A released path stays unusable. Every writer of tombstones takes the
     // path lock first, so a tombstone committed by another transaction is
     // either visible to the check below or written after this one commits.
@@ -197,50 +253,54 @@ pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Creat
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }
-    let created = Created {
+    Ok(Created {
         user_id: UserId::new(user_id),
         namespace_id: NamespaceId::new(namespace_id),
-    };
-    let details = AuditDetails::UserCreated {
-        kind: new.kind,
-        namespace_id: created.namespace_id,
-        is_admin: new.is_admin,
-    };
-    tx.commit(ChangeRecord::audit_only(
-        &details,
-        RESOURCE,
-        created.user_id.get(),
-    ))
-    .await?
-    .require_recorded(details.action())?;
-    Ok(created)
+    })
 }
 
 /// `active` becomes `disabled` with one audit row `user.disabled`
-/// (`AuditDetails::UserDisabled`, with `revoked_tokens`); the user's active
+/// (`AuditDetails::UserDisabled`, with `revoked_tokens` and the guard's
+/// `forced` / `ownerless_groups` / `left_without_admin`); the user's active
 /// tokens are revoked in the same change (`revoked_reason = 'user_disabled'`,
 /// one `token.revoked` event each, ADR-0019). Disabling a disabled user is
 /// `AlreadyDisabled` and writes nothing. An unknown user is `FG-REPO-0005`
 /// (`resource=user`, `reason=absent`).
+///
+/// Enforces the administration guard ([`Guard::Enforce`]): leaving no
+/// active human administrator is `FG-AUTH-0009` `last_admin`, leaving a
+/// top-level group without a direct active Owner is `last_owner`; a refused
+/// disable writes nothing and revokes no token. [`disable_with`] can force it.
 pub async fn disable(
     db: &Db,
     ctx: &ChangeContext,
     user: UserId,
 ) -> Result<DisableOutcome, ForgeError> {
+    disable_with(db, ctx, user, Guard::Enforce).await
+}
+
+/// [`disable`] with an explicit [`Guard`]. Locks `users.admin_set`, then the
+/// user row `FOR UPDATE`, then counts without locks (ADR-0019 §11); group
+/// rows are never locked.
+pub async fn disable_with(
+    db: &Db,
+    ctx: &ChangeContext,
+    user: UserId,
+    guard: Guard,
+) -> Result<DisableOutcome, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let row: Option<(String, String)> = tx
+    tx.step(lock_admin_set).await?;
+    let row: Option<(String, String, bool)> = tx
         .step(|c| async move {
-            sqlx::query_as("SELECT kind, state FROM forge.users WHERE id = $1 FOR UPDATE")
+            sqlx::query_as("SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE")
                 .bind(user.get())
                 .fetch_optional(c)
                 .await
                 .map_err(|e| query_error("users.disable.lock", e))
         })
         .await?;
-    let Some((kind, state)) = row else {
-        return Err(ForgeError::new(ErrorCode::NotFound)
-            .with_context("resource", RESOURCE)
-            .with_context("reason", "absent"));
+    let Some((kind, state, is_admin)) = row else {
+        return Err(not_found());
     };
     if state == "disabled" {
         // Dropping the transaction rolls back the lock; nothing was written.
@@ -251,6 +311,17 @@ pub async fn disable(
             .with_context("reason", "unknown_user_kind")
             .with_context("table", "users")
     })?;
+    let leaves = tx
+        .step(|c| admin::what_disable_leaves(c, user, kind, is_admin))
+        .await?;
+    let forced = guard == Guard::Force;
+    if !forced {
+        if let Some(refused) = leaves.refusal(user) {
+            // Dropping the transaction rolls back the locks; nothing was
+            // written and no token was revoked.
+            return Err(refused);
+        }
+    }
     tx.step(|c| async move {
         sqlx::query("UPDATE forge.users SET state = 'disabled', updated_at = now() WHERE id = $1")
             .bind(user.get())
@@ -278,6 +349,9 @@ pub async fn disable(
     let details = AuditDetails::UserDisabled {
         kind,
         revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
+        forced,
+        ownerless_groups: leaves.ownerless_count(),
+        left_without_admin: leaves.without_admin,
     };
     let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
     // One token.revoked event per token (at most MAX_ACTIVE_TOKENS = 50,
@@ -293,7 +367,14 @@ pub async fn disable(
     tx.commit(record)
         .await?
         .require_recorded(details.action())?;
-    Ok(DisableOutcome::Disabled)
+    Ok(if leaves.is_clean() {
+        DisableOutcome::Disabled
+    } else {
+        DisableOutcome::DisabledPastGuard {
+            ownerless_groups: leaves.ownerless_count(),
+            left_without_admin: leaves.without_admin,
+        }
+    })
 }
 
 /// The id of the user named `username` (the operator CLI names users this
@@ -310,11 +391,7 @@ pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeErro
                 .map_err(|e| crate::read_query_error("users.id_by_username", e))
         })
         .await?;
-    id.map(UserId::new).ok_or_else(|| {
-        ForgeError::new(ErrorCode::NotFound)
-            .with_context("resource", RESOURCE)
-            .with_context("reason", "absent")
-    })
+    id.map(UserId::new).ok_or_else(not_found)
 }
 
 #[cfg(test)]

@@ -55,7 +55,7 @@ fn parse_days(text: &str) -> Result<Duration, ForgeError> {
 
 /// The audit context of an operator command: the system actor, labelled
 /// with the OS account that ran it.
-fn context(request_id: &RequestId) -> ChangeContext {
+pub(crate) fn context(request_id: &RequestId) -> ChangeContext {
     let os_user = std::env::var("USERNAME")
         .or_else(|_| std::env::var("USER"))
         .unwrap_or_else(|_| {
@@ -73,7 +73,7 @@ fn context(request_id: &RequestId) -> ChangeContext {
 }
 
 /// Connect, run, close.
-fn with_db<T>(
+pub(crate) fn with_db<T>(
     cfg: &DatabaseConfig,
     op: impl AsyncFnOnce(&Db) -> Result<T, ForgeError>,
 ) -> Result<T, ForgeError> {

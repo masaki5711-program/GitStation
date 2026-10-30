@@ -74,8 +74,16 @@ fn only_published_audit_actions_name_an_event_type() {
     let disabled = AuditDetails::UserDisabled {
         kind: UserKind::Human,
         revoked_tokens: 0,
+        forced: false,
+        ownerless_groups: 0,
+        left_without_admin: false,
     };
     assert_eq!(disabled.event_type(), None);
+    let bootstrapped = AuditDetails::AdminBootstrapped {
+        created: false,
+        namespace_id: None,
+    };
+    assert_eq!(bootstrapped.event_type(), None);
     let created = AuditDetails::UserCreated {
         kind: UserKind::Human,
         namespace_id: NamespaceId::new(1),

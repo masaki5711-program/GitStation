@@ -64,11 +64,14 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    jobs.queue_depth",
         "ok    subscribers.lag",
         "ok    subscribers.dead_letters",
+        // D3 MR2: no users yet is not orphaned, but it is not hidden either.
+        "warn  users.administration no users yet",
         "ok    storage",
         "ok    git",
     ] {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
+    assert!(text.contains("forge admin bootstrap-admin"), "{text}");
     // No worker has run against this database: ok, but not hidden.
     assert!(text.contains("worker not observed"), "{text}");
     // Read-only: doctor applied nothing (the status still lists exactly the
@@ -296,6 +299,50 @@ fn doctor_reports_a_stale_sequencer_with_a_backlog_as_outbox_sequencer_lag() {
     assert_eq!(text.matches("FAIL").count(), 1, "{text}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("[FG-DB-0005]"), "{err}");
+    rt.block_on(t.drop_now());
+}
+
+// ── D3 MR2: users.administration (FG-AUTH-0010) ─────────────────────────
+#[test]
+fn doctor_reports_an_orphaned_administration() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    // Users exist, none of them an active human administrator.
+    rt.block_on(async {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            forge_core::RequestId::parse("req-doctor-user").expect("request id"),
+        );
+        forge_db::users::create(
+            &t.db,
+            &ctx,
+            &forge_db::users::NewUser::human("bob", "Bob", "bob@example.test"),
+        )
+        .await
+        .expect("bob");
+    });
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("FAIL  users.administration"))
+        .unwrap_or_else(|| panic!("no administration failure in:\n{text}"));
+    for part in [
+        "FG-AUTH-0010",
+        "reason=no_admin",
+        "active_human_admins=0",
+        "ownerless_groups=0",
+    ] {
+        assert!(line.contains(part), "missing {part:?} in {line:?}");
+    }
+    assert!(!text.contains("bob"), "names stay out:\n{text}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("[FG-AUTH-0010]"), "{err}");
     rt.block_on(t.drop_now());
 }
 

@@ -33,6 +33,8 @@
 | [FG-AUTH-0006](FG-AUTH-0006.md) | 400 | info | A request to create a user broke a rule of forge.users before anything was written: a human without an email, or a field that is empty, too long or holds a NUL character (display_name 1 to 255, email 1 to 320, employee_number 1 to 64, external_id 1 to 255 characters). |
 | [FG-AUTH-0007](FG-AUTH-0007.md) | 409 | info | Another user already has the same employee_number, or the same external_id for the same auth_source (unique indexes users_employee_number and users_external_id on forge.users). |
 | [FG-AUTH-0008](FG-AUTH-0008.md) | 400 | info | A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner, a bot owner, a disabled owner, or the owner already holds 50 active tokens. |
+| [FG-AUTH-0009](FG-AUTH-0009.md) | 409 | info | An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2) |
+| [FG-AUTH-0010](FG-AUTH-0010.md) | 500 | warn | forge doctor (check users.administration) found forge without an active human administrator, or a top-level group without a direct active Owner |
 | [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
