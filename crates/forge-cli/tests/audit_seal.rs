@@ -52,7 +52,20 @@ fn key_file(text: &str) -> (tempfile::TempDir, String) {
     let path = dir.path().join("audit_seal_keys");
     let mut f = std::fs::File::create(&path).expect("create");
     f.write_all(text.as_bytes()).expect("write");
+    owner_only(&path);
     (dir, path.to_string_lossy().into_owned())
+}
+
+/// A secret file must not be readable by others on Unix (`insecure_permissions`
+/// otherwise); the default umask leaves it 0644.
+fn owner_only(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// The doctor line of `name` (any status).

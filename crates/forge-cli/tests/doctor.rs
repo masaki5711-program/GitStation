@@ -328,6 +328,12 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
     let keys_dir = tempfile::tempdir().expect("keys dir");
     let keys = keys_dir.path().join("audit_seal_keys");
     std::fs::write(&keys, format!("1 {}\n", "42".repeat(32))).expect("keys");
+    // Not readable by others, or the worker refuses it (`insecure_permissions`).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
     app_only.push((
         "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
         keys.to_string_lossy().into_owned(),
