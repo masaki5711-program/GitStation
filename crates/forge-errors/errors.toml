@@ -333,7 +333,7 @@ user_message_ja = "このアカウントは無効化されています。管理�
 user_message_en = "This account is disabled. Contact the administrator."
 user_message_id = "Akun ini dinonaktifkan. Hubungi administrator."
 cause = "The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins)."
-diagnosis = "The log event carries `action`. The audit log records who disabled the account, or the lockout."
+diagnosis = "The log event carries `action`, or for a personal access token `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate refuses a disabled owner's token itself, ADR-0019). The audit log records who disabled the account, or the lockout."
 fix = "An administrator re-enables the account if it should be active."
 test = "disabled_account_is_denied"
 
@@ -375,6 +375,19 @@ cause = "Another user already has the same employee_number, or the same external
 diagnosis = "The log event carries `reason` (employee_number_taken or external_id_taken); the value is not logged (personal data). Find the other account with a privileged query on forge.users (the read pool cannot see these columns); a duplicate usually means a re-hired employee or an LDAP entry that was recreated."
 fix = "An administrator decides which account keeps the identifier: disable or correct the stale account, then retry."
 test = "a_taken_employee_number_or_external_id_is_user_identifier_taken"
+
+[[error]]
+code = "FG-AUTH-0008"
+name = "TokenRequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "トークンの発行リクエストが正しくありません。入力を確認してください。"
+user_message_en = "The token request is not valid. Check the input."
+user_message_id = "Permintaan token tidak valid. Periksa input."
+cause = "A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner, a bot owner, a disabled owner, or the owner already holds 50 active tokens."
+diagnosis = "The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled or active_limit) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`."
+fix = "Correct the request. For active_limit revoke tokens that are no longer used. For owner_bot / owner_disabled / admin_scope_requires_admin the owner or the scope is the wrong choice; nothing was written."
+test = "expiry_over_365_or_under_1_day_is_token_request_invalid"
 
 [[error]]
 code = "FG-GIT-0007"
@@ -686,6 +699,22 @@ fix = "Restore the rows from the audit log (forge.audit_log group.* / member.* r
 runbook = "membership-data"
 test = "a_namespace_chain_beyond_the_cap_is_membership_data_invalid"
 # ── end D2 ──────────────────────────────────────────────────────────────
+
+# ── D3: credential data that breaks a schema invariant ─────────────────
+[[error]]
+code = "FG-DB-0019"
+name = "CredentialDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "認証情報を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The credential data could not be read. Contact the administrator with the request ID."
+user_message_id = "Data kredensial tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Authenticating a personal access token (forge_db::tokens) found a tokens row that the schema and the forge-db commands never write: a scope name this build does not know, or a secret_sha256 that is not 32 bytes. The data was changed outside forge-db (a manual change, a restored dump, a disabled constraint) or by a newer build. The token is not accepted: the request is refused rather than decided on partial scopes."
+diagnosis = "The log event carries `reason` (unknown_scope or bad_hash), `token_id` and `public_id` (never a secret or hash) and, for unknown_scope, `raw` (the stored scope). Read read-only on the write role: SELECT id, user_id, public_id, scopes FROM forge.tokens WHERE id = <token_id>; then check pg_constraint for tokens_scopes_known and forge_audit.ddl_audit for who changed the constraint, and forge.audit_log token.* rows for the history."
+fix = "Revoke the token through an approved runbook step (forge admin token revoke) and issue a new one; restore a dropped constraint from the migration. Never edit the row by hand without approval."
+runbook = "credential-data"
+test = "an_unknown_stored_scope_is_credential_data_invalid"
+# ── end D3 ──────────────────────────────────────────────────────────────
 
 [[error]]
 code = "FG-DB-0008"

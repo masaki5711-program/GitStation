@@ -266,7 +266,7 @@ pub(crate) async fn run_with(
 #[cfg(test)]
 mod jobs_tests;
 #[cfg(test)]
-mod loop_tests;
+pub(crate) mod loop_tests;
 #[cfg(test)]
 mod seal_tests;
 // ── C5: the subscribers task's tests live in subscribers_tests.rs ──

@@ -1,0 +1,215 @@
+# ADR-0019: 個人用アクセストークンと認証
+
+**Date**: 2026-10-29
+**Status**: 承認済み（accepted。手順 D3 の計画とともにユーザーが承認 2026-10-29。ADR-0010・ADR-0016・ADR-0018 を改訂する）
+**Deciders**: Masaki Fujikawa（ユーザー）、Claude
+
+## 背景
+
+M1 では `git clone` / `git push` と API を、人のユーザーが自分の資格情報で使えるようにする必要がある。手順 D1・D2 でユーザー・名前空間・グループと
+役割の読み込み（ADR-0010 の Amendment 2026-10-29）までが入ったが、**誰がリクエストを送ったか**を決める認証がまだない。
+
+前提として確かめたこと（作業ツリーで確認、2026-10-29）:
+
+- `forge admin` にはまだ読み取りのコマンドしかない。トークンの発行・失効・一覧、ユーザーの無効化、`bootstrap-admin` は **最初の
+  書き込みをする `forge admin` のコマンド**になる。
+- `Scope` は `forge-auth` にある。`forge-db` は `forge-auth` を見られない（依存の向き、CLAUDE.md §3.9）ので、トークンの表を
+  扱う `forge-db` から `Scope` を参照できない。
+- `forge-web` は `forge-db` に依存しない（readyz と同じく、`forge-cli serve` がトレイトの実装を注入する形）。
+- ADR-0018 の `forge_ro` には資格情報（トークンのハッシュ）を見せない。
+- Smart HTTP はまだない（フェーズ 9）。実際の `git` を使う e2e テストはここでは書けない。
+- `forge-auth` README の引き継ぎ事項 7（無効化するユーザーが最後の Owner の場合）と 9（Basic 認証のパスワードはトークンだけ）が未決。
+
+**ユーザーの方針（2026-10-30）**: 製品の根本の目的は、kanflow と密に連携してバイブコーディングの開発速度を上げること。連携は必須で、
+「連携は簡略に」は **設定（つなぐ手順と設定項目）を簡略にする** という意味であり、連携の機能やイベントを減らす意味ではない。
+AI のエージェントもトークンで git と API を使うため、トークンには最初から `is_agent` の印を持たせる。
+
+## 決定
+
+### 1. トークンの形式と生成
+
+- 形式: `fgp_<public_id>_<secret>`。`public_id` は 16 桁の小文字の 16 進（64 bit）、`secret` は 64 桁の小文字の 16 進（256 bit）。
+  接頭辞 `fgp_` は秘密情報の走査（ログ・リポジトリ）で検出しやすくするため。
+- 乱数は OS の CSPRNG（`getrandom`）から 256 bit。`public_id` も同じ源から取る。
+- プリミティブ（解析、生成、ハッシュ、定数時間の比較）は **`forge-core`** に置く（`token.rs`）。`Scope` も `forge-core` の
+  `scope.rs` へ移し、`forge-auth` は再エクスポートする。
+- 秘密の型 `TokenSecret` は `Serialize` も `Display` も実装しない。`Debug` は伏せ字にする。
+
+### 2. ハッシュ: SHA-256（パスワード用のハッシュではない）
+
+- DB には `secret_sha256`（`bytea`、32 バイト）だけを保存し、平文は保存しない。
+- argon2 / bcrypt を使わない理由: 秘密は 256 bit の一様な乱数なので総当たりは成り立たず、遅いハッシュは防御を増やさない。
+  一方で git の操作は 1 回の clone で何度も認証が走るので、遅いハッシュはそのまま遅延と DoS の面になる。
+
+### 3. 照合: `public_id` で引き、定数時間で比べる
+
+- `public_id`（UNIQUE）で 1 行を引き、`secret` の SHA-256 と `secret_sha256` を `subtle` で定数時間に比較する。
+- **`public_id` が見つからないときも、ダミーのハッシュと定数時間の比較を実行する**（存在の有無を時間で漏らさない）。
+- トークンの表の読み取りは **書き込みのプール（`forge_app`）で行う**。`forge_ro` は `secret_sha256` を読めない（ADR-0018 の Amendment）。
+- 認証中に DB が使えないときは **`FG-DB-0001`（503）** にする。401 にはしない（クライアントが資格情報を捨てたり、
+  正しいトークンを「誤り」と記録したりしないため）。
+- 判定の順序は `malformed` → `unknown` → `mismatch` → `revoked` → `expired`（いずれも **`FG-AUTH-0001`（401）**、どれだったかは
+  `reason` としてログにだけ出す）。トークンの状態は秘密を持つ者にだけ分かる。所有者が無効化されているときは、
+  **`tokens::authenticate` 自身が `FG-AUTH-0004`（`reason=owner_disabled`）を返す**（呼び出し側の確認漏れで通らないように。
+  2026-10-30 の /review の指摘による）。このとき `last_used_at` は更新しない。
+- 拒否はログのイベント `forge.auth.token_rejected`（`request_id`、`error_code`、`reason`、`public_id`）に出す。秘密は出さない。
+
+### 4. 有効期限と上限
+
+- `expires_at` は NOT NULL。`created_at` より後で、**365 日以内**（DB の CHECK と `tokens::issue` の両方で強制）。
+  CLI の既定は `--expires-in 90d`。
+- 1 ユーザーあたりの有効なトークンの数に上限を設ける（超えたら `FG-AUTH-0008 reason=active_limit`）。
+- 名前は 1〜100 文字、NUL 文字とその他の制御文字（タブ・改行・エスケープ）は不可（`token list` の表示を偽造させない）。スコープは 1 つ以上で、すべて既知のもの。
+
+### 5. 監査とイベント: 監査は所有者のユーザーに付け、`token.*` は `admin` のイベントにする
+
+- `tokens` の表は監査の対象。表の台帳（`tables.toml`）で `audit_resource = "user"`、`audit_id_column = "user_id"` とし、
+  トークンの監査の行は **所有者のユーザー**に付ける（ユーザーの履歴で発行・失効がまとめて見える）。
+- `AuditDetails::{TokenCreated, TokenRevoked}` を追加する。秘密もハッシュも載せない。
+- **`token.created` / `token.revoked` はドメインイベントとして出す**（ADR-0016 §10 の M1 のイベント、分類は `admin`）。
+  payload はトークンの ID、`public_id`、所有者、スコープの名前、`expires_at`、`is_agent` だけ。
+- トークンが最初のイベントの書き手になるので、D3 で `forge-core` に **`EventType` の列挙**（`ALL`、`as_str`、`visibility_class()`）と
+  **`DedupKey` の規則**（サーバー側の ID とハッシュだけから作る。`^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`、200 文字まで）を入れ、
+  ADR-0016 §11 の未決を閉じる（同 ADR の Amendment）。
+- 無効化による一括の失効も、失効した本数だけ `token.revoked` を出す（有効は最大 50 本なので、1 回の変更のイベントの上限 100 に収まる）。
+- `tokens.is_agent`（`boolean NOT NULL DEFAULT false`、監査の対象）を最初から持つ。発行時に宣言し、ADR-0017 §4.0 の AI のエージェントの
+  識別に使う（`Credential` 型への反映は W1）。
+
+### 6. `last_used_at` の更新
+
+- 更新は **最大 10 分に 1 回**: `UPDATE … SET last_used_at = now() WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '10 minutes')`。
+- `last_used_at` の変更は監査しない（監査のトリガーで除外する列）。
+- 更新の失敗は `FG-DB-0002` を warn で 1 回出し、**認証はそのまま続ける**（使用時刻は補助情報であり、
+  これで認証を落とすと DB の一時的な競合が利用者の失敗になる）。失敗はログに残るので沈黙の失敗ではない。
+
+### 7. HTTP での受け取り方（`forge-web`）
+
+- `Authorization: Bearer <token>`、または `Authorization: Basic`（**パスワードがトークンであるもの**）。Basic のユーザー名は
+  無視し、ログにも出さない。**Basic のパスワードとしてユーザーのパスワードは受け付けない**（ADR-0010 の引き継ぎ事項 9 を閉じる）。
+- 認証のヘッダーが 2 つあるときは 401（`reason=ambiguous`）。
+- `forge-web` は `forge-db` に依存しない: `Authenticator` トレイト（`forge-core`）を `AppState.authenticator` に持ち、
+  `forge-cli serve` が `forge-db` による実装を注入する。
+- 認可は従来どおり `authorize()` だけで決める。認証はプリンシパルとスコープを作るだけ。権限の表（matrix）は変わらない。
+
+### 8. CLI が信頼の起点、`tokens::issue` が不変条件を守る
+
+- トークンの発行は `forge admin token issue --user <u> --scopes <s,..> [--expires-in 90d] [--name <n>]`。ホストの操作者が信頼の
+  起点であり、**この経路は `authorize()` を通らない**（HTTP の経路ではないため。HTTP で発行する経路を作るときは別に認可の行を足す）。
+- そのため `tokens::issue` 自身が不変条件を強制する（この順で判定）: ボットには発行しない（`owner_bot`）、無効化されたユーザーには
+  発行しない（`owner_disabled`）、`admin` スコープは管理者のユーザーだけ（`admin_scope_requires_admin`）、上限（`active_limit`）。
+  `tokens::revoke` は所有者を確かめない（操作者専用）。HTTP の経路は `authorize()` で判定し、他人のトークンは見つからない扱いにしてから呼ぶ。
+- トークンは **標準出力に 1 回だけ**表示し、ログには出さない。`token revoke`、`token list`（ハッシュは出さない）も追加する。
+- **権限の単一判定点（CLAUDE.md §3.4）の明示的な例外**（2026-10-30、/review の指摘を受けユーザーが決定）: `admin_scope_requires_admin`
+  は `users.is_admin` を見る判定だが、`forge-auth` ではなく `forge_db::tokens::issue` に置く。理由: 依存の向き（§3.9）で `forge-db` は
+  `forge-auth` を使えず、この判定は HTTP/git の操作の認可ではなく「保存されるトークン」の不変条件であるため。CLI の発行・失効も
+  `authorize()` を通らない（ホストの操作者が信頼の起点）。**この例外は CLI の経路だけ**: HTTP でトークンを発行・失効する経路を作るときは
+  `Action` と権限マトリクスの行（allow と deny）を足し、判定は `authorize()` で行う（`tokens::issue` の不変条件は二重の守りとして残す）。
+
+### 9. 最初の書き込みをする `forge admin` のコマンドは、人が承認する Runbook の手順
+
+- `token issue` / `token revoke` / `user disable` / `bootstrap-admin` は本番を変える操作なので、本番では
+  **人が承認した Runbook の手順**としてだけ実行する（CLAUDE.md §3.7）。Runbook に承認の手順として明記する。
+
+### 10. 無効化のガード
+
+- 既定では拒否する: 無効化によって次のいずれかになるとき **`FG-AUTH-0009 AdministrationConflict`（409）**。
+  `reason` は `last_admin`（最後の有効な管理者）、`last_owner`（最上位のグループの最後の直接の Owner）、`admin_exists`。
+- **CLI の `forge admin user disable --force` だけが通す**。監査の行に `forced`、`ownerless_groups`、`left_without_admin` を記録する。
+  HTTP からは `--force` 相当を出さない。
+- その結果できた「管理者のいない状態」「Owner のいない最上位のグループ」は `forge doctor`（`users.administration`）が
+  **`FG-AUTH-0010 AdministrationOrphaned`**（warn、Runbook `user-offboarding`）として報告する。復旧は `bootstrap-admin`。
+- **数え方**: 「最後の管理者」は **有効な人間の管理者だけ**を数える（ボットと無効化済みのユーザーは数えない）。
+- **最上位のグループは有効な直接の Owner が必要**。サブグループは親から Owner を継承してよいので対象外。
+- 拒否された無効化は何も失効させない。
+
+### 11. ロックの順序と、グループの行をロックしない理由
+
+- 無効化・`bootstrap-admin`（と、将来の `is_admin` の変更）は次の順で取る:
+  1. トランザクション単位の advisory lock `users.admin_set`
+  2. 対象のユーザーの行を `FOR UPDATE`
+  3. 数え上げ（ロックを取らない）
+- **グループの行はロックしない**。メンバーの変更は「グループ → Owner の行（`FOR SHARE`）」の順でロックするので、無効化が
+  「ユーザー → グループ」の順で取ると逆順になりデッドロックする。数え上げで最後の Owner を見落とす競合は、メンバーの変更が
+  Owner の行を `FOR SHARE` で取ることで、対象のユーザーの `FOR UPDATE` と直列化される。
+
+### 12. 一括失効と、発行と無効化の直列化
+
+- 無効化は同じ `ChangeTx` で、そのユーザーの有効なトークンをすべて失効させる（`revoked_reason = 'user_disabled'`）。
+  監査は `user.disabled` の 1 行に `revoked_tokens` をまとめる（トークンごとの監査の行は出さない）。イベントは失効したトークンごとに
+  `token.revoked` を出す。有効期限の切れたトークンは対象にしない（もう使えないため）。D3 の MR1 で実装（2026-10-30、計画の MR2 から前倒し）。
+- `tokens::issue` は所有者の行を `FOR UPDATE` でロックする。これで「無効化の途中に発行され、失効を免れるトークン」は生じない。
+
+### 13. スキーマ（`tokens`）と権限
+
+- 列: `id`、`user_id`（FK）、`public_id`（UNIQUE、16 進 16 桁の CHECK）、`secret_sha256`（`bytea`、32 バイト）、`name`（1〜100）、
+  `scopes`（`text[]`、1 つ以上、既知のもの）、`created_at`、`expires_at`（NOT NULL、`> created_at`、365 日以内）、`revoked_at`、
+  `revoked_reason`（CHECK `revoked` | `user_disabled`）、`last_used_at`。部分索引 `(user_id) WHERE revoked_at IS NULL`。
+- `forge_app`: SELECT・INSERT と、UPDATE(`revoked_at`, `revoked_reason`, `last_used_at`) だけ。DELETE なし。
+- `forge_ro`: `secret_sha256` を除く列だけ。`guarded_objects` とスキーマの期待値に登録する。
+
+### 14. エラーコード
+
+| コード | 名前 | HTTP | 内容 |
+|---|---|---|---|
+| `FG-AUTH-0008` | TokenRequestInvalid | 400 | 発行の要求が不正。`reason`: `expires_out_of_range`、`scopes_empty`、`scope_unknown`、`name_length`、`nul_character`、`control_character`、`admin_scope_requires_admin`、`owner_bot`、`owner_disabled`、`active_limit` |
+| `FG-AUTH-0009` | AdministrationConflict | 409 | 無効化のガード。`reason`: `last_admin`、`last_owner`、`admin_exists` |
+| `FG-AUTH-0010` | AdministrationOrphaned | —（doctor、warn） | 管理者または最上位のグループの Owner がいない。Runbook `user-offboarding` |
+| `FG-DB-0019` | CredentialDataInvalid | 500（alert） | DB のトークンの行が不正（ハッシュの長さ、形式など）。Runbook `credential-data` |
+
+既存のコードの再利用: `FG-AUTH-0001`（期限切れ・失効・不一致、401）、`FG-AUTH-0004`（所有者が無効）、`FG-DB-0001`（認証中の DB 障害、503）、
+`FG-DB-0002`（`last_used_at` の更新の失敗、warn）。
+
+### 15. 実装の分け方（MR）
+
+1. `feat/auth-personal-access-tokens`: `forge-core` の `scope.rs`・`token.rs`、マイグレーション `tokens`、`AuditDetails`、
+   `forge admin token issue|revoke|list`、`FG-AUTH-0008`・`FG-DB-0019`。
+2. `feat/auth-disable-guard`: ガード、一括失効、`bootstrap-admin`、doctor の `users.administration`、`FG-AUTH-0009`・`FG-AUTH-0010`、
+   Runbook `user-offboarding.md`。D2 の LOW の修正（`groups/members.rs` の `unknown_role` → `FG-DB-0018`）。
+3. `feat/web-token-authentication`: `forge-web` の `auth.rs`、`AppState.authenticator`、`serve` の配線、
+   `forge-web/tests/token_principal.rs`。
+
+## 検討した案
+
+### トークンの処理をどこに置くか
+
+| 案 | 内容 | 失敗の現れ方 | 判断 |
+|---|---|---|---|
+| **A（採用）** | プリミティブを `forge-core`、保存と照合を `forge_db::tokens`、HTTP は `forge-web` の middleware が `Authenticator` トレイト経由で呼ぶ | 解析の失敗は `FG-AUTH-0001`、DB は `FG-DB-0001`、行の破損は `FG-DB-0019`。どの層で落ちたかがコードで分かる | 依存の向きを守り、`forge-web` は `forge-db` を見ない |
+| B | すべてを `forge-auth` に置き、`forge-auth` が DB を引く | — | `forge-auth` は判定だけの純粋な層（ADR-0010）。DB への依存を入れると判定の単体テストが DB を要する |
+| C | `forge-web` が `forge-db` を直接呼ぶ | — | ADR-0001 の依存の向きと readyz の前例に反する。HTTP の層と DB の層の失敗が混ざる |
+
+### 無効化のガード
+
+| 案 | 内容 | 判断 |
+|---|---|---|
+| **1（採用）** | 既定で拒否（`FG-AUTH-0009`）、CLI の `--force` だけが通す。結果の孤立は doctor の `FG-AUTH-0010` で見える化、`bootstrap-admin` で復旧 | 誤操作を防ぎつつ、退職者の即時の無効化（セキュリティ）を止めない |
+| 2 | 常に拒否（先に Owner を移す必要がある） | 緊急の無効化（資格情報の漏えい）が Owner の移譲待ちで遅れる |
+| 3 | 常に許可し、警告だけ | 管理者のいない状態が黙って生じる。沈黙の失敗に近い |
+
+## 結果
+
+- 依存の向きは変わらない（`forge-core` に `Scope`・`token`・`Authenticator`、`forge-db` は `forge-core` だけを見る）。
+- 認証の失敗は `FG-AUTH-0001`／`FG-AUTH-0004`、DB の障害は `FG-DB-0001`、データの破損は `FG-DB-0019` と分かれ、ログの
+  `forge.auth.token_rejected` の `reason` で原因まで追える。
+
+**受け入れたリスク**
+
+- **無効化の時点で処理中のリクエスト**は、そのリクエストの間は完了しうる（認証はリクエストの開始時に 1 回だけ行う）。
+  次のリクエストからは拒否される。
+- **トークンは端末に 1 回表示される**。端末の履歴やスクロールバックに残りうる。ログには出さない。
+- **メモリ上の秘密を `zeroize` しない**。プロセスのメモリを読める攻撃者はすでにより多くを持っている。
+
+## 見送り
+
+- `is_agent` を `Credential` 型と認可に反映すること: W1（ADR-0017 §4.0）。列は D3 で入れる。
+- 拒否されたリクエストの監査の集約（ADR-0016 §6）。
+- 認証のレート制限。
+- 実際の `git` による e2e テスト: フェーズ 9（Smart HTTP）へ渡す。名前だけ決める:
+  `git_clone_with_a_token_in_basic_auth_succeeds`、`git_push_with_a_read_repository_token_is_refused`、
+  `git_without_credentials_gets_www_authenticate_basic`。
+
+## 影響するエラーコードと Runbook
+
+- 追加: `FG-AUTH-0008`、`FG-AUTH-0009`、`FG-AUTH-0010`、`FG-DB-0019`（`errors.toml` に登録し、カタログは生成する）。
+- Runbook 追加: `user-offboarding.md`（`FG-AUTH-0010`、`--force`、`bootstrap-admin`）、`credential-data.md`（`FG-DB-0019`）。
+- Runbook 更新: `forge admin` の書き込みのコマンドは、人が承認する手順として記載する。

@@ -2,7 +2,8 @@
 //! with their personal namespace, and disable a user. Each command is one
 //! `ChangeTx`: the state rows and the one audit row commit together
 //! (`forge.audited_change_present` refuses anything else). `user.*` changes
-//! are audit-only: they publish no domain event.
+//! are audit-only: they publish no domain event (the `token.revoked` events of
+//! the tokens a disable revokes belong to the tokens, ADR-0019).
 
 use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
@@ -216,7 +217,9 @@ pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Creat
 }
 
 /// `active` becomes `disabled` with one audit row `user.disabled`
-/// (`AuditDetails::UserDisabled`); no event. Disabling a disabled user is
+/// (`AuditDetails::UserDisabled`, with `revoked_tokens`); the user's active
+/// tokens are revoked in the same change (`revoked_reason = 'user_disabled'`,
+/// one `token.revoked` event each, ADR-0019). Disabling a disabled user is
 /// `AlreadyDisabled` and writes nothing. An unknown user is `FG-REPO-0005`
 /// (`resource=user`, `reason=absent`).
 pub async fn disable(
@@ -256,11 +259,62 @@ pub async fn disable(
             .map_err(|e| query_error("users.disable.update", e))
     })
     .await?;
-    let details = AuditDetails::UserDisabled { kind };
-    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, user.get()))
+    // ADR-0019: the user's active tokens die with the account, in the same
+    // change, so re-enabling the user never revives them. `tokens::issue`
+    // locks the user row too, so no token is issued in between.
+    let revoked: Vec<(i64, String)> = tx
+        .step(|c| async move {
+            sqlx::query_as(
+                "UPDATE forge.tokens SET revoked_at = now(), revoked_reason = 'user_disabled' \
+                 WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() \
+                 RETURNING id, public_id",
+            )
+            .bind(user.get())
+            .fetch_all(c)
+            .await
+            .map_err(|e| query_error("users.disable.revoke_tokens", e))
+        })
+        .await?;
+    let details = AuditDetails::UserDisabled {
+        kind,
+        revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
+    };
+    let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
+    // One token.revoked event per token (at most MAX_ACTIVE_TOKENS = 50,
+    // inside the 100 events one change may carry).
+    for (token_id, public_id) in revoked {
+        let token = AuditDetails::TokenRevoked {
+            token_id,
+            user,
+            public_id,
+        };
+        record.events.push(crate::tokens::event(&token, token_id));
+    }
+    tx.commit(record)
         .await?
         .require_recorded(details.action())?;
     Ok(DisableOutcome::Disabled)
+}
+
+/// The id of the user named `username` (the operator CLI names users this
+/// way). Reads on the read pool. An unknown name is `FG-REPO-0005`
+/// (`resource=user`, `reason=absent`); the name never enters the error.
+pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeError> {
+    let id: Option<i64> = db
+        .within("users.id_by_username", async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_scalar("SELECT id FROM forge.users WHERE username = $1")
+                .bind(username)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| crate::read_query_error("users.id_by_username", e))
+        })
+        .await?;
+    id.map(UserId::new).ok_or_else(|| {
+        ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", RESOURCE)
+            .with_context("reason", "absent")
+    })
 }
 
 #[cfg(test)]

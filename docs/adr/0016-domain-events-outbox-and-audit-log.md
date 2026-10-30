@@ -683,3 +683,14 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - **台帳の検査**: 台帳の解析は、リソースの列が `unaudited_columns` か `txn_audited_columns` にあること、同じ列が両方に入ることを拒否する。
   `audit_id_column` が整数列であることは、`bootstrap::check` が実際の表に対して確かめる（`FG-DB-0009 guard=audited_trigger`、`detail=id_column`）。
   テストは `every_table_is_in_the_ledger` と `guarded_objects_match_the_ledger`、D1 の表の検査は `users_schema_tests`。
+
+## Amendment（2026-10-29、手順 D3: トークン）
+
+- `token.created` / `token.revoked` は §10 のとおり M1 のイベント（分類 `admin`）として出す。監査の行は所有者のユーザーに付ける
+  （`tables.toml` の `audit_resource = "user"`、`audit_id_column = "user_id"`）。詳細は ADR-0019 §5。
+- トークンが最初のイベントの書き手なので、D3 で `forge-core` に `EventType` の列挙（`ALL`、`as_str`、`visibility_class()`。
+  `DomainEvent.event_type` はこの型にする）と `DedupKey` を入れる。§11 の未決はこう閉じる: `dedup_key` は **サーバー側の ID とハッシュ
+  だけから作る**（利用者の値から作れる構築子を持たない）、形は `^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`・200 文字まで、
+  形の違反は `FG-DB-0010 reason=invalid_dedup_key`。プロジェクトを指さない監査の行の変更がプロジェクトのイベントを出してよいかは、
+  最初のプロジェクトのイベントを入れる D4 で決める。
+- 拒否されたリクエストの監査の集約（§6）は引き続き見送り（ADR-0019「見送り」）。

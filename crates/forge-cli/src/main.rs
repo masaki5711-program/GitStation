@@ -10,6 +10,7 @@ use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
+mod admin_token;
 mod db;
 mod doctor;
 mod explain;
@@ -64,7 +65,8 @@ enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
-    /// Operator commands (read-only).
+    /// Operator commands. `token issue` / `token revoke` change data (in
+    /// production: approved runbook steps); the others only read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -80,6 +82,44 @@ enum AdminCommand {
         /// Storage root (default: `storage.root`).
         #[arg(long)]
         storage_root: Option<std::path::PathBuf>,
+    },
+    /// Personal access tokens (ADR-0019).
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// Issue a token for a user and print it once.
+    Issue {
+        /// The owner's username.
+        #[arg(long)]
+        user: String,
+        /// Comma-separated scopes: read_repository, write_repository, read_api, api, admin.
+        #[arg(long)]
+        scopes: String,
+        /// Lifetime as `<days>d`, 1d..365d (default 90d).
+        #[arg(long)]
+        expires_in: Option<String>,
+        /// A label for the token (1..100 characters).
+        #[arg(long, default_value = "cli")]
+        name: String,
+        /// The token is held by an AI agent (ADR-0017 §4.0).
+        #[arg(long)]
+        agent: bool,
+    },
+    /// Revoke a token by id.
+    Revoke {
+        /// The token id (from `token list`).
+        token_id: i64,
+    },
+    /// List a user's tokens (never the secret).
+    List {
+        /// The owner's username.
+        #[arg(long)]
+        user: String,
     },
 }
 
@@ -116,10 +156,22 @@ fn main() -> ExitCode {
         | Command::Worker
         | Command::Db {
             command: DbCommand::Migrate,
+        }
+        | Command::Admin {
+            command:
+                AdminCommand::Token {
+                    command: TokenCommand::Issue { .. } | TokenCommand::Revoke { .. },
+                },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
         | Command::Errors { .. }
-        | Command::Admin { .. }
+        | Command::Admin {
+            command:
+                AdminCommand::RepoPath { .. }
+                | AdminCommand::Token {
+                    command: TokenCommand::List { .. },
+                },
+        }
         | Command::Doctor { .. }
         | Command::Db {
             command: DbCommand::Status { .. },
@@ -165,6 +217,31 @@ fn main() -> ExitCode {
             Some(root) => admin::repo_path(&root, repo_id),
             None => config().and_then(|cfg| admin::repo_path(cfg.storage_root()?, repo_id)),
         },
+        Command::Admin {
+            command: AdminCommand::Token { command },
+        } => config().and_then(|cfg| match command {
+            TokenCommand::Issue {
+                user,
+                scopes,
+                expires_in,
+                name,
+                agent,
+            } => admin_token::issue(
+                &cfg.database,
+                &request_id,
+                &admin_token::IssueArgs {
+                    username: user,
+                    scopes,
+                    expires_in,
+                    name,
+                    agent,
+                },
+            ),
+            TokenCommand::Revoke { token_id } => {
+                admin_token::revoke(&cfg.database, &request_id, token_id)
+            }
+            TokenCommand::List { user } => admin_token::list(&cfg.database, &user),
+        }),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)

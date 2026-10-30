@@ -22,3 +22,4 @@
 | [0016](0016-domain-events-outbox-and-audit-log.md) | ドメインイベントの Outbox、カーソル方式のイベントの履歴、監査ログ | accepted | 2026-10-27 |
 | [0017](0017-local-ai-autofix-loop.md) | ローカル LLM による MR の自動修正ループと、kanflow からの承認・マージ | accepted | 2026-10-28 |
 | [0018](0018-db-roles-append-only-and-audit-sealing.md) | DB のロール、追記のみの強制、監査ログの封印 | accepted | 2026-10-27 |
+| [0019](0019-personal-access-tokens-and-authentication.md) | 個人用アクセストークンと認証、無効化のガード | accepted | 2026-10-29 |

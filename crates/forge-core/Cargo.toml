@@ -17,6 +17,10 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 # D1: AuditDetails serializes to the audit log's details.
 serde_json.workspace = true
+# D3: personal access tokens (OS RNG, SHA-256, constant-time compare).
+getrandom = "0.2"
+sha2.workspace = true
+subtle = "2"
 
 [dev-dependencies]
 tempfile.workspace = true

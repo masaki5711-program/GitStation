@@ -529,9 +529,12 @@ name = "forge-core"
 version = "0.1.0"
 dependencies = [
  "forge-errors",
+ "getrandom 0.2.17",
  "percent-encoding",
  "proptest",
  "serde_json",
+ "sha2",
+ "subtle",
  "tempfile",
  "toml",
  "tracing",

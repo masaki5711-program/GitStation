@@ -5,47 +5,10 @@
 //! Inputs fail closed: a `Principal` cannot be built without stating how it
 //! authenticated and whether the account is active.
 
-// Role and Visibility live in forge-core (step D2: forge-db stores and loads
+// Role, Visibility (D2) and Scope (D3) live in forge-core (forge-db stores and loads
 // them); re-exported here so the authorization API is unchanged.
 use forge_core::{RefName, UserId};
-pub use forge_core::{Role, Visibility};
-
-/// What a token may be used for. Scopes only narrow a role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Scope {
-    /// git clone / fetch.
-    ReadRepository,
-    /// git push (implies `ReadRepository`).
-    WriteRepository,
-    /// REST API reads.
-    ReadApi,
-    /// REST API reads and writes (implies `ReadApi`).
-    Api,
-    /// Lets an administrator's token use administrator rights. Without it a
-    /// token of an administrator acts as a normal user.
-    Admin,
-}
-
-impl Scope {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Scope::ReadRepository => "read_repository",
-            Scope::WriteRepository => "write_repository",
-            Scope::ReadApi => "read_api",
-            Scope::Api => "api",
-            Scope::Admin => "admin",
-        }
-    }
-
-    /// Whether holding `self` satisfies a requirement of `required`.
-    pub fn satisfies(self, required: Scope) -> bool {
-        self == required
-            || matches!(
-                (self, required),
-                (Scope::WriteRepository, Scope::ReadRepository) | (Scope::Api, Scope::ReadApi)
-            )
-    }
-}
+pub use forge_core::{Role, Scope, Visibility};
 
 /// How the caller authenticated.
 #[derive(Debug, Clone, PartialEq, Eq)]

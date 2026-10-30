@@ -64,6 +64,9 @@ pub mod groups;
 mod groups_schema_tests;
 pub mod roles;
 // ── end D2 ──
+// ── D3: personal access tokens ──
+pub mod tokens;
+// ── end D3 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

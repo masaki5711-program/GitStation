@@ -304,7 +304,7 @@ mod queue_edge_tests;
 #[cfg(test)]
 mod runner_abort_tests;
 #[cfg(test)]
-mod runner_stop_tests;
+pub(crate) mod runner_stop_tests;
 #[cfg(test)]
 mod runner_tests;
 #[cfg(test)]

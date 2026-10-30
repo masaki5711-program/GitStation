@@ -360,8 +360,39 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         // ── end D2 ──
+        // ── D3: tokens: no DELETE, UPDATE on three columns only, the read
+        // pool without secret_sha256 (ADR-0018) ──
+        (
+            "forge.tokens",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", TOKENS_APP_UPDATE),
+                columns("forge_ro", "SELECT", TOKENS_RO),
+            ]
+            .concat(),
+        ),
+        // ── end D3 ──
     ]
 }
+
+/// The columns forge_app may update on forge.tokens.
+const TOKENS_APP_UPDATE: &[&str] = &["revoked_at", "revoked_reason", "last_used_at"];
+
+/// The read pool's columns of tokens (tables.toml `ro_columns`): not
+/// secret_sha256.
+const TOKENS_RO: &[&str] = &[
+    "id",
+    "user_id",
+    "public_id",
+    "name",
+    "scopes",
+    "created_at",
+    "expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "last_used_at",
+    "is_agent",
+];
 
 /// The read pool's columns of users (tables.toml `ro_columns`): not email,
 /// employee_number or external_id.
@@ -414,6 +445,9 @@ const LATER_TABLES: &[&str] = &[
     "groups",
     "group_members",
     // ── end D2 ──
+    // ── D3: tokens (migration 20261030100000) ──
+    "tokens",
+    // ── end D3 ──
 ];
 
 /// Every table the first migration creates.

@@ -74,6 +74,13 @@ async fn every_audited_table_has_its_audit_trigger() {
                 txn_audited_columns: s(&["full_path", "depth"]),
             },
             AuditedTable {
+                name: "tokens".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: s(&["last_used_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
                 name: "users".into(),
                 audit_resource: AuditResource::Literal("user".into()),
                 audit_id_column: "id".into(),

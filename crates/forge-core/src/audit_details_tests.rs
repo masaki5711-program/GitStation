@@ -38,13 +38,17 @@ fn audit_details_have_no_pii_fields() {
     };
     let disabled = AuditDetails::UserDisabled {
         kind: UserKind::ServiceAccount,
+        revoked_tokens: 3,
     };
     // The exact shape (a Null or an empty object would pass a key scan).
     assert_eq!(
         created.to_value(),
         json!({"kind": "human", "namespace_id": 5, "is_admin": false})
     );
-    assert_eq!(disabled.to_value(), json!({"kind": "service_account"}));
+    assert_eq!(
+        disabled.to_value(),
+        json!({"kind": "service_account", "revoked_tokens": 3})
+    );
     assert_eq!(created.action(), "user.created");
     assert_eq!(disabled.action(), "user.disabled");
     // D2: groups and their members (ADR-0016 §9: group.*, member.*).
@@ -100,6 +104,50 @@ fn audit_details_have_no_pii_fields() {
         keys(&details.to_value(), &mut found);
         for pii in PII_KEYS {
             assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
+        }
+    }
+}
+
+#[test]
+fn token_audit_details_have_their_exact_shape_and_no_secret() {
+    let created = AuditDetails::TokenCreated {
+        token_id: 9,
+        user: UserId::new(4),
+        public_id: "0123456789abcdef".to_owned(),
+        scopes: vec![crate::Scope::ReadApi, crate::Scope::WriteRepository],
+        expires_at: "2027-01-28T00:00:00Z".to_owned(),
+        is_agent: true,
+    };
+    let revoked = AuditDetails::TokenRevoked {
+        token_id: 9,
+        user: UserId::new(4),
+        public_id: "0123456789abcdef".to_owned(),
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({
+            "token_id": 9,
+            "user_id": 4,
+            "public_id": "0123456789abcdef",
+            "scopes": ["read_api", "write_repository"],
+            "expires_at": "2027-01-28T00:00:00Z",
+            "is_agent": true,
+        })
+    );
+    assert_eq!(
+        revoked.to_value(),
+        json!({"token_id": 9, "user_id": 4, "public_id": "0123456789abcdef"})
+    );
+    assert_eq!(created.action(), "token.created");
+    assert_eq!(revoked.action(), "token.revoked");
+    for value in [created.to_value(), revoked.to_value()] {
+        let mut found = Vec::new();
+        keys(&value, &mut found);
+        for k in &found {
+            assert!(
+                !k.contains("secret") && !k.contains("hash") && !PII_KEYS.contains(&k.as_str()),
+                "{k}"
+            );
         }
     }
 }
