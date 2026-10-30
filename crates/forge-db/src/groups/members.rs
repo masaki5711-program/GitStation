@@ -49,7 +49,8 @@ async fn lock_group(conn: &mut PgConnection, group: GroupId) -> Result<bool, For
     }
 }
 
-/// The user's direct role in the group, `None` = not a member.
+/// The user's direct role in the group, `None` = not a member. A stored
+/// role outside the five is `FG-DB-0018` `unknown_role`.
 async fn direct_role(
     conn: &mut PgConnection,
     group: GroupId,
@@ -63,11 +64,18 @@ async fn direct_role(
     .fetch_optional(conn)
     .await
     .map_err(|e| query_error("groups.member_role", e))?;
-    role.map(|r| {
-        Role::parse(&r).ok_or_else(|| {
-            ForgeError::new(ErrorCode::Internal)
+    role.map(|raw| {
+        Role::parse(&raw).ok_or_else(|| {
+            // The role loader's code and context (FG-DB-0018, runbook
+            // membership-data): data changed outside forge-db, not a bug here.
+            // Bounded: the column is unchecked text once the CHECK is gone.
+            let raw: String = raw.chars().take(32).collect();
+            ForgeError::new(ErrorCode::MembershipDataInvalid)
                 .with_context("reason", "unknown_role")
-                .with_context("table", "group_members")
+                .with_context("resource", RESOURCE)
+                .with_context("id", group.get())
+                .with_context("user", user.get())
+                .with_context("raw", raw)
         })
     })
     .transpose()
@@ -78,7 +86,8 @@ async fn direct_role(
 /// owners' user rows are locked `FOR SHARE` (in id order): a concurrent
 /// `users::disable` of one of them either commits first, and the re-checked
 /// row no longer counts, or waits until this change commits. Disabling the
-/// sole Owner on its own is not refused yet (step D3).
+/// sole Owner is refused by `users::disable` itself (`FG-AUTH-0009`
+/// `last_owner`, step D3), which never locks group rows (ADR-0019 §11).
 async fn keep_an_owner(
     conn: &mut PgConnection,
     group: GroupId,

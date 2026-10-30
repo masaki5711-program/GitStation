@@ -372,3 +372,47 @@ async fn an_unknown_member_is_not_a_member_and_an_unknown_group_is_not_found() {
     assert!(err.to_string().contains("resource=group"), "{err}");
     t.drop_now().await;
 }
+
+/// A stored role outside the five (changed outside forge-db) is
+/// `FG-DB-0018` `unknown_role`, the role loader's code, not `FG-SYS-0001`
+/// (ADR-0019 §15 item 2).
+#[tokio::test]
+async fn an_unknown_stored_role_is_membership_data_invalid() {
+    let t = FreshDb::migrated().await;
+    let (acme, _, bob) = acme(&t).await;
+    let g = acme.group_id;
+    add_member(&t.db, &ctx("req-add"), g, bob, Role::Developer)
+        .await
+        .expect("add");
+    // The constraint and the audit triggers are dropped / off for the tamper
+    // only (this database is dropped).
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.group_members DROP CONSTRAINT group_members_role; \
+         ALTER TABLE forge.group_members DISABLE TRIGGER USER; \
+         UPDATE forge.group_members SET role = 'superuser' WHERE group_id = {} AND user_id = {}; \
+         ALTER TABLE forge.group_members ENABLE TRIGGER USER",
+        g.get(),
+        bob.get()
+    ))
+    .await;
+    for err in [
+        change_member(&t.db, &ctx("req-change"), g, bob, Role::Guest)
+            .await
+            .expect_err("change"),
+        remove_member(&t.db, &ctx("req-remove"), g, bob)
+            .await
+            .expect_err("remove"),
+    ] {
+        assert_reason(&err, ErrorCode::MembershipDataInvalid, "unknown_role");
+        let text = err.to_string();
+        for part in [
+            "resource=group".to_owned(),
+            format!("id={}", g.get()),
+            format!("user={}", bob.get()),
+            "raw=superuser".to_owned(),
+        ] {
+            assert!(text.contains(&part), "missing {part:?} in {text}");
+        }
+    }
+    t.drop_now().await;
+}
