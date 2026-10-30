@@ -15,8 +15,29 @@ use crate::app::{build, AppConfig, AppState};
 use crate::context::REQUEST_ID_HEADER;
 use crate::registry::{openapi_json, routes_json, Registry, Verb};
 
+/// An authenticator that knows no token (these tests insert principals
+/// directly; `tests/token_principal.rs` covers authentication).
+pub(crate) struct NoTokens;
+
+impl forge_core::Authenticator for NoTokens {
+    fn authenticate<'a>(
+        &'a self,
+        _request_id: &'a forge_core::RequestId,
+        _presented: &'a str,
+    ) -> forge_core::authenticator::AuthFuture<'a> {
+        Box::pin(async {
+            Err(forge_errors::ForgeError::new(ErrorCode::Unauthenticated)
+                .with_context("reason", "unknown"))
+        })
+    }
+}
+
+pub(crate) fn no_tokens() -> Arc<dyn forge_core::Authenticator> {
+    Arc::new(NoTokens)
+}
+
 fn state() -> AppState {
-    AppState::new("test", Vec::new())
+    AppState::new("test", Vec::new(), no_tokens())
 }
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, HeaderMap, Value) {

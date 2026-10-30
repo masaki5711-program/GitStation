@@ -5,9 +5,12 @@
 //! - [`context`] — request id + language per request, access log
 //! - [`error`] — the single error renderer (`error_code`, `user_message`,
 //!   `request_id` only; logged once)
+//! - `auth` — token authentication (Bearer / Basic with the token as the
+//!   password) on every non-public route
 //! - [`app`] — wiring and middleware; [`server`] — bind and serve
 
 pub mod app;
+mod auth;
 pub mod context;
 pub mod error;
 mod guard;
@@ -16,6 +19,7 @@ pub mod routes;
 pub mod server;
 
 pub use app::{app, registry as route_registry, AppConfig, AppState};
+pub use auth::BoundedAuthenticator;
 pub use context::Ctx;
 pub use error::ApiError;
 pub use server::ServerLimits;

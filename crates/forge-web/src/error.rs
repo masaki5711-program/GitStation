@@ -2,14 +2,24 @@
 //!
 //! Body: `{ "error_code", "user_message", "request_id" }` — nothing else.
 //! Context, sources, paths and git stderr stay in the log, written once here.
+//! Every 401 carries the authentication challenges (one place for them).
 
-use axum::http::header::{HeaderValue, CONTENT_LANGUAGE};
+use axum::http::header::{HeaderValue, CONTENT_LANGUAGE, WWW_AUTHENTICATE};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_core::{telemetry, RequestId};
 use forge_errors::{ForgeError, Lang};
 use serde::Serialize;
+
+/// The challenges of a 401 (RFC 9110 §11.6.1), Basic first: git asks its
+/// credential helper only on a Basic challenge, and the Basic password is a
+/// personal access token (ADR-0019 §7). Never on a 503 or 403, so a client
+/// does not drop valid credentials because of an outage.
+const CHALLENGES: [&str; 2] = [
+    "Basic realm=\"GitStation\", charset=\"UTF-8\"",
+    "Bearer realm=\"GitStation\"",
+];
 
 /// A failure on its way to the client.
 #[derive(Debug)]
@@ -71,6 +81,12 @@ impl IntoResponse for ApiError {
             CONTENT_LANGUAGE,
             HeaderValue::from_static(self.lang.as_str()),
         );
+        if status == StatusCode::UNAUTHORIZED {
+            for challenge in CHALLENGES {
+                res.headers_mut()
+                    .append(WWW_AUTHENTICATE, HeaderValue::from_static(challenge));
+            }
+        }
         res
     }
 }

@@ -129,7 +129,9 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
   AdministrationOrphaned（warn）で報告する。「最後の管理者」は有効な人間の管理者だけを数える。最上位のグループは
   有効な直接の Owner を要し、サブグループは継承してよい（ADR-0019 §10〜12）。
 - **引き継ぎ事項 9（Basic 認証のパスワード）**: Basic のパスワードは **トークンだけ**。ユーザー名は無視し、ログに出さない。
-  認証のヘッダーが 2 つあれば 401（`ambiguous`）（ADR-0019 §7）。
+  認証のヘッダーが 2 つあれば 401（`ambiguous`）（ADR-0019 §7）。**D3 MR3（2026-10-30）で実装して閉じた**: `forge-web` の
+  `auth.rs` が公開でない経路ごとにガードの前で Bearer／Basic のトークンをプリンシパル（`Credential::Token(scopes)`）にする。
+  パスワードによる Basic（`Credential::Session` 相当）の経路は存在しない。細部は ADR-0019 の Amendment（2026-10-30、MR3）。
 - CLI によるトークンの発行は HTTP の経路ではないので `authorize()` を通らない（ホストの操作者が信頼の起点）。
   不変条件（`admin` スコープは管理者だけ、ボットと無効化済みのユーザーには発行しない）は `forge_db::tokens::issue` が
   強制する。「トークンはトークンを発行しない」は変わらない。`authorize()` と権限のマトリクスは変わらない。

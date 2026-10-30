@@ -110,6 +110,19 @@ pub async fn authenticate(
     .await
 }
 
+/// The HTTP layer's authenticator (`forge serve` injects the `Db` as
+/// `forge_web::AppState.authenticator`, like the readiness probe): exactly
+/// [`authenticate`].
+impl forge_core::Authenticator for Db {
+    fn authenticate<'a>(
+        &'a self,
+        request_id: &'a RequestId,
+        presented: &'a str,
+    ) -> forge_core::authenticator::AuthFuture<'a> {
+        Box::pin(authenticate(self, request_id, presented))
+    }
+}
+
 /// Constant-time comparison with the stored hash; a hash that is not 32
 /// bytes is `FG-DB-0019 reason=bad_hash` (the CHECK was bypassed).
 fn matches_hash(token_id: i64, stored: &[u8], secret: &TokenSecret) -> Result<bool, ForgeError> {

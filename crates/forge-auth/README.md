@@ -65,8 +65,10 @@ with administrator rights may request it.
 6. Project creation: the creator gets no direct role above their group role.
 7. Last Owner: apply the same guard to user disable / delete.
 8. List endpoints filter each item through `ProjectRead`.
-9. Decide explicitly whether password Basic auth is allowed on git routes (it
-   would be `Credential::Session`: every scope and administrator rights).
+9. ~~Decide explicitly whether password Basic auth is allowed on git routes~~
+   **Closed (D3 MR3, ADR-0019 §7)**: no. The Basic password is a personal
+   access token only (`Credential::Token(scopes)`, built by forge-web
+   `auth.rs`); the username is ignored and never logged.
 10. CSRF protection for session-backed changes; rate limits on login and tokens.
 11. Before M4: default protection for tags, or deploy only from protected refs.
 

@@ -2,6 +2,7 @@
 //! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
 
 pub mod audit_details;
+pub mod authenticator;
 pub mod config;
 pub mod dedup_key;
 pub mod event_type;
@@ -19,6 +20,7 @@ pub mod token;
 pub mod user_kind;
 
 pub use audit_details::AuditDetails;
+pub use authenticator::{Authenticator, TokenIdentity};
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, RepoId, TombstoneId, UserId};

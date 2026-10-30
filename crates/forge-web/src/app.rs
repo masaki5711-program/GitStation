@@ -1,5 +1,7 @@
 //! Wiring: the registered routes, the fallback, and the middleware stack
-//! (outermost first): request id + access log → request timeout → routes.
+//! (outermost first): request id + access log → request timeout → panic
+//! catcher → authenticator extension → body limit → routes (non-public
+//! routes: token authentication → guard → handler).
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -12,10 +14,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use forge_auth::Action;
 use forge_core::readiness::ReadinessProbe;
-use forge_core::RequestId;
+use forge_core::{Authenticator, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 use futures_util::FutureExt;
 
+use crate::auth::AuthenticatorExt;
 use crate::context::{self, Ctx};
 use crate::error::ApiError;
 use crate::registry::{Registry, Verb};
@@ -33,15 +36,24 @@ pub struct AppState {
     pub probe_timeout: Duration,
     /// Single-flight + cache for `/readyz` (it is public).
     pub readiness: Arc<routes::health::ReadinessCache>,
+    /// Resolves personal access tokens (ADR-0019 §7). `forge serve` passes
+    /// the database (`forge_db::tokens::authenticate`); forge-web does not
+    /// depend on forge-db. Required, so a server cannot start without it.
+    pub authenticator: Arc<dyn Authenticator>,
 }
 
 impl AppState {
-    pub fn new(version: &'static str, probes: Vec<Arc<dyn ReadinessProbe>>) -> Self {
+    pub fn new(
+        version: &'static str,
+        probes: Vec<Arc<dyn ReadinessProbe>>,
+        authenticator: Arc<dyn Authenticator>,
+    ) -> Self {
         Self {
             version,
             probes: probes.into(),
             probe_timeout: Duration::from_secs(3),
             readiness: routes::health::ReadinessCache::new(),
+            authenticator,
         }
     }
 
@@ -59,7 +71,7 @@ impl std::fmt::Debug for AppState {
             .field("version", &self.version)
             .field("probes", &names)
             .field("probe_timeout", &self.probe_timeout)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -135,17 +147,32 @@ pub fn app(state: AppState, config: AppConfig) -> Result<Router, ForgeError> {
     build(registry(), state, config)
 }
 
+/// The product's middleware around a test's own registry (integration
+/// tests need guarded routes; the product registers none yet). Not compiled
+/// into the server.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn with_registry(
+    registry: Registry<AppState>,
+    state: AppState,
+    config: AppConfig,
+) -> Result<Router, ForgeError> {
+    build(registry, state, config)
+}
+
 /// Assemble a router from a registry (tests use their own registries).
 pub(crate) fn build(
     registry: Registry<AppState>,
     state: AppState,
     config: AppConfig,
 ) -> Result<Router, ForgeError> {
+    let authenticator = AuthenticatorExt(Arc::clone(&state.authenticator));
     Ok(registry
         .into_router()?
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(DefaultBodyLimit::max(config.body_limit_bytes))
+        .layer(axum::Extension(authenticator))
         .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(
             config.request_timeout,

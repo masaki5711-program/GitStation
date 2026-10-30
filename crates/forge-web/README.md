@@ -1,7 +1,8 @@
 # forge-web
 
 **Responsibility**: the HTTP layer — the route registry (ADR-0010), request
-ids, the single error renderer, timeouts, and serving. Handlers decide with
+ids, token authentication (ADR-0019 §7), the single error renderer, timeouts,
+and serving. Handlers decide with
 `forge_auth::authorize()` (DB-backed handlers arrive in M1 phase 8).
 
 **Public API**
@@ -9,16 +10,31 @@ ids, the single error renderer, timeouts, and serving. Handlers decide with
   router (routes come only from `app::registry()`).
 - `registry::Registry::route(Verb, path, Action, summary, handler)` — the only
   way to add a route (a test fails on `Router::new` / `.route("..")` / `.nest`
-  outside the registry). Every non-public route gets the authentication guard:
-  no authenticated `Principal` → `FG-AUTH-0001` before the handler runs; the
-  handler then authorizes its resource. An invalid or duplicate path is a
+  outside the registry). Every non-public route gets token authentication and
+  then the authentication guard: no authenticated `Principal` →
+  `FG-AUTH-0001` before the handler runs; the handler then authorizes its
+  resource. Public routes never look at credentials. An invalid or duplicate path is a
   startup error (`FG-WEB-0004`).
+- `AppState::new(version, probes, authenticator)` — the authenticator
+  (`forge_core::Authenticator`, `Arc<dyn …>`) is required; `forge serve`
+  passes the database (`forge_db::tokens::authenticate`), so forge-web never
+  depends on forge-db.
+- `app::with_registry(registry, state, config)` — feature `test-support`
+  only (`#[doc(hidden)]`): the product middleware around a test's own
+  registry. forge-web enables the feature for its own tests through a
+  dev-dependency on itself, so it is on in `cargo build --workspace
+  --all-targets`; CI fails if any `test-support` feature appears in the
+  `forge` binary's normal graph (`cargo tree -p forge-cli -e
+  normal,features`).
 - `app::PLANNED` — actions with matrix rows but no route yet; an action leaves
   the list in the commit that routes it.
 - `Ctx` extractor — `request_id` and `lang` (from `Accept-Language`: ja / en /
   id, Japanese otherwise); `ctx.fail(err)` → `ApiError`.
 - `ApiError` — renders `{ error_code, user_message, request_id }` only, sets
   `Content-Language`, and logs the failure once (`telemetry::log_failure`).
+  Every 401 carries `WWW-Authenticate: Basic realm="GitStation",
+  charset="UTF-8"` and `Bearer realm="GitStation"` (the one place for the
+  challenge; never on 403 / 503).
 - `server::bind(addr)` (`FG-SYS-0004`), `server::serve(listener, router,
   ServerLimits, shutdown)` on hyper directly: header-read timeout (slowloris),
   connection limit, shutdown grace (`FG-SYS-0005` when exceeded), accept
@@ -32,7 +48,35 @@ ids, the single error renderer, timeouts, and serving. Handlers decide with
 a client `X-Request-Id` is logged as `client_request_id`) + access log →
 request timeout (`FG-WEB-0002`) → panic catcher (`FG-SYS-0001`) → body
 limit → routes → fallbacks (`FG-WEB-0001` unknown path, `FG-WEB-0003` wrong
-method, `Allow` kept).
+method, `Allow` kept). The authenticator travels as a request extension; on
+non-public routes: token authentication → guard → handler.
+
+**Token authentication** (`src/auth.rs`, step D3 MR3): `Authorization: Bearer
+<token>`, or `Authorization: Basic` whose **password** is the token (git's
+form; the username is ignored and never logged; a user password is never a
+credential). A valid token inserts `Principal::authenticated(owner, is_admin,
+true, Credential::Token(scopes))` — an administrator's token without the
+`admin` scope has no administrator rights (`Principal::admin_rights`); the
+`Authorization` header is then removed before the handler. No header → no
+principal. Two headers, or a header on top of an existing
+principal → `FG-AUTH-0001 reason=ambiguous`; an unreadable header →
+`reason=malformed_header`; another scheme → `reason=unsupported_scheme`.
+The authenticator's `FG-AUTH-0001` (malformed / unknown / mismatch / revoked
+/ expired) and `FG-AUTH-0004` (owner_disabled) are logged once as
+`forge.auth.token_rejected` (`request_id`, `error_code`, `reason`, `scheme`,
+`public_id`); `FG-DB-0001` stays a 503 (never a 401) and is logged by the
+renderer. Header values, tokens and usernames never reach a log
+(`tests/token_principal.rs` captures the logs and checks). The log fields
+are `reason`, `public_id` and `user` (the internal id, as FG-AUTH-0004's
+diagnosis records it); there is no separate `context` string. A missing
+request id is `FG-SYS-0001 reason=request_id_missing`, never a fresh id.
+
+**Bounded authentication**: `BoundedAuthenticator::new(inner, permits)` wraps
+any `Authenticator` in a semaphore (0 → 1 permit). `forge serve` uses
+`max(1, database.write_max_connections / 2)`: each lookup takes a write
+connection, so a flood of random well-formed tokens cannot starve writers.
+Waiting for a permit is bounded by the request timeout (`FG-WEB-0002`).
+Per-client (IP) rate limiting is **open** (ADR-0019 MR3 amendment).
 
 **Error codes owned**: FG-WEB-0001 RouteNotFound, FG-WEB-0002 RequestTimeout,
 FG-WEB-0003 MethodNotAllowed, FG-WEB-0004 RouteRegistryInvalid, FG-SYS-0004
@@ -70,4 +114,7 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
   response schemas (utoipa, per ADR-0010) join with the resource routes.
 - `GET /readyz` (public) runs `AppState::probes` (`forge_core::readiness::ReadinessProbe`; the database today) in order, each bounded by `probe_timeout` (3 s); the first failure answers with its own code (FG-DB-0001, 503) or FG-WEB-0005. The body is `{"status":"ok"}` or the standard error body — never host names. forge-web does not depend on forge-db: `forge serve` passes the probes.
 
-**Tests**: `cargo nextest run -p forge-web` (no DB, no network beyond loopback).
+**Tests**: `cargo nextest run -p forge-web` (no network beyond loopback;
+`tests/token_principal.rs` uses a fake authenticator, `tests/member_roles.rs`
+needs the development database). The real-`git` token tests are named in
+ADR-0019 "見送り" and land with Smart HTTP (phase 9).
