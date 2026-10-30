@@ -99,7 +99,9 @@ connection, mapping driver errors to registered codes, migrations
   `group.created` audit row. `groups::{add_member, change_member, remove_member}`:
   one `member.*` audit row each on the group (audit-only); every one locks the
   group row first; a top-level group keeps at least one direct active Owner;
-  bots are never members. `change_member` to the same role is
+  bots are never members. `change_member(.., user, from, to)` / `remove_member(.., user, from)`
+  take the member's direct role the caller loaded and authorized against: a different
+  stored role is FG-REPO-0010 `role_changed` (D4 review). `change_member` to the same role is
   `MemberChange::Unchanged` and writes nothing.
 - `roles::{load_group_roles, load_namespace_roles}(&Db, id, UserId) -> Result<MemberRoles, ForgeError>`
   (step D2, ADR-0010): the only role computation. `MemberRoles { native, direct }` —
@@ -129,7 +131,8 @@ connection, mapping driver errors to registered codes, migrations
   `ProjectAccess { visibility, pending_deletion }` (`deleted_at` set) — with
   `load_project_roles`, what forge-auth's `ProjectView` needs (read pool).
 - `projects::{add_member, change_member, remove_member}(&Db, &ChangeContext, ProjectId,
-  UserId[, Role])` (step D4 MR4, ADR-0019 Amendment D4 MR4): one `member.*` audit row on
+  UserId, ..)` (`add_member(.., role)`, `change_member(.., from, to)`, `remove_member(.., from)`;
+  `from` is the authorized direct role, else `role_changed`) (step D4 MR4, ADR-0019 Amendment D4 MR4): one `member.*` audit row on
   (`project`, id) with `project_id` set **and** one `member.*` event of the project
   (`EventType::Member{Added,RoleChanged,Removed}`, maintainer class, payload = the audit
   details `AuditDetails::ProjectMember*`, the group JSON shapes; no dedup key). Lock
@@ -155,7 +158,9 @@ connection, mapping driver errors to registered codes, migrations
   patterns equal by `RefPattern::key()` (`duplicate_pattern`, non-ASCII case included),
   `push_min_role` Developer / Maintainer / Owner. One `protected_ref.*` audit row on
   (`project`, id) and one `protected_ref.*` event (maintainer class, payload = the details,
-  no dedup key) each. No authorization here (`Action::ProtectedRefManage` is the route's).
+  no dedup key) each. `delete` does not parse the row, so a rule this build cannot read
+  (FG-DB-0020) can be deleted; its details carry `stored_invalid` and the stored text,
+  bounded. No authorization here (`Action::ProtectedRefManage` is the route's).
 - `protected_refs::levels_for(&Db, ProjectId, &RefName) -> Result<Vec<Role>, ForgeError>`:
   the `push_min_role` of every rule whose pattern matches the ref ignoring case, in rule
   id order — feed it to `forge_auth::RefProtection::effective` (strictest wins); the

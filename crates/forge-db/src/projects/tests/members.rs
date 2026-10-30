@@ -7,6 +7,7 @@ use std::time::Duration;
 use forge_core::{EventType, Role, Scope, VisibilityClass};
 
 use super::*;
+use crate::projects::ownership;
 use crate::roles::load_project_roles;
 use crate::tokens::{self, NewToken};
 use crate::users::{DisableOutcome, Guard};
@@ -81,16 +82,23 @@ async fn project_member_add_change_remove_write_one_audit_row_each() {
     add_member(&t.db, &ctx("req-add"), p, bob, Role::Developer)
         .await
         .expect("add");
-    let changed = change_member(&t.db, &ctx("req-change"), p, bob, Role::Maintainer)
-        .await
-        .expect("change");
+    let changed = change_member(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        bob,
+        Role::Developer,
+        Role::Maintainer,
+    )
+    .await
+    .expect("change");
     assert_eq!(
         changed,
         MemberChange::Changed {
             from: Role::Developer
         }
     );
-    remove_member(&t.db, &ctx("req-remove"), p, bob)
+    remove_member(&t.db, &ctx("req-remove"), p, bob, Role::Maintainer)
         .await
         .expect("remove");
     let mut su = t.superuser().await;
@@ -152,10 +160,17 @@ async fn project_member_events_are_maintainer_class() {
     add_member(&t.db, &ctx("req-add"), p, bob, Role::Reporter)
         .await
         .expect("add");
-    let _ = change_member(&t.db, &ctx("req-change"), p, bob, Role::Developer)
-        .await
-        .expect("change");
-    remove_member(&t.db, &ctx("req-remove"), p, bob)
+    let _ = change_member(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        bob,
+        Role::Reporter,
+        Role::Developer,
+    )
+    .await
+    .expect("change");
+    remove_member(&t.db, &ctx("req-remove"), p, bob, Role::Developer)
         .await
         .expect("remove");
     let mut su = t.superuser().await;
@@ -190,9 +205,16 @@ async fn changing_a_project_member_to_the_same_role_writes_nothing() {
     add_member(&t.db, &ctx("req-add"), p, bob, Role::Reporter)
         .await
         .expect("add");
-    let same = change_member(&t.db, &ctx("req-same"), p, bob, Role::Reporter)
-        .await
-        .expect("same role");
+    let same = change_member(
+        &t.db,
+        &ctx("req-same"),
+        p,
+        bob,
+        Role::Reporter,
+        Role::Reporter,
+    )
+    .await
+    .expect("same role");
     assert_eq!(same, MemberChange::Unchanged);
     let mut su = t.superuser().await;
     assert!(audit_rows(&mut su, "req-same").await.is_empty());
@@ -216,11 +238,18 @@ async fn a_bot_cannot_be_a_project_member() {
         .await
         .expect_err("alice is the owner");
     assert_reason(&err, ErrorCode::MembershipConflict, "already_member");
-    let err = change_member(&t.db, &ctx("req-change"), p, bob.user_id, Role::Guest)
-        .await
-        .expect_err("bob is no member");
+    let err = change_member(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        bob.user_id,
+        Role::Guest,
+        Role::Guest,
+    )
+    .await
+    .expect_err("bob is no member");
     assert_reason(&err, ErrorCode::MembershipConflict, "not_member");
-    let err = remove_member(&t.db, &ctx("req-remove"), p, bob.user_id)
+    let err = remove_member(&t.db, &ctx("req-remove"), p, bob.user_id, Role::Guest)
         .await
         .expect_err("bob is no member");
     assert_reason(&err, ErrorCode::MembershipConflict, "not_member");
@@ -267,9 +296,15 @@ async fn removing_the_last_direct_owner_is_allowed_when_an_owner_is_inherited() 
     // Personal namespace: alice is web's only direct Owner and inherits
     // Owner as the namespace owner, so she may leave the direct list.
     let (web, alice, bob) = alice_web(&t).await;
-    remove_member(&t.db, &ctx("req-rm-alice"), web.project_id, alice.user_id)
-        .await
-        .expect("alice still inherits Owner");
+    remove_member(
+        &t.db,
+        &ctx("req-rm-alice"),
+        web.project_id,
+        alice.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("alice still inherits Owner");
     let roles = load_project_roles(&t.db, web.project_id, alice.user_id)
         .await
         .expect("roles");
@@ -283,14 +318,21 @@ async fn removing_the_last_direct_owner_is_allowed_when_an_owner_is_inherited() 
         &ctx("req-demote-bob"),
         api.project_id,
         bob.user_id,
+        Role::Owner,
         Role::Developer,
     )
     .await
     .expect("alice inherits Owner of acme/api");
     assert_eq!(changed, MemberChange::Changed { from: Role::Owner });
-    remove_member(&t.db, &ctx("req-rm-bob"), api.project_id, bob.user_id)
-        .await
-        .expect("a non-owner leaves");
+    remove_member(
+        &t.db,
+        &ctx("req-rm-bob"),
+        api.project_id,
+        bob.user_id,
+        Role::Developer,
+    )
+    .await
+    .expect("a non-owner leaves");
     let roles = load_project_roles(&t.db, api.project_id, alice.user_id)
         .await
         .expect("roles");
@@ -322,12 +364,19 @@ async fn removing_the_last_owner_without_inheritance_is_refused() {
         .expect("bob remains");
     assert_eq!(disabled, DisableOutcome::Disabled);
     for err in [
-        remove_member(&t.db, &ctx("req-rm-bob"), p, bob.user_id)
+        remove_member(&t.db, &ctx("req-rm-bob"), p, bob.user_id, Role::Owner)
             .await
             .expect_err("bob is the last active owner"),
-        change_member(&t.db, &ctx("req-demote-bob"), p, bob.user_id, Role::Guest)
-            .await
-            .expect_err("bob is the last active owner"),
+        change_member(
+            &t.db,
+            &ctx("req-demote-bob"),
+            p,
+            bob.user_id,
+            Role::Owner,
+            Role::Guest,
+        )
+        .await
+        .expect_err("bob is the last active owner"),
     ] {
         assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
         assert!(
@@ -349,7 +398,7 @@ async fn removing_the_last_owner_without_inheritance_is_refused() {
     add_member(&t.db, &ctx("req-add-dave"), p, dave.user_id, Role::Owner)
         .await
         .expect("dave owner");
-    remove_member(&t.db, &ctx("req-rm-bob-2"), p, bob.user_id)
+    remove_member(&t.db, &ctx("req-rm-bob-2"), p, bob.user_id, Role::Owner)
         .await
         .expect("dave remains");
     t.drop_now().await;
@@ -378,10 +427,17 @@ async fn an_unknown_stored_project_role_is_membership_data_invalid() {
     ))
     .await;
     for err in [
-        change_member(&t.db, &ctx("req-change"), p, bob, Role::Guest)
-            .await
-            .expect_err("change"),
-        remove_member(&t.db, &ctx("req-remove"), p, bob)
+        change_member(
+            &t.db,
+            &ctx("req-change"),
+            p,
+            bob,
+            Role::Developer,
+            Role::Guest,
+        )
+        .await
+        .expect_err("change"),
+        remove_member(&t.db, &ctx("req-remove"), p, bob, Role::Developer)
             .await
             .expect_err("remove"),
         add_member(&t.db, &ctx("req-add-again"), p, bob, Role::Guest)
@@ -541,9 +597,15 @@ async fn disabling_the_only_inherited_owner_of_a_project_is_refused() {
     // bob creates acme/team/api; then leaves its direct list (alice and he
     // inherit).
     let api = create_ok(&t, &project("api", team.namespace_id, bob.user_id)).await;
-    remove_member(&t.db, &ctx("req-rm-bob"), api.project_id, bob.user_id)
-        .await
-        .expect("inherited owners remain");
+    remove_member(
+        &t.db,
+        &ctx("req-rm-bob"),
+        api.project_id,
+        bob.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("inherited owners remain");
     // alice is forced out (acme is then ownerless); bob, team's Owner, is
     // api's only Owner left.
     let _ = users::disable_with(&t.db, &ctx("req-force-alice"), alice.user_id, Guard::Force)
@@ -649,7 +711,7 @@ async fn a_disable_waits_for_a_project_owner_removal_and_then_refuses() {
     )
     .await;
     let (rm_ctx, dis_ctx) = (ctx("req-rm-bob"), ctx("req-disable-alice"));
-    let removing = remove_member(&t.db, &rm_ctx, p, bob);
+    let removing = remove_member(&t.db, &rm_ctx, p, bob, Role::Owner);
     let disabling = async {
         until_waiting(&t, MEMBER_DELETE_WAIT).await;
         users::disable(&t.db, &dis_ctx, alice).await
@@ -689,7 +751,7 @@ async fn a_project_owner_removal_waits_for_a_disable_and_then_refuses() {
     let disabling = users::disable(&t.db, &dis_ctx, alice);
     let removing = async {
         until_waiting(&t, DISABLE_TOKENS_WAIT).await;
-        remove_member(&t.db, &rm_ctx, p, bob).await
+        remove_member(&t.db, &rm_ctx, p, bob, Role::Owner).await
     };
     let releasing = async {
         until_waiting(&t, DISABLE_TOKENS_WAIT).await;
@@ -705,5 +767,171 @@ async fn a_project_owner_removal_waits_for_a_disable_and_then_refuses() {
     assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
     let mut su = t.superuser().await;
     assert_eq!(role_of(&mut su, p, bob).await.as_deref(), Some("owner"));
+    t.drop_now().await;
+}
+
+/// The role a caller authorized against is a precondition (D4 review): a
+/// promotion to Owner committed between `authorize()` (which saw
+/// Developer) and the demotion or removal makes both `role_changed`.
+#[tokio::test]
+async fn a_project_role_changed_after_authorization_is_role_changed() {
+    let t = FreshDb::migrated().await;
+    let (web, _, bob) = alice_web(&t).await;
+    let (p, bob) = (web.project_id, bob.user_id);
+    add_member(&t.db, &ctx("req-add"), p, bob, Role::Developer)
+        .await
+        .expect("add");
+    let authorized = Role::Developer;
+    let _ = change_member(
+        &t.db,
+        &ctx("req-promote"),
+        p,
+        bob,
+        Role::Developer,
+        Role::Owner,
+    )
+    .await
+    .expect("promote");
+    for err in [
+        change_member(&t.db, &ctx("req-demote"), p, bob, authorized, Role::Guest)
+            .await
+            .expect_err("demote"),
+        remove_member(&t.db, &ctx("req-remove"), p, bob, authorized)
+            .await
+            .expect_err("remove"),
+    ] {
+        assert_reason(&err, ErrorCode::MembershipConflict, "role_changed");
+        assert!(err.to_string().contains("actual=owner"), "{err}");
+    }
+    let mut su = t.superuser().await;
+    assert_eq!(role_of(&mut su, p, bob).await.as_deref(), Some("owner"));
+    for request in ["req-demote", "req-remove"] {
+        assert!(audit_rows(&mut su, request).await.is_empty(), "{request}");
+        assert!(events_of(&mut su, request).await.is_empty(), "{request}");
+    }
+    t.drop_now().await;
+}
+
+const PROJECT_LOCK_WAIT: &str = "FOR UPDATE OF p";
+
+/// Pinned: the last two direct Owners (no inheritance: the personal
+/// namespace's owner is disabled) are removed at once. The removal of bob
+/// holds the project row and is kept open before its DELETE by a blocker on
+/// bob's membership row; the removal of carol must wait on the project row
+/// (`FOR UPDATE OF p`), then see bob gone and refuse (`last_owner`).
+/// Mutation-checked: without `FOR UPDATE OF p` in `lock_project` nobody
+/// waits on the project row (this test panics in `until_waiting`), and
+/// unpinned both removals could commit, leaving web without an Owner.
+#[tokio::test]
+async fn removing_the_last_two_direct_owners_at_once_keeps_one() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let carol = user(&t, "carol").await;
+    let web = create_ok(&t, &project("web", alice.namespace_id, bob.user_id)).await;
+    let p = web.project_id;
+    add_member(&t.db, &ctx("req-add-carol"), p, carol.user_id, Role::Owner)
+        .await
+        .expect("carol owner");
+    let disabled = users::disable(&t.db, &ctx("req-disable-alice"), alice.user_id)
+        .await
+        .expect("bob and carol remain");
+    assert_eq!(disabled, DisableOutcome::Disabled);
+    let (bob, carol) = (bob.user_id, carol.user_id);
+    let hold = blocker(
+        &t,
+        &format!(
+            "SELECT 1 FROM forge.project_members WHERE project_id = {} AND user_id = {} \
+             FOR UPDATE",
+            p.get(),
+            bob.get()
+        ),
+    )
+    .await;
+    let (ctx_b, ctx_c) = (ctx("req-rm-bob"), ctx("req-rm-carol"));
+    let removing_bob = remove_member(&t.db, &ctx_b, p, bob, Role::Owner);
+    let removing_carol = async {
+        until_waiting(&t, MEMBER_DELETE_WAIT).await;
+        remove_member(&t.db, &ctx_c, p, carol, Role::Owner).await
+    };
+    let releasing = async {
+        until_waiting(&t, MEMBER_DELETE_WAIT).await;
+        until_waiting(&t, PROJECT_LOCK_WAIT).await;
+        release(hold).await;
+    };
+    let (b, c, ()) = tokio::join!(removing_bob, removing_carol, releasing);
+    b.expect("carol is an owner while bob leaves");
+    let err = c.expect_err("bob is gone: carol is the last owner");
+    assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
+    let mut su = t.superuser().await;
+    assert_eq!(role_of(&mut su, p, carol).await.as_deref(), Some("owner"));
+    t.drop_now().await;
+}
+
+/// The ownerless read stays set-based with hundreds of projects (D4
+/// review): the right count and ids, and no per-row subplan in either
+/// query's plan.
+#[tokio::test]
+async fn ownerless_reads_hundreds_of_projects_set_based() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let acme = group(&t, "acme", None, bob.user_id).await;
+    let mut mine = Vec::new();
+    for n in 0..300 {
+        // Two thirds in alice's namespace (she is their only Owner), the
+        // rest in acme (bob inherits).
+        let parent = if n % 3 == 2 {
+            acme.namespace_id
+        } else {
+            alice.namespace_id
+        };
+        let created = create_ok(&t, &project(&format!("p{n}"), parent, alice.user_id)).await;
+        if n % 3 != 2 {
+            mine.push(created.project_id);
+        }
+    }
+    let err = users::disable(&t.db, &ctx("req-disable-alice"), alice.user_id)
+        .await
+        .expect_err("alice is the last owner of 200 projects");
+    assert_reason(&err, ErrorCode::AdministrationConflict, "last_owner");
+    let text = err.to_string();
+    assert!(text.contains("ownerless_projects=200"), "{text}");
+    assert!(
+        text.contains(&format!("project_id={}", mine[0].get())),
+        "{text}"
+    );
+    let _ = users::disable_with(&t.db, &ctx("req-force"), alice.user_id, Guard::Force)
+        .await
+        .expect("forced");
+    let found = ownerless(&t.db).await.expect("read").expect("migrated");
+    assert_eq!(found.count, 200);
+    assert_eq!(found.project_ids, mine[..10].to_vec());
+    let mut su = t.superuser().await;
+    for (name, sql, binds) in [
+        (
+            "AFTER_DISABLE",
+            ownership::AFTER_DISABLE,
+            [bob.user_id.get(), bob.user_id.get(), 20, 11],
+        ),
+        ("EVERY", ownership::EVERY, [10, 0, 20, 0]),
+    ] {
+        let explain = format!("EXPLAIN {sql}");
+        let mut q = sqlx::query_scalar::<_, String>(&explain);
+        let used = if name == "EVERY" { 3 } else { 4 };
+        for (i, v) in binds.iter().enumerate().take(used) {
+            q = if i == 2 {
+                q.bind(i32::try_from(*v).expect("cap"))
+            } else {
+                q.bind(*v)
+            };
+        }
+        let plan: Vec<String> = q.fetch_all(&mut su).await.expect("explain");
+        let plan = plan.join("\n");
+        assert!(
+            !plan.contains("SubPlan"),
+            "{name}: a per-row subplan:\n{plan}"
+        );
+    }
     t.drop_now().await;
 }

@@ -31,10 +31,20 @@ const CAP: i32 = {
 /// How many ownerless project ids the doctor finding carries.
 const SHOWN_PROJECT_IDS: i64 = 10;
 
-/// `$1` = the projects to look at (`candidates (project_id)`, defined by
-/// the caller's SQL before this fragment), `$2` = the user who no longer
-/// counts (0 = nobody), `$3` = the cap. Selects the candidates that are not
-/// pending deletion and have no active Owner other than `$2`.
+/// How many ownerless project ids the disable guard reads (the refusal
+/// names the first; the count is separate, so the read stays bounded).
+const GUARD_PROJECT_IDS: i64 = 11;
+
+/// The candidates (`candidates (project_id)`, defined by the caller's SQL
+/// before this fragment) that are not pending deletion and have no active
+/// Owner other than `$2` (0 = nobody), with the chain capped at `$3`.
+///
+/// Set-based (D4 review): the ancestry of all candidates is walked once
+/// (`up`), the projects that still have an Owner are collected by joins
+/// into one set (`owned`, three sources of `roles::load_project_roles`),
+/// and the ownerless ones are an anti-join against it — no correlated
+/// subquery per project, so the work grows with the rows read, not with
+/// projects × ancestry (test `ownerless_reads_hundreds_of_projects_set_based`).
 macro_rules! without_owner_sql {
     ($candidates:literal, $tail:literal) => {
         concat!(
@@ -47,25 +57,26 @@ macro_rules! without_owner_sql {
                UNION ALL \
                  SELECT u.project_id, n.parent_id, n.kind, n.owner_id, u.step + 1 \
                  FROM forge.namespaces n JOIN up u ON n.id = u.parent_id WHERE u.step < $3), \
+             owned (project_id) AS ( \
+                 SELECT m.project_id FROM candidates c \
+                 JOIN forge.project_members m ON m.project_id = c.project_id \
+                 JOIN forge.users u ON u.id = m.user_id \
+                 WHERE m.role = 'owner' AND m.user_id <> $2 AND u.state = 'active' \
+               UNION \
+                 SELECT up.project_id FROM up \
+                 JOIN forge.group_members m ON m.group_id = up.owner_id \
+                 JOIN forge.users u ON u.id = m.user_id \
+                 WHERE up.kind = 'group' AND m.role = 'owner' AND m.user_id <> $2 \
+                   AND u.state = 'active' \
+               UNION \
+                 SELECT up.project_id FROM up JOIN forge.users u ON u.id = up.owner_id \
+                 WHERE up.kind = 'user' AND up.step = 2 AND u.id <> $2 \
+                   AND u.state = 'active' AND u.kind <> 'bot'), \
              ownerless AS ( \
-               SELECT c.project_id AS id FROM candidates c \
-               JOIN forge.projects p ON p.id = c.project_id \
-               WHERE p.deleted_at IS NULL \
-               AND NOT EXISTS (SELECT 1 FROM forge.project_members m \
-                   JOIN forge.users u ON u.id = m.user_id \
-                   WHERE m.project_id = c.project_id AND m.role = 'owner' \
-                   AND m.user_id <> $2 AND u.state = 'active') \
-               AND NOT EXISTS (SELECT 1 FROM up \
-                   JOIN forge.group_members m ON up.kind = 'group' \
-                     AND m.group_id = up.owner_id AND m.role = 'owner' \
-                   JOIN forge.users u ON u.id = m.user_id \
-                   WHERE up.project_id = c.project_id AND m.user_id <> $2 \
-                   AND u.state = 'active') \
-               AND NOT EXISTS (SELECT 1 FROM up \
-                   JOIN forge.users u ON up.kind = 'user' AND up.step = 2 \
-                     AND u.id = up.owner_id \
-                   WHERE up.project_id = c.project_id AND u.id <> $2 \
-                   AND u.state = 'active' AND u.kind <> 'bot')) ",
+                 SELECT c.project_id AS id FROM candidates c \
+                 JOIN forge.projects p ON p.id = c.project_id \
+                 LEFT JOIN owned o ON o.project_id = c.project_id \
+                 WHERE p.deleted_at IS NULL AND o.project_id IS NULL) ",
             $tail
         )
     };
@@ -73,8 +84,9 @@ macro_rules! without_owner_sql {
 
 /// The projects where `$1` holds Owner (direct, through a group it directly
 /// owns and the groups below it, or through its personal namespace) and
-/// that would have no other active Owner.
-const AFTER_DISABLE: &str = without_owner_sql!(
+/// that would have no other active Owner: their count and the first `$4`
+/// ids.
+pub(crate) const AFTER_DISABLE: &str = without_owner_sql!(
     "roots (id) AS ( \
          SELECT n.id FROM forge.group_members m \
          JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id \
@@ -91,30 +103,41 @@ const AFTER_DISABLE: &str = without_owner_sql!(
          SELECT owner_id FROM down WHERE kind = 'project' \
        UNION \
          SELECT project_id FROM forge.project_members WHERE user_id = $1 AND role = 'owner')",
-    "SELECT id FROM ownerless ORDER BY id"
+    "SELECT (SELECT pg_catalog.count(*) FROM ownerless), \
+     ARRAY(SELECT id FROM ownerless ORDER BY id LIMIT $4)"
 );
 
-/// Every project without an active Owner: the count and the first ids.
-const EVERY: &str = without_owner_sql!(
-    "candidates (project_id) AS (SELECT id FROM forge.projects)",
+/// Every project without an active Owner: the count and the first `$1` ids.
+pub(crate) const EVERY: &str = without_owner_sql!(
+    "candidates (project_id) AS (SELECT id FROM forge.projects WHERE deleted_at IS NULL)",
     "SELECT (SELECT pg_catalog.count(*) FROM ownerless), \
      ARRAY(SELECT id FROM ownerless ORDER BY id LIMIT $1)"
 );
 
+/// What disabling a user would leave: how many projects without an active
+/// Owner, and the first of them (at most 11), by id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LeftOwnerless {
+    pub count: i64,
+    pub first_ids: Vec<i64>,
+}
+
 /// The projects disabling `user` would leave without an active Owner (the
-/// disable guard, ADR-0019 Amendment D4 MR4), by id. Runs in the disable's
-/// change, after the user row lock.
+/// disable guard, ADR-0019 Amendment D4 MR4). Runs in the disable's change,
+/// after the user row lock; one bounded row.
 pub(crate) async fn after_disable(
     conn: &mut PgConnection,
     user: UserId,
-) -> Result<Vec<i64>, ForgeError> {
-    sqlx::query_scalar(AFTER_DISABLE)
+) -> Result<LeftOwnerless, ForgeError> {
+    let (count, first_ids): (i64, Vec<i64>) = sqlx::query_as(AFTER_DISABLE)
         .bind(user.get())
         .bind(user.get())
         .bind(CAP)
-        .fetch_all(conn)
+        .bind(GUARD_PROJECT_IDS)
+        .fetch_one(conn)
         .await
-        .map_err(|e| query_error("users.disable.project_owner_count", e))
+        .map_err(|e| query_error("users.disable.project_owner_count", e))?;
+    Ok(LeftOwnerless { count, first_ids })
 }
 
 /// The projects without an active Owner, as `forge doctor` sees them.

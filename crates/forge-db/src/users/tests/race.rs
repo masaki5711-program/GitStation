@@ -308,7 +308,7 @@ async fn a_disable_waits_for_a_real_owner_removal_and_then_refuses() {
     )
     .await;
     let (rm_ctx, dis_ctx) = (ctx("req-rm-bob"), ctx("req-disable-alice"));
-    let removing = crate::groups::remove_member(&t.db, &rm_ctx, g, bob);
+    let removing = crate::groups::remove_member(&t.db, &rm_ctx, g, bob, forge_core::Role::Owner);
     let disabling = async {
         until_waiting(&t, MEMBER_DELETE_WAIT).await;
         disable(&t.db, &dis_ctx, alice).await
@@ -352,7 +352,7 @@ async fn a_real_owner_removal_waits_for_a_disable_and_then_refuses() {
     let disabling = disable(&t.db, &dis_ctx, bob);
     let removing = async {
         until_waiting(&t, DISABLE_TOKENS_WAIT).await;
-        crate::groups::remove_member(&t.db, &rm_ctx, g, alice).await
+        crate::groups::remove_member(&t.db, &rm_ctx, g, alice, forge_core::Role::Owner).await
     };
     let releasing = async {
         until_waiting(&t, DISABLE_TOKENS_WAIT).await;

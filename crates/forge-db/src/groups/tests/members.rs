@@ -30,16 +30,23 @@ async fn member_changes_write_one_audit_row_each() {
     add_member(&t.db, &ctx("req-add"), g, bob, Role::Developer)
         .await
         .expect("add");
-    let changed = change_member(&t.db, &ctx("req-change"), g, bob, Role::Maintainer)
-        .await
-        .expect("change");
+    let changed = change_member(
+        &t.db,
+        &ctx("req-change"),
+        g,
+        bob,
+        Role::Developer,
+        Role::Maintainer,
+    )
+    .await
+    .expect("change");
     assert_eq!(
         changed,
         MemberChange::Changed {
             from: Role::Developer
         }
     );
-    remove_member(&t.db, &ctx("req-remove"), g, bob)
+    remove_member(&t.db, &ctx("req-remove"), g, bob, Role::Maintainer)
         .await
         .expect("remove");
     let mut su = t.superuser().await;
@@ -85,9 +92,16 @@ async fn changing_to_the_same_role_writes_nothing() {
     add_member(&t.db, &ctx("req-add"), acme.group_id, bob, Role::Reporter)
         .await
         .expect("add");
-    let same = change_member(&t.db, &ctx("req-same"), acme.group_id, bob, Role::Reporter)
-        .await
-        .expect("same role");
+    let same = change_member(
+        &t.db,
+        &ctx("req-same"),
+        acme.group_id,
+        bob,
+        Role::Reporter,
+        Role::Reporter,
+    )
+    .await
+    .expect("same role");
     assert_eq!(same, MemberChange::Unchanged);
     let mut su = t.superuser().await;
     assert!(audit_rows(&mut su, "req-same").await.is_empty());
@@ -104,11 +118,11 @@ async fn adding_an_existing_member_is_membership_conflict() {
         .expect_err("alice is the owner");
     assert_reason(&err, ErrorCode::MembershipConflict, "already_member");
     assert_eq!(err.code().http_status(), 409);
-    let err = change_member(&t.db, &ctx("req-change"), g, bob, Role::Guest)
+    let err = change_member(&t.db, &ctx("req-change"), g, bob, Role::Guest, Role::Guest)
         .await
         .expect_err("bob is no member");
     assert_reason(&err, ErrorCode::MembershipConflict, "not_member");
-    let err = remove_member(&t.db, &ctx("req-remove"), g, bob)
+    let err = remove_member(&t.db, &ctx("req-remove"), g, bob, Role::Guest)
         .await
         .expect_err("bob is no member");
     assert_reason(&err, ErrorCode::MembershipConflict, "not_member");
@@ -157,13 +171,20 @@ async fn the_last_owner_of_a_top_level_group_stays() {
     let t = FreshDb::migrated().await;
     let (acme, alice, bob) = acme(&t).await;
     let g = acme.group_id;
-    let err = remove_member(&t.db, &ctx("req-rm"), g, alice)
+    let err = remove_member(&t.db, &ctx("req-rm"), g, alice, Role::Owner)
         .await
         .expect_err("alice is the only owner");
     assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
-    let err = change_member(&t.db, &ctx("req-demote"), g, alice, Role::Maintainer)
-        .await
-        .expect_err("demoting the only owner");
+    let err = change_member(
+        &t.db,
+        &ctx("req-demote"),
+        g,
+        alice,
+        Role::Owner,
+        Role::Maintainer,
+    )
+    .await
+    .expect_err("demoting the only owner");
     assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
     // A disabled second owner does not count.
     add_member(&t.db, &ctx("req-bob"), g, bob, Role::Owner)
@@ -173,13 +194,13 @@ async fn the_last_owner_of_a_top_level_group_stays() {
         .await
         .expect("disable bob");
     assert_eq!(disabled, users::DisableOutcome::Disabled);
-    let err = remove_member(&t.db, &ctx("req-rm-2"), g, alice)
+    let err = remove_member(&t.db, &ctx("req-rm-2"), g, alice, Role::Owner)
         .await
         .expect_err("bob is disabled");
     assert_reason(&err, ErrorCode::MembershipConflict, "last_owner");
     // A subgroup relies on its ancestors' owners: its only direct owner may go.
     let team = create_ok(&t, &group("team", Some(acme.namespace_id), alice)).await;
-    remove_member(&t.db, &ctx("req-rm-sub"), team.group_id, alice)
+    remove_member(&t.db, &ctx("req-rm-sub"), team.group_id, alice, Role::Owner)
         .await
         .expect("a subgroup may have no direct owner");
     t.drop_now().await;
@@ -197,8 +218,8 @@ async fn removing_the_last_owner_is_refused_under_concurrency() {
         .expect("bob owner");
     let (ctx_a, ctx_b) = (ctx("req-rm-alice"), ctx("req-rm-bob"));
     let (a, b) = tokio::join!(
-        remove_member(&t.db, &ctx_a, g, alice),
-        remove_member(&t.db, &ctx_b, g, bob),
+        remove_member(&t.db, &ctx_a, g, alice, Role::Owner),
+        remove_member(&t.db, &ctx_b, g, bob, Role::Owner),
     );
     let refused: Vec<_> = [a, b].into_iter().filter_map(Result::err).collect();
     assert_eq!(
@@ -259,7 +280,7 @@ async fn removing_an_owner_while_the_other_is_disabled_keeps_an_owner() {
     .await
     .expect("disable bob, uncommitted");
     let rm_ctx = ctx("req-rm-alice");
-    let removing = remove_member(&t.db, &rm_ctx, g, alice);
+    let removing = remove_member(&t.db, &rm_ctx, g, alice, Role::Owner);
     let committing = async {
         until_someone_waits(&t).await;
         disabling.commit().await.expect("bob is disabled");
@@ -302,11 +323,11 @@ async fn an_unknown_group_or_user_is_not_found() {
         .expect_err("unknown user");
     assert_reason(&err, ErrorCode::NotFound, "absent");
     assert!(err.to_string().contains("resource=user"), "{err}");
-    let err = change_member(&t.db, &ctx("req-2"), nogroup, bob, Role::Guest)
+    let err = change_member(&t.db, &ctx("req-2"), nogroup, bob, Role::Guest, Role::Guest)
         .await
         .expect_err("unknown group");
     assert!(err.to_string().contains("resource=group"), "{err}");
-    let err = remove_member(&t.db, &ctx("req-3"), nogroup, bob)
+    let err = remove_member(&t.db, &ctx("req-3"), nogroup, bob, Role::Guest)
         .await
         .expect_err("unknown group");
     assert!(err.to_string().contains("resource=group"), "{err}");
@@ -325,8 +346,8 @@ async fn demoting_and_removing_the_two_owners_at_once_keeps_one() {
         .expect("bob owner");
     let (ctx_a, ctx_b) = (ctx("req-demote-alice"), ctx("req-rm-bob"));
     let (demoted, removed) = tokio::join!(
-        change_member(&t.db, &ctx_a, g, alice, Role::Developer),
-        remove_member(&t.db, &ctx_b, g, bob),
+        change_member(&t.db, &ctx_a, g, alice, Role::Owner, Role::Developer),
+        remove_member(&t.db, &ctx_b, g, bob, Role::Owner),
     );
     let refused: Vec<_> = [demoted.err(), removed.err()]
         .into_iter()
@@ -356,10 +377,17 @@ async fn an_unknown_member_is_not_a_member_and_an_unknown_group_is_not_found() {
     let (acme, _, bob) = acme(&t).await;
     let nobody = UserId::new(9_999);
     for err in [
-        change_member(&t.db, &ctx("req-1"), acme.group_id, nobody, Role::Guest)
-            .await
-            .expect_err("unknown user"),
-        remove_member(&t.db, &ctx("req-2"), acme.group_id, nobody)
+        change_member(
+            &t.db,
+            &ctx("req-1"),
+            acme.group_id,
+            nobody,
+            Role::Guest,
+            Role::Guest,
+        )
+        .await
+        .expect_err("unknown user"),
+        remove_member(&t.db, &ctx("req-2"), acme.group_id, nobody, Role::Guest)
             .await
             .expect_err("unknown user"),
     ] {
@@ -396,10 +424,17 @@ async fn an_unknown_stored_role_is_membership_data_invalid() {
     ))
     .await;
     for err in [
-        change_member(&t.db, &ctx("req-change"), g, bob, Role::Guest)
-            .await
-            .expect_err("change"),
-        remove_member(&t.db, &ctx("req-remove"), g, bob)
+        change_member(
+            &t.db,
+            &ctx("req-change"),
+            g,
+            bob,
+            Role::Developer,
+            Role::Guest,
+        )
+        .await
+        .expect_err("change"),
+        remove_member(&t.db, &ctx("req-remove"), g, bob, Role::Developer)
             .await
             .expect_err("remove"),
     ] {
@@ -413,6 +448,52 @@ async fn an_unknown_stored_role_is_membership_data_invalid() {
         ] {
             assert!(text.contains(&part), "missing {part:?} in {text}");
         }
+    }
+    t.drop_now().await;
+}
+
+/// The role a caller authorized against is a precondition (D4 review): a
+/// promotion to Owner committed between `authorize()` (which saw
+/// Developer) and the demotion or removal makes both `role_changed`, and
+/// nothing is written.
+#[tokio::test]
+async fn a_role_changed_after_authorization_is_role_changed() {
+    let t = FreshDb::migrated().await;
+    let (acme, _, bob) = acme(&t).await;
+    let g = acme.group_id;
+    add_member(&t.db, &ctx("req-add"), g, bob, Role::Developer)
+        .await
+        .expect("add");
+    // The caller loads bob's role (Developer) and authorizes; meanwhile an
+    // Owner promotes bob.
+    let authorized = Role::Developer;
+    let _ = change_member(
+        &t.db,
+        &ctx("req-promote"),
+        g,
+        bob,
+        Role::Developer,
+        Role::Owner,
+    )
+    .await
+    .expect("promote");
+    for err in [
+        change_member(&t.db, &ctx("req-demote"), g, bob, authorized, Role::Guest)
+            .await
+            .expect_err("demote"),
+        remove_member(&t.db, &ctx("req-remove"), g, bob, authorized)
+            .await
+            .expect_err("remove"),
+    ] {
+        assert_reason(&err, ErrorCode::MembershipConflict, "role_changed");
+        let text = err.to_string();
+        assert!(text.contains("expected=developer"), "{text}");
+        assert!(text.contains("actual=owner"), "{text}");
+    }
+    let mut su = t.superuser().await;
+    assert_eq!(role_of(&mut su, g, bob).await.as_deref(), Some("owner"));
+    for request in ["req-demote", "req-remove"] {
+        assert!(audit_rows(&mut su, request).await.is_empty(), "{request}");
     }
     t.drop_now().await;
 }

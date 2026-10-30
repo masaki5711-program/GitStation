@@ -34,6 +34,7 @@ use sqlx::postgres::PgConnection;
 
 use super::{insert, not_found, validate, NewUser, RESOURCE};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::projects::ownership::LeftOwnerless;
 use crate::{query_error, read_query_error, Db};
 
 /// The advisory lock key of "the set of administrators". A `namespace:`
@@ -70,15 +71,15 @@ pub(super) struct Leaves {
     /// Top-level groups whose only direct active Owner is the user.
     pub ownerless_groups: Vec<i64>,
     /// Projects whose only active Owner, direct or inherited, is the user
-    /// (D4 MR4, `projects::ownership`).
-    pub ownerless_projects: Vec<i64>,
+    /// (D4 MR4, `projects::ownership`): the count and the first ids.
+    pub ownerless_projects: LeftOwnerless,
 }
 
 impl Leaves {
     pub fn is_clean(&self) -> bool {
         !self.without_admin
             && self.ownerless_groups.is_empty()
-            && self.ownerless_projects.is_empty()
+            && self.ownerless_projects.count == 0
     }
 
     pub fn ownerless_count(&self) -> i64 {
@@ -86,7 +87,7 @@ impl Leaves {
     }
 
     pub fn ownerless_project_count(&self) -> i64 {
-        i64::try_from(self.ownerless_projects.len()).unwrap_or(i64::MAX)
+        self.ownerless_projects.count
     }
 
     /// The guard's refusal, `None` when the disable leaves forge
@@ -100,7 +101,7 @@ impl Leaves {
         let refused = conflict("last_owner").with_context("user", user.get());
         let refused = match (
             self.ownerless_groups.first(),
-            self.ownerless_projects.first(),
+            self.ownerless_projects.first_ids.first(),
         ) {
             (Some(group), _) => refused.with_context("group_id", *group),
             (None, Some(project)) => refused.with_context("project_id", *project),
@@ -151,7 +152,13 @@ pub(super) async fn what_disable_leaves(
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| query_error("users.disable.owner_count", e))?;
-    let ownerless_projects = crate::projects::ownership::after_disable(conn, user).await?;
+    // A bot never holds Owner (bots are never members, and never inherit a
+    // personal namespace's Owner): nothing to count.
+    let ownerless_projects = if kind == UserKind::Bot {
+        LeftOwnerless::default()
+    } else {
+        crate::projects::ownership::after_disable(conn, user).await?
+    };
     Ok(Leaves {
         without_admin,
         ownerless_groups,

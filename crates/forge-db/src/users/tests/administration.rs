@@ -32,9 +32,15 @@ async fn administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group
     groups::add_member(&t.db, &ctx("req-add-bob"), team.group_id, bob, Role::Owner)
         .await
         .expect("bob owner of team");
-    groups::remove_member(&t.db, &ctx("req-rm-alice"), team.group_id, alice)
-        .await
-        .expect("alice leaves team");
+    groups::remove_member(
+        &t.db,
+        &ctx("req-rm-alice"),
+        team.group_id,
+        alice,
+        Role::Owner,
+    )
+    .await
+    .expect("alice leaves team");
     let healthy = read(&t).await;
     assert!(!healthy.is_fresh_install());
     assert_eq!(

@@ -107,11 +107,16 @@ pub enum AuditDetails {
         from: Role,
         to: Role,
     },
-    /// `protected_ref.deleted` (D4 MR5): the rule as it was.
+    /// `protected_ref.deleted` (D4 MR5): the rule as it was stored. A row
+    /// this build cannot read (FG-DB-0020) can still be deleted: then
+    /// `stored_invalid` is set, `pattern` is the stored text cut to 255
+    /// bytes and `push_min_role` the stored text cut to 32 characters
+    /// (D4 review).
     ProtectedRefDeleted {
         rule: ProtectedRefId,
         pattern: String,
-        push_min_role: Role,
+        push_min_role: String,
+        stored_invalid: bool,
     },
 }
 
@@ -177,8 +182,9 @@ impl AuditDetails {
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
     /// ProjectMemberAdded / ProjectMemberRemoved `{"user_id","role"}`,
     /// ProjectMemberRoleChanged `{"user_id","from","to"}` (the group shapes),
-    /// ProtectedRefCreated / ProtectedRefDeleted
-    /// `{"protected_ref_id","pattern","push_min_role"}`,
+    /// ProtectedRefCreated `{"protected_ref_id","pattern","push_min_role"}`,
+    /// ProtectedRefDeleted
+    /// `{"protected_ref_id","pattern","push_min_role","stored_invalid"}`,
     /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
@@ -255,15 +261,21 @@ impl AuditDetails {
                 rule,
                 pattern,
                 push_min_role,
-            }
-            | Self::ProtectedRefDeleted {
-                rule,
-                pattern,
-                push_min_role,
             } => serde_json::json!({
                 "protected_ref_id": rule.get(),
                 "pattern": pattern,
                 "push_min_role": push_min_role.as_str(),
+            }),
+            Self::ProtectedRefDeleted {
+                rule,
+                pattern,
+                push_min_role,
+                stored_invalid,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
+                "push_min_role": push_min_role,
+                "stored_invalid": stored_invalid,
             }),
             Self::ProtectedRefUpdated {
                 rule,

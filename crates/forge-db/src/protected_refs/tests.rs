@@ -142,7 +142,7 @@ async fn protected_ref_change_writes_one_audit_row_and_one_maintainer_event() {
             "req-delete",
             "protected_ref.deleted",
             json!({"protected_ref_id": id, "pattern": "refs/heads/release/*",
-                   "push_min_role": "owner"}),
+                   "push_min_role": "owner", "stored_invalid": false}),
         ),
     ] {
         assert_eq!(
@@ -327,6 +327,22 @@ async fn more_than_100_rules_is_rejected() {
         ErrorCode::ProtectedRefDataInvalid,
         "too_many_stored_rules",
     );
+    // A create reads the same rules: the broken cap is FG-DB-0020, not
+    // too_many_rules (D4 review).
+    let err = create(
+        &t.db,
+        &ctx("req-rule-102"),
+        p,
+        &pattern("refs/heads/after-smuggle"),
+        Role::Developer,
+    )
+    .await
+    .expect_err("over the stored cap");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "too_many_stored_rules",
+    );
     t.drop_now().await;
 }
 
@@ -469,5 +485,71 @@ async fn a_stored_rule_this_build_cannot_read_is_protected_ref_data_invalid() {
         ErrorCode::ProtectedRefDataInvalid,
         "stored_push_min_role_invalid",
     );
+    t.drop_now().await;
+}
+
+/// The runbook's fix for FG-DB-0020 is to delete the row: `delete` must not
+/// parse it (D4 review HIGH). The audit row keeps the stored text, bounded
+/// and marked `stored_invalid`; `levels_for` works again afterwards.
+#[tokio::test]
+async fn a_rule_this_build_cannot_read_can_still_be_deleted() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let bad_pattern = create_ok(&t, p, "refs/heads/main", Role::Maintainer).await;
+    let bad_role = create_ok(&t, p, "refs/heads/dev", Role::Developer).await;
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.protected_refs DROP CONSTRAINT protected_refs_push_min_role; \
+         ALTER TABLE forge.protected_refs DISABLE TRIGGER USER; \
+         UPDATE forge.protected_refs SET pattern = 'refs/heads/*/*' WHERE id = {}; \
+         UPDATE forge.protected_refs SET push_min_role = 'emperor' WHERE id = {}; \
+         ALTER TABLE forge.protected_refs ENABLE TRIGGER USER",
+        bad_pattern.get(),
+        bad_role.get()
+    ))
+    .await;
+    let main = ref_name("refs/heads/main");
+    let err = levels_for(&t.db, p, &main)
+        .await
+        .expect_err("unreadable rules");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefDataInvalid);
+    delete(&t.db, &ctx("req-del-pattern"), p, bad_pattern)
+        .await
+        .expect("an unreadable pattern can be deleted");
+    delete(&t.db, &ctx("req-del-role"), p, bad_role)
+        .await
+        .expect("an unreadable role can be deleted");
+    for (request, rule, details) in [
+        (
+            "req-del-pattern",
+            bad_pattern,
+            json!({"protected_ref_id": bad_pattern.get(), "pattern": "refs/heads/*/*",
+                   "push_min_role": "maintainer", "stored_invalid": true}),
+        ),
+        (
+            "req-del-role",
+            bad_role,
+            json!({"protected_ref_id": bad_role.get(), "pattern": "refs/heads/dev",
+                   "push_min_role": "emperor", "stored_invalid": true}),
+        ),
+    ] {
+        assert_eq!(
+            audit_rows(&t, request).await,
+            vec![(
+                "protected_ref.deleted".to_owned(),
+                "project".to_owned(),
+                p.get(),
+                p.get()
+            )],
+            "{rule:?}"
+        );
+        let events = events_of(&t, request).await;
+        assert_eq!(events.len(), 1, "{request}");
+        assert_eq!(events[0].4, details, "{request}");
+    }
+    assert!(levels_for(&t.db, p, &main)
+        .await
+        .expect("readable again")
+        .is_empty());
+    assert_eq!(rule_count(&t, p).await, 0);
     t.drop_now().await;
 }

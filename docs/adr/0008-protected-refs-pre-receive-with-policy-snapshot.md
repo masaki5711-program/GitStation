@@ -75,3 +75,6 @@ ref ごとの `update` フックでは、複数の ref の push が一部だけ�
   使う実装にはしない（規則を足しても保護が緩まないことを、forge-web のテスト `adding_a_rule_never_loosens_protection` が DB から確かめる）。
   読み込みは読み取り用のプールの 1 文で、行は 101 までに限る。100 を超える行、読めないパターン・ロールは規則を飛ばさずに `FG-DB-0020`
   ProtectedRefDataInvalid（alert、Runbook `protected-ref-data`）で拒否する。
+- （D4 のレビュー）`delete` は行を解釈せずに取る（同じプロジェクトの中だけ）。読めない行（FG-DB-0020）も消せるようにするため（Runbook `protected-ref-data`
+  の修復の手順）。監査の詳細は保存されていた文字列（パターンは 255 バイト、ロールは 32 文字まで）と `stored_invalid: true`。保存された行が 100 を超えるときは、
+  `create` も `too_many_rules` ではなく FG-DB-0020 `too_many_stored_rules` を返す。

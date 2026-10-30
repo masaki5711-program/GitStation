@@ -169,9 +169,15 @@ async fn disabling_the_last_direct_owner_of_a_top_level_group_is_refused() {
     groups::add_member(&t.db, &ctx("req-add-bob"), team.group_id, bob, Role::Owner)
         .await
         .expect("bob owner of team");
-    groups::remove_member(&t.db, &ctx("req-rm-alice"), team.group_id, alice)
-        .await
-        .expect("alice leaves team");
+    groups::remove_member(
+        &t.db,
+        &ctx("req-rm-alice"),
+        team.group_id,
+        alice,
+        Role::Owner,
+    )
+    .await
+    .expect("alice leaves team");
     let outcome = disable(&t.db, &ctx("req-disable-bob"), bob)
         .await
         .expect("a subgroup does not need a direct owner");

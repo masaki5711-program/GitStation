@@ -311,7 +311,8 @@ fn protected_ref_details_have_their_exact_shape_and_publish_maintainer_events() 
     let deleted = AuditDetails::ProtectedRefDeleted {
         rule,
         pattern: "refs/heads/release/*".to_owned(),
-        push_min_role: Role::Owner,
+        push_min_role: "owner".to_owned(),
+        stored_invalid: false,
     };
     assert_eq!(
         created.to_value(),
@@ -323,7 +324,7 @@ fn protected_ref_details_have_their_exact_shape_and_publish_maintainer_events() 
     );
     assert_eq!(
         deleted.to_value(),
-        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "owner"})
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "owner", "stored_invalid": false})
     );
     for (details, action, event) in [
         (

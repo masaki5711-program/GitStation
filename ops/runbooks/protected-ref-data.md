@@ -35,6 +35,8 @@
 1. 規則に反する行を、監査の残る経路で消す（`forge_db::protected_refs::delete`。HTTP の経路・CLI はまだない — 承認の記録に行の id を残し、
    経路ができるまでは DB の管理者と相談する）。`[MUTATING — needs approval]`（ロールバック: 消した規則は `protected_refs::create` で作り直す。
    監査の記録の `details` に、元のパターンと `push_min_role` がある）
+   `delete` は行を解釈しないので、読めない行（パターン・ロール）も消せる。その監査の行は `stored_invalid: true` と、保存されていた文字列
+   （パターン 255 バイト、ロール 32 文字まで）を持つ。消した後、`levels_for` は FG-DB-0020 を出さなくなる。
 2. 外された制約を、マイグレーション `20261031100000` の定義どおりに戻す。`[MUTATING — needs approval]`（ロールバック: 不要）
 3. 手で UPDATE しない、監査の行を手で書かない、トリガーを止めない。
 

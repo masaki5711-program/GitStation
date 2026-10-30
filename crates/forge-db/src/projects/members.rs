@@ -167,6 +167,21 @@ async fn keep_an_owner(
 }
 
 /// Commit with one audit row on (`project`, id) and its `member.*` event.
+/// The precondition of `change_member` / `remove_member`: the member's
+/// direct role re-read under the lock must still be `from`, the role the
+/// caller loaded and authorized against (`authorize()` with
+/// `MembershipChange::{Change, Remove}`). Otherwise the membership changed
+/// in between (e.g. a promotion to Owner) and the authorization no longer
+/// holds: `FG-REPO-0010` `role_changed` with `expected` / `actual`.
+fn check_from(stored: Role, from: Role) -> Result<(), ForgeError> {
+    if stored == from {
+        return Ok(());
+    }
+    Err(membership_conflict("role_changed")
+        .with_context("expected", from.as_str())
+        .with_context("actual", stored.as_str()))
+}
+
 async fn commit(
     tx: ChangeTx,
     project: ProjectId,
@@ -215,8 +230,10 @@ pub async fn add_member(
     .await
 }
 
-/// Give a member another role: one `member.role_changed` audit row and
-/// event, or `Unchanged` (nothing written) when the role is the same.
+/// Give a member the role `to`: one `member.role_changed` audit row and
+/// event, or `Unchanged` (nothing written) when `to` is `from`. `from` is
+/// the member's direct role as the caller loaded it before `authorize()`;
+/// a different stored role is `FG-REPO-0010` `role_changed`.
 /// Demoting the last direct Owner without an inherited active Owner is
 /// `FG-REPO-0010` `last_owner`; a non-member is `not_member`.
 pub async fn change_member(
@@ -224,15 +241,17 @@ pub async fn change_member(
     ctx: &ChangeContext,
     project: ProjectId,
     user: UserId,
-    role: Role,
+    from: Role,
+    to: Role,
 ) -> Result<MemberChange, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     tx.step(|c| lock_project(c, project)).await?;
-    let from = tx
+    let stored = tx
         .step(|c| direct_role(c, project, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
-    if from == role {
+    check_from(stored, from)?;
+    if from == to {
         // Dropping the transaction releases the lock; nothing was written.
         return Ok(MemberChange::Unchanged);
     }
@@ -246,22 +265,20 @@ pub async fn change_member(
         )
         .bind(project.get())
         .bind(user.get())
-        .bind(role.as_str())
+        .bind(to.as_str())
         .execute(c)
         .await
         .map_err(|e| query_error("projects.change_member", e))
     })
     .await?;
-    let details = AuditDetails::ProjectMemberRoleChanged {
-        user,
-        from,
-        to: role,
-    };
+    let details = AuditDetails::ProjectMemberRoleChanged { user, from, to };
     commit(tx, project, &details).await?;
     Ok(MemberChange::Changed { from })
 }
 
-/// Remove a direct member: one `member.removed` audit row and event.
+/// Remove a direct member whose direct role is `from` (as loaded before
+/// `authorize()`; else `FG-REPO-0010` `role_changed`): one
+/// `member.removed` audit row and event.
 /// Removing the last direct Owner without an inherited active Owner is
 /// `FG-REPO-0010` `last_owner`; a non-member is `not_member`.
 pub async fn remove_member(
@@ -269,6 +286,7 @@ pub async fn remove_member(
     ctx: &ChangeContext,
     project: ProjectId,
     user: UserId,
+    from: Role,
 ) -> Result<(), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     tx.step(|c| lock_project(c, project)).await?;
@@ -276,6 +294,7 @@ pub async fn remove_member(
         .step(|c| direct_role(c, project, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
+    check_from(role, from)?;
     if role == Role::Owner {
         tx.step(|c| keep_an_owner(c, project, user)).await?;
     }

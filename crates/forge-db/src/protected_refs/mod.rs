@@ -95,6 +95,20 @@ fn row_limit() -> i64 {
     i64::try_from(MAX_RULES).map_or(i64::MAX, |n| n.saturating_add(1))
 }
 
+/// More stored rows than `MAX_RULES` (written outside forge-db) is
+/// `FG-DB-0020` `too_many_stored_rules`, never a partial rule set.
+fn parse_rows(
+    project: ProjectId,
+    rows: Vec<(i64, String, String)>,
+) -> Result<Vec<Rule>, ForgeError> {
+    if rows.len() > MAX_RULES {
+        return Err(ForgeError::new(ErrorCode::ProtectedRefDataInvalid)
+            .with_context("reason", "too_many_stored_rules")
+            .with_context("project_id", project.get()));
+    }
+    rows.into_iter().map(parse_row).collect()
+}
+
 /// The project's rules, read inside a change after the project lock.
 async fn rules_locked(
     conn: &mut PgConnection,
@@ -106,16 +120,18 @@ async fn rules_locked(
         .fetch_all(conn)
         .await
         .map_err(|e| query_error("protected_refs.rules", e))?;
-    rows.into_iter().map(parse_row).collect()
+    parse_rows(project, rows)
 }
 
-/// The rule `rule` of `project`, locked `FOR UPDATE`. `FG-REPO-0005`
-/// (`resource=protected_ref`) when the project has no such rule.
-async fn lock_rule(
+/// The stored row of rule `rule` of `project`, locked `FOR UPDATE` and not
+/// parsed (so `delete` can remove a row this build cannot read).
+/// `FG-REPO-0005` (`resource=protected_ref`) when the project has no such
+/// rule.
+async fn lock_rule_row(
     conn: &mut PgConnection,
     project: ProjectId,
     rule: ProtectedRefId,
-) -> Result<Rule, ForgeError> {
+) -> Result<(i64, String, String), ForgeError> {
     let row: Option<(i64, String, String)> = sqlx::query_as(
         "SELECT id, pattern, push_min_role FROM forge.protected_refs \
          WHERE id = $1 AND project_id = $2 FOR UPDATE",
@@ -125,12 +141,30 @@ async fn lock_rule(
     .fetch_optional(conn)
     .await
     .map_err(|e| query_error("protected_refs.lock", e))?;
-    let Some(row) = row else {
-        return Err(ForgeError::new(ErrorCode::NotFound)
+    row.ok_or_else(|| {
+        ForgeError::new(ErrorCode::NotFound)
             .with_context("resource", "protected_ref")
-            .with_context("reason", "absent"));
-    };
-    parse_row(row)
+            .with_context("reason", "absent")
+    })
+}
+
+/// The rule `rule` of `project`, locked `FOR UPDATE` and parsed
+/// (`FG-DB-0020` for a row this build cannot read).
+async fn lock_rule(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    rule: ProtectedRefId,
+) -> Result<Rule, ForgeError> {
+    parse_row(lock_rule_row(conn, project, rule).await?)
+}
+
+/// `s` cut to at most `max` bytes, on a character boundary.
+fn bounded(s: &str, max: usize) -> String {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.get(..end).unwrap_or_default().to_owned()
 }
 
 /// A unique violation on the pattern index is a duplicate (the ASCII
@@ -246,7 +280,10 @@ pub async fn change(
 
 /// Delete a rule: one `protected_ref.deleted` audit row and event.
 /// `FG-REPO-0005` (`resource=project` / `protected_ref`) when the project or
-/// its rule does not exist.
+/// its rule does not exist. The row is not parsed, so a rule this build
+/// cannot read (`FG-DB-0020`, written outside forge-db) can be deleted — the
+/// runbook `protected-ref-data` fix; its details then carry
+/// `stored_invalid: true` with the stored text bounded.
 pub async fn delete(
     db: &Db,
     ctx: &ChangeContext,
@@ -255,7 +292,8 @@ pub async fn delete(
 ) -> Result<(), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     tx.step(|c| lock_project(c, project)).await?;
-    let current = tx.step(|c| lock_rule(c, project, rule)).await?;
+    let (id, pattern, role) = tx.step(|c| lock_rule_row(c, project, rule)).await?;
+    let stored_invalid = parse_row((id, pattern.clone(), role.clone())).is_err(); // clone: the raw text goes into the details
     tx.step(|c| async move {
         sqlx::query("DELETE FROM forge.protected_refs WHERE id = $1")
             .bind(rule.get())
@@ -266,8 +304,9 @@ pub async fn delete(
     .await?;
     let details = AuditDetails::ProtectedRefDeleted {
         rule,
-        pattern: current.pattern.as_str().to_owned(),
-        push_min_role: current.push_min_role,
+        pattern: bounded(&pattern, forge_core::ref_pattern::MAX_PATTERN_LEN),
+        push_min_role: role.chars().take(32).collect(),
+        stored_invalid,
     };
     commit(tx, project, &details).await
 }
@@ -302,19 +341,11 @@ pub async fn levels_for(
                 .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    if rows.len() > MAX_RULES {
-        return Err(ForgeError::new(ErrorCode::ProtectedRefDataInvalid)
-            .with_context("reason", "too_many_stored_rules")
-            .with_context("project_id", project.get()));
-    }
-    let mut levels = Vec::new();
-    for row in rows {
-        let rule = parse_row(row)?;
-        if rule.pattern.matches(name) {
-            levels.push(rule.push_min_role);
-        }
-    }
-    Ok(levels)
+    Ok(parse_rows(project, rows)?
+        .into_iter()
+        .filter(|rule| rule.pattern.matches(name))
+        .map(|rule| rule.push_min_role)
+        .collect())
 }
 
 #[cfg(test)]

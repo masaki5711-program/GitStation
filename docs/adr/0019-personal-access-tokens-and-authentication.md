@@ -348,3 +348,9 @@ D4 MR2 の Amendment が D4 MR4 に送った決定（計画 D4 の回答 2）。
   最初の 10 件の id を返し、`Ownerless::check()` が `FG-AUTH-0010 reason=ownerless_project`（`ownerless_projects`、`project_ids`）を返す。
   `forge doctor` の `users.administration` への配線（と `doctor/render.rs` の `SAFE_CONTEXT` への `ownerless_projects`・`project_ids` の追加）は、
   doctor を同時に変える D4 MR3b と衝突しないよう **D4 の統合のときに行う**。
+- （D4 のレビュー）無効化のガードのプロジェクトの読み込みは、数と最初の 11 件の id だけを返す 1 行の問い合わせにした。どちらの問い合わせ（ガード、doctor）も
+  集合で求める（祖先を 1 度たどり、Owner のいるプロジェクトを結合で集め、反結合で残りを出す。プロジェクトごとの相関副問い合わせはしない。テスト
+  `ownerless_reads_hundreds_of_projects_set_based` が 300 件で数と計画を確かめる）。ボットの無効化ではプロジェクトを数えない（ボットは Owner にならない）。
+- （D4 のレビュー）グループとプロジェクトの `change_member` / `remove_member` は、呼び出し側が `authorize()` で見た直接のロールを `from` として受け取り、
+  ロックの下で読み直した値と違えば FG-REPO-0010 `role_changed`（`expected`、`actual`）で何も書かない。認可と変更の間の昇格（例: Owner への昇格の後に、
+  Maintainer が認可済みの降格を書く）を防ぐ。
