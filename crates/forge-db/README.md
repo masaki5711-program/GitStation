@@ -127,9 +127,33 @@ connection, mapping driver errors to registered codes, migrations
   audit details). Path lock and tombstone checks as for groups. `creator` must be the
   acting user (`Actor::System`, the operator / worker, may name anyone). `CreatedProject {
   project_id, namespace_id, repository_id, provision_job }`.
-  `projects::access(&Db, ProjectId) -> Result<ProjectAccess, ForgeError>`:
-  `ProjectAccess { visibility, pending_deletion }` (`deleted_at` set) — with
-  `load_project_roles`, what forge-auth's `ProjectView` needs (read pool).
+- `resolve::{resolve, project_access}` and `impl forge_core::NamespaceResolver /
+  ProjectAccessLoader for Db` (M1 phase 8 MR3, ADR-0015 Amendment MR3; `forge serve`
+  injects the `Db` into forge-web like the authenticator):
+  `resolve(&Db, &LookupPath, viewer: Option<UserId>) -> Result<Resolution, ForgeError>` —
+  the exact live path first, else the exact tombstone (`Live` / `Moved { resolved,
+  tombstone, current }` / `Deleted { tombstone }` / `Absent`); `project_access(&Db,
+  ProjectId, viewer) -> Result<Option<forge_core::ProjectAccess>, ForgeError>`
+  (`None` = no such project; it replaces D4's `projects::access` and its
+  `ProjectAccess { visibility, pending_deletion }` — one type, forge-core's, now with
+  the viewer's `role`). **One statement per call, whatever the answer**
+  (`RESOLVE_SQL`, `PROJECT_ACCESS_SQL`): it always returns exactly one row (an
+  aggregate without `GROUP BY` drives `LEFT JOIN`s), so live / moved / deleted /
+  absent, visible / invisible and signed-in / anonymous (`$2` NULL) issue the same
+  one statement on the read pool under `Db::within` (ADR-0015 step 6). Only the
+  statement count and text are constant, not the work inside (an absent path is two
+  index probes, a deep project walks its chain): an accepted residual, mitigated by
+  resolve rate limiting (M2) and, if needed, a response-time floor in forge-web. The viewer's
+  role is the role loaders' own chain CTE and fold (`roles::chain_cte!`,
+  `chain_role_columns!`, `fold_chain`): the same `native` as `load_project_roles`
+  / `load_group_roles` (tested). A `moved` tombstone's `current` path is rebuilt
+  from the target's segments, confirmed by an exact match on the live paths with
+  the target's id, and read through `NamespacePath::parse`. Only a purged target
+  (`namespace_id` NULL) is `Deleted`; a target that exists but whose rebuilt path is
+  not live is FG-DB-0021 `moved_path_unconfirmed`, a broken chain FG-DB-0018.
+  Nothing here decides visibility (`authorize()` does). The test
+  `every_outcome_runs_the_same_single_statement` counts sqlx's per-statement
+  events for every outcome.
 - `repositories` (step D4 MR3b, ADR-0009 / ADR-0016 Amendments D4 MR3b):
   `provision_target(&Db, RepoId) -> ProvisionTarget { repo_id, project_id, state, token }`
   (write pool — `forge_ro` cannot read `provision_token`; `Debug` redacts the token);
@@ -221,7 +245,7 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
 derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`), FG-DB-0020 ProtectedRefDataInvalid
-(`protected_refs`).
+(`protected_refs`), FG-DB-0021 NamespaceDataInvalid (`resolve`).
 Raised by `users::create` / `users::disable`: FG-REPO-0007 / 0008 (`PathSegment`),
 FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_taken`,
 ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
@@ -253,7 +277,7 @@ FG-REPO-0014 ProjectRequestInvalid (`display_name_length`, `description_length`,
 `creator_inactive`, `creator_not_actor`), FG-REPO-0010 (`bot_member`: a bot as creator
 or a bot's personal namespace as parent), FG-REPO-0005 (`resource=namespace` / `user` /
 `project`, `reason=absent`), FG-SYS-0001 (`unexpected_dedup`, `unexpected_job_dedup`,
-`unknown_visibility`, `namespace_owner_missing`), FG-DB-0010 from the change checks.
+`namespace_owner_missing`), FG-DB-0010 from the change checks.
 Raised by the project member commands (D4 MR4): FG-REPO-0010 (`already_member`,
 `not_member`, `last_owner` with `project_id`, `bot_member`), FG-REPO-0005
 (`resource=project` / `user`, `reason=absent`), FG-DB-0018 (`unknown_role`,
@@ -263,6 +287,12 @@ Raised by `protected_refs` (D4 MR5): FG-REPO-0013 (`duplicate_pattern`, `too_man
 with `rules`, `push_min_role`), FG-REPO-0005 (`resource=project` / `protected_ref`,
 `reason=absent`), FG-DB-0020 ProtectedRefDataInvalid (alert: `too_many_stored_rules`,
 `stored_pattern_invalid`, `stored_push_min_role_invalid`; ids only, never the pattern).
+Raised by `resolve`: FG-DB-0021 NamespaceDataInvalid (alert: `stored_path_invalid` with
+`rule`, `moved_path_unconfirmed`, `unknown_namespace_kind`, `unknown_tombstone_kind`, `unknown_visibility` with `raw`,
+`namespace_without_project`, `project_without_namespace`; ids only, never the path),
+FG-DB-0018 (`namespace_chain_too_deep`, `unknown_role`; `resource=namespace` / `project`,
+`user` only for a signed-in viewer), FG-DB-0001 / 0002. Absence is `Resolution::Absent` /
+`None`, never an error.
 Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
@@ -277,7 +307,7 @@ from `reprovision`), FG-REPO-0005 (`resource=repository`, `reason=absent`), FG-S
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
 `job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
 `subscriber-lag.md`, `credential-data.md`, `user-offboarding.md`,
-`repository-provisioning.md`.
+`repository-provisioning.md`, `namespace-data.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then

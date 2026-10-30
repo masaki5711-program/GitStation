@@ -216,5 +216,8 @@ the action is a runtime field of `Authorized<R>` (a WebShell proof has the same 
 (a) check `proof.action() == def.action` in the registry before calling **every** handler, (b) give handlers no way to be called
 outside the registry (the proof reaches a handler only through it), and (c) add a negative test that a proof for a different
 action is rejected. MR3 / MR4 lookups must issue the same query shape (count and kind) for absent, tombstone and invisible paths.
+MR3 note (review MEDIUM, accepted residual, ADR-0015 Amendment MR3): the resolver's statement count and text are constant, the
+work inside is not (an absent path stops after two index probes, a deep project walks its chain) — mitigations: resolve rate
+limiting (deferred to M2) and, if needed, a response-time floor in forge-web for the resolve / dispatcher paths.
 MR3 / MR4 build `forge_auth::LoadedProject` / `LoadedNamespace` from one query result (contexts are sealed, fields private; new
 context types are added in forge-auth).
