@@ -250,10 +250,20 @@ fn repository_created_and_reprovision_requested_have_ids_only() {
     let requested = AuditDetails::RepositoryReprovisionRequested {
         repository_id: RepoId::new(34),
         job_id: 9,
+        after_succeeded_job: None,
     };
     assert_eq!(
         requested.to_value(),
-        json!({"repository_id": 34, "job_id": 9})
+        json!({"repository_id": 34, "job_id": 9, "holder_job_id": null, "holder_state": "none"})
+    );
+    let after = AuditDetails::RepositoryReprovisionRequested {
+        repository_id: RepoId::new(34),
+        job_id: 10,
+        after_succeeded_job: Some(9),
+    };
+    assert_eq!(
+        after.to_value(),
+        json!({"repository_id": 34, "job_id": 10, "holder_job_id": 9, "holder_state": "succeeded"})
     );
     assert_eq!(requested.action(), "repository.reprovision_requested");
     // An operator's recovery step: audit-only, no event.

@@ -27,7 +27,7 @@ async fn reprovision_requeues_a_dead_job() {
     let out = reprovision_with(&t.db, &rid("req-cli-rp-1"), repo.get())
         .await
         .expect("live");
-    assert!(out.contains("already queued or running"), "{out}");
+    assert!(out.contains("is already queued"), "{out}");
     // It dies (as after FG-REPO-0004 adopt_refused, once the operator has
     // dealt with the directory).
     t.exec_superuser(&format!(

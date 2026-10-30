@@ -137,18 +137,27 @@ connection, mapping driver errors to registered codes, migrations
   resource (`project`, project id) with `project_id` set and one `repository.created`
   event (integration, aggregate `repository`, payload `{project_id, repository_id,
   kind}`, dedup `repository_created:<repo_id>`); an already ready repository writes
-  nothing (no second event). `provisioning_report(&Db, stuck_after) ->
+  nothing (no second event); the UPDATE must touch exactly one row.
+  `mark_ready_within(.., timeout)` takes the change bound from the caller (the
+  provisioning job passes what is left of its own timeout).
+  **Key chain**: `jobs_dedup` keeps the key of queued, running and succeeded jobs, so the
+  current job of a repository is the end of `repository_provision:<id>` →
+  `repository_provision:<id>:after:<succeeded job>` → … (`CHAIN_CAP` 16 links, equality
+  lookups in a recursive CTE). `provisioning_report(&Db, stuck_after) ->
   Option<ProvisioningReport>` (read pool; `None` before the D4 schema): repositories in
-  `provisioning` (count capped) and the stuck ones among the 100 oldest — older than
-  `stuck_after` (`PROVISIONING_STUCK_AFTER` = 10 min) or without a queued / running job
-  (found by dedup key through `jobs_dedup`, so a dead job reads as `none`);
-  `ProvisioningReport::check()` → FG-REPO-0012 (`reason` `job_not_live` / `too_old`).
+  `provisioning` (count capped); the 10 000 oldest classified in SQL by their current job —
+  `job_not_live` (none, dead or succeeded) or `too_old` (live, older than `stuck_after`,
+  `PROVISIONING_STUCK_AFTER` = 10 min) — with per-reason counts and the first 100 stuck
+  (`job_not_live` first, each oldest first); `ProvisioningReport::check()` → FG-REPO-0012
+  (`reason`, `job_not_live`, `too_old`, `job_state`; `detail` for a succeeded job).
   `ready_ids(&Db, after, limit)` — ready repository ids in id order, keyset pages of at
   most `READY_PAGE_MAX` (1000). `reprovision(&Db, &ChangeContext, RepoId) ->
-  Reprovisioned::{Queued { project_id, job }, AlreadyLive { project_id }}` — row locked,
-  a ready repository is FG-REPO-0014 `repository_ready`; the job plus an audit-only
-  `repository.reprovision_requested` row (on the project) in one change; a live job
-  holding the key writes nothing.
+  Reprovisioned::{Queued { project_id, job, after }, AlreadyLive { project_id, job, state }}`
+  — row locked, a ready repository is FG-REPO-0014 `repository_ready`; by the current job:
+  queued / running → `AlreadyLive` (nothing written), dead / none → a new job with that
+  link's key, succeeded → a new job keyed `…:after:<that job>`; the job plus an audit-only
+  `repository.reprovision_requested` row (on the project, `holder_job_id` /
+  `holder_state`) in one change. Concurrent calls serialize on the row lock.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

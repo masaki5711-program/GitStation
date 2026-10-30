@@ -17,6 +17,16 @@
 //! - [`reprovision`] enqueues the job again for a repository still
 //!   `provisioning` (`forge admin repo reprovision`, an approved runbook
 //!   step; audited as `repository.reprovision_requested`).
+//!
+//! **The key chain.** `jobs_dedup` keeps a job's key while it is queued,
+//! running or succeeded; only a dead job releases it (ADR-0016 C6
+//! amendment, unchanged here). A repository still `provisioning` whose job
+//! *succeeded* (a database restore, a manual state change) would therefore
+//! block its own key forever. [`reprovision`] then enqueues under
+//! `repository_provision:<repo>:after:<succeeded job id>`, and the current
+//! job of a repository is the end of that chain: start at the base key,
+//! follow `…:after:<id>` while the holder succeeded ([`CHAIN_CAP`] links).
+//! Doctor and `reprovision` read the chain with the same SQL.
 
 use std::time::Duration;
 
@@ -49,6 +59,33 @@ pub const PROVISIONING_STUCK_AFTER: Duration = Duration::from_secs(600);
 const REPORT_ROWS: i64 = 100;
 /// The largest page [`ready_ids`] returns.
 pub const READY_PAGE_MAX: i64 = 1000;
+/// At most this many provisioning repositories are classified per report
+/// (the oldest first); beyond them nothing is hidden: `provisioning` counts
+/// all of them (capped) and the report says `scanned`.
+const REPORT_SCAN: i64 = 10_000;
+/// At most this many links of the key chain are followed.
+pub const CHAIN_CAP: i32 = 16;
+
+/// The current provisioning job of the repository whose id is `{repo}` (an
+/// SQL expression): the end of the key chain (module docs), `(id, state)`
+/// of the last non-dead holder, no row when no job holds the base key.
+/// `$1` = [`PROVISION_JOB`], `$2` = `"repository_provision:"`. Every step
+/// is an equality lookup on `jobs_dedup`.
+fn chain_sql(repo: &str) -> String {
+    format!(
+        "WITH RECURSIVE chain(id, state, n) AS ( \
+             SELECT j.id, j.state, 1 FROM ONLY forge.jobs AS j \
+              WHERE j.kind = $1 AND j.dedup_key = $2 || ({repo})::text \
+                AND j.dedup_key IS NOT NULL AND j.state <> 'dead' \
+           UNION ALL \
+             SELECT j.id, j.state, c.n + 1 FROM chain AS c JOIN ONLY forge.jobs AS j \
+                 ON j.kind = $1 \
+                AND j.dedup_key = $2 || ({repo})::text || ':after:' || c.id::text \
+                AND j.dedup_key IS NOT NULL AND j.state <> 'dead' \
+              WHERE c.state = 'succeeded' AND c.n < {CHAIN_CAP}) \
+         SELECT chain.id, chain.state FROM chain ORDER BY chain.n DESC LIMIT 1"
+    )
+}
 
 /// The audit resource type of a repository's changes: its project
 /// (tables.toml; `forge.audited_change_present('project', 'project_id')`).
@@ -85,10 +122,20 @@ fn state_of(raw: &str, repo: i64) -> Result<RepositoryState, ForgeError> {
 /// first job is queued, running or succeeded (a dead one does not hold it:
 /// [`reprovision`] enqueues again).
 pub(crate) fn provision_job(repo: RepoId, request_id: &RequestId) -> Result<NewJob, ForgeError> {
+    provision_job_after(repo, None, request_id)
+}
+
+/// [`provision_job`] keyed after a succeeded holder of the key chain:
+/// `repository_provision:<repo>:after:<job>` (module docs).
+fn provision_job_after(
+    repo: RepoId,
+    after: Option<JobId>,
+    request_id: &RequestId,
+) -> Result<NewJob, ForgeError> {
     let kind = JobKind::parse(PROVISION_JOB).ok_or_else(|| constant("invalid_job_kind"))?;
     let timeout =
         JobTimeout::new(PROVISION_TIMEOUT).ok_or_else(|| constant("invalid_job_timeout"))?;
-    let dedup_key = jobs::DedupKey::parse(provision_dedup_key(repo)?.as_str())
+    let dedup_key = jobs::DedupKey::parse(provision_dedup_key(repo, after)?.as_str())
         .ok_or_else(|| constant("invalid_job_dedup_key"))?;
     Ok(NewJob {
         kind,
@@ -101,8 +148,18 @@ pub(crate) fn provision_job(repo: RepoId, request_id: &RequestId) -> Result<NewJ
     })
 }
 
-fn provision_dedup_key(repo: RepoId) -> Result<DedupKey, ForgeError> {
-    DedupKey::new(PROVISION_DEDUP_PREFIX, &[DedupPart::Id(repo.get())])
+fn provision_dedup_key(repo: RepoId, after: Option<JobId>) -> Result<DedupKey, ForgeError> {
+    match after {
+        None => DedupKey::new(PROVISION_DEDUP_PREFIX, &[DedupPart::Id(repo.get())]),
+        Some(job) => DedupKey::new(
+            PROVISION_DEDUP_PREFIX,
+            &[
+                DedupPart::Id(repo.get()),
+                DedupPart::Word("after"),
+                DedupPart::Id(job.get()),
+            ],
+        ),
+    }
 }
 
 /// The repository id of a provisioning job's payload `{"repo_id": <id>}`;
@@ -229,7 +286,24 @@ pub async fn mark_ready(
     ctx: &ChangeContext,
     repo: RepoId,
 ) -> Result<MarkReady, ForgeError> {
-    let mut tx = ChangeTx::begin(db, ctx).await?;
+    mark_ready_tx(repo, ChangeTx::begin(db, ctx).await?).await
+}
+
+/// [`mark_ready`] bounded by `timeout` up to COMMIT instead of the change
+/// default (30 s): the provisioning job passes what is left of its own
+/// timeout, so an overrun is `FG-DB-0002 reason=change_timeout` (retryable)
+/// rather than the job's generic timeout. COMMIT keeps its own bound.
+pub async fn mark_ready_within(
+    db: &Db,
+    ctx: &ChangeContext,
+    repo: RepoId,
+    timeout: Duration,
+) -> Result<MarkReady, ForgeError> {
+    let tx = ChangeTx::begin_within(db, ctx, timeout).await?;
+    mark_ready_tx(repo, tx).await
+}
+
+async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, ForgeError> {
     let (project_id, kind, state) = tx
         .step(|c| lock_repository(c, repo, "repositories.mark_ready.lock"))
         .await?;
@@ -237,17 +311,26 @@ pub async fn mark_ready(
         // Dropping the transaction rolls it back: nothing was written.
         return Ok(MarkReady::AlreadyReady { project_id });
     }
-    tx.step(|c| async move {
-        sqlx::query(
-            "UPDATE forge.repositories SET state = 'ready', ready_at = now() \
-             WHERE id = $1 AND state = 'provisioning'",
-        )
-        .bind(repo.get())
-        .execute(c)
-        .await
-        .map_err(|e| query_error("repositories.mark_ready", e))
-    })
-    .await?;
+    let updated = tx
+        .step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.repositories SET state = 'ready', ready_at = now() \
+                 WHERE id = $1 AND state = 'provisioning'",
+            )
+            .bind(repo.get())
+            .execute(c)
+            .await
+            .map_err(|e| query_error("repositories.mark_ready", e))
+        })
+        .await?
+        .rows_affected();
+    if updated != 1 {
+        // The row is locked and was `provisioning`: anything else is a bug.
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "unexpected_row_count")
+            .with_context("rows", updated)
+            .with_context("repo_id", repo.get()));
+    }
     let details = AuditDetails::RepositoryCreated {
         project_id,
         repository_id: repo,
@@ -328,20 +411,36 @@ impl ProvisionJobState {
     }
 }
 
-/// A repository still `provisioning`.
+/// Why a repository is stuck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StuckReason {
+    /// No queued or running job: dead, missing, or the chain ends at a
+    /// succeeded job although the repository is not ready (a database
+    /// restore or a manual change).
+    JobNotLive,
+    /// The job is queued or running, but the repository waits longer than
+    /// the threshold (usually: no worker runs).
+    TooOld,
+}
+
+impl StuckReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::JobNotLive => "job_not_live",
+            Self::TooOld => "too_old",
+        }
+    }
+}
+
+/// A stuck repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Provisioning {
     pub repo_id: RepoId,
     pub project_id: ProjectId,
     pub age_ms: i64,
+    /// The state of the end of its key chain.
     pub job: ProvisionJobState,
-}
-
-impl Provisioning {
-    /// Stuck: no live job, or older than the threshold.
-    fn stuck(&self, threshold_ms: i64) -> bool {
-        !self.job.is_live() || self.age_ms > threshold_ms
-    }
+    pub reason: StuckReason,
 }
 
 /// What `forge doctor` reports about provisioning (`repositories.provisioning`).
@@ -349,47 +448,73 @@ impl Provisioning {
 pub struct ProvisioningReport {
     /// Repositories in `provisioning` (capped at `COUNT_CAP + 1`).
     pub provisioning: i64,
-    /// The stuck ones among the [`REPORT_ROWS`] oldest, oldest first.
+    /// Stuck ones among the classified (the [`REPORT_SCAN`] oldest), by reason.
+    pub job_not_live: i64,
+    pub too_old: i64,
+    /// At most [`REPORT_ROWS`] stuck repositories: `job_not_live` first,
+    /// then `too_old`, each oldest first.
     pub stuck: Vec<Provisioning>,
+    /// More repositories are provisioning than were classified.
+    pub truncated: bool,
     /// The threshold the report was made with.
     pub stuck_after: Duration,
 }
 
 impl ProvisioningReport {
-    /// `FG-REPO-0012` for the oldest stuck repository: `reason=job_not_live`
-    /// (its job is dead, missing or succeeded) or `too_old` (still queued or
-    /// running, but waiting longer than the threshold).
+    /// `FG-REPO-0012` for the first stuck repository (`job_not_live` before
+    /// `too_old`, oldest first), with the per-reason counts.
     pub fn check(&self) -> Result<(), ForgeError> {
-        let Some(oldest) = self.stuck.first() else {
+        let Some(first) = self.stuck.first() else {
             return Ok(());
         };
-        let reason = if oldest.job.is_live() {
-            "too_old"
-        } else {
-            "job_not_live"
-        };
-        Err(ForgeError::new(ErrorCode::RepositoryProvisioningStuck)
-            .with_context("reason", reason)
-            .with_context("stuck", self.stuck.len())
-            .with_context("repo_id", oldest.repo_id.get())
-            .with_context("project_id", oldest.project_id.get())
-            .with_context("age_ms", oldest.age_ms)
-            .with_context("job_state", oldest.job.as_str())
-            .with_context("threshold_ms", self.stuck_after.as_millis()))
+        let mut err = ForgeError::new(ErrorCode::RepositoryProvisioningStuck)
+            .with_context("reason", first.reason.as_str())
+            .with_context(
+                "stuck",
+                shown(self.job_not_live.saturating_add(self.too_old)),
+            )
+            .with_context("job_not_live", self.job_not_live)
+            .with_context("too_old", self.too_old)
+            .with_context("repo_id", first.repo_id.get())
+            .with_context("project_id", first.project_id.get())
+            .with_context("age_ms", first.age_ms)
+            .with_context("job_state", first.job.as_str())
+            .with_context("threshold_ms", self.stuck_after.as_millis());
+        if first.job == ProvisionJobState::Succeeded {
+            err = err.with_context(
+                "detail",
+                "its job succeeded but the repository is not ready (database restore or \
+                 manual change): `forge admin repo reprovision` enqueues a new one",
+            );
+        }
+        if self.truncated {
+            err = err.with_context("truncated", true);
+        }
+        Err(err)
     }
 
-    /// `"<n> provisioning"` for the ok line.
+    /// `"<n> provisioning, none stuck"` for the ok line.
     pub fn summary(&self) -> String {
-        format!("{} provisioning, none stuck", shown(self.provisioning))
+        let more = if self.truncated {
+            format!(" (the oldest {REPORT_SCAN} checked)")
+        } else {
+            String::new()
+        };
+        format!(
+            "{} provisioning, none stuck{more}",
+            shown(self.provisioning)
+        )
     }
 }
 
-/// The repositories in `provisioning` and the stuck ones among the oldest
-/// [`REPORT_ROWS`] (older than `stuck_after`, or without a queued / running
-/// provisioning job), read on the read pool; `None` before the D4 schema.
-/// The job is found by its dedup key through the live-key index
-/// (`jobs_dedup`: queued, running and succeeded jobs), so a dead job is
-/// seen as "no live job" without scanning the queue.
+type StuckRow = (i64, i64, i64, Option<String>, String, i64);
+
+/// The repositories in `provisioning` and the stuck ones (read pool;
+/// `None` before the D4 schema). The [`REPORT_SCAN`] oldest are classified
+/// in SQL by the end of their key chain (module docs): no queued / running
+/// job → `job_not_live`, else older than `stuck_after` → `too_old`; the
+/// counts per reason and the first [`REPORT_ROWS`] (`job_not_live` first,
+/// each oldest first) come back.
 pub async fn provisioning_report(
     db: &Db,
     stuck_after: Duration,
@@ -412,35 +537,63 @@ pub async fn provisioning_report(
         .fetch_one(&mut *conn)
         .await
         .map_err(|e| read_query_error("repositories.provisioning_count", e))?;
-        let rows: Vec<(i64, i64, i64, Option<String>)> = sqlx::query_as(
-            "SELECT r.id, r.project_id, \
-                    (EXTRACT(epoch FROM pg_catalog.now() - r.created_at) * 1000)::bigint, \
-                    (SELECT j.state FROM ONLY forge.jobs AS j \
-                      WHERE j.kind = $1 AND j.dedup_key = $2 || r.id::text \
-                        AND j.dedup_key IS NOT NULL AND j.state <> 'dead' LIMIT 1) \
-             FROM forge.repositories AS r WHERE r.state = 'provisioning' \
-             ORDER BY r.created_at, r.id LIMIT $3",
-        )
-        .bind(PROVISION_JOB)
-        .bind(format!("{PROVISION_DEDUP_PREFIX}:"))
-        .bind(REPORT_ROWS)
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(|e| read_query_error("repositories.provisioning_report", e))?;
+        let sql = format!(
+            "WITH p AS ( \
+                 SELECT r.id, r.project_id, \
+                        (EXTRACT(epoch FROM pg_catalog.now() - r.created_at) * 1000)::bigint \
+                          AS age_ms, \
+                        h.state AS job \
+                 FROM (SELECT id, project_id, created_at FROM forge.repositories \
+                        WHERE state = 'provisioning' ORDER BY created_at, id LIMIT $4) AS r \
+                 LEFT JOIN LATERAL ({chain}) AS h ON true), \
+             s AS ( \
+                 SELECT p.*, CASE WHEN p.job IS NULL OR p.job NOT IN ('queued', 'running') \
+                                  THEN 'job_not_live' \
+                                  WHEN p.age_ms > $3 THEN 'too_old' END AS reason \
+                 FROM p) \
+             SELECT s.id, s.project_id, s.age_ms, s.job, s.reason, \
+                    pg_catalog.count(*) OVER (PARTITION BY s.reason) \
+             FROM s WHERE s.reason IS NOT NULL \
+             ORDER BY (s.reason = 'job_not_live') DESC, s.age_ms DESC, s.id LIMIT $5",
+            chain = chain_sql("r.id")
+        );
         let threshold_ms = i64::try_from(stuck_after.as_millis()).unwrap_or(i64::MAX);
-        let stuck = rows
-            .into_iter()
-            .map(|(id, project, age_ms, job)| Provisioning {
+        let rows: Vec<StuckRow> = sqlx::query_as(&sql)
+            .bind(PROVISION_JOB)
+            .bind(format!("{PROVISION_DEDUP_PREFIX}:"))
+            .bind(threshold_ms)
+            .bind(REPORT_SCAN)
+            .bind(REPORT_ROWS)
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| read_query_error("repositories.provisioning_report", e))?;
+        let (mut job_not_live, mut too_old) = (0, 0);
+        let mut stuck = Vec::with_capacity(rows.len());
+        for (id, project, age_ms, job, reason, count) in rows {
+            let reason = match reason.as_str() {
+                "job_not_live" => {
+                    job_not_live = count;
+                    StuckReason::JobNotLive
+                }
+                _ => {
+                    too_old = count;
+                    StuckReason::TooOld
+                }
+            };
+            stuck.push(Provisioning {
                 repo_id: RepoId::new(id),
                 project_id: ProjectId::new(project),
                 age_ms,
                 job: ProvisionJobState::parse(job.as_deref()),
-            })
-            .filter(|p| p.stuck(threshold_ms))
-            .collect();
+                reason,
+            });
+        }
         Ok(Some(ProvisioningReport {
             provisioning,
+            job_not_live,
+            too_old,
             stuck,
+            truncated: provisioning > REPORT_SCAN,
             stuck_after,
         }))
     })
@@ -475,23 +628,52 @@ pub async fn ready_ids(
 #[must_use = "AlreadyLive wrote nothing; callers report it differently"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reprovisioned {
-    /// A new provisioning job was enqueued (audited).
-    Queued { project_id: ProjectId, job: JobId },
-    /// A queued, running or succeeded provisioning job holds the key:
-    /// nothing was written.
-    AlreadyLive { project_id: ProjectId },
+    /// A new provisioning job was enqueued (audited). `after`: the
+    /// succeeded job whose key it follows (module docs, the key chain).
+    Queued {
+        project_id: ProjectId,
+        job: JobId,
+        after: Option<JobId>,
+    },
+    /// The current job of the key chain is queued or running: nothing was
+    /// written.
+    AlreadyLive {
+        project_id: ProjectId,
+        job: JobId,
+        state: ProvisionJobState,
+    },
+}
+
+/// The end of `repo`'s key chain, read in the change (under its row lock).
+async fn current_job(
+    conn: &mut PgConnection,
+    repo: RepoId,
+) -> Result<Option<(JobId, ProvisionJobState)>, ForgeError> {
+    let row: Option<(i64, String)> = sqlx::query_as(&chain_sql("$3"))
+        .bind(PROVISION_JOB)
+        .bind(format!("{PROVISION_DEDUP_PREFIX}:"))
+        .bind(repo.get())
+        .fetch_optional(conn)
+        .await
+        .map_err(|e| query_error("repositories.reprovision.job", e))?;
+    Ok(row.map(|(id, state)| (JobId::new(id), ProvisionJobState::parse(Some(&state)))))
 }
 
 /// Enqueue the provisioning job of `repo` again (`forge admin repo
-/// reprovision`, after its job died or vanished). The repository row is
-/// locked; it must still be `provisioning`, else `FG-REPO-0014
-/// reason=repository_ready`. The job (dedup `repository_provision:<id>`,
-/// `ctx`'s request id as origin) and a `repository.reprovision_requested`
-/// audit row on the project are one change; when a live job holds the key
-/// nothing is written ([`Reprovisioned::AlreadyLive`]).
+/// reprovision`). The repository row is locked; it must still be
+/// `provisioning`, else `FG-REPO-0014 reason=repository_ready`. Then, by
+/// the current job of its key chain (module docs): queued / running →
+/// [`Reprovisioned::AlreadyLive`] (nothing written); none (dead or never
+/// there) → a new job with that link's key; succeeded (a restore or a
+/// manual change left the repository behind) → a new job keyed
+/// `repository_provision:<repo>:after:<that job>`. The job and a
+/// `repository.reprovision_requested` audit row on the project (with the
+/// succeeded holder, if any) are one change. Concurrent calls serialize
+/// on the row lock, so they enqueue once.
 ///
 /// Errors: `FG-REPO-0005` (`resource=repository`) for an unknown id,
-/// `FG-REPO-0014 repository_ready`, the change's own.
+/// `FG-REPO-0014 repository_ready`, `FG-SYS-0001 unexpected_job_dedup`,
+/// the change's own.
 pub async fn reprovision(
     db: &Db,
     ctx: &ChangeContext,
@@ -506,15 +688,32 @@ pub async fn reprovision(
             .with_context("reason", "repository_ready")
             .with_context("repo_id", repo.get()));
     }
-    let job = provision_job(repo, &ctx.request_id)?;
+    let after = match tx.step(|c| current_job(c, repo)).await? {
+        None => None,
+        Some((job, state)) if state.is_live() => {
+            return Ok(Reprovisioned::AlreadyLive {
+                project_id,
+                job,
+                state,
+            })
+        }
+        Some((job, _succeeded)) => Some(job),
+    };
+    let job = provision_job_after(repo, after, &ctx.request_id)?;
     let job = match tx.enqueue_job(&job).await? {
         Enqueued::Queued(id) => id,
-        // Dropping the transaction rolls it back: nothing was written.
-        Enqueued::Deduped => return Ok(Reprovisioned::AlreadyLive { project_id }),
+        // Under the row lock the chain said the key is free: a holder now
+        // means the chain is longer than CHAIN_CAP or a writer skipped the lock.
+        Enqueued::Deduped => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "unexpected_job_dedup")
+                .with_context("repo_id", repo.get()))
+        }
     };
     let details = AuditDetails::RepositoryReprovisionRequested {
         repository_id: repo,
         job_id: job.get(),
+        after_succeeded_job: after.map(JobId::get),
     };
     let mut record = ChangeRecord::audit_only(&details, RESOURCE, project_id.get());
     // The event scope rule: an audit row on a project names that project.
@@ -522,7 +721,11 @@ pub async fn reprovision(
     tx.commit(record)
         .await?
         .require_recorded(details.action())?;
-    Ok(Reprovisioned::Queued { project_id, job })
+    Ok(Reprovisioned::Queued {
+        project_id,
+        job,
+        after,
+    })
 }
 
 #[cfg(test)]
@@ -564,51 +767,67 @@ mod tests {
     }
 
     #[test]
-    fn the_report_names_the_oldest_stuck_repository() {
-        let report = |stuck: Vec<Provisioning>| ProvisioningReport {
+    fn a_job_after_a_succeeded_holder_names_it_in_its_key() {
+        let request = RequestId::parse("req-8").expect("request id");
+        let job = provision_job_after(RepoId::new(42), Some(JobId::new(7)), &request).expect("job");
+        assert_eq!(
+            job.dedup_key.as_ref().map(jobs::DedupKey::as_str),
+            Some("repository_provision:42:after:7")
+        );
+        assert_eq!(job.payload, serde_json::json!({ "repo_id": 42 }));
+    }
+
+    #[test]
+    fn the_report_names_the_first_stuck_repository_with_the_counts() {
+        let report = |stuck: Vec<Provisioning>, job_not_live, too_old| ProvisioningReport {
             provisioning: 3,
+            job_not_live,
+            too_old,
             stuck,
+            truncated: false,
             stuck_after: PROVISIONING_STUCK_AFTER,
         };
-        assert!(report(Vec::new()).check().is_ok());
+        assert!(report(Vec::new(), 0, 0).check().is_ok());
         let dead = Provisioning {
             repo_id: RepoId::new(5),
             project_id: ProjectId::new(4),
             age_ms: 1_000,
             job: ProvisionJobState::None,
+            reason: StuckReason::JobNotLive,
         };
-        let err = report(vec![dead.clone()]).check().expect_err("stuck");
+        let err = report(vec![dead.clone()], 1, 2).check().expect_err("stuck");
         assert_eq!(err.code(), ErrorCode::RepositoryProvisioningStuck);
         let text = err.to_string();
         for part in [
             "reason=job_not_live",
+            "stuck=3",
+            "job_not_live=1",
+            "too_old=2",
             "repo_id=5",
             "project_id=4",
             "job_state=none",
         ] {
             assert!(text.contains(part), "{part}: {text}");
         }
+        assert!(!text.contains("detail="), "{text}");
+        let succeeded = Provisioning {
+            job: ProvisionJobState::Succeeded,
+            ..dead.clone()
+        };
+        let text = report(vec![succeeded], 1, 0)
+            .check()
+            .expect_err("stuck")
+            .to_string();
+        assert!(text.contains("job_state=succeeded"), "{text}");
+        assert!(text.contains("database restore or manual change"), "{text}");
         let old = Provisioning {
             job: ProvisionJobState::Queued,
             age_ms: 700_000,
+            reason: StuckReason::TooOld,
             ..dead
         };
-        let err = report(vec![old]).check().expect_err("stuck");
+        let err = report(vec![old], 0, 1).check().expect_err("stuck");
         assert!(err.to_string().contains("reason=too_old"), "{err}");
-        // Live and young is not stuck; live and old is; dead is at any age.
-        let young = Provisioning {
-            repo_id: RepoId::new(1),
-            project_id: ProjectId::new(1),
-            age_ms: 10,
-            job: ProvisionJobState::Running,
-        };
-        assert!(!young.stuck(600_000));
-        assert!(young.stuck(5));
-        assert!(Provisioning {
-            job: ProvisionJobState::Succeeded,
-            ..young
-        }
-        .stuck(600_000));
     }
 }
 

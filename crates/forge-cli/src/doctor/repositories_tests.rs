@@ -135,3 +135,54 @@ async fn a_ready_repository_without_storage_is_reported() {
     assert_eq!(detail(&storage), ("skip", "storage root unavailable"));
     t.drop_now().await;
 }
+
+/// A ready repository whose path is rejected (a file where its directory
+/// should be) is counted as `other`, next to the missing ones.
+#[tokio::test]
+async fn a_rejected_storage_path_is_counted_as_other() {
+    let t = FreshDb::migrated().await;
+    let (_dir, root) = root();
+    let a = project(&t, "sol").await;
+    let b = project(&t, "tia").await;
+    ready(&t, a.repository_id).await;
+    ready(&t, b.repository_id).await;
+    let file = root.path_for(a.repository_id);
+    std::fs::create_dir_all(file.parent().expect("shard")).expect("shard");
+    std::fs::write(&file, b"not a repository").expect("a file in its place");
+    // b is missing: FG-REPO-0002 comes first, both counts with it.
+    let check = storage_check(&t.db, &root, STORAGE_CHECK_CAP).await;
+    let err = failure(&check);
+    assert_eq!(err.code(), ErrorCode::StorageMissing);
+    let text = err.to_string();
+    for part in ["missing=1", "other=1", "checked=2"] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    // b restored: the rejection is reported with its own code.
+    std::fs::create_dir_all(root.path_for(b.repository_id)).expect("b's directory");
+    let check = storage_check(&t.db, &root, STORAGE_CHECK_CAP).await;
+    let err = failure(&check);
+    assert_eq!(err.code(), ErrorCode::StoragePathRejected);
+    let text = err.to_string();
+    for part in ["missing=0", "other=1", "checked=2"] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    t.drop_now().await;
+}
+
+/// The walk is bounded as a whole: out of time, it fails with FG-REPO-0003
+/// `check_timeout` and how far it got, never an ok.
+#[tokio::test]
+async fn a_storage_walk_out_of_time_fails_with_check_timeout() {
+    let t = FreshDb::migrated().await;
+    let (_dir, root) = root();
+    let a = project(&t, "uma").await;
+    ready(&t, a.repository_id).await;
+    let check = storage_check_within(&t.db, &root, STORAGE_CHECK_CAP, Duration::ZERO).await;
+    let err = failure(&check);
+    assert_eq!(err.code(), ErrorCode::StorageIoFailed);
+    let text = err.to_string();
+    for part in ["reason=check_timeout", "checked=0"] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    t.drop_now().await;
+}

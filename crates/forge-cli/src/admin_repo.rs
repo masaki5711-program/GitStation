@@ -34,9 +34,17 @@ pub(crate) async fn reprovision_with(
 ) -> Result<String, ForgeError> {
     let repo = RepoId::new(repo_id);
     let done = repositories::reprovision(db, &context(request_id), repo).await?;
-    let (project_id, job_id, outcome) = match done {
-        Reprovisioned::Queued { project_id, job } => (project_id, Some(job.get()), "queued"),
-        Reprovisioned::AlreadyLive { project_id } => (project_id, None, "already_live"),
+    let (project_id, job, after, outcome, job_state) = match done {
+        Reprovisioned::Queued {
+            project_id,
+            job,
+            after,
+        } => (project_id, job, after, "queued", "queued"),
+        Reprovisioned::AlreadyLive {
+            project_id,
+            job,
+            state,
+        } => (project_id, job, None, "already_live", state.as_str()),
     };
     tracing::info!(
         target: "forge_cli",
@@ -44,19 +52,29 @@ pub(crate) async fn reprovision_with(
         request_id = %request_id,
         repo_id,
         project_id = project_id.get(),
-        job_id,
+        job_id = job.get(),
+        after_job_id = after.map(|a| a.get()),
         outcome,
+        job_state,
         "repository reprovision"
     );
-    Ok(match done {
-        Reprovisioned::Queued { job, .. } => format!(
+    Ok(match (done, after) {
+        (Reprovisioned::Queued { .. }, None) => format!(
             "repository {repo_id}: provisioning job {} queued; a running `forge worker` \
              picks it up (check with `forge doctor`, repositories.provisioning)\n",
             job.get()
         ),
-        Reprovisioned::AlreadyLive { .. } => format!(
-            "repository {repo_id}: a provisioning job is already queued or running \
-             (nothing changed); make sure a `forge worker` runs\n"
+        (Reprovisioned::Queued { .. }, Some(after)) => format!(
+            "repository {repo_id}: provisioning job {} queued after job {} (which succeeded \
+             without the repository becoming ready: a database restore or a manual change); \
+             a running `forge worker` picks it up\n",
+            job.get(),
+            after.get()
+        ),
+        (Reprovisioned::AlreadyLive { .. }, _) => format!(
+            "repository {repo_id}: provisioning job {} is already {job_state} \
+             (nothing changed); make sure a `forge worker` runs\n",
+            job.get()
         ),
     })
 }

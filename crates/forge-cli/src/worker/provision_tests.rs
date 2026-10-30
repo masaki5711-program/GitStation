@@ -201,3 +201,195 @@ async fn an_already_ready_repository_is_not_touched_again() {
     );
     t.drop_now().await;
 }
+
+// ── the retry classification and the run's deadline (review of 198df93) ──
+
+mod classification {
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    use forge_core::ids::ProjectId;
+    use forge_db::jobs::Retry;
+    use forge_db::repositories::MarkReady;
+    use forge_errors::{ErrorCode, ForgeError};
+    use forge_git::Provisioned;
+
+    use super::super::{db_failure, outcome, storage_failure, Deadlines, COMMIT_RESERVE};
+
+    #[test]
+    fn transient_storage_failures_retry_and_the_rest_dead_letter() {
+        for code in [
+            ErrorCode::GitTimeout,
+            ErrorCode::GitBusy,
+            ErrorCode::GitUnavailable,
+            ErrorCode::GitProcessFailed,
+            ErrorCode::StorageIoFailed,
+        ] {
+            assert_eq!(
+                storage_failure(ForgeError::new(code)).retry,
+                Retry::Backoff,
+                "{code:?}"
+            );
+        }
+        for code in [
+            ErrorCode::RepoPathOccupied,
+            ErrorCode::StoragePathRejected,
+            ErrorCode::ConfigInvalid,
+            ErrorCode::Internal,
+        ] {
+            assert_eq!(
+                storage_failure(ForgeError::new(code)).retry,
+                Retry::Never,
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreachable_database_or_a_failed_query_retries_and_the_rest_dead_letter() {
+        for code in [ErrorCode::DbUnavailable, ErrorCode::DbQueryFailed] {
+            assert_eq!(
+                db_failure(ForgeError::new(code)).retry,
+                Retry::Backoff,
+                "{code:?}"
+            );
+        }
+        for code in [
+            ErrorCode::NotFound,
+            ErrorCode::ChangeRejected,
+            ErrorCode::AuditMissing,
+            ErrorCode::Internal,
+        ] {
+            assert_eq!(
+                db_failure(ForgeError::new(code)).retry,
+                Retry::Never,
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_concurrent_mark_ready_is_reported_as_already_ready() {
+        let project_id = ProjectId::new(1);
+        let created = Provisioned::Created(PathBuf::from("/r/1.git"));
+        let adopted = Provisioned::Adopted(PathBuf::from("/r/1.git"));
+        assert_eq!(
+            outcome(&created, MarkReady::Marked { project_id }),
+            "created"
+        );
+        assert_eq!(
+            outcome(&adopted, MarkReady::Marked { project_id }),
+            "adopted"
+        );
+        // Another run marked it between this run's read and its mark_ready.
+        for made in [&created, &adopted] {
+            assert_eq!(
+                outcome(made, MarkReady::AlreadyReady { project_id }),
+                "already_ready"
+            );
+        }
+    }
+
+    #[test]
+    fn the_storage_work_gets_half_the_job_and_mark_ready_the_rest_before_commit() {
+        let started = Instant::now();
+        let d = Deadlines::new(started, Duration::from_secs(60));
+        assert_eq!(d.storage, started + Duration::from_secs(30));
+        let mark = d.mark_ready();
+        assert!(mark <= Duration::from_secs(60) - COMMIT_RESERVE, "{mark:?}");
+        assert!(mark >= Duration::from_secs(47), "{mark:?}");
+        // A tiny timeout still leaves mark_ready its minimum.
+        let tiny = Deadlines::new(started, Duration::from_millis(100));
+        assert_eq!(tiny.mark_ready(), Duration::from_secs(1));
+    }
+}
+
+/// A repository id no row has: the handler's lookup is FG-REPO-0005, which
+/// no retry can fix — dead at once.
+#[tokio::test]
+async fn a_job_for_an_unknown_repository_is_dead_lettered_with_repo_0005() {
+    use forge_db::jobs::{enqueue, JobKind, JobTimeout, MaxAttempts, NewJob};
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let job = NewJob {
+        kind: JobKind::parse(repositories::PROVISION_JOB).expect("kind"),
+        payload: serde_json::json!({ "repo_id": 987_654 }),
+        max_attempts: MaxAttempts::DEFAULT,
+        timeout: JobTimeout::new(repositories::PROVISION_TIMEOUT).expect("timeout"),
+        dedup_key: None,
+        origin_request_id: RequestId::parse("req-unknown-repo").expect("id"),
+        origin_event_seq: None,
+    };
+    let _ = enqueue(&t.db, &job).await.expect("enqueue");
+    let (ran, _events) = run_once(&runner(&t, &storage)).await;
+    assert!(matches!(ran, Ran::Dead { .. }), "{ran:?}");
+    let health = jobs::health(&t.db)
+        .await
+        .expect("health")
+        .expect("migrated");
+    let dead = health.newest_dead.expect("a dead job");
+    assert_eq!(
+        (dead.attempts, dead.last_error_code.as_str()),
+        (1, "FG-REPO-0005")
+    );
+    t.drop_now().await;
+}
+
+/// A git that never answers is cut at the run's storage deadline (half the
+/// job's timeout) with its own code, FG-GIT-0002, logged once by the
+/// runner, and the job is retried — not left to the runner's anonymous
+/// timeout.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hanging_git_is_retried_with_its_own_code() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::{Duration, Instant};
+
+    use forge_git::{Git, GitConfig};
+
+    let t = FreshDb::migrated().await;
+    let (_root, mut storage) = storage();
+    let bin = tempfile::tempdir().expect("bin dir");
+    let fake = bin.path().join("git");
+    // `exec`: the killed child is the sleep itself (no orphan holding the pipes).
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").expect("fake git");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    storage.git = Git::new(GitConfig::new(&fake, storage.root.path()));
+    let p = project(&t, "max").await;
+    // A 2 s job: the storage work gets 1 s.
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET timeout_ms = 2000 WHERE id = {}",
+        p.provision_job.get()
+    ))
+    .await;
+    let logs = Captured::default();
+    let guard = logs.install();
+    let started = Instant::now();
+    let ran = runner(&t, &storage)
+        .run_once()
+        .await
+        .expect("claim")
+        .expect("a job ran");
+    drop(guard);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "cut before the job timeout"
+    );
+    let Ran::Retrying { failure, .. } = &ran else {
+        panic!("{ran:?}");
+    };
+    assert_eq!(
+        failure.code(),
+        forge_errors::ErrorCode::GitTimeout,
+        "{failure}"
+    );
+    let failures = logs.failures();
+    let codes: Vec<_> = failures
+        .iter()
+        .map(|e| e["fields"]["error_code"].clone())
+        .collect();
+    assert!(codes.contains(&Value::from("FG-GIT-0002")), "{failures:?}");
+    assert_eq!(state(&t, p.repository_id).await, "provisioning");
+    assert!(!storage.root.path_for(p.repository_id).exists());
+    t.drop_now().await;
+}

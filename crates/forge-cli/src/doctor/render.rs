@@ -80,6 +80,9 @@ const SAFE_CONTEXT: &[&str] = &[
     "missing",
     "checked",
     "truncated",
+    "other",
+    "job_not_live",
+    "too_old",
     // ── end D4 MR3b ──
 ];
 

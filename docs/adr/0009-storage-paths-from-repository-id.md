@@ -82,3 +82,13 @@ URL は DB で `RepoId` に解決してからパスを作り、URL の文字列�
   （無ければ `FG-REPO-0002`、ほかの拒否はそのコード）。それを超えた分は確かめず、`truncated` で知らせる（黙って省かない）。
   `repositories.provisioning` は `provisioning` のまま 10 分を超えたもの、または生きたジョブの無いものを `FG-REPO-0012`（alert）で知らせる。
 - 作りかけの一時ディレクトリ `.tmp-*` は今回も自動では消さない。探し方と消してよい条件は Runbook `repository-provisioning.md`。
+- レビューを受けて次を加えた（同日）。
+  - **1 回の実行に 1 つの期限**: 1 回 20 秒の git を何度か呼び、ファイル操作と `mark_ready`（最大 30 秒）も足すと、ジョブの
+    60 秒を超えうる。そのときは実行器の一般的な時間切れになり、どの段で止まったかが分からなかった。作成のジョブはジョブの時間切れから
+    期限を決める: 保存先の作業は前半（60 秒なら 30 秒）で `init_bare_or_adopt_until(…, deadline)` を使う。各 git の呼び出しは
+    残り時間まで（`FG-GIT-0002`）、ファイル操作は残り時間の中で行い（`std::fs` のものは blocking のスレッドで）、超えたら
+    `FG-REPO-0003`（`operation`、`reason=deadline`）。どちらもやり直す。`mark_ready_within` には残りから COMMIT の分（12 秒）を
+    引いた時間（最低 1 秒）を渡す（超えたら `FG-DB-0002 reason=change_timeout`、やり直す）。
+  - doctor の `repositories.storage` は `stat` を blocking のスレッドで行い、全体を 60 秒で打ち切る（`FG-REPO-0003
+    operation=doctor_storage reason=check_timeout`）。`missing` と並べて `other`（リンク、ファイル、I/O）の件数を出す。
+    `ready` のリポジトリのディレクトリが消えたことを見つけるのはこの検査だけである。

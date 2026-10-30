@@ -93,7 +93,13 @@ pub enum AuditDetails {
     /// `repository.reprovision_requested` (D4 MR3b, audit-only): an
     /// operator enqueued the provisioning job again (`forge admin repo
     /// reprovision`) for a repository still `provisioning`.
-    RepositoryReprovisionRequested { repository_id: RepoId, job_id: i64 },
+    /// `after_succeeded_job`: the succeeded job that held the key (the new
+    /// job is keyed after it); `None` when no job held it (dead or missing).
+    RepositoryReprovisionRequested {
+        repository_id: RepoId,
+        job_id: i64,
+        after_succeeded_job: Option<i64>,
+    },
     // ── end D4 MR3b ──
 }
 
@@ -153,7 +159,8 @@ impl AuditDetails {
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
     /// RepositoryCreated `{"project_id","repository_id","kind"}`,
-    /// RepositoryReprovisionRequested `{"repository_id","job_id"}`.
+    /// RepositoryReprovisionRequested `{"repository_id","job_id","holder_job_id",
+    /// "holder_state"}` (`holder_state` = `succeeded` with its id, or `none`).
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -256,9 +263,12 @@ impl AuditDetails {
             Self::RepositoryReprovisionRequested {
                 repository_id,
                 job_id,
+                after_succeeded_job,
             } => serde_json::json!({
                 "repository_id": repository_id.get(),
                 "job_id": job_id,
+                "holder_job_id": after_succeeded_job,
+                "holder_state": if after_succeeded_job.is_some() { "succeeded" } else { "none" },
             }),
             // ── end D4 MR3b ──
         }
