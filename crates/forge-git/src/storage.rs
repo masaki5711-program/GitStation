@@ -277,34 +277,49 @@ impl StorageRoot {
             .path(dir)
             .output()
             .await?;
-        configure(git, dir, hooks).await?;
+        let config = dir.join("config");
+        configure(git, &config, hooks).await?;
         // Written last: a marked repository is a fully configured one.
-        git.command("config")
-            .repo(dir)
-            .arg(PROVISION_TOKEN_KEY)
-            .arg_owned(token.hyphenated().to_string())
-            .output()
-            .await?;
-        Ok(())
+        set_config(
+            git,
+            &config,
+            PROVISION_TOKEN_KEY,
+            &token.hyphenated().to_string(),
+        )
+        .await
     }
 }
 
-/// Apply the server-side settings (and the hooks path) to `dir`. Idempotent:
-/// adoption runs it again on an existing repository.
-async fn configure(git: &Git, dir: &Path, hooks: Option<&str>) -> Result<(), ForgeError> {
+/// Apply the server-side settings (and the hooks path) to the repository
+/// config file `config` (absolute). Idempotent: adoption runs it again on an
+/// existing repository.
+async fn configure(git: &Git, config: &Path, hooks: Option<&str>) -> Result<(), ForgeError> {
     let settings = REPO_SETTINGS
         .iter()
         .copied()
         .chain(hooks.map(|h| ("core.hooksPath", h)));
     for (key, value) in settings {
-        git.command("config")
-            .repo(dir)
-            .arg_owned(key)
-            .arg_owned(value)
-            .output()
-            .await?;
+        set_config(git, config, key, value).await?;
     }
     Ok(())
+}
+
+/// `git config --file <config> <key> <value>`: writes exactly that file (no
+/// repository discovery, no `GIT_DIR`); callers check it is a regular file.
+async fn set_config(
+    git: &Git,
+    config: &Path,
+    key: &'static str,
+    value: &str,
+) -> Result<(), ForgeError> {
+    git.command("config")
+        .arg("--file")
+        .arg_owned(config)
+        .arg(key)
+        .arg_owned(value)
+        .output()
+        .await
+        .map(|_| ())
 }
 
 /// A lossy or relative hooks path would point git at a directory that does
@@ -320,6 +335,26 @@ fn hooks_value(hooks_path: Option<&Path>) -> Result<Option<String>, ForgeError> 
                 .with_context("reason", "must_be_absolute_utf8")),
         },
     }
+}
+
+/// Whether a provisioning job should retry after `err` from
+/// [`StorageRoot::init_bare`] / [`StorageRoot::init_bare_or_adopt`].
+///
+/// Retryable (transient, nothing left at the final path that a retry could
+/// not adopt): git timeout / busy / unavailable, storage I/O failures, and a
+/// git failure while *creating* (the temporary directory is removed). Every
+/// git failure on an *existing* directory is reported as `FG-REPO-0004`
+/// with `adopt_refused`, which — like a rejected path or an invalid hooks
+/// path — needs an operator and is not retryable.
+pub fn provision_error_is_retryable(err: &ForgeError) -> bool {
+    matches!(
+        err.code(),
+        ErrorCode::GitTimeout
+            | ErrorCode::GitBusy
+            | ErrorCode::GitUnavailable
+            | ErrorCode::GitProcessFailed
+            | ErrorCode::StorageIoFailed
+    )
 }
 
 fn occupied(id: RepoId, path: &Path) -> ForgeError {
@@ -339,3 +374,7 @@ mod tests;
 #[cfg(test)]
 #[path = "storage_adopt_tests.rs"]
 mod adopt_tests;
+
+#[cfg(test)]
+#[path = "storage_adopt_hardening_tests.rs"]
+mod adopt_hardening_tests;

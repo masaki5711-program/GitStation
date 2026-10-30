@@ -45,14 +45,29 @@ phases 9–10.
   (`Created(path)` | `Adopted(path)`, `.path()` / `.into_path()`) — the
   idempotent form for the provisioning job (ADR-0009 amendment, D4). Adopts an
   existing path only when it is a real directory under the root (no symlink),
-  its `config` is a regular file, its `forge.provisionToken` equals `token`
-  and it is bare; adoption re-applies the settings and `core.hooksPath`.
-  Anything else stays `FG-REPO-0004` with `adopt_refused` = `symlink` |
-  `not_dir` | `not_a_repository` | `config_not_a_file` | `unmarked` |
-  `token_mismatch` | `unreadable` | `not_bare` (tokens never go into the
-  context). Git timeout / busy / unavailable keep their own codes (retryable).
-  Temp dirs (`.tmp-<id>-<uuid>.git`) left by a crashed attempt do not block a
-  retry and are not removed by it.
+  its `config` is a regular file, that file (read with `--file --no-includes`)
+  has no `include.*` / `includeIf.*` key and exactly one
+  `forge.provisionToken`, equal to `token`, and it is bare. Adoption re-checks
+  that `config` is a regular file, then re-applies the settings and
+  `core.hooksPath` with `git config --file <repo>/config` (no `GIT_DIR`). A
+  concurrent attempt that loses the rename (FG-REPO-0004 from `create`) runs
+  the adopt path once. Anything else stays `FG-REPO-0004` with
+  `adopt_refused` = `symlink` | `not_dir` | `not_a_repository` |
+  `config_not_a_file` | `includes` | `unmarked` | `duplicate_marker` |
+  `token_mismatch` | `unreadable` | `not_bare` | `unwritable` (tokens never
+  go into the context). Temp dirs (`.tmp-<id>-<uuid>.git`) left by a crashed
+  attempt do not block a retry and are not removed by it. Assumes the storage
+  root is writable only by forge (ADR-0009 amendment).
+- `storage::provision_error_is_retryable(&ForgeError) -> bool` — the retry
+  rule for the provisioning job:
+  - **retry**: `FG-GIT-0001` unavailable, `FG-GIT-0002` timeout, `FG-GIT-0004`
+    busy, `FG-REPO-0003` storage I/O (a directory that vanished during
+    adoption included), and `FG-GIT-0003` — which reaches the caller only from
+    *creating* (the temp dir is removed, nothing is left at the final path);
+  - **do not retry** (operator needed): `FG-REPO-0004` (every `adopt_refused`,
+    including git failing or printing too much while reading or writing an
+    existing directory, and a permission-denied `config`), `FG-REPO-0001`,
+    `FG-REPO-0002`, `FG-SYS-0002` invalid hooks path, `FG-GIT-0006`.
 
 **Error codes owned**
 

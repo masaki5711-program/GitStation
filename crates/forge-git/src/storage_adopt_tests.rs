@@ -7,21 +7,21 @@ use forge_errors::ErrorCode;
 use super::*;
 use crate::GitConfig;
 
-const MARKER: &str = "forge.provisionToken";
+pub(super) const MARKER: &str = "forge.provisionToken";
 
-fn root() -> (tempfile::TempDir, StorageRoot) {
+pub(super) fn root() -> (tempfile::TempDir, StorageRoot) {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = StorageRoot::open(dir.path()).expect("open root");
     (dir, root)
 }
 
-fn git() -> (tempfile::TempDir, Git) {
+pub(super) fn git() -> (tempfile::TempDir, Git) {
     let home = tempfile::tempdir().expect("home");
     let git = Git::new(GitConfig::new("git", home.path()));
     (home, git)
 }
 
-async fn config_get(git: &Git, repo: &Path, key: &'static str) -> String {
+pub(super) async fn config_get(git: &Git, repo: &Path, key: &'static str) -> String {
     git.command("config")
         .repo(repo)
         .arg("--get")
@@ -34,7 +34,7 @@ async fn config_get(git: &Git, repo: &Path, key: &'static str) -> String {
         .to_string()
 }
 
-async fn config_set(git: &Git, repo: &Path, key: &'static str, value: &'static str) {
+pub(super) async fn config_set(git: &Git, repo: &Path, key: &'static str, value: &'static str) {
     git.command("config")
         .repo(repo)
         .arg(key)
@@ -45,7 +45,7 @@ async fn config_set(git: &Git, repo: &Path, key: &'static str, value: &'static s
 }
 
 /// A bare repository at the final path that forge did not mark.
-async fn plain_bare_repo(git: &Git, path: &Path) {
+pub(super) async fn plain_bare_repo(git: &Git, path: &Path) {
     std::fs::create_dir_all(path.parent().expect("shard")).expect("shard");
     git.command("init")
         .arg("--bare")

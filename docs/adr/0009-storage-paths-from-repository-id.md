@@ -51,3 +51,16 @@ URL は DB で `RepoId` に解決してからパスを作り、URL の文字列�
   引き取ることはない**。git の時間切れ・混雑・未導入はそれぞれのコードのまま返し、ジョブのやり直しに任せる。
 - 名前を変える前に止まった試みの一時ディレクトリ（`.tmp-<id>-<uuid>.git`）は試みごとに名前が違うので、やり直しを妨げない。
   自動では消さない（片付けは `forge doctor` などで後から扱う）。
+- レビューを受けて次を加えた（同日）。
+  - 目印は `git config --file <repo>/config --no-includes` で読む。`--local` でも `include.path` は辿られるので、
+    設定に `include.*` / `includeIf.*` があれば引き取らない（`adopt_refused=includes`）。目印が二つ以上あるときも引き取らない
+    （`duplicate_marker`）。`core.bare=false` は `not_bare`、git が読めない設定は `unreadable`。
+  - 引き取りで設定を書く直前に、`config` が普通のファイルであることをもう一度確かめ、`--file <repo>/config` に書く。
+    確かめてから書くまでのわずかな隙は残る。これは **保存先のルートには forge だけが書ける**（OS の利用者と権限で守る）
+    という前提で受け入れる。この前提が崩れると、リンクへのすり替えで root の外のファイルに書かれうる。
+  - 同時に二つの試みが走って名前の変更で負けた側は、そのまま一度だけ引き取りを試す（同じトークンなら `Adopted`、
+    違えば `token_mismatch`）。
+  - やり直してよい失敗の決まり: git の時間切れ・混雑・未導入、保存先の I/O の失敗、新しく作る途中の git の失敗は
+    やり直す。既にあるディレクトリについての失敗（`adopt_refused` の付いた `FG-REPO-0004`。`config` を見る権限がない、
+    git が読めない・書けない場合を含む）、パスの拒否、フックの場所の設定の誤りはやり直さず、運用者が見る。
+    判定は `forge_git::storage::provision_error_is_retryable` に一つにまとめた。
