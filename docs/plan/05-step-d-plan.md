@@ -193,3 +193,20 @@ Answers (user, 2026-10-30, all as recommended): (1) projects only under a person
 (2) creator = direct Owner, personal-namespace owner and ancestor group Owners inherit, no last-owner refusal while an inherited Owner
 exists; (3) project `member.*` are events (maintainer class); (4) option A, alert after 10 min; (5) one repository per project in M1,
 kind default `system`, visibility default `private`; (6) ProjectRequestInvalid = FG-REPO-0014, D5 TransferInvalid moves to FG-REPO-0015.
+
+## M1 phase 8 plan (planner, 2026-10-30, cloud session) — approved by the user 2026-10-30 ("推奨で進めてください")
+
+Option A: 8a = ADR-0015 step 2 (path parsing in forge-core: LookupPath, TailSegments, RouteWord, ParsedPath, parse_web_path,
+NamespaceResolver + access-loader traits, url-vectors.json) + step 3 (prove()/Authorized<R>, PathResolve and WebShell actions,
+Unresolved/Resolved resources, the 7-step dispatcher on the raw path, scoped() routes, Verb::Head, manifest scope/word/query_key,
+namespace_tombstone_routes.rs) + `GET /api/v1/namespaces/resolve` + `GET|HEAD /api/v1/projects/{id}`; phase 9 starts after MR4.
+8b (alongside phase 9): request-body plumbing + keyset cursor (FG-WEB-0006 RequestInvalid), group / project / member /
+protected-ref write endpoints, ProjectList / GroupList (rows filtered by authorize, never in SQL), `GET /api/v1/user` (UserSelfRead).
+MRs: MR1 feat/core-web-path-parse ∥ MR2 feat/auth-prove-authorized → MR3 feat/db-namespace-resolve → MR4 feat/web-dispatcher →
+MR5 feat/web-api-project-read ∥ phase 9 → MR6–MR8 (8b).
+Answers (as recommended): forge-web reads through forge-core traits implemented by forge-db (8a); one feature crate `forge-hosting`
+(web → hosting → auth/db) for the 8b writes (ADR amendment); D5 actions/resources (GroupTransfer, UserRename, TombstoneRelease,
+TransferTarget) move to D5 (ADR-0015 amendment); utoipa for OpenAPI in MR6 after cargo deny/audit; W1 deferred to M3 with a single
+ProjectView builder now; Idempotency-Key deferred to M3; resolve rate limiting and prefix=true deferred to M2; the agent-model
+authz-coverage gate is already updated (v0.4.2) — the user confirms it is on the agent model's main; next free codes FG-WEB-0006,
+FG-AUTH-0011, FG-GIT-0011, FG-REPO-0016 (0015 is D5's TransferInvalid).
