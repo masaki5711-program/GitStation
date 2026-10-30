@@ -506,3 +506,35 @@ impl<S> Registry<S> {
   - MR2 は、作成の後に 3 つがそろっていること（どれかが欠けた作成は確定しないこと）を確かめるテストを持つ。
   - 欠けた組（名前空間のないプロジェクト、プロジェクトのない `kind = 'project'` の名前空間、リポジトリのないプロジェクト）を doctor で検査するかは、
     削除とパージを入れる D5 で決める。
+
+## Amendment（2026-10-31、手順 D4 MR2: プロジェクトの置き場所と作成）
+
+- **プロジェクトは、個人の名前空間（`kind = 'user'`）かグループ（`kind = 'group'`）の下にだけ置ける**（計画 D4 の回答 1）。
+  プロジェクトの下にプロジェクトは作れない（FG-REPO-0014 `ProjectRequestInvalid`、`reason=parent_not_owner_namespace`）。
+  トップレベルのプロジェクトはない（`NewProject.parent` は必須）ので、予約語の検査は親の下のセグメントとして `PathSegment::parse` だけを使う。
+  グループの下ではサブグループとプロジェクトが同じ兄弟の空間を使う（`namespaces_sibling_key`、FG-REPO-0009 `sibling`）。
+- `projects::create` は、グループと同じく、親の名前空間を `FOR SHARE` で読み、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。
+  深さと長さの上限（20、255）を超える作成は FG-REPO-0007 `too_deep` / `path_too_long`。
+- **1 対 1 対 1 は 1 つのトランザクションで書く**（MR1 の Amendment の約束）: プロジェクト、名前空間（`kind = 'project'`、`owner_id = projects.id`）、
+  リポジトリ（`provisioning`、種類は既定 `system`）、作成者の直接の Owner、`repository.provision` のジョブ、`project.created` の監査の行とイベントを、
+  1 つの `ChangeTx` で書く。テスト `project_create_writes_namespace_project_repository_owner_job_and_one_audit_row` が、3 つがそろって存在すること
+  （1 つの結合の問い合わせ）と、全体が 1 つのトランザクション（同じ `txid`）であることを確かめる。拒否された作成は何も残さない（各テストが件数を比べる）。
+- 作成者（`NewProject.creator`）は呼び出し側が渡すプリンシパルで、有効な人間かサービスアカウントに限る。bot はグループの最初の Owner と同じく
+  FG-REPO-0010 `bot_member`、無効なユーザーは FG-REPO-0014 `creator_inactive`。誰がその名前空間に作ってよいかは `authorize()` が決め、このコマンドは決めない
+  （D4 には経路がなく、権限のマトリクスは変わらない）。
+- 可視性の既定は `private`、リポジトリの種類の既定は `system`（回答 5）。
+- **レビュー（security / database）後の追加**:
+  - 親が個人の名前空間のとき、その持ち主はプロジェクトの Owner を継承するので、持ち主のユーザーの行も `FOR SHARE` で読み、bot なら
+    FG-REPO-0010 `bot_member`、有効でなければ FG-REPO-0014 `parent_owner_inactive` で拒否する（すべての種類のユーザーが個人の名前空間を持つため、
+    これがないと管理者が `ci-bot/foo` を作ると bot が Owner になる）。
+  - 作成者は変更の行為者でなければならない（`Actor::User` / `ServiceAccount` はその本人、`UserViaServiceAccount` はその人）。違えば FG-REPO-0014
+    `creator_not_actor`。`Actor::System`（操作者の CLI とワーカー、ADR-0019 §8 と同じ信頼の起点）だけが他のユーザーを作成者に指定できる。
+    経路は認証済みのプリンシパルを渡し、その前に `authorize()` で作成の可否を決める。
+  - **既知の TOCTOU**: `authorize()` の判定（呼び出し側）と、このコマンドが親の名前空間を `FOR SHARE` で読むまでの間に、たとえばグループの Owner が
+    外されても、その作成は通る（判定に使った役割は読み直さない）。影響は「外される直前に始めた 1 回の作成」に限られ、作成者は監査の行に残る。
+    経路を入れる手順で、役割の読み込みと作成を同じトランザクションにするかを決める。
+  - 2 接続の競合のテスト（`projects/tests/race.rs`）: 作成と作成者の無効化（両方の順序を固定）、作成と同じパスの墓標の書き込み。
+    作成者の `FOR SHARE` やパスのロックを外すと赤くなることを、一度ずつ変異で確かめた。
+  - **無効化とプロジェクトの Owner**: `users::disable` は、直接の Owner を失うプロジェクトを数えない（この MR では変えない）。プロジェクトの
+    最後の Owner の方針（回答 2: 継承された Owner がいる間は拒まない）と、それが無効化のガードと doctor（ADR-0019 §10〜12）に与える影響は、
+    D4 MR4（プロジェクトのメンバー）で決めて実装する。

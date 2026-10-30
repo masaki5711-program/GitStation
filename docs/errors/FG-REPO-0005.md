@@ -20,7 +20,7 @@ The resource does not exist, or the caller may not see it. Both cases return the
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group, or roles::load_group_roles on a group id without a namespace; `resource=namespace`: a group create under an unknown parent, or roles::load_namespace_roles on an unknown namespace id).
+The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable, a group command or a project create on a user id that does not exist; `resource=group`: a member change on an unknown group, or roles::load_group_roles on a group id without a namespace; `resource=namespace`: a group or project create under an unknown parent, or roles::load_namespace_roles on an unknown namespace id; `resource=project`: roles::load_project_roles or projects::access on a project id without a project namespace / project row).
 
 ## 対処 (fix)
 

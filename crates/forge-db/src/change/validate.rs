@@ -1,6 +1,7 @@
 //! What a change must satisfy before anything is written (FG-DB-0010), and
 //! the cleaning of the client-supplied fields.
 
+use forge_core::ids::ProjectId;
 use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -19,6 +20,10 @@ const MAX_USER_AGENT_CHARS: usize = 256;
 const MAX_ACT_AS_CHARS: usize = 128;
 const MAX_SCOPES: usize = 32;
 const MAX_SCOPE_CHARS: usize = 64;
+
+/// The audit resource type of projects (tables.toml): such a row's
+/// `project_id` is its `resource_id`.
+const PROJECT_RESOURCE: &str = "project";
 
 fn rejected(reason: &'static str, action: &str) -> ForgeError {
     ForgeError::new(ErrorCode::ChangeRejected)
@@ -163,11 +168,24 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
     if !events.is_empty() && record.audit.outcome != Outcome::Succeeded {
         return Err(rejected("events_on_unsuccessful", action));
     }
-    // A change audited for one project publishes events of that project only.
-    if let Some(project) = record.audit.project_id {
-        if events.iter().any(|e| e.project_id != Some(project)) {
-            return Err(rejected("event_scope_mismatch", action));
-        }
+    // The event scope rule (ADR-0016 Amendment D4): an event carries the
+    // project of its change's audit row. A change audited for one project
+    // publishes events of that project only, and a change whose audit row
+    // names no project publishes only instance-wide events — the feed shows
+    // a project event to that project's readers, so its audit row must say
+    // which project changed. That trusts the audit row's project_id, so an
+    // audit row on a project resource must name that project
+    // (`audit_scope_mismatch`).
+    if record.audit.resource_type == PROJECT_RESOURCE
+        && record.audit.project_id.map(ProjectId::get) != record.audit.resource_id
+    {
+        return Err(rejected("audit_scope_mismatch", action));
+    }
+    if events
+        .iter()
+        .any(|e| e.project_id != record.audit.project_id)
+    {
+        return Err(rejected("event_scope_mismatch", action));
     }
     if let Actor::UserViaServiceAccount { credential_id, .. } = &ctx.actor {
         if ctx.credential_id.is_some_and(|c| c != *credential_id) {

@@ -135,3 +135,20 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - CLI によるトークンの発行は HTTP の経路ではないので `authorize()` を通らない（ホストの操作者が信頼の起点）。
   不変条件（`admin` スコープは管理者だけ、ボットと無効化済みのユーザーには発行しない）は `forge_db::tokens::issue` が
   強制する。「トークンはトークンを発行しない」は変わらない。`authorize()` と権限のマトリクスは変わらない。
+
+## Amendment（2026-10-31、手順 D4 MR2: プロジェクトの役割の読み込み）
+
+- **`forge_db::roles::load_project_roles(db, ProjectId, UserId) -> MemberRoles`** を足す。役割の計算は引き続き `roles` の 1 つの再帰の問い合わせだけで行う。
+  - `direct` は `project_members` の役割（直接のメンバー）。
+  - `native` は、`direct`、プロジェクトの名前空間の祖先のグループでの直接の役割、そして **個人の名前空間の持ち主には Owner**（回答 2）の、最も高いもの。
+    個人の名前空間の持ち主が Owner になるのは、その名前空間の **下のプロジェクト** についてだけで、名前空間そのものには役割を持たない（D2 のとおり、
+    `Resource::Namespace` で決める）。レビュー後の修正: この Owner は、個人の名前空間が **プロジェクトの直接の親**（鎖の 2 段目で、起点が
+    プロジェクト）のときだけ与え、bot には与えない。D5 の移動で個人の名前空間の下にグループなどが入っても、その下には継承しない
+    （テスト `a_user_namespace_above_a_group_gives_no_role`、`a_bots_personal_namespace_gives_the_bot_no_role`）。
+  - 有効なユーザーだけが役割を持つ（直接・継承・個人の名前空間のいずれも）。上限 20 段、壊れた鎖や未知の役割は FG-DB-0018（D2 と同じ）。
+  - プロジェクトの名前空間がなければ FG-REPO-0005（`resource=project`、`reason=absent`）。
+- `load_namespace_roles` をプロジェクトの名前空間に使うと、`load_project_roles` と同じ答えになる（D2 の「祖先のグループだけ」の暫定は終わり）。
+- `forge_db::projects::access(db, ProjectId) -> ProjectAccess { visibility, pending_deletion }` と `load_project_roles` の `native` で、
+  forge-auth の `ProjectView { visibility, role, pending_deletion }` を組み立てる。`pending_deletion` は `deleted_at` があること（D5 が書く）。
+  forge-db は forge-auth に依存しない（依存の向き）ので、組み立ては呼び出し側（プロジェクトの経路を入れる後の手順）が行う。`authorize()` と権限のマトリクスは変わらない。
+- 継承された Owner がいる間は、最後の直接の Owner を外すことを拒まない（回答 2、MR4 で実装）。

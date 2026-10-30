@@ -2,8 +2,9 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::event_type::EventType;
-use crate::ids::{NamespaceId, UserId};
-use crate::role::Role;
+use crate::ids::{NamespaceId, ProjectId, RepoId, UserId};
+use crate::repository::RepositoryKind;
+use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
 
@@ -44,6 +45,20 @@ pub enum AuditDetails {
         parent_namespace_id: Option<NamespaceId>,
         owner: UserId,
     },
+    /// `project.created` (D4 MR2): the project, its namespace, the parent
+    /// (a user or group namespace), its repository with the repository's
+    /// kind, the visibility and the creator (the first direct Owner). Also
+    /// the payload of the `project.created` event (integration class), so
+    /// ids, kind and visibility only — never the path or the names.
+    ProjectCreated {
+        project_id: ProjectId,
+        namespace_id: NamespaceId,
+        parent_namespace_id: NamespaceId,
+        repository_id: RepoId,
+        kind: RepositoryKind,
+        visibility: Visibility,
+        owner: UserId,
+    },
     /// `member.added` (D2, group membership).
     MemberAdded { user: UserId, role: Role },
     /// `member.role_changed` (D2).
@@ -76,6 +91,7 @@ impl AuditDetails {
             Self::UserDisabled { .. } => "user.disabled",
             Self::AdminBootstrapped { .. } => "user.admin_bootstrapped",
             Self::GroupCreated { .. } => "group.created",
+            Self::ProjectCreated { .. } => "project.created",
             Self::MemberAdded { .. } => "member.added",
             Self::MemberRoleChanged { .. } => "member.role_changed",
             Self::MemberRemoved { .. } => "member.removed",
@@ -85,7 +101,8 @@ impl AuditDetails {
     }
 
     /// The event a change with these details publishes, `None` for the
-    /// audit-only actions (`user.*`, `group.*`, `member.*`; D-plan Q4, Q8).
+    /// audit-only actions (`user.*`, `group.*`, `member.*` of groups; D-plan
+    /// Q4, Q8).
     /// When `Some`, its name is [`Self::action`].
     pub fn event_type(&self) -> Option<EventType> {
         match self {
@@ -96,6 +113,7 @@ impl AuditDetails {
             | Self::MemberAdded { .. }
             | Self::MemberRoleChanged { .. }
             | Self::MemberRemoved { .. } => None,
+            Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
         }
@@ -106,6 +124,8 @@ impl AuditDetails {
     /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","left_without_admin"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
+    /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
+    /// "repository_id","kind","visibility","owner_id"}`,
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
@@ -148,6 +168,23 @@ impl AuditDetails {
             } => serde_json::json!({
                 "namespace_id": namespace_id.get(),
                 "parent_namespace_id": parent_namespace_id.map(NamespaceId::get),
+                "owner_id": owner.get(),
+            }),
+            Self::ProjectCreated {
+                project_id,
+                namespace_id,
+                parent_namespace_id,
+                repository_id,
+                kind,
+                visibility,
+                owner,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "namespace_id": namespace_id.get(),
+                "parent_namespace_id": parent_namespace_id.get(),
+                "repository_id": repository_id.get(),
+                "kind": kind.as_str(),
+                "visibility": visibility.as_str(),
                 "owner_id": owner.get(),
             }),
             Self::MemberAdded { user, role } | Self::MemberRemoved { user, role } => {

@@ -44,8 +44,10 @@ from forge-auth in step D2 (forge-auth re-exports them).
 
 **Events** (ADR-0016 §5 and its D3 amendment, step D3 MR1b): `EventType` (`ALL`,
 `as_str`, `parse`, `visibility_class()`) is the one list of event types; a variant
-joins in the commit that adds its writer (now `repository.created`, `token.created`,
-`token.revoked`). `VisibilityClass` (`integration`, `maintainer`, `deployment`,
+joins in the commit that adds its writer (now `project.created` — integration class,
+D4 MR2 —, `repository.created`, `token.created`, `token.revoked`).
+`AuditDetails::ProjectCreated` (`project.created`: project, namespace, parent namespace
+and repository ids, repository kind, visibility, owner id) is also that event's payload. `VisibilityClass` (`integration`, `maintainer`, `deployment`,
 `admin`). `DedupKey::new(prefix: &'static str, &[DedupPart])` — parts are `Id(i64)`,
 `Hash(&[u8; 32])` (lowercase hex) and `Word(&'static str)`, so a client string
 cannot become a key (a `compile_fail` doc test); shape

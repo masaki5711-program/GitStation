@@ -49,6 +49,26 @@ fn token_events_are_admin_class() {
         EventType::RepositoryCreated.visibility_class(),
         VisibilityClass::Integration
     );
+    // D4 plan: project.created is the one project event of the integration
+    // class (project.visibility_changed stays maintainer, ADR-0016 §5).
+    assert_eq!(
+        EventType::ProjectCreated.visibility_class(),
+        VisibilityClass::Integration
+    );
+}
+
+#[test]
+fn all_lists_every_event_type_once() {
+    let names: Vec<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "project.created",
+            "repository.created",
+            "token.created",
+            "token.revoked"
+        ]
+    );
 }
 
 #[test]

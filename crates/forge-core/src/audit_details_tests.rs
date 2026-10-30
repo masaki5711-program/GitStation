@@ -187,3 +187,42 @@ fn token_audit_details_have_their_exact_shape_and_no_secret() {
         }
     }
 }
+
+#[test]
+fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
+    use crate::ids::{ProjectId, RepoId};
+    use crate::{EventType, RepositoryKind, Visibility};
+    let created = AuditDetails::ProjectCreated {
+        project_id: ProjectId::new(21),
+        namespace_id: NamespaceId::new(8),
+        parent_namespace_id: NamespaceId::new(3),
+        repository_id: RepoId::new(34),
+        kind: RepositoryKind::System,
+        visibility: Visibility::Private,
+        owner: UserId::new(5),
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({
+            "project_id": 21,
+            "namespace_id": 8,
+            "parent_namespace_id": 3,
+            "repository_id": 34,
+            "kind": "system",
+            "visibility": "private",
+            "owner_id": 5,
+        })
+    );
+    assert_eq!(created.action(), "project.created");
+    // The one D4 integration event; its name is the audit action.
+    assert_eq!(created.event_type(), Some(EventType::ProjectCreated));
+    assert_eq!(
+        created.event_type().map(EventType::as_str),
+        Some(created.action())
+    );
+    let mut found = Vec::new();
+    keys(&created.to_value(), &mut found);
+    for pii in PII_KEYS {
+        assert!(!found.iter().any(|k| k == pii), "{pii}");
+    }
+}

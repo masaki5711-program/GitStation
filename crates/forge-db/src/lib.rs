@@ -24,8 +24,12 @@
 //! - [`users`] creates (with the personal namespace) and disables users
 //!   (`FG-REPO-0007`..`0009`, `FG-AUTH-0005`..`0007`).
 //! - [`groups`] creates groups and changes their direct members; [`roles`]
-//!   loads a user's roles on a group (`MemberRoles`, the one role
-//!   computation, ADR-0010).
+//!   loads a user's roles on a group or project (`MemberRoles`, the one
+//!   role computation, ADR-0010).
+//! - [`projects`] creates a project with its namespace, repository, first
+//!   Owner and provisioning job, and reads its access facts
+//!   (`FG-REPO-0014`); [`repositories`] holds the provisioning job's
+//!   definition.
 
 #[cfg(test)]
 mod audited_doctor_tests;
@@ -68,8 +72,10 @@ pub mod roles;
 pub mod tokens;
 // ── end D3 ──
 // ── D4: projects, repositories, project members, protected refs ──
+pub mod projects;
 #[cfg(test)]
 mod projects_schema_tests;
+pub mod repositories;
 // ── end D4 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
