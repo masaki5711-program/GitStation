@@ -30,49 +30,77 @@ pub struct MemberRoles {
 /// The cap on the parent chain, as the SQL parameter. Groups are created at
 /// most `MAX_DEPTH` deep (`groups::create`, CHECK `namespaces_depth`), so
 /// only corrupt data reaches it.
-const CAP: i32 = {
+pub(crate) const CAP: i32 = {
     assert!(MAX_DEPTH <= i32::MAX as usize);
     MAX_DEPTH as i32
 };
 
 /// The namespace chain from the anchor (step 1) up to the top level, capped
-/// at `CAP` steps ($3), with the user's ($2) role at each step: the direct
-/// role in a `group` (group_members) or a `project` (project_members), and
-/// Owner on a `user` namespace the user owns — only when that namespace is
-/// the direct parent (step 2) of a `project` anchor, so a personal
-/// namespace gives its owner a role on the projects directly in it, never
-/// on itself (ownership of the namespace is `Resource::Namespace`'s) and
-/// never on anything a later move (D5) might place deeper below it. Only
-/// active users hold a role, and a bot never gets the personal-namespace
-/// Owner (bots are never members, ADR-0017; `projects::create` also refuses
-/// a bot's namespace as a parent). `truncated` marks a chain cut by the cap
-/// (a cycle or a corrupt depth).
+/// at `CAP` steps ($3), as a recursive CTE named `chain` (columns `id`,
+/// `parent_id`, `kind`, `owner_id`, `segment`, `step`, `anchor_kind`). The
+/// anchor is a `WHERE` clause on `forge.namespaces` matching at most one
+/// row. Shared by the role loaders and the namespace resolver
+/// (`crate::resolve`), so both walk the same chain.
+macro_rules! chain_cte {
+    ($anchor:literal) => {
+        concat!(
+            "chain (id, parent_id, kind, owner_id, segment, step, anchor_kind) AS ( \
+               SELECT id, parent_id, kind, owner_id, segment, 1, kind \
+               FROM forge.namespaces WHERE ",
+            $anchor,
+            " UNION ALL \
+               SELECT n.id, n.parent_id, n.kind, n.owner_id, n.segment, c.step + 1, \
+                 c.anchor_kind \
+               FROM forge.namespaces n JOIN chain c ON n.id = c.parent_id \
+               WHERE c.step < $3)"
+        )
+    };
+}
+pub(crate) use chain_cte;
+
+/// The columns of one `chain c` row the fold needs ([`fold_chain`]):
+/// `step`, `truncated` (the chain was cut by the cap: a cycle or a corrupt
+/// depth) and the user's ($2; NULL = anonymous, no role anywhere) `role` at
+/// that step: the direct role in a `group` (group_members) or a `project`
+/// (project_members), and Owner on a `user` namespace the user owns — only
+/// when that namespace is the direct parent (step 2) of a `project` anchor,
+/// so a personal namespace gives its owner a role on the projects directly
+/// in it, never on itself (ownership of the namespace is
+/// `Resource::Namespace`'s) and never on anything a later move (D5) might
+/// place deeper below it. Only active users hold a role, and a bot never
+/// gets the personal-namespace Owner (bots are never members, ADR-0017;
+/// `projects::create` also refuses a bot's namespace as a parent).
+macro_rules! chain_role_columns {
+    () => {
+        "c.step, c.parent_id IS NOT NULL AND c.step >= $3 AS truncated, \
+           CASE c.kind \
+             WHEN 'group' THEN (SELECT m.role FROM forge.group_members m \
+               JOIN forge.users u ON u.id = m.user_id \
+               WHERE m.group_id = c.owner_id AND m.user_id = $2 \
+                 AND u.state = 'active') \
+             WHEN 'project' THEN (SELECT m.role FROM forge.project_members m \
+               JOIN forge.users u ON u.id = m.user_id \
+               WHERE m.project_id = c.owner_id AND m.user_id = $2 \
+                 AND u.state = 'active') \
+             WHEN 'user' THEN (SELECT 'owner' FROM forge.users u \
+               WHERE c.step = 2 AND c.anchor_kind = 'project' \
+                 AND c.owner_id = $2 AND u.id = $2 \
+                 AND u.state = 'active' AND u.kind <> 'bot') \
+           END AS role"
+    };
+}
+pub(crate) use chain_role_columns;
+
+/// The role loaders' statement: the chain from the anchor ($1) with the
+/// user's ($2) role at each step, in step order.
 macro_rules! chain_sql {
     ($anchor:literal) => {
         concat!(
-            "WITH RECURSIVE chain (parent_id, kind, owner_id, step, anchor_kind) AS ( \
-               SELECT parent_id, kind, owner_id, 1, kind FROM forge.namespaces WHERE ",
-            $anchor,
-            " UNION ALL \
-               SELECT n.parent_id, n.kind, n.owner_id, c.step + 1, c.anchor_kind \
-               FROM forge.namespaces n JOIN chain c ON n.id = c.parent_id \
-               WHERE c.step < $3) \
-             SELECT c.step, c.parent_id IS NOT NULL AND c.step >= $3 AS truncated, \
-               CASE c.kind \
-                 WHEN 'group' THEN (SELECT m.role FROM forge.group_members m \
-                   JOIN forge.users u ON u.id = m.user_id \
-                   WHERE m.group_id = c.owner_id AND m.user_id = $2 \
-                     AND u.state = 'active') \
-                 WHEN 'project' THEN (SELECT m.role FROM forge.project_members m \
-                   JOIN forge.users u ON u.id = m.user_id \
-                   WHERE m.project_id = c.owner_id AND m.user_id = $2 \
-                     AND u.state = 'active') \
-                 WHEN 'user' THEN (SELECT 'owner' FROM forge.users u \
-                   WHERE c.step = 2 AND c.anchor_kind = 'project' \
-                     AND c.owner_id = $2 AND u.id = $2 \
-                     AND u.state = 'active' AND u.kind <> 'bot') \
-               END AS role \
-             FROM chain c ORDER BY c.step"
+            "WITH RECURSIVE ",
+            chain_cte!($anchor),
+            " SELECT ",
+            chain_role_columns!(),
+            " FROM chain c ORDER BY c.step"
         )
     };
 }
@@ -113,7 +141,7 @@ pub async fn load_namespace_roles(
 /// direct roles in the ancestor groups of the project's namespace and, in a
 /// personal namespace, Owner for that namespace's owner. Active users only;
 /// the chain is capped as for groups (`FG-DB-0018`). Nothing here looks at
-/// visibility or deletion (`projects::access`). `FG-REPO-0005`
+/// visibility or deletion (`resolve::project_access`). `FG-REPO-0005`
 /// (`resource=project`, `reason=absent`) when the project has no namespace
 /// row. `user` as in [`load_group_roles`].
 pub async fn load_project_roles(
@@ -124,17 +152,25 @@ pub async fn load_project_roles(
     load(db, BY_PROJECT, project.get(), user, "project").await
 }
 
-/// `FG-DB-0018` with what the runbook needs to find the rows.
-fn invalid(reason: &'static str, resource: &'static str, id: i64, user: UserId) -> ForgeError {
-    ForgeError::new(ErrorCode::MembershipDataInvalid)
+/// `FG-DB-0018` with what the runbook needs to find the rows (`user` only
+/// for a signed-in viewer).
+fn invalid(
+    reason: &'static str,
+    resource: &'static str,
+    id: i64,
+    user: Option<UserId>,
+) -> ForgeError {
+    let err = ForgeError::new(ErrorCode::MembershipDataInvalid)
         .with_context("reason", reason)
         .with_context("resource", resource)
-        .with_context("id", id)
-        .with_context("user", user.get())
+        .with_context("id", id);
+    match user {
+        Some(user) => err.with_context("user", user.get()),
+        None => err,
+    }
 }
 
-/// Run one chain query and fold it. A chain longer than the cap or an
-/// unknown stored role is `FG-DB-0018`, never a silently partial role.
+/// Run one chain query and fold it.
 async fn load(
     db: &Db,
     sql: &'static str,
@@ -158,19 +194,33 @@ async fn load(
             .with_context("resource", resource)
             .with_context("reason", "absent"));
     }
+    fold_chain(rows, resource, anchor, Some(user))
+}
+
+/// Fold the chain rows (`step`, `truncated`, `role`; [`chain_role_columns`])
+/// into [`MemberRoles`] — the one role computation, shared with the
+/// namespace resolver (`crate::resolve`). A chain longer than the cap or an
+/// unknown stored role is `FG-DB-0018`, never a silently partial role.
+/// `resource` / `id` name where the load started (for the log).
+pub(crate) fn fold_chain(
+    rows: impl IntoIterator<Item = (i32, bool, Option<String>)>,
+    resource: &'static str,
+    id: i64,
+    user: Option<UserId>,
+) -> Result<MemberRoles, ForgeError> {
     let mut roles = MemberRoles::default();
     for (step, truncated, role) in rows {
         if truncated {
-            return Err(invalid("namespace_chain_too_deep", resource, anchor, user));
+            return Err(invalid("namespace_chain_too_deep", resource, id, user));
         }
         let Some(raw) = role else { continue };
         let Some(role) = Role::parse(&raw) else {
             // Bounded: the column is unchecked text once the CHECK is gone.
             let raw: String = raw.chars().take(32).collect();
-            return Err(invalid("unknown_role", resource, anchor, user).with_context("raw", raw));
+            return Err(invalid("unknown_role", resource, id, user).with_context("raw", raw));
         };
-        // Step 1 is the anchor itself (ORDER BY step): its group or project
-        // is the direct membership; a personal namespace has no role there.
+        // Step 1 is the anchor itself: its group or project is the direct
+        // membership; a personal namespace has no role there.
         if step == 1 {
             roles.direct = Some(role);
         }

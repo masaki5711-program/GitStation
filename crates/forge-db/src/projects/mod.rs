@@ -1,8 +1,9 @@
 //! Project commands (step D4, ADR-0004, ADR-0010, ADR-0015 Amendment D4,
 //! ADR-0016): create a project with its namespace, its one repository and
 //! its first Owner, change its direct members ([`add_member`],
-//! [`change_member`], [`remove_member`], D4 MR4), and read what
-//! `authorize()` needs about a project ([`access`]). Each command is one `ChangeTx` with one `project` audit row
+//! [`change_member`], [`remove_member`], D4 MR4). What `authorize()` needs
+//! about a project is read by `crate::resolve::project_access` (one
+//! statement with the viewer's role, M1 phase 8 MR3). Each command is one `ChangeTx` with one `project` audit row
 //! (`forge.audited_change_present` refuses anything else).
 //!
 //! A project lives under a personal namespace or a group, never under
@@ -23,7 +24,7 @@ use crate::change::{
 };
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
-use crate::{query_error, read_query_error, repositories, Db};
+use crate::{query_error, repositories, Db};
 
 mod members;
 pub(crate) mod ownership;
@@ -87,16 +88,6 @@ pub struct CreatedProject {
     pub repository_id: RepoId,
     /// The `repository.provision` job (`repositories::PROVISION_JOB`).
     pub provision_job: JobId,
-}
-
-/// What `authorize()`'s `ProjectView` needs from the project row besides
-/// the caller's role (`roles::load_project_roles`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectAccess {
-    pub visibility: Visibility,
-    /// Deleted and not yet purged (`deleted_at` set; D5 writes it, and the
-    /// purge removes the row after `purge_after`).
-    pub pending_deletion: bool,
 }
 
 /// `FG-REPO-0014` with its `reason`.
@@ -419,39 +410,6 @@ pub(crate) fn evented_record(
             payload: value,
             dedup_key: None,
         }],
-    })
-}
-
-/// The visibility and deletion state of `project`, read on the read pool.
-/// `FG-REPO-0005` (`resource=project`, `reason=absent`) when there is no
-/// such project: callers answer an absent and an invisible project with
-/// the same 404 (ADR-0010 Amendment D2).
-pub async fn access(db: &Db, project: ProjectId) -> Result<ProjectAccess, ForgeError> {
-    let row: Option<(String, bool)> = db
-        .within("projects.access", async {
-            sqlx::query_as(
-                "SELECT visibility, deleted_at IS NOT NULL FROM forge.projects WHERE id = $1",
-            )
-            .bind(project.get())
-            .fetch_optional(db.pool().executor())
-            .await
-            .map_err(|e| read_query_error("projects.access", e))
-        })
-        .await?;
-    let Some((raw, pending_deletion)) = row else {
-        return Err(not_found("project"));
-    };
-    let Some(visibility) = Visibility::parse(&raw) else {
-        // Only if the CHECK projects_visibility is gone: never guess.
-        let raw: String = raw.chars().take(32).collect();
-        return Err(ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "unknown_visibility")
-            .with_context("project_id", project.get())
-            .with_context("raw", raw));
-    };
-    Ok(ProjectAccess {
-        visibility,
-        pending_deletion,
     })
 }
 

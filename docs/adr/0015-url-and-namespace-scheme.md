@@ -638,3 +638,26 @@ impl<S> Registry<S> {
   そこで MR4 は、(a) **すべての** ハンドラを呼ぶ前に、登録の仕組みが `proof.action() == def.action` を確かめる、(b) ハンドラを登録の外から呼ぶ方法を
   作らない（`Authorized<R>` は登録の仕組みからだけハンドラに渡す）、(c) 別の Action の証明が拒否されることを確かめる否定のテストを足す。
   また、MR3 / MR4 の検索は、ないパス・墓標・見えないパスで **同じ形の問い合わせ**（回数と種類）を発行し、時間の差から存在が分からないようにする。
+
+## Amendment（2026-10-30、M1 phase 8 MR3: forge-db の解決の実装）
+
+上の「解決と認可の入力は 1 回の呼び出しで得る」を、forge-db に実装した（`feat/db-namespace-resolve`、`forge_db::resolve`）。決めた点は次のとおり。
+
+- **`NamespaceResolver` と `ProjectAccessLoader` は `Db` に実装する**（認証の `Authenticator` と同じ形。`forge serve` が `Db` を forge-web に渡す）。
+- **1 回の呼び出しは 1 つの文で、結果によらず同じ文を使う。** 文は常にちょうど 1 行を返す（`GROUP BY` のない集約の 1 行に `LEFT JOIN` で
+  今のパス・墓標・行き先・プロジェクトをつなぐ）。今のパス・移動・削除・なし、見える・見えない、サインイン・匿名（`$2` が NULL）のどれでも、
+  読み取りのプールへの往復は 1 回で、文の字面も同じである。途中で返して照会を省く分岐はない（判定の順序の 6）。テスト
+  `every_outcome_runs_the_same_single_statement` が、sqlx の文ごとのイベントを数えて、すべての結果で 1 回・同じ文であることを確かめる
+  （分岐に 2 つ目の照会を足す変異で赤くなることを一度確かめた）。
+- **閲覧者のロールは、ロールの読み込み（`roles::load_project_roles` / `load_group_roles`）と同じ連鎖の CTE と畳み込みで計算する**
+  （`roles::chain_cte!`、`chain_role_columns!`、`fold_chain` を共有する）。結果は `native` と一致する（テストで比べる）。連鎖の破損と不明なロールは、
+  匿名の閲覧者でも FG-DB-0018 にする（空のロールとして扱わない）。
+- **`moved` の墓標の今のパス**は、行き先の ID から親をたどってセグメントで組み立て、今のパスへの完全一致（同じ ID の行）で確かめる。確かめられない場合
+  （行き先がパージされた、保存された `full_path` が組み立てたパスと違う、連鎖が切れている）は `deleted` と同じに扱う（`Resolution::Deleted`）。
+  確かめたパスは `NamespacePath::parse` で読み、通らなければ新しいコード **FG-DB-0021 `NamespaceDataInvalid`**（alert、`reason=stored_path_invalid`、
+  `rule`。パスそのものはログに出さない。Runbook `namespace-data`）にする。保存された種類・可視性が CHECK の外の値のとき、プロジェクトと名前空間の
+  片方が欠けているときも同じコード（`unknown_*`、`namespace_without_project`、`project_without_namespace`）にする。
+- **`ProjectAccess` の型は forge-core の 1 つにした。** D4 の `forge_db::projects::{access, ProjectAccess { visibility, pending_deletion }}` を廃止し、
+  `forge_db::resolve::project_access(&Db, ProjectId, viewer) -> Option<forge_core::ProjectAccess>`（閲覧者のロールを含む、1 つの文）に置き換えた。
+  以前 FG-SYS-0001 `unknown_visibility` だった保存値の誤りは FG-DB-0021 になる。
+- 可視性はここでは判定しない（`authorize()` が決める）。forge-core の `Visibility` は `private` / `internal` の 2 つである。

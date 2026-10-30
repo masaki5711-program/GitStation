@@ -27,9 +27,11 @@
 //!   loads a user's roles on a group or project (`MemberRoles`, the one
 //!   role computation, ADR-0010).
 //! - [`projects`] creates a project with its namespace, repository, first
-//!   Owner and provisioning job, and reads its access facts
-//!   (`FG-REPO-0014`); [`repositories`] holds the provisioning job's
-//!   definition.
+//!   Owner and provisioning job (`FG-REPO-0014`); [`repositories`] holds
+//!   the provisioning job's definition.
+//! - [`resolve`] implements `forge_core::NamespaceResolver` and
+//!   `ProjectAccessLoader` on [`Db`]: path (or project id) → target and the
+//!   viewer's authorization inputs in one statement (`FG-DB-0021`).
 
 #[cfg(test)]
 mod audited_doctor_tests;
@@ -80,6 +82,9 @@ pub mod repositories;
 // ── D4 MR5: protected ref rules ──
 pub mod protected_refs;
 // ── end D4 MR5 ──
+// ── M1 phase 8 MR3: the namespace resolver ──
+pub mod resolve;
+// ── end M1 phase 8 MR3 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

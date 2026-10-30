@@ -1,7 +1,7 @@
 //! The project commands against a migrated database. Inspection uses a
 //! superuser connection.
 
-use forge_core::{RequestId, UserKind};
+use forge_core::{ProjectAccess, RequestId, Role, UserKind};
 use forge_errors::ErrorCode;
 use serde_json::json;
 use sqlx::postgres::PgConnection;
@@ -10,6 +10,7 @@ use super::*;
 use crate::audited_tests::{audit, commit};
 use crate::change::Actor;
 use crate::groups::{self, CreatedGroup, NewGroup};
+use crate::resolve::project_access;
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
@@ -255,13 +256,16 @@ async fn project_create_writes_namespace_project_repository_owner_job_and_one_au
     .await;
     assert_eq!(txids, 1);
     assert_eq!(written(&mut su).await, [1, 1, 1, 1, 1, 1, 1]);
-    let access = access(&t.db, created.project_id).await.expect("access");
+    let access = project_access(&t.db, created.project_id, None)
+        .await
+        .expect("access");
     assert_eq!(
         access,
-        ProjectAccess {
+        Some(ProjectAccess {
             visibility: Visibility::Private,
+            role: None,
             pending_deletion: false
-        }
+        })
     );
     t.drop_now().await;
 }
@@ -286,11 +290,14 @@ async fn a_project_under_a_group_keeps_its_kind_and_visibility() {
         ("acme/api/specs", 3, "spec", "internal")
     );
     assert_eq!(
-        access(&t.db, created.project_id).await.expect("access"),
-        ProjectAccess {
+        project_access(&t.db, created.project_id, Some(alice.user_id))
+            .await
+            .expect("access"),
+        Some(ProjectAccess {
             visibility: Visibility::Internal,
+            role: Some(Role::Owner),
             pending_deletion: false
-        }
+        })
     );
     t.drop_now().await;
 }
@@ -709,16 +716,21 @@ async fn access_reports_visibility_pending_deletion_and_absence() {
     .await
     .expect("mark deleted");
     assert_eq!(
-        access(&t.db, web.project_id).await.expect("access"),
-        ProjectAccess {
+        project_access(&t.db, web.project_id, None)
+            .await
+            .expect("access"),
+        Some(ProjectAccess {
             visibility: Visibility::Private,
+            role: None,
             pending_deletion: true
-        }
+        })
     );
-    let err = access(&t.db, ProjectId::new(9_999))
-        .await
-        .expect_err("unknown project");
-    assert_reason(&err, ErrorCode::NotFound, "absent");
-    assert!(err.to_string().contains("resource=project"), "{err}");
+    // Absent is None, not an error (ProjectAccessLoader).
+    assert_eq!(
+        project_access(&t.db, ProjectId::new(9_999), None)
+            .await
+            .expect("absent"),
+        None
+    );
     t.drop_now().await;
 }
