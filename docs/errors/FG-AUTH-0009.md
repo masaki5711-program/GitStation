@@ -10,9 +10,9 @@
 
 ## 利用者向けメッセージ
 
-- ja: この操作を行うと、管理者またはグループの Owner がいなくなります。先に別の管理者・Owner を用意してください。
-- en: This would leave no administrator or group Owner. Make someone else an administrator or Owner first.
-- id: Tindakan ini akan membuat tidak ada administrator atau Owner grup. Jadikan orang lain administrator atau Owner terlebih dahulu.
+- ja: 管理者またはグループの Owner がいなくなるため、この操作は拒否されました。問い合わせ番号を添えて管理者に連絡してください。
+- en: This was refused because it would leave no administrator or group Owner. Contact the administrator with the request ID.
+- id: Tindakan ini ditolak karena akan membuat tidak ada administrator atau Owner grup. Hubungi administrator dengan menyertakan ID permintaan.
 
 ## 原因 (cause)
 
@@ -20,8 +20,8 @@ An administration command was refused to keep forge manageable (ADR-0019 §10, A
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`: last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — and `ownerless_groups`, how many), admin_exists (with `active_human_admins`), not_human or user_disabled (with `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin.
+The log event carries `reason`: last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — and `ownerless_groups`, how many), admin_exists (with `active_human_admins`), not_human or user_disabled (with `user` when promoting an existing user; `bootstrap-admin --create` refuses before any user exists, so it carries no `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin.
 
 ## 対処 (fix)
 
-For last_admin / last_owner: first make another active human an administrator or an Owner of the group, then disable again; in an emergency (a leaked credential) disable with `forge admin user disable <username> --force` as an approved runbook step and recover afterwards (runbook user-offboarding). For admin_exists: bootstrap-admin is only for a forge without an active human administrator — an existing administrator grants the role instead. For not_human / user_disabled: name an active human, or use --create.
+There is no command yet to grant administrator rights or change group members (D3), so the guard cannot be satisfied by adding a successor first. For last_admin / last_owner follow runbook user-offboarding: with approval naming the successor, disable with `forge admin user disable <username> --force`, then at once restore an administrator with `forge admin bootstrap-admin --user <successor>` (or `--create`); top-level groups left without an Owner stay reported by forge doctor (FG-AUTH-0010) until a member-change route exists. For admin_exists: bootstrap-admin is only for a forge without an active human administrator. For not_human / user_disabled: name an active human, or use --create.

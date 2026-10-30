@@ -13,6 +13,18 @@
 //! locking user → group would be the reverse order and could deadlock. The
 //! user row lock alone serializes a disable with a member change that relies
 //! on that user as the remaining Owner.
+//!
+//! **Every change of `users.is_admin` or of an administrator's state**
+//! (today `disable` and `bootstrap_admin`; later a "grant / revoke admin"
+//! command, LDAP sync or any HTTP route) **must take [`lock_admin_set`]
+//! first**, in the order above. A writer that skips it can race the
+//! last-admin count of a concurrent `disable` and leave forge without an
+//! administrator. (`create` with `is_admin = true` only adds an
+//! administrator, so it cannot break that count and does not take it.)
+//!
+//! The guard and the doctor query know no group state: groups have no
+//! archived / pending-deletion state yet (M1, step D plan Q11). When one is
+//! added (D5), both must exclude such groups (ADR-0019 Amendment).
 
 use forge_core::ids::{GroupId, NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
@@ -317,34 +329,39 @@ pub async fn administration(db: &Db) -> Result<Option<Administration>, ForgeErro
         if !migrated {
             return Ok(None);
         }
-        let (users, active_human_admins): (i64, i64) = sqlx::query_as(
-            "SELECT pg_catalog.count(*), pg_catalog.count(*) FILTER \
-                 (WHERE kind = 'human' AND state = 'active' AND is_admin) \
-             FROM forge.users",
-        )
-        .fetch_one(&mut *conn)
-        .await
-        .map_err(|e| read_query_error(QUERY, e))?;
-        // Top-level groups (their namespace has no parent) without a direct
-        // active Owner, with the total count on every row.
-        let ownerless: Vec<(i64, i64)> = sqlx::query_as(
-            "SELECT g.id, pg_catalog.count(*) OVER () FROM forge.groups g \
-             JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
-             WHERE n.parent_id IS NULL \
-             AND NOT EXISTS (SELECT 1 FROM forge.group_members m \
-                 JOIN forge.users u ON u.id = m.user_id \
-                 WHERE m.group_id = g.id AND m.role = 'owner' AND u.state = 'active') \
-             ORDER BY g.id LIMIT $1",
-        )
-        .bind(SHOWN_GROUP_IDS)
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(|e| read_query_error(QUERY, e))?;
+        // One statement, so the user counts and the ownerless groups come
+        // from one snapshot (a separate REPEATABLE READ transaction would
+        // need `SET TRANSACTION`, which the db-write-boundary gate keeps
+        // inside ChangeTx). Ownerless = top-level groups (their namespace
+        // has no parent) without a direct active Owner.
+        let (users, active_human_admins, ownerless_groups, shown): (i64, i64, i64, Vec<i64>) =
+            sqlx::query_as(
+                "WITH counts AS ( \
+                     SELECT pg_catalog.count(*) AS users, pg_catalog.count(*) FILTER \
+                         (WHERE kind = 'human' AND state = 'active' AND is_admin) AS admins \
+                     FROM forge.users), \
+                 ownerless AS ( \
+                     SELECT g.id FROM forge.groups g \
+                     JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
+                     WHERE n.parent_id IS NULL \
+                     AND NOT EXISTS (SELECT 1 FROM forge.group_members m \
+                         JOIN forge.users u ON u.id = m.user_id \
+                         WHERE m.group_id = g.id AND m.role = 'owner' \
+                         AND u.state = 'active')) \
+                 SELECT c.users, c.admins, \
+                     (SELECT pg_catalog.count(*) FROM ownerless), \
+                     ARRAY(SELECT id FROM ownerless ORDER BY id LIMIT $1) \
+                 FROM counts c",
+            )
+            .bind(SHOWN_GROUP_IDS)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| read_query_error(QUERY, e))?;
         Ok(Some(Administration {
             users,
             active_human_admins,
-            ownerless_groups: ownerless.first().map_or(0, |(_, total)| *total),
-            ownerless_group_ids: ownerless.iter().map(|(id, _)| GroupId::new(*id)).collect(),
+            ownerless_groups,
+            ownerless_group_ids: shown.into_iter().map(GroupId::new).collect(),
         }))
     })
     .await

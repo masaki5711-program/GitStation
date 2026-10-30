@@ -24,4 +24,4 @@ The doctor line carries `reason` (no_admin when there is no active human adminis
 
 ## 対処 (fix)
 
-Follow runbook user-offboarding: as an approved step, run `forge admin bootstrap-admin --user <username>` (or `--create`) to restore an administrator, then make an active user an Owner of each listed group. Re-run forge doctor until users.administration is ok.
+Follow runbook user-offboarding: as an approved step, run `forge admin bootstrap-admin --user <username>` (or `--create`) to restore an administrator. Top-level groups without an Owner cannot be fixed yet (no member-change command or route exists in D3): record the listed group_ids in the incident record; the finding stays (warn) until a member-change route lands and an active user is made their Owner. Re-run forge doctor after each step.

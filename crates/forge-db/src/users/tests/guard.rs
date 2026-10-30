@@ -68,7 +68,7 @@ pub(super) async fn group_under(
     .unwrap_or_else(|e| panic!("{segment}: {e}"))
 }
 
-async fn token_for(t: &FreshDb, user: UserId, request: &str) {
+pub(super) async fn token_for(t: &FreshDb, user: UserId, request: &str) {
     tokens::issue(
         &t.db,
         &ctx(request),

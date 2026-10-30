@@ -250,3 +250,23 @@ AI のエージェントもトークンで git と API を使うため、トー�
 10. **まだできないこと（Runbook に明記）**: 管理者を付与するコマンドと、グループのメンバーを変える操作の手段（HTTP の経路）はまだない。
     そのため「先に別の管理者・Owner を用意する」手順は、今は `--force` と `bootstrap-admin` での復旧になり、Owner のいない最上位のグループは
     メンバーの変更の手段ができるまで doctor が warn を出し続ける。
+11. **グループの状態**（レビューの指摘、2026-10-30）: グループには今、アーカイブ・削除待ちの状態がない（`forge.groups` は状態の列を持たない。
+    M1 ではグループを削除しない、計画の Q11）。D5 でそのような状態を足すときは、ガードの数え上げ（`users::admin::what_disable_leaves`）と
+    doctor の `users::administration` の両方で、その状態のグループを除くこと（除かないと、消えかけのグループのために無効化が拒否される、
+    または doctor が報告し続ける）。
+12. **`actor_label` は自己申告**（レビューの指摘、変更なし）: CLI の監査の行の `actor_label = forge-cli:<OS のアカウント>` は環境変数
+    `USERNAME` / `USER` から取り、実行する人が書き換えられる。ホストの操作者が信頼の起点（§8）なので、新しい依存（OS の API での照会など）は
+    足さない。**「誰が実行したか」の正式な記録は Runbook の承認の記録**（`request_id` を残して監査の行と突き合わせる）。Runbook
+    `user-offboarding` に明記した。
+13. **HTTP から強制の経路を使えないことの検査**: `Guard::Force`・`disable_with`・`bootstrap_admin` が HTTP に出ないことを、文書だけでなく
+    forge-db のテスト `forge_web_never_names_the_operator_only_user_commands`（`crates/forge-web/src` のソースを走査）で守る。
+14. **`is_admin`・管理者の状態を変えるすべての経路は `lock_admin_set` を先に取る**: 今は `disable` と `bootstrap_admin`。管理者の付与・剥奪の
+    コマンド、LDAP の同期、HTTP の経路を足すときも、§11 の順（`users.admin_set` → 対象の行）に従う（`users/admin.rs` のモジュールの説明）。
+    `create` で `is_admin = true` の利用者を作る経路は管理者を増やすだけなので、最後の管理者の数え上げを壊さない。
+15. **doctor の読み取りは 1 つの文**: `users.administration` は、利用者の数と Owner のいない最上位のグループを 1 つの SQL 文（CTE）で読み、
+    同じスナップショットにした。REPEATABLE READ のトランザクションは `SET TRANSACTION` を要し、エージェントモデルのゲート
+    db-write-boundary が `SET TRANSACTION` を `ChangeTx` の中に限っているため使わない。
+16. **ガードを越えた無効化のログ**: `forge.admin.user.disabled` は、ガードが拒否したはずの強制（`outcome = disabled_past_guard`）のとき
+    warn（`ownerless_groups`、`left_without_admin` 付き）、それ以外は info。
+17. **最後の管理者の通常の退職**: 管理者を付与するコマンドがない間は、`--force` → 直後の `bootstrap-admin` になり、管理者のいない時間ができる。
+    承認の時点で後任を決め、無効化の直後に復旧する（Runbook）。管理者の付与のコマンドは追跡中の後続の作業。

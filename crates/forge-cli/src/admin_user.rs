@@ -67,17 +67,33 @@ pub(crate) async fn disable_with_db(
         } => ("disabled_past_guard", ownerless_groups, left_without_admin),
         DisableOutcome::AlreadyDisabled => ("already_disabled", 0, false),
     };
-    tracing::info!(
-        target: "forge_cli",
-        event = "forge.admin.user.disabled",
-        request_id = %request_id,
-        user_id = user.get(),
-        forced = force,
-        outcome = state,
-        ownerless_groups,
-        left_without_admin,
-        "user disable"
-    );
+    if matches!(outcome, DisableOutcome::DisabledPastGuard { .. }) {
+        // Forge is now short of an administrator or a group Owner (doctor:
+        // FG-AUTH-0010) until it is recovered: not a routine event.
+        tracing::warn!(
+            target: "forge_cli",
+            event = "forge.admin.user.disabled",
+            request_id = %request_id,
+            user_id = user.get(),
+            forced = force,
+            outcome = state,
+            ownerless_groups,
+            left_without_admin,
+            "user disabled past the administration guard"
+        );
+    } else {
+        tracing::info!(
+            target: "forge_cli",
+            event = "forge.admin.user.disabled",
+            request_id = %request_id,
+            user_id = user.get(),
+            forced = force,
+            outcome = state,
+            ownerless_groups,
+            left_without_admin,
+            "user disable"
+        );
+    }
     Ok(match outcome {
         DisableOutcome::Disabled => format!("user {username}: disabled\n"),
         DisableOutcome::AlreadyDisabled => {

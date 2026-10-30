@@ -66,8 +66,13 @@ connection, mapping driver errors to registered codes, migrations
   `users::administration(&Db) -> Option<Administration>` (read pool; `None`
   before the migration) is what `forge doctor` reports as
   `users.administration`: `check()` is FG-AUTH-0010 (`no_admin` /
-  `ownerless_group`, counts and the first 10 group ids), `is_fresh_install()`
-  when there is no user at all.
+  `ownerless_group`, counts and the first 10 group ids, read in one statement),
+  `is_fresh_install()` when there is no user at all.
+  **Operator-only**: `Guard::Force`, `disable_with` and `bootstrap_admin` are
+  for the CLI; the test `forge_web_never_names_the_operator_only_user_commands`
+  fails if a source under `crates/forge-web/src` names them. **Every future
+  change of `is_admin` or of an administrator's state** (grant / revoke admin,
+  LDAP sync, any HTTP route) must take `lock_admin_set` first (ADR-0019 §11).
 - `tokens::{issue, revoke, list, authenticate}` (step D3, ADR-0019): personal
   access tokens `fgp_<16 hex public_id>_<64 hex secret>`; only `sha256(secret)`
   is stored and only the write pool reads it. `issue(&Db, &ChangeContext, &NewToken)

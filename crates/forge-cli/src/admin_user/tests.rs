@@ -59,6 +59,10 @@ async fn user_disable_refuses_the_last_admin_and_force_passes_it() {
         .collect();
     assert_eq!(disabled.len(), 1, "{events:?}");
     assert_eq!(disabled[0]["fields"]["forced"], true);
+    // Past the guard: warn, with what it left behind.
+    assert_eq!(disabled[0]["level"], "WARN", "{events:?}");
+    assert_eq!(disabled[0]["fields"]["outcome"], "disabled_past_guard");
+    assert_eq!(disabled[0]["fields"]["ownerless_groups"], 0);
     assert_eq!(disabled[0]["fields"]["left_without_admin"], true);
     let all = serde_json::to_string(&events).expect("json");
     assert!(
@@ -81,10 +85,19 @@ async fn user_disable_refuses_the_last_admin_and_force_passes_it() {
 async fn user_disable_of_a_plain_user_says_disabled() {
     let t = FreshDb::migrated().await;
     user(&t, "bob", UserKind::Human, false).await;
+    let logs = Captured::default();
+    let guard = logs.install();
     let out = disable_with_db(&t.db, &rid("req-cli-bob"), "bob", false)
         .await
         .expect("disable");
+    drop(guard);
     assert_eq!(out, "user bob: disabled\n");
+    let events = logs.events();
+    let disabled = events
+        .iter()
+        .find(|e| e["fields"]["event"] == "forge.admin.user.disabled")
+        .expect("logged");
+    assert_eq!(disabled["level"], "INFO", "{events:?}");
     t.drop_now().await;
 }
 

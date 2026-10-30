@@ -84,6 +84,26 @@ async fn administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group
 }
 
 #[tokio::test]
+async fn administration_counts_every_ownerless_group_and_shows_the_first_ten() {
+    let t = FreshDb::migrated().await;
+    let _admin = account(&t, "root", UserKind::Human, true).await;
+    let alice = account(&t, "alice", UserKind::Human, false).await;
+    let mut groups = Vec::new();
+    for i in 0..12 {
+        groups.push(top_level(&t, &format!("g{i:02}"), alice).await.group_id);
+    }
+    let _ = disable_with(&t.db, &ctx("req-force"), alice, Guard::Force)
+        .await
+        .expect("forced");
+    let found = read(&t).await;
+    assert_eq!(found.ownerless_groups, 12);
+    assert_eq!(found.ownerless_group_ids, groups[..10].to_vec());
+    let err = found.check().expect_err("ownerless");
+    assert_reason(&err, ErrorCode::AdministrationOrphaned, "ownerless_group");
+    t.drop_now().await;
+}
+
+#[tokio::test]
 async fn administration_before_the_migration_is_none() {
     let t = FreshDb::new().await;
     assert_eq!(
