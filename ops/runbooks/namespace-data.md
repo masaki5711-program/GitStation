@@ -6,6 +6,9 @@
   `NamespaceResolver` / `ProjectAccessLoader`、ADR-0015）が、スキーマと forge-db のコマンドでは書かれないはずの行を見つけた。
   - `reason=stored_path_invalid`: `moved` の墓標の行き先の今のパス（セグメントから組み立て、`forge.namespaces.full_path` との完全一致で確かめたもの）が
     `NamespacePath::parse` を通らない（名前の規則に合わないセグメント、20 段より深い、255 文字より長い。CHECK が外されている）。`rule` に parse の理由
+  - `reason=moved_path_unconfirmed`: `moved` の墓標の行き先の名前空間は残っているが、セグメントから組み立てた今のパスが、同じ ID の今のパスと一致しない
+    （保存された `full_path` がセグメントと食い違う。部分木の書き換えが行を取りこぼした）。`deleted` と同じに扱うのは、行き先がパージされた
+    （`namespace_id` が NULL）ときだけである
   - `reason=unknown_namespace_kind` / `unknown_tombstone_kind` / `unknown_visibility`: 保存された種類・可視性が CHECK の外の値（`raw` に保存値）
   - `reason=namespace_without_project`: `kind = 'project'` の名前空間に、対応する `forge.projects` の行がない
   - `reason=project_without_namespace`: `forge.projects` の行に、`kind = 'project'` の名前空間がない
@@ -14,13 +17,16 @@
 ## Impact
 
 - そのパス（またはそのプロジェクト）への要求が、どの利用者でも 500 で失敗する（推測でリダイレクトしたり、行の一部で判定したりしない。拒否される）。
+- 壊れた行は `authorize()` より前に 500 になるので、ないパス・見えないパスの 404 と区別でき、そのパスに（壊れた）何かがあることが相手に分かる。
+  コードが alert で必ず知らせるため、この露出は受け入れる（直すまでの間だけ続く）。
 - データが forge-db の外で変えられている（手作業の変更、ダンプの復元、制約の削除、プロジェクト・名前空間・リポジトリの 1 対 1 対 1 の片側だけを消したパージ）。
   原因が分かるまで SEV2 として扱う。
 
 ## Diagnose（読み取りのみ）
 
 1. ログの `context` を読む: `reason`、`namespace_id`、`tombstone_id`（`moved` の墓標のとき）、`project_id`、`unknown_*` なら `raw`、
-   `stored_path_invalid` なら `rule`（パスそのものはログに出ない）。
+   `stored_path_invalid` なら `rule`（パスそのものはログに出ない）。`moved_path_unconfirmed` なら、手順 2 の名前空間から親をたどって
+   （Runbook `membership-data` の連鎖の SQL）セグメントをつなぎ、`full_path` と比べる。
 2. 行を読む:
 
    ```sql

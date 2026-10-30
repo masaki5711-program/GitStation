@@ -10,10 +10,15 @@
 //! `statement_timeout` plus the client-side bound). Each statement always
 //! returns exactly one row (an aggregate without `GROUP BY` drives it), so
 //! a live, moved, deleted, absent, visible or invisible target, a signed-in
-//! or an anonymous viewer (`$2` NULL) cost the same round trip — no early
-//! return skips a statement, so the number of statements is no oracle
-//! (ADR-0015 step 6). Visibility is never decided here: the raw facts go
-//! to `authorize()` (forge-web builds forge-auth's contexts from them).
+//! or an anonymous viewer (`$2` NULL) issue the same statement, once — no
+//! early return skips or adds one (ADR-0015 step 6). What is constant is
+//! the number and the text of the statements, **not the work inside**: an
+//! absent path stops after two index probes, a deep project walks its
+//! parent chain. That residual timing difference is accepted for now
+//! (ADR-0015 Amendment MR3; mitigations: resolve rate limiting in M2 and,
+//! if needed, a response-time floor in forge-web). Visibility is never
+//! decided here: the raw facts go to `authorize()` (forge-web builds
+//! forge-auth's contexts from them).
 //!
 //! The viewer's role comes from the role loaders' own chain
 //! (`roles::chain_cte!`, `roles::chain_role_columns!`, `roles::fold_chain`),
@@ -272,13 +277,26 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
     match kind.as_str() {
         "deleted" => Ok(Resolution::Deleted { tombstone }),
         "moved" => {
-            // A moved tombstone whose target is gone (namespace_id SET NULL
-            // by a purge) or whose current path cannot be rebuilt and
-            // confirmed is treated as deleted (ADR-0015).
-            let (Some(target), Some(true), Some(rebuilt)) =
-                (row.target_id, row.confirmed, row.rebuilt)
-            else {
+            // Only a target that is gone (namespace_id SET NULL by a purge)
+            // makes a moved tombstone deleted (ADR-0015). A target that
+            // still exists must resolve: a broken chain is FG-DB-0018 (the
+            // fold, as for a live path) and a current path that cannot be
+            // confirmed is FG-DB-0021 — never a silent Deleted.
+            let Some(target) = row.target_id else {
                 return Ok(Resolution::Deleted { tombstone });
+            };
+            let resolved = resolved(
+                target,
+                row.target_kind,
+                row.target_owner,
+                row.project,
+                row.chain,
+                viewer,
+            )?;
+            let (Some(true), Some(rebuilt)) = (row.confirmed, row.rebuilt) else {
+                return Err(invalid("moved_path_unconfirmed")
+                    .with_context("namespace_id", target)
+                    .with_context("tombstone_id", tombstone_id));
             };
             let current = NamespacePath::parse(&rebuilt).map_err(|e| {
                 let rule = e
@@ -292,14 +310,6 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
                     .with_context("tombstone_id", tombstone_id)
                     .with_context("rule", rule)
             })?;
-            let resolved = resolved(
-                target,
-                row.target_kind,
-                row.target_owner,
-                row.project,
-                row.chain,
-                viewer,
-            )?;
             Ok(Resolution::Moved {
                 resolved,
                 tombstone,

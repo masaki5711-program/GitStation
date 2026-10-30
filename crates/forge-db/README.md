@@ -139,14 +139,18 @@ connection, mapping driver errors to registered codes, migrations
   the viewer's `role`). **One statement per call, whatever the answer**
   (`RESOLVE_SQL`, `PROJECT_ACCESS_SQL`): it always returns exactly one row (an
   aggregate without `GROUP BY` drives `LEFT JOIN`s), so live / moved / deleted /
-  absent, visible / invisible and signed-in / anonymous (`$2` NULL) cost the same
-  round trip on the read pool under `Db::within` (ADR-0015 step 6). The viewer's
+  absent, visible / invisible and signed-in / anonymous (`$2` NULL) issue the same
+  one statement on the read pool under `Db::within` (ADR-0015 step 6). Only the
+  statement count and text are constant, not the work inside (an absent path is two
+  index probes, a deep project walks its chain): an accepted residual, mitigated by
+  resolve rate limiting (M2) and, if needed, a response-time floor in forge-web. The viewer's
   role is the role loaders' own chain CTE and fold (`roles::chain_cte!`,
   `chain_role_columns!`, `fold_chain`): the same `native` as `load_project_roles`
   / `load_group_roles` (tested). A `moved` tombstone's `current` path is rebuilt
   from the target's segments, confirmed by an exact match on the live paths with
-  the target's id, and read through `NamespacePath::parse`; a target that is gone
-  (purged, `namespace_id` NULL) or whose rebuilt path is not live is `Deleted`.
+  the target's id, and read through `NamespacePath::parse`. Only a purged target
+  (`namespace_id` NULL) is `Deleted`; a target that exists but whose rebuilt path is
+  not live is FG-DB-0021 `moved_path_unconfirmed`, a broken chain FG-DB-0018.
   Nothing here decides visibility (`authorize()` does). The test
   `every_outcome_runs_the_same_single_statement` counts sqlx's per-statement
   events for every outcome.
@@ -284,7 +288,7 @@ with `rules`, `push_min_role`), FG-REPO-0005 (`resource=project` / `protected_re
 `reason=absent`), FG-DB-0020 ProtectedRefDataInvalid (alert: `too_many_stored_rules`,
 `stored_pattern_invalid`, `stored_push_min_role_invalid`; ids only, never the pattern).
 Raised by `resolve`: FG-DB-0021 NamespaceDataInvalid (alert: `stored_path_invalid` with
-`rule`, `unknown_namespace_kind`, `unknown_tombstone_kind`, `unknown_visibility` with `raw`,
+`rule`, `moved_path_unconfirmed`, `unknown_namespace_kind`, `unknown_tombstone_kind`, `unknown_visibility` with `raw`,
 `namespace_without_project`, `project_without_namespace`; ids only, never the path),
 FG-DB-0018 (`namespace_chain_too_deep`, `unknown_role`; `resource=namespace` / `project`,
 `user` only for a signed-in viewer), FG-DB-0001 / 0002. Absence is `Resolution::Absent` /

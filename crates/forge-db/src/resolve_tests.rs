@@ -685,9 +685,11 @@ async fn deleted_tombstones_and_moved_ones_without_a_target_are_deleted() {
 
 /// The current path is rebuilt from the target's segments and confirmed by
 /// an exact match on the live paths: when the stored full path disagrees
-/// (a subtree rewrite that missed a row), the old path never redirects.
+/// (a subtree rewrite that missed a row), the old path never redirects and
+/// the corruption is a registered alert, not a silent `Deleted` (only a
+/// purged target is `Deleted`).
 #[tokio::test]
-async fn a_moved_tombstone_whose_rebuilt_path_is_not_live_is_deleted() {
+async fn a_moved_tombstone_whose_rebuilt_path_is_not_live_is_namespace_data_invalid() {
     let t = FreshDb::migrated().await;
     let alice = user(&t, "alice").await;
     let acme = group(&t, "acme", None, alice.user_id).await;
@@ -728,11 +730,29 @@ async fn a_moved_tombstone_whose_rebuilt_path_is_not_live_is_deleted() {
         ],
     )
     .await;
-    let want = tombstone_id(&t, "acme/api/web").await;
-    assert_eq!(
-        resolve_ok(&t, "acme/api/web", Some(alice.user_id)).await,
-        Resolution::Deleted { tombstone: want }
-    );
+    let tomb = tombstone_id(&t, "acme/api/web").await;
+    for viewer in [Some(alice.user_id), None] {
+        let err = resolve(&t.db, &path("acme/api/web"), viewer)
+            .await
+            .expect_err("never a silent Deleted while the target exists");
+        assert_reason(
+            &err,
+            ErrorCode::NamespaceDataInvalid,
+            "moved_path_unconfirmed",
+        );
+        let shown = err.to_string();
+        assert!(
+            shown.contains(&format!("namespace_id={}", web.namespace_id.get())),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(&format!("tombstone_id={}", tomb.get())),
+            "{shown}"
+        );
+        for p in ["acme/platform", "acme/api/web"] {
+            assert!(!shown.contains(p), "no path in the error: {shown}");
+        }
+    }
     t.drop_now().await;
 }
 
@@ -977,6 +997,16 @@ async fn a_cycle_in_the_resolved_chain_is_membership_data_invalid() {
     let acme = group(&t, "acme", None, alice.user_id).await;
     let api = group(&t, "api", Some(&acme), alice.user_id).await;
     let core = group(&t, "core", Some(&api), alice.user_id).await;
+    // A moved tombstone into the corrupt subtree.
+    apply(
+        &t,
+        &[tombstone(
+            "acme/old",
+            Some(core.namespace_id),
+            ("group", core.group_id.get()),
+        )],
+    )
+    .await;
     t.exec_superuser(&format!(
         "ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
          UPDATE forge.namespaces SET parent_id = {} WHERE id = {}; \
@@ -986,8 +1016,15 @@ async fn a_cycle_in_the_resolved_chain_is_membership_data_invalid() {
     ))
     .await;
     // Anonymous too: a corrupt chain is never a partial (empty) role.
-    for viewer in [Some(alice.user_id), None] {
-        let err = resolve(&t.db, &path("acme/api/core"), viewer)
+    // Through the live path and through the moved tombstone alike (a
+    // moved target's broken chain is never a silent Deleted).
+    for (raw, viewer) in [
+        ("acme/api/core", Some(alice.user_id)),
+        ("acme/api/core", None),
+        ("acme/old", Some(alice.user_id)),
+        ("acme/old", None),
+    ] {
+        let err = resolve(&t.db, &path(raw), viewer)
             .await
             .expect_err("a cycle never resolves");
         assert_reason(
