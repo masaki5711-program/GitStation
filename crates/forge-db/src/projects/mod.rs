@@ -1,7 +1,8 @@
 //! Project commands (step D4, ADR-0004, ADR-0010, ADR-0015 Amendment D4,
 //! ADR-0016): create a project with its namespace, its one repository and
-//! its first Owner, and read what `authorize()` needs about a project
-//! ([`access`]). Each command is one `ChangeTx` with one `project` audit row
+//! its first Owner, change its direct members ([`add_member`],
+//! [`change_member`], [`remove_member`], D4 MR4), and read what
+//! `authorize()` needs about a project ([`access`]). Each command is one `ChangeTx` with one `project` audit row
 //! (`forge.audited_change_present` refuses anything else).
 //!
 //! A project lives under a personal namespace or a group, never under
@@ -23,6 +24,14 @@ use crate::change::{
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, read_query_error, repositories, Db};
+
+mod members;
+pub(crate) mod ownership;
+
+pub use crate::groups::MemberChange;
+pub(crate) use members::lock_project;
+pub use members::{add_member, change_member, remove_member};
+pub use ownership::{ownerless, Ownerless};
 
 /// The audit resource type of projects, their repository and members
 /// (tables.toml), and the aggregate of their events.
@@ -370,17 +379,21 @@ pub async fn create(
         visibility,
         owner,
     };
-    tx.commit(created_record(&details, created.project_id)?)
+    tx.commit(evented_record(&details, created.project_id)?)
         .await?
         .require_recorded(details.action())?;
     Ok(created)
 }
 
-/// The audit row and the event of `project.created`: both on the project
-/// (the event scope rule, ADR-0016 Amendment D4); the event's payload is
-/// the audit details (ids, kind, visibility). No dedup key: the project id
-/// is new, so the change cannot repeat.
-fn created_record(details: &AuditDetails, project: ProjectId) -> Result<ChangeRecord, ForgeError> {
+/// The audit row and the event of a project change (`project.created`,
+/// D4 MR4 `member.*`): both on the project (the event scope rule, ADR-0016
+/// Amendment D4); the event's payload is the audit details (ids, kinds,
+/// roles). No dedup key: `project.created` names a new project and each
+/// member change is a new state, never a retry to absorb.
+pub(crate) fn evented_record(
+    details: &AuditDetails,
+    project: ProjectId,
+) -> Result<ChangeRecord, ForgeError> {
     let event_type = details.event_type().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "audit_only_event")

@@ -63,6 +63,7 @@ async fn user_disable_refuses_the_last_admin_and_force_passes_it() {
     assert_eq!(disabled[0]["level"], "WARN", "{events:?}");
     assert_eq!(disabled[0]["fields"]["outcome"], "disabled_past_guard");
     assert_eq!(disabled[0]["fields"]["ownerless_groups"], 0);
+    assert_eq!(disabled[0]["fields"]["ownerless_projects"], 0);
     assert_eq!(disabled[0]["fields"]["left_without_admin"], true);
     let all = serde_json::to_string(&events).expect("json");
     assert!(

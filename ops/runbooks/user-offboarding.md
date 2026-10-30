@@ -9,10 +9,15 @@
   - `reason=last_admin`（`user`）: その利用者が最後の有効な人間の管理者。ボット・サービスアカウント・無効化済みの利用者は数えない。
   - `reason=last_owner`（`user`、`group_id`、`ownerless_groups`）: その利用者が最上位のグループの最後の直接の有効な Owner。
     サブグループは親から Owner を継承するので数えない。
+  - `reason=last_owner`（`user`、`project_id`、`ownerless_projects`、D4 MR4）: その利用者がプロジェクトの唯一の有効な Owner
+    （直接、または祖先のグループの直接の Owner・個人の名前空間の持ち主として継承）。削除待ちのプロジェクトは数えない。
+    グループとプロジェクトの両方に当たるときは `group_id` が出て、件数は `ownerless_groups` と `ownerless_projects` の両方に出る。
   - `reason=admin_exists`（`active_human_admins`）: 有効な人間の管理者がいるので `bootstrap-admin` は使えない。
   - `reason=not_human` / `reason=user_disabled`（`user`）: `bootstrap-admin` に、人間でない・無効化された利用者を指定した。
 - `forge doctor` の `users.administration` が `FAIL ... FG-AUTH-0010` AdministrationOrphaned（warn）:
   有効な人間の管理者がいない（`reason=no_admin`）、または直接の有効な Owner のいない最上位のグループがある（`reason=ownerless_group`、`group_ids`）。
+  D4 MR4 から、有効な Owner（直接・継承）のいないプロジェクトも `reason=ownerless_project`（`ownerless_projects`、`project_ids`）で出る
+  （`forge_db::projects::ownerless`。doctor への配線は D4 の統合で行う）。
 - `forge doctor` の `users.administration` が `warn ... no users yet`: 新しいインストールで利用者がまだいない（コードなし）。最初の管理者を作る（下の「復旧」）。
 
 ## Impact
@@ -50,6 +55,14 @@
    FROM forge.group_members m
    JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = m.group_id AND n.parent_id IS NULL
    WHERE m.user_id = <user_id> AND m.role = 'owner';
+   -- 対象が直接の Owner であるプロジェクトと、ほかの有効な直接の Owner の数（継承する Owner は、
+   -- 祖先のグループの直接の Owner と個人の名前空間の持ち主。FG-AUTH-0009 の project_id で個別に確かめる）
+   SELECT m.project_id,
+          (SELECT count(*) FROM forge.project_members o JOIN forge.users u ON u.id = o.user_id
+            WHERE o.project_id = m.project_id AND o.role = 'owner' AND u.state = 'active'
+              AND o.user_id <> m.user_id) AS other_direct_owners
+   FROM forge.project_members m
+   WHERE m.user_id = <user_id> AND m.role = 'owner';
    ```
 
 2. FG-AUTH-0010 のときは、強制した無効化を監査の記録で探す。
@@ -61,7 +74,8 @@
    ORDER BY id DESC LIMIT 20;
    ```
 
-   `details` の `ownerless_groups`（Owner のいなくなった最上位のグループの数）と `left_without_admin` が、その無効化の残した状態。
+   `details` の `ownerless_groups`（Owner のいなくなった最上位のグループの数）、`ownerless_projects`（有効な Owner のいなくなった
+   プロジェクトの数、D4 MR4）と `left_without_admin` が、その無効化の残した状態。
    強制した記録がないのに FG-AUTH-0010 が出るなら、forge-db の外でデータが変えられている（Runbook `membership-data`、`append-only-violation` も確かめる）。
 
 ## Mitigate
@@ -71,7 +85,8 @@
 1. 対象が最後の管理者なら、先に別の有効な人間を管理者にする。**管理者を付与するコマンド・画面はまだない**（D3 時点）。対象が有効なあいだは
    `bootstrap-admin` も使えない（有効な管理者がいるため）。管理者の交代がどうしても必要なら、B の手順（`--force`）で無効化してから
    C の手順 2 で新しい管理者を立てる。
-2. 対象が最上位のグループの最後の Owner なら、先に別の有効な利用者をそのグループの Owner にする。**グループのメンバーを変えるコマンド・画面はまだない**
+2. 対象が最上位のグループの最後の Owner、またはプロジェクトの唯一の Owner なら、先に別の有効な利用者をそのグループ・プロジェクトの Owner にする
+   （プロジェクトのメンバーを変える HTTP の経路もまだない。forge-db の `projects::add_member` だけがある）。**グループのメンバーを変えるコマンド・画面はまだない**
    （D3 時点。forge-db の `groups::add_member` だけがある）。それまでは、その利用者の無効化は B の手順になり、Owner のいないグループが残る（C の手順 3）。
 3. 無効化する。`[MUTATING — needs approval]`（ロールバック: 無効化を戻すコマンドはまだない。失効したトークンは戻らない — 必要なら新しく発行する）
 
@@ -118,7 +133,7 @@ Owner の移譲を待てないときだけ使う。
 
    有効な人間の管理者がいると `FG-AUTH-0009 reason=admin_exists` で拒否される（何も書かない）。ボット・サービスアカウント・無効化された利用者は
    管理者にできない（`not_human` / `user_disabled`）。監査の行は `user.admin_bootstrapped`（`created`、`namespace_id`）。
-3. `group_ids` の各グループに、有効な利用者を Owner として加える。メンバーを変える操作の手段（HTTP の経路）ができるまでは実行できない:
+3. `group_ids` の各グループ（と `project_ids` の各プロジェクト）に、有効な利用者を Owner として加える。メンバーを変える操作の手段（HTTP の経路）ができるまでは実行できない:
    `group_ids` を障害記録に残し、手段ができたら加える。それまで `forge doctor` は FG-AUTH-0010（`reason=ownerless_group`）を出し続ける（warn）。
    手で `forge.group_members` に INSERT しない（監査のトリガーが拒み、監査の行を手で書くと封印の連鎖を壊しうる）。
 

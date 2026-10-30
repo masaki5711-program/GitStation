@@ -2,7 +2,7 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::event_type::EventType;
-use crate::ids::{NamespaceId, ProjectId, RepoId, UserId};
+use crate::ids::{NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
@@ -27,6 +27,9 @@ pub enum AuditDetails {
         /// Top-level groups this disable left without a direct active Owner
         /// (non-zero only when `forced`).
         ownerless_groups: i64,
+        /// Projects this disable left without any active Owner, direct or
+        /// inherited (D4 MR4; non-zero only when `forced`).
+        ownerless_projects: i64,
         /// This disable left no active human administrator (only when `forced`).
         left_without_admin: bool,
     },
@@ -101,6 +104,40 @@ pub enum AuditDetails {
         after_succeeded_job: Option<i64>,
     },
     // ── end D4 MR3b ──
+    /// `member.added` of a project (D4 MR4): the same action and JSON as
+    /// the group variant, but on a `project` audit row, and it publishes
+    /// the `member.added` event (maintainer class, ADR-0016 §5).
+    ProjectMemberAdded { user: UserId, role: Role },
+    /// `member.role_changed` of a project (D4 MR4).
+    ProjectMemberRoleChanged { user: UserId, from: Role, to: Role },
+    /// `member.removed` of a project (D4 MR4): the role the member had.
+    ProjectMemberRemoved { user: UserId, role: Role },
+    /// `protected_ref.created` (D4 MR5, ADR-0008): the rule, its pattern as
+    /// written (a ref pattern, not personal data) and its minimum push role.
+    /// Also the payload of the event (maintainer class).
+    ProtectedRefCreated {
+        rule: ProtectedRefId,
+        pattern: String,
+        push_min_role: Role,
+    },
+    /// `protected_ref.updated` (D4 MR5): the minimum push role changed.
+    ProtectedRefUpdated {
+        rule: ProtectedRefId,
+        pattern: String,
+        from: Role,
+        to: Role,
+    },
+    /// `protected_ref.deleted` (D4 MR5): the rule as it was stored. A row
+    /// this build cannot read (FG-DB-0020) can still be deleted: then
+    /// `stored_invalid` is set, `pattern` is the stored text cut to 255
+    /// bytes and `push_min_role` the stored text cut to 32 characters
+    /// (D4 review).
+    ProtectedRefDeleted {
+        rule: ProtectedRefId,
+        pattern: String,
+        push_min_role: String,
+        stored_invalid: bool,
+    },
 }
 
 impl AuditDetails {
@@ -121,12 +158,18 @@ impl AuditDetails {
             Self::RepositoryCreated { .. } => "repository.created",
             Self::RepositoryReprovisionRequested { .. } => "repository.reprovision_requested",
             // ── end D4 MR3b ──
+            Self::ProjectMemberAdded { .. } => "member.added",
+            Self::ProjectMemberRoleChanged { .. } => "member.role_changed",
+            Self::ProjectMemberRemoved { .. } => "member.removed",
+            Self::ProtectedRefCreated { .. } => "protected_ref.created",
+            Self::ProtectedRefUpdated { .. } => "protected_ref.updated",
+            Self::ProtectedRefDeleted { .. } => "protected_ref.deleted",
         }
     }
 
     /// The event a change with these details publishes, `None` for the
     /// audit-only actions (`user.*`, `group.*`, `member.*` of groups; D-plan
-    /// Q4, Q8).
+    /// Q4, Q8). `member.*` of a project is an event (D4 plan answer 3).
     /// When `Some`, its name is [`Self::action`].
     pub fn event_type(&self) -> Option<EventType> {
         match self {
@@ -144,12 +187,19 @@ impl AuditDetails {
             Self::RepositoryCreated { .. } => Some(EventType::RepositoryCreated),
             Self::RepositoryReprovisionRequested { .. } => None,
             // ── end D4 MR3b ──
+            Self::ProjectMemberAdded { .. } => Some(EventType::MemberAdded),
+            Self::ProjectMemberRoleChanged { .. } => Some(EventType::MemberRoleChanged),
+            Self::ProjectMemberRemoved { .. } => Some(EventType::MemberRemoved),
+            Self::ProtectedRefCreated { .. } => Some(EventType::ProtectedRefCreated),
+            Self::ProtectedRefUpdated { .. } => Some(EventType::ProtectedRefUpdated),
+            Self::ProtectedRefDeleted { .. } => Some(EventType::ProtectedRefDeleted),
         }
     }
 
     /// The JSON stored in `audit_log.details`:
     /// UserCreated `{"kind","namespace_id","is_admin"}`,
-    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","left_without_admin"}`,
+    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","ownerless_projects",
+    /// "left_without_admin"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
@@ -161,6 +211,12 @@ impl AuditDetails {
     /// RepositoryCreated `{"project_id","repository_id","kind"}`,
     /// RepositoryReprovisionRequested `{"repository_id","job_id","holder_job_id",
     /// "holder_state"}` (`holder_state` = `succeeded` with its id, or `none`).
+    /// ProjectMemberAdded / ProjectMemberRemoved `{"user_id","role"}`,
+    /// ProjectMemberRoleChanged `{"user_id","from","to"}` (the group shapes),
+    /// ProtectedRefCreated `{"protected_ref_id","pattern","push_min_role"}`,
+    /// ProtectedRefDeleted
+    /// `{"protected_ref_id","pattern","push_min_role","stored_invalid"}`,
+    /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -177,12 +233,14 @@ impl AuditDetails {
                 revoked_tokens,
                 forced,
                 ownerless_groups,
+                ownerless_projects,
                 left_without_admin,
             } => serde_json::json!({
                 "kind": kind.as_str(),
                 "revoked_tokens": revoked_tokens,
                 "forced": forced,
                 "ownerless_groups": ownerless_groups,
+                "ownerless_projects": ownerless_projects,
                 "left_without_admin": left_without_admin,
             }),
             Self::AdminBootstrapped {
@@ -218,11 +276,46 @@ impl AuditDetails {
                 "visibility": visibility.as_str(),
                 "owner_id": owner.get(),
             }),
-            Self::MemberAdded { user, role } | Self::MemberRemoved { user, role } => {
+            Self::MemberAdded { user, role }
+            | Self::MemberRemoved { user, role }
+            | Self::ProjectMemberAdded { user, role }
+            | Self::ProjectMemberRemoved { user, role } => {
                 serde_json::json!({ "user_id": user.get(), "role": role.as_str() })
             }
-            Self::MemberRoleChanged { user, from, to } => serde_json::json!({
+            Self::MemberRoleChanged { user, from, to }
+            | Self::ProjectMemberRoleChanged { user, from, to } => serde_json::json!({
                 "user_id": user.get(),
+                "from": from.as_str(),
+                "to": to.as_str(),
+            }),
+            Self::ProtectedRefCreated {
+                rule,
+                pattern,
+                push_min_role,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
+                "push_min_role": push_min_role.as_str(),
+            }),
+            Self::ProtectedRefDeleted {
+                rule,
+                pattern,
+                push_min_role,
+                stored_invalid,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
+                "push_min_role": push_min_role,
+                "stored_invalid": stored_invalid,
+            }),
+            Self::ProtectedRefUpdated {
+                rule,
+                pattern,
+                from,
+                to,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
                 "from": from.as_str(),
                 "to": to.as_str(),
             }),

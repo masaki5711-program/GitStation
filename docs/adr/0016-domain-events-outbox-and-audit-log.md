@@ -752,3 +752,19 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
     両方の順序をテストで固定した。
   - doctor の `repositories.provisioning` は詰まったものを SQL で選ぶ（`job_not_live` を先、それぞれ古い順、古い 10 000 件を分類）。
     理由ごとの件数 `job_not_live` / `too_old` を `FG-REPO-0012` の context に入れる。
+
+## Amendment（2026-10-31、手順 D4 MR4: プロジェクトの `member.*` のイベント）
+
+- `EventType::{MemberAdded, MemberRoleChanged, MemberRemoved}`（`member.added`・`member.role_changed`・`member.removed`、分類 `maintainer`、§5）を足す。
+  書き手は `projects::{add_member, change_member, remove_member}`。監査の行はプロジェクト（`project` / id、`project_id` あり）、イベントの集約も
+  `project` / id、ペイロードは監査の詳細（`AuditDetails::ProjectMember*`、グループと同じ JSON の形 `{"user_id","role"}` / `{"user_id","from","to"}`）。
+  重複除去の鍵は付けない（メンバーの変更は毎回新しい状態で、吸収すべき再試行ではない）。
+- グループのメンバーの変更（`AuditDetails::Member*`）は監査だけのまま（計画 Q8、`event_type()` は `None`、テスト
+  `project_member_details_have_the_group_shapes_and_publish_maintainer_events`）。
+
+## Amendment（2026-10-31、手順 D4 MR5: `protected_ref.*` のイベント）
+
+- §10 の M1 のイベントに `protected_ref.*` を足す: `EventType::{ProtectedRefCreated, ProtectedRefUpdated, ProtectedRefDeleted}`
+  （`protected_ref.created`・`protected_ref.updated`・`protected_ref.deleted`、分類 `maintainer`、§5）。書き手は `protected_refs::{create, change, delete}`。
+  監査の行とイベントの集約はプロジェクト（`project` / id、`project_id` あり）、ペイロードは監査の詳細（`{"protected_ref_id","pattern","push_min_role"}`、
+  更新は `{"protected_ref_id","pattern","from","to"}`）。パターンは ref の名前の形で、個人に関わる値ではない。重複除去の鍵は付けない。

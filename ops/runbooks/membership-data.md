@@ -4,7 +4,7 @@
 
 - `error_code=FG-DB-0018` MembershipDataInvalid（ログ）: ロールの読み込み（`forge_db::roles`）が、スキーマと forge-db のコマンドでは書かれないはずの行を見つけた。
   - `reason=namespace_chain_too_deep`: 名前空間の親をたどると 20 段を超える（`namespaces.parent_id` のループ、または CHECK が拒むはずの深さ）
-  - `reason=unknown_role`: `group_members.role` が 5 つのロール以外の値
+  - `reason=unknown_role`: `group_members.role` / `project_members.role`（D4 MR4、`resource=project`）が 5 つのロール以外の値
 
 ## Impact
 
@@ -28,6 +28,7 @@
    子グループのページで起点が `resource=group` のときは、`SELECT id FROM forge.namespaces WHERE kind = 'group' AND owner_id = <id>;` で名前空間の id を得る。
 3. `unknown_role`: `SELECT group_id, user_id, role FROM forge.group_members WHERE role NOT IN ('guest','reporter','developer','maintainer','owner');`
    と、制約が残っているか `SELECT conname FROM pg_constraint WHERE conname = 'group_members_role';` を確かめる。
+   `resource=project` なら同じことを `forge.project_members`（`project_id`）と制約 `project_members_role` で行う。
 4. いつ誰が変えたか: `forge_audit.ddl_audit`（制約・トリガーの変更）と、`forge.audit_log` の `group.*` / `member.*` の行（正しい履歴）を見る。
    監査の行のない変更は、トリガーが無効だった時間がある — Runbook `append-only-violation` も確かめる。
 
@@ -38,6 +39,13 @@
    正しい値（`forge.audit_log` の `group.*` / `member.*` の行、またはバックアップ）を障害記録に残したうえで、修復の手段（forge-db の型付きコマンドか、レビューを通した 1 回限りの手順）を
    通常の開発の流れで作る。それを実行する段階は `[MUTATING — needs approval]`（ロールバック: 修復の手段と一緒に、戻す前の値と戻し方を障害記録に残す）
 2. 外された制約・トリガーを、マイグレーションのファイルの定義どおりに戻す。`[MUTATING — needs approval]`（ロールバック: 不要。出荷した状態に揃えるだけ）
+
+### 関連: 直接の Owner が無効化された利用者だけのプロジェクト（FG-REPO-0010 `last_owner`）
+
+FG-DB-0018 ではないが、同じ「メンバーのデータ」の相談として来る。プロジェクトの直接の Owner が無効化された利用者だけで、継承する Owner
+（祖先のグループの直接の Owner、個人の名前空間の持ち主）もいないと、そのプロジェクトのメンバーを外す・降格する変更は `last_owner` で拒否される
+（無効化された Owner は数えない）。**先に有効な利用者を Owner として加える**（`projects::add_member`。HTTP の経路はまだない）。
+`forge doctor` は、そのようなプロジェクトを FG-AUTH-0010 `ownerless_project` として出す（Runbook `user-offboarding` の C）。
 
 ## Verify
 

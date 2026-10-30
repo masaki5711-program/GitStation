@@ -77,6 +77,9 @@ pub mod projects;
 mod projects_schema_tests;
 pub mod repositories;
 // ── end D4 ──
+// ── D4 MR5: protected ref rules ──
+pub mod protected_refs;
+// ── end D4 MR5 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

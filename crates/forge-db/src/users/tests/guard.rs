@@ -169,9 +169,15 @@ async fn disabling_the_last_direct_owner_of_a_top_level_group_is_refused() {
     groups::add_member(&t.db, &ctx("req-add-bob"), team.group_id, bob, Role::Owner)
         .await
         .expect("bob owner of team");
-    groups::remove_member(&t.db, &ctx("req-rm-alice"), team.group_id, alice)
-        .await
-        .expect("alice leaves team");
+    groups::remove_member(
+        &t.db,
+        &ctx("req-rm-alice"),
+        team.group_id,
+        alice,
+        Role::Owner,
+    )
+    .await
+    .expect("alice leaves team");
     let outcome = disable(&t.db, &ctx("req-disable-bob"), bob)
         .await
         .expect("a subgroup does not need a direct owner");
@@ -210,6 +216,7 @@ async fn a_forced_disable_passes_the_guard_and_records_what_it_left() {
         outcome,
         DisableOutcome::DisabledPastGuard {
             ownerless_groups: 2,
+            ownerless_projects: 0,
             left_without_admin: true,
         }
     );
@@ -235,6 +242,7 @@ async fn a_forced_disable_passes_the_guard_and_records_what_it_left() {
             "revoked_tokens": 1,
             "forced": true,
             "ownerless_groups": 2,
+            "ownerless_projects": 0,
             "left_without_admin": true,
         })
     );
@@ -274,6 +282,7 @@ async fn a_forced_disable_the_guard_would_allow_is_a_plain_disable() {
             "revoked_tokens": 0,
             "forced": true,
             "ownerless_groups": 0,
+            "ownerless_projects": 0,
             "left_without_admin": false,
         })
     );

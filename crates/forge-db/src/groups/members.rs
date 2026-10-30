@@ -109,6 +109,21 @@ async fn keep_an_owner(
     Ok(())
 }
 
+/// The precondition of `change_member` / `remove_member`: the member's
+/// direct role re-read under the lock must still be `from`, the role the
+/// caller loaded and authorized against (`authorize()` with
+/// `MembershipChange::{Change, Remove}`). Otherwise the membership changed
+/// in between (e.g. a promotion to Owner) and the authorization no longer
+/// holds: `FG-REPO-0010` `role_changed` with `expected` / `actual`.
+fn check_from(stored: Role, from: Role) -> Result<(), ForgeError> {
+    if stored == from {
+        return Ok(());
+    }
+    Err(membership_conflict("role_changed")
+        .with_context("expected", from.as_str())
+        .with_context("actual", stored.as_str()))
+}
+
 async fn commit(tx: ChangeTx, group: GroupId, details: &AuditDetails) -> Result<(), ForgeError> {
     tx.commit(ChangeRecord::audit_only(details, RESOURCE, group.get()))
         .await?
@@ -147,8 +162,10 @@ pub async fn add_member(
     commit(tx, group, &AuditDetails::MemberAdded { user, role }).await
 }
 
-/// Give a member another role: one `member.role_changed` audit row, or
-/// `Unchanged` (nothing written) when the role is the same. Demoting the
+/// Give a member the role `to`: one `member.role_changed` audit row, or
+/// `Unchanged` (nothing written) when `to` is `from`. `from` is the
+/// member's direct role as the caller loaded it before `authorize()`; a
+/// different stored role is `FG-REPO-0010` `role_changed` (D4 review). Demoting the
 /// last direct active Owner of a top-level group is `FG-REPO-0010`
 /// `last_owner`; a non-member is `not_member`.
 pub async fn change_member(
@@ -156,15 +173,17 @@ pub async fn change_member(
     ctx: &ChangeContext,
     group: GroupId,
     user: UserId,
-    role: Role,
+    from: Role,
+    to: Role,
 ) -> Result<MemberChange, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let top_level = tx.step(|c| lock_group(c, group)).await?;
-    let from = tx
+    let stored = tx
         .step(|c| direct_role(c, group, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
-    if from == role {
+    check_from(stored, from)?;
+    if from == to {
         // Dropping the transaction releases the lock; nothing was written.
         return Ok(MemberChange::Unchanged);
     }
@@ -178,22 +197,20 @@ pub async fn change_member(
         )
         .bind(group.get())
         .bind(user.get())
-        .bind(role.as_str())
+        .bind(to.as_str())
         .execute(c)
         .await
         .map_err(|e| query_error("groups.change_member", e))
     })
     .await?;
-    let details = AuditDetails::MemberRoleChanged {
-        user,
-        from,
-        to: role,
-    };
+    let details = AuditDetails::MemberRoleChanged { user, from, to };
     commit(tx, group, &details).await?;
     Ok(MemberChange::Changed { from })
 }
 
-/// Remove a direct member: one `member.removed` audit row. Removing the
+/// Remove a direct member whose direct role is `from` (as loaded before
+/// `authorize()`; else `FG-REPO-0010` `role_changed`): one
+/// `member.removed` audit row. Removing the
 /// last direct active Owner of a top-level group is `FG-REPO-0010`
 /// `last_owner`; a non-member is `not_member`.
 pub async fn remove_member(
@@ -201,6 +218,7 @@ pub async fn remove_member(
     ctx: &ChangeContext,
     group: GroupId,
     user: UserId,
+    from: Role,
 ) -> Result<(), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let top_level = tx.step(|c| lock_group(c, group)).await?;
@@ -208,6 +226,7 @@ pub async fn remove_member(
         .step(|c| direct_role(c, group, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
+    check_from(role, from)?;
     if top_level && role == Role::Owner {
         tx.step(|c| keep_an_owner(c, group, user)).await?;
     }

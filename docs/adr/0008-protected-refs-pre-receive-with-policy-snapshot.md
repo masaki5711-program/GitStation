@@ -62,3 +62,19 @@ ref ごとの `update` フックでは、複数の ref の push が一部だけ�
   `(project_id, lower(pattern))` で、`pattern` は `COLLATE "C"` なので `lower()` は ASCII だけを畳む（サーバーのロケールに依らない）。
   ASCII 以外の大文字小文字の違いは、D4 MR5 の書き込みが `RefPattern::key()` で調べる（`duplicate_pattern`）。規則の数の上限
   （1 プロジェクト 100、`too_many_rules`）も MR5 で、アプリケーションだけが守る（DB には上限がない）。
+
+## Amendment（2026-10-31、手順 D4 MR5: 規則の書き込みと読み込み）
+
+- 規則の書き手は `forge_db::protected_refs::{create, change, delete}` だけ。どれもプロジェクトの行を `FOR UPDATE` で取ってから既存の規則を読むので、
+  規則の数（100 まで、`too_many_rules`）と重複（`RefPattern::key()` で比べる。ASCII 以外の大文字小文字も、`duplicate_pattern`）は確定した規則に対して調べられ、
+  同時の作成で破れない。`push_min_role` に Guest / Reporter は使えない（`FG-REPO-0013 push_min_role`）。`change` は `push_min_role` だけを変える
+  （パターンを変えるには、消して作り直す）。監査の行はプロジェクト（`project` / id、`project_id` あり）、イベントは `protected_ref.*`（分類 `maintainer`、
+  ADR-0016 の D4 MR5 の Amendment）。
+- **ポリシーのスナップショットは `protected_refs::levels_for(db, ProjectId, &RefName)` から作る**。これは、そのプロジェクトの規則のうちパターンが ref に一致する
+  **すべて** の `push_min_role` を返し（`RefPattern::matches`、大文字小文字を区別しない）、`RefProtection::effective` が最も厳しいものを選ぶ。最初に一致した規則だけを
+  使う実装にはしない（規則を足しても保護が緩まないことを、forge-web のテスト `adding_a_rule_never_loosens_protection` が DB から確かめる）。
+  読み込みは読み取り用のプールの 1 文で、行は 101 までに限る。100 を超える行、読めないパターン・ロールは規則を飛ばさずに `FG-DB-0020`
+  ProtectedRefDataInvalid（alert、Runbook `protected-ref-data`）で拒否する。
+- （D4 のレビュー）`delete` は行を解釈せずに取る（同じプロジェクトの中だけ）。読めない行（FG-DB-0020）も消せるようにするため（Runbook `protected-ref-data`
+  の修復の手順）。監査の詳細は保存されていた文字列（パターンは 255 バイト、ロールは 32 文字まで）と `stored_invalid: true`。保存された行が 100 を超えるときは、
+  `create` も `too_many_rules` ではなく FG-DB-0020 `too_many_stored_rules` を返す。

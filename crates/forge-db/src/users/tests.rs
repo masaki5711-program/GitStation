@@ -292,6 +292,7 @@ async fn user_disable_writes_one_audit_row_and_no_event() {
             "revoked_tokens": 0,
             "forced": false,
             "ownerless_groups": 0,
+            "ownerless_projects": 0,
             "left_without_admin": false,
         })
     );

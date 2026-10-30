@@ -41,6 +41,7 @@ fn audit_details_have_no_pii_fields() {
         revoked_tokens: 3,
         forced: true,
         ownerless_groups: 2,
+        ownerless_projects: 1,
         left_without_admin: false,
     };
     // D3 MR2: the recovery path writes ids and flags only.
@@ -64,6 +65,7 @@ fn audit_details_have_no_pii_fields() {
             "revoked_tokens": 3,
             "forced": true,
             "ownerless_groups": 2,
+            "ownerless_projects": 1,
             "left_without_admin": false,
         })
     );
@@ -277,3 +279,129 @@ fn repository_created_and_reprovision_requested_have_ids_only() {
     }
 }
 // ── end D4 MR3b ──
+
+#[test]
+fn project_member_details_have_the_group_shapes_and_publish_maintainer_events() {
+    use crate::{EventType, VisibilityClass};
+    let user = UserId::new(12);
+    let cases = [
+        (
+            AuditDetails::ProjectMemberAdded {
+                user,
+                role: Role::Developer,
+            },
+            AuditDetails::MemberAdded {
+                user,
+                role: Role::Developer,
+            },
+            EventType::MemberAdded,
+            json!({"user_id": 12, "role": "developer"}),
+        ),
+        (
+            AuditDetails::ProjectMemberRoleChanged {
+                user,
+                from: Role::Developer,
+                to: Role::Owner,
+            },
+            AuditDetails::MemberRoleChanged {
+                user,
+                from: Role::Developer,
+                to: Role::Owner,
+            },
+            EventType::MemberRoleChanged,
+            json!({"user_id": 12, "from": "developer", "to": "owner"}),
+        ),
+        (
+            AuditDetails::ProjectMemberRemoved {
+                user,
+                role: Role::Owner,
+            },
+            AuditDetails::MemberRemoved {
+                user,
+                role: Role::Owner,
+            },
+            EventType::MemberRemoved,
+            json!({"user_id": 12, "role": "owner"}),
+        ),
+    ];
+    for (project, group, event, shape) in cases {
+        // One action string and one JSON shape for both kinds of member.
+        assert_eq!(project.action(), group.action());
+        assert_eq!(project.to_value(), shape);
+        assert_eq!(group.to_value(), shape);
+        // A project's member change is an event of the maintainer class
+        // (ADR-0016 §5); a group's stays audit-only (Q8).
+        assert_eq!(project.event_type(), Some(event));
+        assert_eq!(event.as_str(), project.action());
+        assert_eq!(event.visibility_class(), VisibilityClass::Maintainer);
+        assert_eq!(group.event_type(), None, "{group:?}");
+        let mut found = Vec::new();
+        keys(&project.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii}");
+        }
+    }
+}
+
+#[test]
+fn protected_ref_details_have_their_exact_shape_and_publish_maintainer_events() {
+    use crate::ids::ProtectedRefId;
+    use crate::{EventType, VisibilityClass};
+    let rule = ProtectedRefId::new(4);
+    let created = AuditDetails::ProtectedRefCreated {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        push_min_role: Role::Maintainer,
+    };
+    let updated = AuditDetails::ProtectedRefUpdated {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        from: Role::Maintainer,
+        to: Role::Owner,
+    };
+    let deleted = AuditDetails::ProtectedRefDeleted {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        push_min_role: "owner".to_owned(),
+        stored_invalid: false,
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "maintainer"})
+    );
+    assert_eq!(
+        updated.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "from": "maintainer", "to": "owner"})
+    );
+    assert_eq!(
+        deleted.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "owner", "stored_invalid": false})
+    );
+    for (details, action, event) in [
+        (
+            &created,
+            "protected_ref.created",
+            EventType::ProtectedRefCreated,
+        ),
+        (
+            &updated,
+            "protected_ref.updated",
+            EventType::ProtectedRefUpdated,
+        ),
+        (
+            &deleted,
+            "protected_ref.deleted",
+            EventType::ProtectedRefDeleted,
+        ),
+    ] {
+        assert_eq!(details.action(), action);
+        assert_eq!(details.event_type(), Some(event));
+        assert_eq!(event.as_str(), action);
+        assert_eq!(event.visibility_class(), VisibilityClass::Maintainer);
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii}");
+        }
+    }
+}

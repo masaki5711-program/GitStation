@@ -13,6 +13,7 @@ use crate::groups::{self, CreatedGroup, NewGroup};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
+mod members;
 mod race;
 
 fn ctx(request: &str) -> ChangeContext {

@@ -196,11 +196,22 @@ async fn a_disabled_member_has_no_project_role() {
             .expect("disable bob"),
         users::DisableOutcome::Disabled
     );
+    // carol is the only Owner of carol/notes: since D4 MR4 the disable
+    // guard refuses that unless forced (ADR-0019 Amendment D4 MR4).
     assert_eq!(
-        users::disable(&t.db, &ctx("req-disable-carol"), carol.user_id)
-            .await
-            .expect("disable carol"),
-        users::DisableOutcome::Disabled
+        users::disable_with(
+            &t.db,
+            &ctx("req-disable-carol"),
+            carol.user_id,
+            users::Guard::Force
+        )
+        .await
+        .expect("disable carol"),
+        users::DisableOutcome::DisabledPastGuard {
+            ownerless_groups: 0,
+            ownerless_projects: 1,
+            left_without_admin: false,
+        }
     );
     // An inherited group role, a direct role and a personal namespace's
     // ownership all end with the account.
