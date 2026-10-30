@@ -152,3 +152,11 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
   forge-auth の `ProjectView { visibility, role, pending_deletion }` を組み立てる。`pending_deletion` は `deleted_at` があること（D5 が書く）。
   forge-db は forge-auth に依存しない（依存の向き）ので、組み立ては呼び出し側（プロジェクトの経路を入れる後の手順）が行う。`authorize()` と権限のマトリクスは変わらない。
 - 継承された Owner がいる間は、最後の直接の Owner を外すことを拒まない（回答 2、MR4 で実装）。
+
+## Amendment（2026-10-30、M1 phase 8 MR2: 認可の証明と新しい Action）
+
+- 判定の点は引き続き `authorize()` の 1 つだけである。その上に `prove()` → `Authorized<R>`（ADR-0015）を足したが、`prove()` は `authorize()` を
+  呼ぶだけで、規則を持たない。matrix のテストは引き続き `authorize()` を直接呼び、`prove_denies_exactly_like_authorize` が両者の一致を確かめる。
+- 新しい Action `PathResolve`（`read_api`）と `WebShell`（公開）を足し、`Resource::Unresolved` / `Resource::Resolved` を足した（細部は ADR-0015 の
+  同じ日付の Amendment）。公開の Action は `Health` と `WebShell` の 2 つになった。どちらもルートがまだないので `app::PLANNED` に入れ、
+  `gen-authz` で `docs/authz/*.generated.json` を作り直した（OpenAPI は変わらない）。

@@ -220,6 +220,32 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::AuditRead, W::Owner, F::PrivateProject, Allow),
     row(A::AuditRead, W::Maintainer, F::PrivateProject, deny(E::Forbidden)),
     row(A::AuditRead, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    // --- PathResolve (`GET /api/v1/namespaces/resolve?path=`, ADR-0015) ---
+    // Decided by "can see" (Guest on private resolves), not by a read role.
+    // The `prefix=true` rows (ADR-0015) arrive with that mode in M2.
+    row(A::PathResolve, W::Developer, F::ResolvedPrivate, Allow),
+    row(A::PathResolve, W::NonMember, F::ResolvedInternal, Allow),
+    row(A::PathResolve, W::Guest, F::ResolvedPrivate, Allow),
+    row(A::PathResolve, W::Developer, F::MovedPrivate, Allow),
+    row(A::PathResolve, W::NonMember, F::ResolvedGroup, Allow),
+    row(A::PathResolve, W::NonMember, F::ResolvedUser, Allow),
+    row(A::PathResolve, W::Admin, F::ResolvedPrivate, Allow),
+    row(A::PathResolve, W::OwnerTokenReadApi, F::ResolvedPrivate, Allow),
+    row(A::PathResolve, W::Anonymous, F::ResolvedPrivate, deny(E::Unauthenticated)),
+    row(A::PathResolve, W::Anonymous, F::Absent, deny(E::Unauthenticated)),
+    row(A::PathResolve, W::Disabled, F::ResolvedPrivate, deny(E::AccountDisabled)),
+    row(A::PathResolve, W::Disabled, F::Absent, deny(E::AccountDisabled)),
+    row(A::PathResolve, W::NonMember, F::ResolvedPrivate, deny(E::NotFound)),
+    row(A::PathResolve, W::Developer, F::Absent, deny(E::NotFound)),
+    row(A::PathResolve, W::Admin, F::Absent, deny(E::NotFound)),
+    row(A::PathResolve, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
+    row(A::PathResolve, W::NonMember, F::MovedPrivate, deny(E::NotFound)),
+    row(A::PathResolve, W::DevTokenReadRepository, F::ResolvedPrivate, deny(E::InsufficientScope)),
+    row(A::PathResolve, W::Developer, F::ResolvedDeleted, deny(E::PendingDeletion)),
+    // --- WebShell (the SPA's index.html: same body for every path, no DB) ---
+    row(A::WebShell, W::Anonymous, F::Instance, Allow),
+    row(A::WebShell, W::Disabled, F::Instance, Allow),
+    row(A::WebShell, W::DevTokenReadRepository, F::Instance, Allow),
     // --- Operations ---
     row(A::Health, W::Anonymous, F::Instance, Allow),
     row(A::Metrics, W::Admin, F::Instance, Allow),

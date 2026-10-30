@@ -119,6 +119,9 @@ pub const PLANNED: &[Action] = &[
     Action::UserCreate,
     Action::UserDisable,
     Action::AuditRead,
+    // ADR-0015 (M1 phase 8): routed by the dispatcher (MR4).
+    Action::PathResolve,
+    Action::WebShell,
     Action::Metrics,
 ];
 

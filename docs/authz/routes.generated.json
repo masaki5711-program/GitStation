@@ -96,6 +96,14 @@
     "planned": true
   },
   {
+    "action": "PathResolve",
+    "planned": true
+  },
+  {
+    "action": "WebShell",
+    "planned": true
+  },
+  {
     "action": "Metrics",
     "planned": true
   }

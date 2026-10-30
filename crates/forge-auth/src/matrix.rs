@@ -12,7 +12,8 @@ use crate::model::{MembershipChange, RefKind, RefUpdate, Role};
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
-    Credential, MembershipScope, Principal, ProjectView, RefProtection, Resource, Scope, Visibility,
+    Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection, ResolvedVia,
+    Resource, Scope, UnresolvedReason, Visibility,
 };
 #[cfg(test)]
 use forge_core::UserId;
@@ -91,6 +92,22 @@ pub(crate) enum Fixture {
     /// Creating a token for another user.
     ForeignTokenRequest,
     Instance,
+    /// A path resolved (live) to a private project.
+    ResolvedPrivate,
+    /// A path resolved (live) to an internal project.
+    ResolvedInternal,
+    /// A path resolved (live) to a private project pending deletion.
+    ResolvedDeleted,
+    /// A `moved` tombstone pointing at a private project.
+    MovedPrivate,
+    /// A path resolved (live) to a group.
+    ResolvedGroup,
+    /// A path resolved (live) to a personal namespace.
+    ResolvedUser,
+    /// Nothing at the path.
+    Absent,
+    /// A `deleted` tombstone at the path.
+    DeletedTombstone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +203,7 @@ impl Fixture {
             change,
             removes_last_owner: false,
         };
+        let resolved = |via, view| Resource::Resolved { via, view };
         let branch_ff = |project| Resource::Ref {
             project,
             name: ref_name(RefKind::Branch),
@@ -257,6 +275,20 @@ impl Fixture {
                 scopes: vec![Scope::ReadRepository],
             },
             Fixture::Instance => Resource::Instance,
+            Fixture::ResolvedPrivate => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(private))
+            }
+            Fixture::ResolvedInternal => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(internal))
+            }
+            Fixture::ResolvedDeleted => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(deleted))
+            }
+            Fixture::MovedPrivate => resolved(ResolvedVia::Moved, NamespaceView::Project(private)),
+            Fixture::ResolvedGroup => resolved(ResolvedVia::Live, NamespaceView::Group { role }),
+            Fixture::ResolvedUser => resolved(ResolvedVia::Live, NamespaceView::User),
+            Fixture::Absent => Resource::Unresolved(UnresolvedReason::Absent),
+            Fixture::DeletedTombstone => Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
         }
     }
 }

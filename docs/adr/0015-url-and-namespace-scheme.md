@@ -545,3 +545,35 @@ impl<S> Registry<S> {
   `project_id` あり）に付け、`member.*` のイベント（分類 `maintainer`、ADR-0016 §5）を同じ変更で出す。グループのメンバーの変更は監査だけのまま。
 - 最後の Owner の方針（継承された有効な Owner がいる間は最後の直接の Owner を外せる）と、それが無効化のガードと doctor に与える影響は
   ADR-0019 の Amendment（D4 MR4）に書く。
+
+## Amendment（2026-10-30、M1 phase 8 MR2: `prove()` / `Authorized<R>` と `PathResolve` / `WebShell`）
+
+上の「インターフェースの概略」と「新しい Action と変わる Resource の最小の matrix の行」を、forge-auth に実装した（`feat/auth-prove-authorized`）。
+概略から変えた点と、決めた点は次のとおり。
+
+- **`Resource::Resolved` の形**: 概略の `Resolved { kind, view }` は、`Resolved { via: ResolvedVia, view: NamespaceView }` にした。
+  - `NamespaceView` は `User` / `Group { role }` / `Project(ProjectView)` で、**種類は variant そのもの** にした（`kind()` が `user` / `group` / `project` を返す）。
+    `kind` と `view` を別の欄にすると、`kind = group` で `view` がプロジェクト、という食い違いが型の上で作れてしまうため。
+  - `ResolvedVia` は `Live` / `Moved`。`moved` の墓標を通って届いた先が見えないときに、ログの `reason` を `not_visible` ではなく
+    `tombstone_not_visible` にするためだけに使う（コードと応答は同じ FG-REPO-0005）。
+- **`Resource::Unresolved` に理由を持たせた**: `Unresolved(UnresolvedReason)`、`UnresolvedReason` は `Absent` / `TombstoneDeleted`。
+  どちらも同じ FG-REPO-0005 で、違いはログの `reason`（`absent` / `tombstone_deleted`）だけ（「判定の順序」の 6）。
+- **`PathResolve` の判定の順序**: 認証なし → FG-AUTH-0001、無効 → FG-AUTH-0004、`Unresolved` → FG-REPO-0005（**スコープの検査より前**。
+  ないパスへの答えがトークンによって変わらない）、`Resolved` は見えるか（`can_see`、管理者は通る）→ FG-REPO-0005、削除の猶予中 → FG-REPO-0006、
+  スコープ（`read_api`）→ FG-AUTH-0002。読み取りの役割（Reporter 以上）は求めない。グループと個人の名前空間は、サインインしたすべての人に見える
+  （`GroupRead` と同じ。グループの可視性はまだない）。
+- **`Unresolved` / `Resolved` は `PathResolve` 専用**。ほかの Action に渡すと、既存の規則どおり FG-SYS-0001（`resource_does_not_match_action`）になる。
+- **`WebShell`**: `is_public()` が真、`required_scope()` は `None`。無効なアカウントや、スコープのないトークンでも通る（matrix の行）。
+- **`prove()`**: `prove<R: ResourceCtx>(&Principal, Action, R) -> Result<Authorized<R>, ForgeError>` は `authorize()` を呼ぶだけで、
+  規則を持たない。テスト `prove_denies_exactly_like_authorize` が、matrix に出てくるすべての Action × 呼び出し元 × リソースで、許可と拒否
+  （コードと文脈）が `authorize()` と一致することを確かめる。`Authorized<R>` は欄が非公開で、`Clone` / `Default` / 公開のコンストラクタを持たない
+  （`compile_fail` の doctest 3 つ。`Clone` を足すと赤くなることを一度変異で確かめた）。`ResourceCtx` の型は、`InstanceCtx`（`Id = ()`）、
+  `ProjectCtx { id: ProjectId, view }`、`ResolvedCtx { namespace: NamespaceId, via, view }`、`UnresolvedCtx(UnresolvedReason)`（`Id = ()`、
+  `prove` は必ず拒否する）を forge-auth に置いた。forge-core の `NamespaceKind` / `Resolution`（MR1）には依存しない。`Resolution` から
+  `ResolvedCtx` / `UnresolvedCtx` への変換は、forge-web の dispatcher（MR4）が行う。
+- **matrix の行**: `PathResolve` は許可 8（Developer / private、NonMember / internal、Guest / private、Developer / moved private、NonMember / グループ、
+  NonMember / 個人の名前空間、管理者 / private、`read_api` のトークン）、拒否 11（Anonymous、Disabled、NonMember / private、ないパス（Developer と管理者）、
+  削除の墓標、墓標の先が見えない、`read_repository` だけのトークン（FG-AUTH-0002）、削除の猶予中（FG-REPO-0006）など）。`WebShell` は許可 3
+  （Anonymous、Disabled、スコープのないトークン）。**`prefix=true` の行は M2 に送る**（計画の回答どおり。そのモードを入れる MR で足す）。
+- `PathResolve` と `WebShell` は、ルートができるまで `app::PLANNED` に入れた（MR4 の dispatcher が登録した時点で外す）。`is_git_operation()` の意味の変更
+  （「git のプロトコルでも行う」）と `route()` の証明への置き換えは、MR4 で行う。

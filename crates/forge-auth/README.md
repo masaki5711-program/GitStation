@@ -10,6 +10,17 @@ lands (M1 phase 5).
 - `authorize(&Principal, Action, &Resource) -> Result<(), ForgeError>` — pure:
   no I/O. The caller loads memberships / effective roles / token scopes / ref
   protection into the inputs first.
+- `prove<R: ResourceCtx>(&Principal, Action, R) -> Result<Authorized<R>, ForgeError>`
+  — calls `authorize()` and nothing else (same code, same context on denial;
+  `prove_denies_exactly_like_authorize` checks every action × actor × fixture of
+  the matrix). `Authorized<R>` has private fields and no `Clone` / `Default` /
+  public constructor (`compile_fail` doctests in `src/prove.rs`); it exposes
+  `action()`, `id() -> &R::Id` and `ctx() -> &R`. Handlers take the proof and
+  read the target id from it (ADR-0015).
+- `ResourceCtx { type Id; fn resource(&self) -> Resource; fn id(&self) -> Self::Id }`
+  with `InstanceCtx` (`Id = ()`), `ProjectCtx { id: ProjectId, view }`,
+  `ResolvedCtx { namespace: NamespaceId, via, view }` and
+  `UnresolvedCtx(UnresolvedReason)` (`Id = ()`; `prove` always denies it).
 - `Principal::authenticated(user, is_admin, active, Credential)` /
   `Principal::anonymous()` — no permissive defaults; `admin_rights()` is true
   for an administrator in a session, or with a token carrying `Scope::Admin`.
@@ -21,7 +32,16 @@ lands (M1 phase 5).
   `Transfer { source, target_role }`,
   `Membership { scope, change, removes_last_owner }`,
   `RefProtectionChange { project, from, to }`, `VisibilityChange { project, to }`,
-  `Token { owner }` (list / revoke), `TokenRequest { owner, scopes }` (create).
+  `Token { owner }` (list / revoke), `TokenRequest { owner, scopes }` (create),
+  `Unresolved(UnresolvedReason)` (`Absent` / `TombstoneDeleted`) and
+  `Resolved { via: ResolvedVia, view: NamespaceView }` (`PathResolve` only;
+  `ResolvedVia::{Live, Moved}`, `NamespaceView::{User, Group { role },
+  Project(ProjectView)}` — the kind is the variant, `kind()` names it).
+- `PathResolve` (scope `read_api`) is decided by **can see**, not by a read
+  role: a Guest on a private project resolves it (but cannot `ProjectRead`);
+  groups and personal namespaces resolve for every signed-in user; a project
+  for members, everyone on internal, administrators. `WebShell` is public (no
+  scope). Both are in forge-web `app::PLANNED` until the dispatcher routes them.
 - `RefKind::of(&RefName)` — derives a ref kind (`authorize()` does it for pushes).
 - `RefProtection::effective(levels)` — the strictest of all matching rules;
   the only way to build a push resource's protection.
@@ -34,7 +54,10 @@ lands (M1 phase 5).
   `Git/docs/authz/matrix.generated.json` (the `authz-coverage` gate).
 
 **Decision order**: public → credentials (`FG-AUTH-0001`) → active
-(`FG-AUTH-0004`) → visibility (`FG-REPO-0005`, 404) → pending deletion
+(`FG-AUTH-0004`) → `PathResolve` on `Unresolved` (`FG-REPO-0005`,
+`reason=absent` / `tombstone_deleted`, before the scope) → visibility
+(`FG-REPO-0005`, 404; `reason=not_visible`, or `tombstone_not_visible` for a
+resolved path that arrived through a `moved` tombstone) → pending deletion
 (`FG-REPO-0006`, restore excepted) → token scope (`FG-AUTH-0002`) → role
 (`FG-AUTH-0003`; administrator rights pass) → pushes: reserved namespace
 (`FG-GIT-0010`, everyone), protected force (`FG-GIT-0007`) and delete
