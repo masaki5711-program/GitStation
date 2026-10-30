@@ -36,8 +36,38 @@ phases 9–10.
 - `version::detect(&Git)` / `GitVersion::require_supported()` — minimum 2.38.
 - `StorageRoot::open(path)`, `path_for(RepoId)` (pure, stable layout),
   `existing(RepoId)` (every directory from the root down is a real directory),
-  `init_bare(&Git, RepoId, hooks_path)` — atomic (temp dir + rename), refuses an
-  existing path, no template, `receive.autogc=false`, `gc.auto=0`, fsck on.
+  `init_bare(&Git, RepoId, token: Uuid, hooks_path)` — atomic (temp dir +
+  rename), refuses an existing path, no template, `receive.autogc=false`,
+  `gc.auto=0`, fsck on; writes `forge.provisionToken=<token>`
+  (`PROVISION_TOKEN_KEY`, the `repositories.provision_token`) last, before the
+  rename, so a marked repository is a fully configured one.
+- `init_bare_or_adopt(&Git, RepoId, token: Uuid, hooks_path) -> Provisioned`
+  (`Created(path)` | `Adopted(path)`, `.path()` / `.into_path()`) — the
+  idempotent form for the provisioning job (ADR-0009 amendment, D4). Adopts an
+  existing path only when it is a real directory under the root (no symlink),
+  its `config` is a regular file, that file (read with `--file --no-includes`)
+  has no `include.*` / `includeIf.*` key and exactly one
+  `forge.provisionToken`, equal to `token`, and it is bare. Adoption re-checks
+  that `config` is a regular file, then re-applies the settings and
+  `core.hooksPath` with `git config --file <repo>/config` (no `GIT_DIR`). A
+  concurrent attempt that loses the rename (FG-REPO-0004 from `create`) runs
+  the adopt path once. Anything else stays `FG-REPO-0004` with
+  `adopt_refused` = `symlink` | `not_dir` | `not_a_repository` |
+  `config_not_a_file` | `includes` | `unmarked` | `duplicate_marker` |
+  `token_mismatch` | `unreadable` | `not_bare` | `unwritable` (tokens never
+  go into the context). Temp dirs (`.tmp-<id>-<uuid>.git`) left by a crashed
+  attempt do not block a retry and are not removed by it. Assumes the storage
+  root is writable only by forge (ADR-0009 amendment).
+- `storage::provision_error_is_retryable(&ForgeError) -> bool` — the retry
+  rule for the provisioning job:
+  - **retry**: `FG-GIT-0001` unavailable, `FG-GIT-0002` timeout, `FG-GIT-0004`
+    busy, `FG-REPO-0003` storage I/O (a directory that vanished during
+    adoption included), and `FG-GIT-0003` — which reaches the caller only from
+    *creating* (the temp dir is removed, nothing is left at the final path);
+  - **do not retry** (operator needed): `FG-REPO-0004` (every `adopt_refused`,
+    including git failing or printing too much while reading or writing an
+    existing directory, and a permission-denied `config`), `FG-REPO-0001`,
+    `FG-REPO-0002`, `FG-SYS-0002` invalid hooks path, `FG-GIT-0006`.
 
 **Error codes owned**
 
@@ -69,6 +99,9 @@ phases 9–10.
   each subcommand phases 9–10 use.
 - On Windows, `git` on `PATH` may be the `cmd\git.exe` launcher; killing it may
   not kill the real git — configure an absolute path to `mingw64\bin\git.exe`.
+- Temp directories left by a crashed `init_bare` (`<shard>/.tmp-<id>-*.git`)
+  are never removed automatically; a doctor check / admin cleanup is open
+  (candidate for D4 MR3b or later).
 - `command.rs` is ~480 lines (target 400): split `GitConfig` out when the
   streaming API lands.
 
