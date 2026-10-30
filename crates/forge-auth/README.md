@@ -16,11 +16,22 @@ lands (M1 phase 5).
   the matrix). `Authorized<R>` has private fields and no `Clone` / `Default` /
   public constructor (`compile_fail` doctests in `src/prove.rs`); it exposes
   `action()`, `id() -> &R::Id` and `ctx() -> &R`. Handlers take the proof and
-  read the target id from it (ADR-0015).
+  read the target id from it (ADR-0015). The action is a runtime value (a
+  `WebShell` proof has the same type as a `UserCreate` one): the registry
+  (MR4) must check `proof.action() == def.action` before every handler, keep
+  handlers unreachable outside the registry, and test that a proof for another
+  action is rejected.
 - `ResourceCtx { type Id; fn resource(&self) -> Resource; fn id(&self) -> Self::Id }`
-  with `InstanceCtx` (`Id = ()`), `ProjectCtx { id: ProjectId, view }`,
-  `ResolvedCtx { namespace: NamespaceId, via, view }` and
-  `UnresolvedCtx(UnresolvedReason)` (`Id = ()`; `prove` always denies it).
+  — **sealed** (only this crate implements it), so `id()` and `resource()`
+  always read the same value. Contexts have private fields and one
+  constructor taking one loaded row: `InstanceCtx` (`Id = ()`),
+  `ProjectCtx::new(LoadedProject { id, visibility, role, pending_deletion })`
+  (`Id = ProjectId`; `view()`),
+  `ResolvedCtx::new(LoadedNamespace { namespace, via, view })`
+  (`Id = NamespaceId`; `via()`, `view()`) and
+  `UnresolvedCtx::new(UnresolvedReason)` (`Id = ()`; `reason()`; `prove`
+  denies it for every non-public action). The lookup layer builds the row from
+  one query result; new context types are added here.
 - `Principal::authenticated(user, is_admin, active, Credential)` /
   `Principal::anonymous()` — no permissive defaults; `admin_rights()` is true
   for an administrator in a session, or with a token carrying `Scope::Admin`.
@@ -54,8 +65,10 @@ lands (M1 phase 5).
   `Git/docs/authz/matrix.generated.json` (the `authz-coverage` gate).
 
 **Decision order**: public → credentials (`FG-AUTH-0001`) → active
-(`FG-AUTH-0004`) → `PathResolve` on `Unresolved` (`FG-REPO-0005`,
-`reason=absent` / `tombstone_deleted`, before the scope) → visibility
+(`FG-AUTH-0004`) → `PathResolve` only: token scope (`FG-AUTH-0002`, before
+the path is looked at, so the same 403 for every path) → `Unresolved`, any
+non-public action (`FG-REPO-0005`, `reason=absent` / `tombstone_deleted`; the
+same 404 as an invisible project) → visibility
 (`FG-REPO-0005`, 404; `reason=not_visible`, or `tombstone_not_visible` for a
 resolved path that arrived through a `moved` tombstone) → pending deletion
 (`FG-REPO-0006`, restore excepted) → token scope (`FG-AUTH-0002`) → role

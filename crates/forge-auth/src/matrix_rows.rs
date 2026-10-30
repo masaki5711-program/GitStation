@@ -54,6 +54,9 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::RepoRead, W::Guest, F::InternalProject, Allow),
     row(A::RepoRead, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
     row(A::RepoRead, W::NonMember, F::DeletedProject, deny(E::NotFound)),
+    // an absent path or a tombstone: the same 404 as an invisible project
+    row(A::RepoRead, W::Developer, F::Absent, deny(E::NotFound)),
+    row(A::RepoRead, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
     // --- RepoPush, project level (before receive-pack starts) ---
     row(A::RepoPush, W::Developer, F::PrivateProject, Allow),
     row(A::RepoPush, W::DevTokenWriteRepository, F::PrivateProject, Allow),
@@ -61,6 +64,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::RepoPush, W::NonMember, F::InternalProject, deny(E::Forbidden)),
     row(A::RepoPush, W::NonMember, F::PrivateProject, deny(E::NotFound)),
     row(A::RepoPush, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::RepoPush, W::Developer, F::Absent, deny(E::NotFound)),
+    row(A::RepoPush, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
     // --- RepoPush (one ref update) ---
     row(A::RepoPush, W::Anonymous, r(BR, U::FastForward, None), deny(E::Unauthenticated)),
     row(A::RepoPush, W::NonMember, r(BR, U::FastForward, None), deny(E::NotFound)),
@@ -240,8 +245,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::PathResolve, W::Admin, F::Absent, deny(E::NotFound)),
     row(A::PathResolve, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
     row(A::PathResolve, W::NonMember, F::MovedPrivate, deny(E::NotFound)),
+    // a wrong-scope token: the same 403 for every path, before the lookup
     row(A::PathResolve, W::DevTokenReadRepository, F::ResolvedPrivate, deny(E::InsufficientScope)),
+    row(A::PathResolve, W::DevTokenReadRepository, F::Absent, deny(E::InsufficientScope)),
     row(A::PathResolve, W::Developer, F::ResolvedDeleted, deny(E::PendingDeletion)),
+    row(A::PathResolve, W::NonMember, F::ResolvedDeleted, deny(E::NotFound)),
     // --- WebShell (the SPA's index.html: same body for every path, no DB) ---
     row(A::WebShell, W::Anonymous, F::Instance, Allow),
     row(A::WebShell, W::Disabled, F::Instance, Allow),

@@ -4,8 +4,10 @@
 //! Order of checks:
 //! 1. public actions are allowed;
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
-//! 3. a path that resolved to nothing (`PathResolve` on `Unresolved`) →
-//!    `FG-REPO-0005`; project visibility (also behind a resolved path) →
+//! 3. `PathResolve` only: token scope → `FG-AUTH-0002` here, before the
+//!    path is looked at (the same 403 for every path);
+//!    a path that resolved to nothing (`Unresolved`, any non-public action)
+//!    → `FG-REPO-0005`; project visibility (also behind a resolved path) →
 //!    `FG-REPO-0005` (404, no existence leak) and pending deletion →
 //!    `FG-REPO-0006` (restore excepted);
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
@@ -44,12 +46,32 @@ pub fn authorize(
     }
     let admin = principal.admin_rights();
 
-    // Nothing at the path: the same 404 for every signed-in caller, before
-    // the scope check (the answer cannot depend on the token).
+    let check_scope = || -> Result<(), ForgeError> {
+        if let (Credential::Token(scopes), Some(required)) =
+            (principal.credential(), action.required_scope())
+        {
+            if !scopes.iter().any(|s| s.satisfies(required)) {
+                let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+                return Err(deny(ErrorCode::InsufficientScope)
+                    .with_context("required_scope", required.as_str())
+                    .with_context("token_scopes", held.join(",")));
+            }
+        }
+        Ok(())
+    };
+
+    // Resolving a path: the scope first, so a wrong-scope token gets the
+    // same 403 for every path (absent, invisible or visible alike).
+    if action == Action::PathResolve {
+        check_scope()?;
+    }
+
+    // Nothing at the path: the same 404 for every non-public action, as an
+    // invisible project gets (no existence oracle through any route).
     let unresolved = |r: UnresolvedReason| -> Result<(), ForgeError> {
         Err(deny(ErrorCode::NotFound).with_context("reason", r.as_str()))
     };
-    if let (Action::PathResolve, Resource::Unresolved(reason)) = (action, resource) {
+    if let Resource::Unresolved(reason) = resource {
         return unresolved(*reason);
     }
 
@@ -67,16 +89,7 @@ pub fn authorize(
         }
     }
 
-    if let (Credential::Token(scopes), Some(required)) =
-        (principal.credential(), action.required_scope())
-    {
-        if !scopes.iter().any(|s| s.satisfies(required)) {
-            let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-            return Err(deny(ErrorCode::InsufficientScope)
-                .with_context("required_scope", required.as_str())
-                .with_context("token_scopes", held.join(",")));
-        }
-    }
+    check_scope()?;
 
     let need = |required: Role, actual: Option<Role>| -> Result<(), ForgeError> {
         if admin || actual.is_some_and(|r| r >= required) {
@@ -118,7 +131,8 @@ pub fn authorize(
         // resolves it) and pending deletion were decided above; groups and
         // personal namespaces are visible to every signed-in user.
         (Action::PathResolve, Resource::Resolved { .. }) => Ok(()),
-        (Action::PathResolve, Resource::Unresolved(reason)) => unresolved(*reason),
+        // Returned above for every non-public action; kept for exhaustiveness.
+        (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
         (Action::RepoRead | Action::ProjectRead, Resource::Project(p)) => {
             need(Role::Reporter, read_role(p))
@@ -324,7 +338,6 @@ pub fn authorize(
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
             | Resource::TokenRequest { .. }
-            | Resource::Unresolved(_)
             | Resource::Resolved { .. },
         ) => wrong_resource(),
     }

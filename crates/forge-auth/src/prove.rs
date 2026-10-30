@@ -4,7 +4,7 @@
 //! `prove()` holds no rule of its own: it calls [`authorize`] and, on `Ok`,
 //! wraps the typed context it decided on. A handler takes the proof and reads
 //! the target id from it, never from the path again; the route registry checks
-//! `proof.action() == def.action` before it calls the handler.
+//! `proof.action() == def.action` before it calls the handler (MR4).
 //!
 //! The proof cannot be forged: its fields are private and it has no public
 //! constructor, so a struct literal outside this crate does not compile:
@@ -30,16 +30,56 @@
 //! needs_clone(&proof);
 //! ```
 //!
-//! The same code without the forbidden line compiles, so the three tests
-//! above fail for the reason they name:
+//! The id a proof carries comes from the same value the decision reads: a
+//! context has private fields and one constructor that takes one loaded row
+//! (id and facts together), so a project's id cannot be paired with another
+//! project's view by a struct literal:
+//!
+//! ```compile_fail
+//! use forge_auth::{LoadedProject, ProjectCtx, Visibility};
+//! use forge_core::ProjectId;
+//! let project = LoadedProject {
+//!     id: ProjectId::new(2), visibility: Visibility::Internal, role: None, pending_deletion: false,
+//! };
+//! let mixed = ProjectCtx { project };
+//! ```
+//!
+//! and `ResourceCtx` is sealed — no other crate can implement a context
+//! whose `id()` disagrees with its `resource()`:
+//!
+//! ```compile_fail
+//! use forge_auth::{Resource, ResourceCtx};
+//! struct Mine;
+//! impl ResourceCtx for Mine {
+//!     type Id = ();
+//!     fn resource(&self) -> Resource { Resource::Instance }
+//!     fn id(&self) {}
+//! }
+//! ```
+//!
+//! The same code without the forbidden parts compiles, so the tests above
+//! fail for the reason they name:
 //!
 //! ```
-//! use forge_auth::{prove, Action, InstanceCtx, Principal};
+//! use forge_auth::{
+//!     prove, Action, Credential, InstanceCtx, LoadedProject, Principal, ProjectCtx, Role,
+//!     Visibility,
+//! };
+//! use forge_core::{ProjectId, UserId};
 //! let Ok(proof) = prove(&Principal::anonymous(), Action::Health, InstanceCtx) else {
 //!     panic!("health is public");
 //! };
 //! assert_eq!(proof.action(), Action::Health);
 //! assert_eq!(proof.id(), &());
+//! let ctx = ProjectCtx::new(LoadedProject {
+//!     id: ProjectId::new(2),
+//!     visibility: Visibility::Private,
+//!     role: Some(Role::Reporter),
+//!     pending_deletion: false,
+//! });
+//! let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
+//! let Ok(proof) = prove(&me, Action::ProjectRead, ctx) else { panic!("reporter reads") };
+//! assert_eq!(proof.id(), &ProjectId::new(2));
 //! ```
 
 use std::fmt;
@@ -50,13 +90,20 @@ use forge_errors::ForgeError;
 use crate::action::Action;
 use crate::authorize::authorize;
 use crate::model::{
-    NamespaceView, Principal, ProjectView, ResolvedVia, Resource, UnresolvedReason,
+    NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role, UnresolvedReason,
+    Visibility,
 };
 
+/// Seals [`ResourceCtx`]: only this crate implements it, so every context's
+/// `id()` and `resource()` read the same private value.
+pub(crate) mod sealed {
+    pub trait Sealed {}
+}
+
 /// A typed resource context: what `authorize()` decides on (`resource()`)
-/// and the id of the target the handler acts on (`id()`). Built by the
-/// lookup layer from the database, never from the request.
-pub trait ResourceCtx {
+/// and the id of the target the handler acts on (`id()`). Sealed; built by
+/// the lookup layer from one loaded row, never from the request.
+pub trait ResourceCtx: sealed::Sealed {
     type Id;
     /// The resource `authorize()` decides on.
     fn resource(&self) -> Resource;
@@ -66,6 +113,10 @@ pub trait ResourceCtx {
 
 /// Proof that `authorize()` allowed `action` on `ctx`. Only [`prove`] makes
 /// one; it is neither `Clone` nor `Default` and has no public constructor.
+///
+/// The action is a runtime value: a proof for `WebShell` has the same type
+/// as one for `UserCreate`. The route registry must compare `action()` with
+/// the route's action before every handler (ADR-0015, MR4).
 #[must_use = "a proof is the only way to reach the handler's target"]
 pub struct Authorized<R: ResourceCtx> {
     action: Action,
@@ -124,6 +175,8 @@ pub fn prove<R: ResourceCtx>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InstanceCtx;
 
+impl sealed::Sealed for InstanceCtx {}
+
 impl ResourceCtx for InstanceCtx {
     type Id = ();
     fn resource(&self) -> Resource {
@@ -132,54 +185,122 @@ impl ResourceCtx for InstanceCtx {
     fn id(&self) {}
 }
 
-/// A project as seen by the caller (`ProjectRead`, `RepoRead`, …).
+/// One project as loaded for the caller (one row: id and access facts
+/// together). The lookup layer fills it from a single query result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProjectCtx {
+pub struct LoadedProject {
     pub id: ProjectId,
-    pub view: ProjectView,
+    pub visibility: Visibility,
+    /// The caller's effective role (`None` = not a member).
+    pub role: Option<Role>,
+    pub pending_deletion: bool,
 }
+
+/// A project as seen by the caller (`ProjectRead`, `RepoRead`, …). The id
+/// and the view come from the same [`LoadedProject`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCtx {
+    project: LoadedProject,
+}
+
+impl ProjectCtx {
+    pub fn new(project: LoadedProject) -> Self {
+        Self { project }
+    }
+
+    /// The view `authorize()` decides on.
+    pub fn view(&self) -> ProjectView {
+        ProjectView {
+            visibility: self.project.visibility,
+            role: self.project.role,
+            pending_deletion: self.project.pending_deletion,
+        }
+    }
+}
+
+impl sealed::Sealed for ProjectCtx {}
 
 impl ResourceCtx for ProjectCtx {
     type Id = ProjectId;
     fn resource(&self) -> Resource {
-        Resource::Project(self.view)
+        Resource::Project(self.view())
     }
     fn id(&self) -> ProjectId {
-        self.id
+        self.project.id
     }
 }
 
-/// A path that resolved to a namespace (`PathResolve`).
+/// A path's resolution as loaded for the caller (one row: the namespace id,
+/// how the path reached it, and the caller's view of it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResolvedCtx {
+pub struct LoadedNamespace {
     pub namespace: NamespaceId,
     pub via: ResolvedVia,
     pub view: NamespaceView,
 }
 
+/// A path that resolved to a namespace (`PathResolve`). The id and the view
+/// come from the same [`LoadedNamespace`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCtx {
+    resolved: LoadedNamespace,
+}
+
+impl ResolvedCtx {
+    pub fn new(resolved: LoadedNamespace) -> Self {
+        Self { resolved }
+    }
+
+    pub fn via(&self) -> ResolvedVia {
+        self.resolved.via
+    }
+
+    pub fn view(&self) -> NamespaceView {
+        self.resolved.view
+    }
+}
+
+impl sealed::Sealed for ResolvedCtx {}
+
 impl ResourceCtx for ResolvedCtx {
     type Id = NamespaceId;
     fn resource(&self) -> Resource {
         Resource::Resolved {
-            via: self.via,
-            view: self.view,
+            via: self.resolved.via,
+            view: self.resolved.view,
         }
     }
     fn id(&self) -> NamespaceId {
-        self.namespace
+        self.resolved.namespace
     }
 }
 
-/// A path that resolved to nothing (`PathResolve`). `prove()` on it always
-/// fails; it exists so the dispatcher decides every resolution through the
-/// same call (`FG-AUTH-0001` / `FG-AUTH-0004` / `FG-REPO-0005`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnresolvedCtx(pub UnresolvedReason);
+/// A path that resolved to nothing. `prove()` on it fails for every
+/// non-public action (`FG-AUTH-0001` / `FG-AUTH-0004`, a wrong-scope token
+/// on `PathResolve` `FG-AUTH-0002`, otherwise `FG-REPO-0005`); public
+/// actions such as `WebShell` never look a path up. It exists so the
+/// dispatcher decides every resolution through the same call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedCtx {
+    reason: UnresolvedReason,
+}
+
+impl UnresolvedCtx {
+    pub fn new(reason: UnresolvedReason) -> Self {
+        Self { reason }
+    }
+
+    pub fn reason(&self) -> UnresolvedReason {
+        self.reason
+    }
+}
+
+impl sealed::Sealed for UnresolvedCtx {}
 
 impl ResourceCtx for UnresolvedCtx {
     type Id = ();
     fn resource(&self) -> Resource {
-        Resource::Unresolved(self.0)
+        Resource::Unresolved(self.reason)
     }
     fn id(&self) {}
 }

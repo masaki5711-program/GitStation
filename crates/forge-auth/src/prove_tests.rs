@@ -3,14 +3,17 @@ use forge_errors::ErrorCode;
 
 use crate::matrix::{Actor, Fixture, ME, ROWS};
 use crate::{
-    authorize, prove, Action, Credential, InstanceCtx, NamespaceView, Principal, ProjectCtx,
-    ProjectView, ResolvedCtx, ResolvedVia, Resource, ResourceCtx, Role, Scope, UnresolvedCtx,
-    UnresolvedReason, Visibility,
+    authorize, prove, Action, Credential, InstanceCtx, LoadedNamespace, LoadedProject,
+    NamespaceView, Principal, ProjectCtx, ProjectView, ResolvedCtx, ResolvedVia, Resource,
+    ResourceCtx, Role, Scope, UnresolvedCtx, UnresolvedReason, Visibility,
 };
 
 /// Any matrix resource as a context (the id is irrelevant to the decision).
+/// Only possible inside this crate: `ResourceCtx` is sealed.
 #[derive(Debug)]
 struct RowCtx(Resource);
+
+impl crate::prove::sealed::Sealed for RowCtx {}
 
 impl ResourceCtx for RowCtx {
     type Id = ();
@@ -32,25 +35,54 @@ fn private(role: Option<Role>) -> ProjectView {
     }
 }
 
+fn project(id: i64, role: Option<Role>) -> ProjectCtx {
+    ProjectCtx::new(LoadedProject {
+        id: ProjectId::new(id),
+        visibility: Visibility::Private,
+        role,
+        pending_deletion: false,
+    })
+}
+
+fn resolved(id: i64, via: ResolvedVia, view: NamespaceView) -> ResolvedCtx {
+    ResolvedCtx::new(LoadedNamespace {
+        namespace: NamespaceId::new(id),
+        via,
+        view,
+    })
+}
+
 #[test]
 fn prove_returns_the_action_and_id_it_decided() {
-    let ctx = ProjectCtx {
-        id: ProjectId::new(42),
-        view: private(Some(Role::Reporter)),
-    };
-    let proof = prove(&session(), Action::ProjectRead, ctx).expect("reporter reads");
+    let ctx = project(42, Some(Role::Reporter));
+    let proof = prove(&session(), Action::ProjectRead, ctx.clone()).expect("reporter reads");
     assert_eq!(proof.action(), Action::ProjectRead);
     assert_eq!(proof.id(), &ProjectId::new(42));
     assert_eq!(proof.ctx(), &ctx);
+    assert_eq!(proof.ctx().view(), private(Some(Role::Reporter)));
 
-    let resolved = ResolvedCtx {
-        namespace: NamespaceId::new(7),
-        via: ResolvedVia::Live,
-        view: NamespaceView::Project(private(Some(Role::Guest))),
-    };
-    let proof = prove(&session(), Action::PathResolve, resolved).expect("guest resolves");
+    let ctx = resolved(
+        7,
+        ResolvedVia::Live,
+        NamespaceView::Project(private(Some(Role::Guest))),
+    );
+    let proof = prove(&session(), Action::PathResolve, ctx).expect("guest resolves");
     assert_eq!(proof.action(), Action::PathResolve);
     assert_eq!(proof.id(), &NamespaceId::new(7));
+    assert_eq!(proof.ctx().via(), ResolvedVia::Live);
+}
+
+#[test]
+fn a_context_decides_on_the_row_its_id_comes_from() {
+    // Two loaded projects: the proof for one carries that one's id and view.
+    let visible = project(1, Some(Role::Reporter));
+    let invisible = project(2, None);
+    assert_eq!(visible.id(), ProjectId::new(1));
+    assert_eq!(visible.resource(), Resource::Project(visible.view()));
+    let err = prove(&session(), Action::ProjectRead, invisible).expect_err("not visible");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    let proof = prove(&session(), Action::ProjectRead, visible).expect("visible");
+    assert_eq!(proof.id(), &ProjectId::new(1));
 }
 
 /// Property over the whole matrix: for every action × every actor × every
@@ -104,19 +136,12 @@ fn prove_denies_exactly_like_authorize() {
 #[test]
 fn guest_on_private_may_resolve_but_not_project_read() {
     let guest = private(Some(Role::Guest));
-    let resolved = ResolvedCtx {
-        namespace: NamespaceId::new(1),
-        via: ResolvedVia::Live,
-        view: NamespaceView::Project(guest),
-    };
-    assert!(prove(&session(), Action::PathResolve, resolved).is_ok());
+    let ctx = resolved(1, ResolvedVia::Live, NamespaceView::Project(guest));
+    assert!(prove(&session(), Action::PathResolve, ctx).is_ok());
     let err = prove(
         &session(),
         Action::ProjectRead,
-        ProjectCtx {
-            id: ProjectId::new(1),
-            view: guest,
-        },
+        project(1, Some(Role::Guest)),
     )
     .expect_err("guest cannot read the project");
     assert_eq!(err.code(), ErrorCode::Forbidden);
@@ -142,18 +167,23 @@ fn path_resolve_needs_read_api() {
     assert!(!Action::PathResolve.is_git_operation());
 }
 
-#[test]
-fn unresolved_is_not_found_with_its_reason_for_every_active_caller() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
-    let repo_token = Principal::authenticated(
+fn repo_token() -> Principal {
+    Principal::authenticated(
         ME,
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
-    );
+    )
+}
+
+#[test]
+fn unresolved_is_not_found_with_its_reason_for_every_active_caller() {
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let api_token = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]));
     for reason in [UnresolvedReason::Absent, UnresolvedReason::TombstoneDeleted] {
-        for p in [session(), admin.clone(), repo_token.clone()] {
-            let err = prove(&p, Action::PathResolve, UnresolvedCtx(reason)).expect_err("absent");
+        for p in [session(), admin.clone(), api_token.clone()] {
+            let err =
+                prove(&p, Action::PathResolve, UnresolvedCtx::new(reason)).expect_err("absent");
             assert_eq!(err.code(), ErrorCode::NotFound);
             assert!(
                 err.to_string()
@@ -165,30 +195,88 @@ fn unresolved_is_not_found_with_its_reason_for_every_active_caller() {
     let err = prove(
         &Principal::anonymous(),
         Action::PathResolve,
-        UnresolvedCtx(UnresolvedReason::Absent),
+        UnresolvedCtx::new(UnresolvedReason::Absent),
     )
     .expect_err("anonymous");
     assert_eq!(err.code(), ErrorCode::Unauthenticated);
 }
 
 #[test]
+fn a_wrong_scope_token_gets_the_same_403_for_every_path() {
+    let paths = [
+        Resource::Unresolved(UnresolvedReason::Absent),
+        Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
+        Resource::Resolved {
+            via: ResolvedVia::Live,
+            view: NamespaceView::Project(private(None)),
+        },
+        Resource::Resolved {
+            via: ResolvedVia::Moved,
+            view: NamespaceView::Project(private(None)),
+        },
+        Resource::Resolved {
+            via: ResolvedVia::Live,
+            view: NamespaceView::Project(ProjectView {
+                pending_deletion: true,
+                ..private(Some(Role::Owner))
+            }),
+        },
+        Resource::Resolved {
+            via: ResolvedVia::Live,
+            view: NamespaceView::Project(private(Some(Role::Developer))),
+        },
+        Resource::Resolved {
+            via: ResolvedVia::Live,
+            view: NamespaceView::User,
+        },
+    ];
+    let errors: Vec<String> = paths
+        .iter()
+        .map(|r| {
+            let err = authorize(&repo_token(), Action::PathResolve, r).expect_err("wrong scope");
+            assert_eq!(err.code(), ErrorCode::InsufficientScope, "{r:?}");
+            err.to_string()
+        })
+        .collect();
+    assert!(errors.iter().all(|e| *e == errors[0]), "{errors:?}");
+}
+
+#[test]
+fn unresolved_is_not_found_for_every_non_public_action() {
+    // No existence oracle: an absent path gets the same 404 as an invisible
+    // project, whatever action a route decides it with.
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
+        for reason in [UnresolvedReason::Absent, UnresolvedReason::TombstoneDeleted] {
+            for p in [session(), admin.clone()] {
+                let err = authorize(&p, action, &Resource::Unresolved(reason))
+                    .expect_err("nothing there");
+                assert_eq!(err.code(), ErrorCode::NotFound, "{action:?} {reason:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn an_invisible_target_behind_a_tombstone_is_logged_as_such() {
-    let moved = ResolvedCtx {
-        namespace: NamespaceId::new(1),
-        via: ResolvedVia::Moved,
-        view: NamespaceView::Project(private(None)),
-    };
-    let err = prove(&session(), Action::PathResolve, moved).expect_err("not visible");
+    let view = NamespaceView::Project(private(None));
+    let err = prove(
+        &session(),
+        Action::PathResolve,
+        resolved(1, ResolvedVia::Moved, view),
+    )
+    .expect_err("not visible");
     assert_eq!(err.code(), ErrorCode::NotFound);
     assert!(
         err.to_string().contains("reason=tombstone_not_visible"),
         "{err}"
     );
-    let live = ResolvedCtx {
-        via: ResolvedVia::Live,
-        ..moved
-    };
-    let err = prove(&session(), Action::PathResolve, live).expect_err("not visible");
+    let err = prove(
+        &session(),
+        Action::PathResolve,
+        resolved(1, ResolvedVia::Live, view),
+    )
+    .expect_err("not visible");
     assert!(err.to_string().contains("reason=not_visible"), "{err}");
 }
 
@@ -201,11 +289,7 @@ fn groups_and_personal_namespaces_resolve_for_every_signed_in_user() {
             role: Some(Role::Guest),
         },
     ] {
-        let ctx = ResolvedCtx {
-            namespace: NamespaceId::new(3),
-            via: ResolvedVia::Live,
-            view,
-        };
+        let ctx = resolved(3, ResolvedVia::Live, view);
         assert!(
             prove(&session(), Action::PathResolve, ctx).is_ok(),
             "{view:?}"
@@ -216,32 +300,23 @@ fn groups_and_personal_namespaces_resolve_for_every_signed_in_user() {
 #[test]
 fn an_administrator_resolves_an_invisible_project() {
     let admin = Principal::authenticated(ME, true, true, Credential::Session);
-    let ctx = ResolvedCtx {
-        namespace: NamespaceId::new(3),
-        via: ResolvedVia::Moved,
-        view: NamespaceView::Project(private(None)),
-    };
+    let ctx = resolved(3, ResolvedVia::Moved, NamespaceView::Project(private(None)));
     assert!(prove(&admin, Action::PathResolve, ctx).is_ok());
 }
 
 #[test]
-fn resolution_resources_fit_only_path_resolve() {
+fn resolved_fits_only_path_resolve() {
     let admin = Principal::authenticated(ME, true, true, Credential::Session);
-    let resources = [
-        Resource::Unresolved(UnresolvedReason::Absent),
-        Resource::Resolved {
-            via: ResolvedVia::Live,
-            view: NamespaceView::User,
-        },
-    ];
+    let resource = Resource::Resolved {
+        via: ResolvedVia::Live,
+        view: NamespaceView::User,
+    };
     for &action in Action::ALL
         .iter()
         .filter(|a| !a.is_public() && **a != Action::PathResolve)
     {
-        for resource in &resources {
-            let err = authorize(&admin, action, resource).expect_err("wrong shape");
-            assert_eq!(err.code(), ErrorCode::Internal, "{action:?} {resource:?}");
-        }
+        let err = authorize(&admin, action, &resource).expect_err("wrong shape");
+        assert_eq!(err.code(), ErrorCode::Internal, "{action:?}");
     }
 }
 
@@ -250,4 +325,14 @@ fn namespace_view_names_its_kind() {
     assert_eq!(NamespaceView::User.kind(), "user");
     assert_eq!(NamespaceView::Group { role: None }.kind(), "group");
     assert_eq!(NamespaceView::Project(private(None)).kind(), "project");
+}
+
+#[test]
+fn unresolved_ctx_keeps_its_reason() {
+    let ctx = UnresolvedCtx::new(UnresolvedReason::TombstoneDeleted);
+    assert_eq!(ctx.reason(), UnresolvedReason::TombstoneDeleted);
+    assert_eq!(
+        ctx.resource(),
+        Resource::Unresolved(UnresolvedReason::TombstoneDeleted)
+    );
 }

@@ -210,3 +210,11 @@ TransferTarget) move to D5 (ADR-0015 amendment); utoipa for OpenAPI in MR6 after
 ProjectView builder now; Idempotency-Key deferred to M3; resolve rate limiting and prefix=true deferred to M2; the agent-model
 authz-coverage gate is already updated (v0.4.2) — the user confirms it is on the agent model's main; next free codes FG-WEB-0006,
 FG-AUTH-0011, FG-GIT-0011, FG-REPO-0016 (0015 is D5's TransferInvalid).
+
+MR4 musts carried over from the MR2 review (authz-matrix-auditor + security-reviewer, HIGH; ADR-0015 amendment 2026-10-30):
+the action is a runtime field of `Authorized<R>` (a WebShell proof has the same type as a UserCreate proof), so MR4 must
+(a) check `proof.action() == def.action` in the registry before calling **every** handler, (b) give handlers no way to be called
+outside the registry (the proof reaches a handler only through it), and (c) add a negative test that a proof for a different
+action is rejected. MR3 / MR4 lookups must issue the same query shape (count and kind) for absent, tombstone and invisible paths.
+MR3 / MR4 build `forge_auth::LoadedProject` / `LoadedNamespace` from one query result (contexts are sealed, fields private; new
+context types are added in forge-auth).
