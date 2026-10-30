@@ -16,7 +16,8 @@
 -- repositories: one per project in M1 (project_id UNIQUE). kind
 -- (spec | system, ADR-0004) is fixed at creation (step D plan Q3): forge_app
 -- may UPDATE only state and ready_at; ready_at is set exactly when the state
--- is 'ready'. provision_token marks the bare repository the provisioning job
+-- is 'ready', and the state moves only provisioning -> ready (guard trigger
+-- repositories_state_forward). provision_token marks the bare repository the provisioning job
 -- creates (written into its config before the rename, so a retry adopts only
 -- its own directory, D4 option A); the read pool never sees it (ADR-0018).
 -- No DELETE grant yet (D5).
@@ -68,6 +69,29 @@ CREATE TABLE forge.repositories (
 -- Doctor and the provisioning report look for repositories still waiting.
 CREATE INDEX repositories_provisioning ON forge.repositories (created_at)
     WHERE state = 'provisioning';
+
+-- The state moves only forward: provisioning -> ready, which sets ready_at
+-- once; ready_at never changes after that. A guard (XF001, FG-DB-0009
+-- reason=rejected), enabled ALWAYS so it holds for every role; doctor
+-- compares the trigger and the function body (bootstrap/schema.rs).
+CREATE FUNCTION forge.repositories_state_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+AS $$
+BEGIN
+    IF (NEW.state IS DISTINCT FROM OLD.state
+            AND NOT (OLD.state = 'provisioning' AND NEW.state = 'ready'))
+       OR (OLD.ready_at IS NOT NULL AND NEW.ready_at IS DISTINCT FROM OLD.ready_at) THEN
+        RAISE EXCEPTION USING ERRCODE = 'XF001',
+            MESSAGE = 'the state of a repository on forge.repositories moves only from provisioning to ready, once';
+    END IF;
+    RETURN NEW;
+END
+$$;
+REVOKE ALL ON FUNCTION forge.repositories_state_guard() FROM PUBLIC;
+CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories
+    FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard();
+ALTER TABLE forge.repositories ENABLE ALWAYS TRIGGER repositories_state_forward;
 
 CREATE TABLE forge.project_members (
     project_id  bigint NOT NULL REFERENCES forge.projects (id),
@@ -156,9 +180,11 @@ INSERT INTO forge_audit.guarded_objects (object_type, object_identity) VALUES
     ('trigger', 'audited_change_present on forge.projects'),
     ('trigger', 'audited_change_present on forge.repositories'),
     ('trigger', 'audited_change_present on forge.project_members'),
-    ('trigger', 'audited_change_present on forge.protected_refs')
+    ('trigger', 'audited_change_present on forge.protected_refs'),
+    ('function', 'forge.repositories_state_guard()'),
+    ('trigger', 'repositories_state_forward on forge.repositories')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261031100000, "guarded_changes": ["forge.projects.audited_change_present", "forge.repositories.audited_change_present", "forge.project_members.audited_change_present", "forge.protected_refs.audited_change_present"]}');
+    '{"version": 20261031100000, "guarded_changes": ["forge.projects.audited_change_present", "forge.repositories.audited_change_present", "forge.project_members.audited_change_present", "forge.protected_refs.audited_change_present", "forge.repositories_state_guard", "forge.repositories.repositories_state_forward"]}');

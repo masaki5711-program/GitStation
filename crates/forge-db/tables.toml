@@ -21,13 +21,13 @@
 # Every other column is audited, columns added later included.
 #
 # guarded_functions: functions that are guarded although no guarded table
-# uses them (the audit trigger function of state tables, which forge_app
-# writes and are therefore not guarded tables).
+# uses them (the audit trigger function and the guards of state tables,
+# which forge_app writes and are therefore not guarded tables).
 #
 # Shape (validated by scripts/validate-migrations.js in the root repo):
 # [tables.<bare name>] with a boolean `guarded`.
 
-guarded_functions = ["audited_change_present"]
+guarded_functions = ["audited_change_present", "repositories_state_guard"]
 
 [tables.events]
 guarded = true

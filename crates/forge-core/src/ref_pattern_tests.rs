@@ -217,15 +217,65 @@ fn patterns_match_case_insensitively() {
     }
 }
 
+/// Folding is per character and without context: Greek capital sigma folds
+/// to σ wherever it stands (a whole-string lowercase would make it final ς at
+/// the end of a word and miss the ref), final ς folds to σ too, and the
+/// wildcard may sit next to a multibyte letter. A miss would leave a ref
+/// unprotected (ADR-0008).
+#[test]
+fn patterns_match_unicode_case_without_context() {
+    for (pattern, refname) in [
+        ("refs/heads/aΣ*", "refs/heads/aΣb"),
+        ("refs/heads/aΣ*", "refs/heads/aσb"),
+        ("refs/heads/*Σ", "refs/heads/aΣ"),
+        ("refs/heads/*Σ", "refs/heads/aς"),
+        ("refs/heads/*σ", "refs/heads/aΣ"),
+        ("refs/heads/aσ", "refs/heads/aΣ"),
+        ("refs/heads/aΣ", "refs/heads/aς"),
+        ("refs/heads/aς", "refs/heads/AΣ"),
+        ("refs/heads/ΣΣ", "refs/heads/σς"),
+        ("refs/heads/İx", "refs/heads/i\u{307}x"),
+        ("refs/heads/İ*", "refs/heads/İ"),
+        ("refs/heads/ß", "refs/heads/ẞ"),
+        ("refs/heads/ẞ*", "refs/heads/ßx"),
+        ("refs/heads/k", "refs/heads/\u{212A}"),
+        ("refs/heads/\u{212A}", "refs/heads/K"),
+        ("refs/heads/é*ü", "refs/heads/ÉxÜ"),
+        ("refs/heads/日*", "refs/heads/日本"),
+        ("refs/heads/*本", "refs/heads/日本"),
+        ("refs/heads/Ä*", "refs/heads/ä"),
+    ] {
+        assert!(p(pattern).matches(&r(refname)), "{pattern} ~ {refname}");
+    }
+    for (pattern, refname) in [
+        ("refs/heads/日*本", "refs/heads/日"),
+        ("refs/heads/ß", "refs/heads/ss"),
+        ("refs/heads/i", "refs/heads/İ"),
+        ("refs/heads/aΣ*", "refs/heads/a"),
+    ] {
+        assert!(!p(pattern).matches(&r(refname)), "{pattern} !~ {refname}");
+    }
+}
+
 #[test]
 fn equal_patterns_ignoring_case_share_a_key() {
+    assert_eq!(p("refs/heads/aΣ").key(), "refs/heads/aσ");
+    assert_eq!(p("refs/heads/aς").key(), p("refs/heads/AΣ").key());
+    assert_eq!(p("refs/heads/\u{212A}").key(), p("refs/heads/k").key());
     assert_eq!(p("refs/heads/Main").key(), p("refs/heads/MAIN").key());
     assert_eq!(p("refs/heads/Main").key(), "refs/heads/main");
     assert_ne!(p("refs/heads/main").key(), p("refs/heads/main*").key());
 }
 
+/// Letters whose case mapping is not one ASCII letter to another: Greek
+/// sigma (final and medial), dotted capital I, sharp s and its capital, the
+/// Kelvin sign, accented Latin.
+const UNICODE_CASES: &[char] = &[
+    'Σ', 'σ', 'ς', 'İ', 'ß', 'ẞ', '\u{212A}', 'k', 'é', 'É', 'Ä', 'ä',
+];
+
 /// Characters that make interesting patterns: the separator, the wildcard,
-/// git's forbidden characters, dots, dashes, cases and a multibyte letter.
+/// git's forbidden characters, dots, dashes, cases and multibyte letters.
 fn tail() -> impl Strategy<Value = String> {
     proptest::collection::vec(
         prop_oneof![
@@ -233,10 +283,32 @@ fn tail() -> impl Strategy<Value = String> {
             1 => prop::sample::select(vec![
                 '/', '*', '.', '-', '_', '@', '{', '~', ' ', ':', '\\', '\u{7f}', '\n', 'é', 'K',
             ]),
+            1 => prop::sample::select(UNICODE_CASES.to_vec()),
         ],
         0..40,
     )
     .prop_map(|cs| cs.into_iter().collect())
+}
+
+/// `s` with each character upper- or lowercased by `choices` (cycled). A
+/// character whose uppercase is not a single character (ß -> SS) keeps its
+/// case: case-insensitive file systems use simple, one-to-one case mapping.
+fn case_variant(s: &str, choices: &[bool]) -> String {
+    s.chars()
+        .zip(choices.iter().cycle())
+        .flat_map(|(c, upper)| {
+            let mapped: Vec<char> = if *upper {
+                c.to_uppercase().collect()
+            } else {
+                c.to_lowercase().collect()
+            };
+            if *upper && mapped.len() != 1 {
+                vec![c]
+            } else {
+                mapped
+            }
+        })
+        .collect()
 }
 
 fn prefix() -> impl Strategy<Value = &'static str> {
@@ -253,9 +325,17 @@ fn prefix() -> impl Strategy<Value = &'static str> {
 
 proptest! {
     /// Whatever the parser accepts is a valid ref once the `*` is filled in,
-    /// and matches its own literal text in any case.
+    /// and matches its own literal text in any case: each side gets its own
+    /// per-character mix of upper and lower case (a pattern variant must parse
+    /// too), so a fold that depends on context or position would show.
     #[test]
-    fn accepted_patterns_match_their_own_instances(pre in prefix(), rest in tail(), fill in "[a-z0-9]{0,3}") {
+    fn accepted_patterns_match_their_own_instances(
+        pre in prefix(),
+        rest in tail(),
+        fill in "[a-zA-Z0-9\u{3a3}\u{3c2}\u{3c3}]{0,3}",
+        pattern_case in proptest::collection::vec(any::<bool>(), 1..8),
+        ref_case in proptest::collection::vec(any::<bool>(), 1..8),
+    ) {
         let raw = format!("{pre}{rest}");
         if let Ok(pattern) = RefPattern::parse(&raw) {
             prop_assert!(raw.starts_with("refs/heads/") || raw.starts_with("refs/tags/"));
@@ -264,10 +344,17 @@ proptest! {
             let instance = raw.replacen('*', &fill, 1);
             if let Ok(refname) = RefName::parse(&instance) {
                 prop_assert!(pattern.matches(&refname), "{raw} ~ {instance}");
-                // The prefix holds no `*`, so it starts the instance too.
-                let rest_upper = instance.get(pre.len()..).unwrap_or_default().to_uppercase();
-                if let Ok(upper) = RefName::parse(&format!("{pre}{rest_upper}")) {
-                    prop_assert!(pattern.matches(&upper), "{raw} ~ upper {instance}");
+                // The prefix holds no `*` and stays as it is (it must be lowercase).
+                let tail_of = |s: &str| s.get(pre.len()..).unwrap_or_default().to_owned();
+                let ref_variant = format!("{pre}{}", case_variant(&tail_of(&instance), &ref_case));
+                let pattern_variant = format!("{pre}{}", case_variant(&tail_of(&raw), &pattern_case));
+                let other = RefPattern::parse(&pattern_variant);
+                prop_assert!(other.is_ok(), "{pattern_variant}");
+                if let (Ok(variant), Ok(other)) = (RefName::parse(&ref_variant), other) {
+                    prop_assert!(pattern.matches(&variant), "{raw} ~ {ref_variant}");
+                    prop_assert!(other.matches(&refname), "{pattern_variant} ~ {instance}");
+                    prop_assert!(other.matches(&variant), "{pattern_variant} ~ {ref_variant}");
+                    prop_assert_eq!(other.key(), pattern.key());
                 }
             }
         }

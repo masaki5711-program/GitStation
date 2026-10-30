@@ -26,9 +26,11 @@ and `RepositoryState` (`provisioning`, `ready`; same API) — the CHECKs of
 order: ≤ 255 bytes `too_long`; starts with `refs/heads/` or `refs/tags/`
 `prefix`; at most one `*`, only in the last path component `wildcard`; with the
 `*` read as a letter, the `RefName` rules `check_ref_format` + `rule`), `as_str`,
-`key()` (lowercase; duplicate rules share it), `matches(&RefName)` (ignores case
+`key()` (case-folded; duplicate rules share it), `matches(&RefName)` (ignores case
 on both sides; `*` matches any run, `/` and the empty run included — broader
-only ever protects more). `MAX_PATTERN_LEN`, `PATTERN_PREFIXES`.
+only ever protects more). The fold is per character and context-free
+(`char::to_lowercase`, then final `ς` → `σ`), so `Σ` folds alike in a pattern and
+in a ref wherever it stands; no Unicode normalization (NFC vs NFD differ). `MAX_PATTERN_LEN`, `PATTERN_PREFIXES`.
 
 **Namespaces** (ADR-0015, step D1): `PathSegment::parse` (any segment) and
 `PathSegment::parse_top_level` (user names and top-level groups; also refuses

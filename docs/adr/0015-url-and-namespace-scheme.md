@@ -500,3 +500,9 @@ impl<S> Registry<S> {
 - `projects.deleted_at` と `purge_after` は、両方あるか両方ないか（CHECK `projects_deletion_pair`。`purge_after >= deleted_at`）。書き手は D5。
   プロジェクトの DELETE の権限も D5 まで与えない。
 - `project_members` には、`group_members` と同じく、bot を入れないトリガー（`project_members_no_bot`）を DB の裏付けとして付ける。
+- **プロジェクト・名前空間・リポジトリの 1 対 1 対 1 は、DB だけでは守られない**（`namespaces.owner_id` は多態で外部キーがなく、
+  プロジェクトがリポジトリや名前空間を持つことを強制する制約もない）。このため:
+  - D4 MR2 の作成（`projects::create`）は、プロジェクト、名前空間（`kind = 'project'`）、リポジトリ（`provisioning`）を **1 つのトランザクション** で書く。
+  - MR2 は、作成の後に 3 つがそろっていること（どれかが欠けた作成は確定しないこと）を確かめるテストを持つ。
+  - 欠けた組（名前空間のないプロジェクト、プロジェクトのない `kind = 'project'` の名前空間、リポジトリのないプロジェクト）を doctor で検査するかは、
+    削除とパージを入れる D5 で決める。

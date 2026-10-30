@@ -76,7 +76,10 @@ fn an_audited_entry_without_audit_id_column_is_rejected() {
 #[test]
 fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
     let ledger = Ledger::embedded().expect("tables.toml parses");
-    assert_eq!(ledger.guarded_functions, vec!["audited_change_present"]);
+    assert_eq!(
+        ledger.guarded_functions,
+        vec!["audited_change_present", "repositories_state_guard"]
+    );
 }
 
 #[test]

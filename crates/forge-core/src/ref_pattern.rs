@@ -16,9 +16,13 @@
 //! forge-db). Rules 3 and 4 are the parser's job alone: every writer goes
 //! through `RefPattern::parse`.
 //!
-//! Matching ([`RefPattern::matches`]) ignores case (Unicode lowercase on both
-//! sides): `MAIN` and `main` are one file on a case-insensitive file system,
-//! and a rule must not be dodged by changing case. A `*` matches any run of
+//! Matching ([`RefPattern::matches`]) ignores case: both sides are folded by
+//! [`fold`] — each character lowercased on its own, without context (a
+//! whole-string `to_lowercase` turns a word-final `Σ` into `ς` and would miss
+//! refs), and final `ς` mapped to `σ`. `MAIN` and `main` are one file on a
+//! case-insensitive file system, and a rule must not be dodged by changing
+//! case. Unicode normalization (NFC vs NFD) is not applied: `é` written as one
+//! code point and as `e` + combining accent are different patterns and refs. A `*` matches any run of
 //! characters, `/` and the empty run included — matching more refs only ever
 //! protects more, since the strictest matching rule wins
 //! (`RefProtection::effective`).
@@ -75,7 +79,7 @@ impl RefPattern {
         }
         Ok(Self {
             raw: raw.to_owned(),
-            key: raw.to_lowercase(),
+            key: fold(raw),
         })
     }
 
@@ -84,7 +88,7 @@ impl RefPattern {
         &self.raw
     }
 
-    /// The pattern in lowercase: two rules of one project must not share it
+    /// The pattern case-folded (see `fold`): two rules of one project must not share it
     /// (FG-REPO-0013 `duplicate_pattern`; the database backstop
     /// `protected_refs_project_pattern` folds ASCII letters only).
     pub fn key(&self) -> &str {
@@ -93,7 +97,7 @@ impl RefPattern {
 
     /// Whether this rule applies to `name`, ignoring case.
     pub fn matches(&self, name: &RefName) -> bool {
-        let name = name.as_str().to_lowercase();
+        let name = fold(name.as_str());
         match self.key.split_once('*') {
             None => name == self.key,
             Some((head, tail)) => {
@@ -103,6 +107,17 @@ impl RefPattern {
             }
         }
     }
+}
+
+/// The case fold of patterns and ref names: every character lowercased on its
+/// own (`char::to_lowercase`, so `İ` becomes `i` + U+0307 and the Kelvin sign
+/// `k`), then final sigma `ς` as `σ`. Context-free, so a pattern and a ref
+/// fold the same letters the same way wherever they stand; `*` is unchanged.
+fn fold(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
 }
 
 impl fmt::Display for RefPattern {

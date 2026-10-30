@@ -261,7 +261,9 @@ column that is both.
 column); `deleted_at` / `purge_after` both or neither, no DELETE yet (D5).
 `repositories`: one per project (`project_id` UNIQUE), `kind` spec | system fixed —
 forge_app may UPDATE only `state` (provisioning | ready) and `ready_at` (set exactly
-when ready), no DELETE; `provision_token` (uuid, default `gen_random_uuid()`) is not
+when ready; the guard trigger `repositories_state_forward` — XF001, FG-DB-0009
+`rejected`, enabled ALWAYS, compared by doctor — allows only provisioning → ready and
+never changes `ready_at` once set), no DELETE; `provision_token` (uuid, default `gen_random_uuid()`) is not
 readable by `forge_ro`. `project_members`: PK (project_id, user_id), role CHECK, no
 bots (trigger `project_members_no_bot`), DELETE allowed. `protected_refs`: CHECKs
 `protected_refs_pattern_prefix` (`^refs/(heads|tags)/`) and `_length` (≤ 255 bytes) —

@@ -49,7 +49,10 @@
   `forge_app` に列の UPDATE の権限がないことで守る（`forge_app` が更新できるのは `state` と `ready_at` だけ。DELETE は D5 まで与えない）。
   テスト `repository_kind_cannot_change`。`forge-core` の `RepositoryKind`（`ALL`、`as_str`、`parse`）が同じ一覧を持つ。
 - M1 ではプロジェクトに 1 つのリポジトリ（`project_id` UNIQUE）。状態は `provisioning` → `ready`（`RepositoryState`）で、
-  `ready_at` は状態が `ready` のときに限って入る（CHECK `repositories_ready_at`）。
+  `ready_at` は状態が `ready` のときに限って入る（CHECK `repositories_ready_at`）。状態は前にしか進まない: ガードのトリガー
+  `repositories_state_forward`（`forge.repositories_state_guard()`、`ENABLE ALWAYS`、guarded_objects に登録し、doctor が定義と本体を比べる）が、
+  `provisioning` → `ready`（このとき `ready_at` を 1 度だけ入れる）以外の状態の変更と、入った後の `ready_at` の変更を、どの役割にも拒否する
+  （SQLSTATE XF001 → FG-DB-0009 `reason=rejected`。テスト `a_repository_state_only_moves_forward`）。
 - `provision_token`（uuid、既定値 `gen_random_uuid()`）は、プロビジョニングのジョブが bare リポジトリの設定に書く目印（D4 の案 A。再試行は
   目印が一致するディレクトリだけを引き取る）。書き手は変えない（`forge_app` に UPDATE の権限がない）。読み取りのプール（`forge_ro`）からは
   読めない（ADR-0018 のトークンのハッシュと同じ扱い。テスト `the_read_pool_cannot_read_provision_token`）。

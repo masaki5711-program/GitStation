@@ -20,7 +20,7 @@ A protected ref rule (forge.protected_refs, ADR-0008) broke a rule before anythi
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), duplicate_pattern (another rule of the project has the same pattern ignoring case; the database backstop is the unique index protected_refs_project_pattern on lower(pattern)) or too_many_rules (the project already has 100 rules). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database.
+The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), duplicate_pattern (another rule of the project has the same pattern ignoring case; the database backstop is the unique index protected_refs_project_pattern on lower(pattern), ASCII case only) or too_many_rules (the project already has 100 rules; this cap is enforced by the application only, the database has no limit). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database.
 
 ## 対処 (fix)
 

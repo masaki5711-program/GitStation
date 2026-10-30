@@ -131,6 +131,100 @@ async fn a_repository_state_change_needs_a_project_audit_row() {
     t.drop_now().await;
 }
 
+/// A repository moves only provisioning → ready, setting ready_at once; the
+/// guard trigger repositories_state_forward refuses anything else with XF001
+/// (FG-DB-0009 `rejected`), audit row or not.
+#[tokio::test]
+async fn a_repository_state_only_moves_forward() {
+    let t = FreshDb::migrated().await;
+    commit(&t, &seed()).await.expect("seed");
+    commit(&t, &[audit("project", 1, "succeeded"), sql(REPOSITORY)])
+        .await
+        .expect("repository");
+    // Staying in provisioning with a no-op update is fine.
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.repositories SET state = 'provisioning'"),
+        ],
+    )
+    .await
+    .expect("no change");
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.repositories SET state = 'ready', ready_at = now()"),
+        ],
+    )
+    .await
+    .expect("provisioning -> ready");
+    for change in [
+        "UPDATE forge.repositories SET state = 'provisioning', ready_at = NULL",
+        "UPDATE forge.repositories SET ready_at = now() + interval '1 hour'",
+        "UPDATE forge.repositories SET ready_at = NULL",
+    ] {
+        let err = commit(&t, &[audit("project", 1, "succeeded"), sql(change)])
+            .await
+            .expect_err(change);
+        assert_reason(
+            &err,
+            forge_errors::ErrorCode::AppendOnlyViolation,
+            "rejected",
+        );
+        let text = chain(&err);
+        assert!(text.contains("sqlstate=XF001"), "{change}: {text}");
+        assert!(text.contains("forge.repositories"), "{change}: {text}");
+    }
+    // A ready repository may be updated without touching state / ready_at.
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.repositories SET state = 'ready'"),
+        ],
+    )
+    .await
+    .expect("no change");
+    t.drop_now().await;
+}
+
+/// Doctor compares the state guard's trigger and function body like the
+/// other guards (FG-DB-0009 guard_missing).
+#[tokio::test]
+async fn a_weakened_repository_state_guard_is_reported() {
+    for (tamper, guard) in [
+        (
+            "ALTER TABLE forge.repositories ENABLE TRIGGER repositories_state_forward",
+            "guard=log_triggers",
+        ),
+        (
+            "ALTER TABLE forge.repositories DISABLE TRIGGER repositories_state_forward",
+            "guard=log_triggers",
+        ),
+        (
+            "DROP TRIGGER repositories_state_forward ON forge.repositories",
+            "guard=log_triggers",
+        ),
+        (
+            "CREATE OR REPLACE FUNCTION forge.repositories_state_guard() RETURNS trigger \
+             LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp \
+             AS $$ BEGIN RETURN NEW; END $$",
+            "guard=function_body",
+        ),
+    ] {
+        let t = FreshDb::migrated().await;
+        t.exec_superuser(tamper).await;
+        let text = crate::bootstrap::check(&t.db, &[])
+            .await
+            .expect_err(tamper)
+            .to_string();
+        assert!(text.contains(guard), "{tamper}\n=> {text}");
+        t.drop_now().await;
+    }
+}
+
 #[tokio::test]
 async fn repository_kind_cannot_change() {
     let t = FreshDb::migrated().await;
@@ -353,6 +447,11 @@ async fn the_d4_constraints_refuse_their_rows() {
         ("", member(9, "owner"), "23503".into(), "project_members_user_id_fkey", "unknown user"),
         ("", member(2, "guest"), "23514".into(), "project_members_no_bot", "a bot member"),
         (owner.as_str(), member(1, "guest"), "23505".into(), "project_members_pkey", "one row per member"),
+        (owner.as_str(), "UPDATE forge.project_members SET user_id = 2".into(), "23514".into(), "project_members_no_bot", "a member changed into a bot"),
+        // The state guard holds for every role (ENABLE ALWAYS), not only for
+        // forge_app's column grants.
+        (REPOSITORY, "UPDATE forge.repositories SET state = 'ready', ready_at = now(); UPDATE forge.repositories SET state = 'provisioning', ready_at = NULL".into(), "XF001".into(), "", "ready back to provisioning (owner)"),
+        (REPOSITORY, "UPDATE forge.repositories SET state = 'ready', ready_at = now(); UPDATE forge.repositories SET ready_at = ready_at - interval '1 day'".into(), "XF001".into(), "", "ready_at rewritten (owner)"),
     ];
     for (setup, probe, state, constraint, what) in &cases {
         let got = refusal(&mut su, setup, probe).await;
