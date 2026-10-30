@@ -81,6 +81,20 @@ pub enum AuditDetails {
         user: UserId,
         public_id: String,
     },
+    // ── D4 MR3b: repository provisioning ──
+    /// `repository.created` (D4 MR3b): the provisioning job created (or
+    /// adopted) the bare repository and marked it ready. Also the payload of
+    /// the `repository.created` event (integration class): ids and kind only.
+    RepositoryCreated {
+        project_id: ProjectId,
+        repository_id: RepoId,
+        kind: RepositoryKind,
+    },
+    /// `repository.reprovision_requested` (D4 MR3b, audit-only): an
+    /// operator enqueued the provisioning job again (`forge admin repo
+    /// reprovision`) for a repository still `provisioning`.
+    RepositoryReprovisionRequested { repository_id: RepoId, job_id: i64 },
+    // ── end D4 MR3b ──
 }
 
 impl AuditDetails {
@@ -97,6 +111,10 @@ impl AuditDetails {
             Self::MemberRemoved { .. } => "member.removed",
             Self::TokenCreated { .. } => "token.created",
             Self::TokenRevoked { .. } => "token.revoked",
+            // ── D4 MR3b ──
+            Self::RepositoryCreated { .. } => "repository.created",
+            Self::RepositoryReprovisionRequested { .. } => "repository.reprovision_requested",
+            // ── end D4 MR3b ──
         }
     }
 
@@ -116,6 +134,10 @@ impl AuditDetails {
             Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
+            // ── D4 MR3b ──
+            Self::RepositoryCreated { .. } => Some(EventType::RepositoryCreated),
+            Self::RepositoryReprovisionRequested { .. } => None,
+            // ── end D4 MR3b ──
         }
     }
 
@@ -129,7 +151,9 @@ impl AuditDetails {
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
-    /// TokenRevoked `{"token_id","user_id","public_id"}`.
+    /// TokenRevoked `{"token_id","user_id","public_id"}`,
+    /// RepositoryCreated `{"project_id","repository_id","kind"}`,
+    /// RepositoryReprovisionRequested `{"repository_id","job_id"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -219,6 +243,24 @@ impl AuditDetails {
                 "user_id": user.get(),
                 "public_id": public_id,
             }),
+            // ── D4 MR3b ──
+            Self::RepositoryCreated {
+                project_id,
+                repository_id,
+                kind,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "repository_id": repository_id.get(),
+                "kind": kind.as_str(),
+            }),
+            Self::RepositoryReprovisionRequested {
+                repository_id,
+                job_id,
+            } => serde_json::json!({
+                "repository_id": repository_id.get(),
+                "job_id": job_id,
+            }),
+            // ── end D4 MR3b ──
         }
     }
 }

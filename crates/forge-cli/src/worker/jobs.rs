@@ -3,9 +3,8 @@
 //! while idle, at once again after a job) and the reaper (every 30 s, also
 //! once at startup so leases left by a crashed worker are ended early).
 //!
-//! Handlers are registered in [`handlers`]; none exist yet (the first ones
-//! arrive with the subscribers; the audit seal is a task, `seal`), so the runner claims
-//! nothing — it must still run without error.
+//! Handlers are registered in [`handlers`]: `repository.provision` (step
+//! D4 MR3b, `provision`). The audit seal is a task (`seal`), not a job.
 //!
 //! Shutdown: a job may run for up to its timeout (≤ 1 h), longer than a
 //! stop should wait. A job in progress gets [`SHUTDOWN_GRACE`]; then its
@@ -24,9 +23,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use forge_db::jobs::{JobHandler, JobRunner, Ran, REAP_BATCH};
+use forge_db::Db;
 use forge_errors::ForgeError;
 use tokio::sync::watch;
 
+use super::provision::{ProvisionHandler, Storage};
 use super::supervise::Next;
 
 /// How often an idle runner looks for a ready job.
@@ -36,9 +37,11 @@ pub(crate) const REAP_PERIOD: Duration = Duration::from_secs(30);
 /// How long a job in progress may finish after a shutdown request.
 pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
-/// Every job handler of this build (none yet).
-pub(crate) fn handlers() -> Vec<Arc<dyn JobHandler>> {
-    Vec::new()
+/// Every job handler of this build: `repository.provision` (D4 MR3b).
+pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
+    // clone: the handler owns its storage handles (paths and an Arc)
+    let provision = ProvisionHandler::new(db, storage.clone())?;
+    Ok(vec![Arc::new(provision)])
 }
 
 /// One run of the job runner: one job (or none); a shutdown request gives

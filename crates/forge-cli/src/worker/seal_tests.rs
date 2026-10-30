@@ -78,7 +78,13 @@ async fn the_worker_seals_numbered_rows_and_drains_a_backlog_at_once() {
     let started = Instant::now();
     let (tx, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run(&db, seal_keys(), stopped).await });
+    let worker = {
+        let (dir, storage) = super::provision::tests::storage();
+        tokio::spawn(async move {
+            let _root = dir;
+            run(&db, seal_keys(), &storage, stopped).await
+        })
+    };
     // The second seal holds fewer than eager_rows rows a moment after the
     // first: only the drain (`more`) seals it before the policy's minute.
     let deadline = started + Duration::from_secs(40);
@@ -119,7 +125,13 @@ async fn a_gap_is_logged_once_with_its_code_and_request_id_while_the_worker_runs
     let _guard = logs.install();
     let (tx, stopped) = watch::channel(false);
     let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker = tokio::spawn(async move { run(&db, seal_keys(), stopped).await });
+    let worker = {
+        let (dir, storage) = super::provision::tests::storage();
+        tokio::spawn(async move {
+            let _root = dir;
+            run(&db, seal_keys(), &storage, stopped).await
+        })
+    };
     // Retried after the backoff (≤ 5 s) at least once in this time.
     tokio::time::sleep(Duration::from_secs(8)).await;
     // The other tasks still run: events written now get numbered.

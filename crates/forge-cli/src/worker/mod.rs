@@ -17,8 +17,10 @@
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
-//! reason=missing`), the database is connected and the schema checked
-//! (ADR-0014): the worker never migrates.
+//! reason=missing`), the storage root is opened (`storage.root` is required
+//! too: the `repository.provision` job creates repositories there, D4 MR3b;
+//! `FG-SYS-0002` / `FG-REPO-0001` before anything runs), the database is
+//! connected and the schema checked (ADR-0014): the worker never migrates.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -36,12 +38,16 @@ use crate::runtime::block_on;
 
 mod backoff;
 mod jobs;
+// ── D4 MR3b: repository provisioning ──
+pub(crate) mod provision;
+// ── end D4 MR3b ──
 mod seal;
 // ── C5: event subscribers ──
 mod subscribers;
 // ── end C5 ──
 mod supervise;
 
+use provision::Storage;
 use supervise::{supervise, Next, Runner};
 
 /// The sequencer's period (ADR-0016 §7).
@@ -56,6 +62,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     database.reject_privileged_logins()?;
     // The worker seals the audit log: no keys, no start (ADR-0018 §4).
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
+    // No storage, no start: provisioning would only fail (D4 MR3b).
+    let storage = Storage::open(cfg.storage_root()?)?;
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -66,7 +74,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             let _ = stop.send(true);
         });
         tracing::info!(db_target = %db.target(), "forge.worker.started");
-        let result = run(&db, keys, stopped).await;
+        let result = run(&db, keys, &storage, stopped).await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -220,14 +228,16 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
 }
 
 /// Run every task until `shutdown` turns true (see `supervise`), with the
-/// job handlers and subscribers of this build.
+/// job handlers (creating repositories under `storage`) and subscribers of
+/// this build.
 pub(crate) async fn run(
     db: &Db,
     keys: Arc<SealKeys>,
+    storage: &Storage,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
-    for handler in jobs::handlers() {
+    for handler in jobs::handlers(db, storage)? {
         runner.register(handler)?;
     }
     run_with(db, runner, registry(), jobs::SHUTDOWN_GRACE, keys, shutdown).await

@@ -64,3 +64,21 @@ URL は DB で `RepoId` に解決してからパスを作り、URL の文字列�
     やり直す。既にあるディレクトリについての失敗（`adopt_refused` の付いた `FG-REPO-0004`。`config` を見る権限がない、
     git が読めない・書けない場合を含む）、パスの拒否、フックの場所の設定の誤りはやり直さず、運用者が見る。
     判定は `forge_git::storage::provision_error_is_retryable` に一つにまとめた。
+
+## Amendment（2026-10-30、手順 D4 MR3b: 作成のジョブ、worker の git、doctor）
+
+- `forge worker` は `repository.provision` のジョブ（60 秒）を処理する。手順: 行のトークンを書き込み用の接続で読む（`forge_ro` は読めない）→
+  `init_bare_or_adopt` → `mark_ready`。行が既に `ready` ならディレクトリに触らない（`outcome=already_ready`）。
+- **worker は `storage.root` が無いと起動しない**（`FG-SYS-0002 config_key=storage.root`、ルートが開けなければ `FG-REPO-0001`）。
+  起動してからジョブが全部失敗するより、起動の時点で止める方が原因が分かりやすい（封印の鍵と同じ扱い）。
+- worker の git は `PATH` の `git`、**HOME は保存先のルート**（`<root>/.gitconfig` が大域の設定になる。ルートには forge だけが書ける
+  という MR3a の前提に乗る。共有の `/tmp` などを HOME にすると他人の置いた設定が効きうる）。1 回の git の呼び出しは 20 秒まで
+  （ジョブの 60 秒より十分短く、止まった git は中断ではなくやり直せる `FG-GIT-0002` になる）。
+- フックの場所（`core.hooksPath`）はまだ渡さない（設定 `git.hooks_path` は M1 phase 10 で足す）。引き取りは設定を書き直すので、
+  そのときに既存のリポジトリにも行き渡る。
+- やり直しの判定: 保存先の失敗は `provision_error_is_retryable` のとおり。DB の失敗は `FG-DB-0001` / `FG-DB-0002` ならやり直し、
+  それ以外はすぐ `dead`。`mark_ready` が失敗してもディレクトリは目印付きで残るので、次の試行は引き取る。
+- `forge doctor` の `repositories.storage` は `ready` のリポジトリのディレクトリがあるかを ID の順に最大 10 000 件確かめる
+  （無ければ `FG-REPO-0002`、ほかの拒否はそのコード）。それを超えた分は確かめず、`truncated` で知らせる（黙って省かない）。
+  `repositories.provisioning` は `provisioning` のまま 10 分を超えたもの、または生きたジョブの無いものを `FG-REPO-0012`（alert）で知らせる。
+- 作りかけの一時ディレクトリ `.tmp-*` は今回も自動では消さない。探し方と消してよい条件は Runbook `repository-provisioning.md`。

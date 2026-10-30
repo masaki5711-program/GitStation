@@ -66,6 +66,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    subscribers.dead_letters",
         // D3 MR2: no users yet is not orphaned, but it is not hidden either.
         "warn  users.administration no users yet",
+        // D4 MR3b: nothing provisioning, no ready repository to look for.
+        "ok    repositories.provisioning 0 provisioning, none stuck",
+        "ok    repositories.storage 0 ready repositories have their directory",
         "ok    storage",
         "ok    git",
     ] {
@@ -385,6 +388,12 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
         "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
         keys.to_string_lossy().into_owned(),
     ));
+    // ...and its storage root (D4 MR3b: the provisioning job writes there).
+    let storage = tempfile::tempdir().expect("storage root");
+    app_only.push((
+        "FORGE_STORAGE_ROOT".to_owned(),
+        storage.path().to_string_lossy().into_owned(),
+    ));
     let out = forge_bounded(&["worker"], &app_only);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(1), "{HINT}\n{err}");
@@ -395,6 +404,36 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
     let text = stdout(&status);
     assert!(text.contains("applied    -"), "{text}");
     rt.block_on(t.drop_now());
+}
+
+#[test]
+fn worker_refuses_to_start_without_a_storage_root() {
+    // D4 MR3b: checked after the seal keys, before the database is touched
+    // (the database URL points nowhere).
+    let keys_dir = tempfile::tempdir().expect("keys dir");
+    let keys = keys_dir.path().join("audit_seal_keys");
+    std::fs::write(&keys, format!("1 {}\n", "42".repeat(32))).expect("keys");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    let vars = vec![
+        (
+            "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
+            keys.to_string_lossy().into_owned(),
+        ),
+        (
+            "FORGE_DATABASE_URL".to_owned(),
+            "postgres://forge_app@127.0.0.1:1/none".to_owned(),
+        ),
+    ];
+    let out = forge_bounded(&["worker"], &vars);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    for part in ["FG-SYS-0002", "storage.root", "reason=missing"] {
+        assert!(err.contains(part), "missing {part:?} in {err}");
+    }
 }
 
 /// `forge` that must exit by itself: killed (and the test failed) after 60 s
