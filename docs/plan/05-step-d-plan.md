@@ -147,3 +147,49 @@ MRs (in order):
 
 ADR: new ADR-0019 (personal access tokens and authentication; architect). Amendments: ADR-0016 (token.* audit-only in M1; dedup_key
 open question moves to D4), ADR-0010 (hand-offs 7 and 9), ADR-0018 (token hashes excluded from forge_ro).
+
+## D4 plan (planner, 2026-10-30, cloud session) — approved by the user 2026-10-30 ("推奨どおりで承認")
+
+Premise: forge-git `StorageRoot::init_bare` (atomic, refuses an existing path with REPO-0004); job queue and `ChangeTx::enqueue_job`
+exist but no production handler; `EventType::RepositoryCreated` has no writer; `event_scope_mismatch` only applies when the audit row
+names a project; `namespaces.kind` allows `project`; forge-auth already has `ProjectView`, `RefProtection::effective` and the matrix
+rows — **the matrix does not change in D4** (no routes). Missing: the four tables, a ref pattern type, repository kind/state types, a
+project role loader, a provisioning handler, a safe `init_bare` retry. Conflicts settled: `project.visibility_changed` and
+`protected_ref.*` stay **maintainer** class (ADR-0016 §5 wins over Q7; D4 writes only `project.created` as integration); project
+members need their own `AuditDetails::ProjectMember*` variants (same action strings as groups). Event scope rule (closes the ADR-0016
+D3-amendment question): a project event needs an audit row with the same `project_id`; an audit row without a project publishes only
+instance-wide events; dedup keys `<aggregate>_<verb>:<ids>`, no forced project prefix. `projects.deleted_at` / `purge_after` created
+now without a writer (D5).
+
+Option A (approved): provisioning by a worker job. tx1 = project + namespace + repository (`provisioning`) + creator as direct Owner +
+`project.created` + job `repository.provision` (dedup `repository_provision:<repo_id>`); the forge-cli worker handler runs
+`init_bare_or_adopt` then `mark_ready` (tx2: `repository.created`, dedup `repository_created:<repo_id>`). Idempotent retry:
+`init_bare` writes `forge.provisionToken=<repositories.provision_token>` into the repo config before the rename; a retry adopts an
+existing path only when the token matches, else REPO-0004.
+
+MRs, order MR1 → {MR2 ∥ MR3a} → {MR3b ∥ MR4 ∥ MR5} (parallel MRs only append to shared registries; only MR1 edits migrations /
+tables.toml / bootstrap schema; only MR3b edits doctor `DB_CHECKS`):
+- MR1 `feat/db-projects-schema`: migration `projects` (namespace_id UNIQUE, display_name, description, visibility, timestamps,
+  deleted_at/purge_after both-or-neither), `repositories` (project_id UNIQUE = 1:1 in M1, kind spec|system immutable — forge_app
+  UPDATE(state, ready_at) only, state provisioning|ready ⇔ ready_at, provision_token), `project_members`, `protected_refs` (pattern
+  `^refs/(heads|tags)/`, ≤ 255, push_min_role developer|maintainer|owner, UNIQUE (project_id, lower(pattern))); all audited as
+  ('project', id|project_id); forge_ro without provision_token. forge-core `RepositoryKind`, `RepositoryState`, `RefPattern`
+  (case-insensitive, at most one `*`, last component only), `ProtectedRefId`. FG-REPO-0013 ProtectedRefRuleInvalid.
+- MR2 `feat/db-project-create`: `projects::create` (parent = user or group namespace, never under a project; creator = direct Owner;
+  no bots; kind default system; visibility default private), `roles::load_project_roles` (direct ∨ ancestor groups ∨ personal-namespace
+  owner = Owner), `projects::access`; `EventType::ProjectCreated` (integration); scope rule in `change/validate.rs`; FG-REPO-0014
+  ProjectRequestInvalid. ADR amendments 0015 / 0010 / 0016.
+- MR3a `feat/git-init-bare-adopt` (forge-git storage only): provision token marker and adopt-on-retry.
+- MR3b `feat/repo-provisioning`: `repositories::{mark_ready, provisioning_report, ready_ids}`, worker handler `repository.provision`
+  (60 s), doctor `repositories.provisioning` (> 10 min or dead job) and `repositories.storage` (ready without directory → REPO-0002,
+  capped 10 000), `forge admin repo reprovision <repo_id>`, FG-REPO-0012 RepositoryProvisioningStuck (alert), runbook
+  `repository-provisioning.md`.
+- MR4 `feat/db-project-members`: add / change / remove (project row lock, then owner rows FOR SHARE); `member.*` events maintainer
+  class; no last-owner refusal while an inherited Owner exists.
+- MR5 `feat/db-protected-refs`: create / change / delete, `levels_for(db, ProjectId, &RefName)` → `RefProtection::effective`;
+  `protected_ref.*` events maintainer class; ≤ 100 rules per project; ADR-0008 / ADR-0016 §10 notes.
+
+Answers (user, 2026-10-30, all as recommended): (1) projects only under a personal namespace or a group, never under a project;
+(2) creator = direct Owner, personal-namespace owner and ancestor group Owners inherit, no last-owner refusal while an inherited Owner
+exists; (3) project `member.*` are events (maintainer class); (4) option A, alert after 10 min; (5) one repository per project in M1,
+kind default `system`, visibility default `private`; (6) ProjectRequestInvalid = FG-REPO-0014, D5 TransferInvalid moves to FG-REPO-0015.
