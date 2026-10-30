@@ -20,7 +20,7 @@ The path is used by a sibling (user, group or project under the same parent) or 
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created` with the same request_id) before treating it as a conflict.
+The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created`, `group.created` or `project.created` with the same request_id) before treating it as a conflict.
 
 ## 対処 (fix)
 

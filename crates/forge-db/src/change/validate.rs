@@ -163,11 +163,17 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
     if !events.is_empty() && record.audit.outcome != Outcome::Succeeded {
         return Err(rejected("events_on_unsuccessful", action));
     }
-    // A change audited for one project publishes events of that project only.
-    if let Some(project) = record.audit.project_id {
-        if events.iter().any(|e| e.project_id != Some(project)) {
-            return Err(rejected("event_scope_mismatch", action));
-        }
+    // The event scope rule (ADR-0016 Amendment D4): an event carries the
+    // project of its change's audit row. A change audited for one project
+    // publishes events of that project only, and a change whose audit row
+    // names no project publishes only instance-wide events — the feed shows
+    // a project event to that project's readers, so its audit row must say
+    // which project changed.
+    if events
+        .iter()
+        .any(|e| e.project_id != record.audit.project_id)
+    {
+        return Err(rejected("event_scope_mismatch", action));
     }
     if let Actor::UserViaServiceAccount { credential_id, .. } = &ctx.actor {
         if ctx.credential_id.is_some_and(|c| c != *credential_id) {

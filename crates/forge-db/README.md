@@ -106,6 +106,29 @@ connection, mapping driver errors to registered codes, migrations
   `native` is the highest direct role over the group and its ancestor groups
   (recursive query on the read pool, capped at 20 steps), `direct` the role in that
   group alone; active users only; a personal namespace has no group role.
+  `roles::load_project_roles(&Db, ProjectId, UserId) -> Result<MemberRoles, ForgeError>`
+  (step D4 MR2, ADR-0010 Amendment D4): `direct` = the project_members role,
+  `native` = the highest of it, the ancestor groups' direct roles and Owner for the
+  owner of the personal namespace the project is in; same query, same cap.
+  `load_namespace_roles` on a project namespace gives the same answer.
+- `projects::create(&Db, &ChangeContext, &NewProject) -> Result<CreatedProject, ForgeError>`
+  (step D4 MR2, ADR-0015 Amendment D4): `NewProject::new(segment, parent, display_name,
+  creator)` defaults to visibility `private`, kind `system`, an empty description. One
+  `ChangeTx` writes the project, its namespace (`kind = project`, under a user or group
+  namespace only — never under a project), its repository (`provisioning`), the creator
+  as direct Owner, the `repository.provision` job (`repositories::PROVISION_JOB`, 60 s,
+  dedup `repository_provision:<repo_id>`, payload `{"repo_id"}`, origin = the request
+  id), one `project.created` audit row (resource `project`, `project_id` set) and one
+  `project.created` event (integration class, `project_id` = the project, payload = the
+  audit details). Path lock and tombstone checks as for groups. `CreatedProject {
+  project_id, namespace_id, repository_id, provision_job }`.
+  `projects::access(&Db, ProjectId) -> Result<ProjectAccess, ForgeError>`:
+  `ProjectAccess { visibility, pending_deletion }` (`deleted_at` set) — with
+  `load_project_roles`, what forge-auth's `ProjectView` needs (read pool).
+- **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
+  `project_id` equals the audit row's — a project event needs an audit row naming
+  that project, an audit row without a project publishes only instance-wide events
+  (FG-DB-0010 `event_scope_mismatch`).
 - Feature `test-support` (dev-dependency of other crates only):
   `test_support::FreshDb` — a database bootstrapped with the real files,
   logins with synthetic passwords.
@@ -152,7 +175,13 @@ FG-AUTH-0001 from `authenticate` (`reason` in the log only: `malformed`, `unknow
 FG-DB-0019 CredentialDataInvalid (a stored row this build cannot read: `unknown_scope`,
 `bad_hash`; alert), FG-SYS-0001 (`reason=rng_unavailable`), FG-DB-0001 when the database
 is down (never a 401), FG-DB-0002.
-Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace`, `reason=absent`),
+Raised by `projects`: FG-REPO-0007 (also `too_deep`, `path_too_long`) / 0009,
+FG-REPO-0014 ProjectRequestInvalid (`display_name_length`, `description_length`,
+`nul_character`, `parent_not_owner_namespace`, `creator_inactive`), FG-REPO-0010
+(`bot_member`: a bot as creator), FG-REPO-0005 (`resource=namespace` / `user` /
+`project`, `reason=absent`), FG-SYS-0001 (`unexpected_dedup`, `unexpected_job_dedup`,
+`unknown_visibility`), FG-DB-0010 from the change checks.
+Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
 

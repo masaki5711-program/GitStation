@@ -705,3 +705,21 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   違反は `FG-DB-0010 reason=invalid_dedup_key`。`forge.events.dedup_key` に正規表現の CHECK は **足さない**（長さ 200 の CHECK だけ）。
   形の検査が `field_too_long field=dedup_key` に代わる。
 - `AuditDetails::event_type()` が、変更の詳細から出すイベントの種類を返す（監査だけの操作は `None`）。
+
+## Amendment（2026-10-31、手順 D4 MR2: イベントの範囲の規則と `project.created`）
+
+- **イベントの範囲の規則**（D3 の Amendment の未決を閉じる）: `ChangeTx` は、変更のすべてのイベントの `project_id` が監査の行の `project_id` と
+  **等しい** ことを求める。つまり、プロジェクトのイベントには同じプロジェクトを指す監査の行が要り、プロジェクトを指さない監査の行の変更は
+  インスタンス全体のイベント（`project_id` なし）だけを出せる。違反は `FG-DB-0010 reason=event_scope_mismatch`（何も書かない）。
+  理由: フィードはプロジェクトのイベントをそのプロジェクトの読み手に見せる（§5）ので、監査の行もどのプロジェクトが変わったかを示さないと、
+  監査とフィードが食い違う。両方向のテスト `a_change_whose_audit_row_names_no_project_cannot_publish_a_project_event`。
+  `DerivedTx`（監査の行のない派生イベント）はこの規則の外である。
+- **`EventType::ProjectCreated`**（`project.created`、分類 `integration`）を足す。書き手は `projects::create`。ペイロードは
+  `AuditDetails::ProjectCreated` と同じ JSON（`project_id`、`namespace_id`、`parent_namespace_id`、`repository_id`、`kind`、`visibility`、`owner_id`。
+  パスや名前などの個人に関わる値は入れない）。集約は `project` / `projects.id`。重複除去の鍵は付けない（プロジェクトの ID は新しいので、同じ変更は繰り返されない）。
+  `project.visibility_changed` と `protected_ref.*` は計画 D4 のとおり `maintainer` のまま。
+- **重複除去の鍵の接頭辞は `<aggregate>_<verb>`**（例 `repository_provision:<repo_id>`、MR3b の `repository_created:<repo_id>`）。プロジェクトの接頭辞を
+  強制しない（範囲はイベントの `project_id` が示す）。ジョブの重複除去の鍵（`jobs::DedupKey`、種類ごとに一意）も同じ形にし、
+  `forge_core::DedupKey::new` で作ってから渡す（`repositories::provision_job`）。
+- `repository.provision` のジョブは、作成の変更の中で `ChangeTx::enqueue_job` で入れる（初めての本番の呼び出し元）。変更が確定したときだけジョブが存在する。
+  新しいリポジトリの ID で `Deduped` になるのは不整合なので、`FG-SYS-0001 reason=unexpected_job_dedup` で作成全体を失敗させる。

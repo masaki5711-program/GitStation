@@ -99,8 +99,8 @@ impl ChangeTx {
 
     /// Enqueue a job inside the change (ADR-0016 §7): it exists only if the
     /// change commits, and the insert counts against the change's deadline.
-    // First production caller: repository provisioning (step D4).
-    #[cfg_attr(not(test), expect(dead_code))]
+    // First production caller: `projects::create` (repository provisioning,
+    // step D4).
     pub(crate) async fn enqueue_job(&mut self, job: &NewJob) -> Result<Enqueued, ForgeError> {
         let (deadline, timeout) = (self.deadline, self.timeout);
         bounded(deadline, timeout, enqueue_on(&mut self.tx, job)).await

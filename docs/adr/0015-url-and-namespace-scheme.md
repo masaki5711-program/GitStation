@@ -506,3 +506,20 @@ impl<S> Registry<S> {
   - MR2 は、作成の後に 3 つがそろっていること（どれかが欠けた作成は確定しないこと）を確かめるテストを持つ。
   - 欠けた組（名前空間のないプロジェクト、プロジェクトのない `kind = 'project'` の名前空間、リポジトリのないプロジェクト）を doctor で検査するかは、
     削除とパージを入れる D5 で決める。
+
+## Amendment（2026-10-31、手順 D4 MR2: プロジェクトの置き場所と作成）
+
+- **プロジェクトは、個人の名前空間（`kind = 'user'`）かグループ（`kind = 'group'`）の下にだけ置ける**（計画 D4 の回答 1）。
+  プロジェクトの下にプロジェクトは作れない（FG-REPO-0014 `ProjectRequestInvalid`、`reason=parent_not_owner_namespace`）。
+  トップレベルのプロジェクトはない（`NewProject.parent` は必須）ので、予約語の検査は親の下のセグメントとして `PathSegment::parse` だけを使う。
+  グループの下ではサブグループとプロジェクトが同じ兄弟の空間を使う（`namespaces_sibling_key`、FG-REPO-0009 `sibling`）。
+- `projects::create` は、グループと同じく、親の名前空間を `FOR SHARE` で読み、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。
+  深さと長さの上限（20、255）を超える作成は FG-REPO-0007 `too_deep` / `path_too_long`。
+- **1 対 1 対 1 は 1 つのトランザクションで書く**（MR1 の Amendment の約束）: プロジェクト、名前空間（`kind = 'project'`、`owner_id = projects.id`）、
+  リポジトリ（`provisioning`、種類は既定 `system`）、作成者の直接の Owner、`repository.provision` のジョブ、`project.created` の監査の行とイベントを、
+  1 つの `ChangeTx` で書く。テスト `project_create_writes_namespace_project_repository_owner_job_and_one_audit_row` が、3 つがそろって存在すること
+  （1 つの結合の問い合わせ）と、全体が 1 つのトランザクション（同じ `txid`）であることを確かめる。拒否された作成は何も残さない（各テストが件数を比べる）。
+- 作成者（`NewProject.creator`）は呼び出し側が渡すプリンシパルで、有効な人間かサービスアカウントに限る。bot はグループの最初の Owner と同じく
+  FG-REPO-0010 `bot_member`、無効なユーザーは FG-REPO-0014 `creator_inactive`。誰がその名前空間に作ってよいかは `authorize()` が決め、このコマンドは決めない
+  （D4 には経路がなく、権限のマトリクスは変わらない）。
+- 可視性の既定は `private`、リポジトリの種類の既定は `system`（回答 5）。

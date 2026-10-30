@@ -222,6 +222,45 @@ async fn invalid_changes_are_rejected_with_their_reason() {
     t.drop_now().await;
 }
 
+/// The event scope rule (ADR-0016 Amendment D4): an event carries the
+/// project of its change's audit row, in both directions.
+#[tokio::test]
+async fn a_change_whose_audit_row_names_no_project_cannot_publish_a_project_event() {
+    let t = FreshDb::migrated().await;
+    // No project on the audit row, a project event: refused.
+    let mut instance_audit = record(vec![event(1, None)]);
+    instance_audit.audit.project_id = None;
+    // A project on the audit row, an instance-wide event: refused.
+    let mut instance_event = event(2, None);
+    instance_event.project_id = None;
+    for rec in [instance_audit, record(vec![instance_event])] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err("scope");
+        assert_reason(&err, ErrorCode::ChangeRejected, "event_scope_mismatch");
+    }
+    assert_eq!(count(&t, "forge.events").await, 0);
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        0
+    );
+    // Both sides instance-wide, and both on the same project, are fine.
+    let mut instance = record(vec![DomainEvent {
+        project_id: None,
+        ..event(3, None)
+    }]);
+    instance.audit.project_id = None;
+    for rec in [instance, record(vec![event(4, None)])] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        tx.commit(rec).await.expect("same scope");
+    }
+    assert_eq!(count(&t, "forge.events").await, 2);
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn exactly_max_events_is_accepted() {
     let t = FreshDb::migrated().await;
