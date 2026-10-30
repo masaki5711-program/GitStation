@@ -1,0 +1,1309 @@
+{
+  "schema": 1,
+  "about": "Shared URL vectors for ADR-0015 (parse_web_path in forge-core, later the forge-web dispatcher and the SPA). `path` is exactly what the server receives (req.uri().path()); `query` the raw query string without '?', absent = none. `form`: `both` = a browser's new URL() leaves the path unchanged and curl --path-as-is sends it as is; `browser` = what new URL(browser_input, base).pathname produces; `raw` = only reachable as raw bytes (curl --path-as-is), a browser would rewrite it first. Accepted vectors carry `expect`; namespaces are folded and joined with '/', `rest` holds the decoded tail segments. Rejected vectors carry the FG-WEB-0001 `reason`; `dot_git` marks the places a `.git` segment is not allowed. Generated once and edited by hand; keep names unique.",
+  "accept": [
+    {
+      "name": "top-level namespace",
+      "path": "/acme",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme"
+      }
+    },
+    {
+      "name": "nested namespace",
+      "path": "/acme/platform/infra/forge-web",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme/platform/infra/forge-web"
+      }
+    },
+    {
+      "name": "namespace is folded to ASCII lowercase",
+      "path": "/Acme/Forge-Web",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme/forge-web"
+      }
+    },
+    {
+      "name": "a dot at the top level (user name)",
+      "path": "/john.doe/notes",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "john.doe/notes"
+      }
+    },
+    {
+      "name": "a reserved word below the top level",
+      "path": "/acme/api/settings",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme/api/settings"
+      }
+    },
+    {
+      "name": "GitHub-style words without /-/ are a namespace home",
+      "path": "/acme/x/blob/main/README.md",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme/x/blob/main/readme.md"
+      }
+    },
+    {
+      "name": "info/refs without .git is a namespace home",
+      "path": "/acme/x/info/refs",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "acme/x/info/refs"
+      }
+    },
+    {
+      "name": "20 levels deep",
+      "path": "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t"
+      }
+    },
+    {
+      "name": "full path of exactly 255 characters",
+      "path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    },
+    {
+      "name": "segment of 64 characters",
+      "path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "form": "both",
+      "expect": {
+        "kind": "home",
+        "namespace": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "blob with a file",
+      "path": "/acme/forge-web/-/blob/main/README.md",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/forge-web",
+        "word": "blob",
+        "rest": [
+          "main",
+          "README.md"
+        ]
+      }
+    },
+    {
+      "name": "tree with no rest",
+      "path": "/acme/x/-/tree",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "tree",
+        "rest": []
+      }
+    },
+    {
+      "name": "branch with a slash is several segments",
+      "path": "/acme/x/-/tree/feature/login/src",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "tree",
+        "rest": [
+          "feature",
+          "login",
+          "src"
+        ]
+      }
+    },
+    {
+      "name": "words for a group",
+      "path": "/acme/-/members",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme",
+        "word": "members",
+        "rest": []
+      }
+    },
+    {
+      "name": "settings of a project",
+      "path": "/acme/x/-/settings",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "settings",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word tree",
+      "path": "/g/p/-/tree",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "tree",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word blob",
+      "path": "/g/p/-/blob",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "blob",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word raw",
+      "path": "/g/p/-/raw",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "raw",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word blame",
+      "path": "/g/p/-/blame",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "blame",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word commits",
+      "path": "/g/p/-/commits",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "commits",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word commit",
+      "path": "/g/p/-/commit",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "commit",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word compare",
+      "path": "/g/p/-/compare",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "compare",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word branches",
+      "path": "/g/p/-/branches",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "branches",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word tags",
+      "path": "/g/p/-/tags",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "tags",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word archive",
+      "path": "/g/p/-/archive",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "archive",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word settings",
+      "path": "/g/p/-/settings",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "settings",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word members",
+      "path": "/g/p/-/members",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "members",
+        "rest": []
+      }
+    },
+    {
+      "name": "ref and file keep their case",
+      "path": "/acme/x/-/blob/Main/ReadMe.MD",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "Main",
+          "ReadMe.MD"
+        ]
+      }
+    },
+    {
+      "name": "Japanese file name, browser form",
+      "path": "/acme/x/-/blob/main/%E6%97%A5%E6%9C%AC.md",
+      "form": "browser",
+      "browser_input": "/acme/x/-/blob/main/日本.md",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "日本.md"
+        ]
+      }
+    },
+    {
+      "name": "Japanese file name, raw UTF-8 bytes",
+      "path": "/acme/x/-/blob/main/日本.md",
+      "form": "raw",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "日本.md"
+        ]
+      }
+    },
+    {
+      "name": "space in a file name, browser form",
+      "path": "/acme/x/-/blob/main/a%20b.txt",
+      "form": "browser",
+      "browser_input": "/acme/x/-/blob/main/a b.txt",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "a b.txt"
+        ]
+      }
+    },
+    {
+      "name": "encoded percent decodes once",
+      "path": "/acme/x/-/blob/main/100%25",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "100%"
+        ]
+      }
+    },
+    {
+      "name": "double-encoded separator decodes once to text",
+      "path": "/acme/x/-/blob/main/a%252Fb",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "a%2Fb"
+        ]
+      }
+    },
+    {
+      "name": "a dash segment in the tail is a name",
+      "path": "/acme/x/-/blob/main/-/x",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "-",
+          "x"
+        ]
+      }
+    },
+    {
+      "name": "a .git file in the tail",
+      "path": "/acme/x/-/blob/main/vendor/lib.git",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "vendor",
+          "lib.git"
+        ]
+      }
+    },
+    {
+      "name": "three dots are a name",
+      "path": "/acme/x/-/blob/main/...",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "..."
+        ]
+      }
+    },
+    {
+      "name": "hidden file",
+      "path": "/acme/x/-/blob/main/.gitignore",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          ".gitignore"
+        ]
+      }
+    },
+    {
+      "name": "archive with extension",
+      "path": "/acme/x/-/archive/v1.0.tar.gz",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "archive",
+        "rest": [
+          "v1.0.tar.gz"
+        ]
+      }
+    },
+    {
+      "name": "the query of a scoped route is ignored",
+      "path": "/acme/x/-/blob/main/a",
+      "query": "plain=1",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "a"
+        ]
+      }
+    },
+    {
+      "name": "dot segments are removed by a browser before the request",
+      "path": "/acme/x/-/blob/secret",
+      "form": "browser",
+      "browser_input": "/acme/x/-/blob/main/../secret",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "secret"
+        ]
+      }
+    },
+    {
+      "name": "a browser turns a backslash into a slash",
+      "path": "/acme/x/-/blob/main/a/b",
+      "form": "browser",
+      "browser_input": "/acme/x/-/blob/main/a\\b",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "acme/x",
+        "word": "blob",
+        "rest": [
+          "main",
+          "a",
+          "b"
+        ]
+      }
+    },
+    {
+      "name": "info/refs upload-pack",
+      "path": "/acme/platform/forge-web.git/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/platform/forge-web",
+        "route": "info_refs_upload_pack"
+      }
+    },
+    {
+      "name": "info/refs receive-pack",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git-receive-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "info_refs_receive_pack"
+      }
+    },
+    {
+      "name": "upload-pack POST",
+      "path": "/acme/x.git/git-upload-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "upload_pack"
+      }
+    },
+    {
+      "name": "receive-pack POST",
+      "path": "/acme/x.git/git-receive-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "receive_pack"
+      }
+    },
+    {
+      "name": "POST ignores the query",
+      "path": "/acme/x.git/git-upload-pack",
+      "query": "service=bogus",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "upload_pack"
+      }
+    },
+    {
+      "name": "the .git suffix and the namespace are case-folded",
+      "path": "/Acme/X.GIT/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "info_refs_upload_pack"
+      }
+    },
+    {
+      "name": "other query parameters are ignored",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git-upload-pack&x=1",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "acme/x",
+        "route": "info_refs_upload_pack"
+      }
+    },
+    {
+      "name": "a single-segment .git path parses (resolution decides)",
+      "path": "/x.git/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "expect": {
+        "kind": "git",
+        "namespace": "x",
+        "route": "info_refs_upload_pack"
+      }
+    },
+    {
+      "name": "project permalink",
+      "path": "/-/projects/42",
+      "form": "both",
+      "expect": {
+        "kind": "instance",
+        "route": "project_permalink",
+        "rest": [
+          "42"
+        ]
+      }
+    },
+    {
+      "name": "project permalink with a page",
+      "path": "/-/projects/42/-/blob/main/a.rs",
+      "form": "both",
+      "expect": {
+        "kind": "instance",
+        "route": "project_permalink",
+        "rest": [
+          "42",
+          "-",
+          "blob",
+          "main",
+          "a.rs"
+        ]
+      }
+    },
+    {
+      "name": "largest project id",
+      "path": "/-/projects/9223372036854775807",
+      "form": "both",
+      "expect": {
+        "kind": "instance",
+        "route": "project_permalink",
+        "rest": [
+          "9223372036854775807"
+        ]
+      }
+    }
+  ],
+  "reject": [
+    {
+      "name": "no leading slash",
+      "path": "acme/x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "the root",
+      "path": "/",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "empty path",
+      "path": "",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "double slash at the start",
+      "path": "//acme",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "double slash in the namespace",
+      "path": "/acme//x",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "trailing slash on a namespace",
+      "path": "/acme/x/",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "trailing slash on a scoped route",
+      "path": "/acme/x/-/tree/main/",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "double slash in the tail",
+      "path": "/acme/x/-/blob//a",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "trailing slash on info/refs",
+      "path": "/acme/x.git/info/refs/",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "21 levels deep",
+      "path": "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "full path of 256 characters",
+      "path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "segment of 65 characters",
+      "path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "raw path over 8192 bytes",
+      "path": "/acme/x/-/blob/main/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "percent in the namespace",
+      "path": "/acme/%78",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded slash in the namespace",
+      "path": "/acme%2Fx",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded lowercase slash in the namespace",
+      "path": "/acme%2fx",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded dots in the namespace",
+      "path": "/acme/%2e%2e",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "non-ASCII namespace, browser form",
+      "path": "/%E6%97%A5%E6%9C%AC/x",
+      "form": "browser",
+      "browser_input": "/日本/x",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "non-ASCII namespace, raw bytes",
+      "path": "/日本/x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "Kelvin sign, raw",
+      "path": "/acme/Kelvin",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "Kelvin sign, browser form",
+      "path": "/acme/%E2%84%AAelvin",
+      "form": "browser",
+      "browser_input": "/acme/Kelvin",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dotted capital I, raw",
+      "path": "/İstanbul",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dotted capital I, browser form",
+      "path": "/%C4%B0stanbul",
+      "form": "browser",
+      "browser_input": "/İstanbul",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "fullwidth letter",
+      "path": "/ａcme",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "NUL in the namespace",
+      "path": "/acme/x\u0000",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "newline in the namespace",
+      "path": "/acme\n/x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "tab in the namespace",
+      "path": "/acme/x\t",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "space in the namespace",
+      "path": "/a b/x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded space in the namespace",
+      "path": "/a%20b/x",
+      "form": "browser",
+      "browser_input": "/a b/x",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "backslash in the namespace",
+      "path": "/acme\\x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "segment starting with a dash",
+      "path": "/acme/-x",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "double dot inside a segment",
+      "path": "/acme/a..b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "Windows device name",
+      "path": "/acme/con",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dot segment in the namespace",
+      "path": "/acme/./x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dot-dot segment in the namespace",
+      "path": "/acme/../x",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": ".atom suffix in the namespace",
+      "path": "/acme/x.atom",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": ".wiki suffix in the namespace",
+      "path": "/acme/x.wiki",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": ".git on a non-last namespace segment (git form)",
+      "path": "/acme.git/x/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git on a non-last namespace segment (home)",
+      "path": "/acme.git/x",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git on a non-last namespace segment (scoped)",
+      "path": "/acme.git/x/-/tree/main",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git with nothing after it",
+      "path": "/acme/x.git",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git in upper case with nothing after it",
+      "path": "/acme/x.GIT",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git followed by /-/",
+      "path": "/acme/x.git/-/blob/main/a",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "dumb HTTP objects",
+      "path": "/acme/x.git/objects/info/packs",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "dumb HTTP HEAD",
+      "path": "/acme/x.git/HEAD",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "info without refs",
+      "path": "/acme/x.git/info",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "info/refs with more after it",
+      "path": "/acme/x.git/info/refs/x",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "upload-pack with more after it",
+      "path": "/acme/x.git/git-upload-pack/x",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "git fixed words are case-sensitive",
+      "path": "/acme/x.git/Info/Refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git.git is stripped once",
+      "path": "/acme/x.git.git/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git.git as a home",
+      "path": "/acme/x.git.git",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "bare .git segment",
+      "path": "/acme/.git/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": ".git trailing slash",
+      "path": "/acme/x.git/",
+      "form": "both",
+      "reason": "path_rejected",
+      "dot_git": true
+    },
+    {
+      "name": "encoded slash in the tail",
+      "path": "/acme/x/-/blob/main/a%2Fb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded lowercase slash in the tail",
+      "path": "/acme/x/-/blob/main/a%2fb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded backslash in the tail",
+      "path": "/acme/x/-/blob/main/a%5Cb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded lowercase backslash in the tail",
+      "path": "/acme/x/-/blob/main/a%5cb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "raw backslash in the tail",
+      "path": "/acme/x/-/blob/main/a\\b",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded NUL in the tail",
+      "path": "/acme/x/-/blob/main/a%00b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "raw NUL in the tail",
+      "path": "/acme/x/-/blob/main/a\u0000b",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded newline in the tail",
+      "path": "/acme/x/-/blob/main/a%0Ab",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded DEL in the tail",
+      "path": "/acme/x/-/blob/main/a%7Fb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded C1 control (NEL) in the tail",
+      "path": "/acme/x/-/blob/main/a%C2%85b",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dot segment in the tail",
+      "path": "/acme/x/-/blob/main/./a",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "dot-dot segment in the tail",
+      "path": "/acme/x/-/blob/main/../a",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded dot segment in the tail",
+      "path": "/acme/x/-/blob/main/%2e/a",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "encoded dot-dot segment in the tail",
+      "path": "/acme/x/-/blob/main/%2E%2E/a",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "half-encoded dot-dot segment in the tail",
+      "path": "/acme/x/-/blob/main/.%2e/a",
+      "form": "raw",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "invalid UTF-8 in the tail",
+      "path": "/acme/x/-/blob/main/%FF",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "truncated UTF-8 in the tail",
+      "path": "/acme/x/-/blob/main/%E6%97",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "overlong UTF-8 for a slash",
+      "path": "/acme/x/-/blob/main/%C0%AF",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "malformed escape",
+      "path": "/acme/x/-/blob/main/%zz",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "lone percent",
+      "path": "/acme/x/-/blob/main/%",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "short escape",
+      "path": "/acme/x/-/blob/main/%4",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "API prefix",
+      "path": "/api/v1/projects",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "API prefix in upper case folds to the reserved word",
+      "path": "/API/v1",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "reserved word admin",
+      "path": "/admin",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "reserved file favicon.ico",
+      "path": "/favicon.ico",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "reserved file robots.txt",
+      "path": "/robots.txt",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "reserved word as a git namespace",
+      "path": "/api.git/info/refs",
+      "query": "service=git-upload-pack",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "reserved word with a route word",
+      "path": "/settings/-/members",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "instance separator alone",
+      "path": "/-",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "unknown instance word",
+      "path": "/-/unknown",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "static files are not the dispatcher's",
+      "path": "/-/static/app.js",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "separator with no word",
+      "path": "/acme/x/-",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "route words are case-sensitive",
+      "path": "/acme/x/-/Blob/main/a",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "route words are case-sensitive (upper)",
+      "path": "/acme/x/-/BLOB",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "not yet routed: pulls (M3)",
+      "path": "/acme/x/-/pulls",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "not yet routed: pull (M3)",
+      "path": "/acme/x/-/pull/3",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "not yet routed: pipelines (M4)",
+      "path": "/acme/x/-/pipelines",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "not yet routed: wiki (M6)",
+      "path": "/acme/x/-/wiki",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "not yet routed: issues (M6)",
+      "path": "/acme/x/-/issues",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "encoded route word",
+      "path": "/acme/x/-/%62lob/main",
+      "form": "both",
+      "reason": "unknown_route"
+    },
+    {
+      "name": "permalink without an id",
+      "path": "/-/projects",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink id zero",
+      "path": "/-/projects/0",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink id with a leading zero",
+      "path": "/-/projects/042",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink id not a number",
+      "path": "/-/projects/abc",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink id negative",
+      "path": "/-/projects/-1",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink id overflows i64",
+      "path": "/-/projects/9223372036854775808",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink trailing slash",
+      "path": "/-/projects/42/",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "permalink tail with an encoded slash",
+      "path": "/-/projects/42/a%2Fb",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "info/refs without a query",
+      "path": "/acme/x.git/info/refs",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "info/refs without service",
+      "path": "/acme/x.git/info/refs",
+      "query": "x=1",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "service twice",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git-upload-pack&service=git-upload-pack",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "service in upper case",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=GIT-UPLOAD-PACK",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "unknown service",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git-upload-archive",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "empty service",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "service without a value",
+      "path": "/acme/x.git/info/refs",
+      "query": "service",
+      "form": "both",
+      "reason": "service_unsupported"
+    },
+    {
+      "name": "percent-encoded service value",
+      "path": "/acme/x.git/info/refs",
+      "query": "service=git%2Dupload-pack",
+      "form": "both",
+      "reason": "service_unsupported"
+    }
+  ]
+}
