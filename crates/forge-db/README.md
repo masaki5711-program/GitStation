@@ -47,6 +47,32 @@ connection, mapping driver errors to registered codes, migrations
   one `token.revoked` event each, `revoked_tokens` in the `user.disabled` audit
   row; step D3). `users::id_by_username(&Db, &str) -> Result<UserId, ForgeError>`
   (read pool; FG-REPO-0005 `resource=user`, `reason=absent`).
+- **Disable guard** (step D3 MR2, ADR-0019 §10–§11): `disable` refuses
+  (FG-AUTH-0009, nothing written, no token revoked) when it would leave no
+  active **human** administrator (`last_admin`) or a **top-level** group
+  without a direct active Owner (`last_owner`; subgroups inherit). `disable_with(…,
+  Guard::Force)` passes it (the operator CLI's `--force` only) and records
+  `forced`, `ownerless_groups` (a count) and `left_without_admin` in the
+  `user.disabled` details; it returns `DisableOutcome::DisabledPastGuard` when
+  the guard would have refused. Lock order: advisory lock `users.admin_set`
+  (`users::lock_admin_set`, crate-private) → the user row `FOR UPDATE` →
+  unlocked counts; group rows are never locked (member changes lock group →
+  owner rows `FOR SHARE`). `users::bootstrap_admin(&Db, &ChangeContext,
+  &Bootstrap) -> Bootstrapped` (`Promote(UserId)` or `Create(NewUser)` through
+  the `create` path, `is_admin` set): refused while an active human admin
+  exists (`admin_exists`), for bots / service accounts (`not_human`) and
+  disabled users (`user_disabled`); same lock order; one audit row
+  `user.admin_bootstrapped` (`created`, `namespace_id`), no event.
+  `users::administration(&Db) -> Option<Administration>` (read pool; `None`
+  before the migration) is what `forge doctor` reports as
+  `users.administration`: `check()` is FG-AUTH-0010 (`no_admin` /
+  `ownerless_group`, counts and the first 10 group ids, read in one statement),
+  `is_fresh_install()` when there is no user at all.
+  **Operator-only**: `Guard::Force`, `disable_with` and `bootstrap_admin` are
+  for the CLI; the test `forge_web_never_names_the_operator_only_user_commands`
+  fails if a source under `crates/forge-web/src` names them. **Every future
+  change of `is_admin` or of an administrator's state** (grant / revoke admin,
+  LDAP sync, any HTTP route) must take `lock_admin_set` first (ADR-0019 §11).
 - `tokens::{issue, revoke, list, authenticate}` (step D3, ADR-0019): personal
   access tokens `fgp_<16 hex public_id>_<64 hex secret>`; only `sha256(secret)`
   is stored and only the write pool reads it. `issue(&Db, &ChangeContext, &NewToken)
@@ -106,13 +132,17 @@ FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_tak
 ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
 (`reason=employee_number_taken` / `external_id_taken`), FG-REPO-0005 (`resource=user`,
 `reason=absent` on disable), FG-SYS-0001
-(`reason=unexpected_dedup`, `unknown_user_kind`).
+(`reason=unexpected_dedup`, `unknown_user_kind`), FG-AUTH-0009 AdministrationConflict
+(409: `last_admin` / `last_owner` from `disable`, `admin_exists` / `not_human` /
+`user_disabled` from `bootstrap_admin`; ids only). `Administration::check`:
+FG-AUTH-0010 AdministrationOrphaned (warn; `no_admin` / `ownerless_group`).
 Raised by `groups`: FG-REPO-0007 (also `too_deep`, `path_too_long`) / 0008 / 0009,
 FG-REPO-0010 MembershipConflict (`already_member`, `not_member`, `last_owner`,
 `bot_member`), FG-REPO-0011 GroupRequestInvalid (`display_name_length`,
 `description_length`, `nul_character`, `parent_not_group`, `owner_inactive`),
-FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-SYS-0001
-(`unknown_role`, `unexpected_dedup`).
+FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-DB-0018
+(`unknown_role` on a stored role outside the five; `resource=group`, `id`, `user`, `raw` —
+the role loader's code since D3 MR2, it was FG-SYS-0001), FG-SYS-0001 (`unexpected_dedup`).
 Raised by `tokens`: FG-AUTH-0008 TokenRequestInvalid (`expires_out_of_range`,
 `scopes_empty`, `name_length`, `nul_character`, `control_character`, `owner_bot`,
 `owner_disabled`, `admin_scope_requires_admin`, `active_limit`; nothing is written),
@@ -129,7 +159,7 @@ FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `r
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
 `job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
-`subscriber-lag.md`, `credential-data.md`.
+`subscriber-lag.md`, `credential-data.md`, `user-offboarding.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then

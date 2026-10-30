@@ -39,6 +39,18 @@ fn audit_details_have_no_pii_fields() {
     let disabled = AuditDetails::UserDisabled {
         kind: UserKind::ServiceAccount,
         revoked_tokens: 3,
+        forced: true,
+        ownerless_groups: 2,
+        left_without_admin: false,
+    };
+    // D3 MR2: the recovery path writes ids and flags only.
+    let bootstrapped = AuditDetails::AdminBootstrapped {
+        created: true,
+        namespace_id: Some(NamespaceId::new(8)),
+    };
+    let promoted = AuditDetails::AdminBootstrapped {
+        created: false,
+        namespace_id: None,
     };
     // The exact shape (a Null or an empty object would pass a key scan).
     assert_eq!(
@@ -47,8 +59,23 @@ fn audit_details_have_no_pii_fields() {
     );
     assert_eq!(
         disabled.to_value(),
-        json!({"kind": "service_account", "revoked_tokens": 3})
+        json!({
+            "kind": "service_account",
+            "revoked_tokens": 3,
+            "forced": true,
+            "ownerless_groups": 2,
+            "left_without_admin": false,
+        })
     );
+    assert_eq!(
+        bootstrapped.to_value(),
+        json!({"created": true, "namespace_id": 8})
+    );
+    assert_eq!(
+        promoted.to_value(),
+        json!({"created": false, "namespace_id": null})
+    );
+    assert_eq!(bootstrapped.action(), "user.admin_bootstrapped");
     assert_eq!(created.action(), "user.created");
     assert_eq!(disabled.action(), "user.disabled");
     // D2: groups and their members (ADR-0016 §9: group.*, member.*).
@@ -99,7 +126,16 @@ fn audit_details_have_no_pii_fields() {
     assert_eq!(added.action(), "member.added");
     assert_eq!(changed.action(), "member.role_changed");
     assert_eq!(removed.action(), "member.removed");
-    for details in [created, disabled, group, added, changed, removed] {
+    for details in [
+        created,
+        disabled,
+        bootstrapped,
+        promoted,
+        group,
+        added,
+        changed,
+        removed,
+    ] {
         let mut found = Vec::new();
         keys(&details.to_value(), &mut found);
         for pii in PII_KEYS {

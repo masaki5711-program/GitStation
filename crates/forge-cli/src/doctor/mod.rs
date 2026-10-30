@@ -5,7 +5,8 @@
 //! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
 //! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
-//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), storage root and
+//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
+//! administers forge (`users.administration`), storage root and
 //! the git binary. One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
@@ -31,6 +32,7 @@ mod seal;
 // ── C5 ──
 mod subscribers;
 // ── end C5 ──
+mod users;
 
 /// The outcome of one check.
 enum Outcome {
@@ -54,7 +56,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 12] = [
+const DB_CHECKS: [&str; 13] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -72,6 +74,8 @@ const DB_CHECKS: [&str; 12] = [
     "subscribers.lag",
     "subscribers.dead_letters",
     // ── end C5 ──
+    // D3 MR2: FG-AUTH-0010.
+    "users.administration",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -174,6 +178,7 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
     // ── C5 ──
     let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
     // ── end C5 ──
+    let administration = users::administration_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -187,6 +192,7 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         depth,
         subscriber_lag,
         dead_letters,
+        administration,
     ]
 }
 

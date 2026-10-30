@@ -20,6 +20,22 @@ pub enum AuditDetails {
         kind: UserKind,
         /// Active tokens revoked in the same change (D3, ADR-0019).
         revoked_tokens: i64,
+        /// The operator passed the administration guard (`--force`,
+        /// ADR-0019 §10), whether or not it would have refused.
+        forced: bool,
+        /// Top-level groups this disable left without a direct active Owner
+        /// (non-zero only when `forced`).
+        ownerless_groups: i64,
+        /// This disable left no active human administrator (only when `forced`).
+        left_without_admin: bool,
+    },
+    /// `user.admin_bootstrapped` (D3 MR2, ADR-0019 Amendment): the recovery /
+    /// first-install path made an active human an administrator. `created`:
+    /// the user was created by the same command (then `namespace_id` is its
+    /// personal namespace; no separate `user.created` row).
+    AdminBootstrapped {
+        created: bool,
+        namespace_id: Option<NamespaceId>,
     },
     /// `group.created` (D2): its namespace, the parent group's namespace
     /// (`None` at the top level) and the first Owner.
@@ -58,6 +74,7 @@ impl AuditDetails {
         match self {
             Self::UserCreated { .. } => "user.created",
             Self::UserDisabled { .. } => "user.disabled",
+            Self::AdminBootstrapped { .. } => "user.admin_bootstrapped",
             Self::GroupCreated { .. } => "group.created",
             Self::MemberAdded { .. } => "member.added",
             Self::MemberRoleChanged { .. } => "member.role_changed",
@@ -74,6 +91,7 @@ impl AuditDetails {
         match self {
             Self::UserCreated { .. }
             | Self::UserDisabled { .. }
+            | Self::AdminBootstrapped { .. }
             | Self::GroupCreated { .. }
             | Self::MemberAdded { .. }
             | Self::MemberRoleChanged { .. }
@@ -84,7 +102,9 @@ impl AuditDetails {
     }
 
     /// The JSON stored in `audit_log.details`:
-    /// UserCreated `{"kind","namespace_id","is_admin"}`, UserDisabled `{"kind","revoked_tokens"}`,
+    /// UserCreated `{"kind","namespace_id","is_admin"}`,
+    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","left_without_admin"}`,
+    /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
@@ -104,7 +124,23 @@ impl AuditDetails {
             Self::UserDisabled {
                 kind,
                 revoked_tokens,
-            } => serde_json::json!({ "kind": kind.as_str(), "revoked_tokens": revoked_tokens }),
+                forced,
+                ownerless_groups,
+                left_without_admin,
+            } => serde_json::json!({
+                "kind": kind.as_str(),
+                "revoked_tokens": revoked_tokens,
+                "forced": forced,
+                "ownerless_groups": ownerless_groups,
+                "left_without_admin": left_without_admin,
+            }),
+            Self::AdminBootstrapped {
+                created,
+                namespace_id,
+            } => serde_json::json!({
+                "created": created,
+                "namespace_id": namespace_id.map(NamespaceId::get),
+            }),
             Self::GroupCreated {
                 namespace_id,
                 parent_namespace_id,

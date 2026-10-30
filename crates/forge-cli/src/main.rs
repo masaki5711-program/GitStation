@@ -11,6 +11,7 @@ use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
 mod admin_token;
+mod admin_user;
 mod db;
 mod doctor;
 mod explain;
@@ -65,8 +66,9 @@ enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
-    /// Operator commands. `token issue` / `token revoke` change data (in
-    /// production: approved runbook steps); the others only read.
+    /// Operator commands. `token issue` / `token revoke`, `user disable` and
+    /// `bootstrap-admin` change data (in production: approved runbook steps);
+    /// the others only read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -87,6 +89,43 @@ enum AdminCommand {
     Token {
         #[command(subcommand)]
         command: TokenCommand,
+    },
+    /// Users (ADR-0019 §10).
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+    /// Make an active human the administrator when forge has none (first
+    /// install, or recovery after a forced disable). Refused while an active
+    /// human administrator exists.
+    BootstrapAdmin {
+        /// The username to promote (or, with --create, to create).
+        #[arg(long)]
+        user: String,
+        /// Create the user (a local human) instead of promoting an existing one.
+        #[arg(long, requires = "email")]
+        create: bool,
+        /// The new user's email (with --create).
+        #[arg(long, requires = "create")]
+        email: Option<String>,
+        /// The new user's display name (with --create; default: the username).
+        #[arg(long, requires = "create")]
+        display_name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum UserCommand {
+    /// Disable a user and revoke their active tokens. Refused when it would
+    /// leave no active human administrator, or a top-level group without a
+    /// direct active Owner, unless --force.
+    Disable {
+        /// The username.
+        username: String,
+        /// Disable even if no administrator or group Owner is left
+        /// (recorded in the audit log; recover with `bootstrap-admin`).
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -161,7 +200,11 @@ fn main() -> ExitCode {
             command:
                 AdminCommand::Token {
                     command: TokenCommand::Issue { .. } | TokenCommand::Revoke { .. },
-                },
+                }
+                | AdminCommand::User {
+                    command: UserCommand::Disable { .. },
+                }
+                | AdminCommand::BootstrapAdmin { .. },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
         | Command::Errors { .. }
@@ -242,6 +285,39 @@ fn main() -> ExitCode {
             }
             TokenCommand::List { user } => admin_token::list(&cfg.database, &user),
         }),
+        Command::Admin {
+            command:
+                AdminCommand::User {
+                    command: UserCommand::Disable { username, force },
+                },
+        } => config()
+            .and_then(|cfg| admin_user::disable(&cfg.database, &request_id, &username, force)),
+        Command::Admin {
+            command:
+                AdminCommand::BootstrapAdmin {
+                    user,
+                    create,
+                    email,
+                    display_name,
+                },
+        } => config().and_then(|cfg| {
+            let create = match (create, email) {
+                (true, Some(email)) => Some(admin_user::NewAdmin {
+                    email,
+                    display_name,
+                }),
+                // clap requires --email with --create; without --create there is nothing to create.
+                _ => None,
+            };
+            admin_user::bootstrap_admin(
+                &cfg.database,
+                &request_id,
+                &admin_user::BootstrapArgs {
+                    username: user,
+                    create,
+                },
+            )
+        }),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)
@@ -304,5 +380,69 @@ fn request_id_label(lang: Lang) -> &'static str {
         Lang::Ja => "問い合わせ番号",
         Lang::En => "Request ID",
         Lang::Id => "ID permintaan",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("forge").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn user_disable_takes_a_username_and_an_optional_force() {
+        let cli = parse(&["admin", "user", "disable", "alice", "--force"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::User {
+                    command: UserCommand::Disable { ref username, force: true }
+                }
+            } if username == "alice"
+        ));
+        let cli = parse(&["admin", "user", "disable", "alice"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::User {
+                    command: UserCommand::Disable { force: false, .. }
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn bootstrap_admin_create_needs_an_email_and_an_email_needs_create() {
+        assert!(parse(&["admin", "bootstrap-admin", "--user", "root"]).is_ok());
+        assert!(parse(&[
+            "admin",
+            "bootstrap-admin",
+            "--user",
+            "root",
+            "--create",
+            "--email",
+            "root@example.test",
+            "--display-name",
+            "Root",
+        ])
+        .is_ok());
+        assert!(
+            parse(&["admin", "bootstrap-admin", "--user", "root", "--create"]).is_err(),
+            "--create without --email"
+        );
+        assert!(
+            parse(&[
+                "admin",
+                "bootstrap-admin",
+                "--user",
+                "root",
+                "--email",
+                "root@example.test"
+            ])
+            .is_err(),
+            "--email without --create"
+        );
     }
 }

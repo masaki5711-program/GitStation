@@ -258,3 +258,60 @@ AI のエージェントもトークンで git と API を使うため、トー�
 **未決（追加）**: クライアント（IP）ごとの認証のレート制限。同時の照合の上限は全体で 1 つなので、1 つのクライアントが
 許可を使い切ると他のクライアントの認証が待つ（リクエストのタイムアウトで 503 になりうる）。クライアントを区別する制限は
 プロキシの構成（送信元のアドレスをどこから取るか）と一緒に決める。
+
+## Amendment（2026-10-30、D3 MR2: 無効化のガードと `bootstrap-admin`）
+
+実装（`feat/auth-disable-guard`）で決めたこと。§10〜§12 の決定は変えていない。
+
+1. **`bootstrap-admin` の形**（リードの決定）: `forge admin bootstrap-admin --user <username>` は既存の有効な人間を管理者にする（`Promote`）。
+   `--user <username> --email <email> [--display-name <name>] --create` は、`users::create` と同じ経路（パスのロック、墓標の確認、個人の名前空間）で
+   新しい人間の管理者を作る（`Create`。`--display-name` の既定はユーザー名）。clap で `--create` には `--email` を、`--email`・`--display-name` には
+   `--create` を必須にした。有効な人間の管理者がいるときは `FG-AUTH-0009 reason=admin_exists` で拒否し、**`--force` はない**。
+   ロックは §11 と同じ順（`users.admin_set` → 対象の行 `FOR UPDATE`（`Promote` のみ）→ 数え上げ）。
+2. **`bootstrap-admin` で拒否する対象のコード**: ボット・サービスアカウント（`reason=not_human`）と無効化された利用者（`reason=user_disabled`）も
+   `FG-AUTH-0009` にした（新しいコードを作らない）。「管理の状態に合わない管理の操作」を 1 つのコードにまとめ、Runbook も 1 つにするため。
+   `--create` は常に人間を作るので、`Create` に人間以外が来るのはプログラムの誤りだが、同じく `not_human` で拒否する。
+3. **`bootstrap-admin` の監査**: 新しい `AuditDetails::AdminBootstrapped { created, namespace_id }`、action `user.admin_bootstrapped`、
+   リソースは `user`/`users.id`、イベントなし（`user.*` は監査だけ）。1 つの変更に監査の行は 1 つなので、`Create` でも `user.created` の行は
+   別に書かない（`created: true` と `namespace_id` がその代わり）。名前・メールは入れない。
+4. **`user.disabled` の詳細**: 常に `{"kind","revoked_tokens","forced","ownerless_groups","left_without_admin"}` の 5 つを書く（強制しなかった
+   無効化でも `false`/`0`）。`forced` は「操作者が `--force` を指定した」ことで、ガードが実際に拒否したかどうかではない（それは
+   `ownerless_groups` と `left_without_admin` で分かる）。`ownerless_groups` は **数** にした（グループの id は `forge doctor` の
+   `users.administration` が `group_ids` で示す。監査の行の大きさを利用者の持つグループの数に比例させないため）。
+5. **API**: `users::disable` は既定でガードを守る（`Guard::Enforce`。HTTP の経路はこれだけを使う）。`users::disable_with(…, Guard::Force)` は
+   CLI の `--force` だけが使う。ガードが拒否したはずの無効化を強制したときは `DisableOutcome::DisabledPastGuard { ownerless_groups,
+   left_without_admin }` を返し、CLI は孤立した状態と復旧の手順を表示する。
+6. **ガードの数え方の細部**: `last_admin` は対象が有効な人間の管理者のときだけ判定する（管理者がもともといない状態で一般の利用者を
+   無効化するのは拒否しない — 最後の管理者を失わせる操作ではないため。その状態は doctor が報告する）。両方に当たるときは `last_admin` を先に報告する。
+   `last_owner` の誤りには `user`、最初のグループの `group_id`、`ownerless_groups`（数）を付ける。advisory lock は管理者でない利用者の
+   無効化でも取る（2 人の Owner が互いを同時に無効化する競合を、行のロックだけでは防げないため）。
+7. **doctor の `users.administration`**: 利用者が 1 人もいない（新しいインストール）は FG-AUTH-0010 にせず、コードなしの `warn`
+   （「`forge admin bootstrap-admin` で最初の管理者を作る」）にした。失われたものはなく、インストール直後の `forge doctor` を毎回失敗させないため。
+   利用者がいて有効な人間の管理者がいない（`reason=no_admin`）、または直接の有効な Owner のいない最上位のグループがある
+   （`reason=ownerless_group`）ときに FG-AUTH-0010（warn、終了コード 1）。出力は数と最初の 10 個のグループの id だけ。読み取りの接続で読む。
+8. **FG-AUTH-0010 の HTTP の状態**: doctor だけのコードだが、カタログの形（400〜599）に合わせて 500 にした（利用者には返さない）。
+9. **D2 の LOW の修正**: `groups::members` の `unknown_role` を `FG-SYS-0001` から `FG-DB-0018 MembershipDataInvalid` にし、ロールの読み込み
+   （`roles`）と同じ文脈（`resource=group`、`id`、`user`、`raw`、32 文字まで）を付けた。
+10. **まだできないこと（Runbook に明記）**: 管理者を付与するコマンドと、グループのメンバーを変える操作の手段（HTTP の経路）はまだない。
+    そのため「先に別の管理者・Owner を用意する」手順は、今は `--force` と `bootstrap-admin` での復旧になり、Owner のいない最上位のグループは
+    メンバーの変更の手段ができるまで doctor が warn を出し続ける。
+11. **グループの状態**（レビューの指摘、2026-10-30）: グループには今、アーカイブ・削除待ちの状態がない（`forge.groups` は状態の列を持たない。
+    M1 ではグループを削除しない、計画の Q11）。D5 でそのような状態を足すときは、ガードの数え上げ（`users::admin::what_disable_leaves`）と
+    doctor の `users::administration` の両方で、その状態のグループを除くこと（除かないと、消えかけのグループのために無効化が拒否される、
+    または doctor が報告し続ける）。
+12. **`actor_label` は自己申告**（レビューの指摘、変更なし）: CLI の監査の行の `actor_label = forge-cli:<OS のアカウント>` は環境変数
+    `USERNAME` / `USER` から取り、実行する人が書き換えられる。ホストの操作者が信頼の起点（§8）なので、新しい依存（OS の API での照会など）は
+    足さない。**「誰が実行したか」の正式な記録は Runbook の承認の記録**（`request_id` を残して監査の行と突き合わせる）。Runbook
+    `user-offboarding` に明記した。
+13. **HTTP から強制の経路を使えないことの検査**: `Guard::Force`・`disable_with`・`bootstrap_admin` が HTTP に出ないことを、文書だけでなく
+    forge-db のテスト `forge_web_never_names_the_operator_only_user_commands`（`crates/forge-web/src` のソースを走査）で守る。
+14. **`is_admin`・管理者の状態を変えるすべての経路は `lock_admin_set` を先に取る**: 今は `disable` と `bootstrap_admin`。管理者の付与・剥奪の
+    コマンド、LDAP の同期、HTTP の経路を足すときも、§11 の順（`users.admin_set` → 対象の行）に従う（`users/admin.rs` のモジュールの説明）。
+    `create` で `is_admin = true` の利用者を作る経路は管理者を増やすだけなので、最後の管理者の数え上げを壊さない。
+15. **doctor の読み取りは 1 つの文**: `users.administration` は、利用者の数と Owner のいない最上位のグループを 1 つの SQL 文（CTE）で読み、
+    同じスナップショットにした。REPEATABLE READ のトランザクションは `SET TRANSACTION` を要し、エージェントモデルのゲート
+    db-write-boundary が `SET TRANSACTION` を `ChangeTx` の中に限っているため使わない。
+16. **ガードを越えた無効化のログ**: `forge.admin.user.disabled` は、ガードが拒否したはずの強制（`outcome = disabled_past_guard`）のとき
+    warn（`ownerless_groups`、`left_without_admin` 付き）、それ以外は info。
+17. **最後の管理者の通常の退職**: 管理者を付与するコマンドがない間は、`--force` → 直後の `bootstrap-admin` になり、管理者のいない時間ができる。
+    承認の時点で後任を決め、無効化の直後に復旧する（Runbook）。管理者の付与のコマンドは追跡中の後続の作業。

@@ -63,7 +63,9 @@ with administrator rights may request it.
 5. Transfer into a personal namespace: `target_role = Some(Owner)` only for the
    caller's own namespace; never into a group pending deletion.
 6. Project creation: the creator gets no direct role above their group role.
-7. Last Owner: apply the same guard to user disable / delete.
+7. Last Owner: apply the same guard to user disable / delete. Disable: done
+   in D3 MR2 (`forge_db::users::disable`, FG-AUTH-0009 `last_owner` for
+   top-level groups, plus `last_admin`; ADR-0019 §10). Delete: still open.
 8. List endpoints filter each item through `ProjectRead`.
 9. ~~Decide explicitly whether password Basic auth is allowed on git routes~~
    **Closed (D3 MR3, ADR-0019 §7)**: no. The Basic password is a personal
