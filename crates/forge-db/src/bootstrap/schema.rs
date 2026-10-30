@@ -372,8 +372,43 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end D3 ──
+        // ── D4: no DELETE on projects / repositories yet (D5), repository
+        // kind fixed (UPDATE of state and ready_at only), the read pool
+        // without provision_token, TRUNCATE for no one ──
+        (
+            "forge.projects",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.repositories",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", &["state", "ready_at"]),
+                columns("forge_ro", "SELECT", REPOSITORIES_RO),
+            ]
+            .concat(),
+        ),
+        ("forge.project_members", operational()),
+        ("forge.protected_refs", operational()),
+        // ── end D4 ──
     ]
 }
+
+/// The read pool's columns of repositories (tables.toml `ro_columns`): not
+/// provision_token.
+const REPOSITORIES_RO: &[&str] = &[
+    "id",
+    "project_id",
+    "kind",
+    "state",
+    "created_at",
+    "ready_at",
+];
 
 /// The columns forge_app may update on forge.tokens.
 const TOKENS_APP_UPDATE: &[&str] = &["revoked_at", "revoked_reason", "last_used_at"];
@@ -448,6 +483,12 @@ const LATER_TABLES: &[&str] = &[
     // ── D3: tokens (migration 20261030100000) ──
     "tokens",
     // ── end D3 ──
+    // ── D4: projects (migration 20261031100000) ──
+    "projects",
+    "repositories",
+    "project_members",
+    "protected_refs",
+    // ── end D4 ──
 ];
 
 /// Every table the first migration creates.

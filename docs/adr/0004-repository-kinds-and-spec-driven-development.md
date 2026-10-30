@@ -42,3 +42,17 @@
 
 ### Risks
 - 規則が守られない → `forge/spec-trace` で検出する（助言から始め、計測後に必須化を判断）
+
+## Amendment（2026-10-31、手順 D4 MR1: `repositories` の表）
+
+- **種類は作成の時に決まり、変わらない**（手順 D の計画 Q3）。`forge.repositories.kind`（CHECK `repositories_kind`: `spec` / `system`）は、
+  `forge_app` に列の UPDATE の権限がないことで守る（`forge_app` が更新できるのは `state` と `ready_at` だけ。DELETE は D5 まで与えない）。
+  テスト `repository_kind_cannot_change`。`forge-core` の `RepositoryKind`（`ALL`、`as_str`、`parse`）が同じ一覧を持つ。
+- M1 ではプロジェクトに 1 つのリポジトリ（`project_id` UNIQUE）。状態は `provisioning` → `ready`（`RepositoryState`）で、
+  `ready_at` は状態が `ready` のときに限って入る（CHECK `repositories_ready_at`）。
+- `provision_token`（uuid、既定値 `gen_random_uuid()`）は、プロビジョニングのジョブが bare リポジトリの設定に書く目印（D4 の案 A。再試行は
+  目印が一致するディレクトリだけを引き取る）。書き手は変えない（`forge_app` に UPDATE の権限がない）。読み取りのプール（`forge_ro`）からは
+  読めない（ADR-0018 のトークンのハッシュと同じ扱い。テスト `the_read_pool_cannot_read_provision_token`）。
+- 4 つの表（`projects`、`repositories`、`project_members`、`protected_refs`）はすべて、プロジェクトの監査の行（`resource_type = 'project'`、
+  `resource_id` = プロジェクトの ID）で覆う（ADR-0016 §1 の状態の表）。状態の変更にも監査の行が要る
+  （テスト `a_repository_state_change_needs_a_project_audit_row`）。

@@ -283,6 +283,21 @@ diagnosis = "The log event carries `reason` (display_name_length, description_le
 fix = "Correct the field named by `reason`; create subgroups below a group, not below a user."
 test = "an_invalid_group_request_is_group_request_invalid"
 
+# FG-REPO-0012 is reserved for RepositoryProvisioningStuck (step D4 MR3b).
+
+[[error]]
+code = "FG-REPO-0013"
+name = "ProtectedRefRuleInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "保護ブランチの規則が正しくありません。refs/heads/ か refs/tags/ で始まる 255 バイトまでのパターンで、* は最後の部分に 1 つだけ使えます。"
+user_message_en = "The protected branch rule is not valid. Use a pattern of up to 255 bytes that starts with refs/heads/ or refs/tags/, with at most one '*' in its last part."
+user_message_id = "Aturan branch terlindungi tidak valid. Gunakan pola hingga 255 byte yang diawali refs/heads/ atau refs/tags/, dengan paling banyak satu '*' di bagian terakhirnya."
+cause = "A protected ref rule (forge.protected_refs, ADR-0008) broke a rule before anything was written. The pattern (forge_core RefPattern::parse) is longer than 255 bytes, does not start with refs/heads/ or refs/tags/, has more than one '*' or a '*' outside its last path component, or, with the '*' read as an ordinary character, breaks git's check-ref-format rules (the rules of RefName, including forge's no-leading-'-' rule). Protected ref changes (step D4 MR5) also refuse a pattern that equals an existing rule of the project ignoring case, and a 101st rule of one project."
+diagnosis = "The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), duplicate_pattern (another rule of the project has the same pattern ignoring case; the database backstop is the unique index protected_refs_project_pattern on lower(pattern)) or too_many_rules (the project already has 100 rules). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database."
+fix = "Correct the pattern named by `reason`: start it with refs/heads/ or refs/tags/, keep it within 255 bytes, use at most one '*' and only in the last part (refs/heads/release/*), or change the existing rule instead of adding a duplicate; remove unused rules before adding more than 100."
+test = "a_protected_ref_pattern_breaking_the_rules_is_rejected"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

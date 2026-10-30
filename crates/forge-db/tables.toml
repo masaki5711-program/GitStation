@@ -147,6 +147,46 @@ unaudited_columns = ["last_used_at"]
 txn_audited_columns = []
 # ── end D3 ──
 
+# ── D4: projects and what belongs to them (ADR-0004, ADR-0008, ADR-0016 §1).
+# Every change is audited on its project (resource 'project'). ──
+[tables.projects]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.repositories]
+guarded = false
+kind = "audited"
+# Not provision_token (it lets a provisioning retry adopt a directory).
+ro_columns = ["id", "project_id", "kind", "state", "created_at", "ready_at"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.project_members]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.protected_refs]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+# ── end D4 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true
