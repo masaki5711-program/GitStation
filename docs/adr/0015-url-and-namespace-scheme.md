@@ -591,3 +591,50 @@ impl<S> Registry<S> {
 - **テストベクタ**は `tests/fixtures/url-vectors.json`（リポジトリのルート）。`form` は `both`（ブラウザの `new URL()` でも変わらない）、
   `browser`（`browser_input` を `new URL()` で正規化した形）、`raw`（`curl --path-as-is` でしか送れない）の 3 つで、ラベルは WHATWG の URL 解析で確かめた。
   `dot_git` が `.git` の許されない場所の印である。
+
+## Amendment（2026-10-30、M1 phase 8 MR2: `prove()` / `Authorized<R>` と `PathResolve` / `WebShell`）
+
+上の「インターフェースの概略」と「新しい Action と変わる Resource の最小の matrix の行」を、forge-auth に実装した（`feat/auth-prove-authorized`）。
+概略から変えた点と、決めた点は次のとおり。
+
+- **`Resource::Resolved` の形**: 概略の `Resolved { kind, view }` は、`Resolved { via: ResolvedVia, view: NamespaceView }` にした。
+  - `NamespaceView` は `User` / `Group { role }` / `Project(ProjectView)` で、**種類は variant そのもの** にした（`kind()` が `user` / `group` / `project` を返す）。
+    `kind` と `view` を別の欄にすると、`kind = group` で `view` がプロジェクト、という食い違いが型の上で作れてしまうため。
+  - `ResolvedVia` は `Live` / `Moved`。`moved` の墓標を通って届いた先が見えないときに、ログの `reason` を `not_visible` ではなく
+    `tombstone_not_visible` にするためだけに使う（コードと応答は同じ FG-REPO-0005）。
+- **`Resource::Unresolved` に理由を持たせた**: `Unresolved(UnresolvedReason)`、`UnresolvedReason` は `Absent` / `TombstoneDeleted`。
+  どちらも同じ FG-REPO-0005 で、違いはログの `reason`（`absent` / `tombstone_deleted`）だけ（「判定の順序」の 6）。
+- **`PathResolve` の判定の順序**（レビュー後）: 認証なし → FG-AUTH-0001、無効 → FG-AUTH-0004、**スコープ（`read_api`）→ FG-AUTH-0002**（パスを見る前。
+  スコープの足りないトークンには、ないパス・見えないパス・見えるパスのどれにも同じ 403 を返す）、`Unresolved` → FG-REPO-0005、`Resolved` は見えるか
+  （`can_see`、管理者は通る）→ FG-REPO-0005、削除の猶予中 → FG-REPO-0006（見えない人には、その前に FG-REPO-0005）。読み取りの役割（Reporter 以上）は
+  求めない。グループと個人の名前空間は、サインインしたすべての人に見える（`GroupRead` と同じ。グループの可視性はまだない）。
+- **`Unresolved` は、公開でないすべての Action で FG-REPO-0005**（レビュー後。認証と無効の検査の後）。見えないプロジェクトと同じ 404 なので、
+  どの Action の経路にないパスが渡っても、存在の手がかり（500 と 404 の違い）にならない。`PathResolve` 以外では、見えないプロジェクトと同じく
+  スコープの検査より前に返す。matrix に `RepoRead` / `RepoPush` × ないパス・削除の墓標 → FG-REPO-0005 の行を足した。
+  `Resolved` は `PathResolve` 専用で、ほかの Action に渡すと既存の規則どおり FG-SYS-0001（`resource_does_not_match_action`）になる
+  （見えないプロジェクトなら、その前に FG-REPO-0005）。
+- **`WebShell`**: `is_public()` が真、`required_scope()` は `None`。無効なアカウントや、スコープのないトークンでも通る（matrix の行）。
+- **`prove()`**: `prove<R: ResourceCtx>(&Principal, Action, R) -> Result<Authorized<R>, ForgeError>` は `authorize()` を呼ぶだけで、
+  規則を持たない。テスト `prove_denies_exactly_like_authorize` が、matrix に出てくるすべての Action × 呼び出し元 × リソースで、許可と拒否
+  （コードと文脈）が `authorize()` と一致することを確かめる。`Authorized<R>` は欄が非公開で、`Clone` / `Default` / 公開のコンストラクタを持たない。
+- **証明の ID と判定の対象を 1 つの値に結びつける**（レビューの HIGH）:
+  - `ResourceCtx` は封印した（非公開のスーパートレイト）。forge-auth の外では実装できないので、`id()` と `resource()` が別の値を読む文脈は作れない。
+  - 文脈の欄は非公開で、コンストラクタは 1 行の値を 1 つ受け取るものだけにした: `ProjectCtx::new(LoadedProject { id, visibility, role, pending_deletion })`、
+    `ResolvedCtx::new(LoadedNamespace { namespace, via, view })`、`UnresolvedCtx::new(UnresolvedReason)`、`InstanceCtx`。読み取りは
+    `view()` / `via()` / `reason()` と `ResourceCtx::id()` だけ。プロジェクト A の view にプロジェクト B の ID を組み合わせる構造体リテラルは書けない。
+    検索の層（MR3 / MR4）は、`LoadedProject` / `LoadedNamespace` を **1 つの問い合わせの結果** から組み立てる。forge-auth は forge-db に依存しない（依存の向き）。
+  - `compile_fail` の doctest は 5 つ（証明のリテラル、`Default`、`Clone`、文脈のリテラル、外部での `ResourceCtx` の実装）。`Clone` を足す、文脈の欄を公開する、
+    封印を外す、の変異で、それぞれ対応する doctest が赤くなることを一度ずつ確かめた。
+  - forge-core の `NamespaceKind` / `Resolution`（MR1）には依存しない。`Resolution` から `LoadedNamespace` / `UnresolvedReason` への変換は、
+    forge-web の dispatcher（MR4）が行う。新しい文脈（グループ、トークンなど）は、封印のため forge-auth に足す。
+- **matrix の行**: `PathResolve` は許可 8（Developer / private、NonMember / internal、Guest / private、Developer / moved private、NonMember / グループ、
+  NonMember / 個人の名前空間、管理者 / private、`read_api` のトークン）、拒否 13（Anonymous、Disabled、NonMember / private、ないパス（Developer と管理者）、
+  削除の墓標、墓標の先が見えない、`read_repository` だけのトークン（見えるパスとないパスの両方で FG-AUTH-0002）、削除の猶予中（Developer は FG-REPO-0006、
+  NonMember は FG-REPO-0005）など）。`WebShell` は許可 3（Anonymous、Disabled、スコープのないトークン）。
+  **`prefix=true` の行は M2 に送る**（計画の回答どおり。そのモードを入れる MR で足す）。
+- `PathResolve` と `WebShell` は、ルートができるまで `app::PLANNED` に入れた（MR4 の dispatcher が登録した時点で外す）。`is_git_operation()` の意味の変更
+  （「git のプロトコルでも行う」）と `route()` の証明への置き換えは、MR4 で行う。
+- **MR4 の必須事項**（レビューの HIGH。型の設計は今は変えない）: Action は証明の実行時の値なので、`WebShell` の証明と `UserCreate` の証明は同じ型になる。
+  そこで MR4 は、(a) **すべての** ハンドラを呼ぶ前に、登録の仕組みが `proof.action() == def.action` を確かめる、(b) ハンドラを登録の外から呼ぶ方法を
+  作らない（`Authorized<R>` は登録の仕組みからだけハンドラに渡す）、(c) 別の Action の証明が拒否されることを確かめる否定のテストを足す。
+  また、MR3 / MR4 の検索は、ないパス・墓標・見えないパスで **同じ形の問い合わせ**（回数と種類）を発行し、時間の差から存在が分からないようにする。

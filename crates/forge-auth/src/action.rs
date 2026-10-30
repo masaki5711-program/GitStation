@@ -56,6 +56,14 @@ actions! {
     UserCreate,
     UserDisable,
     AuditRead,
+    // --- web (ADR-0015) ---
+    /// `GET /api/v1/namespaces/resolve?path=`: which namespace a path names,
+    /// decided by whether the caller can see it (`Resource::Unresolved` /
+    /// `Resource::Resolved`). Git paths are decided by `RepoRead` / `RepoPush`.
+    PathResolve,
+    /// The SPA shell (`index.html`) for namespace pages and permalinks: the
+    /// same body for every path, without looking at the database (public).
+    WebShell,
     // --- operations ---
     Health,
     Metrics,
@@ -64,7 +72,7 @@ actions! {
 impl Action {
     /// Reachable without credentials.
     pub fn is_public(self) -> bool {
-        matches!(self, Action::Health)
+        matches!(self, Action::Health | Action::WebShell)
     }
 
     /// Performed through the git protocol rather than an HTTP API route.
@@ -75,13 +83,14 @@ impl Action {
     /// The token scope the action needs (`None` for public actions).
     pub fn required_scope(self) -> Option<Scope> {
         match self {
-            Action::Health => None,
+            Action::Health | Action::WebShell => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
             | Action::GroupRead
             | Action::TokenList
             | Action::AuditRead
+            | Action::PathResolve
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate

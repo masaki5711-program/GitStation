@@ -238,4 +238,69 @@ pub enum Resource {
         owner: UserId,
         scopes: Vec<Scope>,
     },
+    /// A path that resolved to nothing (`PathResolve`): `FG-REPO-0005` for
+    /// every signed-in, active caller.
+    Unresolved(UnresolvedReason),
+    /// A path that resolved to a namespace (`PathResolve`), decided by
+    /// whether the caller can see it — not by a read role (ADR-0015).
+    Resolved {
+        via: ResolvedVia,
+        view: NamespaceView,
+    },
+}
+
+/// Why a path resolved to nothing. Both are answered with the same
+/// `FG-REPO-0005`; the difference reaches only the log's `reason`
+/// (ADR-0015 "判定の順序" step 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedReason {
+    /// No namespace and no tombstone at the path.
+    Absent,
+    /// A `deleted` tombstone, or a `moved` one whose target is gone.
+    TombstoneDeleted,
+}
+
+impl UnresolvedReason {
+    /// The log `reason`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnresolvedReason::Absent => "absent",
+            UnresolvedReason::TombstoneDeleted => "tombstone_deleted",
+        }
+    }
+}
+
+/// How a path reached the namespace it resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedVia {
+    /// The path is the namespace's current path.
+    Live,
+    /// The path is a `moved` tombstone pointing at the namespace (an
+    /// invisible target is logged as `tombstone_not_visible`).
+    Moved,
+}
+
+/// The namespace a path resolved to, as seen by the caller. The kind is the
+/// variant, so a kind and a view can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamespaceView {
+    /// A personal namespace: visible to every signed-in user.
+    User,
+    /// A group: visible to every signed-in user (as for `GroupRead`); `role`
+    /// is the caller's effective role on it.
+    Group { role: Option<Role> },
+    /// A project: visible to its members (Guest included), to every
+    /// signed-in user when internal, and to administrators.
+    Project(ProjectView),
+}
+
+impl NamespaceView {
+    /// `user` / `group` / `project` (the `namespaces.kind` values).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            NamespaceView::User => "user",
+            NamespaceView::Group { .. } => "group",
+            NamespaceView::Project(_) => "project",
+        }
+    }
 }

@@ -4,8 +4,12 @@
 //! Order of checks:
 //! 1. public actions are allowed;
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
-//! 3. project visibility → `FG-REPO-0005` (404, no existence leak) and
-//!    pending deletion → `FG-REPO-0006` (restore excepted);
+//! 3. `PathResolve` only: token scope → `FG-AUTH-0002` here, before the
+//!    path is looked at (the same 403 for every path);
+//!    a path that resolved to nothing (`Unresolved`, any non-public action)
+//!    → `FG-REPO-0005`; project visibility (also behind a resolved path) →
+//!    `FG-REPO-0005` (404, no existence leak) and pending deletion →
+//!    `FG-REPO-0006` (restore excepted);
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
 //! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
 //!    carries administrator rights only with the `admin` scope);
@@ -18,8 +22,8 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
 use crate::model::{
-    Credential, MembershipChange, MembershipScope, Principal, ProjectView, RefKind, RefUpdate,
-    Resource, Role, Scope, Visibility,
+    Credential, MembershipChange, MembershipScope, NamespaceView, Principal, ProjectView, RefKind,
+    RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -42,26 +46,50 @@ pub fn authorize(
     }
     let admin = principal.admin_rights();
 
+    let check_scope = || -> Result<(), ForgeError> {
+        if let (Credential::Token(scopes), Some(required)) =
+            (principal.credential(), action.required_scope())
+        {
+            if !scopes.iter().any(|s| s.satisfies(required)) {
+                let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+                return Err(deny(ErrorCode::InsufficientScope)
+                    .with_context("required_scope", required.as_str())
+                    .with_context("token_scopes", held.join(",")));
+            }
+        }
+        Ok(())
+    };
+
+    // Resolving a path: the scope first, so a wrong-scope token gets the
+    // same 403 for every path (absent, invisible or visible alike).
+    if action == Action::PathResolve {
+        check_scope()?;
+    }
+
+    // Nothing at the path: the same 404 for every non-public action, as an
+    // invisible project gets (no existence oracle through any route).
+    let unresolved = |r: UnresolvedReason| -> Result<(), ForgeError> {
+        Err(deny(ErrorCode::NotFound).with_context("reason", r.as_str()))
+    };
+    if let Resource::Unresolved(reason) = resource {
+        return unresolved(*reason);
+    }
+
     // Visibility before anything else that could reveal existence.
-    if let Some(project) = project_of(resource) {
+    if let Some((project, via)) = project_of(resource) {
         if !(admin || can_see(project)) {
-            return Err(deny(ErrorCode::NotFound).with_context("reason", "not_visible"));
+            let reason = match via {
+                ResolvedVia::Live => "not_visible",
+                ResolvedVia::Moved => "tombstone_not_visible",
+            };
+            return Err(deny(ErrorCode::NotFound).with_context("reason", reason));
         }
         if project.pending_deletion && action != Action::ProjectRestore {
             return Err(deny(ErrorCode::PendingDeletion));
         }
     }
 
-    if let (Credential::Token(scopes), Some(required)) =
-        (principal.credential(), action.required_scope())
-    {
-        if !scopes.iter().any(|s| s.satisfies(required)) {
-            let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-            return Err(deny(ErrorCode::InsufficientScope)
-                .with_context("required_scope", required.as_str())
-                .with_context("token_scopes", held.join(",")));
-        }
-    }
+    check_scope()?;
 
     let need = |required: Role, actual: Option<Role>| -> Result<(), ForgeError> {
         if admin || actual.is_some_and(|r| r >= required) {
@@ -97,7 +125,14 @@ pub fn authorize(
 
     match (action, resource) {
         // Public actions returned above; kept for exhaustiveness.
-        (Action::Health, _) => Ok(()),
+        (Action::Health | Action::WebShell, _) => Ok(()),
+
+        // Visibility (can see, not a read role: a Guest on a private project
+        // resolves it) and pending deletion were decided above; groups and
+        // personal namespaces are visible to every signed-in user.
+        (Action::PathResolve, Resource::Resolved { .. }) => Ok(()),
+        // Returned above for every non-public action; kept for exhaustiveness.
+        (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
         (Action::RepoRead | Action::ProjectRead, Resource::Project(p)) => {
             need(Role::Reporter, read_role(p))
@@ -290,6 +325,7 @@ pub fn authorize(
             | Action::UserCreate
             | Action::UserDisable
             | Action::AuditRead
+            | Action::PathResolve
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -301,23 +337,36 @@ pub fn authorize(
             | Resource::RefProtectionChange { .. }
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
-            | Resource::TokenRequest { .. },
+            | Resource::TokenRequest { .. }
+            | Resource::Resolved { .. },
         ) => wrong_resource(),
     }
 }
 
-/// The project a resource belongs to, for the visibility check.
-fn project_of(resource: &Resource) -> Option<&ProjectView> {
+/// The project a resource belongs to, for the visibility check, and how it
+/// was reached (only a resolved path can arrive through a tombstone).
+fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
+    let live = |p| Some((p, ResolvedVia::Live));
     match resource {
-        Resource::Project(p) => Some(p),
-        Resource::Ref { project, .. } => Some(project),
-        Resource::Transfer { source, .. } => Some(source),
+        Resource::Project(p) => live(p),
+        Resource::Ref { project, .. } => live(project),
+        Resource::Transfer { source, .. } => live(source),
         Resource::RefProtectionChange { project, .. }
-        | Resource::VisibilityChange { project, .. } => Some(project),
+        | Resource::VisibilityChange { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
-        } => Some(p),
+        } => live(p),
+        Resource::Resolved {
+            via,
+            view: NamespaceView::Project(p),
+        } => Some((p, *via)),
+        // Groups and personal namespaces are visible to every signed-in user.
+        Resource::Resolved {
+            view: NamespaceView::User | NamespaceView::Group { .. },
+            ..
+        }
+        | Resource::Unresolved(_) => None,
         Resource::Membership {
             scope: MembershipScope::Group { .. },
             ..
