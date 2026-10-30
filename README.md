@@ -22,6 +22,7 @@ Claude Code はそこで起動します。
 | `crates/forge-cli` | `forge` コマンド（`explain`、`errors list`。M1 以降 `serve`、`doctor`、`diag`） |
 | `docs/errors/` | エラーカタログ（**自動生成**。手で編集しない） |
 | `docs/adr/` | 設計判断の記録 |
+| `docs/brand/` | ロゴとアイコン（UI ではこのファイルを使う） |
 | `ops/runbooks/` | 障害対応手順（エラーコードと紐づく） |
 | `ops/incidents/` | 障害記録とポストモーテム、障害の記憶 `records.jsonl` |
 
