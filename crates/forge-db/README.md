@@ -42,7 +42,29 @@ connection, mapping driver errors to registered codes, migrations
   audit row and no event. `create` also writes the personal namespace
   (`kind = user`, `owner_id` = the user), under the path's advisory lock
   (`namespaces::lock_path`, crate-private; D5 rename / move / delete / release take
-  it too). Disabling a disabled user writes nothing.
+  it too). Disabling a disabled user writes nothing. `disable` also revokes
+  the user's active tokens in the same change (`revoked_reason = 'user_disabled'`,
+  one `token.revoked` event each, `revoked_tokens` in the `user.disabled` audit
+  row; step D3). `users::id_by_username(&Db, &str) -> Result<UserId, ForgeError>`
+  (read pool; FG-REPO-0005 `resource=user`, `reason=absent`).
+- `tokens::{issue, revoke, list, authenticate}` (step D3, ADR-0019): personal
+  access tokens `fgp_<16 hex public_id>_<64 hex secret>`; only `sha256(secret)`
+  is stored and only the write pool reads it. `issue(&Db, &ChangeContext, &NewToken)
+  -> Issued` (the `PlainToken` exists only there) and `revoke(&Db, &ChangeContext,
+  token_id) -> RevokeOutcome` write one audit row on the **owner** (resource
+  `user`) and one `token.created` / `token.revoked` event (admin class); `issue`
+  locks the owner row `FOR UPDATE`, so issues for one user and a concurrent
+  disable serialize and the limit holds. Limits: expiry 1–365 days (default 90,
+  `DEFAULT_EXPIRY` / `MIN_EXPIRY` / `MAX_EXPIRY`), 50 active tokens per user
+  (`MAX_ACTIVE_TOKENS`), name 1–100 characters. The `admin` scope only for an
+  administrator — checked here because issuing is CLI-only, outside
+  `authorize()` (ADR-0019 §8). `revoke` does not check the owner (operator
+  only); revoking a revoked token is `AlreadyRevoked` and writes nothing.
+  `list(&Db, UserId) -> Vec<TokenInfo>` (read pool, newest first, never the
+  hash). `authenticate(&Db, &str) -> TokenIdentity`: an unknown public id still
+  costs one hash and constant-time comparison; the owner must be active;
+  `last_used_at` is refreshed at most every 10 minutes, unaudited, and a failed
+  refresh is logged once (FG-DB-0002, warn) without failing the request.
 - `groups::create(&Db, &ChangeContext, &NewGroup) -> Result<CreatedGroup, ForgeError>`
   (step D2): the group, its namespace (`kind = group`, only at the top level or
   under a group) and its first Owner, under the path lock, with one
@@ -89,6 +111,15 @@ FG-REPO-0010 MembershipConflict (`already_member`, `not_member`, `last_owner`,
 `description_length`, `nul_character`, `parent_not_group`, `owner_inactive`),
 FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-SYS-0001
 (`unknown_role`, `unexpected_dedup`).
+Raised by `tokens`: FG-AUTH-0008 TokenRequestInvalid (`expires_out_of_range`,
+`scopes_empty`, `name_length`, `nul_character`, `control_character`, `owner_bot`,
+`owner_disabled`, `admin_scope_requires_admin`, `active_limit`; nothing is written),
+FG-AUTH-0001 from `authenticate` (`reason` in the log only: `malformed`, `unknown`,
+`mismatch`, `revoked`, `expired`, checked in that order), FG-AUTH-0004
+(`reason=owner_disabled`), FG-REPO-0005 (`resource=user` / `token`, `reason=absent`),
+FG-DB-0019 CredentialDataInvalid (a stored row this build cannot read: `unknown_scope`,
+`bad_hash`; alert), FG-SYS-0001 (`reason=rng_unavailable`), FG-DB-0001 when the database
+is down (never a 401), FG-DB-0002.
 Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
@@ -96,7 +127,7 @@ FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `r
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
 `job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
-`subscriber-lag.md`.
+`subscriber-lag.md`, `credential-data.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -186,7 +217,12 @@ column that is both.
 `forge.subscriber_dead_letters`, `forge.jobs`, and (step D1, migration `20261028100100`)
 `forge.users`, `forge.namespaces`, `forge.namespace_tombstones` (all `kind = "audited"`;
 `forge_ro` cannot read email, employee_number or external_id; tombstone targets are
-`ON DELETE SET NULL` foreign keys and unaudited); the DDL-status decision is
+`ON DELETE SET NULL` foreign keys and unaudited), (step D2, `20261029100000`)
+`forge.groups`, `forge.group_members` (audited, resource `group`; no DELETE on groups),
+(step D3, `20261030100000`) `forge.tokens` (audited on the owner, resource `user` /
+`user_id`; `last_used_at` unaudited; forge_app may INSERT and UPDATE only `revoked_at`,
+`revoked_reason`, `last_used_at`, never DELETE; `forge_ro` cannot read `secret_sha256`);
+the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
 (`guarded`, `kind`, `ro_columns`); rules for new migrations are in
 `migrations/README.md`. events / audit_log are append-only (per-table guard
