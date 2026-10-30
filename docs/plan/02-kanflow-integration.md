@@ -46,7 +46,9 @@
 - **実際の書き方は 1 通りではない**（現在の「開発」タブの表示から確認、§8.3）。
   ブランチ名は `fix/L2-pbi-43-e1-until-precision` のように **小文字で、途中に接頭辞が付く**。
   MR のタイトルは `(PBI #43)` の形。既定の検出規則は **大文字小文字を区別せず、
-  `PBI-43` / `pbi-43` / `PBI #43` / `PBI_43` のいずれも拾う**（`(?i)\bpbi[-_ #]?(\d+)\b`）。
+  `PBI-43` / `pbi-43` / `PBI #43` / `PBI#43` / `PBI_43` のいずれも拾う**（`/(?<![a-z0-9])pbi[-_ ]?#?(\d{1,7})(?![0-9])/gi`。
+  2026-10-30 訂正: 以前の `(?i)\bpbi[-_ #]?(\d+)\b` は区切りが 1 文字だけなので `PBI #43` を拾えず、`\b` は `x_pbi-4` も拒む。
+  kanflow の第 0 段 K1 と同じ規則にし、バインディングの既定値は kanflow の規則と一致させる）。
   `pbi-430` を `pbi-43` と誤認しないよう、数字の後ろは境界で区切る。検出規則には、実際に
   使われている書き方の一覧をテストケースとして持たせる。
 - 例: ブランチ `feature/PBI-123-login-form`（**既存の kanflow の規則**）、コミット `fix(auth): lock after 5 failures (PBI-123)`。
@@ -714,3 +716,27 @@ ADR-0016（ドメインイベントの Outbox・イベントの履歴・監査�
 - **これらは第 0 段として GitLab のまま進める**（D-3）。kanflow の Git 連携は、GitLab 用と GitStation 用を差し替えられる薄い層にする（今の `ClientFactory` を広げる）。
 - **kanflow はプロジェクトごとに、GitLab と GitStation のどちらか一方だけを読む**（D-2、D-4）。GitStation に移ったリポジトリでは、GitLab はミラー（保険）なので読まない。両方を読むと、同じコミットと MR が二重に表示される。
 - **サーバー側の AI は Qwen3.8 27B だけ**（D-1）。§6 の道具の提供は Qwen が使うものであり、Claude は開発者の PC から MCP で使う。
+
+---
+
+## 13. 連携の実装の順序（2026-10-30、クラウドのセッション。ユーザーは推奨案で進めることを指示）
+
+planner がこの時点の両方のコードを確かめた結果（kanflow `81dca6a`、GitStation `claude/brave-cray-w62c35`）:
+
+- §8.4 の取りこぼし 2 件は **まだある**（`pbi-keys.ts:6`、`gitlab-client.ts` の `paged()`、`git-sync.ts:74`）。「クローズした MR が出ない」は表示の不具合ではなく、この 2 件の結果（`git-format.ts` は `closed` を表示し、MR の行は消さない）。
+- ブランチの行は、ブランチが消えると消える（`pruneBranches`）。パイプラインの取得の失敗はログなしで捨てられている。
+- `write:dev` はまだない（kanflow のスコープは read / backlog / sprint / task / comment / icebox / daily）。
+- GitStation 側の前提（管理者の履歴と `…/cursor`、サービスアカウントのトークン、`work_items`、Web の振り分け）はまだない。連携の表を先に作っても、書き手も読み手もない。
+
+**決定（推奨案 B）**: いまは kanflow の第 0 段を GitLab のまま進め、取り込み元を差し替えられる薄い層（`DevSource`）を入れる。GitStation 側の連携の土台（`integrations` / `integration_bindings`、`prove_visible`、FG-INT-0007/0008/0012、権限の行）は、M1 の管理者の履歴とサービスアカウントのトークンができてから作る。kanflow の `GitStationSource` は M3。
+
+| MR（kanflow） | 内容 | 順序 |
+|---|---|---|
+| K1 `feat/L4-git-pbi-keys` | 検出の正規表現（上の §2）とテストのベクタ | K2 と並列 |
+| K2 `feat/L4-git-sync-watermark` | 上限で打ち切ったら位置を進めない、打ち切りとパイプラインの取得の失敗をログに出す | K1 と並列 |
+| K3 | 消えたブランチのリンクを `goneAt` で残す（PBI の画面では「削除済み」）、過去 90 日分の再同期（リポジトリごとに 1 回、人が始める） | K1・K2 の後 |
+| K4 | `DevSource`（不透明なカーソル）、`GitIntegration.provider`（いまは `gitlab` だけ受け付ける）、プロジェクトごとに 1 つの取り込み元 | K3 の後 |
+| K5 | `write:dev` スコープと `/api/v1` の開発のリンク | MCP のステップ 5 の後 |
+
+決定事項（推奨どおり）: MR の説明文からは PBI 番号を拾わない／再同期はリポジトリごとに 1 回、過去 90 日／消えたブランチのリンクは「削除済み」として残す（バッジには数えない）／`write:dev` は MCP のステップ 5 の後。
+エラーの領域 `INT` は、エージェントモデルのゲート（`validate-error-registry.js`、`forge-error-contract.md`）に登録済み。`errors.toml` への FG-INT の登録は、土台を作る MR で行う。
