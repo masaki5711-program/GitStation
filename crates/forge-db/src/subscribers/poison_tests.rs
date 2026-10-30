@@ -242,6 +242,53 @@ async fn derived_writes_refused_at_commit_are_counted_until_stuck() {
     t.drop_now().await;
 }
 
+/// The recount after a refused COMMIT claims the row while the server may
+/// still be releasing the refused transaction's lock (the client reads the
+/// COMMIT error first): it waits for a lock released shortly, where a
+/// step's claim reports Busy.
+#[tokio::test]
+async fn the_recount_claim_waits_for_a_lock_released_shortly() {
+    use super::cursor::{claim, Wait};
+    let t = FreshDb::migrated().await;
+    registered(&t, &Forges).await;
+    let mut holder = t.superuser().await;
+    sqlx::query("BEGIN")
+        .execute(&mut holder)
+        .await
+        .expect("begin");
+    sqlx::query("SELECT 1 FROM forge.event_subscribers WHERE name = 'forger' FOR UPDATE")
+        .execute(&mut holder)
+        .await
+        .expect("hold the row");
+    let mut step_tx = t.db.write_pool().begin().await.expect("begin");
+    assert!(
+        claim(&mut step_tx, &Forges, Wait::No)
+            .await
+            .expect("claim")
+            .is_none(),
+        "a step skips a held row"
+    );
+    step_tx.rollback().await.expect("rollback");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        sqlx::query("ROLLBACK")
+            .execute(&mut holder)
+            .await
+            .expect("release");
+    });
+    let mut recount_tx = t.db.write_pool().begin().await.expect("begin");
+    let claimed = claim(&mut recount_tx, &Forges, Wait::Bounded)
+        .await
+        .expect("claim");
+    assert!(
+        matches!(claimed, Some(Some(c)) if c.last_seq == 0),
+        "{claimed:?}"
+    );
+    recount_tx.rollback().await.expect("rollback");
+    release.await.expect("released");
+    t.drop_now().await;
+}
+
 /// Never returns.
 struct Hangs;
 

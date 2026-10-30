@@ -24,7 +24,7 @@ use sqlx::postgres::Postgres;
 use sqlx::{Connection as _, Transaction};
 
 use super::count::{count, lag_error, Attempt, Failure};
-use super::cursor;
+use super::cursor::{self, Wait};
 use super::derived::DerivedTx;
 use super::Subscriber;
 use crate::{query_error, Db};
@@ -81,8 +81,11 @@ pub enum Progress {
 }
 
 enum Step {
-    /// Roll back (by dropping the transaction) and report.
-    Nothing(Progress),
+    /// Roll back and report.
+    Nothing {
+        tx: Transaction<'static, Postgres>,
+        progress: Progress,
+    },
     /// Commit; `handled` is set when the step handled the event (a refusal
     /// at COMMIT is then counted against it).
     Commit {
@@ -108,7 +111,15 @@ pub(crate) async fn run_once_with(
         .await
         .map_err(with_name)?;
     let (tx, progress, handled) = match step {
-        Step::Nothing(progress) => return Ok(progress),
+        Step::Nothing { tx, progress } => {
+            // Explicitly, not by dropping: a dropped transaction is rolled
+            // back by a task sqlx spawns, so the row lock of `claim` could
+            // outlive the step and make the next one `Busy`.
+            tx.rollback()
+                .await
+                .map_err(|e| with_name(query_error("subscribers.rollback", e)))?;
+            return Ok(progress);
+        }
         Step::Commit {
             tx,
             progress,
@@ -170,11 +181,11 @@ async fn step(db: &Db, subscriber: &dyn Subscriber, t: Timeouts) -> Result<Step,
         .begin()
         .await
         .map_err(|e| query_error("subscribers.begin", e))?;
-    let Some(claimed) = cursor::claim(&mut tx, subscriber).await? else {
-        return Ok(Step::Nothing(Progress::Busy));
+    let Some(claimed) = cursor::claim(&mut tx, subscriber, Wait::No).await? else {
+        return Ok(nothing(tx, Progress::Busy));
     };
     let Some(cursor) = claimed else {
-        return Ok(Step::Nothing(Progress::Disabled));
+        return Ok(nothing(tx, Progress::Disabled));
     };
     let high: i64 = sqlx::query_scalar(
         "SELECT coalesce((SELECT f.high_seq FROM forge.event_feed_state AS f \
@@ -184,7 +195,7 @@ async fn step(db: &Db, subscriber: &dyn Subscriber, t: Timeouts) -> Result<Step,
     .await
     .map_err(|e| query_error("subscribers.high_seq", e))?;
     if cursor.last_seq >= high {
-        return Ok(Step::Nothing(Progress::CaughtUp));
+        return Ok(nothing(tx, Progress::CaughtUp));
     }
     let seq = cursor.last_seq + 1;
     let Some((at, decoded)) = cursor::source_event(&mut tx, seq).await? else {
@@ -264,6 +275,10 @@ async fn step(db: &Db, subscriber: &dyn Subscriber, t: Timeouts) -> Result<Step,
     Ok(commit_step(tx, progress, None))
 }
 
+fn nothing(tx: Transaction<'static, Postgres>, progress: Progress) -> Step {
+    Step::Nothing { tx, progress }
+}
+
 fn commit_step(
     tx: Transaction<'static, Postgres>,
     progress: Progress,
@@ -277,7 +292,10 @@ fn commit_step(
 }
 
 /// The handled event's writes were refused at COMMIT: count that in a new
-/// transaction, if the cursor is still where the step found it.
+/// transaction, if the cursor is still where the step found it. The claim
+/// waits (bounded) for the row: the client reads the COMMIT error before
+/// the server has aborted the refused transaction and released its row
+/// lock, so a NOWAIT claim here could meet our own dying lock.
 async fn count_refused_commit(
     db: &Db,
     subscriber: &dyn Subscriber,
@@ -290,7 +308,7 @@ async fn count_refused_commit(
         .begin()
         .await
         .map_err(|e| query_error("subscribers.begin", e))?;
-    let now = match cursor::claim(&mut tx, subscriber).await? {
+    let now = match cursor::claim(&mut tx, subscriber, Wait::Bounded).await? {
         Some(Some(now)) if now.last_seq == attempt.cursor.last_seq => now,
         // Held, disabled or moved meanwhile: not counted here; the next
         // step meets the event again.
