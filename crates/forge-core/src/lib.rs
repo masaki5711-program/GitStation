@@ -8,6 +8,7 @@ pub mod dedup_key;
 pub mod event_type;
 pub mod ids;
 pub mod namespace_path;
+pub mod namespace_resolver;
 #[cfg(any(test, feature = "test-support"))]
 pub mod path_vectors;
 pub mod readiness;
@@ -20,13 +21,18 @@ pub mod scope;
 pub mod telemetry;
 pub mod token;
 pub mod user_kind;
+pub mod web_path;
 
 pub use audit_details::AuditDetails;
 pub use authenticator::{Authenticator, TokenIdentity};
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
-pub use namespace_path::PathSegment;
+pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
+pub use namespace_resolver::{
+    NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
+    Resolution, Resolved, ResolvedTarget,
+};
 pub use ref_name::RefName;
 pub use ref_pattern::RefPattern;
 pub use repository::{RepositoryKind, RepositoryState};
@@ -34,6 +40,9 @@ pub use request_id::RequestId;
 pub use role::{Role, Visibility};
 pub use scope::Scope;
 pub use user_kind::UserKind;
+pub use web_path::{
+    log_safe_path, parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord, TailSegments,
+};
 
 #[cfg(test)]
 mod audit_details_tests;
@@ -55,3 +64,5 @@ mod scope_tests;
 mod token_tests;
 #[cfg(test)]
 mod user_kind_tests;
+#[cfg(test)]
+mod web_path_tests;

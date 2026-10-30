@@ -36,7 +36,49 @@ in a ref wherever it stands; no Unicode normalization (NFC vs NFD differ). `MAX_
 `PathSegment::parse_top_level` (user names and top-level groups; also refuses
 `RESERVED_TOP_LEVEL`), `as_str`. `RESERVED_TOP_LEVEL` (the one list, including
 `edge`, `fleet`, `devices`), `MAX_DEPTH` (20), `MAX_FULL_PATH_LEN` (255).
+`NamespacePath` (`from_segments`, `parse(full_path)` — FG-REPO-0007 `empty` /
+`too_deep` / `path_too_long`; `segments`, `depth`, `top_level`, `full_path`) and
+`LookupPath::fold(&[&str])` (request side: refuses empty segments, non-ASCII,
+control characters and `%`, then `to_ascii_lowercase` only and `PathSegment::parse`;
+FG-WEB-0001 `reason=path_rejected`, `part=namespace`, `rule`).
 `UserKind` (`human`, `service_account`, `bot`; `ALL`, `as_str`, `parse`; no device kind).
+
+**Web paths** (ADR-0015 step 2, M1 phase 8 MR1; `web_path`): `parse_web_path(raw_path,
+query) -> ParsedPath` sorts the raw (still encoded) `req.uri().path()` by its string
+alone into `NamespaceHome(LookupPath)`, `Scoped { path, word: RouteWord, rest:
+TailSegments }`, `Git { path, route: GitRoute }` (`.git` only on the last namespace
+segment, removed once; `info/refs` needs exactly one `service=git-upload-pack` /
+`git-receive-pack`) or `Instance { route: InstanceRoute, rest }` (`/-/projects/{id}/…`).
+It never chooses the scope (group / project): that follows resolution. `RouteWord`,
+`GitRoute` (`service`, `is_advertisement`, `is_push`) and `InstanceRoute` have `ALL`
+and `as_str`; route words are case-sensitive. `TailSegments::decode` decodes each
+segment once (strict escapes, valid UTF-8; refuses `%2F` `%5C` `\`, control
+characters, invisible / bidi formatting characters (`is_invisible`), `.` `..`).
+A tail segment may start with `-`: anything that reaches a git argument vector
+goes after `--` / `--end-of-options` or is a resolved ref / oid. Refusals are
+FG-WEB-0001 with `reason` `path_rejected` /
+`unknown_route` / `service_unsupported` plus `part` and `rule`, never the input:
+log the path through `log_safe_path` / `LogSafePath` (256 characters, controls and
+bidi / zero-width characters escaped). `MAX_RAW_PATH_LEN` (8192 bytes),
+`MAX_QUERY_LEN` (2048 bytes, every shape). The HTTP method is not checked (the
+forge-web route table does).
+Shared vectors: `tests/fixtures/url-vectors.json` at the repository root
+(`form` = `both` / `browser` / `raw`; also for forge-web and the SPA).
+
+**Dispatcher data access** (`namespace_resolver`; implemented by forge-db, injected
+like `ReadinessProbe`): `NamespaceResolver::resolve(&LookupPath, viewer:
+Option<UserId>) -> Resolution` — one call resolves the path **and** loads the
+viewer's authorization inputs, and MUST issue the same statements whatever the
+outcome and whether or not the viewer may see the target (no timing oracle).
+`Resolution`: `Live(Resolved)`, `Moved { resolved, tombstone, current: NamespacePath }`,
+`Deleted { tombstone }`, `Absent` (exact matches only). `Resolved { namespace_id,
+target: ResolvedTarget }` with `ResolvedTarget::User(UserId)` / `Group { id,
+viewer_role }` / `Project { id, access: ProjectAccess { visibility, role,
+pending_deletion } }`; `owner() -> NamespaceOwner` (typed id), `kind()`.
+`NamespaceKind` (`user`, `group`, `project`). `ProjectAccessLoader::project_access(ProjectId,
+Option<UserId>) -> Option<ProjectAccess>` for routes that address a project by id
+(same contract). Boxed futures (`LookupFuture`); no forge-auth types (forge-web
+converts).
 `Role` (`Guest < … < Owner`; `ALL`, `as_str`, `parse`) and `Visibility` (`private`, `internal`), moved
 from forge-auth in step D2 (forge-auth re-exports them).
 `AuditDetails` (typed `audit_log.details`: `action()`, `to_value()`, `event_type()` —
@@ -71,6 +113,9 @@ FG-REPO-0013 ProtectedRefRuleInvalid (`RefPattern::parse`: `too_long`, `prefix`,
 `wildcard`, `check_ref_format` with `rule`; `len`; the pattern is not logged —
 `duplicate_pattern` / `too_many_rules` are raised by forge-db from step D4 MR5).
 Raises FG-DB-0010 ChangeRejected `reason=invalid_dedup_key` (owned by forge-db).
+Raises FG-WEB-0001 RouteNotFound (owned by forge-web) from `parse_web_path`,
+`LookupPath::fold` and `TailSegments::decode` (`reason` path_rejected / unknown_route /
+service_unsupported; `part`; `rule`).
 
 **Gotchas**
 - Adding a configuration key: add it to `KEYS` and to `build()`; an unknown
@@ -85,6 +130,12 @@ Raises FG-DB-0010 ChangeRejected `reason=invalid_dedup_key` (owned by forge-db).
   `forge.protected_refs.pattern` (migration `20261031100000`; forge-db test
   `the_db_check_agrees_with_the_ref_pattern_parser`); the wildcard and
   check-ref-format rules exist only in the parser. Change both together.
+- `parse_web_path` and the SPA's parser (M2) must agree: change the rules, the
+  vectors in `tests/fixtures/url-vectors.json` and the ADR-0015 amendment together.
+  A vector's `form` is checked against a WHATWG URL parser (`new URL()`); a `raw`
+  path is one a browser would rewrite before sending.
+- A new route word (`pulls`, `pipelines`, …) is added to `RouteWord` only with the
+  ADR that gives it an Action; until then it is `unknown_route`.
 - A new top-level reserved word needs an ADR-0015 amendment. The planned
   `ReservedNameOccupied` doctor check (ADR-0015) is not built yet, so existing
   names are not checked against a new word.

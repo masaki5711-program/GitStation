@@ -545,3 +545,49 @@ impl<S> Registry<S> {
   `project_id` あり）に付け、`member.*` のイベント（分類 `maintainer`、ADR-0016 §5）を同じ変更で出す。グループのメンバーの変更は監査だけのまま。
 - 最後の Owner の方針（継承された有効な Owner がいる間は最後の直接の Owner を外せる）と、それが無効化のガードと doctor に与える影響は
   ADR-0019 の Amendment（D4 MR4）に書く。
+
+## Amendment（2026-10-30、M1 phase 8 MR1: forge-core のパスの解析）
+
+上の決定が開けたままにしていた点を、次のとおり決めた（`forge_core::web_path`、`namespace_path`、`namespace_resolver`）。
+
+- **`.git` の規則は名前空間のセグメントだけに掛かる。** `/-/` の後ろ（と `/-/projects/{id}/…` の後ろ）は ref やファイルの名前なので、
+  `lib.git` のような `.git` で終わるセグメントを受け付ける。形を決めるのは `/-/` より前だけで、後ろの名前が形を変えることはないからである。
+  `.git` の検出は ASCII の大文字小文字を区別しない（`X.GIT` は `x`。名前空間の小文字化と合わせる）。
+- **拒否の `reason`**: FG-WEB-0001 の `reason` は `path_rejected`（文字列の規則）、`unknown_route`（未知の語、トップレベルの予約語、
+  `/-/` の未知の語、`/-` だけ、`-` の後ろに語がない）、`service_unsupported`（`info/refs` の `service` がない、重複、未知）の 3 つ。
+  どれにも `part`（`path` / `namespace` / `tail` / `git` / `query` / `instance` / `word` / `reserved_top_level`）と、`path_rejected` では
+  `rule`（破った最初の規則）を付ける。入力そのものは入れない（ログには `log_safe_path` で出す）。
+  - `service_unsupported` は、phase 9 が `SmartHttpServiceUnsupported`（400）を登録するまでの仮の扱いで、それまでは 404 になる。
+    `service` は、キーも値もデコードせず完全一致で比べる（`git%2Dupload-pack` は未知）。ほかのキーは無視する。POST と他の形はクエリを見ない。
+- **生のパスの上限は 8192 バイト**（`MAX_RAW_PATH_LEN`）。超えたものは区切る前に `path_rejected`（`rule=too_long`）にする。`/` で始まらないもの、
+  `/` だけのものも `path_rejected`。クエリは、どの形でも 2048 バイト（`MAX_QUERY_LEN`）までにし、超えたものは区切る前に
+  `path_rejected`（`part=query`、`rule=too_long`）にする。
+- **HTTP のメソッドは解析では見ない。** 形とメソッドの組（`info/refs` は GET / HEAD、`git-upload-pack` は POST など）は、MR4 のルートの表が決める。
+- **デコードは厳密にする。** `%` の後に 16 進数 2 桁がなければ拒否する（文字として通さない）。制御文字は C0、DEL に加えて C1（U+0080〜U+009F）も拒否する。
+  `/-/` の後ろの `-` だけのセグメントは名前として受け付ける。`%252F` は 1 回だけデコードして `%2F` という名前になる。
+- **見えない書式文字**: `/-/` の後ろのセグメントは、ゼロ幅・bidi の制御・行と段落の区切り・語の結合子・BOM・タグ文字
+  （U+200B〜U+200F、U+2028〜U+202E、U+2060〜U+2064、U+2066〜U+2069、U+FEFF、U+E0000〜U+E007F）を含めば
+  `path_rejected`（`part=tail`、`rule=invisible`）にする。ファイル名や ref の見た目を偽装できないようにするためである。
+- **`-` で始まるセグメント**: `/-/` の後ろのセグメントは `-` で始まってもよい（`--output=x` は正しいファイル名・ref 名である）。このため、
+  **MR4 と phase 9 の要件として**、`TailSegments` から git の引数に届く値は、必ず `--` / `--end-of-options` の後ろに置くか、
+  解決し終えた完全な ref 名か oid にしてから渡す（上の「ref とパスの境目」と同じ規則）。
+- **固定リンクの ID** は、先頭が 0 でない 10 進数で、`i64` の正の値に収まるものだけを受け付ける（それ以外は `path_rejected`、`rule=invalid_id`）。
+  殻は DB を見ないので、存在は確かめない。
+- **解決と認可の入力は 1 回の呼び出しで得る。** `NamespaceResolver::resolve(&LookupPath, viewer: Option<UserId>) -> Resolution` が、
+  パスの解決と、閲覧者の認可の入力の読み込みを同時に行う。解決の後で別の照会をすると、ないパスと見えないパスで照会の回数が変わり、
+  時間の差から存在が分かってしまうからである（判定の順序の 6）。実装は、結果（今のパス・移動・削除・なし、ユーザー・グループ・プロジェクト）にも、
+  閲覧者に見えるかどうかにも関係なく、**同じ照会を同じ回数だけ** 行わなければならない（MR3 は 1 つの文で実装する）。見えるかどうかは `authorize()` が決め、ここでは決めない。
+  `viewer` は匿名なら `None`（公開のプロジェクトや clone も同じ経路を通る）。
+- **解決の型**: `Resolved` は `{ namespace_id, target: ResolvedTarget }` とし、`ResolvedTarget` は `User(UserId)`、
+  `Group { id, viewer_role }`、`Project { id, access: ProjectAccess { visibility, role, pending_deletion } }` にした
+  （種類と ID と認可の入力が食い違えないため。`owner()` で型付きの `NamespaceOwner` を返す）。`Deleted` と `Absent` は何も持たない。
+  `Resolution::Moved` は、ID から組み立てて今のパスへの完全一致で確かめた `current: NamespacePath` も持つ（upload-pack の `302` と
+  SPA の `canonical_path` に使う。見せるのは認可の後）。`resolve_prefix` は、`prefix=true` と一緒に M2 で足す。
+- **ID で指すプロジェクト**（`GET /api/v1/projects/{id}`）には `ProjectAccessLoader::project_access(ProjectId, viewer: Option<UserId>)
+  -> Option<ProjectAccess>` を使う（`None` はない。同じ照会の規則）。forge-core は forge-auth より下にあるので、forge-auth の型は使わず、
+  forge-web（MR4）が forge-auth の文脈の型に変換する。
+- **ログ**: `log_safe_path` は最初の 256 文字だけを残し（切ったときは `…(+残りの文字数)`）、`\` を二重にし、制御文字と、bidi の制御・
+  ゼロ幅などの見えない書式文字を `\u{…}` にする。
+- **テストベクタ**は `tests/fixtures/url-vectors.json`（リポジトリのルート）。`form` は `both`（ブラウザの `new URL()` でも変わらない）、
+  `browser`（`browser_input` を `new URL()` で正規化した形）、`raw`（`curl --path-as-is` でしか送れない）の 3 つで、ラベルは WHATWG の URL 解析で確かめた。
+  `dot_git` が `.git` の許されない場所の印である。
