@@ -6,7 +6,11 @@
 //! `^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`, at most 200 characters; a
 //! violation is `FG-DB-0010 reason=invalid_dedup_key`.
 //!
-//! A client string cannot be a part:
+//! The `'static` bound is a guard rail, not a proof: it stops a request
+//! value from being passed by mistake (below), but `Box::leak` or a
+//! client-chosen integer in `Id` still get through — review keys built
+//! from anything but forge's own ids and hashes. A request string cannot
+//! be passed directly:
 //!
 //! ```compile_fail
 //! use forge_core::dedup_key::{DedupKey, DedupPart};
@@ -56,9 +60,18 @@ fn is_part(s: &str) -> bool {
 impl DedupKey {
     /// `<prefix>:<part>[:<part>…]` with one to four parts.
     /// `FG-DB-0010 reason=invalid_dedup_key` (with `prefix`) when the
-    /// prefix or a word breaks the shape, the part count is outside 1..=4,
-    /// or the key is longer than [`MAX_CHARS`].
+    /// prefix or a word breaks the shape on its own (a `:` inside a word
+    /// would add a part), the part count is outside 1..=4, or the key is
+    /// longer than [`MAX_CHARS`].
     pub fn new(prefix: &'static str, parts: &[DedupPart<'_>]) -> Result<DedupKey, ForgeError> {
+        let words_ok = is_prefix(prefix)
+            && parts.iter().all(|p| match p {
+                DedupPart::Word(w) => is_part(w),
+                DedupPart::Id(_) | DedupPart::Hash(_) => true,
+            });
+        if !words_ok {
+            return Err(invalid().with_context("prefix", prefix));
+        }
         let mut key = String::from(prefix);
         for part in parts {
             key.push(':');

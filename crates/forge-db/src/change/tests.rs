@@ -133,7 +133,12 @@ async fn invalid_changes_are_rejected_with_their_reason() {
     other_project.project_id = Some(ProjectId::new(99));
     let mut huge_number = event(1, None);
     huge_number.payload = json!({ "n": u64::MAX });
-    let long_key = format!("k:{}", "1".repeat(199));
+    // Every part within 64 characters, 201 in all: only the total bound
+    // refuses it (`exact_key` below, 200 characters, is accepted).
+    let long_key = format!(
+        "kk:{}",
+        vec!["1".repeat(64); 3].join(":") + ":" + &"1".repeat(3)
+    );
     let act_as = |credential_id: i64| Actor::UserViaServiceAccount {
         user: UserId::new(5),
         via: UserId::new(77),
@@ -202,6 +207,18 @@ async fn invalid_changes_are_rejected_with_their_reason() {
     let mut failed_login = record(vec![]);
     failed_login.audit.outcome = Outcome::Failed;
     tx.commit(failed_login).await.expect("audit only");
+    // A key of exactly 200 characters is stored.
+    let exact_key = format!(
+        "k:{}",
+        vec!["1".repeat(64); 3].join(":") + ":" + &"1".repeat(3)
+    );
+    assert_eq!(exact_key.len(), 200);
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(record(vec![event(1, Some(&exact_key))]))
+        .await
+        .expect("200 characters");
     t.drop_now().await;
 }
 

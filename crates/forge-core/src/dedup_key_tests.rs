@@ -9,6 +9,7 @@ fn assert_invalid(result: Result<DedupKey, forge_errors::ForgeError>) {
         err.to_string().contains("reason=invalid_dedup_key"),
         "{err}"
     );
+    assert!(err.to_string().contains("prefix="), "{err}");
 }
 
 #[test]
@@ -40,6 +41,9 @@ fn a_dedup_key_from_a_raw_client_value_cannot_be_built() {
     assert_invalid(DedupKey::new("", &[DedupPart::Id(1)]));
     assert_invalid(DedupKey::new("push", &[DedupPart::Word("A b")]));
     assert_invalid(DedupKey::new("push", &[DedupPart::Word("")]));
+    // A `:` inside a word or the prefix would silently add a part.
+    assert_invalid(DedupKey::new("push", &[DedupPart::Word("a:b")]));
+    assert_invalid(DedupKey::new("a:b", &[DedupPart::Id(1)]));
     assert_invalid(DedupKey::new("push", &[]));
     assert_invalid(DedupKey::new(
         "push",
