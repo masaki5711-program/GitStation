@@ -1,4 +1,8 @@
 //! Route handlers, one module per resource. Register them in
-//! `app::registry()` — never with `Router::route`.
+//! `app::registry()` — never with `Router::route`. A handler takes
+//! `(state, Dispatched<R>)`: it runs only with the registry's admitted
+//! proof.
 
 pub mod health;
+pub mod namespaces;
+pub mod shell;

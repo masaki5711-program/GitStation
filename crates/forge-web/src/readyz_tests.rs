@@ -51,7 +51,12 @@ fn app_with(probes: Vec<Fake>, timeout: Duration) -> axum::Router {
         .into_iter()
         .map(|p| Arc::new(p) as Arc<dyn ReadinessProbe>)
         .collect();
-    let mut state = AppState::new("test", probes, crate::tests::no_tokens());
+    let mut state = AppState::new(
+        "test",
+        probes,
+        crate::tests::no_tokens(),
+        crate::tests::no_lookups(),
+    );
     state.probe_timeout = timeout;
     crate::app(state, AppConfig::default()).expect("app builds")
 }
@@ -214,7 +219,12 @@ async fn concurrent_and_repeated_readyz_calls_share_one_probe_run() {
     let probe: Arc<dyn ReadinessProbe> = Arc::new(Counting {
         runs: Arc::clone(&runs),
     });
-    let state = AppState::new("test", vec![probe], crate::tests::no_tokens());
+    let state = AppState::new(
+        "test",
+        vec![probe],
+        crate::tests::no_tokens(),
+        crate::tests::no_lookups(),
+    );
     let router = crate::app(state, AppConfig::default()).expect("app");
     let calls = (0..20).map(|_| get_readyz(router.clone()));
     let results = futures_util::future::join_all(calls).await;

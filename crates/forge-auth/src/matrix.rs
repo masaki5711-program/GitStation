@@ -108,6 +108,8 @@ pub(crate) enum Fixture {
     Absent,
     /// A `deleted` tombstone at the path.
     DeletedTombstone,
+    /// A namespace of another kind than the route's scope (MR4).
+    KindMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,6 +291,7 @@ impl Fixture {
             Fixture::ResolvedUser => resolved(ResolvedVia::Live, NamespaceView::User),
             Fixture::Absent => Resource::Unresolved(UnresolvedReason::Absent),
             Fixture::DeletedTombstone => Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
+            Fixture::KindMismatch => Resource::Unresolved(UnresolvedReason::KindMismatch),
         }
     }
 }

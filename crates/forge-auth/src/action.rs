@@ -75,7 +75,9 @@ impl Action {
         matches!(self, Action::Health | Action::WebShell)
     }
 
-    /// Performed through the git protocol rather than an HTTP API route.
+    /// Also performed through the git protocol (Smart HTTP). `RepoRead` is
+    /// an HTTP route too (`/-/raw`, `/-/archive`, ADR-0015): `true` means
+    /// "git does it as well", not "only git" (M1 phase 8 MR4).
     pub fn is_git_operation(self) -> bool {
         matches!(self, Action::RepoRead | Action::RepoPush)
     }

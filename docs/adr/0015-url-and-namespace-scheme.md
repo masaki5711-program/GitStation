@@ -668,3 +668,54 @@ impl<S> Registry<S> {
   `forge_db::resolve::project_access(&Db, ProjectId, viewer) -> Option<forge_core::ProjectAccess>`（閲覧者のロールを含む、1 つの文）に置き換えた。
   以前 FG-SYS-0001 `unknown_visibility` だった保存値の誤りは FG-DB-0021 になる。
 - 可視性はここでは判定しない（`authorize()` が決める）。forge-core の `Visibility` は `private` / `internal` の 2 つである。
+
+## Amendment（2026-10-30、M1 phase 8 MR4: forge-web の dispatcher と登録の仕組み）
+
+上の「判定の順序」と「ルートの登録に足すもの」を forge-web に実装した（`feat/web-dispatcher`、`forge_web::registry`、`dispatch`）。決めた点は次のとおり。
+
+- **ハンドラは証明なしでは呼べない（MR2 の必須事項 a〜c）。** ハンドラの型は `Endpoint<S, R>`（`async fn(state, Dispatched<R>)`）にした。
+  `Dispatched<R>` は欄が非公開で、`Clone` / `Default` / 公開のコンストラクタを持たない（`compile_fail` の doctest）。作れるのは
+  `registry.rs` の `admit()` だけで、`admit()` は `proof.action() == def.action` を確かめる。違えば FG-SYS-0001
+  （`reason=proof_action_mismatch`、`route_action`、`proof_action`）。固定のパスのルート（`route()` / `route_with()`）も scoped のルートも、
+  すべてこの 1 か所を通る。`WebShell` の証明で `UserCreate` のルートに入れないことを否定のテストで確かめた
+  （`registry_tests::a_proof_for_another_action_is_refused`）。
+- **既存の `route()` も証明の形にそろえた**（forge-web README の MUST）。登録の仕組みが認証 → ガード → 読み込み（`Loader`。
+  `route()` は `InstanceCtx`）→ `prove(principal, def.action, ctx)` → `admit()` → ハンドラの順に呼ぶ。ハンドラは `authorize()` を呼ばない。
+  公開のルートは資格情報を見ず、匿名として判定する。
+- **dispatcher はルーターの fallback の 1 か所**（`Router::route` は登録の中の 1 か所のまま）。固定のパスに一致しないすべての要求が来て、
+  表にないものは FG-WEB-0001（fail closed）。`/api/…`、未知の `/-/…`、dumb HTTP、まだルートのない `raw` / `archive` / git の形には殻を返さない。
+- **手順 5 の照会は、要求ごとにちょうど 1 回**（必須事項 d）。公開の語と、文字列で拒否したパスは 0 回。解決の前に照会はしない（認証は手順 4）。
+  `Resolution` からの変換は、`Live` → `ResolvedVia::Live`、`Moved` → `ResolvedVia::Moved`（`PathResolve` の `ResolvedCtx`）、
+  プロジェクトのルートでは `LoadedProject` → `ProjectCtx`、`Deleted` → `UnresolvedReason::TombstoneDeleted`、`Absent` → `Absent`。
+  解決した種類と語に RouteDef がない（グループに `raw`、個人の名前空間に語）ときは、新しい **`UnresolvedReason::KindMismatch`**
+  （ログの `reason=kind_mismatch`、応答は同じ FG-REPO-0005）にした。判定は `prove()` が行い、2 つ目の判定点は作らない。matrix に
+  `RepoRead × KindMismatch` の拒否の行を足した。照会は `AppState::lookup_timeout`（`forge serve` は acquire + statement_timeout + 1 秒）で
+  抑え、超えたら FG-WEB-0002（`operation=namespace_resolve`）。
+- **ないもの・墓標・種類違い・見えないものの応答は、request_id を除いてバイト単位で同じ**（必須事項 f）。ステータス、ヘッダ、本文をテストで比べる
+  （`dispatch_tests::every_denial_is_identical_and_costs_one_lookup`、`namespace_tombstone_routes`）。違いはログの `reason` だけ。
+- **`moved` の墓標**: `authorize()` が許可した後でだけ、安全な verb（GET / HEAD）で push でないルートに限り `302`（`Cache-Control: no-store`）で
+  今のパスへ送る。`Location` は検証済みのセグメントから組み立てた相対パス（各セグメントを百分率符号化。`Host` は使わない）で、クエリは捨てる
+  （git の広告だけは、ルートから `service` を付け直す）。それ以外（POST、receive-pack）は FG-REPO-0005（`tombstone_post` / `tombstone_push`）。
+  送るときに `namespace.redirected`（warn、`namespace_id`、`tombstone_id`、`route`）を出す。見えない行き先は、ないパスと同じ 404 で、今のパスは出さない。
+  - **残り（phase 9 で決める）**: `Resource::Project` は `via` を持たないので、プロジェクトのルートで墓標の先が見えないときのログは
+    `reason=not_visible` に `via=moved` と `tombstone_id` を添えた形になる（`tombstone_not_visible` ではない。応答は同じ）。
+- **語ごとのガード**: 登録の仕組みが `is_public_word(verb, route)`（その語の RouteDef がすべて公開のときだけ真）を持つ。公開と非公開が混ざった語は認証を求め、
+  認証の後に解決した種類が公開の RouteDef を選べば殻を返す。製品の公開の語の RouteDef がすべて `WebShell` であることをテストで確かめる。
+- **`scoped()` の登録の規則**（違反は FG-WEB-0004）: 形とスコープ（Home → Namespace、語 → Group / Project、git → ProjectGit、固定リンク → Instance）、
+  `query_key`（`info/refs` だけが `("service", …)` を持つ）、verb（広告は GET / HEAD、POST は upload / receive-pack）、文脈の型
+  （公開は `InstanceCtx`、非公開は今は Project / ProjectGit の `ProjectCtx` だけ。グループと個人の名前空間の文脈は、最初の非公開のルートと一緒に forge-auth に足す）。
+- **この MR で作ったルート**: `GET /api/v1/namespaces/resolve?path=`（`PathResolve`。`{ namespace_id, kind, canonical_path, moved }`、
+  `Cache-Control: private, no-store`、`Vary: Authorization, Cookie`）と、殻（`WebShell`。名前空間のトップ、プロジェクトの
+  `tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags` `settings` `members`、グループの `settings` `members`、固定リンク。GET と HEAD）。
+  `PathResolve` と `WebShell` を `app::PLANNED` から外した。殻は M2 の SPA まで仮の HTML で、どのパスでも同じバイト列、DB も資格情報も見ない。
+  `raw` / `archive`（`RepoRead`）と git のルートはまだ登録しない（FG-WEB-0001）。`GET|HEAD /api/v1/projects/{id}` は MR5。
+- **`path` の引数の誤り**（ない、重複、符号化の誤り、名前として不正）は、FG-WEB-0006 `RequestInvalid`（phase 8b）までは、ないパスと同じ
+  FG-REPO-0005（ログに `lookup=path_param_*`）にする。このときは照会しない（違いは要求の形で、データではない）。
+- **manifest**: `routes.generated.json` の全行に `scope`（固定のパスは `fixed`）と `word`（固定のパスは `fixed`）を、`info/refs` には
+  `query_key: [key, value]` を足した。並びは `(path, scope, verb, query_key)`。OpenAPI には固定のパスだけを出す。
+- **ログ**: dispatcher、405、パニック、タイムアウト、アクセスログのパスは、すべて `log_safe_path` で出す。FG-WEB-0001 の diagnosis に
+  `reason` / `part` / `rule` の読み方を書いた。
+- **`TailSegments` と git（必須事項 e）**: dispatcher は git を起動せず、`TailSegments` を `Dispatched::tail()` で渡すだけ。forge-git の
+  `GitCommand` は、利用者の値を `revision()`（`--end-of-options` の後ろ）か `path()`（`--` の後ろ）でしか受け付けない。forge-web が forge-git に
+  依存した時点で赤くなるテスト（`the_dispatcher_runs_no_git_and_tails_keep_leading_dashes`）を置き、phase 9 で置き場所を示させる。
+- `is_git_operation()` の意味を「git でも行う」に変えた（文書だけ。値は変えない）。

@@ -180,7 +180,7 @@ fn repo_token() -> Principal {
 fn unresolved_is_not_found_with_its_reason_for_every_active_caller() {
     let admin = Principal::authenticated(ME, true, true, Credential::Session);
     let api_token = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]));
-    for reason in [UnresolvedReason::Absent, UnresolvedReason::TombstoneDeleted] {
+    for &reason in UnresolvedReason::ALL {
         for p in [session(), admin.clone(), api_token.clone()] {
             let err =
                 prove(&p, Action::PathResolve, UnresolvedCtx::new(reason)).expect_err("absent");
@@ -247,7 +247,7 @@ fn unresolved_is_not_found_for_every_non_public_action() {
     // project, whatever action a route decides it with.
     let admin = Principal::authenticated(ME, true, true, Credential::Session);
     for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
-        for reason in [UnresolvedReason::Absent, UnresolvedReason::TombstoneDeleted] {
+        for &reason in UnresolvedReason::ALL {
             for p in [session(), admin.clone()] {
                 let err = authorize(&p, action, &Resource::Unresolved(reason))
                     .expect_err("nothing there");

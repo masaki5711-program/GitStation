@@ -17,10 +17,11 @@ lands (M1 phase 5).
   public constructor (`compile_fail` doctests in `src/prove.rs`); it exposes
   `action()`, `id() -> &R::Id` and `ctx() -> &R`. Handlers take the proof and
   read the target id from it (ADR-0015). The action is a runtime value (a
-  `WebShell` proof has the same type as a `UserCreate` one): the registry
-  (MR4) must check `proof.action() == def.action` before every handler, keep
-  handlers unreachable outside the registry, and test that a proof for another
-  action is rejected.
+  `WebShell` proof has the same type as a `UserCreate` one): forge-web's
+  registry checks `proof.action() == def.action` before every handler
+  (`Dispatched<R>`, built only there), so handlers are unreachable outside
+  the registry; `registry_tests::a_proof_for_another_action_is_refused` pins
+  the rejection (M1 phase 8 MR4).
 - `ResourceCtx { type Id; fn resource(&self) -> Resource; fn id(&self) -> Self::Id }`
   — **sealed** (only this crate implements it), so `id()` and `resource()`
   always read the same value. Contexts have private fields and one
@@ -37,14 +38,17 @@ lands (M1 phase 5).
   for an administrator in a session, or with a token carrying `Scope::Admin`.
 - `Credential` — `Session` (all scopes) or `Token(Vec<Scope>)`.
 - `Action` — fieldless enum generated with `Action::ALL` and `name()` by one
-  macro; `is_public()`, `is_git_operation()`, `required_scope()`.
+  macro; `is_public()`, `is_git_operation()` ("git does it as well":
+  `RepoRead` is also an HTTP route), `required_scope()`.
 - `Resource` — `Instance`, `Group { role }`, `Namespace { owner }`,
   `Project(ProjectView)`, `Ref { project, name, update, protection }`,
   `Transfer { source, target_role }`,
   `Membership { scope, change, removes_last_owner }`,
   `RefProtectionChange { project, from, to }`, `VisibilityChange { project, to }`,
   `Token { owner }` (list / revoke), `TokenRequest { owner, scopes }` (create),
-  `Unresolved(UnresolvedReason)` (`Absent` / `TombstoneDeleted`) and
+  `Unresolved(UnresolvedReason)` (`Absent` / `TombstoneDeleted` /
+  `KindMismatch` — a path of another kind than the route's scope, MR4;
+  `UnresolvedReason::ALL`) and
   `Resolved { via: ResolvedVia, view: NamespaceView }` (`PathResolve` only;
   `ResolvedVia::{Live, Moved}`, `NamespaceView::{User, Group { role },
   Project(ProjectView)}` — the kind is the variant, `kind()` names it).
@@ -52,7 +56,8 @@ lands (M1 phase 5).
   role: a Guest on a private project resolves it (but cannot `ProjectRead`);
   groups and personal namespaces resolve for every signed-in user; a project
   for members, everyone on internal, administrators. `WebShell` is public (no
-  scope). Both are in forge-web `app::PLANNED` until the dispatcher routes them.
+  scope). Both are routed by forge-web since M1 phase 8 MR4
+  (`GET /api/v1/namespaces/resolve`, the dispatcher's shell words).
 - `RefKind::of(&RefName)` — derives a ref kind (`authorize()` does it for pushes).
 - `RefProtection::effective(levels)` — the strictest of all matching rules;
   the only way to build a push resource's protection.

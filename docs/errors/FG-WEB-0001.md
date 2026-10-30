@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-No registered route matches the request path.
+No registered route matches the request path: no fixed route, and the dispatcher (ADR-0015) refused the raw path by its string rules or found no scoped route for its word and method.
 
 ## 調べ方 (diagnosis)
 
-The `context` field of the log event contains `method=` and `path=`. Compare with `Git/docs/api/openapi.json` (generated from the route registry).
+The `context` field of the log event contains `method=`, `path=` (the raw path, cut to 256 characters with control and invisible characters escaped — `log_safe_path`), `reason=` and `part=`. `reason=path_rejected`: the path breaks a string rule; `part` says where (`path`, `namespace`, `tail`, `git`, `query`, `instance`) and `rule` which rule (e.g. `empty_segment`, `dot_git_placement`, `malformed_escape`, `invisible`, `too_long`). `reason=unknown_route`: the word is not served — `part=word` (an unknown word after `/-/`), `part=reserved_top_level` (`/api/…` and the other reserved top-level names), `part=instance`, `part=method`, or `part=route` with `route=` (a known word with no route for this method yet, e.g. `raw`, `archive`, the git routes before phase 9). `reason=service_unsupported`: `info/refs` without exactly one known `service`. Compare with `Git/docs/authz/routes.generated.json` (scoped routes) and `Git/docs/api/openapi.json` (fixed routes), and replay the path against `tests/fixtures/url-vectors.json`.
 
 ## 対処 (fix)
 

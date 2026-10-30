@@ -8,7 +8,9 @@
 //!
 //! The database is injected into forge-web twice through forge-core traits
 //! (forge-web does not depend on forge-db): as the readiness probe and as
-//! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7).
+//! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7),
+//! and as the dispatcher's lookups (`forge_db::resolve`: path → namespace
+//! and project by id, ADR-0015 MR3 / MR4).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +20,7 @@ use forge_core::readiness::ReadinessProbe;
 use forge_core::Authenticator;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
-use forge_web::{AppConfig, AppState, BoundedAuthenticator, ServerLimits};
+use forge_web::{AppConfig, AppState, BoundedAuthenticator, Lookups, ServerLimits};
 
 use crate::runtime::block_on;
 
@@ -60,8 +62,28 @@ fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
         Arc::new(db.clone()),
         auth_permits(database),
     ));
-    AppState::new(env!("CARGO_PKG_VERSION"), vec![probe], authenticator)
-        .with_probe_timeout(probe_timeout_for(database))
+    let lookups = Lookups {
+        namespaces: Arc::new(db.clone()),
+        projects: Arc::new(db.clone()),
+    };
+    AppState::new(
+        env!("CARGO_PKG_VERSION"),
+        vec![probe],
+        authenticator,
+        lookups,
+    )
+    .with_probe_timeout(probe_timeout_for(database))
+    .with_lookup_timeout(lookup_timeout_for(database))
+}
+
+/// One lookup is one statement on the read pool: acquire, then the
+/// statement (bounded by the session's `statement_timeout`). The client
+/// bound exceeds both, so the database reports its own cause first.
+fn lookup_timeout_for(database: &DatabaseConfig) -> Duration {
+    database
+        .acquire_timeout
+        .saturating_add(database.statement_timeout)
+        .saturating_add(Duration::from_secs(1))
 }
 
 /// Token lookups run on the write pool (ADR-0018: only it can read the
@@ -99,6 +121,16 @@ mod tests {
         .expect("config");
         let bound = probe_timeout_for(&cfg.database);
         assert!(bound > cfg.database.acquire_timeout * 2, "{bound:?}");
+    }
+
+    #[test]
+    fn the_lookup_bound_exceeds_acquire_plus_statement() {
+        let cfg = load(None, &Env::from_pairs([])).expect("config");
+        let bound = lookup_timeout_for(&cfg.database);
+        assert!(
+            bound > cfg.database.acquire_timeout + cfg.database.statement_timeout,
+            "{bound:?}"
+        );
     }
 
     #[test]
