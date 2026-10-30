@@ -68,6 +68,9 @@ const SAFE_CONTEXT: &[&str] = &[
     "active_human_admins",
     "ownerless_groups",
     "group_ids",
+    // D4 MR4: FG-AUTH-0010 reason=ownerless_project (a count and ids).
+    "ownerless_projects",
+    "project_ids",
     // ── D4 MR3b — FG-REPO-0012 (repository-provisioning runbook) and
     // FG-REPO-0002 from `repositories.storage` (repo-storage): ids, counts,
     // ages, a job state. Never the path or the provision token.

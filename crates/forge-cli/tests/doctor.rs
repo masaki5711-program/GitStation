@@ -349,6 +349,70 @@ fn doctor_reports_an_orphaned_administration() {
     rt.block_on(t.drop_now());
 }
 
+// ── D4 MR4: a project without any active Owner (FG-AUTH-0010 ownerless_project) ──
+#[test]
+fn doctor_reports_an_ownerless_project() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    // An administrator exists; carol's only project loses its Owner when
+    // carol is disabled past the guard.
+    let project = rt.block_on(async {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            forge_core::RequestId::parse("req-doctor-project").expect("request id"),
+        );
+        let mut alice = forge_db::users::NewUser::human("alice", "Alice", "alice@example.test");
+        alice.is_admin = true;
+        forge_db::users::create(&t.db, &ctx, &alice)
+            .await
+            .expect("alice");
+        let carol = forge_db::users::create(
+            &t.db,
+            &ctx,
+            &forge_db::users::NewUser::human("carol", "Carol", "carol@example.test"),
+        )
+        .await
+        .expect("carol");
+        let created = forge_db::projects::create(
+            &t.db,
+            &ctx,
+            &forge_db::projects::NewProject::new("tool", carol.namespace_id, "Tool", carol.user_id),
+        )
+        .await
+        .expect("project");
+        let _ = forge_db::users::disable_with(
+            &t.db,
+            &ctx,
+            carol.user_id,
+            forge_db::users::Guard::Force,
+        )
+        .await
+        .expect("forced disable");
+        created.project_id
+    });
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("FAIL  users.administration"))
+        .unwrap_or_else(|| panic!("no administration failure in:\n{text}"));
+    for part in [
+        "FG-AUTH-0010".to_owned(),
+        "reason=ownerless_project".to_owned(),
+        "ownerless_projects=1".to_owned(),
+        format!("project_ids={}", project.get()),
+    ] {
+        assert!(line.contains(&part), "missing {part:?} in {line:?}");
+    }
+    assert!(!text.contains("carol"), "names stay out:\n{text}");
+    rt.block_on(t.drop_now());
+}
+
 #[test]
 fn worker_refuses_a_configuration_with_the_migration_password() {
     let pw = PasswordFile::new("x");
