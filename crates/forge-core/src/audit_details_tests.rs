@@ -291,3 +291,65 @@ fn project_member_details_have_the_group_shapes_and_publish_maintainer_events() 
         }
     }
 }
+
+#[test]
+fn protected_ref_details_have_their_exact_shape_and_publish_maintainer_events() {
+    use crate::ids::ProtectedRefId;
+    use crate::{EventType, VisibilityClass};
+    let rule = ProtectedRefId::new(4);
+    let created = AuditDetails::ProtectedRefCreated {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        push_min_role: Role::Maintainer,
+    };
+    let updated = AuditDetails::ProtectedRefUpdated {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        from: Role::Maintainer,
+        to: Role::Owner,
+    };
+    let deleted = AuditDetails::ProtectedRefDeleted {
+        rule,
+        pattern: "refs/heads/release/*".to_owned(),
+        push_min_role: Role::Owner,
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "maintainer"})
+    );
+    assert_eq!(
+        updated.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "from": "maintainer", "to": "owner"})
+    );
+    assert_eq!(
+        deleted.to_value(),
+        json!({"protected_ref_id": 4, "pattern": "refs/heads/release/*", "push_min_role": "owner"})
+    );
+    for (details, action, event) in [
+        (
+            &created,
+            "protected_ref.created",
+            EventType::ProtectedRefCreated,
+        ),
+        (
+            &updated,
+            "protected_ref.updated",
+            EventType::ProtectedRefUpdated,
+        ),
+        (
+            &deleted,
+            "protected_ref.deleted",
+            EventType::ProtectedRefDeleted,
+        ),
+    ] {
+        assert_eq!(details.action(), action);
+        assert_eq!(details.event_type(), Some(event));
+        assert_eq!(event.as_str(), action);
+        assert_eq!(event.visibility_class(), VisibilityClass::Maintainer);
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii}");
+        }
+    }
+}

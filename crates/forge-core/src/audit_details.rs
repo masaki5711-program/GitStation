@@ -2,7 +2,7 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::event_type::EventType;
-use crate::ids::{NamespaceId, ProjectId, RepoId, UserId};
+use crate::ids::{NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
@@ -92,6 +92,27 @@ pub enum AuditDetails {
     ProjectMemberRoleChanged { user: UserId, from: Role, to: Role },
     /// `member.removed` of a project (D4 MR4): the role the member had.
     ProjectMemberRemoved { user: UserId, role: Role },
+    /// `protected_ref.created` (D4 MR5, ADR-0008): the rule, its pattern as
+    /// written (a ref pattern, not personal data) and its minimum push role.
+    /// Also the payload of the event (maintainer class).
+    ProtectedRefCreated {
+        rule: ProtectedRefId,
+        pattern: String,
+        push_min_role: Role,
+    },
+    /// `protected_ref.updated` (D4 MR5): the minimum push role changed.
+    ProtectedRefUpdated {
+        rule: ProtectedRefId,
+        pattern: String,
+        from: Role,
+        to: Role,
+    },
+    /// `protected_ref.deleted` (D4 MR5): the rule as it was.
+    ProtectedRefDeleted {
+        rule: ProtectedRefId,
+        pattern: String,
+        push_min_role: Role,
+    },
 }
 
 impl AuditDetails {
@@ -111,6 +132,9 @@ impl AuditDetails {
             Self::ProjectMemberAdded { .. } => "member.added",
             Self::ProjectMemberRoleChanged { .. } => "member.role_changed",
             Self::ProjectMemberRemoved { .. } => "member.removed",
+            Self::ProtectedRefCreated { .. } => "protected_ref.created",
+            Self::ProtectedRefUpdated { .. } => "protected_ref.updated",
+            Self::ProtectedRefDeleted { .. } => "protected_ref.deleted",
         }
     }
 
@@ -133,6 +157,9 @@ impl AuditDetails {
             Self::ProjectMemberAdded { .. } => Some(EventType::MemberAdded),
             Self::ProjectMemberRoleChanged { .. } => Some(EventType::MemberRoleChanged),
             Self::ProjectMemberRemoved { .. } => Some(EventType::MemberRemoved),
+            Self::ProtectedRefCreated { .. } => Some(EventType::ProtectedRefCreated),
+            Self::ProtectedRefUpdated { .. } => Some(EventType::ProtectedRefUpdated),
+            Self::ProtectedRefDeleted { .. } => Some(EventType::ProtectedRefDeleted),
         }
     }
 
@@ -149,7 +176,10 @@ impl AuditDetails {
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
     /// ProjectMemberAdded / ProjectMemberRemoved `{"user_id","role"}`,
-    /// ProjectMemberRoleChanged `{"user_id","from","to"}` (the group shapes).
+    /// ProjectMemberRoleChanged `{"user_id","from","to"}` (the group shapes),
+    /// ProtectedRefCreated / ProtectedRefDeleted
+    /// `{"protected_ref_id","pattern","push_min_role"}`,
+    /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -218,6 +248,31 @@ impl AuditDetails {
             Self::MemberRoleChanged { user, from, to }
             | Self::ProjectMemberRoleChanged { user, from, to } => serde_json::json!({
                 "user_id": user.get(),
+                "from": from.as_str(),
+                "to": to.as_str(),
+            }),
+            Self::ProtectedRefCreated {
+                rule,
+                pattern,
+                push_min_role,
+            }
+            | Self::ProtectedRefDeleted {
+                rule,
+                pattern,
+                push_min_role,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
+                "push_min_role": push_min_role.as_str(),
+            }),
+            Self::ProtectedRefUpdated {
+                rule,
+                pattern,
+                from,
+                to,
+            } => serde_json::json!({
+                "protected_ref_id": rule.get(),
+                "pattern": pattern,
                 "from": from.as_str(),
                 "to": to.as_str(),
             }),

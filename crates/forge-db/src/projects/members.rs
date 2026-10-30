@@ -45,7 +45,10 @@ fn membership_conflict(reason: &'static str) -> ForgeError {
 /// Lock the project row. `FG-REPO-0005` (`resource=project`) when it does
 /// not exist; a project without its namespace is a broken invariant
 /// (`FG-SYS-0001` `project_without_namespace`), not a 404.
-async fn lock_project(conn: &mut PgConnection, project: ProjectId) -> Result<(), ForgeError> {
+pub(crate) async fn lock_project(
+    conn: &mut PgConnection,
+    project: ProjectId,
+) -> Result<(), ForgeError> {
     let row: Option<bool> = sqlx::query_scalar(
         "SELECT n.id IS NOT NULL FROM forge.projects p \
          LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \

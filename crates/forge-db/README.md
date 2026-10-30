@@ -147,6 +147,19 @@ connection, mapping driver errors to registered codes, migrations
   `project_id`) a disable that would leave a project without an active Owner; `--force`
   records `ownerless_projects` in `DisableOutcome::DisabledPastGuard` and the
   `user.disabled` details.
+- `protected_refs::{create, change, delete}` (step D4 MR5, ADR-0008 Amendment D4 MR5):
+  `create(&Db, &ChangeContext, ProjectId, &RefPattern, Role) -> ProtectedRefId`,
+  `change(.., ProjectId, ProtectedRefId, Role) -> RuleChange { Changed { from } | Unchanged }`
+  (the minimum push role only), `delete(.., ProjectId, ProtectedRefId)`. The project row is
+  locked first; at most `MAX_RULES` = 100 rules per project (`too_many_rules`), no two
+  patterns equal by `RefPattern::key()` (`duplicate_pattern`, non-ASCII case included),
+  `push_min_role` Developer / Maintainer / Owner. One `protected_ref.*` audit row on
+  (`project`, id) and one `protected_ref.*` event (maintainer class, payload = the details,
+  no dedup key) each. No authorization here (`Action::ProtectedRefManage` is the route's).
+- `protected_refs::levels_for(&Db, ProjectId, &RefName) -> Result<Vec<Role>, ForgeError>`:
+  the `push_min_role` of every rule whose pattern matches the ref ignoring case, in rule
+  id order — feed it to `forge_auth::RefProtection::effective` (strictest wins); the
+  push policy snapshot is built from it. One bounded read (≤ 101 rows) on the read pool.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events
@@ -172,7 +185,8 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 `audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
-derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`).
+derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`), FG-DB-0020 ProtectedRefDataInvalid
+(`protected_refs`).
 Raised by `users::create` / `users::disable`: FG-REPO-0007 / 0008 (`PathSegment`),
 FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_taken`,
 ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
@@ -210,6 +224,10 @@ Raised by the project member commands (D4 MR4): FG-REPO-0010 (`already_member`,
 (`resource=project` / `user`, `reason=absent`), FG-DB-0018 (`unknown_role`,
 `resource=project`), FG-SYS-0001 (`project_without_namespace`). `Ownerless::check`:
 FG-AUTH-0010 (`ownerless_project`, `ownerless_projects`, `project_ids`).
+Raised by `protected_refs` (D4 MR5): FG-REPO-0013 (`duplicate_pattern`, `too_many_rules`
+with `rules`, `push_min_role`), FG-REPO-0005 (`resource=project` / `protected_ref`,
+`reason=absent`), FG-DB-0020 ProtectedRefDataInvalid (alert: `too_many_stored_rules`,
+`stored_pattern_invalid`, `stored_push_min_role_invalid`; ids only, never the pattern).
 Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.

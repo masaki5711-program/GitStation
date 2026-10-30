@@ -69,7 +69,10 @@ fn all_lists_every_event_type_once() {
             "token.revoked",
             "member.added",
             "member.role_changed",
-            "member.removed"
+            "member.removed",
+            "protected_ref.created",
+            "protected_ref.updated",
+            "protected_ref.deleted"
         ]
     );
 }
@@ -127,5 +130,18 @@ fn project_member_events_are_maintainer_class() {
     ] {
         assert_eq!(t.visibility_class(), VisibilityClass::Maintainer, "{t:?}");
         assert!(t.as_str().starts_with("member."), "{t:?}");
+    }
+}
+
+/// D4 MR5: `protected_ref.*` stays maintainer class (ADR-0016 §5 over Q7).
+#[test]
+fn protected_ref_events_are_maintainer_class() {
+    for t in [
+        EventType::ProtectedRefCreated,
+        EventType::ProtectedRefUpdated,
+        EventType::ProtectedRefDeleted,
+    ] {
+        assert_eq!(t.visibility_class(), VisibilityClass::Maintainer, "{t:?}");
+        assert!(t.as_str().starts_with("protected_ref."), "{t:?}");
     }
 }

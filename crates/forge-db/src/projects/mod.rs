@@ -29,6 +29,7 @@ mod members;
 pub(crate) mod ownership;
 
 pub use crate::groups::MemberChange;
+pub(crate) use members::lock_project;
 pub use members::{add_member, change_member, remove_member};
 pub use ownership::{ownerless, Ownerless};
 
@@ -389,7 +390,10 @@ pub async fn create(
 /// Amendment D4); the event's payload is the audit details (ids, kinds,
 /// roles). No dedup key: `project.created` names a new project and each
 /// member change is a new state, never a retry to absorb.
-fn evented_record(details: &AuditDetails, project: ProjectId) -> Result<ChangeRecord, ForgeError> {
+pub(crate) fn evented_record(
+    details: &AuditDetails,
+    project: ProjectId,
+) -> Result<ChangeRecord, ForgeError> {
     let event_type = details.event_type().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "audit_only_event")

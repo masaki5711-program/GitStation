@@ -734,3 +734,10 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   重複除去の鍵は付けない（メンバーの変更は毎回新しい状態で、吸収すべき再試行ではない）。
 - グループのメンバーの変更（`AuditDetails::Member*`）は監査だけのまま（計画 Q8、`event_type()` は `None`、テスト
   `project_member_details_have_the_group_shapes_and_publish_maintainer_events`）。
+
+## Amendment（2026-10-31、手順 D4 MR5: `protected_ref.*` のイベント）
+
+- §10 の M1 のイベントに `protected_ref.*` を足す: `EventType::{ProtectedRefCreated, ProtectedRefUpdated, ProtectedRefDeleted}`
+  （`protected_ref.created`・`protected_ref.updated`・`protected_ref.deleted`、分類 `maintainer`、§5）。書き手は `protected_refs::{create, change, delete}`。
+  監査の行とイベントの集約はプロジェクト（`project` / id、`project_id` あり）、ペイロードは監査の詳細（`{"protected_ref_id","pattern","push_min_role"}`、
+  更新は `{"protected_ref_id","pattern","from","to"}`）。パターンは ref の名前の形で、個人に関わる値ではない。重複除去の鍵は付けない。
