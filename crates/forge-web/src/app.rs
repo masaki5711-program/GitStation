@@ -151,6 +151,7 @@ pub fn app(state: AppState, config: AppConfig) -> Result<Router, ForgeError> {
 /// tests need guarded routes; the product registers none yet). Not compiled
 /// into the server.
 #[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
 pub fn with_registry(
     registry: Registry<AppState>,
     state: AppState,

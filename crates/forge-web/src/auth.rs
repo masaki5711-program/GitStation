@@ -37,8 +37,10 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use forge_auth::{Credential, Principal};
+use forge_core::authenticator::AuthFuture;
 use forge_core::{Authenticator, RequestId};
 use forge_errors::{ErrorCode, ForgeError, Lang};
+use tokio::sync::Semaphore;
 
 use crate::context;
 use crate::error::ApiError;
@@ -48,6 +50,49 @@ use crate::error::ApiError;
 /// it for every request).
 #[derive(Clone)]
 pub(crate) struct AuthenticatorExt(pub(crate) Arc<dyn Authenticator>);
+
+/// Bounds the number of authentications that run at once (each one is a
+/// write-pool lookup, ADR-0019 §3): a flood of well-formed random tokens
+/// must not take every write connection. Waiting for a permit is bounded by
+/// the request timeout (`FG-WEB-0002`); no new code. Generic over any
+/// [`Authenticator`], so forge-web stays independent of forge-db;
+/// `forge serve` sets the permits from the write pool size.
+pub struct BoundedAuthenticator {
+    inner: Arc<dyn Authenticator>,
+    permits: Arc<Semaphore>,
+    size: usize,
+}
+
+impl BoundedAuthenticator {
+    /// `permits` = 0 is raised to 1 (zero would refuse every token).
+    pub fn new(inner: Arc<dyn Authenticator>, permits: usize) -> Self {
+        let size = permits.max(1);
+        Self {
+            inner,
+            permits: Arc::new(Semaphore::new(size)),
+            size,
+        }
+    }
+
+    /// The number of authentications that may run at once.
+    pub fn permits(&self) -> usize {
+        self.size
+    }
+}
+
+impl Authenticator for BoundedAuthenticator {
+    fn authenticate<'a>(&'a self, request_id: &'a RequestId, presented: &'a str) -> AuthFuture<'a> {
+        Box::pin(async move {
+            // The semaphore is never closed (this value owns it); a closed
+            // one is a bug, reported, not a pass.
+            let _permit = self.permits.acquire().await.map_err(|_| {
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "authenticator_permits_closed")
+            })?;
+            self.inner.authenticate(request_id, presented).await
+        })
+    }
+}
 
 /// How the token was presented (logged; never the value).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +129,8 @@ fn presented(headers: &HeaderMap) -> Result<Option<Presented>, Refusal> {
         return Err("ambiguous");
     }
     let text = value.to_str().map_err(|_| "malformed_header")?;
-    let (scheme, rest) = text.split_once(' ').unwrap_or((text, ""));
+    // The scheme ends at the first ASCII space or tab.
+    let (scheme, rest) = text.split_once([' ', '\t']).unwrap_or((text, ""));
     let rest = rest.trim_matches([' ', '\t']);
     let scheme = if scheme.eq_ignore_ascii_case("bearer") {
         Scheme::Bearer
@@ -117,12 +163,18 @@ fn basic_password(encoded: &str) -> Result<String, Refusal> {
 
 /// Per-route middleware (non-public routes, before the guard).
 pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
-    let request_id = req
-        .extensions()
-        .get::<RequestId>()
-        .cloned()
-        .unwrap_or_else(RequestId::generate);
     let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
+    let Some(request_id) = req.extensions().get::<RequestId>().cloned() else {
+        // Only reachable if the request-id middleware stopped running
+        // outside the routes: fail closed and loudly, never authenticate
+        // under an id nobody can find. The response still needs an id.
+        return ApiError::new(
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "request_id_missing"),
+            RequestId::generate(),
+            lang,
+        )
+        .into_response();
+    };
     let presented = match presented(req.headers()) {
         Ok(None) => return next.run(req).await,
         Ok(Some(p)) => p,
@@ -197,26 +249,24 @@ fn token_rejected(
     request_id: RequestId,
     lang: Lang,
 ) -> Response {
+    // One representation: the context keys the authenticator and this
+    // module set (`reason`; `public_id`, `user` when known) become fields.
+    // `user` is the internal numeric id, as FG-AUTH-0004's catalog
+    // diagnosis and forge-db's token errors already record it.
     let field = |key: &str| {
         err.context()
             .iter()
             .find(|(k, _)| *k == key)
-            .map_or("", |(_, v)| v.as_str())
+            .map(|(_, v)| v.as_str())
     };
-    let context = err
-        .context()
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join(" ");
     tracing::info!(
         target: "forge_web::auth",
         error_code = err.code().id(),
         request_id = %request_id,
         reason = field("reason"),
         public_id = field("public_id"),
-        scheme = scheme.map_or("", Scheme::as_str),
-        context = %context,
+        user = field("user"),
+        scheme = scheme.map(Scheme::as_str),
         "forge.auth.token_rejected"
     );
     ApiError::new(err, request_id, lang)
@@ -253,6 +303,44 @@ mod tests {
         assert_eq!(
             token_of(&[format!("BASIC {enc}").as_bytes()]),
             Ok(Some((Scheme::Basic, "fgp_a:b".into())))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_request_id_is_an_internal_error_not_a_fresh_id() {
+        use axum::body::Body;
+        use forge_auth::Action;
+        use tower::ServiceExt;
+
+        use crate::app::AppState;
+        use crate::registry::{Registry, Verb};
+
+        async fn ok() -> &'static str {
+            "ok"
+        }
+        // The product stack minus the request-id middleware.
+        let state = AppState::new("test", Vec::new(), crate::tests::no_tokens());
+        let router = Registry::<AppState>::new()
+            .route(Verb::Get, "/guarded", Action::UserCreate, "x", ok)
+            .into_router()
+            .expect("router")
+            .layer(axum::Extension(AuthenticatorExt(Arc::clone(
+                &state.authenticator,
+            ))))
+            .with_state(state);
+        let req = axum::http::Request::get("/guarded")
+            .header(AUTHORIZATION, "Bearer fgp_x")
+            .body(Body::empty())
+            .expect("request");
+        let res = router.oneshot(req).await.expect("infallible");
+        assert_eq!(res.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn a_tab_separates_the_scheme_too() {
+        assert_eq!(
+            token_of(&[b"Bearer\tfgp_x"]),
+            Ok(Some((Scheme::Bearer, "fgp_x".into())))
         );
     }
 

@@ -18,7 +18,7 @@ use forge_core::readiness::ReadinessProbe;
 use forge_core::Authenticator;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
-use forge_web::{AppConfig, AppState, ServerLimits};
+use forge_web::{AppConfig, AppState, BoundedAuthenticator, ServerLimits};
 
 use crate::runtime::block_on;
 
@@ -52,13 +52,26 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
 }
 
 /// The server's state: the database as readiness probe and as token
-/// authenticator.
+/// authenticator, bounded to [`auth_permits`] concurrent lookups.
 fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
     // clone: the pool handle is shared (Arc inside)
     let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone());
-    let authenticator: Arc<dyn Authenticator> = Arc::new(db.clone());
+    let authenticator: Arc<dyn Authenticator> = Arc::new(BoundedAuthenticator::new(
+        Arc::new(db.clone()),
+        auth_permits(database),
+    ));
     AppState::new(env!("CARGO_PKG_VERSION"), vec![probe], authenticator)
         .with_probe_timeout(probe_timeout_for(database))
+}
+
+/// Token lookups run on the write pool (ADR-0018: only it can read the
+/// hashes); at most half of its connections may serve them, so a flood of
+/// random tokens cannot starve writers. At least one.
+fn auth_permits(database: &DatabaseConfig) -> usize {
+    // A u32 always fits a usize on the supported (32/64-bit) targets.
+    usize::try_from(database.write_max_connections / 2)
+        .unwrap_or(usize::MAX)
+        .max(1)
 }
 
 /// The readiness bound must exceed what the database probe can take on its
@@ -86,6 +99,25 @@ mod tests {
         .expect("config");
         let bound = probe_timeout_for(&cfg.database);
         assert!(bound > cfg.database.acquire_timeout * 2, "{bound:?}");
+    }
+
+    #[test]
+    fn authentication_may_use_at_most_half_of_the_write_pool() {
+        for (write_max, permits) in [("10", 5), ("3", 1), ("1", 1), ("30", 15)] {
+            let cfg = load(
+                None,
+                &Env::from_pairs([
+                    ("FORGE_DATABASE_WRITE_MAX_CONNECTIONS", write_max),
+                    ("FORGE_DATABASE_MIN_CONNECTIONS", "1"),
+                ]),
+            )
+            .expect("config");
+            assert_eq!(
+                auth_permits(&cfg.database),
+                permits,
+                "write_max={write_max}"
+            );
+        }
     }
 
     /// `forge serve` authenticates with the real token store: a token issued

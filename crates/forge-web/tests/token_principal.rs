@@ -8,7 +8,9 @@
 //! wiring of the real one is tested in forge-cli.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::Extension;
@@ -21,7 +23,7 @@ use forge_core::authenticator::{AuthFuture, Authenticator, TokenIdentity};
 use forge_core::{RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_web::registry::{Registry, Verb};
-use forge_web::{AppConfig, AppState, Ctx};
+use forge_web::{AppConfig, AppState, BoundedAuthenticator, Ctx};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -39,6 +41,12 @@ const DB_DOWN: &str =
     "fgp_00000000000000d5_5555555555555555555555555555555555555555555555555555555555555555";
 const REVOKED: &str =
     "fgp_00000000000000e6_6666666666666666666666666666666666666666666666666666666666666666";
+
+const CORRUPT_ROW: &str =
+    "fgp_00000000000000f7_7777777777777777777777777777777777777777777777777777777777777777";
+/// Never answers (the request timeout must end the request).
+const HANGS: &str =
+    "fgp_00000000000000f8_8888888888888888888888888888888888888888888888888888888888888888";
 
 /// A synthetic user password: never a credential (hand-off 9).
 const USER_PASSWORD: &str = "correct-horse-battery-staple";
@@ -92,6 +100,15 @@ impl Authenticator for FakeAuthenticator {
                 .with_context("reason", "connect_refused")
                 .with_context("target", "db-host.internal:5432/forge")),
             REVOKED => Err(rejected("revoked").with_context("public_id", "00000000000000e6")),
+            CORRUPT_ROW => Err(ForgeError::new(ErrorCode::CredentialDataInvalid)
+                .with_context("reason", "bad_hash")
+                .with_context("token_id", 70)),
+            HANGS => {
+                return Box::pin(async {
+                    std::future::pending::<()>().await;
+                    Err(rejected("unreachable"))
+                })
+            }
             other if other.starts_with("fgp_") => Err(rejected("unknown")),
             _ => Err(rejected("malformed")),
         };
@@ -127,6 +144,10 @@ async fn healthy() -> &'static str {
 }
 
 fn router(auth: Arc<FakeAuthenticator>) -> axum::Router {
+    router_with(auth, AppConfig::default())
+}
+
+fn router_with(auth: Arc<dyn Authenticator>, config: AppConfig) -> axum::Router {
     let registry = Registry::new()
         .route(
             Verb::Post,
@@ -137,7 +158,7 @@ fn router(auth: Arc<FakeAuthenticator>) -> axum::Router {
         )
         .route(Verb::Get, "/healthz", Action::Health, "test", healthy);
     let state = AppState::new("test", Vec::new(), auth);
-    forge_web::app::with_registry(registry, state, AppConfig::default()).expect("router")
+    forge_web::app::with_registry(registry, state, config).expect("router")
 }
 
 fn post(headers: &[(&str, &str)]) -> Request<Body> {
@@ -484,6 +505,162 @@ async fn a_rejected_token_is_logged_once_with_request_id_reason_and_public_id() 
     assert_eq!(e["reason"], "revoked");
     assert_eq!(e["public_id"], "00000000000000e6");
     assert_eq!(e["scheme"], "bearer");
+    assert!(
+        e.get("context").is_none(),
+        "one representation (fields): {e}"
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_owner_is_logged_once_with_the_owner_and_no_challenge() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let (status, headers, body) = call(
+        router(auth),
+        post(&[("authorization", &bearer(DISABLED_OWNER))]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(challenges(&headers).is_empty(), "a 403 is no challenge");
+    let failures = logs.failures();
+    assert_eq!(failures.len(), 1, "logged once: {failures:?}");
+    let e = &failures[0];
+    assert_eq!(e["message"], "forge.auth.token_rejected", "{e}");
+    assert_eq!(e["error_code"], ErrorCode::AccountDisabled.id());
+    assert_eq!(e["request_id"], body["request_id"]);
+    assert_eq!(e["reason"], "owner_disabled");
+    // Internal ids are logged like FG-AUTH-0004's catalog diagnosis says.
+    assert_eq!(e["user"], "4");
+}
+
+#[tokio::test]
+async fn a_database_outage_is_logged_once_by_the_renderer() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let (status, headers, body) =
+        call(router(auth), post(&[("authorization", &bearer(DB_DOWN))])).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(challenges(&headers).is_empty());
+    let failures = logs.failures();
+    assert_eq!(failures.len(), 1, "logged once: {failures:?}");
+    assert_eq!(failures[0]["error_code"], ErrorCode::DbUnavailable.id());
+    assert_eq!(failures[0]["request_id"], body["request_id"]);
+    assert_ne!(failures[0]["message"], "forge.auth.token_rejected");
+}
+
+#[tokio::test]
+async fn unreadable_stored_credentials_pass_through_as_a_non_401() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let (status, headers, body) = call(
+        router(auth),
+        post(&[("authorization", &bearer(CORRUPT_ROW))]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body["error_code"], ErrorCode::CredentialDataInvalid.id());
+    assert!(challenges(&headers).is_empty());
+}
+
+#[tokio::test]
+async fn the_authorization_header_is_removed_for_basic_too() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let (status, _, body) = call(
+        router(auth),
+        post(&[("authorization", &basic(BASIC_USER, ADMIN_WITH_SCOPE))]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["authorization_header_seen"], false);
+}
+
+#[tokio::test]
+async fn a_scheme_separated_by_a_tab_is_accepted() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let header = format!("Bearer\t{ADMIN_WITH_SCOPE}");
+    let (status, _, body) = call(router(auth), post(&[("authorization", &header)])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_hanging_authenticator_is_ended_by_the_request_timeout() {
+    let auth: Arc<dyn Authenticator> = Arc::new(FakeAuthenticator::default());
+    let config = AppConfig {
+        request_timeout: Duration::from_millis(50),
+        ..AppConfig::default()
+    };
+    let (status, _, body) = call(
+        router_with(auth, config),
+        post(&[("authorization", &bearer(HANGS))]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error_code"], ErrorCode::RequestTimeout.id());
+}
+
+#[tokio::test]
+async fn an_unknown_path_with_a_bad_header_never_consults_the_authenticator() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let req = Request::get("/no/such/path")
+        .header("authorization", bearer(REVOKED))
+        .body(Body::empty())
+        .expect("request");
+    let (status, _, body) = call(router(Arc::clone(&auth)), req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error_code"], ErrorCode::RouteNotFound.id());
+    assert!(auth.presented().is_empty());
+}
+
+/// Counts how many authentications run at once.
+#[derive(Default)]
+struct Concurrency {
+    now: AtomicUsize,
+    max: AtomicUsize,
+}
+
+impl Authenticator for Concurrency {
+    fn authenticate<'a>(
+        &'a self,
+        _request_id: &'a RequestId,
+        _presented: &'a str,
+    ) -> AuthFuture<'a> {
+        Box::pin(async move {
+            let now = self.now.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max.fetch_max(now, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.now.fetch_sub(1, Ordering::SeqCst);
+            Ok(identity(2, true, &[Scope::Api, Scope::Admin]))
+        })
+    }
+}
+
+#[tokio::test]
+async fn no_more_than_the_permitted_authentications_run_at_once() {
+    let inner = Arc::new(Concurrency::default());
+    let bounded: Arc<dyn Authenticator> = Arc::new(BoundedAuthenticator::new(
+        Arc::clone(&inner) as Arc<dyn Authenticator>,
+        2,
+    ));
+    let router = router_with(bounded, AppConfig::default());
+    let calls = (0..10).map(|_| {
+        call(
+            router.clone(),
+            post(&[("authorization", &bearer(ADMIN_WITH_SCOPE))]),
+        )
+    });
+    let results = futures_util::future::join_all(calls).await;
+    assert!(
+        results.iter().all(|(s, _, _)| *s == StatusCode::OK),
+        "every request is served once a permit is free"
+    );
+    assert_eq!(inner.max.load(Ordering::SeqCst), 2, "at most 2 at once");
+}
+
+#[test]
+fn zero_permits_still_allow_one_authentication() {
+    let inner: Arc<dyn Authenticator> = Arc::new(Concurrency::default());
+    assert_eq!(BoundedAuthenticator::new(inner, 0).permits(), 1);
 }
 
 #[tokio::test]

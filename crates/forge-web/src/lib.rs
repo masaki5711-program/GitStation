@@ -19,6 +19,7 @@ pub mod routes;
 pub mod server;
 
 pub use app::{app, registry as route_registry, AppConfig, AppState};
+pub use auth::BoundedAuthenticator;
 pub use context::Ctx;
 pub use error::ApiError;
 pub use server::ServerLimits;

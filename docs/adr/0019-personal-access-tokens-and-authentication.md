@@ -232,7 +232,9 @@ AI のエージェントもトークンで git と API を使うため、トー�
   あり、その場合は「方式」が秘密そのものになるため）。Basic のパスワードが何であっても認証器に渡すので、ユーザーの
   パスワードは `malformed` で必ず拒否される（ADR-0010 の引き継ぎ事項 9）。
 - **ログ**: `FG-AUTH-0001` / `FG-AUTH-0004` の拒否は `forge-web` の middleware がイベント `forge.auth.token_rejected`
-  （`request_id`、`error_code`、`reason`、`scheme`、分かれば `public_id`）として **1 回だけ**出し、エラーの描画では
+  （`request_id`、`error_code`、`reason`、`scheme`、分かれば `public_id` と所有者の `user`。`user` は内部の数値の ID で、
+  FG-AUTH-0004 のカタログの診断と `forge_db::tokens` のエラーがすでに記録している慣習に合わせた。文脈をまとめた文字列は
+  出さず、フィールドだけにする）として **1 回だけ**出し、エラーの描画では
   もう一度出さない。それ以外のコード（`FG-DB-0001` など）は通常どおりエラーの描画が 1 回出す（文脈に `scheme`）。
   ヘッダーの値、トークン、秘密、Basic のユーザー名はどこにも出さない（テストでログを捕まえて確かめる）。
   認証に成功したら `Authorization` ヘッダーをリクエストから外してからハンドラーに渡す（ハンドラーが資格情報を
@@ -240,7 +242,19 @@ AI のエージェントもトークンで git と API を使うため、トー�
 - **`WWW-Authenticate`**: エラーの描画（`error.rs`）の 1 か所で、**すべての 401** に `Basic realm="GitStation", charset="UTF-8"`
   と `Bearer realm="GitStation"` を付ける（git は Basic のチャレンジで資格情報ヘルパーに聞く）。403 と 503 には付けない
   （障害のときにクライアントが正しい資格情報を捨てないように）。
+- **方式と資格情報の区切り**: 最初の ASCII の空白（スペースまたはタブ）。
+- **リクエスト ID がないとき**: 新しい ID を作って続けず、`FG-SYS-0001 reason=request_id_missing`（500、1 回ログ）にする。
+- **同時に走る認証の上限**（2026-10-30 のレビューの指摘）: 照合は書き込みのプールを使うので、形の正しいでたらめなトークンを
+  大量に送られると書き込みが詰まる。`forge-web` の汎用のラッパー `BoundedAuthenticator`（セマフォ）で同時の照合の数を抑え、
+  `forge serve` が許可の数を `max(1, database.write_max_connections / 2)` にする。許可を待つ時間はリクエストのタイムアウト
+  （`FG-WEB-0002`）で区切る。新しいエラーコードはない。
 - **テストのための口**: 製品の登録簿には公開でない経路がまだないので、`forge-web` の feature `test-support` で
-  `app::with_registry`（製品と同じ middleware でテスト用の登録簿を組む）を出す。サーバーには入らない。
+  `app::with_registry`（製品と同じ middleware でテスト用の登録簿を組む。`#[doc(hidden)]`）を出す。`forge-web` が自分自身を
+  dev-dependency にして有効にするため `cargo build --workspace --all-targets` では有効になるが、`forge` のバイナリには入らない。
+  CI が `cargo tree -p forge-cli -e normal,features` で `test-support` が通常の依存のグラフにないことを確かめる。
 
 **見送り（追加）**: リクエストに `token_id` と `is_agent` を載せること（監査と ADR-0017 §4.0 の W1 で、使う側と一緒に入れる）。
+
+**未決（追加）**: クライアント（IP）ごとの認証のレート制限。同時の照合の上限は全体で 1 つなので、1 つのクライアントが
+許可を使い切ると他のクライアントの認証が待つ（リクエストのタイムアウトで 503 になりうる）。クライアントを区別する制限は
+プロキシの構成（送信元のアドレスをどこから取るか）と一緒に決める。

@@ -34,6 +34,15 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      # Test hooks (forge-web `app::with_registry`, forge-db / forge-core test
+      # helpers) are behind `test-support`, enabled by dev-dependencies only.
+      # The `forge` binary's normal dependency graph must never enable it.
+      - name: no test-support feature in the forge binary
+        run: |
+          if cargo tree -p forge-cli -e normal,features | grep -F 'feature "test-support"'; then
+            echo "::error::a test-support feature is enabled in forge-cli's normal dependency graph"
+            exit 1
+          fi
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo run -q -p forge-errors --bin gen-catalog -- --check
