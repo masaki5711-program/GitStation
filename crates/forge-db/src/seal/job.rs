@@ -107,6 +107,22 @@ pub async fn seal_due(
     seal(db, keys, Some(policy)).await
 }
 
+/// End a call that sealed nothing: roll back explicitly so the seal lock is
+/// released before the call returns. A dropped sqlx transaction is rolled
+/// back only when a spawned task returns its connection to the pool; under
+/// load that task runs late, the transaction-scoped advisory lock stays held,
+/// and the next caller on another pooled connection gets `Busy` although
+/// nobody is sealing.
+async fn finish(
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    outcome: SealOutcome,
+) -> Result<SealOutcome, ForgeError> {
+    tx.rollback()
+        .await
+        .map_err(|e| query_error("seal.rollback", e))?;
+    Ok(outcome)
+}
+
 async fn seal(
     db: &Db,
     keys: &SealKeys,
@@ -169,7 +185,7 @@ async fn seal(
             if prev_last.is_some() || numbered {
                 return Err(chain_broken("feed_state_missing"));
             }
-            return Ok(SealOutcome::UpToDate);
+            return finish(tx, SealOutcome::UpToDate).await;
         };
         let sealed_to = prev_last.unwrap_or(0);
         if audit_high < sealed_to {
@@ -178,14 +194,14 @@ async fn seal(
             return Err(chain_broken("audit_high_below_seal"));
         }
         if audit_high == sealed_to {
-            return Ok(SealOutcome::UpToDate);
+            return finish(tx, SealOutcome::UpToDate).await;
         }
         let waiting = audit_high - sealed_to;
         if let Some(p) = policy {
             let due =
                 prev_last.is_none() || interval_passed == Some(true) || waiting > p.eager_rows;
             if !due {
-                return Ok(SealOutcome::NotDue);
+                return finish(tx, SealOutcome::NotDue).await;
             }
         }
         let first = sealed_to + 1; // sealed_to < audit_high <= i64::MAX
