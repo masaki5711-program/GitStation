@@ -17,7 +17,9 @@ use forge_core::{AuditDetails, PathSegment, RepositoryKind, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
-use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome};
+use crate::change::{
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome,
+};
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, read_query_error, repositories, Db};
@@ -40,9 +42,14 @@ pub struct NewProject {
     /// The kind of the project's repository, fixed at creation (ADR-0004).
     pub kind: RepositoryKind,
     /// The user creating the project, who becomes its direct Owner: an
-    /// active human or service account (the caller passes the principal;
-    /// whether it may create here is `authorize()`'s decision, not this
-    /// command's).
+    /// active human or service account. It must be the acting user of the
+    /// change (`Actor::User` / `ServiceAccount` itself, the person of
+    /// `UserViaServiceAccount`), else `FG-REPO-0014 creator_not_actor`;
+    /// only `Actor::System` (the operator CLI and the worker, the trust root
+    /// as for the token commands, ADR-0019 §8) may name another user. A
+    /// route must pass its authenticated principal here and decide with
+    /// `authorize()` beforehand whether that principal may create under
+    /// `parent`; this command does not authorize.
     pub creator: UserId,
 }
 
@@ -149,6 +156,51 @@ fn namespace_conflict(e: sqlx::Error) -> ForgeError {
     }
 }
 
+/// The owner of a personal parent namespace inherits Owner of the project
+/// (`roles::load_project_roles`), so it must be an active non-bot account:
+/// a bot is `FG-REPO-0010 bot_member` (bots are never members, ADR-0017),
+/// an inactive user `FG-REPO-0014 parent_owner_inactive`. The row is read
+/// `FOR SHARE`, so it cannot be disabled before the change commits. A
+/// personal namespace without its user is corrupt data (`FG-SYS-0001`).
+async fn check_namespace_owner(conn: &mut PgConnection, owner_id: i64) -> Result<(), ForgeError> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT kind, state FROM forge.users WHERE id = $1 FOR SHARE")
+            .bind(owner_id)
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| query_error("projects.create.parent_owner", e))?;
+    let Some((kind, state)) = row else {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "namespace_owner_missing")
+            .with_context("user_id", owner_id));
+    };
+    if kind == "bot" {
+        return Err(
+            ForgeError::new(ErrorCode::MembershipConflict).with_context("reason", "bot_member")
+        );
+    }
+    if state != "active" {
+        return Err(request_invalid("parent_owner_inactive"));
+    }
+    Ok(())
+}
+
+/// `FG-REPO-0014 creator_not_actor` unless `creator` is the acting user;
+/// `Actor::System` (operator CLI, worker) may name any creator.
+fn check_actor(ctx: &ChangeContext, creator: UserId) -> Result<(), ForgeError> {
+    let acting = match &ctx.actor {
+        Actor::System => return Ok(()),
+        Actor::User(u) | Actor::ServiceAccount(u) => Some(*u),
+        Actor::UserViaServiceAccount { user, .. } => Some(*user),
+        Actor::Anonymous => None,
+    };
+    if acting == Some(creator) {
+        Ok(())
+    } else {
+        Err(request_invalid("creator_not_actor"))
+    }
+}
+
 /// Where the project's namespace goes.
 struct Placement {
     full_path: String,
@@ -164,18 +216,20 @@ async fn place(
     segment: &PathSegment,
     parent: NamespaceId,
 ) -> Result<Placement, ForgeError> {
-    let row: Option<(String, String, i16)> = sqlx::query_as(
-        "SELECT kind, full_path, depth FROM forge.namespaces WHERE id = $1 FOR SHARE",
+    let row: Option<(String, i64, String, i16)> = sqlx::query_as(
+        "SELECT kind, owner_id, full_path, depth FROM forge.namespaces WHERE id = $1 FOR SHARE",
     )
     .bind(parent.get())
-    .fetch_optional(conn)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| query_error("projects.create.parent", e))?;
-    let Some((kind, parent_path, parent_depth)) = row else {
+    let Some((kind, owner_id, parent_path, parent_depth)) = row else {
         return Err(not_found("namespace"));
     };
-    if kind != "user" && kind != "group" {
-        return Err(request_invalid("parent_not_owner_namespace"));
+    match kind.as_str() {
+        "group" => {}
+        "user" => check_namespace_owner(conn, owner_id).await?,
+        _ => return Err(request_invalid("parent_not_owner_namespace")),
     }
     let depth = parent_depth.saturating_add(1);
     if usize::try_from(depth).map_or(true, |d| d > MAX_DEPTH) {
@@ -205,8 +259,10 @@ async fn place(
 ///
 /// Errors (nothing is written): `FG-REPO-0007` invalid name (also
 /// `too_deep`, `path_too_long`), `FG-REPO-0009` taken / tombstoned,
-/// `FG-REPO-0014` a field, a parent that is a project or an inactive
-/// creator, `FG-REPO-0010` `bot_member`, `FG-REPO-0005` unknown parent
+/// `FG-REPO-0014` a field, a parent that is a project, a personal parent
+/// whose owner is inactive, an inactive creator or a creator who is not the
+/// acting user, `FG-REPO-0010` `bot_member` (a bot creator or a bot's
+/// personal namespace), `FG-REPO-0005` unknown parent
 /// namespace or creator (`reason=absent`).
 pub async fn create(
     db: &Db,
@@ -216,6 +272,7 @@ pub async fn create(
     // Never top level, so the reserved top-level words are allowed.
     let segment = PathSegment::parse(&new.segment)?;
     validate(new)?;
+    check_actor(ctx, new.creator)?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let placement = tx.step(|c| place(c, &segment, new.parent)).await?;
     tx.step(|c| check_creator(c, new.creator)).await?;

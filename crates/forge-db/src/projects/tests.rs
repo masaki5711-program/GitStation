@@ -13,6 +13,8 @@ use crate::groups::{self, CreatedGroup, NewGroup};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
+mod race;
+
 fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(
         Actor::System,
@@ -362,8 +364,135 @@ async fn a_bot_cannot_create_or_own_a_project() {
         "{}",
         chain(&err)
     );
+    // In a bot's personal namespace (every user kind has one): refused, so
+    // the bot never inherits Owner of a project there.
+    let bot_ns: i64 =
+        sqlx::query_scalar("SELECT id FROM forge.namespaces WHERE kind = 'user' AND owner_id = $1")
+            .bind(bot.get())
+            .fetch_one(&mut t.superuser().await)
+            .await
+            .expect("bot namespace");
+    let err = create(
+        &t.db,
+        &ctx("req-in-bot"),
+        &project("tools", NamespaceId::new(bot_ns), alice.user_id),
+    )
+    .await
+    .expect_err("bot namespace");
+    assert_reason(&err, ErrorCode::MembershipConflict, "bot_member");
     let mut su = t.superuser().await;
     assert_eq!(written(&mut su).await, [1, 1, 1, 1, 1, 1, 1]);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_disabled_users_personal_namespace_takes_no_project() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    assert_eq!(
+        users::disable(&t.db, &ctx("req-disable"), bob.user_id)
+            .await
+            .expect("disable"),
+        users::DisableOutcome::Disabled
+    );
+    let err = create(
+        &t.db,
+        &ctx("req-in-bob"),
+        &project("web", bob.namespace_id, alice.user_id),
+    )
+    .await
+    .expect_err("disabled owner");
+    assert_reason(
+        &err,
+        ErrorCode::ProjectRequestInvalid,
+        "parent_owner_inactive",
+    );
+    let mut su = t.superuser().await;
+    assert_eq!(written(&mut su).await, [0; 7]);
+    t.drop_now().await;
+}
+
+/// The creator is the acting user (or the operator, `Actor::System`).
+#[tokio::test]
+async fn the_creator_must_be_the_acting_user() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let as_actor = |actor: Actor, request: &str| {
+        ChangeContext::new(actor, RequestId::parse(request).expect("request id"))
+    };
+    let new = project("web", alice.namespace_id, alice.user_id);
+    let via = Actor::UserViaServiceAccount {
+        user: bob.user_id,
+        via: alice.user_id,
+        credential_id: 1,
+        act_as_claimed: "hmac".to_owned(),
+        act_as_key_id: 1,
+        via_assertion_id: None,
+    };
+    for (actor, name) in [
+        (Actor::User(bob.user_id), "user"),
+        (Actor::ServiceAccount(bob.user_id), "service_account"),
+        (via, "via"),
+        (Actor::Anonymous, "anonymous"),
+    ] {
+        let err = create(&t.db, &as_actor(actor, &format!("req-{name}")), &new)
+            .await
+            .expect_err(name);
+        assert_reason(&err, ErrorCode::ProjectRequestInvalid, "creator_not_actor");
+    }
+    let mut su = t.superuser().await;
+    assert_eq!(written(&mut su).await, [0; 7]);
+    // The acting user themselves, and a person acting through kanflow.
+    create(
+        &t.db,
+        &as_actor(Actor::User(alice.user_id), "req-self"),
+        &new,
+    )
+    .await
+    .expect("alice creates her own");
+    let for_bob = Actor::UserViaServiceAccount {
+        user: bob.user_id,
+        via: alice.user_id,
+        credential_id: 1,
+        act_as_claimed: "hmac".to_owned(),
+        act_as_key_id: 1,
+        via_assertion_id: None,
+    };
+    create(
+        &t.db,
+        &as_actor(for_bob, "req-for-bob"),
+        &project("api", bob.namespace_id, bob.user_id),
+    )
+    .await
+    .expect("bob through a service account");
+    t.drop_now().await;
+}
+
+/// A job already holding the new repository's dedup key is an
+/// inconsistency, never absorbed: the whole create fails.
+#[tokio::test]
+async fn a_held_provisioning_dedup_key_fails_the_create() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    // The fresh database gives the first repository id 1.
+    let job = crate::repositories::provision_job(
+        RepoId::new(1),
+        &RequestId::parse("req-held").expect("request id"),
+    )
+    .expect("job");
+    crate::jobs::enqueue(&t.db, &job).await.expect("held key");
+    let err = create(
+        &t.db,
+        &ctx("req-web"),
+        &project("web", alice.namespace_id, alice.user_id),
+    )
+    .await
+    .expect_err("deduped job");
+    assert_reason(&err, ErrorCode::Internal, "unexpected_job_dedup");
+    let mut su = t.superuser().await;
+    assert_eq!(written(&mut su).await, [0, 0, 0, 0, 0, 0, 1]);
     t.drop_now().await;
 }
 

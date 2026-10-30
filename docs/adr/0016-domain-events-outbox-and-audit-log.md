@@ -714,6 +714,8 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   理由: フィードはプロジェクトのイベントをそのプロジェクトの読み手に見せる（§5）ので、監査の行もどのプロジェクトが変わったかを示さないと、
   監査とフィードが食い違う。両方向のテスト `a_change_whose_audit_row_names_no_project_cannot_publish_a_project_event`。
   `DerivedTx`（監査の行のない派生イベント）はこの規則の外である。
+  この規則は監査の行の `project_id` を信頼するので、リソースが `project` の監査の行は `project_id = resource_id` でなければならない
+  （違反は `FG-DB-0010 reason=audit_scope_mismatch`、テスト `a_project_audit_row_must_name_its_own_project`）。
 - **`EventType::ProjectCreated`**（`project.created`、分類 `integration`）を足す。書き手は `projects::create`。ペイロードは
   `AuditDetails::ProjectCreated` と同じ JSON（`project_id`、`namespace_id`、`parent_namespace_id`、`repository_id`、`kind`、`visibility`、`owner_id`。
   パスや名前などの個人に関わる値は入れない）。集約は `project` / `projects.id`。重複除去の鍵は付けない（プロジェクトの ID は新しいので、同じ変更は繰り返されない）。

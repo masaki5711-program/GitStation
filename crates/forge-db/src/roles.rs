@@ -38,21 +38,23 @@ const CAP: i32 = {
 /// The namespace chain from the anchor (step 1) up to the top level, capped
 /// at `CAP` steps ($3), with the user's ($2) role at each step: the direct
 /// role in a `group` (group_members) or a `project` (project_members), and
-/// Owner on a `user` namespace the user owns — only above the anchor, so a
-/// personal namespace gives its owner a role on the projects in it, never
-/// on itself (ownership of the namespace is `Resource::Namespace`'s). Only
-/// active users hold a role. Groups nest only under groups and projects
-/// only under users or groups, so a `user` namespace above step 1 is always
-/// the parent of a project. `truncated` marks a chain cut by the cap (a
-/// cycle or a corrupt depth).
+/// Owner on a `user` namespace the user owns — only when that namespace is
+/// the direct parent (step 2) of a `project` anchor, so a personal
+/// namespace gives its owner a role on the projects directly in it, never
+/// on itself (ownership of the namespace is `Resource::Namespace`'s) and
+/// never on anything a later move (D5) might place deeper below it. Only
+/// active users hold a role, and a bot never gets the personal-namespace
+/// Owner (bots are never members, ADR-0017; `projects::create` also refuses
+/// a bot's namespace as a parent). `truncated` marks a chain cut by the cap
+/// (a cycle or a corrupt depth).
 macro_rules! chain_sql {
     ($anchor:literal) => {
         concat!(
-            "WITH RECURSIVE chain (parent_id, kind, owner_id, step) AS ( \
-               SELECT parent_id, kind, owner_id, 1 FROM forge.namespaces WHERE ",
+            "WITH RECURSIVE chain (parent_id, kind, owner_id, step, anchor_kind) AS ( \
+               SELECT parent_id, kind, owner_id, 1, kind FROM forge.namespaces WHERE ",
             $anchor,
             " UNION ALL \
-               SELECT n.parent_id, n.kind, n.owner_id, c.step + 1 \
+               SELECT n.parent_id, n.kind, n.owner_id, c.step + 1, c.anchor_kind \
                FROM forge.namespaces n JOIN chain c ON n.id = c.parent_id \
                WHERE c.step < $3) \
              SELECT c.step, c.parent_id IS NOT NULL AND c.step >= $3 AS truncated, \
@@ -66,8 +68,9 @@ macro_rules! chain_sql {
                    WHERE m.project_id = c.owner_id AND m.user_id = $2 \
                      AND u.state = 'active') \
                  WHEN 'user' THEN (SELECT 'owner' FROM forge.users u \
-                   WHERE c.step > 1 AND c.owner_id = $2 AND u.id = $2 \
-                     AND u.state = 'active') \
+                   WHERE c.step = 2 AND c.anchor_kind = 'project' \
+                     AND c.owner_id = $2 AND u.id = $2 \
+                     AND u.state = 'active' AND u.kind <> 'bot') \
                END AS role \
              FROM chain c ORDER BY c.step"
         )

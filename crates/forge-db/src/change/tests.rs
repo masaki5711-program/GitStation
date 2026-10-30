@@ -261,6 +261,38 @@ async fn a_change_whose_audit_row_names_no_project_cannot_publish_a_project_even
     t.drop_now().await;
 }
 
+/// An audit row on a project resource names that project as its
+/// `project_id`, so the event scope rule cannot be steered by the caller.
+#[tokio::test]
+async fn a_project_audit_row_must_name_its_own_project() {
+    let t = FreshDb::migrated().await;
+    let on_project = |project_id: Option<i64>| {
+        let mut rec = record(vec![]);
+        rec.audit.resource_type = "project";
+        rec.audit.resource_id = Some(3);
+        rec.audit.project_id = project_id.map(ProjectId::new);
+        rec
+    };
+    for rec in [on_project(Some(4)), on_project(None)] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err("audit scope");
+        assert_reason(&err, ErrorCode::ChangeRejected, "audit_scope_mismatch");
+    }
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        0
+    );
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(on_project(Some(3)))
+        .await
+        .expect("its own project");
+    t.drop_now().await;
+}
+
 #[tokio::test]
 async fn exactly_max_events_is_accepted() {
     let t = FreshDb::migrated().await;

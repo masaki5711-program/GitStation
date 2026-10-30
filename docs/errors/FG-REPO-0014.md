@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-A request to create a project (forge_db::projects::create, step D4) broke a rule before anything was written: the display name (1 to 255 characters) or the description (at most 2000 characters) is out of range or holds a NUL character, the parent namespace is a project (projects live only under a personal namespace or a group, ADR-0015 Amendment D4), or the creator, who becomes the first direct Owner, is not an active user (a bot as creator is FG-REPO-0010 `bot_member`, as for groups). The path rules are FG-REPO-0007..0009.
+A request to create a project (forge_db::projects::create, step D4) broke a rule before anything was written: the display name (1 to 255 characters) or the description (at most 2000 characters) is out of range or holds a NUL character, the parent namespace is a project (projects live only under a personal namespace or a group, ADR-0015 Amendment D4), the parent is a personal namespace whose owner is not active (that owner would inherit Owner of the project), the creator, who becomes the first direct Owner, is not an active user, or the creator is not the acting user of the request (only the operator CLI and the worker, actor `system`, may create a project for another user). A bot as creator, or a bot's personal namespace as parent, is FG-REPO-0010 `bot_member`, as for groups. The path rules are FG-REPO-0007..0009.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_owner_namespace, creator_inactive) and `len` where it applies; values are not logged.
+The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_owner_namespace, parent_owner_inactive, creator_inactive, creator_not_actor) and `len` where it applies; values are not logged.
 
 ## 対処 (fix)
 
-Correct the field named by `reason`; create the project below a user or a group, not below another project; let an active user create it.
+Correct the field named by `reason`; create the project below a user or a group, not below another project nor in the namespace of a disabled user; let an active user create it for themselves (creator_not_actor on a route means the route passed something other than its principal: a bug in that route).

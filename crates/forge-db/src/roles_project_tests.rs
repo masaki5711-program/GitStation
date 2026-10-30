@@ -250,3 +250,110 @@ async fn an_unknown_project_is_not_found() {
     assert!(err.to_string().contains("resource=project"), "{err}");
     t.drop_now().await;
 }
+
+/// Write a namespace row (and, for a project, its project row) directly as
+/// the superuser, with the audit row the trigger needs: shapes the commands
+/// refuse (a project in a bot's namespace) or that only D5 moves could
+/// produce (a group under a user namespace).
+async fn hand_insert(t: &FreshDb, sql: &str) {
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(&format!("BEGIN; {sql}; COMMIT"))
+        .execute(&mut su)
+        .await
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+}
+
+/// A project `segment` with id `id` under namespace `parent` (full path
+/// `path`, depth `depth`), written by hand.
+async fn hand_project(t: &FreshDb, id: i64, parent: NamespaceId, path: &str, depth: i16) {
+    let segment = path.rsplit('/').next().unwrap_or(path);
+    hand_insert(
+        t,
+        &format!(
+            "{}; INSERT INTO forge.projects (id, display_name) OVERRIDING SYSTEM VALUE \
+             VALUES ({id}, 'P'); \
+             INSERT INTO forge.namespaces (parent_id, kind, owner_id, segment, full_path, depth) \
+             VALUES ({}, 'project', {id}, '{segment}', '{path}', {depth})",
+            audit("project", id, "succeeded"),
+            parent.get()
+        ),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_bots_personal_namespace_gives_the_bot_no_role() {
+    let t = FreshDb::migrated().await;
+    let bot = users::create(
+        &t.db,
+        &ctx("req-bot"),
+        &NewUser {
+            kind: forge_core::UserKind::Bot,
+            email: None,
+            ..NewUser::human("ci-bot", "CI", "unused@example.test")
+        },
+    )
+    .await
+    .expect("bot");
+    // projects::create refuses this parent; a hand-written row must still
+    // give the bot nothing.
+    hand_project(&t, 900, bot.namespace_id, "ci-bot/tools", 2).await;
+    assert_eq!(
+        load_project_roles(&t.db, ProjectId::new(900), bot.user_id)
+            .await
+            .expect("roles"),
+        member(None, None)
+    );
+    t.drop_now().await;
+}
+
+/// The personal-namespace Owner rule covers only a project directly in that
+/// namespace: a group that ended up under a user namespace (only a D5 move
+/// could do that) gives the user no role on the group or its projects.
+#[tokio::test]
+async fn a_user_namespace_above_a_group_gives_no_role() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    hand_insert(
+        &t,
+        &format!(
+            "{}; INSERT INTO forge.groups (id, display_name) OVERRIDING SYSTEM VALUE \
+             VALUES (900, 'Team'); \
+             INSERT INTO forge.namespaces (parent_id, kind, owner_id, segment, full_path, depth) \
+             VALUES ({}, 'group', 900, 'team', 'alice/team', 2)",
+            audit("group", 900, "succeeded"),
+            alice.namespace_id.get()
+        ),
+    )
+    .await;
+    let team_ns: i64 = sqlx::query_scalar(
+        "SELECT id FROM forge.namespaces WHERE kind = 'group' AND owner_id = 900",
+    )
+    .fetch_one(&mut t.superuser().await)
+    .await
+    .expect("team namespace");
+    let team_ns = NamespaceId::new(team_ns);
+    assert_eq!(
+        load_group_roles(&t.db, GroupId::new(900), alice.user_id)
+            .await
+            .expect("group roles"),
+        member(None, None)
+    );
+    let web = project(&t, "web", team_ns, bob.user_id).await;
+    assert_eq!(roles(&t, &web, alice.user_id).await, member(None, None));
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_personal_namespace_owner_has_no_role_on_a_project_in_a_group() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let carol = user(&t, "carol").await;
+    let acme = group(&t, "acme", None, alice.user_id).await;
+    let web = project(&t, "web", acme.namespace_id, bob.user_id).await;
+    // Carol owns a personal namespace, but not the group the project is in.
+    assert_eq!(roles(&t, &web, carol.user_id).await, member(None, None));
+    t.drop_now().await;
+}
