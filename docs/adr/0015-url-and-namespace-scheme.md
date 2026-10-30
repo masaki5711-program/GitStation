@@ -538,3 +538,10 @@ impl<S> Registry<S> {
   - **無効化とプロジェクトの Owner**: `users::disable` は、直接の Owner を失うプロジェクトを数えない（この MR では変えない）。プロジェクトの
     最後の Owner の方針（回答 2: 継承された Owner がいる間は拒まない）と、それが無効化のガードと doctor（ADR-0019 §10〜12）に与える影響は、
     D4 MR4（プロジェクトのメンバー）で決めて実装する。
+
+## Amendment（2026-10-31、手順 D4 MR4: プロジェクトのメンバー）
+
+- プロジェクトの直接のメンバーは `projects::{add_member, change_member, remove_member}` で変える。監査の行はプロジェクト（`project` / id、
+  `project_id` あり）に付け、`member.*` のイベント（分類 `maintainer`、ADR-0016 §5）を同じ変更で出す。グループのメンバーの変更は監査だけのまま。
+- 最後の Owner の方針（継承された有効な Owner がいる間は最後の直接の Owner を外せる）と、それが無効化のガードと doctor に与える影響は
+  ADR-0019 の Amendment（D4 MR4）に書く。

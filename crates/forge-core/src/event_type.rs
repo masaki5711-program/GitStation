@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -48,15 +48,25 @@ pub enum EventType {
     TokenCreated,
     /// `token.revoked` (D3, ADR-0019).
     TokenRevoked,
+    /// `member.added` of a project (D4 MR4; maintainer class, ADR-0016 §5).
+    /// Group member changes stay audit-only.
+    MemberAdded,
+    /// `member.role_changed` of a project (D4 MR4; maintainer class).
+    MemberRoleChanged,
+    /// `member.removed` of a project (D4 MR4; maintainer class).
+    MemberRemoved,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 4] = [
+    pub const ALL: [EventType; 7] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
         EventType::TokenRevoked,
+        EventType::MemberAdded,
+        EventType::MemberRoleChanged,
+        EventType::MemberRemoved,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -66,6 +76,9 @@ impl EventType {
             EventType::RepositoryCreated => "repository.created",
             EventType::TokenCreated => "token.created",
             EventType::TokenRevoked => "token.revoked",
+            EventType::MemberAdded => "member.added",
+            EventType::MemberRoleChanged => "member.role_changed",
+            EventType::MemberRemoved => "member.removed",
         }
     }
 
@@ -81,6 +94,9 @@ impl EventType {
                 VisibilityClass::Integration
             }
             EventType::TokenCreated | EventType::TokenRevoked => VisibilityClass::Admin,
+            EventType::MemberAdded | EventType::MemberRoleChanged | EventType::MemberRemoved => {
+                VisibilityClass::Maintainer
+            }
         }
     }
 }

@@ -27,6 +27,9 @@ pub enum AuditDetails {
         /// Top-level groups this disable left without a direct active Owner
         /// (non-zero only when `forced`).
         ownerless_groups: i64,
+        /// Projects this disable left without any active Owner, direct or
+        /// inherited (D4 MR4; non-zero only when `forced`).
+        ownerless_projects: i64,
         /// This disable left no active human administrator (only when `forced`).
         left_without_admin: bool,
     },
@@ -81,6 +84,14 @@ pub enum AuditDetails {
         user: UserId,
         public_id: String,
     },
+    /// `member.added` of a project (D4 MR4): the same action and JSON as
+    /// the group variant, but on a `project` audit row, and it publishes
+    /// the `member.added` event (maintainer class, ADR-0016 §5).
+    ProjectMemberAdded { user: UserId, role: Role },
+    /// `member.role_changed` of a project (D4 MR4).
+    ProjectMemberRoleChanged { user: UserId, from: Role, to: Role },
+    /// `member.removed` of a project (D4 MR4): the role the member had.
+    ProjectMemberRemoved { user: UserId, role: Role },
 }
 
 impl AuditDetails {
@@ -97,12 +108,15 @@ impl AuditDetails {
             Self::MemberRemoved { .. } => "member.removed",
             Self::TokenCreated { .. } => "token.created",
             Self::TokenRevoked { .. } => "token.revoked",
+            Self::ProjectMemberAdded { .. } => "member.added",
+            Self::ProjectMemberRoleChanged { .. } => "member.role_changed",
+            Self::ProjectMemberRemoved { .. } => "member.removed",
         }
     }
 
     /// The event a change with these details publishes, `None` for the
     /// audit-only actions (`user.*`, `group.*`, `member.*` of groups; D-plan
-    /// Q4, Q8).
+    /// Q4, Q8). `member.*` of a project is an event (D4 plan answer 3).
     /// When `Some`, its name is [`Self::action`].
     pub fn event_type(&self) -> Option<EventType> {
         match self {
@@ -116,12 +130,16 @@ impl AuditDetails {
             Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
+            Self::ProjectMemberAdded { .. } => Some(EventType::MemberAdded),
+            Self::ProjectMemberRoleChanged { .. } => Some(EventType::MemberRoleChanged),
+            Self::ProjectMemberRemoved { .. } => Some(EventType::MemberRemoved),
         }
     }
 
     /// The JSON stored in `audit_log.details`:
     /// UserCreated `{"kind","namespace_id","is_admin"}`,
-    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","left_without_admin"}`,
+    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","ownerless_projects",
+    /// "left_without_admin"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
@@ -129,7 +147,9 @@ impl AuditDetails {
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
-    /// TokenRevoked `{"token_id","user_id","public_id"}`.
+    /// TokenRevoked `{"token_id","user_id","public_id"}`,
+    /// ProjectMemberAdded / ProjectMemberRemoved `{"user_id","role"}`,
+    /// ProjectMemberRoleChanged `{"user_id","from","to"}` (the group shapes).
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -146,12 +166,14 @@ impl AuditDetails {
                 revoked_tokens,
                 forced,
                 ownerless_groups,
+                ownerless_projects,
                 left_without_admin,
             } => serde_json::json!({
                 "kind": kind.as_str(),
                 "revoked_tokens": revoked_tokens,
                 "forced": forced,
                 "ownerless_groups": ownerless_groups,
+                "ownerless_projects": ownerless_projects,
                 "left_without_admin": left_without_admin,
             }),
             Self::AdminBootstrapped {
@@ -187,10 +209,14 @@ impl AuditDetails {
                 "visibility": visibility.as_str(),
                 "owner_id": owner.get(),
             }),
-            Self::MemberAdded { user, role } | Self::MemberRemoved { user, role } => {
+            Self::MemberAdded { user, role }
+            | Self::MemberRemoved { user, role }
+            | Self::ProjectMemberAdded { user, role }
+            | Self::ProjectMemberRemoved { user, role } => {
                 serde_json::json!({ "user_id": user.get(), "role": role.as_str() })
             }
-            Self::MemberRoleChanged { user, from, to } => serde_json::json!({
+            Self::MemberRoleChanged { user, from, to }
+            | Self::ProjectMemberRoleChanged { user, from, to } => serde_json::json!({
                 "user_id": user.get(),
                 "from": from.as_str(),
                 "to": to.as_str(),

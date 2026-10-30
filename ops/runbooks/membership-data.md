@@ -4,7 +4,7 @@
 
 - `error_code=FG-DB-0018` MembershipDataInvalid（ログ）: ロールの読み込み（`forge_db::roles`）が、スキーマと forge-db のコマンドでは書かれないはずの行を見つけた。
   - `reason=namespace_chain_too_deep`: 名前空間の親をたどると 20 段を超える（`namespaces.parent_id` のループ、または CHECK が拒むはずの深さ）
-  - `reason=unknown_role`: `group_members.role` が 5 つのロール以外の値
+  - `reason=unknown_role`: `group_members.role` / `project_members.role`（D4 MR4、`resource=project`）が 5 つのロール以外の値
 
 ## Impact
 
@@ -28,6 +28,7 @@
    子グループのページで起点が `resource=group` のときは、`SELECT id FROM forge.namespaces WHERE kind = 'group' AND owner_id = <id>;` で名前空間の id を得る。
 3. `unknown_role`: `SELECT group_id, user_id, role FROM forge.group_members WHERE role NOT IN ('guest','reporter','developer','maintainer','owner');`
    と、制約が残っているか `SELECT conname FROM pg_constraint WHERE conname = 'group_members_role';` を確かめる。
+   `resource=project` なら同じことを `forge.project_members`（`project_id`）と制約 `project_members_role` で行う。
 4. いつ誰が変えたか: `forge_audit.ddl_audit`（制約・トリガーの変更）と、`forge.audit_log` の `group.*` / `member.*` の行（正しい履歴）を見る。
    監査の行のない変更は、トリガーが無効だった時間がある — Runbook `append-only-violation` も確かめる。
 

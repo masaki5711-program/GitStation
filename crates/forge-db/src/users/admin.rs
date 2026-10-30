@@ -8,9 +8,10 @@
 //! 2. the target user row `FOR UPDATE`,
 //! 3. the counts below, without locks.
 //!
-//! Group rows are never locked here: member changes lock the group row and
-//! then the other owners' user rows `FOR SHARE` (`groups::members`), so
-//! locking user → group would be the reverse order and could deadlock. The
+//! Group and project rows are never locked here: member changes lock the
+//! group (or project, D4 MR4) row and then the other owners' user rows
+//! `FOR SHARE` (`groups::members`, `projects::members`), so locking
+//! user → group / project would be the reverse order and could deadlock. The
 //! user row lock alone serializes a disable with a member change that relies
 //! on that user as the remaining Owner.
 //!
@@ -68,36 +69,55 @@ pub(super) struct Leaves {
     pub without_admin: bool,
     /// Top-level groups whose only direct active Owner is the user.
     pub ownerless_groups: Vec<i64>,
+    /// Projects whose only active Owner, direct or inherited, is the user
+    /// (D4 MR4, `projects::ownership`).
+    pub ownerless_projects: Vec<i64>,
 }
 
 impl Leaves {
     pub fn is_clean(&self) -> bool {
-        !self.without_admin && self.ownerless_groups.is_empty()
+        !self.without_admin
+            && self.ownerless_groups.is_empty()
+            && self.ownerless_projects.is_empty()
     }
 
     pub fn ownerless_count(&self) -> i64 {
         i64::try_from(self.ownerless_groups.len()).unwrap_or(i64::MAX)
     }
 
+    pub fn ownerless_project_count(&self) -> i64 {
+        i64::try_from(self.ownerless_projects.len()).unwrap_or(i64::MAX)
+    }
+
     /// The guard's refusal, `None` when the disable leaves forge
-    /// administrable. The last administrator is reported first.
+    /// administrable. The last administrator is reported first, then the
+    /// first ownerless group, then the first ownerless project; both counts
+    /// are always carried with `last_owner`.
     pub fn refusal(&self, user: UserId) -> Option<ForgeError> {
         if self.without_admin {
             return Some(conflict("last_admin").with_context("user", user.get()));
         }
-        let first = self.ownerless_groups.first()?;
+        let refused = conflict("last_owner").with_context("user", user.get());
+        let refused = match (
+            self.ownerless_groups.first(),
+            self.ownerless_projects.first(),
+        ) {
+            (Some(group), _) => refused.with_context("group_id", *group),
+            (None, Some(project)) => refused.with_context("project_id", *project),
+            (None, None) => return None,
+        };
         Some(
-            conflict("last_owner")
-                .with_context("user", user.get())
-                .with_context("group_id", *first)
-                .with_context("ownerless_groups", self.ownerless_count()),
+            refused
+                .with_context("ownerless_groups", self.ownerless_count())
+                .with_context("ownerless_projects", self.ownerless_project_count()),
         )
     }
 }
 
 /// The disable guard's counts for an active user of `kind` (ADR-0019 §10):
-/// only active human administrators count, and only top-level groups need
-/// a direct active Owner (subgroups inherit theirs).
+/// only active human administrators count, only top-level groups need a
+/// direct active Owner (subgroups inherit theirs), and every project needs
+/// an active Owner, direct or inherited (ADR-0019 Amendment D4 MR4).
 pub(super) async fn what_disable_leaves(
     conn: &mut PgConnection,
     user: UserId,
@@ -131,9 +151,11 @@ pub(super) async fn what_disable_leaves(
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| query_error("users.disable.owner_count", e))?;
+    let ownerless_projects = crate::projects::ownership::after_disable(conn, user).await?;
     Ok(Leaves {
         without_admin,
         ownerless_groups,
+        ownerless_projects,
     })
 }
 

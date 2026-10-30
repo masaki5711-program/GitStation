@@ -66,7 +66,10 @@ fn all_lists_every_event_type_once() {
             "project.created",
             "repository.created",
             "token.created",
-            "token.revoked"
+            "token.revoked",
+            "member.added",
+            "member.role_changed",
+            "member.removed"
         ]
     );
 }
@@ -96,6 +99,7 @@ fn only_published_audit_actions_name_an_event_type() {
         revoked_tokens: 0,
         forced: false,
         ownerless_groups: 0,
+        ownerless_projects: 0,
         left_without_admin: false,
     };
     assert_eq!(disabled.event_type(), None);
@@ -110,4 +114,18 @@ fn only_published_audit_actions_name_an_event_type() {
         is_admin: false,
     };
     assert_eq!(created.event_type(), None);
+}
+
+/// D4 MR4: a project's `member.*` events are maintainer class (ADR-0016 §5,
+/// D4 plan answer 3); nothing lower may read them.
+#[test]
+fn project_member_events_are_maintainer_class() {
+    for t in [
+        EventType::MemberAdded,
+        EventType::MemberRoleChanged,
+        EventType::MemberRemoved,
+    ] {
+        assert_eq!(t.visibility_class(), VisibilityClass::Maintainer, "{t:?}");
+        assert!(t.as_str().starts_with("member."), "{t:?}");
+    }
 }

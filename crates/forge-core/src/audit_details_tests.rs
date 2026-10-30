@@ -41,6 +41,7 @@ fn audit_details_have_no_pii_fields() {
         revoked_tokens: 3,
         forced: true,
         ownerless_groups: 2,
+        ownerless_projects: 1,
         left_without_admin: false,
     };
     // D3 MR2: the recovery path writes ids and flags only.
@@ -64,6 +65,7 @@ fn audit_details_have_no_pii_fields() {
             "revoked_tokens": 3,
             "forced": true,
             "ownerless_groups": 2,
+            "ownerless_projects": 1,
             "left_without_admin": false,
         })
     );
@@ -224,5 +226,68 @@ fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
     keys(&created.to_value(), &mut found);
     for pii in PII_KEYS {
         assert!(!found.iter().any(|k| k == pii), "{pii}");
+    }
+}
+
+#[test]
+fn project_member_details_have_the_group_shapes_and_publish_maintainer_events() {
+    use crate::{EventType, VisibilityClass};
+    let user = UserId::new(12);
+    let cases = [
+        (
+            AuditDetails::ProjectMemberAdded {
+                user,
+                role: Role::Developer,
+            },
+            AuditDetails::MemberAdded {
+                user,
+                role: Role::Developer,
+            },
+            EventType::MemberAdded,
+            json!({"user_id": 12, "role": "developer"}),
+        ),
+        (
+            AuditDetails::ProjectMemberRoleChanged {
+                user,
+                from: Role::Developer,
+                to: Role::Owner,
+            },
+            AuditDetails::MemberRoleChanged {
+                user,
+                from: Role::Developer,
+                to: Role::Owner,
+            },
+            EventType::MemberRoleChanged,
+            json!({"user_id": 12, "from": "developer", "to": "owner"}),
+        ),
+        (
+            AuditDetails::ProjectMemberRemoved {
+                user,
+                role: Role::Owner,
+            },
+            AuditDetails::MemberRemoved {
+                user,
+                role: Role::Owner,
+            },
+            EventType::MemberRemoved,
+            json!({"user_id": 12, "role": "owner"}),
+        ),
+    ];
+    for (project, group, event, shape) in cases {
+        // One action string and one JSON shape for both kinds of member.
+        assert_eq!(project.action(), group.action());
+        assert_eq!(project.to_value(), shape);
+        assert_eq!(group.to_value(), shape);
+        // A project's member change is an event of the maintainer class
+        // (ADR-0016 §5); a group's stays audit-only (Q8).
+        assert_eq!(project.event_type(), Some(event));
+        assert_eq!(event.as_str(), project.action());
+        assert_eq!(event.visibility_class(), VisibilityClass::Maintainer);
+        assert_eq!(group.event_type(), None, "{group:?}");
+        let mut found = Vec::new();
+        keys(&project.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii}");
+        }
     }
 }

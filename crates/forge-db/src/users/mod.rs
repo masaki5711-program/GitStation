@@ -5,7 +5,8 @@
 //! are audit-only: they publish no domain event (the `token.revoked` events of
 //! the tokens a disable revokes belong to the tokens, ADR-0019). A disable
 //! that would leave forge without an active human administrator, or a
-//! top-level group without a direct active Owner, is refused unless forced
+//! top-level group without a direct active Owner, or a project without any
+//! active Owner (D4 MR4), is refused unless forced
 //! ([`Guard`]); [`bootstrap_admin`] restores an administrator (D3 MR2,
 //! ADR-0019 §10–§11, `admin.rs`).
 
@@ -88,6 +89,9 @@ pub enum DisableOutcome {
     DisabledPastGuard {
         /// Top-level groups left without a direct active Owner.
         ownerless_groups: i64,
+        /// Projects left without any active Owner, direct or inherited
+        /// (D4 MR4).
+        ownerless_projects: i64,
         /// No active human administrator is left.
         left_without_admin: bool,
     },
@@ -99,7 +103,8 @@ pub enum DisableOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Guard {
     /// Refuse a disable that would leave no active human administrator or a
-    /// top-level group without a direct active Owner (`FG-AUTH-0009`).
+    /// top-level group without a direct active Owner, or a project without
+    /// any active Owner (`FG-AUTH-0009`).
     #[default]
     Enforce,
     /// Disable anyway and record it (`forced`). Only the operator CLI
@@ -261,7 +266,8 @@ async fn insert(tx: &mut ChangeTx, new: &NewUser, path: &str) -> Result<Created,
 
 /// `active` becomes `disabled` with one audit row `user.disabled`
 /// (`AuditDetails::UserDisabled`, with `revoked_tokens` and the guard's
-/// `forced` / `ownerless_groups` / `left_without_admin`); the user's active
+/// `forced` / `ownerless_groups` / `ownerless_projects` /
+/// `left_without_admin`); the user's active
 /// tokens are revoked in the same change (`revoked_reason = 'user_disabled'`,
 /// one `token.revoked` event each, ADR-0019). Disabling a disabled user is
 /// `AlreadyDisabled` and writes nothing. An unknown user is `FG-REPO-0005`
@@ -269,7 +275,8 @@ async fn insert(tx: &mut ChangeTx, new: &NewUser, path: &str) -> Result<Created,
 ///
 /// Enforces the administration guard ([`Guard::Enforce`]): leaving no
 /// active human administrator is `FG-AUTH-0009` `last_admin`, leaving a
-/// top-level group without a direct active Owner is `last_owner`; a refused
+/// top-level group without a direct active Owner, or a project without any
+/// active Owner (direct or inherited, D4 MR4), is `last_owner`; a refused
 /// disable writes nothing and revokes no token. [`disable_with`] can force it.
 pub async fn disable(
     db: &Db,
@@ -281,7 +288,7 @@ pub async fn disable(
 
 /// [`disable`] with an explicit [`Guard`]. Locks `users.admin_set`, then the
 /// user row `FOR UPDATE`, then counts without locks (ADR-0019 §11); group
-/// rows are never locked.
+/// and project rows are never locked.
 pub async fn disable_with(
     db: &Db,
     ctx: &ChangeContext,
@@ -351,6 +358,7 @@ pub async fn disable_with(
         revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
         forced,
         ownerless_groups: leaves.ownerless_count(),
+        ownerless_projects: leaves.ownerless_project_count(),
         left_without_admin: leaves.without_admin,
     };
     let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
@@ -372,6 +380,7 @@ pub async fn disable_with(
     } else {
         DisableOutcome::DisabledPastGuard {
             ownerless_groups: leaves.ownerless_count(),
+            ownerless_projects: leaves.ownerless_project_count(),
             left_without_admin: leaves.without_admin,
         }
     })

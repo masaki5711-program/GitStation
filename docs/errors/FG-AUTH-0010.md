@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-forge doctor (check users.administration) found forge without an active human administrator, or a top-level group without a direct active Owner. This is what a forced disable (`forge admin user disable --force`) leaves behind, or a disable / demotion done outside forge-db. Nobody can then administer forge, or manage that group's members, until it is recovered. A forge with no users at all (a new install) is reported as `warn` without this code.
+forge doctor (check users.administration) found forge without an active human administrator, a top-level group without a direct active Owner, or a project (not pending deletion) without any active Owner, direct or inherited (forge_db::projects::ownerless, D4 MR4). This is what a forced disable (`forge admin user disable --force`) leaves behind, or a disable / demotion done outside forge-db. Nobody can then administer forge, or manage that group's members, until it is recovered. A forge with no users at all (a new install) is reported as `warn` without this code.
 
 ## 調べ方 (diagnosis)
 
-The doctor line carries `reason` (no_admin when there is no active human administrator, otherwise ownerless_group), `active_human_admins`, `ownerless_groups` (how many top-level groups have no direct active Owner) and `group_ids` (the first 10 of them). The audit log shows how it happened: SELECT created_at, actor_label, request_id, details FROM forge.audit_log WHERE action = 'user.disabled' AND details->>'forced' = 'true' ORDER BY id DESC.
+The doctor line carries `reason` (no_admin when there is no active human administrator, otherwise ownerless_group), `active_human_admins`, `ownerless_groups` (how many top-level groups have no direct active Owner) and `group_ids` (the first 10 of them); a project finding carries `reason=ownerless_project`, `ownerless_projects` and `project_ids` (the first 10). The audit log shows how it happened: SELECT created_at, actor_label, request_id, details FROM forge.audit_log WHERE action = 'user.disabled' AND details->>'forced' = 'true' ORDER BY id DESC.
 
 ## 対処 (fix)
 

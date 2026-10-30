@@ -59,13 +59,19 @@ pub(crate) async fn disable_with_db(
     let user = users::id_by_username(db, username).await?;
     let guard = if force { Guard::Force } else { Guard::Enforce };
     let outcome = users::disable_with(db, &context(request_id), user, guard).await?;
-    let (state, ownerless_groups, left_without_admin) = match outcome {
-        DisableOutcome::Disabled => ("disabled", 0, false),
+    let (state, ownerless_groups, ownerless_projects, left_without_admin) = match outcome {
+        DisableOutcome::Disabled => ("disabled", 0, 0, false),
         DisableOutcome::DisabledPastGuard {
             ownerless_groups,
+            ownerless_projects,
             left_without_admin,
-        } => ("disabled_past_guard", ownerless_groups, left_without_admin),
-        DisableOutcome::AlreadyDisabled => ("already_disabled", 0, false),
+        } => (
+            "disabled_past_guard",
+            ownerless_groups,
+            ownerless_projects,
+            left_without_admin,
+        ),
+        DisableOutcome::AlreadyDisabled => ("already_disabled", 0, 0, false),
     };
     if matches!(outcome, DisableOutcome::DisabledPastGuard { .. }) {
         // Forge is now short of an administrator or a group Owner (doctor:
@@ -78,6 +84,7 @@ pub(crate) async fn disable_with_db(
             forced = force,
             outcome = state,
             ownerless_groups,
+            ownerless_projects,
             left_without_admin,
             "user disabled past the administration guard"
         );
@@ -90,6 +97,7 @@ pub(crate) async fn disable_with_db(
             forced = force,
             outcome = state,
             ownerless_groups,
+            ownerless_projects,
             left_without_admin,
             "user disable"
         );
@@ -101,12 +109,18 @@ pub(crate) async fn disable_with_db(
         }
         DisableOutcome::DisabledPastGuard {
             ownerless_groups,
+            ownerless_projects,
             left_without_admin,
         } => {
             let mut out = format!("user {username}: disabled (forced)\n");
             if ownerless_groups > 0 {
                 out.push_str(&format!(
                     "  {ownerless_groups} top-level group(s) now have no direct active Owner\n"
+                ));
+            }
+            if ownerless_projects > 0 {
+                out.push_str(&format!(
+                    "  {ownerless_projects} project(s) now have no active Owner\n"
                 ));
             }
             if left_without_admin {

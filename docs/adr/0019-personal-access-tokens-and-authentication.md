@@ -322,3 +322,29 @@ AI のエージェントもトークンで git と API を使うため、トー�
   `FG-AUTH-0010` は、まだプロジェクトを数えない（MR2 では変えない）。
 - プロジェクトの最後の Owner の方針（計画 D4 の回答 2: 継承された Owner — 祖先のグループの Owner、個人の名前空間の持ち主 — がいる間は拒まない）と、
   それが無効化と doctor に与える影響は、**D4 MR4（プロジェクトのメンバー）で決めて実装する**。詳細は ADR-0015 の D4 MR2 の Amendment。
+
+## Amendment（2026-10-31、手順 D4 MR4: プロジェクトの最後の Owner と無効化）
+
+D4 MR2 の Amendment が D4 MR4 に送った決定（計画 D4 の回答 2）。
+
+- **プロジェクトの Owner** は `roles::load_project_roles` と同じ: 直接の Owner（`project_members`）、祖先のグループの直接の Owner、
+  プロジェクトが直下にある個人の名前空間の持ち主（ボットを除く）。どれも有効な利用者だけを数える。
+- **メンバーの変更**（`projects::{add_member, change_member, remove_member}`）: 最後の直接の Owner を外す・降格するのは、継承された
+  有効な Owner がいる間は拒まない（本人が継承しているなら本人でもよい）。いなければ `FG-REPO-0010 last_owner`（`project_id`）。
+  ロックの順は グループと同じ: プロジェクトの行 `FOR UPDATE` → 残る Owner の利用者の行 `FOR SHARE`（id の順）。
+- **無効化のガード**（§10 の拡張）: `users::disable` は、その利用者がいなくなると有効な Owner（直接・継承）のいなくなるプロジェクトがあれば
+  `FG-AUTH-0009 last_owner` で拒む（グループがなければ `project_id`。件数は `ownerless_groups` と `ownerless_projects` の両方）。
+  `--force` は通し、`DisableOutcome::DisabledPastGuard.ownerless_projects` と `user.disabled` の `details.ownerless_projects` に記録する。
+  数え方は §11 の順のまま: `users.admin_set` → 利用者の行 `FOR UPDATE` → ロックなしの数え上げ。**プロジェクトの行は取らない**
+  （メンバーの変更は プロジェクト → 利用者 の順なので、逆順にするとデッドロックしうる）。利用者の行が、無効化と「その利用者を残る Owner と
+  頼るメンバーの変更」を直列にする（ピン留めのテスト `a_disable_waits_for_a_project_owner_removal_and_then_refuses`・
+  `a_project_owner_removal_waits_for_a_disable_and_then_refuses`）。
+- **削除待ちのプロジェクト**（`deleted_at` あり、D5）はガードと doctor の両方で数えない（グループの将来の削除待ちの扱い、D3 MR2 の
+  Amendment と同じ考え方）。
+- **祖先のグループの Owner を外す変更**（`groups::remove_member` など）は、プロジェクトを数えない（変えない）。最上位のグループには常に
+  直接の有効な Owner がいて、その Owner がグループの下のすべてのプロジェクトに継承されるので、グループのメンバーの変更だけで
+  グループの下のプロジェクトの Owner がいなくなることはない（強制した無効化の後を除く。それは doctor が出す）。
+- **doctor**: `forge_db::projects::ownerless(&Db) -> Option<Ownerless>`（読み取り用のプール、1 文）が、有効な Owner のいないプロジェクトの数と
+  最初の 10 件の id を返し、`Ownerless::check()` が `FG-AUTH-0010 reason=ownerless_project`（`ownerless_projects`、`project_ids`）を返す。
+  `forge doctor` の `users.administration` への配線（と `doctor/render.rs` の `SAFE_CONTEXT` への `ownerless_projects`・`project_ids` の追加）は、
+  doctor を同時に変える D4 MR3b と衝突しないよう **D4 の統合のときに行う**。

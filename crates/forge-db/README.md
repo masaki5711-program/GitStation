@@ -128,6 +128,25 @@ connection, mapping driver errors to registered codes, migrations
   `projects::access(&Db, ProjectId) -> Result<ProjectAccess, ForgeError>`:
   `ProjectAccess { visibility, pending_deletion }` (`deleted_at` set) — with
   `load_project_roles`, what forge-auth's `ProjectView` needs (read pool).
+- `projects::{add_member, change_member, remove_member}(&Db, &ChangeContext, ProjectId,
+  UserId[, Role])` (step D4 MR4, ADR-0019 Amendment D4 MR4): one `member.*` audit row on
+  (`project`, id) with `project_id` set **and** one `member.*` event of the project
+  (`EventType::Member{Added,RoleChanged,Removed}`, maintainer class, payload = the audit
+  details `AuditDetails::ProjectMember*`, the group JSON shapes; no dedup key). Lock
+  order: the project row `FOR UPDATE`, then user rows `FOR SHARE`. Bots are never
+  members; `change_member` to the same role is `MemberChange::Unchanged` (nothing
+  written). The last direct Owner may be removed or demoted while an inherited active
+  Owner exists (an ancestor group's direct Owner, the personal namespace's owner — the
+  `load_project_roles` sources), else FG-REPO-0010 `last_owner`. No authorization here:
+  a route decides with `authorize()` first.
+- `projects::ownerless(&Db) -> Result<Option<Ownerless>, ForgeError>` (D4 MR4): the
+  projects (not pending deletion) without any active Owner, direct or inherited —
+  `Ownerless { count, project_ids (first 10) }`, `check()` = FG-AUTH-0010
+  `ownerless_project`; `None` before the projects migration. For `forge doctor`
+  `users.administration`. `users::disable` refuses (FG-AUTH-0009 `last_owner`,
+  `project_id`) a disable that would leave a project without an active Owner; `--force`
+  records `ownerless_projects` in `DisableOutcome::DisabledPastGuard` and the
+  `user.disabled` details.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events
@@ -186,6 +205,11 @@ FG-REPO-0014 ProjectRequestInvalid (`display_name_length`, `description_length`,
 or a bot's personal namespace as parent), FG-REPO-0005 (`resource=namespace` / `user` /
 `project`, `reason=absent`), FG-SYS-0001 (`unexpected_dedup`, `unexpected_job_dedup`,
 `unknown_visibility`, `namespace_owner_missing`), FG-DB-0010 from the change checks.
+Raised by the project member commands (D4 MR4): FG-REPO-0010 (`already_member`,
+`not_member`, `last_owner` with `project_id`, `bot_member`), FG-REPO-0005
+(`resource=project` / `user`, `reason=absent`), FG-DB-0018 (`unknown_role`,
+`resource=project`), FG-SYS-0001 (`project_without_namespace`). `Ownerless::check`:
+FG-AUTH-0010 (`ownerless_project`, `ownerless_projects`, `project_ids`).
 Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
