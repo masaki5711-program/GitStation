@@ -8,8 +8,14 @@ use std::path::{Path, PathBuf};
 use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::Git;
+
+/// Repository config key that marks a repository with the provision token of
+/// the `repositories` row it was created for (D4). A provisioning retry
+/// adopts an existing directory only when this marker matches.
+pub const PROVISION_TOKEN_KEY: &str = "forge.provisionToken";
 
 /// The canonical storage root, checked once at startup.
 #[derive(Debug, Clone)]
@@ -137,50 +143,74 @@ impl StorageRoot {
     }
 
     /// Create the bare repository for `id`, atomically: initialize and
-    /// configure it in a temporary sibling directory, then rename it into
-    /// place. Refuses to touch an existing path (`FG-REPO-0004`).
+    /// configure it in a temporary sibling directory, mark it with
+    /// `forge.provisionToken=<token>` (the repository row's provision token),
+    /// then rename it into place. Refuses to touch an existing path
+    /// (`FG-REPO-0004`) — a retry uses [`StorageRoot::init_bare_or_adopt`].
     /// `hooks_path` is the forge-owned hooks directory (M1 phase 10 also
     /// forces it per invocation with `-c core.hooksPath`).
     pub async fn init_bare(
         &self,
         git: &Git,
         id: RepoId,
+        token: Uuid,
         hooks_path: Option<&Path>,
     ) -> Result<PathBuf, ForgeError> {
+        let hooks = hooks_value(hooks_path)?;
+        let (path, shard) = self.prepare_shard(id).await?;
+        if self.occupant(&path, id).await?.is_some() {
+            return Err(occupied(id, &path));
+        }
+        self.create(git, id, token, hooks.as_deref(), &path, &shard)
+            .await
+    }
+
+    /// Create `repos/` and the shard one level at a time, verifying each
+    /// level before going below it (never follow a planted symlink).
+    /// Returns the repository path and its shard directory.
+    async fn prepare_shard(&self, id: RepoId) -> Result<(PathBuf, PathBuf), ForgeError> {
         let path = self.path_for(id);
         let shard = path
             .parent()
             .ok_or_else(|| rejected("outside_root").with_context("repo_id", id))?
             .to_path_buf();
-
-        // Create `repos/` and the shard one level at a time, verifying each
-        // level before going below it (never follow a planted symlink).
         for dir in [self.root.join("repos"), shard.clone()] {
             self.ensure_real_dir(&dir, id).await?;
         }
         self.ensure_inside(&shard, id)?;
+        Ok((path, shard))
+    }
 
-        match tokio::fs::symlink_metadata(&path).await {
-            Ok(_) => {
-                return Err(ForgeError::new(ErrorCode::RepoPathOccupied)
-                    .with_context("repo_id", id)
-                    .with_context("path", path.display()));
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_failed("inspect", e).with_context("repo_id", id)),
+    /// What is at `path` without following a symlink; `None` when nothing is.
+    async fn occupant(
+        &self,
+        path: &Path,
+        id: RepoId,
+    ) -> Result<Option<std::fs::Metadata>, ForgeError> {
+        match tokio::fs::symlink_metadata(path).await {
+            Ok(meta) => Ok(Some(meta)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io_failed("inspect", e).with_context("repo_id", id)),
         }
+    }
 
-        let tmp = shard.join(format!(
-            ".tmp-{}-{}.git",
-            id.get(),
-            uuid::Uuid::new_v4().simple()
-        ));
-        let result = match self.init_into(git, &tmp, hooks_path).await {
-            Ok(()) => tokio::fs::rename(&tmp, &path).await.map_err(|e| {
+    /// Initialize in a temporary sibling, then rename into `path`.
+    async fn create(
+        &self,
+        git: &Git,
+        id: RepoId,
+        token: Uuid,
+        hooks: Option<&str>,
+        path: &Path,
+        shard: &Path,
+    ) -> Result<PathBuf, ForgeError> {
+        // A fresh name per attempt: a temp directory left by a crashed
+        // attempt never collides with a retry.
+        let tmp = shard.join(format!(".tmp-{}-{}.git", id.get(), Uuid::new_v4().simple()));
+        let result = match self.init_into(git, &tmp, token, hooks).await {
+            Ok(()) => tokio::fs::rename(&tmp, path).await.map_err(|e| {
                 if e.kind() == io::ErrorKind::AlreadyExists || path.exists() {
-                    ForgeError::new(ErrorCode::RepoPathOccupied)
-                        .with_context("repo_id", id)
-                        .with_context("path", path.display())
+                    occupied(id, path)
                 } else {
                     io_failed("rename", e).with_context("repo_id", id)
                 }
@@ -235,7 +265,8 @@ impl StorageRoot {
         &self,
         git: &Git,
         dir: &Path,
-        hooks_path: Option<&Path>,
+        token: Uuid,
+        hooks: Option<&str>,
     ) -> Result<(), ForgeError> {
         git.command("init")
             .arg("--bare")
@@ -246,35 +277,65 @@ impl StorageRoot {
             .path(dir)
             .output()
             .await?;
-        // A lossy or relative hooks path would point git at a directory that
-        // does not exist, and the policy hooks would silently never run.
-        let hooks = match hooks_path {
-            None => None,
-            Some(h) => match h.to_str() {
-                Some(s) if h.is_absolute() => Some(s.to_string()),
-                _ => {
-                    return Err(ForgeError::new(ErrorCode::ConfigInvalid)
-                        .with_context("config_key", "git.hooks_path")
-                        .with_context("reason", "must_be_absolute_utf8"))
-                }
-            },
-        };
-        let settings = REPO_SETTINGS
-            .iter()
-            .map(|(k, v)| (*k, (*v).to_string()))
-            .chain(hooks.map(|h| ("core.hooksPath", h)));
-        for (key, value) in settings {
-            git.command("config")
-                .repo(dir)
-                .arg_owned(key)
-                .arg_owned(value)
-                .output()
-                .await?;
-        }
+        configure(git, dir, hooks).await?;
+        // Written last: a marked repository is a fully configured one.
+        git.command("config")
+            .repo(dir)
+            .arg(PROVISION_TOKEN_KEY)
+            .arg_owned(token.hyphenated().to_string())
+            .output()
+            .await?;
         Ok(())
     }
 }
 
+/// Apply the server-side settings (and the hooks path) to `dir`. Idempotent:
+/// adoption runs it again on an existing repository.
+async fn configure(git: &Git, dir: &Path, hooks: Option<&str>) -> Result<(), ForgeError> {
+    let settings = REPO_SETTINGS
+        .iter()
+        .copied()
+        .chain(hooks.map(|h| ("core.hooksPath", h)));
+    for (key, value) in settings {
+        git.command("config")
+            .repo(dir)
+            .arg_owned(key)
+            .arg_owned(value)
+            .output()
+            .await?;
+    }
+    Ok(())
+}
+
+/// A lossy or relative hooks path would point git at a directory that does
+/// not exist, and the policy hooks would silently never run. Checked before
+/// anything is created.
+fn hooks_value(hooks_path: Option<&Path>) -> Result<Option<String>, ForgeError> {
+    match hooks_path {
+        None => Ok(None),
+        Some(h) => match h.to_str() {
+            Some(s) if h.is_absolute() => Ok(Some(s.to_string())),
+            _ => Err(ForgeError::new(ErrorCode::ConfigInvalid)
+                .with_context("config_key", "git.hooks_path")
+                .with_context("reason", "must_be_absolute_utf8")),
+        },
+    }
+}
+
+fn occupied(id: RepoId, path: &Path) -> ForgeError {
+    ForgeError::new(ErrorCode::RepoPathOccupied)
+        .with_context("repo_id", id)
+        .with_context("path", path.display())
+}
+
+#[path = "storage_adopt.rs"]
+mod adopt;
+pub use adopt::Provisioned;
+
 #[cfg(test)]
 #[path = "storage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "storage_adopt_tests.rs"]
+mod adopt_tests;
