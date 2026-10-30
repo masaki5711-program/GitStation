@@ -95,16 +95,10 @@ pub struct TokenInfo {
     pub last_used_at: Option<String>,
 }
 
-/// Who a valid token stands for (its owner is active: a disabled owner is
-/// refused by `authenticate` itself).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenIdentity {
-    pub token_id: i64,
-    pub user_id: UserId,
-    pub is_admin: bool,
-    pub scopes: Vec<Scope>,
-    pub is_agent: bool,
-}
+/// Who a valid token stands for (defined in forge-core so forge-web can
+/// receive it through `forge_core::Authenticator` without depending on
+/// forge-db).
+pub use forge_core::TokenIdentity;
 
 fn request_invalid(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::TokenRequestInvalid).with_context("reason", reason)

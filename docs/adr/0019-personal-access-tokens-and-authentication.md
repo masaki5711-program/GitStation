@@ -213,3 +213,34 @@ AI のエージェントもトークンで git と API を使うため、トー�
 - 追加: `FG-AUTH-0008`、`FG-AUTH-0009`、`FG-AUTH-0010`、`FG-DB-0019`（`errors.toml` に登録し、カタログは生成する）。
 - Runbook 追加: `user-offboarding.md`（`FG-AUTH-0010`、`--force`、`bootstrap-admin`）、`credential-data.md`（`FG-DB-0019`）。
 - Runbook 更新: `forge admin` の書き込みのコマンドは、人が承認する手順として記載する。
+
+## Amendment（2026-10-30、手順 D3 MR3: HTTP でのトークン認証）
+
+§7 を実装したときに決めた細部。権限の判定（`authorize()`）と権限のマトリクスは変わらない。新しいエラーコードはない。
+
+- **`Authenticator` トレイトと `TokenIdentity`**: どちらも `forge-core`（`authenticator.rs`）に置き、`forge_db::tokens` は
+  `TokenIdentity` を再エクスポートする。`forge-db` の `Db` が `Authenticator` を実装し（中身は `tokens::authenticate` そのもの）、
+  `forge serve` が readyz のプローブと同じく `AppState.authenticator` に注入する。`AppState::new` は authenticator を
+  **必須の引数**にした（既定の実装を持たない。配線を忘れたサーバーはコンパイルできない）。
+- **認証を走らせる場所**: 登録簿（`Registry::route`）が、公開でない経路ごとに「トークン認証 → 既存のガード」の順で
+  付ける。**公開の経路（`/healthz`、`/readyz`）と未登録のパス（404）は資格情報を見ない**。生存確認がトークンの表や DB に
+  依存せず、公開の経路に不正なヘッダーを付けても 401 にならない。
+- **`ambiguous`（401）**: `Authorization` のヘッダーが 2 つ以上のとき、または別の仕組み（将来のセッション）がすでに
+  プリンシパルを置いたリクエストにヘッダーがあるとき。どちらの資格情報も試さない。
+- **ヘッダー自体の拒否**: 読めないヘッダー・base64 でない・`:` がない Basic・空の値は `FG-AUTH-0001 reason=malformed_header`、
+  Bearer と Basic 以外の方式は `reason=unsupported_scheme`。方式の名前もログに出さない（ヘッダーに秘密だけを書くクライアントが
+  あり、その場合は「方式」が秘密そのものになるため）。Basic のパスワードが何であっても認証器に渡すので、ユーザーの
+  パスワードは `malformed` で必ず拒否される（ADR-0010 の引き継ぎ事項 9）。
+- **ログ**: `FG-AUTH-0001` / `FG-AUTH-0004` の拒否は `forge-web` の middleware がイベント `forge.auth.token_rejected`
+  （`request_id`、`error_code`、`reason`、`scheme`、分かれば `public_id`）として **1 回だけ**出し、エラーの描画では
+  もう一度出さない。それ以外のコード（`FG-DB-0001` など）は通常どおりエラーの描画が 1 回出す（文脈に `scheme`）。
+  ヘッダーの値、トークン、秘密、Basic のユーザー名はどこにも出さない（テストでログを捕まえて確かめる）。
+  認証に成功したら `Authorization` ヘッダーをリクエストから外してからハンドラーに渡す（ハンドラーが資格情報を
+  ログに出したり返したりできないように）。
+- **`WWW-Authenticate`**: エラーの描画（`error.rs`）の 1 か所で、**すべての 401** に `Basic realm="GitStation", charset="UTF-8"`
+  と `Bearer realm="GitStation"` を付ける（git は Basic のチャレンジで資格情報ヘルパーに聞く）。403 と 503 には付けない
+  （障害のときにクライアントが正しい資格情報を捨てないように）。
+- **テストのための口**: 製品の登録簿には公開でない経路がまだないので、`forge-web` の feature `test-support` で
+  `app::with_registry`（製品と同じ middleware でテスト用の登録簿を組む）を出す。サーバーには入らない。
+
+**見送り（追加）**: リクエストに `token_id` と `is_agent` を載せること（監査と ADR-0017 §4.0 の W1 で、使う側と一緒に入れる）。

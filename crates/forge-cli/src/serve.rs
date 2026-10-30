@@ -5,12 +5,17 @@
 //! Before binding, the database is connected and its schema checked
 //! (ADR-0014): pending, newer, edited or dirty migrations stop the start
 //! with `FG-DB-0004` — `serve` never migrates.
+//!
+//! The database is injected into forge-web twice through forge-core traits
+//! (forge-web does not depend on forge-db): as the readiness probe and as
+//! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7).
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use forge_core::config::DatabaseConfig;
 use forge_core::readiness::ReadinessProbe;
+use forge_core::Authenticator;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
 use forge_web::{AppConfig, AppState, ServerLimits};
@@ -24,9 +29,7 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
-        let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone()); // clone: the pool handle is shared (Arc inside)
-        let state = AppState::new(env!("CARGO_PKG_VERSION"), vec![probe])
-            .with_probe_timeout(probe_timeout_for(database));
+        let state = app_state(&db, database);
         let router = forge_web::app(state, AppConfig::default())?;
         let listener = forge_web::server::bind(bind).await?;
         tracing::info!(
@@ -46,6 +49,16 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })
+}
+
+/// The server's state: the database as readiness probe and as token
+/// authenticator.
+fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
+    // clone: the pool handle is shared (Arc inside)
+    let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone());
+    let authenticator: Arc<dyn Authenticator> = Arc::new(db.clone());
+    AppState::new(env!("CARGO_PKG_VERSION"), vec![probe], authenticator)
+        .with_probe_timeout(probe_timeout_for(database))
 }
 
 /// The readiness bound must exceed what the database probe can take on its
@@ -73,5 +86,68 @@ mod tests {
         .expect("config");
         let bound = probe_timeout_for(&cfg.database);
         assert!(bound > cfg.database.acquire_timeout * 2, "{bound:?}");
+    }
+
+    /// `forge serve` authenticates with the real token store: a token issued
+    /// in the database resolves to its owner through the state's
+    /// authenticator, and an unknown one is FG-AUTH-0001.
+    #[tokio::test]
+    async fn serve_wires_the_database_token_authenticator() {
+        use forge_core::{RequestId, Scope};
+        use forge_db::change::{Actor, ChangeContext};
+        use forge_db::test_support::FreshDb;
+        use forge_db::tokens::{self, NewToken};
+        use forge_db::users::{self, NewUser};
+        use forge_errors::ErrorCode;
+
+        let t = FreshDb::migrated().await;
+        let rid = |s: &str| RequestId::parse(s).expect("request id");
+        let ctx = ChangeContext::new(Actor::System, rid("req-serve-user"));
+        let alice = users::create(
+            &t.db,
+            &ctx,
+            &NewUser::human("alice", "Alice", "alice@example.test"),
+        )
+        .await
+        .expect("user")
+        .user_id;
+        let new = NewToken {
+            user: alice,
+            name: "laptop".to_owned(),
+            scopes: vec![Scope::ReadRepository],
+            expires_in: None,
+            is_agent: false,
+        };
+        let issued = tokens::issue(
+            &t.db,
+            &ChangeContext::new(Actor::System, rid("req-serve-tok")),
+            &new,
+        )
+        .await
+        .expect("issue");
+        let cfg = load(
+            None,
+            &Env::from_pairs([("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "4000")]),
+        )
+        .expect("config");
+        let state = app_state(&t.db, &cfg.database);
+        let identity = state
+            .authenticator
+            .authenticate(&rid("req-serve-auth"), &issued.token.reveal())
+            .await
+            .expect("the issued token authenticates");
+        assert_eq!(identity.user_id, alice);
+        assert_eq!(identity.scopes, vec![Scope::ReadRepository]);
+        let unknown =
+            "fgp_00000000000000ff_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let err = state
+            .authenticator
+            .authenticate(&rid("req-serve-unknown"), unknown)
+            .await
+            .expect_err("unknown token");
+        assert_eq!(err.code(), ErrorCode::Unauthenticated);
+        let probes: Vec<&str> = state.probes.iter().map(|p| p.name()).collect();
+        assert_eq!(probes, ["database"]);
+        t.drop_now().await;
     }
 }

@@ -590,10 +590,12 @@ name = "forge-web"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64",
  "forge-auth",
  "forge-core",
  "forge-db",
  "forge-errors",
+ "forge-web",
  "futures-util",
  "http-body-util",
  "hyper",
@@ -603,6 +605,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -61,7 +61,9 @@ connection, mapping driver errors to registered codes, migrations
   `authorize()` (ADR-0019 §8). `revoke` does not check the owner (operator
   only); revoking a revoked token is `AlreadyRevoked` and writes nothing.
   `list(&Db, UserId) -> Vec<TokenInfo>` (read pool, newest first, never the
-  hash). `authenticate(&Db, &str) -> TokenIdentity`: an unknown public id still
+  hash). `authenticate(&Db, &RequestId, &str) -> TokenIdentity` (the type lives
+  in forge-core and is re-exported; `Db` implements `forge_core::Authenticator`
+  with it, which `forge serve` injects into forge-web): an unknown public id still
   costs one hash and constant-time comparison; the owner must be active;
   `last_used_at` is refreshed at most every 10 minutes, unaudited, and a failed
   refresh is logged once (FG-DB-0002, warn) without failing the request.

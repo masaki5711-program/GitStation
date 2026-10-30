@@ -85,10 +85,12 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
 
     /// Register `verb path` handled by `handler`, decided by `action`.
     ///
-    /// Every non-public route is wrapped in the authentication guard: without
+    /// Every non-public route is wrapped in token authentication
+    /// ([`crate::auth`]: `Authorization: Bearer` / Basic with the token as
+    /// password → `Principal`) and then the authentication guard: without
     /// an authenticated, active `Principal` in the request extensions it
     /// answers `FG-AUTH-0001` / `FG-AUTH-0004` and the handler is never
-    /// entered. The guard does not decide on the resource: the handler must
+    /// entered. Public routes never consult the credentials. The guard does not decide on the resource: the handler must
     /// still call `forge_auth::authorize(.., def.action, ..)` before any side
     /// effect.
     #[must_use]
@@ -122,10 +124,14 @@ impl<S: Clone + Send + Sync + 'static> Registry<S> {
         });
         let mut one = axum::routing::on(verb.filter(), handler);
         if !action.is_public() {
-            one = one.route_layer(axum::middleware::from_fn_with_state(
-                action,
-                crate::guard::require_principal,
-            ));
+            // The later route_layer runs first: token authentication builds
+            // the principal, then the guard requires it.
+            one = one
+                .route_layer(axum::middleware::from_fn_with_state(
+                    action,
+                    crate::guard::require_principal,
+                ))
+                .route_layer(axum::middleware::from_fn(crate::auth::authenticate));
         }
         let merged = match self.routers.remove(path) {
             Some(existing) => existing.merge(one),

@@ -5,9 +5,12 @@
 //! - [`context`] — request id + language per request, access log
 //! - [`error`] — the single error renderer (`error_code`, `user_message`,
 //!   `request_id` only; logged once)
+//! - `auth` — token authentication (Bearer / Basic with the token as the
+//!   password) on every non-public route
 //! - [`app`] — wiring and middleware; [`server`] — bind and serve
 
 pub mod app;
+mod auth;
 pub mod context;
 pub mod error;
 mod guard;

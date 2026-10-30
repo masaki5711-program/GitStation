@@ -16,6 +16,8 @@ forge-auth.workspace = true
 forge-core.workspace = true
 forge-errors.workspace = true
 axum.workspace = true
+# D3 MR3: decoding `Authorization: Basic` (the password is the token).
+base64.workspace = true
 futures-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
@@ -25,7 +27,15 @@ tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
 
+[features]
+# `app::with_registry` for the integration tests' own guarded routes
+# (dev-dependency only; the product routes come from `app::registry()`).
+test-support = []
+
 [dev-dependencies]
+forge-web = { workspace = true, features = ["test-support"] }
+# D3 MR3: captured JSON logs (tests/token_principal.rs).
+tracing-subscriber.workspace = true
 # D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
 forge-db = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true

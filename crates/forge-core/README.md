@@ -39,6 +39,12 @@ cannot become a key (a `compile_fail` doc test); shape
 `^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`, at most 200 characters, else FG-DB-0010
 `reason=invalid_dedup_key` (`prefix`). `DedupKey::is_well_formed` is the check the
 forge-db writers repeat.
+**Injected services** (implemented elsewhere, injected by `forge serve` so
+forge-web does not depend on forge-db): `readiness::ReadinessProbe` and
+`Authenticator` (step D3 MR3, ADR-0019 §7) — `authenticate(&RequestId,
+presented: &str) -> Result<TokenIdentity, ForgeError>` (`token_id`,
+`user_id`, `is_admin`, `scopes`, `is_agent`; the presented token is a secret
+and is never logged). forge-db's `Db` implements both.
 Feature `test-support`: `path_vectors::accepted()` / `rejected()`, the shared
 segment vectors; `DedupKey::unchecked` (malformed keys for the writers' tests).
 
