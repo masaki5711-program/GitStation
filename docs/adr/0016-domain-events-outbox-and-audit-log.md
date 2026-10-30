@@ -694,3 +694,14 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   形の違反は `FG-DB-0010 reason=invalid_dedup_key`。プロジェクトを指さない監査の行の変更がプロジェクトのイベントを出してよいかは、
   最初のプロジェクトのイベントを入れる D4 で決める。
 - 拒否されたリクエストの監査の集約（§6）は引き続き見送り（ADR-0019「見送り」）。
+
+## Amendment（2026-10-30、手順 D3 MR1b: `EventType` と `DedupKey` の実装）
+
+- **`EventType` に入れるのは、書き手がある種類だけ**（ユーザーの決定 2026-10-30）。今は `repository.created`（D4 で使う。分類 `integration`）、
+  `token.created`・`token.revoked`（分類 `admin`）。§10 の残りの種類（`branch.*`、`tag.created`、`project.*` など）は、その書き手を入れる変更で足す。
+  型で不正な名前を作れなくなったので、書き込みの前の `invalid_event_type` の検査は外した。DB の CHECK は残る（テスト `every_event_type_passes_the_db_check`）。
+- **`DedupKey` の形は Rust の型と書き込みの前の検査で守る**（ユーザーの決定 2026-10-30）。`DedupKey::new` は `&'static str` の接頭辞と、
+  `Id(i64)`・`Hash(&[u8; 32])`・`Word(&'static str)` の部分だけを受け取る。`ChangeTx` と `DerivedTx` は書く前に形をもう一度確かめ、
+  違反は `FG-DB-0010 reason=invalid_dedup_key`。`forge.events.dedup_key` に正規表現の CHECK は **足さない**（長さ 200 の CHECK だけ）。
+  形の検査が `field_too_long field=dedup_key` に代わる。
+- `AuditDetails::event_type()` が、変更の詳細から出すイベントの種類を返す（監査だけの操作は `None`）。

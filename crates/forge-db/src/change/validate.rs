@@ -1,6 +1,7 @@
 //! What a change must satisfy before anything is written (FG-DB-0010), and
 //! the cleaning of the client-supplied fields.
 
+use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 
 use super::{Actor, ChangeContext, ChangeRecord, Outcome, MAX_EVENTS};
@@ -18,7 +19,6 @@ const MAX_USER_AGENT_CHARS: usize = 256;
 const MAX_ACT_AS_CHARS: usize = 128;
 const MAX_SCOPES: usize = 32;
 const MAX_SCOPE_CHARS: usize = 64;
-pub(crate) const MAX_DEDUP_KEY_CHARS: usize = 200;
 
 fn rejected(reason: &'static str, action: &str) -> ForgeError {
     ForgeError::new(ErrorCode::ChangeRejected)
@@ -26,14 +26,14 @@ fn rejected(reason: &'static str, action: &str) -> ForgeError {
         .with_context("action", action)
 }
 
-/// `^[a-z][a-z_]*(\.[a-z][a-z_]*){1,3}$` (the events.event_type check).
-pub(crate) fn valid_event_type(name: &str) -> bool {
-    let parts: Vec<&str> = name.split('.').collect();
-    (2..=4).contains(&parts.len())
-        && parts.iter().all(|p| {
-            p.starts_with(|c: char| c.is_ascii_lowercase())
-                && p.chars().all(|c| c.is_ascii_lowercase() || c == '_')
-        })
+/// Whether `event`'s dedup key has the documented shape. A [`DedupKey`]
+/// is built well-formed; this repeats the check at every writer so a key
+/// that reached the event another way is refused (`invalid_dedup_key`).
+pub(crate) fn dedup_key_ok(event: &super::DomainEvent) -> bool {
+    event
+        .dedup_key
+        .as_ref()
+        .is_none_or(|k| DedupKey::is_well_formed(k.as_str()))
 }
 
 /// Every number in `value` is an integer within ±2^53−1 or a float.
@@ -163,9 +163,6 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
     if !events.is_empty() && record.audit.outcome != Outcome::Succeeded {
         return Err(rejected("events_on_unsuccessful", action));
     }
-    if let Some(e) = events.iter().find(|e| !valid_event_type(e.event_type)) {
-        return Err(rejected("invalid_event_type", action).with_context("event_type", e.event_type));
-    }
     // A change audited for one project publishes events of that project only.
     if let Some(project) = record.audit.project_id {
         if events.iter().any(|e| e.project_id != Some(project)) {
@@ -182,8 +179,9 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
         return Err(rejected("unsafe_number", action).with_context("field", "details"));
     }
     for e in events {
-        if e.dedup_key.as_deref().map_or(0, |k| k.chars().count()) > MAX_DEDUP_KEY_CHARS {
-            return Err(rejected("field_too_long", action).with_context("field", "dedup_key"));
+        if !dedup_key_ok(e) {
+            return Err(rejected("invalid_dedup_key", action)
+                .with_context("event_type", e.event_type.as_str()));
         }
         if !numbers_are_safe(&e.payload) {
             return Err(rejected("unsafe_number", action).with_context("field", "payload"));

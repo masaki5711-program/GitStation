@@ -1,6 +1,7 @@
 //! Typed `audit_log.details` (ADR-0016 §9). Variants carry no personal data
 //! (no email, employee number, external id, display name, IP).
 
+use crate::event_type::EventType;
 use crate::ids::{NamespaceId, UserId};
 use crate::role::Role;
 use crate::scope::Scope;
@@ -63,6 +64,22 @@ impl AuditDetails {
             Self::MemberRemoved { .. } => "member.removed",
             Self::TokenCreated { .. } => "token.created",
             Self::TokenRevoked { .. } => "token.revoked",
+        }
+    }
+
+    /// The event a change with these details publishes, `None` for the
+    /// audit-only actions (`user.*`, `group.*`, `member.*`; D-plan Q4, Q8).
+    /// When `Some`, its name is [`Self::action`].
+    pub fn event_type(&self) -> Option<EventType> {
+        match self {
+            Self::UserCreated { .. }
+            | Self::UserDisabled { .. }
+            | Self::GroupCreated { .. }
+            | Self::MemberAdded { .. }
+            | Self::MemberRoleChanged { .. }
+            | Self::MemberRemoved { .. } => None,
+            Self::TokenCreated { .. } => Some(EventType::TokenCreated),
+            Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
         }
     }
 

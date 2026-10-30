@@ -12,7 +12,7 @@
 use std::net::IpAddr;
 
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::RequestId;
+use forge_core::{DedupKey, EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
 mod tx;
@@ -20,9 +20,7 @@ mod validate;
 
 pub(crate) use tx::ChangeTx;
 // The event checks DerivedTx shares (subscribers, C5).
-pub(crate) use validate::{
-    numbers_are_safe, valid_event_type, MAX_DEDUP_KEY_CHARS, MAX_PAYLOAD_BYTES,
-};
+pub(crate) use validate::{dedup_key_ok, numbers_are_safe, MAX_PAYLOAD_BYTES};
 
 /// At most this many events per change: a command that needs more emits one
 /// aggregate event instead.
@@ -140,8 +138,9 @@ pub struct AuditEntry {
 /// A domain event published by a change (ADR-0016 §5).
 #[derive(Debug, Clone)]
 pub struct DomainEvent {
-    /// Lowercase dotted name, e.g. `repository.pushed`.
-    pub event_type: &'static str,
+    /// The registered type (`forge_core::EventType`; its name passes the
+    /// table CHECK, test `every_event_type_passes_the_db_check`).
+    pub event_type: EventType,
     pub schema_version: i16,
     pub aggregate_type: &'static str,
     pub aggregate_id: i64,
@@ -150,9 +149,10 @@ pub struct DomainEvent {
     pub payload: serde_json::Value,
     /// Idempotency of the change (e.g. `push:<repo>:<hash>`): a second
     /// change with the same key is [`Committed::Deduped`] and rolled back.
-    /// Keys are unique instance-wide: build them from server-side ids,
-    /// never from a raw client value (another caller could pre-empt it).
-    pub dedup_key: Option<String>,
+    /// Keys are unique instance-wide, so [`DedupKey`] is built from
+    /// server-side ids, hashes and fixed words only (ADR-0016 D3 amendment);
+    /// the writers check its shape again (`invalid_dedup_key`).
+    pub dedup_key: Option<DedupKey>,
 }
 
 /// Everything a change records besides its state writes.

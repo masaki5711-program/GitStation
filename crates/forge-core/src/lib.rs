@@ -3,6 +3,8 @@
 
 pub mod audit_details;
 pub mod config;
+pub mod dedup_key;
+pub mod event_type;
 pub mod ids;
 pub mod namespace_path;
 #[cfg(any(test, feature = "test-support"))]
@@ -17,6 +19,8 @@ pub mod token;
 pub mod user_kind;
 
 pub use audit_details::AuditDetails;
+pub use dedup_key::{DedupKey, DedupPart};
+pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, RepoId, TombstoneId, UserId};
 pub use namespace_path::PathSegment;
 pub use ref_name::RefName;
@@ -27,6 +31,10 @@ pub use user_kind::UserKind;
 
 #[cfg(test)]
 mod audit_details_tests;
+#[cfg(test)]
+mod dedup_key_tests;
+#[cfg(test)]
+mod event_type_tests;
 #[cfg(test)]
 mod namespace_path_tests;
 #[cfg(test)]

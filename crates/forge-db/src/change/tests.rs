@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::RequestId;
+use forge_core::{DedupKey, EventType, RequestId};
 use forge_errors::ErrorCode;
 use serde_json::json;
 
@@ -21,13 +21,15 @@ fn ctx(actor: Actor) -> ChangeContext {
 
 fn event(n: i64, dedup: Option<&str>) -> DomainEvent {
     DomainEvent {
-        event_type: "repository.created",
+        event_type: EventType::RepositoryCreated,
         schema_version: 1,
         aggregate_type: "repository",
         aggregate_id: n,
         project_id: Some(ProjectId::new(3)),
         payload: json!({ "n": n }),
-        dedup_key: dedup.map(str::to_owned),
+        // Well-formed keys in these tests; the writers' own check is
+        // exercised with `unchecked` malformed ones below.
+        dedup_key: dedup.map(DedupKey::unchecked),
     }
 }
 
@@ -127,13 +129,11 @@ async fn a_change_with_too_many_events_is_rejected_before_writing() {
 #[tokio::test]
 async fn invalid_changes_are_rejected_with_their_reason() {
     let t = FreshDb::migrated().await;
-    let mut bad_type = event(1, None);
-    bad_type.event_type = "Repository Created";
     let mut other_project = event(1, None);
     other_project.project_id = Some(ProjectId::new(99));
     let mut huge_number = event(1, None);
     huge_number.payload = json!({ "n": u64::MAX });
-    let long_key = "k".repeat(201);
+    let long_key = format!("k:{}", "1".repeat(199));
     let act_as = |credential_id: i64| Actor::UserViaServiceAccount {
         user: UserId::new(5),
         via: UserId::new(77),
@@ -157,15 +157,9 @@ async fn invalid_changes_are_rejected_with_their_reason() {
         ),
         (
             ctx(Actor::System),
-            record(vec![bad_type]),
-            "invalid_event_type",
-            None,
-        ),
-        (
-            ctx(Actor::System),
             record(vec![event(1, Some(&long_key))]),
-            "field_too_long",
-            Some("dedup_key"),
+            "invalid_dedup_key",
+            None,
         ),
         (ctx(Actor::System), denied, "events_on_unsuccessful", None),
         (
@@ -632,5 +626,56 @@ async fn an_act_as_change_records_both_people() {
             "asr-1".to_owned()
         )
     );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn every_event_type_passes_the_db_check() {
+    let t = FreshDb::migrated().await;
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    let events: Vec<DomainEvent> = EventType::ALL
+        .into_iter()
+        .zip(1..)
+        .map(|(event_type, n)| DomainEvent {
+            event_type,
+            project_id: None,
+            ..event(n, None)
+        })
+        .collect();
+    let mut rec = record(events);
+    rec.audit.project_id = None;
+    let committed = tx.commit(rec).await.expect("every type is stored");
+    let Committed::Recorded { event_ids } = committed else {
+        panic!("not deduplicated: {committed:?}");
+    };
+    assert_eq!(event_ids.len(), EventType::ALL.len());
+    let mut stored: Vec<String> =
+        sqlx::query_scalar("SELECT event_type FROM forge.events ORDER BY id")
+            .fetch_all(&mut t.superuser().await)
+            .await
+            .expect("types");
+    stored.sort();
+    let mut expected: Vec<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+    expected.sort_unstable();
+    assert_eq!(stored, expected);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_malformed_dedup_key_is_change_rejected() {
+    let t = FreshDb::migrated().await;
+    for raw in ["Push:1", "push", "push:a b", "push:1:2:3:4:5", "push:é"] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx
+            .commit(record(vec![event(1, Some(raw))]))
+            .await
+            .expect_err(raw);
+        assert_reason(&err, ErrorCode::ChangeRejected, "invalid_dedup_key");
+    }
+    assert_eq!(count(&t, "forge.events").await, 0);
     t.drop_now().await;
 }

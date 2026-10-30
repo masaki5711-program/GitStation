@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use forge_core::ids::UserId;
 use forge_core::token::{self, PlainToken};
-use forge_core::{AuditDetails, Scope, UserKind};
+use forge_core::{AuditDetails, EventType, Scope, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, DomainEvent};
@@ -290,9 +290,14 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
         expires_at: expires_at.clone(), // clone: the audit details and the result both keep it
         is_agent: new.is_agent,
     };
-    tx.commit(with_event(&details, user.get(), token_id))
-        .await?
-        .require_recorded(details.action())?;
+    tx.commit(with_event(
+        EventType::TokenCreated,
+        &details,
+        user.get(),
+        token_id,
+    ))
+    .await?
+    .require_recorded(details.action())?;
     Ok(Issued {
         token_id,
         token: plain,
@@ -302,16 +307,23 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
 
 /// The change record of a token change: the audit row on the owner and one
 /// event with the same safe fields.
-fn with_event(details: &AuditDetails, user_id: i64, token_id: i64) -> ChangeRecord {
+fn with_event(
+    event_type: EventType,
+    details: &AuditDetails,
+    user_id: i64,
+    token_id: i64,
+) -> ChangeRecord {
     let mut record = ChangeRecord::audit_only(details, RESOURCE, user_id);
-    record.events.push(event(details, token_id));
+    record.events.push(event(event_type, details, token_id));
     record
 }
 
-/// The `token.*` event of `details` (instance-wide, admin class).
-pub(crate) fn event(details: &AuditDetails, token_id: i64) -> DomainEvent {
+/// The `token.*` event of `details` (instance-wide, admin class);
+/// `event_type` is `details.event_type()`, named by the caller, which knows
+/// it statically.
+pub(crate) fn event(event_type: EventType, details: &AuditDetails, token_id: i64) -> DomainEvent {
     DomainEvent {
-        event_type: details.action(),
+        event_type,
         schema_version: 1,
         aggregate_type: AGGREGATE,
         aggregate_id: token_id,
@@ -369,9 +381,14 @@ pub async fn revoke(
         user: UserId::new(user_id),
         public_id,
     };
-    tx.commit(with_event(&details, user_id, token_id))
-        .await?
-        .require_recorded(details.action())?;
+    tx.commit(with_event(
+        EventType::TokenRevoked,
+        &details,
+        user_id,
+        token_id,
+    ))
+    .await?
+    .require_recorded(details.action())?;
     Ok(RevokeOutcome::Revoked)
 }
 

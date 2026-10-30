@@ -12,13 +12,12 @@
 //! `FG-DB-0008 reason=fanout_limit` and is remembered ([`DerivedTx::limit`])
 //! even if the handler swallows the error.
 
+use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use super::{SourceEvent, MAX_DEPTH, MAX_DERIVED_PER_ROOT};
-use crate::change::{
-    numbers_are_safe, valid_event_type, DomainEvent, MAX_DEDUP_KEY_CHARS, MAX_PAYLOAD_BYTES,
-};
+use crate::change::{dedup_key_ok, numbers_are_safe, DomainEvent, MAX_PAYLOAD_BYTES};
 use crate::query_error;
 
 /// Which derivation limit a handler reached.
@@ -109,7 +108,7 @@ impl<'c> DerivedTx<'c> {
              ON CONFLICT (dedup_key) DO NOTHING RETURNING event_id::text",
         )
         .bind(id.to_string())
-        .bind(event.event_type)
+        .bind(event.event_type.as_str())
         .bind(event.schema_version)
         .bind(event.aggregate_type)
         .bind(event.aggregate_id)
@@ -118,7 +117,7 @@ impl<'c> DerivedTx<'c> {
         .bind(self.seq)
         .bind(self.root)
         .bind(self.depth + 1)
-        .bind(event.dedup_key.as_deref())
+        .bind(event.dedup_key.as_ref().map(DedupKey::as_str))
         .bind(&payload)
         .fetch_optional(&mut *self.conn)
         .await
@@ -152,28 +151,21 @@ fn rejected(reason: &'static str, event: &DomainEvent) -> ForgeError {
     ForgeError::new(ErrorCode::ChangeRejected)
         .with_context("reason", reason)
         .with_context("action", "subscribers.derived_event")
-        .with_context("event_type", event.event_type)
+        .with_context("event_type", event.event_type.as_str())
 }
 
 /// The checks ChangeTx makes on an event (FG-DB-0010), payload size as the
 /// table CHECK measures it.
-async fn check(
+pub(super) async fn check(
     event: &DomainEvent,
     payload: &str,
     conn: &mut PgConnection,
 ) -> Result<(), ForgeError> {
-    if !valid_event_type(event.event_type) {
-        return Err(rejected("invalid_event_type", event));
-    }
     if !numbers_are_safe(&event.payload) {
         return Err(rejected("unsafe_number", event).with_context("field", "payload"));
     }
-    if event
-        .dedup_key
-        .as_deref()
-        .is_some_and(|k| k.chars().count() > MAX_DEDUP_KEY_CHARS)
-    {
-        return Err(rejected("field_too_long", event).with_context("field", "dedup_key"));
+    if !dedup_key_ok(event) {
+        return Err(rejected("invalid_dedup_key", event));
     }
     let bytes: i32 = sqlx::query_scalar("SELECT pg_catalog.pg_column_size($1::jsonb)")
         .bind(payload)

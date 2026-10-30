@@ -26,14 +26,27 @@ component starting with `-`; `branch()`, `tag()`).
 `UserKind` (`human`, `service_account`, `bot`; `ALL`, `as_str`, `parse`; no device kind).
 `Role` (`Guest < … < Owner`; `ALL`, `as_str`, `parse`) and `Visibility` (`private`, `internal`), moved
 from forge-auth in step D2 (forge-auth re-exports them).
-`AuditDetails` (typed `audit_log.details`: `action()`, `to_value()`; no personal data).
+`AuditDetails` (typed `audit_log.details`: `action()`, `to_value()`, `event_type()` —
+`None` for the audit-only actions; no personal data).
+
+**Events** (ADR-0016 §5 and its D3 amendment, step D3 MR1b): `EventType` (`ALL`,
+`as_str`, `parse`, `visibility_class()`) is the one list of event types; a variant
+joins in the commit that adds its writer (now `repository.created`, `token.created`,
+`token.revoked`). `VisibilityClass` (`integration`, `maintainer`, `deployment`,
+`admin`). `DedupKey::new(prefix: &'static str, &[DedupPart])` — parts are `Id(i64)`,
+`Hash(&[u8; 32])` (lowercase hex) and `Word(&'static str)`, so a client string
+cannot become a key (a `compile_fail` doc test); shape
+`^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`, at most 200 characters, else FG-DB-0010
+`reason=invalid_dedup_key` (`prefix`). `DedupKey::is_well_formed` is the check the
+forge-db writers repeat.
 Feature `test-support`: `path_vectors::accepted()` / `rejected()`, the shared
-segment vectors.
+segment vectors; `DedupKey::unchecked` (malformed keys for the writers' tests).
 
 **Error codes owned**: FG-GIT-0005 InvalidRefName (`reason` names the failed rule;
 the rejected name is not logged). FG-REPO-0007 NamespacePathInvalid (`reason`:
 empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; `len`;
 the name is not logged). FG-REPO-0008 NamespacePathReserved (`reason=reserved`).
+Raises FG-DB-0010 ChangeRejected `reason=invalid_dedup_key` (owned by forge-db).
 
 **Gotchas**
 - Adding a configuration key: add it to `KEYS` and to `build()`; an unknown

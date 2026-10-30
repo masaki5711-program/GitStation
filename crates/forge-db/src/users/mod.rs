@@ -288,7 +288,11 @@ pub async fn disable(
             user,
             public_id,
         };
-        record.events.push(crate::tokens::event(&token, token_id));
+        record.events.push(crate::tokens::event(
+            forge_core::EventType::TokenRevoked,
+            &token,
+            token_id,
+        ));
     }
     tx.commit(record)
         .await?

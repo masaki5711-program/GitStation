@@ -272,3 +272,25 @@ async fn the_fanout_limit_is_one_hundred_derived_events_per_root() {
     );
     t.drop_now().await;
 }
+
+#[tokio::test]
+async fn a_malformed_derived_dedup_key_is_change_rejected() {
+    let t = FreshDb::migrated().await;
+    let mut conn = t.db.write_pool().acquire().await.expect("acquire");
+    let mut event = super::tests::derived_event(1);
+    event.dedup_key = Some(forge_core::DedupKey::unchecked("Index:1"));
+    let err = derived::check(&event, "{}", &mut conn)
+        .await
+        .expect_err("malformed key");
+    assert_eq!(err.code(), ErrorCode::ChangeRejected, "{err}");
+    assert!(
+        err.to_string().contains("reason=invalid_dedup_key"),
+        "{err}"
+    );
+    event.dedup_key = Some(forge_core::DedupKey::unchecked("index:1"));
+    derived::check(&event, "{}", &mut conn)
+        .await
+        .expect("well-formed key");
+    drop(conn);
+    t.drop_now().await;
+}

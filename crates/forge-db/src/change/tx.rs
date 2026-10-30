@@ -9,6 +9,7 @@
 
 use std::time::{Duration, Instant};
 
+use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::{PgConnection, Postgres};
 use sqlx::Transaction;
@@ -285,7 +286,7 @@ async fn insert_event(
          $12::jsonb) ON CONFLICT (dedup_key) DO NOTHING RETURNING event_id::text",
     )
     .bind(id.to_string())
-    .bind(event.event_type)
+    .bind(event.event_type.as_str())
     .bind(event.schema_version)
     .bind(event.aggregate_type)
     .bind(event.aggregate_id)
@@ -294,7 +295,7 @@ async fn insert_event(
     .bind(ctx.actor.user())
     .bind(ctx.actor.via())
     .bind(ctx.request_id.as_str())
-    .bind(event.dedup_key.as_deref())
+    .bind(event.dedup_key.as_ref().map(DedupKey::as_str))
     .bind(payload)
     .fetch_optional(&mut *conn)
     .await
