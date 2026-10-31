@@ -23,8 +23,9 @@
 | `04-ci-cd-merge-safety.md` | CI/CD、マージキュー、自動マージの 4 方式、危険の検査 | M4・W8 |
 | `05-step-d-plan.md` | **GitStation の今の実装計画**（D1〜D5、M1 phase 8 の MR1〜MR8） | GitStation の実装 |
 | `06-ai-driven-dev-environment.md` | AI 駆動の開発環境（D-1〜D-7、第 0〜2 段） | 全体の考え方 |
-| `07-team-vibe-coding.md` | **チームで速く・壊れにくく**（W1〜W14、目標の数値、順序、決めたこと） | 連携とエージェントモデルの実装 |
+| `07-team-vibe-coding.md` | **チームで速く・壊れにくく**（W1〜W14。W15〜W17 は 09、目標の数値、順序、決めたこと） | 連携とエージェントモデルの実装 |
 | `07-implementation.md` | 07 の GitStation 側の詳細とリポジトリごとの分担 | 同上 |
+| `09-integrated-platform-design.md` | **統合プラットフォームの基本設計（ユーザーの設計書の整理版）**: エージェントビルダーとマーケットプレイス（W15）、プレビューとピン止めの指摘（W16）、**ポータルと Keycloak の共通のログイン（W17）**、Team Immunity Loop、元の設計書との食い違いの決定。元の設計書は `source/2026-10-31-integrated-platform-draft.md` | 全体の設計・ログイン |
 | `08-ux-simplicity.md` | UI の方針（入口 1 つ、承認待ち 1 か所、言い換え、使いやすさの確かめ方） | 画面を作る |
 | Kanflow `docs/plan/team-dev-implementation.md` | Kanflow 側の詳細（CI、ボード、触る範囲、AC の ID、フィードバックの輪、W12） | Kanflow の実装 |
 | Kanflow `docs/plan/ux-simplicity.md` | 08 の写し | Kanflow の画面 |
@@ -49,9 +50,9 @@
 
 | 段 | GitStation | Kanflow | エージェントモデル |
 |---|---|---|---|
-| **第 0 段（今から 1〜2 週）** | MR4 の修正と統合 → 不安定なテストの検証 → **W2 の CI** → MR5 ∥ phase 9（clone / push） | **W2 の CI**（実 DB と E2E）→ W3 ボードの担当中の印 → 08 の「今どこ」と承認待ち（Kanflow の中から） | **W1 共通プラグイン `ymma-dev-core`** の切り出し → W3 宣言の自動化 → W6 引き継ぎの自動化 → W7 レビューの規則 |
-| **第 1 段（2〜4 週）** | phase 8b（書き込みの API）→ D5 → phase 10 | W4 触る範囲 → W5 AC の ID → **W11 フィードバックの輪** → W12（`equipment`、全体計画の MCP） | W4・W5 の対応、W11 の窓口への切り替え、W12 の `spec-authoring` とベースのリポジトリ・出力のスクリプト |
-| **第 2 段（M2〜M5）** | M2 画面・文書ポータル、M3 連携の土台、M4 CI/CD・マージキュー・自動マージ・**デプロイの API（W13）**、W12 の版の公開のゲート、M5 **ローカル LLM の MR の一次レビュー・障害の一次診断（W14）** | W9 GitStationSource（イベント）、W10 ローカル LLM、承認待ちに GitStation を合流、SSO、**リリースの画面からのデプロイ（W13）**、**自然な言葉の質問・承認の要約（W14）** | 旧版から TMUX 版 / Ver2 へ切り替え |
+| **第 0 段（今から 1〜2 週）** | MR4 の修正と統合 → 不安定なテストの検証 → **W2 の CI** → MR5 ∥ phase 9（clone / push） | **W2 の CI**（実 DB と E2E）→ W3 ボードの担当中の印 → 08 の「今どこ」と承認待ち（Kanflow の中から） | **W1 共通部分をマーケットプレイスの部品の形で切り出す**（09 §3.2） → W3 宣言の自動化 → W6 引き継ぎの自動化 → W7 レビューの規則 |
+| **第 1 段（2〜4 週）** | phase 8b（書き込みの API）→ D5 → phase 10 | **Keycloak の OIDC 化（W17、IoT プラットフォームの準備に合わせる）** → W4 触る範囲 → W5 AC の ID → **W11 フィードバックの輪** → W12（`equipment`、全体計画の MCP） | W4・W5 の対応、W11 の窓口への切り替え、W12 の `spec-authoring` とベースのリポジトリ・出力のスクリプト |
+| **第 2 段（M2〜M5）** | M2 画面・文書ポータル・**Keycloak のログイン（W17）**、**エージェントビルダーとマーケットプレイス（W15）**・**プレビューの環境（W16）**、M3 連携の土台、M4 CI/CD・マージキュー・自動マージ・**デプロイの API（W13）**、W12 の版の公開のゲート、M5 **ローカル LLM の MR の一次レビュー・障害の一次診断（W14）** | W9 GitStationSource（イベント）、W10 ローカル LLM、承認待ちに GitStation を合流、SSO、**リリースの画面からのデプロイ（W13）**、**自然な言葉の質問・承認の要約（W14）** | 旧版から TMUX 版 / Ver2 へ切り替え |
 
 切り替えの条件（旧 Agent_Claudecode → TMUX 版 / Ver2）: GitStation で clone / push と MR ができる、Kanflow 連携の第 0 段が実環境で動く、core を取り込んで CI が緑。1 チームで 1 スプリント試してから全体を切り替える。
 
@@ -71,7 +72,7 @@
 | A-2 | 不安定なテストの修正を検証（fmt / clippy / forge-db のテスト / 負荷をかけた繰り返し）して統合 | GitStation | 負荷で繰り返しても落ちない | 引き継ぎ §2 |
 | B-1 | GitHub Actions の CI（fmt、clippy、Postgres 付きのテスト、gen-catalog / gen-authz の確認、cargo deny / audit） | GitStation | PR で CI が回り、main の保護に入る | 07-implementation §1 |
 | B-2 | GitHub Actions の CI（tsc、eslint、vitest、MySQL 8.4 付きの DB テスト、Playwright） | Kanflow | K5 の DB テスト（6 人の同時の宣言）が実 DB で緑 | Kanflow team-dev-implementation §1 |
-| C-1 | 共通プラグイン `ymma-dev-core` の新しいリポジトリを作り、`kanflow-integration`・`/kanflow`・`lib/kanflow.js`・`kanflow-setup.js` を移す | 新規 + TMUX 版 / Ver2 | 両モデルが core を取り込み、`self-heal --check` が緑 | エージェントモデル team-dev-implementation §2 |
+| C-1 | 共通部分（`kanflow-integration`・`/kanflow`・`lib/kanflow.js`・`kanflow-setup.js`・共通のフック）を、マーケットプレイスの部品の形（`SKILL.md` の階層・frontmatter・版）で切り出し、TMUX 版 / Ver2 で同じものを使う | TMUX 版 / Ver2 | 両モデルで同じ部品、`self-heal --check` が緑、食い違いのゲート | エージェントモデル team-dev-implementation §2 |
 
 並行の目安: A は 1 セッション（GitStation の worktree）、B は 1 セッション（CI のファイルだけ）、C は 1 セッション。Rust のビルドは同時に 2 つまで（ディスク）。
 
@@ -91,6 +92,9 @@ GitStation MR5 ∥ phase 9 → Kanflow W3（ボードの担当中の印）と 08
 | UI | 入口は Kanflow、承認待ちは 1 か所、Git の言葉は言い換える（08） |
 | CI | いまは GitHub Actions、GitStation の CI ができたら移す |
 | 自動マージ | 4 方式（既定 `reserve`）、危険（stop）と本番は必ず人 |
+| ログイン | IoT プラットフォームのポータルを共通の入口にし、Keycloak（OIDC）で 1 回のログイン。細かい権限は各アプリ。git と MCP は本人の個人トークンのまま、システム間だけサービスアカウント（09 §8、W17） |
+| エージェントの配り方 | 1 プロジェクト = 1 リポジトリ。GitStation のエージェントビルダーがマーケットプレイスの部品から `.claude/` 一式を MR で生成し、`.gitstation/agent.lock.json` で版を固定（09 §3〜4。07 W1 のプラグインの案を置き換え） |
+| フック | Node.js（Windows でも動く）。教訓の注入は確認済みだけ、MR で（09 §9） |
 | デプロイ | Kanflow のリリースの画面からも操作できる。実行と権限の判断は GitStation、本人の権限で呼ぶ、本番は人の承認（W13） |
 | Claude とローカル LLM | 深く考える仕事は Claude Code、定型・大量・社外に出せないデータはローカル LLM。優先は MR の一次レビュー・障害の一次診断・自然な言葉の質問・承認の要約（W14） |
 | Kanflow の DB | 運用中なので、**本番サーバー（PFS）へ移すときに PostgreSQL へ移す**（ユーザーの決定、2026-10-31）。それまでの新しい表（W4・W11・W12）は今の MySQL 8.4 で作り、Prisma の型だけを使って MySQL に固有の SQL を書かない（移行のときに PostgreSQL の最初のマイグレーションを作り直す） |
@@ -99,7 +103,8 @@ GitStation MR5 ∥ phase 9 → Kanflow W3（ボードの担当中の印）と 08
 
 | 項目 | 推奨 |
 |---|---|
-| `ymma-dev-core` の置き場所 | GitHub の非公開リポジトリ（GitStation ができたら移す） |
+| 共通部分の置き場所（W15 まで） | 今の TMUX 版 / Ver2 のリポジトリで、マーケットプレイスの部品の形に切り出す（09 §3.2） |
+| Keycloak の準備の時期 | IoT プラットフォーム側の予定に合わせる（Kanflow を先に OIDC 化、GitStation は M2） |
 | プロジェクトの種類 `equipment` | 足す（今は `software` / `process_improvement` / `general`） |
 | GitStation_Agent への詳細の文書の配布 | PC 側で写す（このクラウドのセッションには書き込みの権限がなかった） |
 | PDF とスライドの更新 | W12 と 08 を入れて作り直す（必要なとき） |
