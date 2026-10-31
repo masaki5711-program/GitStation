@@ -1,6 +1,7 @@
 # Product CI (GitHub is source hosting only; GitStation runs on-prem).
-# The database tests use a PostgreSQL 16 service container (ADR-0011).
+# What runs and how to require it in branch protection: docs/ci.md.
 name: ci
+
 on:
   push:
     branches: [main]
@@ -9,28 +10,32 @@ on:
 permissions:
   contents: read
 
+# One run per branch / PR; a new push to a PR cancels the run in progress.
+# Runs on main are never cancelled (every main commit gets a result).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
 jobs:
-  rust:
+  lint:
+    name: fmt + clippy
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: forge_dev
-          POSTGRES_PASSWORD: forge_dev
-          POSTGRES_DB: forge_dev
-        ports: ["55432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U forge_dev -d forge_dev"
-          --health-interval 2s --health-timeout 3s --health-retries 30
-    env:
-      CARGO_TERM_COLOR: always
-      FORGE_TEST_DATABASE_URL: postgres://forge_dev@127.0.0.1:55432/forge_dev
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins the channel; read it so the workflow never
+      # disagrees with the file (rustup would otherwise install a second one).
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -44,6 +49,132 @@ jobs:
             exit 1
           fi
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+
+  test:
+    name: tests (nextest + PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Same image, credentials and port as ops/dev/compose.yml (ADR-0011).
+    # The DB tests connect as the superuser forge_dev (password hard-coded in
+    # crates/forge-db/src/test_support.rs), create a database per test and
+    # reset the forge_* login roles: the target must be loopback.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: forge_dev
+          POSTGRES_PASSWORD: forge_dev
+          POSTGRES_DB: forge_dev
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U forge_dev -d forge_dev"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      FORGE_TEST_DATABASE_URL: postgres://forge_dev@127.0.0.1:55432/forge_dev
+    steps:
+      - uses: actions/checkout@v4
+      # compose.yml starts postgres with max_connections=200; a service
+      # container cannot override the command, so set it and restart.
+      - name: postgres max_connections=200 (as ops/dev/compose.yml)
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$PG_CONTAINER" psql -U forge_dev -d forge_dev -c "ALTER SYSTEM SET max_connections = 200"
+          docker restart "$PG_CONTAINER"
+          for _ in $(seq 1 60); do
+            if docker exec "$PG_CONTAINER" pg_isready -U forge_dev -d forge_dev >/dev/null 2>&1; then
+              docker exec "$PG_CONTAINER" psql -U forge_dev -d forge_dev -tAc "SHOW max_connections"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::postgres did not come back after the restart"
+          docker logs "$PG_CONTAINER"
+          exit 1
+      # forge-git shells out to git; the minimum is 2.38 (merge-tree --write-tree, ADR-0006).
+      - name: git version
+        run: git version
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: cargo nextest run
+        run: cargo nextest run --workspace --profile ci -j 4 --no-fail-fast --retries 1
+      - name: flaky tests (passed only on retry) -> job summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET
+          path = pathlib.Path("target/nextest/ci/junit.xml")
+          out = open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8")
+          if not path.exists():
+              out.write("### Flaky tests\n\nNo JUnit report (the tests did not run).\n")
+              raise SystemExit(0)
+          flaky = []
+          for case in ET.parse(path).getroot().iter("testcase"):
+              failed = case.find("failure") is not None or case.find("error") is not None
+              if not failed and case.find("flakyFailure") is not None:
+                  flaky.append(f'{case.get("classname")} {case.get("name")}')
+          out.write("### Flaky tests (passed only on retry)\n\n")
+          if flaky:
+              out.write("These passed on the second attempt. They are not quarantined: "
+                        "file a Kanflow PBI for each (docs/ci.md).\n\n")
+              out.writelines(f"- `{t}`\n" for t in flaky)
+              for t in flaky:
+                  print(f"::warning title=flaky test::{t} passed only on retry")
+          else:
+              out.write("None.\n")
+          PY
+      - name: upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  generated:
+    name: generated artifacts up to date
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+      # docs/errors/ from crates/forge-errors/errors.toml; docs/authz/ from the permission matrix.
       - run: cargo run -q -p forge-errors --bin gen-catalog -- --check
       - run: cargo run -q -p forge-web --bin gen-authz -- --check
+
+  supply-chain:
+    name: cargo-deny + cargo-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      # deny.toml: advisories, license allow-list, bans, sources. The action
+      # runs in its own container; rust-version makes it honour the pinned
+      # channel of rust-toolchain.toml instead of failing to find it.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          rust-version: ${{ steps.toolchain.outputs.channel }}
+      # cargo-audit reads .cargo/audit.toml (documented waivers).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
