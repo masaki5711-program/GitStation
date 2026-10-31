@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>GitStation・Kanflow・エージェントモデル 完成形の全体像</title>
+<style>
+@page { size: A4; margin: 16mm 15mm 16mm 15mm; }
+:root { --navy:#1B2A44; --teal:#22B8A0; --dteal:#128F7C; --orange:#FF7A45; --pale:#F4FBFC; --gray:#5b6575; --line:#d5dde5; }
+body { font-family: "IPAGothic", "IPAゴシック", sans-serif; color: var(--navy); font-size: 10.5pt; line-height: 1.65; }
+h1 { font-size: 21pt; margin: 0 0 4mm; }
+h2 { font-size: 14pt; border-left: 5px solid var(--teal); padding-left: 3mm; margin: 9mm 0 3mm; page-break-after: avoid; }
+h3 { font-size: 11.5pt; margin: 5mm 0 2mm; color: var(--dteal); page-break-after: avoid; }
+p { margin: 1.5mm 0; }
+table { border-collapse: collapse; width: 100%; margin: 2mm 0 3mm; font-size: 9.5pt; page-break-inside: avoid; }
+th, td { border: 1px solid var(--line); padding: 1.4mm 2mm; vertical-align: top; text-align: left; }
+th { background: var(--pale); }
+.cover { height: 250mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+.cover img { width: 110mm; }
+.sub { color: var(--gray); font-size: 11pt; }
+.note { background: var(--pale); border-left: 4px solid var(--orange); padding: 2mm 3mm; margin: 3mm 0; page-break-inside: avoid; }
+.fig { margin: 3mm 0 4mm; page-break-inside: avoid; text-align: center; }
+.fig svg { width: 100%; height: auto; }
+.cap { font-size: 9pt; color: var(--gray); }
+.done { color: var(--dteal); font-weight: bold; }
+.todo { color: var(--orange); font-weight: bold; }
+.pb { page-break-before: always; }
+ul { margin: 1mm 0 2mm 5mm; padding-left: 3mm; }
+li { margin: 0.6mm 0; }
+</style></head><body>
+
+<div class="cover">
+  <img src="logo-light.png" alt="GitStation">
+  <h1 style="margin-top:12mm">完成形の計画の全体像</h1>
+  <p class="sub">GitStation（社内 Git 基盤）・Kanflow（社内 PM ツール）・エージェントモデル（Claude Code の設定）<br>複数人のバイブコーディングで、速く、壊れにくく開発するための仕組み</p>
+  <p class="sub" style="margin-top:10mm">2026-10-31 時点　／　出典: GitStation <code>docs/plan/01〜07</code>、ADR、引き継ぎメモ</p>
+</div>
+
+<h2>1. 目的と完成形の要点</h2>
+<p>社内で閉じた（オンプレの）環境で、<b>複数の開発者と複数の AI セッションが同時に</b>、PBI から本番デプロイまでを速く、安全に進められるようにする。</p>
+<table>
+<tr><th style="width:24%">柱</th><th>完成形でできること</th></tr>
+<tr><td>計画から実装まで</td><td>Claude Code が Kanflow の PBI・受入基準を読み、タスクに分け、作業を宣言し、並行して実装する</td></tr>
+<tr><td>実装からマージまで</td><td>GitStation に PBI 番号付きのブランチを push → パイプライン → MR → マージキュー → 条件付きの自動マージ</td></tr>
+<tr><td>マージから本番まで</td><td>人の承認で社内サーバーに本番デプロイ → Kanflow のリリースとリリースノートに反映</td></tr>
+<tr><td>品質と安全</td><td>エラーの契約、権限の一点の判断、独立レビュー、危険の検査（個人情報の流出や DB の破壊は自動マージしない）</td></tr>
+<tr><td>学習と再発防止</td><td>失敗と直し方を Kanflow にチームで集め、再発したら仕組み（ゲート・テスト・規則）に変える</td></tr>
+</table>
+<div class="note"><b>「完全無敵」の定義</b>: どれか 1 つの仕組みが外れても、ほかの仕組みが止める（多層の防御）。壊れたら数分で気づき、記録から原因が分かる。失敗はゼロにできないので、§10 の数値で測る。</div>
+
+<h2>2. 全体の構成</h2>
+<div class="fig">
+<svg viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg" font-family="IPAGothic" font-size="14">
+ <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1B2A44"/></marker></defs>
+ <rect x="10" y="10" width="880" height="450" rx="14" fill="#F4FBFC" stroke="#22B8A0" stroke-dasharray="6 4"/>
+ <text x="24" y="34" font-size="13" fill="#128F7C">社内ネットワーク（オンプレ）。外部のクラウドには依存しない</text>
+ <!-- dev pcs -->
+ <rect x="30" y="60" width="250" height="180" rx="10" fill="#fff" stroke="#1B2A44"/>
+ <text x="45" y="85" font-weight="bold">開発者の PC（複数人）</text>
+ <rect x="45" y="98" width="220" height="40" rx="6" fill="#1B2A44"/><text x="58" y="123" fill="#fff">Claude Code</text>
+ <rect x="45" y="146" width="105" height="40" rx="6" fill="#22B8A0"/><text x="53" y="164" fill="#fff" font-size="12">TMUX 版</text><text x="53" y="180" fill="#fff" font-size="11">並行・複数</text>
+ <rect x="160" y="146" width="105" height="40" rx="6" fill="#22B8A0"/><text x="168" y="164" fill="#fff" font-size="12">Ver2</text><text x="168" y="180" fill="#fff" font-size="11">単独・1 つ</text>
+ <rect x="45" y="194" width="220" height="32" rx="6" fill="#fff" stroke="#22B8A0"/><text x="55" y="215" font-size="12">共通プラグイン ymma-dev-core</text>
+ <!-- kanflow -->
+ <rect x="330" y="60" width="250" height="180" rx="10" fill="#fff" stroke="#FF7A45" stroke-width="2"/>
+ <text x="345" y="85" font-weight="bold">Kanflow（PM）</text>
+ <text x="345" y="110" font-size="12">・バックログ / スプリント / タスク</text>
+ <text x="345" y="130" font-size="12">・MCP（Claude 用の道具）</text>
+ <text x="345" y="150" font-size="12">・作業の宣言（取り合いの防止）</text>
+ <text x="345" y="170" font-size="12">・触る範囲 / 受入基準の ID</text>
+ <text x="345" y="190" font-size="12" fill="#FF7A45" font-weight="bold">・フィードバックの輪（教訓）</text>
+ <text x="345" y="210" font-size="12">・リリース / リリースノート</text>
+ <!-- gitstation -->
+ <rect x="630" y="60" width="250" height="180" rx="10" fill="#fff" stroke="#22B8A0" stroke-width="2"/>
+ <text x="645" y="85" font-weight="bold">GitStation（Git 基盤）</text>
+ <text x="645" y="110" font-size="12">・Git の置き場所（clone / push）</text>
+ <text x="645" y="130" font-size="12">・MR / レビュー / 保護ブランチ</text>
+ <text x="645" y="150" font-size="12">・CI/CD / マージキュー</text>
+ <text x="645" y="170" font-size="12">・自動マージ（4 つの方式）</text>
+ <text x="645" y="190" font-size="12">・危険の検査 / 監査 / 履歴</text>
+ <text x="645" y="210" font-size="12">・仕様書の版の管理</text>
+ <!-- bottom -->
+ <rect x="330" y="320" width="250" height="110" rx="10" fill="#fff" stroke="#1B2A44"/>
+ <text x="345" y="345" font-weight="bold">ローカル LLM（Qwen）</text>
+ <text x="345" y="370" font-size="12">・仕様との照合（自動マージの承認）</text>
+ <text x="345" y="390" font-size="12">・MR 要約 / リリースノートの下書き</text>
+ <text x="345" y="410" font-size="12">・教訓の要約（よく起きる失敗）</text>
+ <rect x="630" y="320" width="250" height="110" rx="10" fill="#fff" stroke="#1B2A44"/>
+ <text x="645" y="345" font-weight="bold">社内のアプリサーバー</text>
+ <text x="645" y="370" font-size="12">dev / stg / prod</text>
+ <text x="645" y="390" font-size="12" fill="#FF7A45">本番は人の承認が必須</text>
+ <!-- arrows -->
+ <line x1="280" y1="120" x2="328" y2="120" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <text x="283" y="112" font-size="11">MCP</text>
+ <line x1="280" y1="215" x2="628" y2="250" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <text x="430" y="262" font-size="11">git push / MR</text>
+ <line x1="628" y1="150" x2="582" y2="150" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <line x1="582" y1="170" x2="628" y2="170" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <text x="585" y="143" font-size="11">イベント</text>
+ <line x1="755" y1="240" x2="755" y2="318" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/><text x="762" y="285" font-size="11">デプロイ</text>
+ <line x1="680" y1="240" x2="560" y2="318" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <line x1="455" y1="240" x2="455" y2="318" stroke="#1B2A44" stroke-width="2" marker-end="url(#a)"/>
+ <line x1="60" y1="240" x2="60" y2="300" stroke="#FF7A45" stroke-width="2"/><line x1="60" y1="300" x2="328" y2="200" stroke="#FF7A45" stroke-width="2" marker-end="url(#a)"/>
+ <text x="70" y="290" font-size="11" fill="#FF7A45">失敗・解決の報告（CI からも）</text>
+</svg>
+<div class="cap">図 1　完成形の構成。すべて社内で動く。AI は開発者の PC の Claude Code と、サーバー側のローカル LLM の 2 つ。</div>
+</div>
+
+<table>
+<tr><th style="width:20%">部品</th><th style="width:40%">役割</th><th>技術</th></tr>
+<tr><td>GitStation</td><td>Git の置き場所、MR、CI/CD、自動マージ、デプロイ、仕様書の版の管理</td><td>Rust（axum・tokio・sqlx）、PostgreSQL</td></tr>
+<tr><td>Kanflow</td><td>PBI・スプリント・タスク、MCP、作業の宣言、フィードバックの輪、リリース</td><td>Next.js、Prisma、MariaDB</td></tr>
+<tr><td>エージェントモデル</td><td>Claude Code のエージェント・スキル・フック・規則。開発のやり方を決める</td><td>Node.js のフック、Markdown</td></tr>
+<tr><td>ローカル LLM</td><td>仕様との照合、要約、下書き。外にデータを出さない</td><td>Qwen（社内のサーバー）</td></tr>
+</table>
+
+<h2 class="pb">3. 開発の流れ（PBI から本番まで）</h2>
+<div class="fig">
+<svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="IPAGothic" font-size="13">
+ <defs><marker id="b" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1B2A44"/></marker></defs>
+ <g>
+  <rect x="10" y="40" width="130" height="70" rx="8" fill="#FF7A45"/><text x="22" y="68" fill="#fff" font-weight="bold">① 計画</text><text x="22" y="90" fill="#fff" font-size="11">PBI・受入基準を読む</text>
+  <rect x="160" y="40" width="130" height="70" rx="8" fill="#FF7A45"/><text x="172" y="68" fill="#fff" font-weight="bold">② 分担</text><text x="172" y="90" fill="#fff" font-size="11">タスク化・作業の宣言</text>
+  <rect x="310" y="40" width="130" height="70" rx="8" fill="#1B2A44"/><text x="322" y="68" fill="#fff" font-weight="bold">③ 実装</text><text x="322" y="90" fill="#fff" font-size="11">並行・TDD・AC の ID</text>
+  <rect x="460" y="40" width="130" height="70" rx="8" fill="#22B8A0"/><text x="472" y="68" fill="#fff" font-weight="bold">④ MR</text><text x="472" y="90" fill="#fff" font-size="11">パイプライン・危険の検査</text>
+  <rect x="610" y="40" width="130" height="70" rx="8" fill="#22B8A0"/><text x="622" y="68" fill="#fff" font-weight="bold">⑤ マージ</text><text x="622" y="90" fill="#fff" font-size="11">キュー・自動マージ</text>
+  <rect x="760" y="40" width="130" height="70" rx="8" fill="#22B8A0"/><text x="772" y="68" fill="#fff" font-weight="bold">⑥ 本番</text><text x="772" y="90" fill="#fff" font-size="11">デプロイ・リリース</text>
+ </g>
+ <g stroke="#1B2A44" stroke-width="2"><line x1="140" y1="75" x2="158" y2="75" marker-end="url(#b)"/><line x1="290" y1="75" x2="308" y2="75" marker-end="url(#b)"/><line x1="440" y1="75" x2="458" y2="75" marker-end="url(#b)"/><line x1="590" y1="75" x2="608" y2="75" marker-end="url(#b)"/><line x1="740" y1="75" x2="758" y2="75" marker-end="url(#b)"/></g>
+ <text x="10" y="25" font-size="12" fill="#FF7A45">■ Kanflow</text><text x="110" y="25" font-size="12" fill="#1B2A44">■ 開発者の PC（Claude Code）</text><text x="330" y="25" font-size="12" fill="#128F7C">■ GitStation</text>
+ <g font-size="12">
+  <circle cx="75" cy="150" r="13" fill="#fff" stroke="#FF7A45" stroke-width="3"/><text x="70" y="155" font-weight="bold">人</text><text x="20" y="185">計画の承認</text>
+  <circle cx="525" cy="150" r="13" fill="#fff" stroke="#FF7A45" stroke-width="3"/><text x="520" y="155" font-weight="bold">人</text><text x="455" y="185">危険の検査の stop の解除</text>
+  <circle cx="675" cy="150" r="13" fill="#fff" stroke="#FF7A45" stroke-width="3"/><text x="670" y="155" font-weight="bold">人</text><text x="615" y="185">PO の完了の確定</text>
+  <circle cx="825" cy="150" r="13" fill="#fff" stroke="#FF7A45" stroke-width="3"/><text x="820" y="155" font-weight="bold">人</text><text x="770" y="185">本番デプロイの承認</text>
+ </g>
+ <rect x="10" y="215" width="880" height="70" rx="8" fill="#F4FBFC" stroke="#d5dde5"/>
+ <text x="24" y="240" font-weight="bold">Kanflow への反映（イベント）</text>
+ <text x="24" y="265" font-size="12">MR の状態・パイプラインの結果 → PBI のパネル ／ すべての受入基準が緑の MR のマージ → 完了の候補 ／ 本番デプロイの成功 → リリースの状態と日付 ／ リリースノートの下書き（ローカル LLM）</text>
+</svg>
+<div class="cap">図 2　PBI から本番までの流れ。人が判断するのは 4 か所だけ（丸印）。</div>
+</div>
+<h3>自動マージの方式（プロジェクトごとに選ぶ）</h3>
+<table>
+<tr><th style="width:18%">方式</th><th>動き</th><th style="width:22%">人の関与</th></tr>
+<tr><td>off</td><td>自動マージしない</td><td>毎回</td></tr>
+<tr><td>reserve（既定）</td><td>人が「承認してマージを予約」すると、CI が緑になった時点でマージ</td><td>予約の 1 回</td></tr>
+<tr><td>conditional</td><td>共通の条件 + AI の仕様照合の承認で自動。認証・DB のマイグレーションなど保護するパスは人を待つ</td><td>保護するパスだけ</td></tr>
+<tr><td>full</td><td>共通の条件 + AI の承認で、パスの例外なく自動</td><td>なし</td></tr>
+</table>
+<p>共通の条件: マージキューで、先に並ぶ MR を含めたマージ結果のパイプラインが緑。必須チェックがすべて緑。<b>個人情報・機密の流出や DB の破壊の危険（stop）は、どの方式でも止めて人の承認を待つ</b>。マージするのは GitStation の「自動マージ」の主体で、AI のトークン自身にはマージの権限を与えない。</p>
+
+<h2 class="pb">4. 複数人・複数の AI での並行開発</h2>
+<p>取り合いと衝突を、段階を分けて防ぐ。</p>
+<div class="fig">
+<svg viewBox="0 0 900 230" xmlns="http://www.w3.org/2000/svg" font-family="IPAGothic" font-size="13">
+ <rect x="10" y="20" width="280" height="190" rx="10" fill="#fff" stroke="#FF7A45" stroke-width="2"/>
+ <text x="25" y="48" font-weight="bold">① タスクの単位（実装済み K5）</text>
+ <text x="25" y="75" font-size="12">作業の宣言: 誰が・どのセッション・</text><text x="25" y="93" font-size="12">どのブランチで作業中か</text>
+ <text x="25" y="118" font-size="12">別の人の宣言中は 409 で拒否</text>
+ <text x="25" y="140" font-size="12">生存確認がないと 4 時間で失効</text>
+ <text x="25" y="162" font-size="12">PO / SM はほかの人の宣言も解除</text>
+ <text x="25" y="190" font-size="12" fill="#FF7A45">次: ボードに「作業中」を表示（W3）</text>
+ <rect x="310" y="20" width="280" height="190" rx="10" fill="#fff" stroke="#1B2A44" stroke-width="2"/>
+ <text x="325" y="48" font-weight="bold">② ファイルの単位（W4）</text>
+ <text x="325" y="75" font-size="12">計画の時点で「触る範囲」を登録</text>
+ <text x="325" y="100" font-size="12">範囲が重なる作業を、作り始める</text><text x="325" y="118" font-size="12">前に知らせる</text>
+ <text x="325" y="143" font-size="12">push のとき実際の差分と比べ、</text><text x="325" y="161" font-size="12">宣言の外を触ったら警告</text>
+ <rect x="610" y="20" width="280" height="190" rx="10" fill="#fff" stroke="#22B8A0" stroke-width="2"/>
+ <text x="625" y="48" font-weight="bold">③ マージの単位（M4）</text>
+ <text x="625" y="75" font-size="12">マージキュー: 先の MR を含めた</text><text x="625" y="93" font-size="12">マージ結果でパイプライン</text>
+ <text x="625" y="118" font-size="12">組み合わせると壊れる変更を止める</text>
+ <text x="625" y="143" font-size="12">衝突は AI が別ブランチで解消案</text><text x="625" y="161" font-size="12">→ 人が承認して適用</text>
+</svg>
+<div class="cap">図 3　並行開発の 3 段の防御。① はタスク、② はファイル、③ はマージの結果を守る。</div>
+</div>
+<h3>エージェントモデルの使い分け</h3>
+<table>
+<tr><th style="width:24%">モデル</th><th>使う場面</th><th style="width:28%">状態</th></tr>
+<tr><td>旧 Agent_Claudecode</td><td>いまの開発（GitStation と Kanflow の連携ができるまで）</td><td>現役。不具合の修正だけ</td></tr>
+<tr><td>TMUX 版</td><td>大きな機能・複数の PBI を、複数のセッションで並行して速く進める（リーダー 1 + 作業者 n、作業者ごとに worktree）</td><td>準備中。全体ができたら切り替え</td></tr>
+<tr><td>Ver2</td><td>1 つの PBI・小さな修正を、1 つのセッションで少ないコンテキストで進める</td><td>準備中。全体ができたら切り替え</td></tr>
+<tr><td>GitStation_Agent</td><td>GitStation 自体の開発</td><td>現役</td></tr>
+</table>
+<p>TMUX 版と Ver2 は、共通の部分（Kanflow 連携、作業の宣言、レビューの回し方、git の規則、フック）を<b>1 つのプラグイン ymma-dev-core</b>から取り込み、違いは「並行か単独か」だけにする。版は semver、配布は beta → stable の 2 段。共通部分と食い違うと、各モデルのゲートが赤になる。</p>
+
+<h2 class="pb">5. 品質と安全の仕組み（多層の防御）</h2>
+<table>
+<tr><th style="width:22%">層</th><th>仕組み</th><th style="width:18%">状態</th></tr>
+<tr><td>エラーの契約</td><td>すべての失敗に番号 FG-&lt;領域&gt;-&lt;番号&gt;（原因・診断・直し方・手順書・テスト）。ログには request_id と error_code。利用者には user_message と request_id だけ</td><td class="done">GitStation で稼働</td></tr>
+<tr><td>権限</td><td>判断は forge_auth::authorize() の 1 か所。すべてのルートと git の操作が許可・拒否の両方の行を持つ表に載る。証明（Authorized）がないとハンドラに届かない</td><td class="done">GitStation で稼働</td></tr>
+<tr><td>失敗の握りつぶしの禁止</td><td>Result を捨てない、unwrap / panic を本番の経路に置かない、外部の呼び出しには必ずタイムアウト</td><td class="done">規則とレビュー</td></tr>
+<tr><td>存在の漏れの防止</td><td>無いパス・削除済み・見えないパスは同じ応答。DB の問い合わせも同じ形</td><td class="done">phase 8 で実装</td></tr>
+<tr><td>独立レビュー</td><td>作った AI と評価する AI を分ける。言語・セキュリティ・DB・権限・git の評価役。見逃しは eval にする</td><td class="done">運用中</td></tr>
+<tr><td>ゲート（機械の検査）</td><td>fmt・clippy・テスト・エラーの目録・権限の表・生成物・i18n を AI のレビューより先に</td><td>一部。CI は W2</td></tr>
+<tr><td>マージの安全</td><td>マージキュー、危険の検査（stop）、本番は人の承認、main が壊れたら原因の特定と revert の下書き</td><td class="todo">M4</td></tr>
+</table>
+
+<h2>6. フィードバックの輪（Kanflow に移す・W11）</h2>
+<div class="fig">
+<svg viewBox="0 0 900 290" xmlns="http://www.w3.org/2000/svg" font-family="IPAGothic" font-size="13">
+ <defs><marker id="c" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#FF7A45"/></marker></defs>
+ <rect x="10" y="20" width="200" height="110" rx="10" fill="#fff" stroke="#1B2A44"/>
+ <text x="25" y="45" font-weight="bold">送り手</text>
+ <text x="25" y="70" font-size="12">・AI のセッション（窓口）</text><text x="25" y="90" font-size="12">・CI の失敗したジョブ</text><text x="25" y="110" font-size="12">・GitStation（M3 以降）</text>
+ <rect x="260" y="20" width="630" height="250" rx="12" fill="#F4FBFC" stroke="#FF7A45" stroke-width="2"/>
+ <text x="275" y="45" font-weight="bold" fill="#FF7A45">Kanflow のサーバー（輪そのもの）</text>
+ <g font-size="12">
+ <rect x="280" y="60" width="180" height="60" rx="8" fill="#fff" stroke="#d5dde5"/><text x="292" y="85" font-weight="bold">1 照合</text><text x="292" y="105">署名を作り、教訓を返す</text>
+ <rect x="490" y="60" width="180" height="60" rx="8" fill="#fff" stroke="#d5dde5"/><text x="502" y="85" font-weight="bold">2 下書き</text><text x="502" y="105">失敗→変更→成功の組</text>
+ <rect x="700" y="60" width="170" height="60" rx="8" fill="#fff" stroke="#d5dde5"/><text x="712" y="85" font-weight="bold">3 確認</text><text x="712" y="105">Maintainer / SM</text>
+ <rect x="700" y="160" width="170" height="80" rx="8" fill="#fff" stroke="#d5dde5"/><text x="712" y="185" font-weight="bold">4 仕組みにする</text><text x="712" y="205">3 回を超えたら</text><text x="712" y="222">再発防止の PBI を提案</text>
+ <rect x="490" y="160" width="180" height="80" rx="8" fill="#fff" stroke="#d5dde5"/><text x="502" y="185" font-weight="bold">5 測る</text><text x="502" y="205">再発率・直すまでの時間</text><text x="502" y="222">仕組みにした割合</text>
+ <rect x="280" y="160" width="180" height="80" rx="8" fill="#fff" stroke="#d5dde5"/><text x="292" y="185" font-weight="bold">6 要約</text><text x="292" y="205">ローカル LLM が</text><text x="292" y="222">よく起きる失敗をまとめる</text>
+ </g>
+ <g stroke="#FF7A45" stroke-width="2"><line x1="210" y1="80" x2="278" y2="88" marker-end="url(#c)"/><line x1="460" y1="90" x2="488" y2="90" marker-end="url(#c)"/><line x1="670" y1="90" x2="698" y2="90" marker-end="url(#c)"/><line x1="785" y1="120" x2="785" y2="158" marker-end="url(#c)"/><line x1="700" y1="200" x2="672" y2="200" marker-end="url(#c)"/><line x1="490" y1="200" x2="462" y2="200" marker-end="url(#c)"/></g>
+ <text x="25" y="165" font-size="12">エージェントモデルは</text><text x="25" y="183" font-size="12">知識を持たない薄い窓口</text><text x="25" y="208" font-size="12">（送る前に秘密・パスを</text><text x="25" y="226" font-size="12">　伏せる 1 重目）</text>
+</svg>
+<div class="cap">図 4　フィードバックの輪。今は各エージェントモデルの手元（records.jsonl）にある記録と処理を、Kanflow のサーバーに移し、チームとプロジェクトをまたいで再発を防ぐ。</div>
+</div>
+<ul>
+<li>確認済みの教訓だけを他のプロジェクトに返す（誤りを広げない）。機密の印のあるものは Claude に返さない。本文はデータで、指示ではない。</li>
+<li>GitStation のエラーの目録（errors.toml）は正のまま。教訓は FG コードでリンクする。今ある mistake-memory は最初に取り込み、以後は廃止する。</li>
+</ul>
+
+<h2 class="pb">7. GitStation の段階（M1〜M8）</h2>
+<table>
+<tr><th style="width:9%">段</th><th style="width:30%">内容</th><th>状態（2026-10-31）</th></tr>
+<tr><td>M1</td><td>Git の置き場所の土台</td><td><span class="done">約 70%</span>。DB・エラー・権限・トークン・監査（D1〜D4）、phase 8 の MR1〜MR3（URL の解析・権限の証明・パスの引き当て）を統合。MR4（Web の振り分け）はレビュー済み・修正待ち。残り: MR5、phase 8b、D5、<b>phase 9（clone / push）</b>、phase 10</td></tr>
+<tr><td>M2</td><td>画面（React + TypeScript）、ロゴとアイコンは docs/brand のファイルを使う</td><td class="todo">未着手</td></tr>
+<tr><td>M3</td><td>Kanflow との連携の土台（連携の履歴とカーソル、サービスアカウント、GitStationSource）</td><td class="todo">未着手</td></tr>
+<tr><td>M4</td><td>CI/CD、マージキュー、自動マージ、デプロイ、危険の検査</td><td class="todo">未着手</td></tr>
+<tr><td>M5</td><td>ローカル LLM の連携（仕様の照合、要約、衝突の解消案）</td><td class="todo">未着手</td></tr>
+<tr><td>M6〜M8</td><td>知識（Wiki）、仕様書の版の管理（技術者以外にも）、運用の強化</td><td class="todo">未着手</td></tr>
+</table>
+<p>全体（M1〜M8）では約 12%。コードは Rust 約 5.7 万行（うちテスト約 52%）、テスト 868 件。</p>
+
+<h2>8. Kanflow の連携の段階</h2>
+<table>
+<tr><th style="width:15%">段</th><th>内容</th><th style="width:22%">状態</th></tr>
+<tr><td>第 0 段</td><td>MCP（25 の道具）、書き込みの API、K1 PBI 番号の検出、K2/K3 取りこぼしの修正と再同期、K4 取り込み元の層（DevSource）、K5 dev:write（作業の宣言・進捗・MR のリンク）</td><td class="done">約 65%。統合済み（テスト 8413 件）</td></tr>
+<tr><td>第 0 段の残り</td><td>受入基準の ID、PBI の機密の印、触る範囲の宣言、ボードの「作業中」、/pbi からの宣言の自動化、流れの数値</td><td class="todo">これから</td></tr>
+<tr><td>第 1 段以降</td><td>GitStation から読む（M3）、完了の候補・リリースの更新・カレンダー（M4）</td><td class="todo">GitStation の後</td></tr>
+</table>
+<p>Kanflow は製品としてはほぼ完成（TypeScript 約 22 万行）。MariaDB での DB テストと E2E は、CI（W2）で必ず流すようにする。</p>
+
+<h2 class="pb">9. ロードマップ（計画 07 の W1〜W11）</h2>
+<div class="fig">
+<svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" font-family="IPAGothic" font-size="12">
+ <text x="10" y="20" font-weight="bold" font-size="13">第 0 段（1〜2 週）</text>
+ <text x="310" y="20" font-weight="bold" font-size="13">第 1 段（2〜4 週）</text>
+ <text x="610" y="20" font-weight="bold" font-size="13">第 2 段（GitStation M3〜M4）</text>
+ <g>
+ <rect x="10" y="32" width="280" height="36" rx="6" fill="#22B8A0"/><text x="20" y="55" fill="#fff">W1 エージェントモデルの一本化（core）</text>
+ <rect x="10" y="74" width="280" height="36" rx="6" fill="#22B8A0"/><text x="20" y="97" fill="#fff">W2 両製品の CI（DB テスト・E2E）</text>
+ <rect x="10" y="116" width="280" height="36" rx="6" fill="#22B8A0"/><text x="20" y="139" fill="#fff">W3 作業中の表示・宣言の自動化</text>
+ <rect x="10" y="158" width="280" height="36" rx="6" fill="#22B8A0"/><text x="20" y="181" fill="#fff">W6 引き継ぎの自動化</text>
+ <rect x="10" y="200" width="280" height="36" rx="6" fill="#22B8A0"/><text x="20" y="223" fill="#fff">W7 レビューの規則と費用</text>
+ <rect x="310" y="32" width="280" height="36" rx="6" fill="#1B2A44"/><text x="320" y="55" fill="#fff">W4 触る範囲と衝突の予測</text>
+ <rect x="310" y="74" width="280" height="36" rx="6" fill="#1B2A44"/><text x="320" y="97" fill="#fff">W5 受入基準の ID とテスト</text>
+ <rect x="310" y="116" width="280" height="36" rx="6" fill="#FF7A45"/><text x="320" y="139" fill="#fff">W11 フィードバックの輪を Kanflow へ</text>
+ <rect x="310" y="158" width="280" height="36" rx="6" fill="#1B2A44"/><text x="320" y="181" fill="#fff">指標の測定（§10）</text>
+ <rect x="610" y="32" width="280" height="36" rx="6" fill="#5b6575"/><text x="620" y="55" fill="#fff">W8 PBI から本番までの 1 本の流れ</text>
+ <rect x="610" y="74" width="280" height="36" rx="6" fill="#5b6575"/><text x="620" y="97" fill="#fff">W9 ポーリングからイベントへ</text>
+ <rect x="610" y="116" width="280" height="36" rx="6" fill="#5b6575"/><text x="620" y="139" fill="#fff">W10 定型の作業をローカル LLM に</text>
+ <rect x="610" y="158" width="280" height="36" rx="6" fill="#fff" stroke="#5b6575"/><text x="620" y="181">旧版 → TMUX 版 / Ver2 に切り替え</text>
+ </g>
+</svg>
+<div class="cap">図 5　ロードマップ。第 0〜1 段は GitLab のままでも進められる。GitStation 自体の順序（MR4 → MR5 ∥ phase 9 → 8b → D5）は変えない。</div>
+</div>
+<table>
+<tr><th style="width:9%">W</th><th style="width:30%">内容</th><th>完了の条件</th></tr>
+<tr><td>W1</td><td>共通部分をプラグイン ymma-dev-core に</td><td>TMUX 版と Ver2 が取り込み、Kanflow 連携の変更が 1 回で両方に届く。食い違いのゲートが CI で動く</td></tr>
+<tr><td>W2</td><td>CI でテストを回す</td><td>どの PR も CI が緑でないとマージできない。未検証の統合が 0</td></tr>
+<tr><td>W3</td><td>作業中の表示と宣言の自動化</td><td>2 人 + 2 つの AI が同じスプリントで、取り合い 0 件、全員の作業が見える</td></tr>
+<tr><td>W4</td><td>触る範囲の宣言</td><td>衝突による手戻りが MR 10 件あたり 1 件以下</td></tr>
+<tr><td>W5</td><td>受入基準の ID とテスト</td><td>AI が残りの AC を判断でき、PO の完了の確定に要る情報が MR に揃う</td></tr>
+<tr><td>W6</td><td>引き継ぎの自動化</td><td>新しいセッションが最初の 1 分で再開の場所を言える</td></tr>
+<tr><td>W7</td><td>レビューの費用</td><td>1 MR あたりの AI レビューが 2〜3 回、マージ後の欠陥が増えない</td></tr>
+<tr><td>W8</td><td>1 本の流れ</td><td>人の判断が 4 か所だけで PBI が本番に届く</td></tr>
+<tr><td>W9</td><td>イベント</td><td>MR・パイプラインの変化が数秒で Kanflow に出る</td></tr>
+<tr><td>W10</td><td>ローカル LLM</td><td>定型の文章で Claude のクレジットを使わない</td></tr>
+<tr><td>W11</td><td>フィードバックの輪</td><td>別プロジェクトの教訓で直った例がある。3 回を超えた失敗がすべて PBI になる</td></tr>
+</table>
+
+<h2>10. 目標（測るもの）</h2>
+<table>
+<tr><th>指標</th><th style="width:40%">目標</th></tr>
+<tr><td>PBI の着手から MR まで</td><td>測定を始め、中央値を半分に</td></tr>
+<tr><td>並行作業の衝突による手戻り</td><td>MR 10 件あたり 1 件以下</td></tr>
+<tr><td>同じエラーの再発（プロジェクトをまたいで）</td><td>確認済みの教訓がある失敗で 0 件</td></tr>
+<tr><td>マージ後に見つかった欠陥</td><td>0 を目標（見つかったら eval に足す）</td></tr>
+<tr><td>main が赤い時間</td><td>0（マージキュー）</td></tr>
+<tr><td>未検証のまま統合した変更</td><td>0（CI）</td></tr>
+<tr><td>1 MR あたりの AI レビューの回数</td><td>2〜3 回</td></tr>
+<tr><td>新しい開発者が最初の MR を出すまで</td><td>1 日以内</td></tr>
+</table>
+
+<h2>11. 決めたこと（推奨案）</h2>
+<ul>
+<li>共通部分の配り方: Claude Code のプラグインと社内のマーケットプレイス。最初は GitHub の非公開リポジトリ、GitStation ができたら移す。</li>
+<li>旧 Agent_Claudecode: 全体ができるまで今のまま使う（不具合の修正だけ）。その後 TMUX 版と Ver2 に切り替える。</li>
+<li>CI: いまは GitHub Actions。GitStation の CI ができたら移す（オンプレの原則）。</li>
+<li>作業の宣言: セッションの開始で自動に宣言する。</li>
+<li>フィードバックの輪: エージェントモデルではなく Kanflow のサーバーの機能にする。</li>
+</ul>
+
+<h2>12. 次にやること</h2>
+<ol>
+<li>GitStation: MR4 の指摘（MEDIUM 2 件）を直して統合 → 不安定なテストの修正を検証 → MR5 ∥ phase 9（clone / push）。</li>
+<li>計画 07 の第 0 段: W1（core の切り出し）と W2（CI）から。</li>
+<li>Kanflow: MariaDB での DB テストと E2E を CI で流す。</li>
+</ol>
+</body></html>
