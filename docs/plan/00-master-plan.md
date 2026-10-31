@@ -50,7 +50,7 @@
 | 段 | GitStation | Kanflow | エージェントモデル |
 |---|---|---|---|
 | **第 0 段（今から 1〜2 週）** | MR4 の修正と統合 → 不安定なテストの検証 → **W2 の CI** → MR5 ∥ phase 9（clone / push） | **W2 の CI**（実 DB と E2E）→ W3 ボードの担当中の印 → 08 の「今どこ」と承認待ち（Kanflow の中から） | **W1 共通プラグイン `ymma-dev-core`** の切り出し → W3 宣言の自動化 → W6 引き継ぎの自動化 → W7 レビューの規則 |
-| **第 1 段（2〜4 週）** | phase 8b（書き込みの API）→ D5 → phase 10 | **PostgreSQL への移行（段階 T、推奨）** → W4 触る範囲 → W5 AC の ID → **W11 フィードバックの輪** → W12（`equipment`、全体計画の MCP） | W4・W5 の対応、W11 の窓口への切り替え、W12 の `spec-authoring` とベースのリポジトリ・出力のスクリプト |
+| **第 1 段（2〜4 週）** | phase 8b（書き込みの API）→ D5 → phase 10 | W4 触る範囲 → W5 AC の ID → **W11 フィードバックの輪** → W12（`equipment`、全体計画の MCP） | W4・W5 の対応、W11 の窓口への切り替え、W12 の `spec-authoring` とベースのリポジトリ・出力のスクリプト |
 | **第 2 段（M2〜M4）** | M2 画面・文書ポータル、M3 連携の土台、M4 CI/CD・マージキュー・自動マージ、W12 の版の公開のゲート | W9 GitStationSource（イベント）、W10 ローカル LLM、承認待ちに GitStation を合流、SSO | 旧版から TMUX 版 / Ver2 へ切り替え |
 
 切り替えの条件（旧 Agent_Claudecode → TMUX 版 / Ver2）: GitStation で clone / push と MR ができる、Kanflow 連携の第 0 段が実環境で動く、core を取り込んで CI が緑。1 チームで 1 スプリント試してから全体を切り替える。
@@ -91,12 +91,12 @@ GitStation MR5 ∥ phase 9 → Kanflow W3（ボードの担当中の印）と 08
 | UI | 入口は Kanflow、承認待ちは 1 か所、Git の言葉は言い換える（08） |
 | CI | いまは GitHub Actions、GitStation の CI ができたら移す |
 | 自動マージ | 4 方式（既定 `reserve`）、危険（stop）と本番は必ず人 |
+| Kanflow の DB | 運用中なので、**本番サーバー（PFS）へ移すときに PostgreSQL へ移す**（ユーザーの決定、2026-10-31）。それまでの新しい表（W4・W11・W12）は今の MySQL 8.4 で作り、Prisma の型だけを使って MySQL に固有の SQL を書かない（移行のときに PostgreSQL の最初のマイグレーションを作り直す） |
 
 ## 7. まだ決めていないこと（推奨案）
 
 | 項目 | 推奨 |
 |---|---|
-| Kanflow の PostgreSQL への移行の時期 | 第 1 段の最初（W4・W11・W12 の新しい表の前） |
 | `ymma-dev-core` の置き場所 | GitHub の非公開リポジトリ（GitStation ができたら移す） |
 | プロジェクトの種類 `equipment` | 足す（今は `software` / `process_improvement` / `general`） |
 | GitStation_Agent への詳細の文書の配布 | PC 側で写す（このクラウドのセッションには書き込みの権限がなかった） |
