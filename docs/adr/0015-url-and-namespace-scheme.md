@@ -699,8 +699,15 @@ impl<S> Registry<S> {
   送るときに `namespace.redirected`（warn、`namespace_id`、`tombstone_id`、`route`）を出す。見えない行き先は、ないパスと同じ 404 で、今のパスは出さない。
   - **残り（phase 9 で決める）**: `Resource::Project` は `via` を持たないので、プロジェクトのルートで墓標の先が見えないときのログは
     `reason=not_visible` に `via=moved` と `tombstone_id` を添えた形になる（`tombstone_not_visible` ではない。応答は同じ）。
-- **語ごとのガード**: 登録の仕組みが `is_public_word(verb, route)`（その語の RouteDef がすべて公開のときだけ真）を持つ。公開と非公開が混ざった語は認証を求め、
-  認証の後に解決した種類が公開の RouteDef を選べば殻を返す。製品の公開の語の RouteDef がすべて `WebShell` であることをテストで確かめる。
+- **語ごとのガード**: 登録の仕組みが `is_public_word(verb, route)`（その語の RouteDef がすべて公開のときだけ真）を持つ。製品の公開の語の RouteDef が
+  すべて `WebShell` であることをテストで確かめる。
+  - **公開と非公開が混ざった語は、登録で拒否する**（FG-WEB-0004、`word_mixes_public_and_non_public`。同じ verb の語ごと）。上の判定の順序の 4 と
+    phase 8 のテストの「混ざった語は認証を求める」を、この形に置き換えた。混ざった語を許すと、認証と解決の後にグループの殻を、グループの文脈の
+    `prove()` を通さずに返すことになり（`moved` も無視する）、`raw` / `archive` を登録した時点で、見えないグループの存在が分かってしまうからである。
+    グループの `raw` は「ない」と同じ扱いなので、混ざった語が要る場面はない。非公開の語のルートに `InstanceCtx` のハンドラが来たら、
+    FG-SYS-0001（`reason=instance_context_on_non_public_word`）にする。
+  - **要求のタイムアウト**: `forge serve` は `request_timeout` を、30 秒と「認証の上限（acquire + statement_timeout）+ 照会の上限 + 1 秒」の
+    大きいほうにする。既定値（3 秒 + 15 秒）でも 2 つの合計は 30 秒を超え、外側の FG-WEB-0002 が先に切れて DB の原因（FG-DB-0001）がログから消えるためである。
 - **`scoped()` の登録の規則**（違反は FG-WEB-0004）: 形とスコープ（Home → Namespace、語 → Group / Project、git → ProjectGit、固定リンク → Instance）、
   `query_key`（`info/refs` だけが `("service", …)` を持つ）、verb（広告は GET / HEAD、POST は upload / receive-pack）、文脈の型
   （公開は `InstanceCtx`、非公開は今は Project / ProjectGit の `ProjectCtx` だけ。グループと個人の名前空間の文脈は、最初の非公開のルートと一緒に forge-auth に足す）。

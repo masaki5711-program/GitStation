@@ -6,8 +6,10 @@
 //! `FG-AUTH-0001` without an authenticated principal and `FG-AUTH-0004` for a
 //! disabled account — the same preamble as `forge_auth::authorize()`.
 //!
-//! This is authentication only: the per-resource decision is still the
-//! handler's `forge_auth::authorize(.., def.action, ..)` call.
+//! This is authentication only: the per-resource decision is the
+//! registry's `forge_auth::prove(principal, def.action, ctx)` on what the
+//! route's loader (or the dispatcher's resolution) found; the handler only
+//! receives the admitted proof and never calls `authorize()` itself.
 
 use axum::extract::{Request, State};
 use axum::http::header::ACCEPT_LANGUAGE;

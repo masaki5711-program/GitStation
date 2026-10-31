@@ -224,10 +224,12 @@ fn the_same_word_in_two_scopes_or_two_verbs_is_not_a_duplicate() {
 }
 
 #[test]
-fn a_word_mixing_public_and_non_public_routes_is_not_public() {
-    // ADR-0015 step 4: public only when every route with the word is.
+fn a_word_mixing_public_and_non_public_routes_is_a_startup_error() {
+    // A mixed word would resolve to the group's shell after authentication
+    // without a proof on the group (and ignore `moved`): an existence
+    // oracle. Refused in either registration order, for that verb only.
     let raw = ScopedRoute::Word(RouteWord::Raw);
-    let registry: Registry<AppState> = Registry::new()
+    let public_first: Registry<AppState> = Registry::new()
         .scoped(
             RouteScope::Group,
             Verb::Get,
@@ -246,9 +248,76 @@ fn a_word_mixing_public_and_non_public_routes_is_not_public() {
             "p",
             project,
         );
-    assert!(!registry.is_public_word(Verb::Get, raw));
+    let problems_public_first = problems(public_first);
+    assert!(
+        problems_public_first.contains("[project] GET raw: word_mixes_public_and_non_public"),
+        "{problems_public_first}"
+    );
+    let non_public_first: Registry<AppState> = Registry::new()
+        .scoped(
+            RouteScope::Project,
+            Verb::Get,
+            raw,
+            None,
+            Action::RepoRead,
+            "p",
+            project,
+        )
+        .scoped(
+            RouteScope::Group,
+            Verb::Get,
+            raw,
+            None,
+            Action::WebShell,
+            "g",
+            shell,
+        );
+    let problems_non_public_first = problems(non_public_first);
+    assert!(
+        problems_non_public_first.contains("[group] GET raw: word_mixes_public_and_non_public"),
+        "{problems_non_public_first}"
+    );
+    // The same word under another verb is another word: no conflict.
+    let other_verb: Registry<AppState> = Registry::new()
+        .scoped(
+            RouteScope::Group,
+            Verb::Head,
+            raw,
+            None,
+            Action::WebShell,
+            "g",
+            shell,
+        )
+        .scoped(
+            RouteScope::Project,
+            Verb::Get,
+            raw,
+            None,
+            Action::RepoRead,
+            "p",
+            project,
+        );
+    assert!(!other_verb.is_public_word(Verb::Get, raw));
+    assert!(other_verb.is_public_word(Verb::Head, raw));
+    assert_eq!(problems(other_verb), "");
+}
+
+#[test]
+fn a_word_is_public_only_when_every_route_with_it_is() {
+    // ADR-0015 step 4.
+    let raw = ScopedRoute::Word(RouteWord::Raw);
+    let non_public: Registry<AppState> = Registry::new().scoped(
+        RouteScope::Project,
+        Verb::Get,
+        raw,
+        None,
+        Action::RepoRead,
+        "p",
+        project,
+    );
+    assert!(!non_public.is_public_word(Verb::Get, raw));
     // Another verb of the same word has no route: not public either.
-    assert!(!registry.is_public_word(Verb::Head, raw));
+    assert!(!non_public.is_public_word(Verb::Head, raw));
     let only_public: Registry<AppState> = Registry::new()
         .scoped(
             RouteScope::Group,

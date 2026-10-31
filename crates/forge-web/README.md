@@ -36,8 +36,9 @@ admitted proof.
   never resolve); non-public scoped routes are `Project` / `ProjectGit` with
   `ProjectCtx` for now (group / user contexts join with their first route).
   `is_public_word(verb, route)` is true only when every route with the word is
-  public. A registration that does not fit (scope, query key, verb, context)
-  is `FG-WEB-0004`. `Verb::Head` is registered explicitly for scoped routes
+  public; a word (per verb) that mixes public and non-public routes is refused
+  (`word_mixes_public_and_non_public`). A registration that does not fit
+  (scope, query key, verb, context, mixed word) is `FG-WEB-0004`. `Verb::Head` is registered explicitly for scoped routes
   (a fixed `GET` also answers `HEAD`, axum).
 - The dispatcher (`src/dispatch.rs`, the router's fallback; ADR-0015 "判定の
   順序"): (1) `parse_web_path(req.uri().path(), req.uri().query())` on the raw

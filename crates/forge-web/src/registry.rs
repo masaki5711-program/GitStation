@@ -508,8 +508,10 @@ impl<S> ScopedTable<S> {
     }
 
     /// Public only when every route with `(verb, route)` is public (and
-    /// there is one): a word mixing a public and a non-public route
-    /// requires authentication (ADR-0015 step 4).
+    /// there is one), ADR-0015 step 4. Registration refuses a word that
+    /// mixes a public and a non-public route (`FG-WEB-0004`), so for a
+    /// built table "every" and "any" agree; the check stays "every" so a
+    /// mixed word could only ever require authentication, never skip it.
     pub(crate) fn is_public_word(&self, verb: Verb, route: ScopedRoute) -> bool {
         let candidates = self.candidates(verb, route);
         !candidates.is_empty() && candidates.iter().all(|e| e.def.action.is_public())
@@ -520,7 +522,7 @@ impl<S> ScopedTable<S> {
 pub struct Registry<S> {
     defs: Vec<RouteDef>,
     routers: BTreeMap<&'static str, MethodRouter<S>>,
-    scoped: Vec<ScopedEntry<S>>,
+    scoped: ScopedTable<S>,
     problems: Vec<String>,
 }
 
@@ -541,7 +543,9 @@ impl<S: DispatchState> Registry<S> {
         Self {
             defs: Vec::new(),
             routers: BTreeMap::new(),
-            scoped: Vec::new(),
+            scoped: ScopedTable {
+                entries: Vec::new(),
+            },
             problems: Vec::new(),
         }
     }
@@ -638,6 +642,9 @@ impl<S: DispatchState> Registry<S> {
     /// route, query_key)` is unique. The handler's context type must fit:
     /// public actions (`WebShell`) take [`InstanceCtx`] and never resolve;
     /// non-public routes are project-scoped ([`ProjectCtx`]) for now. A
+    /// word (`verb`, `route`) is either public in every scope or in none:
+    /// a mixed word would need a group shell served after authentication
+    /// and resolution without a proof of its own, so it is refused. A
     /// registration that does not fit is a startup error (`FG-WEB-0004`).
     #[allow(clippy::too_many_arguments)] // the ADR-0015 signature
     #[must_use]
@@ -683,12 +690,18 @@ impl<S: DispatchState> Registry<S> {
             self.problems.push(format!("{label}: {reason}"));
             return self;
         }
+        if self.scoped.find(scope, verb, route).is_some() {
+            self.problems.push(format!("duplicate {label}"));
+            return self;
+        }
         if self
             .scoped
+            .candidates(verb, route)
             .iter()
-            .any(|e| e.def.scope == scope && e.def.verb == verb && e.def.route == Some(route))
+            .any(|e| e.def.action.is_public() != action.is_public())
         {
-            self.problems.push(format!("duplicate {label}"));
+            self.problems
+                .push(format!("{label}: word_mixes_public_and_non_public"));
             return self;
         }
         let def = RouteDef {
@@ -701,19 +714,14 @@ impl<S: DispatchState> Registry<S> {
             summary,
         };
         self.defs.push(def.clone());
-        self.scoped.push(ScopedEntry { def, handler });
+        self.scoped.entries.push(ScopedEntry { def, handler });
         self
     }
 
-    /// `true` only if every route with `(verb, route)` is public (step 4).
+    /// `true` only if every route with `(verb, route)` is public (step 4);
+    /// the dispatcher's own check ([`ScopedTable::is_public_word`]).
     pub fn is_public_word(&self, verb: Verb, route: ScopedRoute) -> bool {
-        let candidates: Vec<&RouteDef> = self
-            .scoped
-            .iter()
-            .map(|e| &e.def)
-            .filter(|d| d.verb == verb && d.route == Some(route))
-            .collect();
-        !candidates.is_empty() && candidates.iter().all(|d| d.action.is_public())
+        self.scoped.is_public_word(verb, route)
     }
 
     pub fn defs(&self) -> &[RouteDef] {
@@ -731,9 +739,7 @@ impl<S: DispatchState> Registry<S> {
                 .with_context("reason", "invalid_or_duplicate_route")
                 .with_context("routes", self.problems.join(", ")));
         }
-        let table = Arc::new(ScopedTable {
-            entries: self.scoped,
-        });
+        let table = Arc::new(self.scoped);
         let dispatcher = move |State(state): State<S>, req: Request| {
             let table = Arc::clone(&table);
             async move { crate::dispatch::dispatch(&table, state, req).await }
@@ -833,6 +839,13 @@ pub(crate) fn deny_unresolved(
 }
 
 /// Admit a scoped route's proof (the dispatcher's only way to a handler).
+///
+/// Invariant (the caller's, `crate::dispatch` only): `proof` was produced
+/// by `prove(principal, def.action, ..)` for the entry `def` belongs to, on
+/// the context that entry's handler takes. `admit()` re-checks
+/// `proof.action() == def.action`; the context type is fixed by `R`. No
+/// other module calls this (registered handlers get a `Dispatched` only
+/// through the dispatcher).
 pub(crate) fn admit_scoped<R: ResourceCtx>(
     def: &RouteDef,
     proof: Authorized<R>,

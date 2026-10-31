@@ -12,6 +12,9 @@
 //!    `WebShell`) answers the shell here without credentials or the
 //!    database; any other word needs an authenticated, active principal
 //!    (`FG-AUTH-0001` / `FG-AUTH-0004`, the same for every path).
+//!    Registration refuses a word mixing public and non-public routes
+//!    (`FG-WEB-0004`), so every route reached after this step is
+//!    non-public and goes through `prove()` on its resolved context.
 //! 5. **Exactly one** resolver call (`NamespaceResolver::resolve`, which
 //!    also loads the viewer's authorization inputs); the route is chosen by
 //!    the resolved kind + the word. Nothing else is looked up before
@@ -164,12 +167,18 @@ pub(crate) async fn dispatch<S: DispatchState>(
     // 6. authorize() (through prove), 7. redirect or handler.
     let endpoint = match &entry.handler {
         ScopedHandler::Project(endpoint) => endpoint,
-        // A word that mixes a public route (a group's shell) with a
-        // non-public one (a project's): authenticated above, resolved to the
-        // public one. Registration admits an instance context only for a
-        // public action; it never sees the resolution.
+        // Registration takes an instance context only for a public action
+        // and refuses a word mixing public and non-public routes, so a
+        // non-public word never resolves to one. Reaching this would serve
+        // a route without proving it on the resolved namespace (and ignore
+        // a `moved` tombstone): a programming error, never a pass.
         ScopedHandler::Instance(_) => {
-            return serve_public(entry, state, ctx, req, tail, verb).await;
+            return fail(
+                &ctx,
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "instance_context_on_non_public_word")
+                    .with_context("route", route.name()),
+            );
         }
     };
     let ResolvedTarget::Project { id, access } = found.resolved.target else {

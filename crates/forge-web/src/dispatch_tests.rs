@@ -428,13 +428,15 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
     assert_eq!(script.calls(), 0);
 }
 
-/// ADR test 4: a word with a public and a non-public route needs
-/// authentication, and an authenticated caller gets the route of the kind
-/// the path resolves to.
+/// ADR test 4 (amended in MR4): a word with a public and a non-public
+/// route is refused when the router is built (`FG-WEB-0004`), so no
+/// request can reach a group's shell through a non-public word without a
+/// proof on the group; a non-public word needs authentication before any
+/// lookup.
 #[tokio::test]
-async fn a_word_mixing_public_and_non_public_routes_requires_authentication() {
+async fn a_word_mixing_public_and_non_public_routes_is_refused_at_build() {
     let raw = ScopedRoute::Word(RouteWord::Raw);
-    let registry = Registry::new()
+    let mixed = Registry::new()
         .scoped(
             RouteScope::Group,
             Verb::Get,
@@ -454,8 +456,27 @@ async fn a_word_mixing_public_and_non_public_routes_requires_authentication() {
             content,
         );
     let script = Arc::new(script());
+    let refused = build(mixed, state_with(&script), AppConfig::default())
+        .expect_err("a mixed word must not build");
+    assert_eq!(refused.code(), ErrorCode::RouteRegistryInvalid);
+    assert!(
+        refused
+            .to_string()
+            .contains("word_mixes_public_and_non_public"),
+        "{refused}"
+    );
+
+    let non_public = Registry::new().scoped(
+        RouteScope::Project,
+        Verb::Get,
+        raw,
+        None,
+        Action::RepoRead,
+        "raw",
+        content,
+    );
     let anonymous = send(
-        router(registry, &script),
+        router(non_public, &script),
         request("GET", "/acme/-/raw/x", None),
     )
     .await;
@@ -463,34 +484,6 @@ async fn a_word_mixing_public_and_non_public_routes_requires_authentication() {
     assert_eq!(anonymous.code(), ErrorCode::Unauthenticated.id());
     assert!(anonymous.headers.contains_key("www-authenticate"));
     assert_eq!(script.calls(), 0, "no lookup before authentication");
-
-    let registry = Registry::new()
-        .scoped(
-            RouteScope::Group,
-            Verb::Get,
-            raw,
-            None,
-            Action::WebShell,
-            "group shell",
-            crate::routes::shell::shell,
-        )
-        .scoped(
-            RouteScope::Project,
-            Verb::Get,
-            raw,
-            None,
-            Action::RepoRead,
-            "raw",
-            content,
-        );
-    let group = send(
-        router(registry, &script),
-        request("GET", "/acme/-/raw/x", Some(reporter())),
-    )
-    .await;
-    assert_eq!(group.status, StatusCode::OK);
-    assert_eq!(group.bytes, SHELL_HTML.as_bytes());
-    assert_eq!(script.calls(), 1);
 }
 
 // ── public words ─────────────────────────────────────────────────────────
