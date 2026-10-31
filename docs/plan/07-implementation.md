@@ -57,7 +57,12 @@ M1 phase 8 MR4（修正待ち）→ MR5（`GET|HEAD /api/v1/projects/{id}`、res
 - **出力のジョブ**: 版の公開のとき、Markdown から Word（社内のひな形）・Excel・PDF を作り、成果物として添付する。文書ポータル（範囲 D）から Git を知らない人が受け取り、承認する。
 - **イベント**: `spec.released`（版・承認者・未決定の項目の数）を Kanflow へ。
 
-## 7. 完了の条件（GitStation 側）
+## 7. W13 デプロイの API・W14 ローカル LLM（GitStation の分）
+
+- W13（M4）: デプロイの API（環境・版・本人）、環境ごとの権限（権限の表に許可と拒否の行）、凍結期間、本番の承認、戻す操作、イベント `deployment.started / succeeded / failed / rolled_back`。Kanflow からの呼び出しも、押した本人の権限で `authorize()` を通る。
+- W14（M5）: MR の一次レビュー（ローカル LLM、結果は MR のコメントと必須でないチェック）、仕様と実装のずれの毎晩の検査、障害の一次診断（`forge doctor` の結果・ログ・手順書・Kanflow の教訓から原因の候補）。LLM の呼び出しにはタイムアウト、失敗は登録したエラーコードでログ、使えないときは止めない。
+
+## 8. 完了の条件（GitStation 側）
 
 | W | 条件 |
 |---|---|
@@ -65,4 +70,6 @@ M1 phase 8 MR4（修正待ち）→ MR5（`GET|HEAD /api/v1/projects/{id}`、res
 | W8 | 人の判断が 4 か所（計画の承認、`stop` の解除、PO の完了の確定、本番の承認）だけで PBI が本番に届く |
 | W9 | MR・パイプライン・デプロイの変化が数秒で Kanflow に出る |
 | W11 | GitStation の失敗が Kanflow の教訓の照合に乗る |
+| W13 | Kanflow から出した本番のデプロイが、承認した人の名前付きで監査に残る |
+| W14 | MR の一次レビューと障害の一次診断が動き、Claude のレビューの回数が下がる |
 | W12 | 必須の項目が未決定の仕様は公開できない。公開すると Word / PDF が自動で作られ、Kanflow に版が出る |
