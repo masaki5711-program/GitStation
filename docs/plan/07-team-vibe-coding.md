@@ -15,7 +15,16 @@
 | **複数人の並行開発** | **弱い** | タスクの取り合いは防げる（K5）。ファイルの衝突の予測、作業中の可視化はない |
 | 連携の完成度 | 途中 | kanflow → Claude Code は動く。Claude Code → GitStation → kanflow は計画だけ（GitStation はまだ clone / push できない） |
 | 環境の再現性 | 弱い | クラウドのセッションに MariaDB とブラウザがなく、kanflow の DB のロックと E2E が未検証のまま統合された |
-| **エージェントモデルの保守** | **弱い** | 似たモデルが 3〜4 つ（Agent_model_TMUX、Agent_Claudecode_ver2、GitStation_Agent、旧 Agent_Claudecode）。同じ変更を手で 2 か所にコピーしている |
+| **エージェントモデルの保守** | **弱い** | モデルが 4 つ（下の表）。同じ変更を手で 2 か所にコピーしている |
+
+エージェントモデルの役割（ユーザーの説明、2026-10-31）:
+
+| モデル | 役割 | 状態 |
+|---|---|---|
+| 旧 Agent_Claudecode | **いまの開発で使う版**。GitStation と kanflow の連携ができるまで使い続ける | 現役。動き続けるように保つ |
+| Agent_model_TMUX | 次の版（並行）。tmux で複数のセッションを並べ、コンテキストを多く使って速く進める | 準備中。全体ができたら切り替える |
+| Agent_Claudecode_ver2 | 次の版（単独）。TMUX 版と同じ使い方を 1 つのセッションで進める | 準備中。全体ができたら切り替える |
+| GitStation_Agent | GitStation 自体の開発用（forge の規則と evaluator） | 現役 |
 
 ## 2. 目標（測るもの）
 
@@ -38,7 +47,10 @@
 
 **問題**: モデルが複数あり、共通の部分（kanflow 連携、レビューの規則、git の規則、フック、mistake-memory）が分かれて食い違う。
 
-**方針（推奨）**: 共通の部分を **1 つの Claude Code プラグイン**（仮称 `ymma-dev-core`）にまとめ、社内のマーケットプレイス（git のリポジトリ）から配る。各モデルは、製品ごとの部分（IoTPF の規則、forge の規則、tmux の team-lead など）だけを持つ。
+**方針（推奨）**: 共通の部分を **1 つの Claude Code プラグイン**（仮称 `ymma-dev-core`）にまとめ、社内のマーケットプレイス（git のリポジトリ）から配る。各モデルは、製品ごとの部分（IoTPF の規則、forge の規則、tmux の team-lead など）と、**動かし方の違い**だけを持つ。
+
+- TMUX 版と Ver2 の違いは「並行（複数セッション）か単独（1 セッション）か」だけにする。PBI の扱い、作業の宣言、レビュー、git の規則は core で同じにする。TMUX 版の上乗せは `team-lead` / `/team`、作業者ごとの worktree と作業の宣言。Ver2 の上乗せはコンテキストの節約（`token-report`、再レビューの絞り込み）。
+- 旧 Agent_Claudecode は core の対象にしない。**いまの状態で使えるように保つ**（不具合の修正だけを入れ、新しい機能は入れない）。
 
 | 層 | 中身 | 置き場所 |
 |---|---|---|
@@ -51,12 +63,16 @@
   - core のリポジトリには、フックのテスト（サンプルのイベントを流す）、eval（スキルとエージェントの評価）、各モデルとの組み合わせのテストを置く。
 - **出し方**: `beta` と `stable` の 2 つのチャンネル。新しい版は 1 チームで 3 日使ってから `stable` に上げる。戻すときは前の版を指定するだけ。
 - **共有の知識**: mistake-memory（エラー → 直し方）は core のリポジトリに集める。各モデルからは `node scripts/mistakes.js add` で PR を出す。
-- **移行の順序**:
-  1. TMUX と Ver2 で同じになっている `kanflow-integration` と `/kanflow` を最初に移す。
+- **core に移す順序**（TMUX 版と Ver2 が対象）:
+  1. 両方で同じになっている `kanflow-integration` と `/kanflow`。
   2. フックの共通部分。
   3. レビューの規則。
-  4. 旧 Agent_Claudecode は移行の対象にせず、凍結（README に置き換え先を書く）。
-- **完了の条件**: 2 つ以上のモデルが core を取り込み、kanflow 連携の変更が 1 回の PR で全員に届く。食い違いのゲートが CI で動く。
+- **旧 Agent_Claudecode → TMUX 版 / Ver2 への切り替え**:
+  - 切り替えの条件: GitStation で clone / push と MR ができる（M1 の phase 9 以降、MR は M4）、kanflow の連携の第 0 段が実際の kanflow で動いた、TMUX 版と Ver2 が core を取り込み、CI のゲートが緑。
+  - 切り替えの手順: 1 つのチーム（または 1 つの製品）で 1 スプリント試す → 問題がなければ全体を切り替える → 旧版は読み取り専用にして README に置き換え先を書く。
+  - 切り替えまでの旧版: 不具合の修正だけを入れる。新しいモデルで直した不具合のうち旧版にも当てはまるものは、旧版にも入れる（mistake-memory は共有する）。
+  - 使い分け: 大きな機能や複数の PBI を並行して速く進めるときは TMUX 版、1 つの PBI や小さな修正を少ないコンテキストで進めるときは Ver2。
+- **完了の条件**: TMUX 版と Ver2 が core を取り込み、kanflow 連携の変更が 1 回の PR で両方に届く。食い違いのゲートが CI で動く。旧版は切り替えまで動き続ける。
 
 ### W2 CI でテストを回し、AI のセッションでは回さない
 
@@ -154,7 +170,7 @@ GitStation 自体の順序（M1 phase 8 の MR4 → MR5 ∥ phase 9 → 8b → D
 
 1. **共通部分の配り方**: Claude Code のプラグインと社内のマーケットプレイス（推奨）。代わりの案は共通リポジトリ + 同期のスクリプト、または git subtree。
 2. **core の最初の置き場所**: GitHub の新しい非公開リポジトリ（GitStation が自分を置けるようになったら GitStation に移す）。
-3. **旧 Agent_Claudecode**: 凍結（README に置き換え先）。
+3. **旧 Agent_Claudecode**: 全体（GitStation と kanflow の連携）ができるまで、いまの状態で使い続ける（不具合の修正だけ）。全体ができたら TMUX 版（並行）と Ver2（単独）に切り替える（ユーザーの決定、2026-10-31）。
 4. **CI**: いまは GitHub Actions（オンプレの原則には、GitStation の CI ができた時点で移すことで従う）。
 5. **作業の宣言の自動化**: セッションの開始で自動に宣言する（推奨）。代わりの案は `/kanflow pick` のときだけ。
 
