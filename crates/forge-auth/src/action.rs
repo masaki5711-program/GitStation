@@ -83,6 +83,11 @@ actions! {
     /// user; `read_api` on a token). Decided on the instance: there is no
     /// other user to see.
     UserSelfRead,
+    /// `GET /api/v1/session`: the caller's own web session — who it stands
+    /// for and its CSRF token (M2 MR3, ADR-0021 §6, §17). Sessions only: a
+    /// token is `FG-AUTH-0002 reason=session_required` (a token has no
+    /// session to read, and must never learn a CSRF token).
+    SessionRead,
     // --- web (ADR-0015) ---
     /// `GET /api/v1/namespaces/resolve?path=`: which namespace a path names,
     /// decided by whether the caller can see it (`Resource::Unresolved` /
@@ -102,6 +107,13 @@ impl Action {
         matches!(self, Action::Health | Action::WebShell)
     }
 
+    /// Only a web session may perform it (ADR-0021 §17): a personal access
+    /// token is refused whatever its scopes (`FG-AUTH-0002
+    /// reason=session_required`, before the resource is looked at).
+    pub fn is_session_only(self) -> bool {
+        matches!(self, Action::SessionRead)
+    }
+
     /// Also performed through the git protocol (Smart HTTP). `RepoRead` is
     /// an HTTP route too (`/-/raw`, `/-/archive`, ADR-0015): `true` means
     /// "git does it as well", not "only git" (M1 phase 8 MR4).
@@ -112,7 +124,9 @@ impl Action {
     /// The token scope the action needs (`None` for public actions).
     pub fn required_scope(self) -> Option<Scope> {
         match self {
-            Action::Health | Action::WebShell => None,
+            // Public, or session only (`is_session_only`: no token reaches
+            // the scope check).
+            Action::Health | Action::WebShell | Action::SessionRead => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead

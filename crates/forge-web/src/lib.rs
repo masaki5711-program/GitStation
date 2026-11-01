@@ -6,8 +6,10 @@
 //! - [`error`] — the single error renderer (`error_code`, `user_message`,
 //!   `request_id` only; logged once)
 //! - [`body`] — strict JSON request bodies of the write routes (phase 8b)
-//! - `auth` — token authentication (Bearer / Basic with the token as the
-//!   password) on every non-public route
+//! - `auth` — authentication on every non-public route: tokens (Bearer;
+//!   Basic with the token as the password on git and raw / archive) and the
+//!   web session cookie (M2 MR3)
+//! - `csrf` — the cross-site checks of state-changing requests (M2 MR3)
 //! - `dispatch` — the one dispatcher for namespace URLs (ADR-0015's seven
 //!   steps on the raw path)
 //! - [`routes::git`] / `git_stream` — Smart HTTP fetch (M1 phase 9): git
@@ -20,6 +22,7 @@ pub mod app;
 mod auth;
 pub mod body;
 pub mod context;
+mod csrf;
 mod dispatch;
 pub mod error;
 mod git_stream;
@@ -31,7 +34,7 @@ pub mod server;
 pub mod ui;
 
 pub use app::{app, registry as route_registry, AppConfig, AppState, Lookups};
-pub use auth::{BoundedAuthenticator, CallerProfile};
+pub use auth::{BoundedAuthenticator, BoundedSessions, CallerProfile, SessionCredential};
 pub use context::Ctx;
 pub use error::ApiError;
 pub use routes::git::{GitHttpLimits, PushTasks, SmartHttp};

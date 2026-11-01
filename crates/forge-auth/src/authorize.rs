@@ -4,6 +4,8 @@
 //! Order of checks:
 //! 1. public actions are allowed;
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
+//!    then session-only actions (`SessionRead`): a token → `FG-AUTH-0002
+//!    reason=session_required` (M2 MR3, ADR-0021 §17);
 //! 3. `PathResolve` only: token scope → `FG-AUTH-0002` here, before the
 //!    path is looked at (the same 403 for every path);
 //!    a path that resolved to nothing (`Unresolved`, any non-public action)
@@ -54,6 +56,17 @@ pub fn authorize(
         return Err(deny(ErrorCode::AccountDisabled));
     }
     let admin = principal.admin_rights();
+
+    // A session-only action (ADR-0021 §17): no token, whatever its scopes,
+    // before anything about the resource is decided.
+    if action.is_session_only() {
+        if let Credential::Token(scopes) = principal.credential() {
+            let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+            return Err(deny(ErrorCode::InsufficientScope)
+                .with_context("reason", "session_required")
+                .with_context("token_scopes", held.join(",")));
+        }
+    }
 
     let check_scope = || -> Result<(), ForgeError> {
         if let (Credential::Token(scopes), Some(required)) =
@@ -444,6 +457,10 @@ pub fn authorize(
         // was checked above); the handler shows the principal's own data.
         (Action::UserSelfRead, Resource::Instance) => Ok(()),
 
+        // Every active user reads their own session (a token was refused
+        // above); the handler shows the principal's own session only.
+        (Action::SessionRead, Resource::Instance) => Ok(()),
+
         // Listing is open to every active signed-in user (the scope was
         // checked above); what a list shows is decided row by row with
         // `ProjectRead` / `GroupRead` (M1 phase 8b MR7b, never in SQL).
@@ -486,6 +503,7 @@ pub fn authorize(
             | Action::UserDisable
             | Action::AuditRead
             | Action::UserSelfRead
+            | Action::SessionRead
             | Action::PathResolve
             | Action::Metrics,
             Resource::Instance

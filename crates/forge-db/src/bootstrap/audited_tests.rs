@@ -81,7 +81,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
         vec![
             "audited_change_present",
             "repositories_state_guard",
-            "purge_delete_guard"
+            "purge_delete_guard",
+            "web_sessions_revocation_guard"
         ]
     );
 }

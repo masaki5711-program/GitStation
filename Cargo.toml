@@ -70,6 +70,11 @@ utoipa = { version = "5", default-features = false, features = ["macros"] }
 # embeds in debug builds too (never reads the disk at run time).
 rust-embed = { version = "8.12", default-features = false, features = ["debug-embed"] }
 # ── end M1 phase 8b MR6 ──
+# ── M2 MR3: web sessions (ADR-0021 §7) ──
+# HKDF-SHA256: one key per purpose from web.session_key_file. RustCrypto,
+# MIT OR Apache-2.0; 0.12 is built on the hmac 0.12 / digest 0.10 above.
+hkdf = "0.12"
+# ── end M2 MR3 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

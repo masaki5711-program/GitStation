@@ -1,10 +1,13 @@
 //! Wiring: the registered routes, the dispatcher (the fallback for every
 //! path no fixed route matches), and the middleware stack (outermost
-//! first): request id + access log → request timeout (git POSTs: their own
-//! `git_rpc_timeout`, M1 phase 9 MR3) → panic catcher →
-//! authenticator extension → body limit → routes (non-public fixed routes:
-//! token authentication → guard → load → prove → handler; scoped routes:
-//! the dispatcher's seven steps, `crate::dispatch`).
+//! first): request id + access log → 401 challenges
+//! (`error::challenge_layer`, M2 MR3) → request timeout (git POSTs: their
+//! own `git_rpc_timeout`, M1 phase 9 MR3) → panic catcher → the browser
+//! origin check of state-changing requests (`csrf::browser_origin`, M2 MR3) →
+//! authenticator extensions → body limit → routes (non-public fixed routes:
+//! authentication (token or session cookie, `crate::auth`) → guard → load →
+//! prove → handler; scoped routes: the dispatcher's seven steps,
+//! `crate::dispatch`).
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -18,12 +21,16 @@ use axum::Router;
 use forge_auth::Action;
 use forge_core::readiness::ReadinessProbe;
 use forge_core::web_path::{parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord};
-use forge_core::{log_safe_path, Authenticator, NamespaceResolver, ProjectAccessLoader, RequestId};
+use forge_core::{
+    log_safe_path, Authenticator, NamespaceResolver, ProjectAccessLoader, RequestId,
+    SessionAuthenticator,
+};
 use forge_errors::{ErrorCode, ForgeError};
 use futures_util::FutureExt;
 
-use crate::auth::AuthenticatorExt;
+use crate::auth::{AuthenticatorExt, SessionsExt};
 use crate::context::{self, Ctx};
+use crate::csrf::ExpectedOrigin;
 use crate::error::ApiError;
 use crate::registry::{DispatchState, Registry, RouteScope, ScopedRoute, Verb};
 use crate::routes;
@@ -65,6 +72,16 @@ pub struct AppState {
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
     /// reason=lists_unconfigured`).
     pub lists: Option<Arc<routes::lists::Lists>>,
+    /// Resolves the web session cookie `__Host-gstn_session` (M2 MR3,
+    /// ADR-0021 §5; `forge serve` passes `forge_db::sessions::SessionStore`
+    /// behind the token permits). Without it a request carrying the cookie
+    /// answers `FG-SYS-0001 reason=sessions_unconfigured`.
+    pub sessions: Option<Arc<dyn SessionAuthenticator>>,
+    /// The origin of `web.base_url` (`scheme://host[:port]`): what a
+    /// browser's state-changing request must send as `Origin` (ADR-0021
+    /// §6). `forge serve` requires it; without it every such request is
+    /// refused (`FG-AUTH-0016 origin_mismatch base_url=unset`).
+    pub web_origin: Option<Arc<str>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -96,7 +113,23 @@ impl AppState {
             smart_http: None,
             hosting: None,
             lists: None,
+            sessions: None,
+            web_origin: None,
         }
+    }
+
+    /// The web session authenticator (M2 MR3).
+    #[must_use]
+    pub fn with_sessions(mut self, sessions: Arc<dyn SessionAuthenticator>) -> Self {
+        self.sessions = Some(sessions);
+        self
+    }
+
+    /// The origin of `web.base_url` (`forge_core::config::BaseUrl::origin`).
+    #[must_use]
+    pub fn with_web_origin(mut self, origin: &str) -> Self {
+        self.web_origin = Some(Arc::from(origin));
+        self
     }
 
     #[must_use]
@@ -140,6 +173,8 @@ impl std::fmt::Debug for AppState {
             .field("lookup_timeout", &self.lookup_timeout)
             .field("smart_http", &self.smart_http.as_ref().map(|s| s.limits))
             .field("lists", &self.lists.is_some())
+            .field("sessions", &self.sessions.is_some())
+            .field("web_origin", &self.web_origin)
             .finish_non_exhaustive()
     }
 }
@@ -285,6 +320,15 @@ pub fn registry() -> Registry<AppState> {
             routes::users::me,
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
+        // M2 MR3: the browser session and its CSRF token (sessions only).
+        .route(
+            Verb::Get,
+            routes::session::PATH,
+            Action::SessionRead,
+            "The caller's own web session and its CSRF token (sessions only, ADR-0021)",
+            routes::session::read,
+        )
+        .responds::<routes::session::SessionBody>(Verb::Get, routes::session::PATH)
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
     git_routes(shell_routes(member_routes(move_routes(hosting_routes(
         fixed,
@@ -713,6 +757,11 @@ pub(crate) fn build(
     // The IdP origin for the shell's `form-action` arrives with `auth.oidc`
     // (MR4, ADR-0021 §8); until then the shell allows `'self'` only.
     let security = SecurityHeaders::new(config.hsts, None)?;
+    let origin = ExpectedOrigin(state.web_origin.clone()); // clone: shared by both checks
+    let sessions = SessionsExt {
+        sessions: state.sessions.clone(), // clone: the Arc is shared
+        origin: origin.clone(),           // clone: the browser check keeps one
+    };
     Ok(registry
         .into_router()?
         .method_not_allowed_fallback(method_not_allowed)
@@ -727,11 +776,19 @@ pub(crate) fn build(
             config.body_read_timeout,
         )))
         .layer(axum::Extension(authenticator))
+        .layer(axum::Extension(sessions))
+        // ADR-0021 §6 check 1: before any route, whatever the credentials.
+        .layer(middleware::from_fn_with_state(
+            origin,
+            crate::csrf::browser_origin,
+        ))
         .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(
             (config.request_timeout, config.git_rpc_timeout),
             request_timeout,
         ))
+        // ADR-0019 Amendment M2: every 401 gets its class's challenges.
+        .layer(middleware::from_fn(crate::error::challenge_layer))
         .layer(middleware::from_fn(context::request_id))
         // Outermost: every answer, the timeout's and the panic catcher's
         // included, gets its class's headers (ADR-0022 §3).

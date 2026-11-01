@@ -476,12 +476,21 @@ impl<R: ResourceCtx, B> Dispatched<R, B> {
     }
 
     /// What the authenticator knows of the caller's account (username,
-    /// display name, flags; `None` without one — a session, M2).
+    /// display name, flags; a token's or a session's).
     pub fn caller(&self) -> Option<&crate::auth::CallerProfile> {
         self.request
             .parts
             .extensions
             .get::<crate::auth::CallerProfile>()
+    }
+
+    /// The web session the request authenticated with (`None` for a
+    /// token; M2 MR3): ids, expiries and its CSRF token, never the cookie.
+    pub fn session(&self) -> Option<&crate::auth::SessionCredential> {
+        self.request
+            .parts
+            .extensions
+            .get::<crate::auth::SessionCredential>()
     }
 
     /// What a write handler keeps across its awaits (the request's body

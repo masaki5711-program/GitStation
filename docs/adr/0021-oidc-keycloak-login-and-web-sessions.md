@@ -489,3 +489,11 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 9 | LOW | バックチャネルのログアウトが別の IdP の行に触れうる | §8: `oidc_issuer = iss` の行に限る |
 | 10 | LOW | ログアウトで ID トークン（`id_token_hint` の入った URL）が JS に渡る | §8: `POST /-/auth/logout`（CSRF あり）と 303。ADR-0015 の Amendment M2 の表、ADR-0022 の `form-action` |
 | 11 | LOW | 1 つの鍵を 3 つの用途に使う | §7: 用途ごとに HKDF で鍵を導く |
+
+### 実装で決めた点（2026-11-01、M2 MR3 `00c1f07` の実装とレビュー）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 12 | LOW（セキュリティのレビュー） | §6 の 2「Bearer 以外はすべて CSRF のトークンの対象」を文字どおりに当てると、git の Smart HTTP の POST（`git-receive-pack`・`git-upload-pack`、Basic で認証）が通らない。git はトークンを持たない | **git の Smart HTTP は §6 の 1（fetch metadata / `Origin` の検査）だけを掛け、2（トークン）は掛けない**。安全な理由: (a) ブラウザが別のサイトから送る POST には `Origin`（と fetch metadata）が必ず付き、1 で `origin_mismatch` / `fetch_site` になる。(b) git の POST の本文は `Content-Type: application/x-git-receive-pack-request`（`…-upload-pack-request`）で、CORS の「単純な要求」に当たらないので、別のサイトのページはプリフライトなしに送れず、GitStation はプリフライトに許可を返さない。フォームの送信（単純な要求）では git の pkt-line の本文を正しく作れない。(c) Smart HTTP は Cookie を見ない（§10）ので、ブラウザが自動で付ける資格情報は覚えた Basic だけで、それも (a)(b) で止まる。raw・archive の Basic の状態を変える要求は `token_missing`（そういうルートは今ない）。実装は forge-web `auth.rs`・`csrf.rs` |
+| 13 | MEDIUM（DB のレビュー） | 失効したセッションに暗号化した IdP のトークンが残る。期限切れの行が部分インデックスに残る | 失効（`revoke`・`revoke_all`・無効化）で `refresh_token_enc`・`id_token_enc` を NULL にする。無効化と一括の失効は期限切れの行も失効させる。期限から 30 日の掃除のジョブは後の MR（MR3 の引き継ぎ §5） |
+| 14 | LOW（DB のレビュー） | `oidc_sid` だけがある行、失効の取り消し | マイグレーション `20261103100100`（追記）: `CHECK (oidc_sid IS NULL OR oidc_issuer IS NOT NULL)`、失効は最終（`revoked_at`・`revoked_reason` は一度決まったら変わらない。トリガーのガード、XF001 → FG-DB-0009） |

@@ -23,6 +23,7 @@ mod keys;
 mod secret;
 mod server_limits;
 mod tls;
+mod web;
 
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
@@ -34,6 +35,7 @@ pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
 pub use tls::TlsMode;
+pub use web::{BaseUrl, WebConfig};
 
 /// Environment prefixes owned by the configuration: an unknown variable
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
@@ -46,6 +48,10 @@ const NAMESPACES: &[&str] = &[
     "FORGE_AUDIT_",
     "FORGE_GIT_",
     "FORGE_HOSTING_",
+    // M2 MR3 (ADR-0021 §12): `web.*`; `auth.*` is reserved for the OIDC
+    // login (MR4), so a FORGE_AUTH_ variable fails until it has keys.
+    "FORGE_WEB_",
+    "FORGE_AUTH_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -131,6 +137,8 @@ pub struct Config {
     pub git_http: GitHttpConfig,
     /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
     pub hosting: HostingConfig,
+    /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
+    pub web: WebConfig,
 }
 
 impl Config {
@@ -369,6 +377,11 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
         hosting: HostingConfig::load(get)?,
+        web: WebConfig::load(
+            get,
+            text("web.base_url")?,
+            password_path("web.session_key_file")?,
+        )?,
     }
     .validate_across()
 }

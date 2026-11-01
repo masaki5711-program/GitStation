@@ -20,8 +20,8 @@ The caller authenticated with a token whose scopes do not include the scope the 
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action`, `required_scope` and `token_scopes`.
+The log event carries `action`, `required_scope` and `token_scopes`, or `reason=session_required` for an action only a web session may perform (`GET /api/v1/session`, ADR-0021 §17), whatever the token's scopes.
 
 ## 対処 (fix)
 
-Create a token with the required scope (for example write_repository for push).
+Create a token with the required scope (for example write_repository for push). For session_required, use the browser session; a token cannot do it.

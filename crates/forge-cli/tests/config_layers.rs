@@ -193,3 +193,58 @@ fn serve_needs_valid_cursor_keys_before_it_connects() {
     assert!(err.contains("invalid_key"), "{err}");
     assert!(!err.contains("not-a-synthetic-secret-key"), "{err}");
 }
+
+/// M2 MR3 (ADR-0021 §12): `serve` needs `web.base_url` (the origin of the
+/// CSRF check) and reads `web.session_key_file` before it connects — a
+/// missing base URL and a broken key file both stop the start with
+/// FG-SYS-0002 naming the key (never the file's content).
+#[test]
+fn serve_needs_the_web_base_url_and_a_valid_session_key_file() {
+    let root = tempfile::tempdir().expect("dir");
+    let root_path = root.path().to_string_lossy().into_owned();
+    let secret_file = |name: &str, text: &str| {
+        let path = root.path().join(name);
+        std::fs::write(&path, text).expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        }
+        path.to_string_lossy().into_owned()
+    };
+    // Synthetic keys (test-only values).
+    let cursor = secret_file("cursor.keys", &format!("1 {}\n", "11".repeat(32)));
+    let base = [
+        (
+            "FORGE_DATABASE_URL",
+            "postgres://forge_app@127.0.0.1:1/forge",
+        ),
+        ("FORGE_STORAGE_ROOT", root_path.as_str()),
+        ("FORGE_API_CURSOR_KEYS_FILE", cursor.as_str()),
+    ];
+    let out = forge(&["serve"], &base);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("FG-SYS-0002"), "{err}");
+    assert!(err.contains("web.base_url"), "{err}");
+    assert!(err.contains("missing"), "{err}");
+
+    let mut env = base.to_vec();
+    env.push(("FORGE_WEB_BASE_URL", "http://git.example.test"));
+    let err = stderr(&forge(&["serve"], &env));
+    assert!(
+        err.contains("web.base_url") && err.contains("insecure_http"),
+        "{err}"
+    );
+
+    let keys = secret_file("session.keys", "1 not-a-synthetic-session-key\n");
+    let mut env = base.to_vec();
+    env.push(("FORGE_WEB_BASE_URL", "https://git.example.test"));
+    env.push(("FORGE_WEB_SESSION_KEY_FILE", keys.as_str()));
+    let out = forge(&["serve"], &env);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("web.session_key_file"), "{err}");
+    assert!(err.contains("invalid_key"), "{err}");
+    assert!(!err.contains("not-a-synthetic-session-key"), "{err}");
+}

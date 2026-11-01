@@ -141,6 +141,7 @@ fn only_published_audit_actions_name_an_event_type() {
     let disabled = AuditDetails::UserDisabled {
         kind: UserKind::Human,
         revoked_tokens: 0,
+        revoked_sessions: 0,
         forced: false,
         ownerless_groups: 0,
         ownerless_projects: 0,

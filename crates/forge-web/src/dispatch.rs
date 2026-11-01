@@ -38,7 +38,7 @@ use forge_auth::{
     prove, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, Principal, ProjectCtx,
     ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason,
 };
-use forge_core::web_path::{parse_web_path, GitRoute, LogSafePath, ParsedPath};
+use forge_core::web_path::{parse_web_path, GitRoute, LogSafePath, ParsedPath, RouteWord};
 use forge_core::{
     LookupPath, NamespacePath, ProjectAccess, Resolution, Resolved, ResolvedTarget, TailSegments,
     TombstoneId, UserId,
@@ -98,7 +98,7 @@ pub(crate) async fn dispatch<S: DispatchState>(
         .map(|e| e.def.action)
         .find(|a| !a.is_public())
         .unwrap_or(first.def.action);
-    if let Err(res) = crate::auth::authenticate_request(&mut req).await {
+    if let Err(res) = crate::auth::authenticate_request(&mut req, surface_of(route)).await {
         return *res;
     }
     let principal = match crate::guard::active_principal(&req, guard_action) {
@@ -238,6 +238,18 @@ struct Found {
     resolved: Resolved,
     moved: Option<TombstoneId>,
     canonical: NamespacePath,
+}
+
+/// Which credentials a dispatched route reads (ADR-0021 §10): cookies only
+/// on raw / archive; git (and every other word) reads `Authorization` only.
+fn surface_of(route: ScopedRoute) -> crate::auth::Surface {
+    match route {
+        ScopedRoute::Word(RouteWord::Raw | RouteWord::Archive) => crate::auth::Surface::Content,
+        ScopedRoute::Word(_)
+        | ScopedRoute::Git(_)
+        | ScopedRoute::Home
+        | ScopedRoute::Instance(_) => crate::auth::Surface::Git,
+    }
 }
 
 /// The namespace, the dispatcher's route and the tail of a parsed path.

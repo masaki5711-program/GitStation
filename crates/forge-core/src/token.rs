@@ -35,6 +35,9 @@ pub enum TokenError {
     Malformed,
     /// The operating system could not provide random bytes.
     Rng,
+    /// The MAC could not be keyed (unreachable for HMAC-SHA256, whose key
+    /// may have any length; reported, never replaced by a fixed value).
+    Mac,
 }
 
 /// The non-secret half of a token: identifies the row, safe to log.
@@ -104,20 +107,33 @@ impl fmt::Debug for PlainToken {
 
 /// A fresh token from the OS RNG.
 pub fn generate() -> Result<PlainToken, TokenError> {
-    let mut id = [0u8; PUBLIC_ID_LEN];
-    let mut secret = [0u8; SECRET_LEN];
-    getrandom::getrandom(&mut id).map_err(|_| TokenError::Rng)?;
-    getrandom::getrandom(&mut secret).map_err(|_| TokenError::Rng)?;
-    Ok(PlainToken {
-        public_id: PublicId(to_hex(&id)),
-        secret: TokenSecret(secret),
-    })
+    let (public_id, secret) = random_parts()?;
+    Ok(PlainToken { public_id, secret })
 }
 
 /// Parse a presented token string. Never panics on any input.
 pub fn parse(input: &str) -> Result<PlainToken, TokenError> {
+    let (public_id, secret) = parse_prefixed(input, TOKEN_PREFIX)?;
+    Ok(PlainToken { public_id, secret })
+}
+
+/// A random public id and secret (shared with the web session cookie,
+/// `crate::session_token`, ADR-0021 §5).
+pub(crate) fn random_parts() -> Result<(PublicId, TokenSecret), TokenError> {
+    let mut id = [0u8; PUBLIC_ID_LEN];
+    let mut secret = [0u8; SECRET_LEN];
+    getrandom::getrandom(&mut id).map_err(|_| TokenError::Rng)?;
+    getrandom::getrandom(&mut secret).map_err(|_| TokenError::Rng)?;
+    Ok((PublicId(to_hex(&id)), TokenSecret(secret)))
+}
+
+/// `<prefix>_<16 hex>_<64 hex>` (lowercase) into its parts. Never panics.
+pub(crate) fn parse_prefixed(
+    input: &str,
+    prefix: &str,
+) -> Result<(PublicId, TokenSecret), TokenError> {
     let rest = input
-        .strip_prefix(TOKEN_PREFIX)
+        .strip_prefix(prefix)
         .and_then(|r| r.strip_prefix('_'))
         .ok_or(TokenError::Malformed)?;
     let (id, secret) = rest.split_once('_').ok_or(TokenError::Malformed)?;
@@ -125,10 +141,7 @@ pub fn parse(input: &str) -> Result<PlainToken, TokenError> {
         return Err(TokenError::Malformed);
     }
     let secret = from_hex::<SECRET_LEN>(secret).ok_or(TokenError::Malformed)?;
-    Ok(PlainToken {
-        public_id: PublicId(id.to_owned()),
-        secret: TokenSecret(secret),
-    })
+    Ok((PublicId(id.to_owned()), TokenSecret(secret)))
 }
 
 /// SHA-256 of the secret bytes: what the database stores.
@@ -149,7 +162,7 @@ fn nibble(b: u8) -> Option<u8> {
     }
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     bytes
         .iter()

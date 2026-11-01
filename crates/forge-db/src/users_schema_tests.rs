@@ -109,10 +109,31 @@ async fn every_audited_table_has_its_audit_trigger() {
                 txn_audited_columns: vec![],
             },
             AuditedTable {
+                name: "user_identities".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: s(&["last_login_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
                 name: "users".into(),
                 audit_resource: AuditResource::Literal("user".into()),
                 audit_id_column: "id".into(),
                 unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "web_sessions".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: s(&[
+                    "last_seen_at",
+                    "idle_expires_at",
+                    "refresh_token_enc",
+                    "id_token_enc",
+                    "refresh_checked_at",
+                    "access_role_seen_at",
+                ]),
                 txn_audited_columns: vec![],
             },
         ]

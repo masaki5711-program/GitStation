@@ -129,15 +129,20 @@ fn every_api_route_is_covered_or_planned() {
     }
 }
 
-/// The hosting-more series is done: every route has a dedicated command.
+/// The hosting-more series is done: every route has a dedicated command,
+/// except the browser-session-only ones (M2 MR3), which a token can never
+/// use.
 #[test]
 fn no_route_is_left_planned() {
     for (m, p, cov) in API_ROUTES {
         assert!(
-            matches!(cov, Coverage::Command(_)),
+            matches!(cov, Coverage::Command(_) | Coverage::BrowserOnly(_)),
             "{m} {p} is still planned: {cov:?}"
         );
     }
+    assert!(API_ROUTES.iter().any(|(m, p, cov)| *m == "GET"
+        && *p == "/api/v1/session"
+        && matches!(cov, Coverage::BrowserOnly(_))));
 }
 
 #[test]

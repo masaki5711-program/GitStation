@@ -3,7 +3,10 @@
 //! authentication middleware turns `Authorization: Bearer <token>` or
 //! `Authorization: Basic` whose **password** is the token into a
 //! `forge_auth::Principal` with `Credential::Token(scopes)`; the guard and
-//! `authorize()` decide as before. A fake `Authenticator` stands in for
+//! `authorize()` decide as before. Since M2 MR3 (ADR-0019 Amendment M2)
+//! Basic is accepted on git Smart HTTP and raw / archive only: the API
+//! (here the fixed `/admin/users`) refuses it as `basic_not_allowed`, so
+//! the Basic rows run on a raw route (`/acme/app/-/raw/...`). A fake `Authenticator` stands in for
 //! `forge_db::tokens::authenticate` (no database needed); `forge serve`'s
 //! wiring of the real one is tested in forge-cli.
 
@@ -17,13 +20,17 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
-use forge_auth::{Action, Credential, InstanceCtx, Principal, Scope};
+use forge_auth::{Action, Credential, InstanceCtx, Principal, ProjectCtx, Scope};
 use forge_core::authenticator::{AuthFuture, Authenticator, TokenIdentity};
 use forge_core::namespace_resolver::LookupFuture;
-use forge_core::{LookupPath, ProjectId, ProjectRecord, Resolution};
+use forge_core::web_path::RouteWord;
+use forge_core::{
+    LookupPath, NamespaceId, ProjectAccess, ProjectId, ProjectRecord, ProjectRepository, RepoId,
+    RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
+};
 use forge_core::{RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_web::registry::{Dispatched, Registry, Verb};
+use forge_web::registry::{Dispatched, Registry, RouteScope, ScopedRoute, Verb};
 use forge_web::{AppConfig, AppState, BoundedAuthenticator, Lookups};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -48,6 +55,9 @@ const CORRUPT_ROW: &str =
 /// Never answers (the request timeout must end the request).
 const HANGS: &str =
     "fgp_00000000000000f8_8888888888888888888888888888888888888888888888888888888888888888";
+/// A `read_repository` token (the raw route needs `RepoRead`).
+const READER: &str =
+    "fgp_00000000000000a9_9999999999999999999999999999999999999999999999999999999999999999";
 
 /// A synthetic user password: never a credential (hand-off 9).
 const USER_PASSWORD: &str = "correct-horse-battery-staple";
@@ -93,6 +103,7 @@ impl Authenticator for FakeAuthenticator {
             .push(presented.to_owned());
         let result = match presented {
             ALICE => Ok(identity(1, false, &[Scope::ReadApi, Scope::Api])),
+            READER => Ok(identity(3, false, &[Scope::ReadRepository])),
             ADMIN_NO_SCOPE => Ok(identity(2, true, &[Scope::Api])),
             ADMIN_WITH_SCOPE => Ok(identity(2, true, &[Scope::Api, Scope::Admin])),
             DISABLED_OWNER => Err(ForgeError::new(ErrorCode::AccountDisabled)
@@ -136,12 +147,45 @@ async fn whoami(_: AppState, request: Dispatched<InstanceCtx>) -> Response {
     .into_response()
 }
 
-/// No lookups in these tests (the dispatcher's own tests script them).
+/// The same, on a raw route (a project-scoped dispatcher word, M2 MR3):
+/// runs only after `RepoRead` was proved on the resolved project.
+async fn whoami_raw(_: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let principal = request.principal();
+    let scopes: Vec<&str> = match principal.credential() {
+        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str()).collect(),
+        Credential::Session => vec!["<session>"],
+    };
+    Json(json!({
+        "user": principal.user().map(|u| u.get()),
+        "scopes": scopes,
+        "authorization_header_seen": request.headers().contains_key("authorization"),
+    }))
+    .into_response()
+}
+
+/// Every path is one internal project (the dispatcher's own tests script
+/// the rest); project-by-id lookups find nothing.
 struct NoNamespaces;
 
 impl forge_core::NamespaceResolver for NoNamespaces {
     fn resolve<'a>(&'a self, _: &'a LookupPath, _: Option<UserId>) -> LookupFuture<'a, Resolution> {
-        Box::pin(async { Ok(Resolution::Absent) })
+        Box::pin(async {
+            Ok(Resolution::Live(Resolved {
+                namespace_id: NamespaceId::new(10),
+                target: ResolvedTarget::Project {
+                    id: ProjectId::new(11),
+                    access: ProjectAccess {
+                        visibility: Visibility::Internal,
+                        role: None,
+                        pending_deletion: false,
+                    },
+                    repository: ProjectRepository {
+                        id: RepoId::new(12),
+                        state: RepositoryState::Ready,
+                    },
+                },
+            }))
+        })
     }
 }
 
@@ -172,7 +216,16 @@ fn router_with(auth: Arc<dyn Authenticator>, config: AppConfig) -> axum::Router 
             "test",
             whoami,
         )
-        .route(Verb::Get, "/healthz", Action::Health, "test", healthy);
+        .route(Verb::Get, "/healthz", Action::Health, "test", healthy)
+        .scoped(
+            RouteScope::Project,
+            Verb::Get,
+            ScopedRoute::Word(RouteWord::Raw),
+            None,
+            Action::RepoRead,
+            "test",
+            whoami_raw,
+        );
     let lookups = Lookups {
         namespaces: Arc::new(NoNamespaces),
         projects: Arc::new(NoNamespaces),
@@ -183,6 +236,17 @@ fn router_with(auth: Arc<dyn Authenticator>, config: AppConfig) -> axum::Router 
 
 fn post(headers: &[(&str, &str)]) -> Request<Body> {
     let mut b = Request::post("/admin/users");
+    for (k, v) in headers {
+        b = b.header(*k, *v);
+    }
+    b.body(Body::empty()).expect("request")
+}
+
+/// A raw file of the one project (Basic is accepted there).
+const RAW: &str = "/acme/app/-/raw/main/README.md";
+
+fn raw(headers: &[(&str, &str)]) -> Request<Body> {
+    let mut b = Request::get(RAW);
     for (k, v) in headers {
         b = b.header(*k, *v);
     }
@@ -218,13 +282,27 @@ fn challenges(headers: &HeaderMap) -> Vec<String> {
         .collect()
 }
 
+/// A 401 of the API (`/admin/users`): Bearer only, never Basic
+/// (ADR-0019 Amendment M2).
 fn assert_unauthenticated(status: StatusCode, headers: &HeaderMap, body: &Value) {
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error_code"], ErrorCode::Unauthenticated.id());
+    assert_eq!(
+        challenges(headers),
+        ["Bearer realm=\"GitStation\""],
+        "the API challenges with Bearer only"
+    );
+}
+
+/// A 401 of raw / archive to a non-browser client: Basic and Bearer (a
+/// `curl -u` client may answer the Basic challenge).
+fn assert_unauthenticated_raw(status: StatusCode, headers: &HeaderMap, body: &Value) {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["error_code"], ErrorCode::Unauthenticated.id());
     let challenges = challenges(headers);
     assert!(
         challenges.iter().any(|c| c.starts_with("Basic realm=")),
-        "git needs a Basic challenge to ask its credential helper: {challenges:?}"
+        "a non-browser client of raw gets a Basic challenge: {challenges:?}"
     );
 }
 
@@ -329,37 +407,64 @@ async fn the_bearer_scheme_is_case_insensitive() {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
+/// Basic on raw / archive (and git, `forge-cli` smart_http_e2e): the
+/// password is the token (M2 MR3 moved this row off the API).
 #[tokio::test]
-async fn basic_auth_whose_password_is_a_token_authenticates_and_ignores_the_username() {
+async fn basic_auth_whose_password_is_a_token_authenticates_on_raw_and_ignores_the_username() {
     let auth = Arc::new(FakeAuthenticator::default());
     let (status, _, body) = call(
         router(Arc::clone(&auth)),
-        post(&[("authorization", &basic(BASIC_USER, ADMIN_WITH_SCOPE))]),
+        raw(&[("authorization", &basic(BASIC_USER, READER))]),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
-        body["user"], 2,
+        body["user"], 3,
         "the token decides who it is, not the username"
     );
-    assert_eq!(
-        auth.presented(),
-        [ADMIN_WITH_SCOPE],
-        "only the password is presented"
-    );
+    assert_eq!(body["scopes"], json!(["read_repository"]));
+    assert_eq!(body["authorization_header_seen"], false);
+    assert_eq!(auth.presented(), [READER], "only the password is presented");
 }
 
 #[tokio::test]
-async fn basic_auth_with_a_user_password_or_a_wrong_token_is_unauthenticated() {
+async fn basic_auth_with_a_user_password_or_a_wrong_token_is_unauthenticated_on_raw() {
     for password in [USER_PASSWORD, REVOKED, ""] {
         let auth = Arc::new(FakeAuthenticator::default());
         let (status, headers, body) = call(
             router(auth),
-            post(&[("authorization", &basic(BASIC_USER, password))]),
+            raw(&[("authorization", &basic(BASIC_USER, password))]),
         )
         .await;
-        assert_unauthenticated(status, &headers, &body);
+        assert_unauthenticated_raw(status, &headers, &body);
     }
+}
+
+/// ADR-0019 Amendment M2: the API takes Bearer only. A Basic credential is
+/// refused without trying its password (even a valid token), the 401 has no
+/// Basic challenge, and the same token as Bearer passes.
+#[tokio::test]
+async fn basic_on_the_api_is_refused_as_basic_not_allowed_without_trying_it() {
+    let auth = Arc::new(FakeAuthenticator::default());
+    let logs = Captured::default();
+    let _guard = logs.install();
+    let (status, headers, body) = call(
+        router(Arc::clone(&auth)),
+        post(&[("authorization", &basic(BASIC_USER, ADMIN_WITH_SCOPE))]),
+    )
+    .await;
+    assert_unauthenticated(status, &headers, &body);
+    assert!(auth.presented().is_empty(), "the password is not tried");
+    let failures = logs.failures();
+    assert_eq!(failures.len(), 1, "logged once: {failures:?}");
+    assert_eq!(failures[0]["reason"], "basic_not_allowed");
+    assert_eq!(failures[0]["scheme"], "basic");
+    let (status, _, body) = call(
+        router(Arc::clone(&auth)),
+        post(&[("authorization", &bearer(ADMIN_WITH_SCOPE))]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
@@ -489,7 +594,7 @@ async fn a_disabled_owners_token_is_account_disabled_before_the_handler() {
     let auth = Arc::new(FakeAuthenticator::default());
     let (status, _, body) = call(
         router(auth),
-        post(&[("authorization", &basic(BASIC_USER, DISABLED_OWNER))]),
+        raw(&[("authorization", &basic(BASIC_USER, DISABLED_OWNER))]),
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -588,7 +693,7 @@ async fn the_authorization_header_is_removed_for_basic_too() {
     let auth = Arc::new(FakeAuthenticator::default());
     let (status, _, body) = call(
         router(auth),
-        post(&[("authorization", &basic(BASIC_USER, ADMIN_WITH_SCOPE))]),
+        raw(&[("authorization", &basic(BASIC_USER, READER))]),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -720,12 +825,17 @@ async fn tokens_usernames_and_header_values_never_reach_the_logs() {
                 secrets.push(b64.to_owned());
             }
         }
-        let auth = Arc::new(FakeAuthenticator::default());
-        let mut b = Request::post("/admin/users");
-        for (k, v) in headers {
-            b = b.header(*k, v.as_str());
+        // The API and raw (where Basic reaches the authenticator).
+        for path in ["/admin/users", RAW] {
+            let auth = Arc::new(FakeAuthenticator::default());
+            let mut b = Request::builder()
+                .method(if path == RAW { "GET" } else { "POST" })
+                .uri(path);
+            for (k, v) in headers {
+                b = b.header(*k, v.as_str());
+            }
+            let _ = call(router(auth), b.body(Body::empty()).expect("request")).await;
         }
-        let _ = call(router(auth), b.body(Body::empty()).expect("request")).await;
     }
     for token in [ALICE, wrong, REVOKED, DB_DOWN, DISABLED_OWNER] {
         // The secret part (after the public id) is the credential.

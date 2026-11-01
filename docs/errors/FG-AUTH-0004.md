@@ -20,7 +20,7 @@ The user exists but is disabled (by an administrator, or locked after repeated f
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action`, or for a personal access token `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate refuses a disabled owner's token itself, ADR-0019). The audit log records who disabled the account, or the lockout.
+The log event carries `action`, or for a personal access token or a web session `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate and sessions::authenticate refuse a disabled owner's credential themselves, ADR-0019; a disable also revokes the user's sessions, `user.disabled` details `revoked_sessions`, ADR-0019 Amendment M2). The audit log records who disabled the account, or the lockout.
 
 ## 対処 (fix)
 
