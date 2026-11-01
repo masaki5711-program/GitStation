@@ -397,7 +397,8 @@
       "title": "Ref yang dilindungi",
       "updated": "Diperbarui",
       "changeOf": "Ubah peran untuk {{pattern}}",
-      "removeOf": "Cabut perlindungan {{pattern}}"
+      "removeOf": "Cabut perlindungan {{pattern}}",
+      "changed": "Peran untuk {{pattern}} diubah."
     },
     "save": "Simpan",
     "saved": "Tersimpan.",

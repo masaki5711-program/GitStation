@@ -397,7 +397,8 @@
       "title": "保護する ref",
       "updated": "更新",
       "changeOf": "{{pattern}} の役割を変更",
-      "removeOf": "{{pattern}} の保護をやめる"
+      "removeOf": "{{pattern}} の保護をやめる",
+      "changed": "{{pattern}} の役割を変更しました。"
     },
     "save": "保存",
     "saved": "保存しました。",

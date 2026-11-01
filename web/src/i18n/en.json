@@ -397,7 +397,8 @@
       "title": "Protected refs",
       "updated": "Updated",
       "changeOf": "Change the role for {{pattern}}",
-      "removeOf": "Remove protection of {{pattern}}"
+      "removeOf": "Remove protection of {{pattern}}",
+      "changed": "The role for {{pattern}} was changed."
     },
     "save": "Save",
     "saved": "Saved.",

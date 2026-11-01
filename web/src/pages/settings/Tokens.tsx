@@ -19,7 +19,7 @@ import { CopyButton } from '../../components/CopyButton';
 import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime } from '../../features/labels';
 import { useSession } from '../../session/session';
-import { ConfirmDialog, Denied, Section, focusHeading, useConfirm, useRefreshSessionOn403 } from './common';
+import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 
 type Token = components['schemas']['TokenBody'];
@@ -30,6 +30,7 @@ const KEY = ['tokens'];
 
 export function Tokens() {
   const { t } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const tokens = useQuery({
     queryKey: KEY,
@@ -42,6 +43,10 @@ export function Tokens() {
   });
   return (
     <>
+      {/* Always in the page, so its text is announced when it changes. */}
+      <p role="status" className={styles.srOnly}>
+        {secret === null ? '' : t('tokens.createdStatus')}
+      </p>
       {secret !== null && (
         <SecretPanel
           created={secret}
@@ -85,40 +90,78 @@ export function Tokens() {
   );
 }
 
-/** While the secret is on the screen, a click on an in-app link asks first
- * (the secret would be lost for good). The app uses a plain BrowserRouter, so
- * a router blocker is not available; links are intercepted instead. Reload and
- * close are covered by `beforeunload` in the panel. */
+/** While the secret is on the screen, leaving asks first (the secret would
+ * be lost for good). The app uses a plain BrowserRouter, so a router blocker
+ * is not available:
+ * - a click on an in-app link is intercepted (same-origin, not new-tab, not a
+ *   download, not a jump inside this page);
+ * - browser Back / Forward: a sentinel history entry sits on top of the page;
+ *   Back lands on the page's own entry (same address, nothing re-rendered),
+ *   the question is asked, and Cancel puts the sentinel back;
+ * - reload and close are covered by `beforeunload` in the panel.
+ * A navigation the app starts by code (`navigate()`) cannot be caught without
+ * a data router; none of the screens does that while the secret is shown. */
 function useLeaveGuard(active: boolean, onLeave: () => void) {
   const navigate = useNavigate();
-  const [href, setHref] = useState<string | null>(null);
+  const [target, setTarget] = useState<{ kind: 'link'; to: string } | { kind: 'back' } | null>(null);
+  const armed = useRef(false);
   useEffect(() => {
     if (!active) return;
+    const arm = () => {
+      window.history.pushState({ ...(window.history.state as object | null), gsSecretGuard: true }, '');
+      armed.current = true;
+    };
+    arm();
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const anchor = e.target instanceof Element ? e.target.closest('a[href]') : null;
-      const target = anchor?.getAttribute('href') ?? null;
-      if (target === null || !target.startsWith('/') || target.startsWith('//')) return;
-      if (anchor?.closest('dialog') != null) return;
+      if (!(anchor instanceof HTMLAnchorElement)) return;
+      if (anchor.hasAttribute('download')) return;
+      const kind = anchor.getAttribute('target');
+      if (kind !== null && kind !== '' && kind !== '_self') return;
+      if (anchor.closest('dialog') !== null) return;
+      const url = new URL(anchor.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      // A jump inside this page loses nothing.
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return;
       e.preventDefault();
       e.stopPropagation();
-      setHref(target);
+      setTarget({ kind: 'link', to: url.pathname + url.search + url.hash });
+    };
+    const onPop = () => {
+      // Back consumed the sentinel (or a Forward moved off it).
+      if (!armed.current) return;
+      armed.current = false;
+      setTarget({ kind: 'back' });
     };
     document.addEventListener('click', onClick, true);
+    window.addEventListener('popstate', onPop);
     return () => {
       document.removeEventListener('click', onClick, true);
+      window.removeEventListener('popstate', onPop);
+      // Leave no sentinel behind when the secret goes away on this page.
+      if (armed.current && (window.history.state as { gsSecretGuard?: boolean } | null)?.gsSecretGuard === true) {
+        armed.current = false;
+        window.history.back();
+      }
     };
   }, [active]);
   return {
-    target: href,
+    target,
     stay: () => {
-      setHref(null);
+      if (target?.kind === 'back') {
+        window.history.pushState({ ...(window.history.state as object | null), gsSecretGuard: true }, '');
+        armed.current = true;
+      }
+      setTarget(null);
     },
     proceed: () => {
-      const to = href;
-      setHref(null);
+      const to = target;
+      setTarget(null);
       onLeave();
-      if (to !== null) void navigate(to);
+      if (to?.kind === 'link') void navigate(to.to);
+      // Back: the sentinel is already gone; go on back one more entry.
+      else window.history.back();
     },
   };
 }
@@ -151,9 +194,6 @@ function SecretPanel({ created, onDone }: { created: Created; onDone: () => void
       <h2 id="secret-title" className={styles.secretTitle}>
         {t('tokens.secretTitle', { name: created.name })}
       </h2>
-      <p role="status" className={styles.srOnly}>
-        {t('tokens.createdStatus')}
-      </p>
       <p>
         <strong>{t('tokens.secretWarning')}</strong>
       </p>
@@ -184,6 +224,7 @@ function stateOf(k: Token): 'revoked' | 'expired' | 'active' {
 
 function TokenTable({ tokens }: { tokens: Token[] }) {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();
@@ -320,8 +361,6 @@ function CreateToken({ onCreated }: { onCreated: (c: Created) => void }) {
       setAgent(false);
       setAttempt(0);
       onCreated(created);
-      // The answer holds the secret: do not keep it in the mutation either.
-      queryClient.getMutationCache().clear();
       await queryClient.invalidateQueries({ queryKey: KEY });
     },
     onError: refresh,
@@ -332,7 +371,13 @@ function CreateToken({ onCreated }: { onCreated: (c: Created) => void }) {
     if (create.isPending) return;
     setAttempt((x) => x + 1);
     if (errors.length > 0) return;
-    create.mutate();
+    // The answer holds the secret: once it is handed on, let go of the
+    // mutation (gcTime 0 then drops it from the cache).
+    create.mutate(undefined, {
+      onSuccess: () => {
+        create.reset();
+      },
+    });
   };
   const all = session.user.is_admin ? [...SCOPES, 'admin'] : [...SCOPES];
   return (
