@@ -139,5 +139,17 @@ fetch / clone は `Git-Protocol` ヘッダを `GIT_PROTOCOL` として渡し pro
   （ほかは `FG-GIT-0014 reason=content_encoding`）。`Content-Type` は `application/x-git-upload-pack-request` だけ
   （`reason=content_type`）。本文の読み込みは無通信 60 秒と全体 1 時間（`git.http.idle_timeout_ms` / `timeout_ms`、
   `FG-WEB-0002 operation=git_request_body`）、途中で切れたら `FG-GIT-0015 phase=request_body`（git は起動していない）。
+- **レビューを受けて加えた（同日、MR3 の追加のコミット）**:
+  - オブジェクトの走査は、コミット以外の `want` をすべて見つけた時点で git を止めて回収する（`walked` に読んだ数）。最後まで
+    読むのは、辿れないものがあるときだけである。コミット以外の `want` は 1 つの要求で `git.http.max_object_wants`（既定 10 000）
+    まで（超えたら走査の前に `FG-GIT-0014 reason=too_many_wants`。大きなツリーの partial clone の checkout で足りなければ上げる）。
+  - `filter` に `sparse` を含むもの（`sparse:oid=<blob>`、`combine:` の中も）は拒む（`reason=filter_unsupported`）。`sparse:oid` は
+    ID で blob を読んで sparse の型として使うので、辿れない blob の中身が型の解釈を通じて漏れうる。upload-pack にも
+    `-c uploadpack.filter.sparse:oid.allow=false` を付けた（二重の守り）。
+  - `have` と `shallow` の ID は確かめない。git の `ACK` と shallow の更新が明かすのは、その ID のオブジェクトがあるかどうかだけで、
+    中身ではない（受け入れた残り。強制 push で消した内容があるかどうかは、ID を知っている読み手には分かる）。
+  - 要求の本文を読むあいだも枠を持つ（forge-web の `BodySlots`。全体 `git.http.max_streams`、1 人 `max_streams_per_principal`、
+    `FG-GIT-0004 reason=body_reads` / `principal_body_reads`）。本文は全体で `git.http.body_timeout_ms`（既定 5 分）以内に読み終える
+    （`FG-WEB-0002 operation=git_request_body kind=total`）。遅い要求を何本も開いて本文をため込ませることを防ぐ。
 - **残り**: git 2.43 の v2 の広告は `object-info` を含む（forge は要求を拒むので害はないが、広告から外す設定を確かめる）。
   ref の多いリポジトリでの確認の費用の監視（`check_ms` をメトリクスにする）、bitmap / キャッシュ。

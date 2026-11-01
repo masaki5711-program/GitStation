@@ -336,6 +336,8 @@ fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpC
         )?,
         idle_timeout: millis(get, "git.http.idle_timeout_ms", ms(d.idle_timeout))?,
         timeout: millis(get, "git.http.timeout_ms", ms(d.timeout))?,
+        body_timeout: millis(get, "git.http.body_timeout_ms", ms(d.body_timeout))?,
+        max_object_wants: positive(get, "git.http.max_object_wants", d.max_object_wants)?,
         want_check_timeout: millis(
             get,
             "git.http.want_check_timeout_ms",

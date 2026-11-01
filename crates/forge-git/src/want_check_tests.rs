@@ -7,7 +7,14 @@ use std::time::{Duration, Instant};
 use forge_core::RepoId;
 use forge_errors::ErrorCode;
 
-use crate::{Git, GitConfig, StorageRoot};
+use crate::{Git, GitConfig, StorageRoot, WantLimits};
+
+fn limits(secs: u64) -> WantLimits {
+    WantLimits {
+        timeout: Duration::from_secs(secs),
+        max_object_wants: 10_000,
+    }
+}
 
 struct Fixture {
     _home: tempfile::TempDir,
@@ -141,13 +148,7 @@ impl Fixture {
     async fn check(&self, wants: &[&str]) -> crate::WantCheck {
         let wants: Vec<String> = wants.iter().map(|w| (*w).to_owned()).collect();
         self.git
-            .check_wants(
-                &self.root,
-                self.id,
-                &wants,
-                "user:1",
-                Duration::from_secs(30),
-            )
+            .check_wants(&self.root, self.id, &wants, "user:1", limits(30))
             .await
             .expect("check")
     }
@@ -214,13 +215,7 @@ async fn ids_that_are_not_hex_never_reach_git() {
     for bad in ["--all", "HEAD", "main", &"A".repeat(40)] {
         let err = f
             .git
-            .check_wants(
-                &f.root,
-                f.id,
-                &[bad.to_owned()],
-                "user:1",
-                Duration::from_secs(5),
-            )
+            .check_wants(&f.root, f.id, &[bad.to_owned()], "user:1", limits(5))
             .await
             .expect_err(bad);
         assert_eq!(err.code(), ErrorCode::GitProtocolInvalid, "{bad}");
@@ -237,7 +232,7 @@ async fn a_missing_repository_is_storage_missing() {
             RepoId::new(99),
             &["1".repeat(40)],
             "user:1",
-            Duration::from_secs(5),
+            limits(5),
         )
         .await
         .expect_err("missing");
@@ -280,7 +275,7 @@ async fn want_check_cost_with_many_refs() {
             let started = Instant::now();
             let check = f
                 .git
-                .check_wants(&f.root, f.id, &wants, "user:1", Duration::from_secs(600))
+                .check_wants(&f.root, f.id, &wants, "user:1", limits(600))
                 .await
                 .expect("check");
             println!(
@@ -299,4 +294,59 @@ async fn want_check_cost_with_many_refs() {
     timed("an unreachable commit", vec![h.s1.clone()]).await;
     timed("a blob (object walk)", vec![h.b1.clone()]).await;
     timed("an unreachable blob (object walk)", vec![h.secret.clone()]).await;
+}
+
+/// MR3 review: the object walk stops once every non-commit want was seen
+/// (the tip's blob comes early), so one reachable blob does not read the
+/// whole repository; more non-commit wants than the cap are refused
+/// before any walk.
+#[tokio::test]
+async fn the_object_walk_stops_early_and_non_commit_wants_are_capped() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    let mut fast_import = String::new();
+    for i in 0..300 {
+        fast_import.push_str(&format!(
+            "commit refs/heads/main\ncommitter forge-test <forge-test@example.invalid> 0 +0000\ndata 9\nsynthetic\n{}M 100644 inline f{i}\ndata 4\n{i:03}\n\n",
+            if i == 0 { format!("from {}\n", h.c2) } else { String::new() }
+        ));
+    }
+    plumb(&f.path, &["fast-import", "--quiet"], Some(&fast_import));
+    let total: u64 = plumb(&f.path, &["rev-list", "--objects", "--all"], None)
+        .lines()
+        .count()
+        .try_into()
+        .expect("count");
+    let tip_blob = plumb(&f.path, &["rev-parse", "main:f299"], None);
+    let check = f.check(&[&tip_blob]).await;
+    assert_eq!(check.unreachable, 0, "{check:?}");
+    assert!(
+        check.walked > 0 && check.walked < total,
+        "walked {} of {total}",
+        check.walked
+    );
+    // An unreachable blob needs the whole walk.
+    let missing = f.check(&[&h.secret]).await;
+    assert_eq!(missing.walked, total);
+
+    let wants: Vec<String> = [h.b1.clone(), h.b2.clone(), h.t1.clone()].into();
+    let err = f
+        .git
+        .check_wants(
+            &f.root,
+            f.id,
+            &wants,
+            "user:1",
+            WantLimits {
+                timeout: Duration::from_secs(30),
+                max_object_wants: 2,
+            },
+        )
+        .await
+        .expect_err("over the cap");
+    assert_eq!(err.code(), ErrorCode::GitProtocolInvalid);
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "reason" && v == "too_many_wants"));
 }

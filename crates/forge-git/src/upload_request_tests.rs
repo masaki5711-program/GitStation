@@ -176,3 +176,38 @@ fn err_packet_is_one_pkt_line_and_bounded() {
     );
     assert!(payload.ends_with(b"\n"));
 }
+
+/// MR3 review: `sparse:oid` reads a blob by id; refused in v0 and v2,
+/// alone or inside `combine:`; other filters pass.
+#[test]
+fn sparse_filters_are_refused() {
+    for spec in [
+        "sparse:oid=1111111111111111111111111111111111111111",
+        "SPARSE:oid=main:.gitsparse",
+        "combine:blob:none+sparse%3Aoid%3D1111111111111111111111111111111111111111",
+    ] {
+        let line = format!("filter {spec}\n");
+        let v0 = body(&[data(&format!("want {A}\n")), data(&line), Packet::Flush]);
+        let err = parse_upload_pack_request(&v0, ProtocolVersion::V0).expect_err(spec);
+        assert_eq!(reason(&err), Some("filter_unsupported"), "{spec}");
+        let v2 = body(&[
+            data("command=fetch\n"),
+            Packet::Delim,
+            data(&format!("want {A}\n")),
+            data(&line),
+            Packet::Flush,
+        ]);
+        let err = parse_upload_pack_request(&v2, ProtocolVersion::V2).expect_err(spec);
+        assert_eq!(reason(&err), Some("filter_unsupported"), "{spec}");
+    }
+    for spec in ["blob:none", "blob:limit=1m", "tree:0", "object:type=commit"] {
+        let req = body(&[
+            data("command=fetch\n"),
+            Packet::Delim,
+            data(&format!("want {A}\n")),
+            data(&format!("filter {spec}\n")),
+            Packet::Flush,
+        ]);
+        parse_upload_pack_request(&req, ProtocolVersion::V2).expect(spec);
+    }
+}

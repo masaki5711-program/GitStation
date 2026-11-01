@@ -35,4 +35,4 @@ pub use revision::Revision;
 pub use storage::{Provisioned, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};
 pub use version::GitVersion;
-pub use want_check::WantCheck;
+pub use want_check::{WantCheck, WantLimits};

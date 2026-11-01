@@ -143,6 +143,8 @@ async fn upload_pack_argv_is_the_fixed_set() {
             "-c",
             "uploadpack.allowAnySHA1InWant=false",
             "-c",
+            "uploadpack.filter.sparse:oid.allow=false",
+            "-c",
             hooks.as_str(),
             "upload-pack",
             "--strict",

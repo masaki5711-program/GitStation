@@ -76,11 +76,7 @@ fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
         usize::try_from(limits.max_streams_per_principal).unwrap_or(usize::MAX);
     git.stream_idle_timeout = limits.idle_timeout;
     git.stream_timeout_total = limits.timeout;
-    SmartHttp {
-        git: Git::new(git),
-        storage,
-        limits: GitHttpLimits::from_config(limits),
-    }
+    SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits))
 }
 
 /// The server's state: the database as readiness probe and as token

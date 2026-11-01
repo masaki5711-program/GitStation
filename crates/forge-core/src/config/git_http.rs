@@ -18,13 +18,22 @@ pub struct GitHttpConfig {
     /// the response, and git's stream (default 1 h). Replaces the request
     /// timeout for git POSTs.
     pub timeout: Duration,
+    /// `git.http.body_timeout_ms`: reading one request body completely
+    /// (default 5 min, at most `timeout`). Bounds how long a slow client
+    /// holds a body-read slot.
+    pub body_timeout: Duration,
+    /// `git.http.max_object_wants`: distinct non-commit wants (trees, blobs,
+    /// tags) one upload-pack request may ask for (default 10 000): each is
+    /// looked up in a full object walk.
+    pub max_object_wants: u32,
     /// `git.http.want_check_timeout_ms`: the reachability check of an
     /// upload-pack request's wants (default 30 s, at most `timeout`).
     pub want_check_timeout: Duration,
-    /// `git.http.max_streams`: concurrent git streams (default 16).
+    /// `git.http.max_streams`: concurrent git streams (default 16); also
+    /// the number of request bodies read at once.
     pub max_streams: u32,
     /// `git.http.max_streams_per_principal`: per user (default 4, at most
-    /// `max_streams`).
+    /// `max_streams`); also per-user concurrent request-body reads.
     pub max_streams_per_principal: u32,
 }
 
@@ -38,6 +47,8 @@ impl GitHttpConfig {
         fetch_request_max_bytes: 16 * 1024 * 1024,
         idle_timeout: Duration::from_secs(60),
         timeout: Duration::from_secs(3600),
+        body_timeout: Duration::from_secs(300),
+        max_object_wants: 10_000,
         want_check_timeout: Duration::from_secs(30),
         max_streams: 16,
         max_streams_per_principal: 4,
@@ -56,6 +67,9 @@ impl GitHttpConfig {
                 "git.http.want_check_timeout_ms",
                 "above_timeout",
             ));
+        }
+        if self.body_timeout > self.timeout {
+            return Err(super::invalid("git.http.body_timeout_ms", "above_timeout"));
         }
         if self.idle_timeout > self.timeout {
             return Err(super::invalid("git.http.idle_timeout_ms", "above_timeout"));

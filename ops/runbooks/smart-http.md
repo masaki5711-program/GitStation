@@ -27,7 +27,10 @@ FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body`）。
 | 無通信（どちらの向きにも 1 バイトも流れない）（`git.http.idle_timeout_ms`） | 60 秒 | git を helper ごと強制終了、`FG-GIT-0002 kind=idle`。本文の読み込み中なら `FG-WEB-0002 operation=git_request_body kind=idle` |
 | 1 回の全体（`git.http.timeout_ms`。git の POST は要求のタイムアウトの代わりにこれ） | 1 時間 | `FG-GIT-0002 kind=total` / `FG-WEB-0002 kind=total` |
 | fetch の要求の本文（生と gzip の展開後の両方、`git.http.fetch_request_max_bytes`） | 16 MiB | `FG-GIT-0013 limit=request_body` / `gzip_decompressed`（413） |
+| 本文を読み終えるまで（`git.http.body_timeout_ms`） | 5 分 | `FG-WEB-0002 operation=git_request_body kind=total` |
+| 本文を同時に読む数（`max_streams` / `max_streams_per_principal` と同じ） | 16 / 1 人 4 | `FG-GIT-0004 reason=body_reads`（10 秒待つ）/ `principal_body_reads`（すぐ） |
 | `want` の到達性の確認（`git.http.want_check_timeout_ms`） | 30 秒 | `FG-GIT-0002 operation=want_check`（504） |
+| コミット以外の `want` の数（`git.http.max_object_wants`） | 10 000 | `FG-GIT-0014 reason=too_many_wants` |
 | push の大きさ（`receive.maxInputSize`） | MR4 で設定（2 GiB 予定） | git の index-pack が止め、`unpack` の失敗が push の結果に出る |
 
 git の stderr は先頭 64 KiB だけ残す（ログの `stderr` はさらにその先頭の数行、`stderr_truncated` で切ったことが分かる）。

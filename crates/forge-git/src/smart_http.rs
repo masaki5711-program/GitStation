@@ -114,6 +114,9 @@ pub const UPLOAD_PACK_CONFIG: &[(&str, &str)] = &[
     // v0 / v1: refuse wants that are not advertised. v2 ignores it — see
     // ADR-0007 amendment (M1 phase 9).
     ("uploadpack.allowAnySHA1InWant", "false"),
+    // `sparse:oid=<blob>` reads a blob by id as the sparse pattern (an
+    // unreachable one too); forge's parser refuses it first (MR3 review).
+    ("uploadpack.filter.sparse:oid.allow", "false"),
 ];
 
 /// Fixed `-c` settings of receive-pack (push); `receive.maxInputSize` is

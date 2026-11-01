@@ -106,6 +106,11 @@ pub const KEYS: &[Key] = &[
     ),
     number("git.http.idle_timeout_ms", "FORGE_GIT_HTTP_IDLE_TIMEOUT_MS"),
     number("git.http.timeout_ms", "FORGE_GIT_HTTP_TIMEOUT_MS"),
+    number("git.http.body_timeout_ms", "FORGE_GIT_HTTP_BODY_TIMEOUT_MS"),
+    number(
+        "git.http.max_object_wants",
+        "FORGE_GIT_HTTP_MAX_OBJECT_WANTS",
+    ),
     number(
         "git.http.want_check_timeout_ms",
         "FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS",

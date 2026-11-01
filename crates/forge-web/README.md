@@ -95,11 +95,13 @@ admitted proof.
   authentication). After `authorize()`: a repository still `provisioning`
   is `FG-REPO-0016` (503); the POST checks `Content-Type`
   (`application/x-git-upload-pack-request`) and `Content-Encoding`
-  (gzip / identity; `FG-GIT-0014`), reads the whole body (≤
+  (gzip / identity; `FG-GIT-0014`), takes a body-read slot (`BodySlots`,
+  sized like git's stream pools: `FG-GIT-0004 reason=body_reads` /
+  `principal_body_reads`), reads the whole body within `body_timeout` (≤
   `fetch_request_max_bytes` raw and decompressed → `FG-GIT-0013`; idle /
   total → `FG-WEB-0002 operation=git_request_body`; a vanished client →
   `FG-GIT-0015 phase=request_body`), parses it
-  (`forge_git::upload_request`), and runs `Git::check_wants` — every want
+  (`forge_git::upload_request`; `sparse` filters refused), and runs `Git::check_wants` — every want
   reachable from a ref (ADR-0007 option (a)) — before upload-pack; an
   unreachable want is answered in-band (200, one `ERR` packet with the
   user message and the request id; `FG-GIT-0014 reason=want_unreachable`
@@ -111,8 +113,8 @@ admitted proof.
   `user:<id>`. The git POSTs are exempt from the request timeout:
   `AppConfig::git_rpc_timeout` (`git.http.timeout_ms`, 1 h) bounds them
   instead.
-- `AppState::with_smart_http(SmartHttp { git, storage, limits:
-  GitHttpLimits })` — `forge serve` always sets it (storage root required,
+- `AppState::with_smart_http(SmartHttp::new(git, storage,
+  GitHttpLimits))` — `forge serve` always sets it (storage root required,
   git HOME = storage root, pools and timeouts from `git.http.*`); without it
   a git route is `FG-SYS-0001 reason=smart_http_unconfigured`.
 - `AppState::new(version, probes, authenticator, Lookups { namespaces,

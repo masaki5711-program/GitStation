@@ -241,7 +241,12 @@ struct RepositoryColumns {
 impl RepositoryColumns {
     /// The repository of project `project_id`: `FG-DB-0021`
     /// `project_without_repository` / `unknown_repository_state` when the
-    /// row is missing or unreadable (every project has exactly one).
+    /// row is missing or unreadable. Raised before `authorize()` (so an
+    /// outsider sees a 500 there, not the absent 404): accepted, because
+    /// `projects::create` inserts the project, its namespace and its
+    /// repository in one transaction and nothing deletes a repository row
+    /// alone — a missing row is damaged data for every caller (runbook
+    /// namespace-data; MR3 review).
     fn read(self, project_id: i64) -> Result<ProjectRepository, ForgeError> {
         let (Some(id), Some(raw)) = (self.id, self.state) else {
             return Err(

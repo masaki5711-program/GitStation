@@ -10,9 +10,18 @@
 //!   accepted: any other command (`object-info`, `bundle-uri`, …) would answer
 //!   about objects by id without a want (refused, `command_unsupported`).
 //!
+//! A `filter` naming `sparse` (`sparse:oid=<blob>`, also inside
+//! `combine:`) is refused (`filter_unsupported`): it makes upload-pack read
+//! a blob by id as the sparse pattern, reachable or not (upload-pack is
+//! also run with `uploadpack.filter.sparse:oid.allow=false`).
+//!
+//! `have` and `shallow` ids are not checked: git answers them with `ACK` /
+//! shallow updates, which reveal only whether an object exists, never its
+//! content (accepted residual, ADR-0007 amendment MR3).
+//!
 //! The body is the decompressed request; the original bytes go to git
 //! unchanged. Refusals are `FG-GIT-0014` (`pkt_line` from the framing,
-//! `want_invalid`, `command_unsupported`).
+//! `want_invalid`, `command_unsupported`, `filter_unsupported`).
 
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -75,6 +84,19 @@ fn want_of(payload: &[u8]) -> Result<Option<String>, ForgeError> {
     }
 }
 
+/// `filter <spec>` naming `sparse` anywhere (case-insensitive, so an
+/// encoded `combine:` member is caught too): `filter_unsupported`.
+fn check_filter(payload: &[u8]) -> Result<(), ForgeError> {
+    let Some(spec) = payload.strip_prefix(b"filter ") else {
+        return Ok(());
+    };
+    let lower = spec.to_ascii_lowercase();
+    if lower.windows(6).any(|w| w == b"sparse") {
+        return Err(refused("filter_unsupported"));
+    }
+    Ok(())
+}
+
 /// Parse a complete (decompressed) upload-pack request body for the
 /// protocol `version` the request asked for (`Git-Protocol`, the value git
 /// receives as well).
@@ -92,6 +114,7 @@ fn parse_v0(body: &[u8]) -> Result<UploadPackRequest, ForgeError> {
     let mut wants = Vec::new();
     for packet in pkt_line::decode_all(body, PktMode::V0)? {
         if let Packet::Data(payload) = packet {
+            check_filter(&payload)?;
             if let Some(oid) = want_of(&payload)? {
                 wants.push(oid);
             }
@@ -141,6 +164,7 @@ fn parse_v2(body: &[u8]) -> Result<UploadPackRequest, ForgeError> {
                 return Err(refused("command_unsupported").with_context("command", "response_end"))
             }
             Packet::Data(payload) if in_args && command == UploadPackCommand::Fetch => {
+                check_filter(payload)?;
                 if let Some(oid) = want_of(payload)? {
                     wants.push(oid);
                 }

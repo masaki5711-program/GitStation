@@ -10,7 +10,8 @@
 //!   answers the headers only and starts no git.
 //! - `POST {path}.git/git-upload-pack`: the request body (Content-Type
 //!   checked; gzip or identity; at most `fetch_request_max_bytes` raw and
-//!   decompressed; idle and total timeouts) is read completely, parsed
+//!   decompressed; idle timeout and `body_timeout`; one body-read slot,
+//!   global and per user) is read completely, parsed
 //!   (`want`s, v2 command), and **every want is checked to be reachable from
 //!   a ref** (ADR-0007 option (a)) before upload-pack starts. An
 //!   unreachable want is refused in-band: HTTP 200 with one `ERR` packet
@@ -37,11 +38,11 @@ use forge_core::{telemetry, ProjectRepository, RepositoryState};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::smart_http::{advertisement_prefix, Phase, ProtocolVersion, Service};
 use forge_git::upload_request::{err_packet, parse_upload_pack_request};
-use forge_git::{Git, StorageRoot};
+use forge_git::{Git, StorageRoot, WantLimits};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::app::AppState;
-use crate::git_stream::{read_request_body, GitResponse, StreamLog};
+use crate::git_stream::{read_request_body, BodySlots, GitResponse, StreamLog};
 use crate::registry::Dispatched;
 
 const ADVERTISEMENT: &str = "application/x-git-upload-pack-advertisement";
@@ -57,8 +58,13 @@ pub struct GitHttpLimits {
     pub idle_timeout: Duration,
     /// One git POST, first byte to the end of the response; git's stream.
     pub timeout: Duration,
+    /// Reading one request body completely (a slow client holds a
+    /// body-read slot at most this long).
+    pub body_timeout: Duration,
     /// The want reachability check.
     pub want_check_timeout: Duration,
+    /// Distinct non-commit wants per upload-pack request.
+    pub max_object_wants: usize,
 }
 
 impl GitHttpLimits {
@@ -69,7 +75,9 @@ impl GitHttpLimits {
                 .unwrap_or(usize::MAX),
             idle_timeout: cfg.idle_timeout,
             timeout: cfg.timeout,
+            body_timeout: cfg.body_timeout,
             want_check_timeout: cfg.want_check_timeout,
+            max_object_wants: usize::try_from(cfg.max_object_wants).unwrap_or(usize::MAX),
         }
     }
 }
@@ -81,12 +89,34 @@ impl Default for GitHttpLimits {
 }
 
 /// What the Smart HTTP routes run git with: the git handle (stream pools),
-/// the storage root (paths from `RepoId` only, ADR-0009) and the limits.
+/// the storage root (paths from `RepoId` only, ADR-0009), the limits, and
+/// the request-body read slots (sized like git's stream pools).
 #[derive(Debug, Clone)]
 pub struct SmartHttp {
     pub git: Git,
     pub storage: StorageRoot,
     pub limits: GitHttpLimits,
+    body_slots: BodySlots,
+}
+
+impl SmartHttp {
+    /// The body-read slots take git's stream limits: `max_streams` in
+    /// total, `max_streams_per_principal` per user, waiting at most
+    /// `acquire_timeout` for a free one.
+    pub fn new(git: Git, storage: StorageRoot, limits: GitHttpLimits) -> Self {
+        let cfg = git.config();
+        let body_slots = BodySlots::new(
+            cfg.max_streams,
+            cfg.max_streams_per_principal,
+            cfg.acquire_timeout,
+        );
+        Self {
+            git,
+            storage,
+            limits,
+            body_slots,
+        }
+    }
 }
 
 /// `GET|HEAD {path}.git/info/refs?service=git-upload-pack`.
@@ -157,7 +187,9 @@ async fn upload_pack_inner(
     let principal = principal_key(&request)?;
     let log = StreamLog::new(&request, repository, "upload_pack");
     let ctx = request.ctx().clone(); // clone: the request body is consumed below
+    let slot = smart.body_slots.acquire(&principal).await?;
     let body = read_request_body(request.into_body(), gzip, &smart.limits).await?;
+    drop(slot);
     let parsed = parse_upload_pack_request(&body, version)?;
     let check = smart
         .git
@@ -166,7 +198,10 @@ async fn upload_pack_inner(
             repository.id,
             &parsed.wants,
             &principal,
-            smart.limits.want_check_timeout,
+            WantLimits {
+                timeout: smart.limits.want_check_timeout,
+                max_object_wants: smart.limits.max_object_wants,
+            },
         )
         .await?;
     let check = match check.into_result() {

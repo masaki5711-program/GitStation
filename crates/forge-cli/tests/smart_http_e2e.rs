@@ -281,11 +281,11 @@ fn server(opts: Options) -> Server {
                 projects: Arc::new(db),
             },
         )
-        .with_smart_http(SmartHttp {
-            git: git.clone(), // clone: shared pools with the test
-            storage: StorageRoot::open(storage.path()).expect("root"),
-            limits: opts.limits,
-        });
+        .with_smart_http(SmartHttp::new(
+            git.clone(), // clone: shared pools with the test
+            StorageRoot::open(storage.path()).expect("root"),
+            opts.limits,
+        ));
         let router = forge_web::app(state, AppConfig::default()).expect("router");
         let listener = forge_web::server::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -1062,4 +1062,28 @@ fn upload_pack_request_body_limits() {
     let answer = s.http("POST", UPLOAD, Some(&s.alice), &v2, info.as_bytes());
     assert_eq!(answer.status, 400);
     assert_eq!(answer.code(), ErrorCode::GitProtocolInvalid.id());
+    // `sparse:oid` would read a blob by id (MR3 review): refused, and a git
+    // client asking for it fails.
+    let sparse = format!(
+        "{}0001{}{}{}0000",
+        pkt("command=fetch\n"),
+        pkt(&format!("want {}\n", s.tip)),
+        pkt(&format!("filter sparse:oid={}\n", s.secret_blob)),
+        pkt("done\n")
+    );
+    let answer = s.http("POST", UPLOAD, Some(&s.alice), &v2, sparse.as_bytes());
+    assert_eq!(answer.status, 400);
+    assert_eq!(answer.code(), ErrorCode::GitProtocolInvalid.id());
+}
+
+#[test]
+fn a_sparse_oid_filter_clone_is_refused() {
+    let s = server(Options::default());
+    let filter = format!("--filter=sparse:oid={}", s.secret_blob);
+    let (out, _) = s.clone_into(Some(&s.alice), "alice/web.git", &[&filter]);
+    assert!(
+        !out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

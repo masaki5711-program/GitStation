@@ -19,8 +19,10 @@
 //!    no cheap exact test exists (`rev-list --objects --not --all` does not
 //!    mark the trees of the excluded tips, so it reports reachable blobs as
 //!    unreachable). forge streams `git rev-list --objects --all
-//!    --no-object-names` and looks for the wanted ids: a full object walk,
-//!    paid only by requests that want non-commits.
+//!    --no-object-names` and looks for the wanted ids, and stops (kills
+//!    git) as soon as all are found: at worst a full object walk, paid only
+//!    by requests that want non-commits, at most `max_object_wants` of them
+//!    (`FG-GIT-0014 reason=too_many_wants` above it).
 //!
 //! `--all` is every ref, which is exactly what upload-pack advertises
 //! (forge configures no `transfer.hideRefs` / `uploadpack.hideRefs`; if it
@@ -49,6 +51,9 @@ pub struct WantCheck {
     pub commits: usize,
     /// How many were trees, blobs or tags (step 3, the object walk).
     pub objects: usize,
+    /// Objects the walk of step 3 read before it found every non-commit
+    /// want (or the end).
+    pub walked: u64,
     /// How many no ref reaches (missing ones included).
     pub unreachable: usize,
     /// The first unreachable id (for the log).
@@ -76,6 +81,7 @@ impl WantCheck {
             .with_context("commits", self.commits)
             .with_context("objects", self.objects)
             .with_context("unreachable", self.unreachable)
+            .with_context("walked", self.walked)
             .with_context("check_ms", self.duration.as_millis());
         match &self.first_unreachable {
             Some(oid) => err.with_context("first_unreachable", oid),
@@ -84,11 +90,23 @@ impl WantCheck {
     }
 }
 
+/// The bounds of one check (`git.http.want_check_timeout_ms`,
+/// `git.http.max_object_wants`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WantLimits {
+    /// The whole check (`FG-GIT-0002 operation=want_check`).
+    pub timeout: Duration,
+    /// Distinct non-commit wants per request.
+    pub max_object_wants: usize,
+}
+
 impl Git {
     /// Check that every id in `wants` is reachable from a ref of repository
     /// `id` (see the module docs). `principal` is the caller's stream key
     /// (step 3 runs as a stream, counted against the caller's cap);
-    /// `timeout` bounds the whole check (`FG-GIT-0002` when exceeded).
+    /// `limits.timeout` bounds the whole check (`FG-GIT-0002` when
+    /// exceeded); more than `limits.max_object_wants` non-commit wants are
+    /// `FG-GIT-0014 reason=too_many_wants` before the walk.
     /// An id that is not 40 / 64 lower-case hex digits is `FG-GIT-0014
     /// reason=want_invalid` (the parser already refuses them).
     pub async fn check_wants(
@@ -97,8 +115,9 @@ impl Git {
         id: RepoId,
         wants: &[String],
         principal: &str,
-        timeout: Duration,
+        limits: WantLimits,
     ) -> Result<WantCheck, ForgeError> {
+        let timeout = limits.timeout;
         let started = Instant::now();
         let deadline = started + timeout;
         let distinct: BTreeSet<&str> = wants.iter().map(String::as_str).collect();
@@ -110,6 +129,7 @@ impl Git {
             wants: distinct.len(),
             commits: 0,
             objects: 0,
+            walked: 0,
             unreachable: 0,
             first_unreachable: None,
             duration: Duration::ZERO,
@@ -136,6 +156,12 @@ impl Git {
         }
         check.commits = commits.len();
         check.objects = objects.len();
+        if objects.len() > limits.max_object_wants {
+            return Err(ForgeError::new(ErrorCode::GitProtocolInvalid)
+                .with_context("reason", "too_many_wants")
+                .with_context("objects", objects.len())
+                .with_context("max_object_wants", limits.max_object_wants));
+        }
         if !commits.is_empty() {
             // Output means at least one wanted commit is unreachable; the
             // printed id is the first one of the walk (a want, or an
@@ -149,9 +175,10 @@ impl Git {
             }
         }
         if !objects.is_empty() {
-            let missing = self
+            let (missing, walked) = self
                 .objects_not_reached(&repo, objects, principal, left(deadline, timeout)?)
                 .await?;
+            check.walked = walked;
             unreachable.extend(missing);
         }
         check.unreachable += unreachable.len();
@@ -225,14 +252,15 @@ impl Git {
             .map(str::to_owned))
     }
 
-    /// Step 3: which of `objects` no ref reaches (a full object walk).
+    /// Step 3: which of `objects` no ref reaches, and how many objects the
+    /// walk read: it stops (git killed and reaped) once every id was seen.
     async fn objects_not_reached<'w>(
         &self,
         repo: &Path,
         mut objects: BTreeSet<&'w str>,
         principal: &str,
         timeout: Duration,
-    ) -> Result<Vec<&'w str>, ForgeError> {
+    ) -> Result<(Vec<&'w str>, u64), ForgeError> {
         let mut stream = self
             .command("rev-list")
             .arg("--objects")
@@ -250,11 +278,19 @@ impl Git {
             );
         };
         let mut reader = BufReader::new(stdout).lines();
+        let mut walked = 0u64;
         let read = loop {
             match reader.next_line().await {
                 Ok(Some(line)) => {
+                    walked += 1;
                     let oid = line.split(' ').next().unwrap_or_default();
                     objects.remove(oid);
+                    if objects.is_empty() {
+                        // Every id seen: the rest of the walk is not needed.
+                        drop(reader);
+                        stream.stop_early().await?;
+                        return Ok((Vec::new(), walked));
+                    }
                 }
                 Ok(None) => break Ok(()),
                 Err(e) => break Err(e),
@@ -269,7 +305,7 @@ impl Git {
                 .with_context("reason", "stdout_read_failed")
                 .with_source(e)
         })?;
-        Ok(objects.into_iter().collect())
+        Ok((objects.into_iter().collect(), walked))
     }
 }
 

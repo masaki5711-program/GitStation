@@ -2,10 +2,16 @@
 //! request body under its own limits, and streaming git's stdout as the
 //! response body.
 //!
+//! - [`BodySlots`]: a request body is read only while holding a slot,
+//!   global (`max_streams`, waiting up to `acquire_timeout`, then
+//!   `FG-GIT-0004 reason=body_reads`) and per user
+//!   (`max_streams_per_principal`, refused at once,
+//!   `reason=principal_body_reads`), so slow uploads cannot pile up
+//!   buffered bodies (MR3 review).
 //! - [`read_request_body`]: the whole body, at most
 //!   `fetch_request_max_bytes` raw **and** decompressed (gzip through
 //!   forge-git's capped decoder), with an idle timeout between chunks and
-//!   one total deadline. Over a limit `FG-GIT-0013` (`limit=request_body` /
+//!   one deadline (`body_timeout`, 5 min). Over a limit `FG-GIT-0013` (`limit=request_body` /
 //!   `gzip_decompressed`), too slow `FG-WEB-0002`
 //!   (`operation=git_request_body`, `kind=idle|total`), a client that goes
 //!   away `FG-GIT-0015` (`reason=client_disconnected`,
@@ -19,7 +25,9 @@
 //!   logged with the request id (status 499 in the code; no response is
 //!   left to send).
 
+use std::collections::HashMap;
 use std::io;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::{Body, Bytes};
@@ -30,6 +38,7 @@ use forge_git::gzip::GzipDecoder;
 use forge_git::{GitStdout, GitStream};
 use futures_util::StreamExt as _;
 use tokio::io::AsyncReadExt as _;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 use crate::registry::Dispatched;
@@ -46,7 +55,8 @@ pub(crate) async fn read_request_body(
     limits: &GitHttpLimits,
 ) -> Result<Vec<u8>, ForgeError> {
     let cap = limits.fetch_request_max_bytes;
-    let deadline = Instant::now() + limits.timeout;
+    let total = limits.body_timeout.min(limits.timeout);
+    let deadline = Instant::now() + total;
     let mut chunks = body.into_data_stream();
     let mut decoder = gzip.then(|| GzipDecoder::new(cap));
     let mut raw = 0usize;
@@ -64,7 +74,15 @@ pub(crate) async fn read_request_body(
                 return Err(ForgeError::new(ErrorCode::RequestTimeout)
                     .with_context("operation", "git_request_body")
                     .with_context("kind", kind)
-                    .with_context("timeout_ms", wait.as_millis())
+                    .with_context(
+                        "timeout_ms",
+                        if kind == "total" {
+                            total
+                        } else {
+                            limits.idle_timeout
+                        }
+                        .as_millis(),
+                    )
                     .with_context("bytes_in", raw));
             }
         };
@@ -94,6 +112,107 @@ pub(crate) async fn read_request_body(
         out.extend(d.finish()?);
     }
     Ok(out)
+}
+
+/// The request-body read slots (see the module docs).
+#[derive(Debug, Clone)]
+pub(crate) struct BodySlots {
+    global: Arc<Semaphore>,
+    per_principal: Arc<Mutex<HashMap<String, usize>>>,
+    max_per_principal: usize,
+    wait: Duration,
+}
+
+/// One held body-read slot; released on drop (the permit, then the
+/// per-user claim).
+#[derive(Debug)]
+pub(crate) struct BodySlot {
+    _permit: OwnedSemaphorePermit,
+    _claim: Claim,
+}
+
+impl BodySlots {
+    pub(crate) fn new(max: usize, max_per_principal: usize, wait: Duration) -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(max.max(1))),
+            per_principal: Arc::new(Mutex::new(HashMap::new())),
+            max_per_principal: max_per_principal.max(1),
+            wait,
+        }
+    }
+
+    /// A slot for `principal`: refused at once over the per-user cap,
+    /// after `wait` when every slot is taken (both `FG-GIT-0004`, 503).
+    pub(crate) async fn acquire(&self, principal: &str) -> Result<BodySlot, ForgeError> {
+        {
+            let mut map = self
+                .per_principal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let held = map.entry(principal.to_owned()).or_insert(0);
+            if *held >= self.max_per_principal {
+                return Err(ForgeError::new(ErrorCode::GitBusy)
+                    .with_context("reason", "principal_body_reads")
+                    .with_context("max", self.max_per_principal));
+            }
+            *held += 1;
+        }
+        // From here the per-user claim must be returned on every path.
+        let claim = Claim {
+            key: principal.to_owned(),
+            per_principal: Arc::clone(&self.per_principal),
+        };
+        let permit =
+            match tokio::time::timeout(self.wait, Arc::clone(&self.global).acquire_owned()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(e)) => {
+                    return Err(ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "body_slots_closed")
+                        .with_source(e))
+                }
+                Err(_) => {
+                    return Err(ForgeError::new(ErrorCode::GitBusy)
+                        .with_context("reason", "body_reads")
+                        .with_context("wait_ms", self.wait.as_millis()))
+                }
+            };
+        Ok(BodySlot {
+            _permit: permit,
+            _claim: claim,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn held(&self, principal: &str) -> usize {
+        self.per_principal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(principal)
+            .copied()
+            .unwrap_or(0)
+    }
+}
+
+/// A per-user claim, returned on drop.
+#[derive(Debug)]
+struct Claim {
+    key: String,
+    per_principal: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let mut map = self
+            .per_principal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(held) = map.get_mut(&self.key) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                map.remove(&self.key);
+            }
+        }
+    }
 }
 
 /// What a stream's outcome is logged with: the request and the target.
@@ -265,3 +384,7 @@ impl Drop for GitResponse {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "git_stream_tests.rs"]
+mod tests;
