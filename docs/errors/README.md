@@ -42,6 +42,7 @@
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
 | [FG-GIT-0010](FG-GIT-0010.md) | 403 | info | A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*) |
+| [FG-GIT-0012](FG-GIT-0012.md) | 500 | alert | git updated the refs of a push (outside any database transaction, ADR-0008), but the `repository.pushed` audit row and event could not be written afterwards (reason `record_failed`: forge_db::repositories::record_push failed on every attempt — the database was unreachable or slow, see `cause_code`) |
 | [FG-GIT-0013](FG-GIT-0013.md) | 413 | info | A Smart HTTP request body went over a forge limit: the decompressed size of a gzip request body (`Content-Encoding: gzip`), or a body or command-list limit of the route |
 | [FG-GIT-0014](FG-GIT-0014.md) | 400 | info | A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature |
 | [FG-GIT-0015](FG-GIT-0015.md) | 499 | info | The client went away (or the request was cancelled) while a streaming git subprocess was running; forge killed git together with its helpers (process group / Job Object) and reaped it |

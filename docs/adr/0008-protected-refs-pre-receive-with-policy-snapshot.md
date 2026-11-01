@@ -78,3 +78,16 @@ ref ごとの `update` フックでは、複数の ref の push が一部だけ�
 - （D4 のレビュー）`delete` は行を解釈せずに取る（同じプロジェクトの中だけ）。読めない行（FG-DB-0020）も消せるようにするため（Runbook `protected-ref-data`
   の修復の手順）。監査の詳細は保存されていた文字列（パターンは 255 バイト、ロールは 32 文字まで）と `stored_invalid: true`。保存された行が 100 を超えるときは、
   `create` も `too_many_rules` ではなく FG-DB-0020 `too_many_stored_rules` を返す。
+
+## Amendment（2026-11-01、M1 段階 9 MR2: 規則のスナップショットと push の記録）
+
+- **スナップショット**: push は規則を 1 回だけ読む。`forge_db::protected_refs::rules_for(db, ProjectId)` が、そのプロジェクトの
+  すべての規則を `forge_core::ProtectionRules` として返し（読み取り用のプールの 1 文、行は 101 まで。101 行目は FG-DB-0020
+  `too_many_stored_rules`、読めない行も FG-DB-0020。規則を飛ばさない）、`ProtectionRules::levels(&RefName)` が各 ref の
+  レベルを返す。これは `levels_for` と同じ答えである（同じ SQL と解釈。プロパティテスト `rules_for_matches_levels_for`）。
+  forge-web は `forge_core::ProtectionLoader` を通して読む（forge-db に依存しない）。1 つの push の ref はすべて同じ
+  規則で判定されるので、途中で規則が変わっても一部の ref だけに効くことはない。
+- **記録**: §Risks の「`FG-GIT-0012` で ref の一覧をすべてログに残し、再投入の Runbook を用意する」は、ログの行
+  `forge.git.push_applied`（`forge_core::PushApplied`）、`FG-GIT-0012` PushRecordFailed、Runbook `push-record-failed`、
+  `forge admin repo record-push --from-log` で実現した。再投入の鍵は ADR-0016 の M1 段階 9 MR2 の Amendment
+  （`repository_pushed:<repo_id>:<sha256(request_id ‖ 名前順の更新)>`）。

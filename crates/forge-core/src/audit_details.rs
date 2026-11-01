@@ -3,6 +3,7 @@
 
 use crate::event_type::EventType;
 use crate::ids::{NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
+use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
@@ -138,6 +139,21 @@ pub enum AuditDetails {
         push_min_role: String,
         stored_invalid: bool,
     },
+    /// `repository.pushed` (M1 phase 9 MR2, ADR-0016 §5): one applied push.
+    /// `updates` sorted by ref name ([`crate::PushRecord::sorted_updates`]).
+    /// The audit details and the event payload are the same JSON
+    /// ([`push_json`]) within different byte budgets: the details at most
+    /// [`AUDIT_BUDGET`] (the row holds 8 KiB), the payload at most
+    /// [`EVENT_BUDGET`] (64 KiB) — so the event usually lists more refs
+    /// and commits, and both say what they left out.
+    RepositoryPushed {
+        project_id: ProjectId,
+        repository_id: RepoId,
+        updates: Vec<PushedRef>,
+        /// The original pusher when the runbook replay recorded it (the
+        /// row's actor is then the operator).
+        replayed_from: Option<PushReplay>,
+    },
 }
 
 impl AuditDetails {
@@ -164,6 +180,7 @@ impl AuditDetails {
             Self::ProtectedRefCreated { .. } => "protected_ref.created",
             Self::ProtectedRefUpdated { .. } => "protected_ref.updated",
             Self::ProtectedRefDeleted { .. } => "protected_ref.deleted",
+            Self::RepositoryPushed { .. } => "repository.pushed",
         }
     }
 
@@ -193,6 +210,7 @@ impl AuditDetails {
             Self::ProtectedRefCreated { .. } => Some(EventType::ProtectedRefCreated),
             Self::ProtectedRefUpdated { .. } => Some(EventType::ProtectedRefUpdated),
             Self::ProtectedRefDeleted { .. } => Some(EventType::ProtectedRefDeleted),
+            Self::RepositoryPushed { .. } => Some(EventType::RepositoryPushed),
         }
     }
 
@@ -216,7 +234,8 @@ impl AuditDetails {
     /// ProtectedRefCreated `{"protected_ref_id","pattern","push_min_role"}`,
     /// ProtectedRefDeleted
     /// `{"protected_ref_id","pattern","push_min_role","stored_invalid"}`,
-    /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`.
+    /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`,
+    /// RepositoryPushed: [`push_json`] within [`AUDIT_BUDGET`].
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -364,6 +383,56 @@ impl AuditDetails {
                 "holder_state": if after_succeeded_job.is_some() { "succeeded" } else { "none" },
             }),
             // ── end D4 MR3b ──
+            Self::RepositoryPushed {
+                project_id,
+                repository_id,
+                updates,
+                replayed_from,
+            } => push_json(
+                *project_id,
+                *repository_id,
+                updates,
+                *replayed_from,
+                AUDIT_BUDGET,
+            ),
+        }
+    }
+
+    /// The payload of the event these details publish: the same JSON as
+    /// [`Self::to_value`], except `repository.pushed`, whose payload is
+    /// built within the larger [`EVENT_BUDGET`].
+    pub fn event_payload(&self) -> serde_json::Value {
+        match self {
+            Self::RepositoryPushed {
+                project_id,
+                repository_id,
+                updates,
+                replayed_from,
+            } => push_json(
+                *project_id,
+                *repository_id,
+                updates,
+                *replayed_from,
+                EVENT_BUDGET,
+            ),
+            Self::UserCreated { .. }
+            | Self::UserDisabled { .. }
+            | Self::AdminBootstrapped { .. }
+            | Self::GroupCreated { .. }
+            | Self::ProjectCreated { .. }
+            | Self::MemberAdded { .. }
+            | Self::MemberRoleChanged { .. }
+            | Self::MemberRemoved { .. }
+            | Self::TokenCreated { .. }
+            | Self::TokenRevoked { .. }
+            | Self::RepositoryCreated { .. }
+            | Self::RepositoryReprovisionRequested { .. }
+            | Self::ProjectMemberAdded { .. }
+            | Self::ProjectMemberRoleChanged { .. }
+            | Self::ProjectMemberRemoved { .. }
+            | Self::ProtectedRefCreated { .. }
+            | Self::ProtectedRefUpdated { .. }
+            | Self::ProtectedRefDeleted { .. } => self.to_value(),
         }
     }
 }

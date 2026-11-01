@@ -17,6 +17,10 @@
 //! - [`reprovision`] enqueues the job again for a repository still
 //!   `provisioning` (`forge admin repo reprovision`, an approved runbook
 //!   step; audited as `repository.reprovision_requested`).
+//! - [`record_push`] records one applied push (M1 phase 9 MR2): one
+//!   `repository.pushed` audit row and event, deduplicated by
+//!   `repository_pushed:<repo_id>:<sha256(request_id ‖ sorted updates)>`;
+//!   `Db` implements `forge_core::PushRecorder` with it.
 //!
 //! **The key chain.** `jobs_dedup` keeps a job's key while it is queued,
 //! running or succeeded; only a dead job releases it (ADR-0016 C6
@@ -31,11 +35,17 @@
 use std::time::Duration;
 
 use forge_core::ids::{ProjectId, RepoId};
-use forge_core::{AuditDetails, DedupKey, DedupPart, RepositoryKind, RepositoryState, RequestId};
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{
+    AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, PushReplay, Pusher,
+    RepositoryKind, RepositoryState, RequestId,
+};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
-use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome};
+use crate::change::{
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Committed, DomainEvent, Outcome,
+};
 use crate::jobs::{self, Enqueued, JobId, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::sequencer::{shown, COUNT_CAP};
 use crate::{query_error, read_query_error, Db};
@@ -51,6 +61,11 @@ pub const PROVISION_DEDUP_PREFIX: &str = "repository_provision";
 /// The prefix of the `repository.created` event's dedup key,
 /// `repository_created:<repo_id>`.
 pub const CREATED_DEDUP_PREFIX: &str = "repository_created";
+/// The prefix of the `repository.pushed` event's dedup key,
+/// `repository_pushed:<repo_id>:<64 hex digits>` (ADR-0016 Amendment M1
+/// phase 9: at most 18 + 1 + 19 + 1 + 64 characters, well within 200; the
+/// SHA-256 part is exactly the 64-character part limit, never cut).
+pub const PUSHED_DEDUP_PREFIX: &str = "repository_pushed";
 /// A repository still `provisioning` after this long is stuck (step D plan
 /// answer 4: alert after 10 minutes).
 pub const PROVISIONING_STUCK_AFTER: Duration = Duration::from_secs(600);
@@ -90,7 +105,7 @@ fn chain_sql(repo: &str) -> String {
 /// The audit resource type of a repository's changes: its project
 /// (tables.toml; `forge.audited_change_present('project', 'project_id')`).
 const RESOURCE: &str = "project";
-/// The event aggregate of `repository.created`.
+/// The event aggregate of `repository.created` and `repository.pushed`.
 const AGGREGATE: &str = "repository";
 
 /// `FG-SYS-0001` for a constant that does not fit its type (a bug here).
@@ -364,10 +379,10 @@ async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, Forg
         }],
     };
     match tx.commit(record).await? {
-        crate::change::Committed::Recorded { .. } => Ok(MarkReady::Marked { project_id }),
+        Committed::Recorded { .. } => Ok(MarkReady::Marked { project_id }),
         // The row lock makes a second writer see `ready` above; a recorded
         // key with a provisioning row means the event outlived its change.
-        crate::change::Committed::Deduped => Err(ForgeError::new(ErrorCode::Internal)
+        Committed::Deduped => Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "unexpected_dedup")
             .with_context("action", details.action())
             .with_context("repo_id", repo.get())),
@@ -728,6 +743,211 @@ pub async fn reprovision(
     })
 }
 
+/// The dedup key of the `repository.pushed` event of `push` made in
+/// request `request_id`: `repository_pushed:<repo_id>:<hex digest>`
+/// ([`PushRecord::digest`]). The request id tells apart two pushes with
+/// the same updates (A→B, B→A, A→B again are three events); the same
+/// request id with the same updates (a retry, the runbook replay with the
+/// logged request id) is the same key, so it is recorded once.
+pub fn push_dedup_key(request_id: &RequestId, push: &PushRecord) -> Result<DedupKey, ForgeError> {
+    let digest = push.digest(request_id);
+    DedupKey::new(
+        PUSHED_DEDUP_PREFIX,
+        &[
+            DedupPart::Id(push.repository_id.get()),
+            DedupPart::Hash(&digest),
+        ],
+    )
+}
+
+/// The project of `repo`, read inside the change.
+async fn repository_project(
+    conn: &mut PgConnection,
+    repo: RepoId,
+) -> Result<ProjectId, ForgeError> {
+    let project: Option<i64> =
+        sqlx::query_scalar("SELECT project_id FROM forge.repositories WHERE id = $1")
+            .bind(repo.get())
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| query_error("repositories.record_push.project", e))?;
+    project.map(ProjectId::new).ok_or_else(|| not_found(repo))
+}
+
+/// `FG-GIT-0012 reason=push_log_invalid` for a replayed log line that does
+/// not match the database (`field` names what).
+fn replay_mismatch(field: &'static str, repo: RepoId) -> ForgeError {
+    ForgeError::new(ErrorCode::PushRecordFailed)
+        .with_context("reason", "push_log_invalid")
+        .with_context("field", field)
+        .with_context("repo_id", repo.get())
+}
+
+/// What a replayed log line claims, checked against the database: the
+/// repository exists (`FG-REPO-0005`), belongs to `logged_project`
+/// (`push_log_invalid field=project_id`) and the logged pusher is a user
+/// (`push_log_invalid field=user_id`). One statement.
+async fn check_replay_on<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    repo: RepoId,
+) -> Result<ProjectId, ForgeError> {
+    let row: Option<(i64, bool)> = sqlx::query_as(
+        "SELECT r.project_id, EXISTS (SELECT 1 FROM forge.users AS u WHERE u.id = $2) \
+         FROM forge.repositories AS r WHERE r.id = $1",
+    )
+    .bind(repo.get())
+    .bind(replay.pusher.get())
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| query_error("repositories.replay_push.check", e))?;
+    let Some((project, user_exists)) = row else {
+        return Err(not_found(repo));
+    };
+    if project != logged_project.get() {
+        return Err(replay_mismatch("project_id", repo));
+    }
+    if !user_exists {
+        return Err(replay_mismatch("user_id", repo));
+    }
+    Ok(ProjectId::new(project))
+}
+
+/// The replay's checks ([`replay_push`]) without writing: the CLI runs it
+/// for every logged push before the first write, so a file with one
+/// mismatching line writes nothing.
+pub async fn check_replay(
+    db: &Db,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    push: &PushRecord,
+) -> Result<(), ForgeError> {
+    push.check()?;
+    db.within("repositories.replay_push.check", async {
+        check_replay_on(db.write_pool(), logged_project, replay, push.repository_id).await
+    })
+    .await
+    .map(|_| ())
+}
+
+/// Record one applied push (M1 phase 9 MR2, ADR-0008, ADR-0016 §5 / §6):
+/// git has updated the refs already, so this writes no state — one
+/// `repository.pushed` audit row on (`project`, the repository's project)
+/// with `project_id` set, and one `repository.pushed` event (integration
+/// class, aggregate `repository` / id, the same project) with dedup key
+/// [`push_dedup_key`], in one `ChangeTx`. The details and the payload are
+/// [`forge_core::push::push_json`] of the updates (force and delete refs
+/// first), at most 100 refs and 20 commits per ref within their byte
+/// budgets, with per-kind counts, `total_refs` / `total_commits` and
+/// explicit `refs_truncated` / `commits_truncated`. A key already recorded
+/// is [`PushRecorded::Deduped`]: nothing is written.
+///
+/// `ctx` is the push's own ([`push_context`]: actor = the pusher,
+/// `ctx.request_id` = the push request's id, part of the key).
+///
+/// Errors (nothing is written): `FG-DB-0010 reason=invalid_push_record`
+/// (`PushRecord::check`), `FG-REPO-0005` (`resource=repository`) for an
+/// unknown repository, the change's own (`FG-DB-0002`, …).
+pub async fn record_push(
+    db: &Db,
+    ctx: &ChangeContext,
+    push: &PushRecord,
+) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, None).await
+}
+
+/// Record a push from its `forge.git.push_applied` log line (the runbook
+/// replay, `forge admin repo record-push`). `ctx` is the operator's (actor
+/// `system`, `actor_label` naming the CLI and the OS account) with
+/// `ctx.request_id` = the **logged** push request id, so the dedup key is
+/// the original attempt's and an already recorded push is `Deduped`. The
+/// logged pusher is not trusted as the actor: it goes into the details and
+/// the payload as `replayed_from`. Inside the change, [`check_replay`]'s
+/// checks run first: the repository's project must be `logged_project` and
+/// the pusher must exist (`FG-GIT-0012 reason=push_log_invalid` with
+/// `field` = `project_id` / `user_id`), else nothing is written.
+pub async fn replay_push(
+    db: &Db,
+    ctx: &ChangeContext,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    push: &PushRecord,
+) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, Some((logged_project, replay))).await
+}
+
+async fn record(
+    db: &Db,
+    ctx: &ChangeContext,
+    push: &PushRecord,
+    replay: Option<(ProjectId, PushReplay)>,
+) -> Result<PushRecorded, ForgeError> {
+    push.check()?;
+    let dedup_key = push_dedup_key(&ctx.request_id, push)?;
+    let repo = push.repository_id;
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let project_id = match replay {
+        None => tx.step(|c| repository_project(c, repo)).await?,
+        Some((logged, who)) => tx.step(|c| check_replay_on(c, logged, who, repo)).await?,
+    };
+    let details = AuditDetails::RepositoryPushed {
+        project_id,
+        repository_id: repo,
+        updates: push.sorted_updates(),
+        replayed_from: replay.map(|(_, who)| who),
+    };
+    let event_type = details
+        .event_type()
+        .ok_or_else(|| constant("audit_only_event"))?;
+    let record = ChangeRecord {
+        audit: AuditEntry {
+            action: details.action(),
+            outcome: Outcome::Succeeded,
+            resource_type: RESOURCE,
+            resource_id: Some(project_id.get()),
+            project_id: Some(project_id),
+            error_code: None,
+            details: details.to_value(),
+        },
+        events: vec![DomainEvent {
+            event_type,
+            schema_version: 1,
+            aggregate_type: AGGREGATE,
+            aggregate_id: repo.get(),
+            project_id: Some(project_id),
+            payload: details.event_payload(),
+            dedup_key: Some(dedup_key),
+        }],
+    };
+    Ok(match tx.commit(record).await? {
+        Committed::Recorded { .. } => PushRecorded::Recorded,
+        Committed::Deduped => PushRecorded::Deduped,
+    })
+}
+
+/// The change context of a push by `pusher`: actor `user`, the push
+/// request's id, its credential, source IP and user agent.
+pub fn push_context(pusher: &Pusher) -> ChangeContext {
+    let mut ctx = ChangeContext::new(Actor::User(pusher.user), pusher.request_id.clone()); // clone: the context owns its request id
+    ctx.credential_id = pusher.credential_id;
+    ctx.source_ip = pusher.source_ip;
+    ctx.user_agent = pusher.user_agent.clone(); // clone: the context owns its fields
+    ctx
+}
+
+/// The push path's recorder (`forge serve` injects the `Db`): exactly
+/// [`record_push`] with [`push_context`].
+impl forge_core::PushRecorder for Db {
+    fn record_push<'a>(
+        &'a self,
+        pusher: &'a Pusher,
+        push: &'a PushRecord,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async move { record_push(self, &push_context(pusher), push).await })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,3 +1054,7 @@ mod tests {
 #[cfg(test)]
 #[path = "repositories_tests.rs"]
 mod db_tests;
+
+#[cfg(test)]
+#[path = "repositories_push_tests.rs"]
+mod push_tests;

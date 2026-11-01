@@ -72,7 +72,8 @@ fn all_lists_every_event_type_once() {
             "member.removed",
             "protected_ref.created",
             "protected_ref.updated",
-            "protected_ref.deleted"
+            "protected_ref.deleted",
+            "repository.pushed"
         ]
     );
 }
@@ -144,4 +145,14 @@ fn protected_ref_events_are_maintainer_class() {
         assert_eq!(t.visibility_class(), VisibilityClass::Maintainer, "{t:?}");
         assert!(t.as_str().starts_with("protected_ref."), "{t:?}");
     }
+}
+
+/// M1 phase 9 MR2: `repository.pushed` is an integration event (ADR-0016 §5).
+#[test]
+fn repository_pushed_is_integration_class() {
+    assert_eq!(EventType::RepositoryPushed.as_str(), "repository.pushed");
+    assert_eq!(
+        EventType::RepositoryPushed.visibility_class(),
+        VisibilityClass::Integration
+    );
 }

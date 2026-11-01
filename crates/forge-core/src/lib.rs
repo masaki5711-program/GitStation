@@ -11,9 +11,12 @@ pub mod namespace_path;
 pub mod namespace_resolver;
 #[cfg(any(test, feature = "test-support"))]
 pub mod path_vectors;
+pub mod push;
+pub mod push_log;
 pub mod readiness;
 pub mod ref_name;
 pub mod ref_pattern;
+pub mod ref_protection;
 pub mod repository;
 pub mod request_id;
 pub mod role;
@@ -33,8 +36,13 @@ pub use namespace_resolver::{
     NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
     ProjectRecord, Resolution, Resolved, ResolvedTarget,
 };
+pub use push::{
+    ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedRef, Pusher,
+};
+pub use push_log::{PushApplied, PushAppliedRef, PUSH_APPLIED_EVENT};
 pub use ref_name::RefName;
 pub use ref_pattern::RefPattern;
+pub use ref_protection::{ProtectionLoader, ProtectionRule, ProtectionRules};
 pub use repository::{RepositoryKind, RepositoryState};
 pub use request_id::RequestId;
 pub use role::{Role, Visibility};
@@ -53,6 +61,8 @@ mod dedup_key_tests;
 mod event_type_tests;
 #[cfg(test)]
 mod namespace_path_tests;
+#[cfg(test)]
+mod push_tests;
 #[cfg(test)]
 mod ref_pattern_tests;
 #[cfg(test)]

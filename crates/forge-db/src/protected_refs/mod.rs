@@ -1,6 +1,7 @@
 //! Protected ref rules (step D4 MR5, ADR-0008 and its D4 Amendments): create,
 //! change and delete the rules of one project, and read the levels that
-//! apply to one ref ([`levels_for`]) — the input of forge-auth's
+//! apply to one ref ([`levels_for`]) or every rule as one snapshot
+//! ([`rules_for`], M1 phase 9; `forge_core::ProtectionLoader`) — the input of forge-auth's
 //! `RefProtection::effective` and of the pre-receive policy snapshot.
 //!
 //! Each command is one `ChangeTx` that locks the project row `FOR UPDATE`
@@ -19,7 +20,8 @@
 //! (`Action::ProtectedRefManage`) before calling.
 
 use forge_core::ids::{ProjectId, ProtectedRefId};
-use forge_core::{AuditDetails, RefName, RefPattern, Role};
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{AuditDetails, ProtectionRule, ProtectionRules, RefName, RefPattern, Role};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
@@ -311,6 +313,41 @@ pub async fn delete(
     commit(tx, project, &details).await
 }
 
+/// Every rule of `project` as one snapshot (M1 phase 9 MR2): what a push
+/// loads once and decides each of its refs against
+/// (`forge_core::ProtectionRules::levels`, equal to [`levels_for`] for every
+/// ref — property test `rules_for_matches_levels_for`).
+///
+/// One bounded statement on the read pool (at most `MAX_RULES + 1` rows: the
+/// 101st row is `FG-DB-0020` `too_many_stored_rules`, never a partial rule
+/// set). A stored pattern or role this build cannot parse (written outside
+/// forge-db) is `FG-DB-0020` `stored_pattern_invalid` /
+/// `stored_push_min_role_invalid` with `protected_ref_id`: the push is
+/// refused rather than decided on part of the rules. An unknown project has
+/// no rules (the caller has already loaded it).
+pub async fn rules_for(db: &Db, project: ProjectId) -> Result<ProtectionRules, ForgeError> {
+    const QUERY: &str = "protected_refs.rules_for";
+    let rows: Vec<(i64, String, String)> = db
+        .within(QUERY, async {
+            sqlx::query_as(RULES_SQL)
+                .bind(project.get())
+                .bind(row_limit())
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(ProtectionRules::new(
+        parse_rows(project, rows)?
+            .into_iter()
+            .map(|rule| ProtectionRule {
+                pattern: rule.pattern,
+                push_min_role: rule.push_min_role,
+            })
+            .collect(),
+    ))
+}
+
 /// The minimum push roles of **every** rule of `project` whose pattern
 /// matches `name`, ignoring case (`RefPattern::matches`), in rule id order;
 /// empty = the ref is not protected. Feed it to
@@ -346,6 +383,14 @@ pub async fn levels_for(
         .filter(|rule| rule.pattern.matches(name))
         .map(|rule| rule.push_min_role)
         .collect())
+}
+
+/// The push path's snapshot loader (`forge serve` injects the `Db`):
+/// exactly [`rules_for`].
+impl forge_core::ProtectionLoader for Db {
+    fn load_protection<'a>(&'a self, project: ProjectId) -> LookupFuture<'a, ProtectionRules> {
+        Box::pin(rules_for(self, project))
+    }
 }
 
 #[cfg(test)]

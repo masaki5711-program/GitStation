@@ -21,6 +21,8 @@ serde_json.workspace = true
 getrandom = "0.2"
 sha2.workspace = true
 subtle = "2"
+# M1 phase 9 MR2: the forge.git.push_applied log line (one serde type, logged and replayed).
+serde.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

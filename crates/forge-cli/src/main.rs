@@ -70,8 +70,8 @@ enum Command {
         command: DbCommand,
     },
     /// Operator commands. `token issue` / `token revoke`, `user disable`,
-    /// `bootstrap-admin` and `repo reprovision` change data (in production:
-    /// approved runbook steps); the others only read.
+    /// `bootstrap-admin`, `repo reprovision` and `repo record-push` change
+    /// data (in production: approved runbook steps); the others only read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -134,6 +134,17 @@ enum RepoCommand {
         /// The repository id.
         repo_id: i64,
     },
+    // ── M1 phase 9 MR2 ──
+    /// Record pushes whose `repository.pushed` record could not be written
+    /// (FG-GIT-0012, runbook push-record-failed), from their
+    /// `forge.git.push_applied` log lines. Idempotent: a push already
+    /// recorded is reported and left as it is.
+    RecordPush {
+        /// A file holding the push's log lines (other lines are skipped).
+        #[arg(long)]
+        from_log: std::path::PathBuf,
+    },
+    // ── end M1 phase 9 MR2 ──
 }
 // ── end D4 MR3b ──
 
@@ -229,7 +240,7 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::BootstrapAdmin { .. }
                 | AdminCommand::Repo {
-                    command: RepoCommand::Reprovision { .. },
+                    command: RepoCommand::Reprovision { .. } | RepoCommand::RecordPush { .. },
                 },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
@@ -350,6 +361,14 @@ fn main() -> ExitCode {
                     command: RepoCommand::Reprovision { repo_id },
                 },
         } => config().and_then(|cfg| admin_repo::reprovision(&cfg.database, &request_id, repo_id)),
+        Command::Admin {
+            command:
+                AdminCommand::Repo {
+                    command: RepoCommand::RecordPush { from_log },
+                },
+        } => {
+            config().and_then(|cfg| admin_repo::record_push(&cfg.database, &request_id, &from_log))
+        }
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or(cfg.server.bind);
             serve::serve(&bind, &cfg.database)
@@ -458,6 +477,17 @@ mod tests {
         ));
         assert!(parse(&["admin", "repo", "reprovision"]).is_err());
         assert!(parse(&["admin", "repo", "reprovision", "x"]).is_err());
+        let cli =
+            parse(&["admin", "repo", "record-push", "--from-log", "push.log"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Repo {
+                    command: RepoCommand::RecordPush { ref from_log }
+                }
+            } if from_log == std::path::Path::new("push.log")
+        ));
+        assert!(parse(&["admin", "repo", "record-push"]).is_err());
         // The read-only repo-path command is unchanged.
         assert!(parse(&["admin", "repo-path", "42"]).is_ok());
     }
