@@ -1,0 +1,56 @@
+.notice {
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-danger-surface);
+  color: var(--gs-color-danger-text);
+  padding: var(--gs-space-4);
+  margin: var(--gs-space-4) 0;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--gs-space-2);
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-lg);
+}
+
+.icon {
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--gs-color-danger-text);
+  color: var(--gs-color-white);
+  font-weight: bold;
+}
+
+/* A symbol, not text: the title next to it says what happened. */
+.icon::before {
+  content: "!";
+}
+
+.message {
+  margin: 0 0 var(--gs-space-2);
+}
+
+.requestId {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-sm);
+}
+
+.requestId code {
+  user-select: all;
+}
+
+.button {
+  font: inherit;
+  font-size: var(--gs-font-size-sm);
+  padding: var(--gs-space-1) var(--gs-space-3);
+  border: 1px solid var(--gs-color-danger-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-danger-text);
+  cursor: pointer;
+}

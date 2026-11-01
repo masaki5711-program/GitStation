@@ -90,6 +90,31 @@ admitted proof.
   `/-/tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags`
   `settings` `members`, group `settings` / `members`, `/-/projects/{id}/…`;
   GET and HEAD).
+- Web UI (M2 MR2, ADR-0022 §2 / §3, ADR-0015 Amendment M2):
+  - `src/ui.rs`: with the feature **`embed-ui`** the shell is the embedded
+    `web/dist/index.html` (rust-embed, embedded in every profile) and its
+    files are assets; `build.rs` fails the build when `web/dist` is missing,
+    has a sub-directory or an extension outside the allow-list (cargo never
+    runs npm: `cd web && npm ci --ignore-scripts && npm run build` first).
+    Without it the shell is the placeholder and `forge doctor` warns
+    `web.ui placeholder` (`ok web.ui embedded (index.html sha256 <12>)` with it).
+  - `GET|HEAD /-/assets/{file}` (`src/routes/assets.rs`, `WebShell`, public,
+    one segment): exact embedded names only, else `FG-WEB-0001`
+    (`rule=unknown_asset`, never the shell); `Cache-Control: public,
+    max-age=31536000, immutable`, `Vary: Accept-Encoding`, the build's
+    `.br` / `.gz` when `Accept-Encoding` allows (nothing compressed at run
+    time); `Content-Type` from the extension allow-list.
+  - `src/security_headers.rs`: the one middleware (outermost) with the
+    ADR-0022 §3 table — shell / asset (`'self'` CSP), API (`default-src
+    'none'`, `private, no-store` unless the route set it), raw / archive
+    (`sandbox`), `/-/auth` (`no-store`), other, Smart HTTP (untouched) — plus
+    nosniff, `Referrer-Policy`, COOP, `Permissions-Policy` and the optional
+    HSTS (`AppConfig::hsts`). A class comes from the handler's marker
+    (`ResponseClass::Shell` / `Asset`), else from the raw path, so an error
+    on an asset path never gets the asset's year-long cache.
+  - Tests: `src/web_ui_tests.rs` (the shell's SHA-256 is the same on every
+    path; unknown assets; every class's headers; with `--features embed-ui`
+    also every built asset and the br / gzip choice).
 - Route (MR5, `src/routes/projects.rs`): `GET|HEAD /api/v1/projects/{id}`
   (`ProjectRead`; HEAD is the GET route without the body). One
   `ProjectAccessLoader::load_project` call per request (bounded by

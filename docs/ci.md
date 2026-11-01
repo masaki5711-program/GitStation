@@ -11,7 +11,9 @@ pull request で動く。GitHub はソースのホスティングだけに使い
 | `fmt + clippy` | `cargo fmt --all -- --check`、`forge-cli` の通常依存に `test-support` 機能が入っていないことの確認、`cargo clippy --workspace --all-targets -- -D warnings` |
 | `tests (nextest + PostgreSQL 16)` | PostgreSQL 16 のサービスコンテナ（`ops/dev/compose.yml` と同じユーザー・パスワード・DB 名・ポート 55432、`max_connections=200`）に対して `cargo nextest run --workspace --profile ci -j 4 --no-fail-fast --retries 1`。JUnit（`target/nextest/ci/junit.xml`）を成果物 `nextest-junit` として保存し、再実行で通ったテスト（不安定なテスト）をジョブのサマリーと警告に出す |
 | `generated artifacts up to date` | `cargo run -q -p forge-errors --bin gen-catalog -- --check`（`docs/errors/`）、`cargo run -q -p forge-web --bin gen-authz -- --check`（`docs/authz/`） |
-| `cargo-deny + cargo-audit` | `cargo deny check`（`deny.toml`: 脆弱性、ライセンスの許可リスト、bans、取得元）と `cargo audit`（`.cargo/audit.toml` の免除を読む） |
+| `cargo-deny + cargo-audit` | `cargo deny --all-features check`（`deny.toml`: 脆弱性、ライセンスの許可リスト、bans、取得元。`--all-features` で `embed-ui` の `rust-embed` も見る）と `cargo audit`（`.cargo/audit.toml` の免除を読む） |
+| `web (lint, typecheck, test, build, audit)` | `web/` で `npm ci --ignore-scripts`、`npm audit --audit-level=high`、ライセンスの許可リスト（`npm run licenses`）、`lint`・`typecheck`・`test`（i18n のゲートを含む）、id の欠けた数をサマリーへ（失敗にしない）、`gen:api` の差分なし、`build`、Chromium での殻の CSP の違反の検査（`npm run smoke`）。`web/dist` を成果物 `web-dist` として保存し、元のコミット・lockfile・`index.html` の SHA-256 をサマリーに残す（ADR-0022 §8） |
+| `release build (embed-ui)` | `web-dist` を受け取り、`--features embed-ui` で clippy、埋め込みの資産のテスト（`cargo nextest run -p forge-web --lib --features embed-ui`）、`cargo build --release -p forge-cli --features embed-ui`、`forge doctor` の `web.ui` が `embedded` であることの確認 |
 
 - Rust のバージョンは `rust-toolchain.toml` の `channel` を読んで使う（ワークフローに
   バージョンを二重に書かない）。
@@ -40,13 +42,15 @@ pull request で動く。GitHub はソースのホスティングだけに使い
 ## ブランチ保護で必須にする
 
 GitHub のリポジトリ設定 → Branches（または Rules → Rulesets）で `main` に規則を作り、
-「Require status checks to pass before merging」を有効にして、次の 4 つを必須にする
+「Require status checks to pass before merging」を有効にして、次の 6 つを必須にする
 （一度 CI が動いた後でないと候補に出ない）:
 
 - `fmt + clippy`
 - `tests (nextest + PostgreSQL 16)`
 - `generated artifacts up to date`
 - `cargo-deny + cargo-audit`
+- `web (lint, typecheck, test, build, audit)`
+- `release build (embed-ui)`
 
 あわせて「Require branches to be up to date before merging」と、force-push の禁止
 （`main` は force-push しない）を有効にする。

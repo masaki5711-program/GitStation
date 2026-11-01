@@ -48,7 +48,7 @@ query) -> ParsedPath` sorts the raw (still encoded) `req.uri().path()` by its st
 alone into `NamespaceHome(LookupPath)`, `Scoped { path, word: RouteWord, rest:
 TailSegments }`, `Git { path, route: GitRoute }` (`.git` only on the last namespace
 segment, removed once; `info/refs` needs exactly one `service=git-upload-pack` /
-`git-receive-pack`) or `Instance { route: InstanceRoute, rest }` (`/-/projects/{id}/…`).
+`git-receive-pack`) or `Instance { route: InstanceRoute, rest }` (`/-/projects/{id}/…`; `/-/assets/{file}` since M2 MR2, exactly one segment).
 It never chooses the scope (group / project): that follows resolution. `RouteWord`,
 `GitRoute` (`service`, `is_advertisement`, `is_push`) and `InstanceRoute` have `ALL`
 and `as_str`; route words are case-sensitive. `TailSegments::decode` decodes each

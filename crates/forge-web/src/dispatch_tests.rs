@@ -27,7 +27,7 @@ use tower::ServiceExt;
 use crate::app::{build, AppConfig, AppState, Lookups};
 use crate::context::REQUEST_ID_HEADER;
 use crate::registry::{Dispatched, Registry, RouteScope, ScopedRoute, Verb};
-use crate::routes::shell::SHELL_HTML;
+use crate::ui::shell_html;
 use forge_core::web_path::RouteWord;
 
 // ── the scripted resolver ────────────────────────────────────────────────
@@ -363,8 +363,11 @@ async fn url_vectors_through_the_dispatcher() {
             let answer = send(product(&script), request("GET", &uri.to_string(), None)).await;
             let name = &v["name"];
             let git = accepted && v["expect"]["kind"] == "git";
+            // `raw` / `archive` are not routed yet; the vector's asset name
+            // is no build's file: both answer FG-WEB-0001 (never the shell).
             let unbuilt = accepted
-                && ["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""));
+                && (["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""))
+                    || v["expect"]["route"] == "assets");
             if git {
                 // A routed git URL needs credentials (a GET on a POST
                 // endpoint has no route).
@@ -387,7 +390,7 @@ async fn url_vectors_through_the_dispatcher() {
                 assert_eq!(answer.status, StatusCode::METHOD_NOT_ALLOWED, "{name}");
             } else if accepted && !unbuilt {
                 assert_eq!(answer.status, StatusCode::OK, "{name}");
-                assert_eq!(answer.bytes, SHELL_HTML.as_bytes(), "{name}");
+                assert_eq!(answer.bytes, shell_html(), "{name}");
             } else {
                 assert_eq!(answer.status, StatusCode::NOT_FOUND, "{name}");
                 assert_eq!(answer.code(), ErrorCode::RouteNotFound.id(), "{name}");
@@ -554,7 +557,7 @@ async fn the_shell_is_the_same_for_every_page_and_needs_nothing() {
         );
         let answer = send(product(&script), req).await;
         assert_eq!(answer.status, StatusCode::OK, "{path}");
-        assert_eq!(answer.bytes, SHELL_HTML.as_bytes(), "{path}");
+        assert_eq!(answer.bytes, shell_html(), "{path}");
         assert_eq!(
             answer.headers.get("content-type").expect("type"),
             "text/html; charset=utf-8"

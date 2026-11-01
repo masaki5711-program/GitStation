@@ -1,0 +1,64 @@
+/*
+ * GitStation design tokens — the one place colours, fonts and spacing are
+ * defined (ADR-0022 §4). The brand values come from docs/brand/README.md
+ * (the v1 logo); text/background pairs are only those meeting WCAG 2.2 AA
+ * (tests/tokens.test.ts computes the ratios). Prefix `--gs-` so Kanflow can
+ * share them (plan 08 §4); src/styles/tokens.json mirrors the colours.
+ *
+ * Teal and orange are too light for body text on white: text uses
+ * teal-strong or navy.
+ */
+:root {
+  /* Brand (docs/brand/README.md) */
+  --gs-brand-navy: #1b2a44;
+  --gs-brand-teal: #22b8a0;
+  --gs-brand-teal-strong: #128f7c;
+  --gs-brand-orange: #ff7a45;
+  --gs-brand-paper: #f4fbfc;
+
+  /* Neutrals */
+  --gs-color-white: #ffffff;
+  --gs-color-text: #1b2a44;
+  --gs-color-text-muted: #4a5568;
+  --gs-color-border: #c9d3dd;
+  --gs-color-surface: #ffffff;
+  --gs-color-background: #f4fbfc;
+
+  /* Interactive */
+  --gs-color-link: #0f7a69;
+  --gs-color-focus: #128f7c;
+
+  /* Status: never colour alone — always with text and an icon. */
+  --gs-color-danger-text: #a61b1b;
+  --gs-color-danger-surface: #fdecec;
+  --gs-color-danger-border: #e08a8a;
+  --gs-color-warning-text: #7a4a00;
+  --gs-color-warning-surface: #fff4e0;
+  --gs-color-success-text: #1f6b3a;
+  --gs-color-success-surface: #e8f6ee;
+
+  /* Header */
+  --gs-header-background: #1b2a44;
+  --gs-header-text: #f4fbfc;
+
+  /* Typography: system fonts only (on-prem, no CDN; 0 bytes served). */
+  --gs-font-body: "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --gs-font-mono: "BIZ UDGothic", "Consolas", "Menlo", "Noto Sans Mono", ui-monospace, monospace;
+  --gs-font-size-sm: 0.875rem;
+  --gs-font-size-md: 1rem;
+  --gs-font-size-lg: 1.25rem;
+  --gs-font-size-xl: 1.5rem;
+  --gs-line-height: 1.6;
+
+  /* Spacing and shape */
+  --gs-space-1: 0.25rem;
+  --gs-space-2: 0.5rem;
+  --gs-space-3: 0.75rem;
+  --gs-space-4: 1rem;
+  --gs-space-6: 1.5rem;
+  --gs-space-8: 2rem;
+  --gs-radius-sm: 4px;
+  --gs-radius-md: 8px;
+  --gs-header-height: 3.5rem;
+  --gs-content-max-width: 72rem;
+}

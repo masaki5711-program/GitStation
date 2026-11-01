@@ -248,6 +248,7 @@ impl ScopedRoute {
             },
             ScopedRoute::Instance(i) => match i {
                 InstanceRoute::ProjectPermalink => "/-/projects/{id}/{*rest}",
+                InstanceRoute::Assets => "/-/assets/{file}",
             },
         }
     }

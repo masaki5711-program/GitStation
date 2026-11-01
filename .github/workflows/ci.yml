@@ -169,12 +169,111 @@ jobs:
       # deny.toml: advisories, license allow-list, bans, sources. The action
       # runs in its own container; rust-version makes it honour the pinned
       # channel of rust-toolchain.toml instead of failing to find it.
+      # --all-features: the optional dependencies too (forge-web's embed-ui:
+      # rust-embed, M2 MR2), which the release binary ships.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          arguments: --all-features
           rust-version: ${{ steps.toolchain.outputs.channel }}
       # cargo-audit reads .cargo/audit.toml (documented waivers).
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
       - run: cargo audit
+
+  # ADR-0022 §1 / §8: the web UI (web/). Dependencies only through the
+  # lockfile with install scripts disabled; the generated API types must
+  # match docs/api/openapi.json; dist is uploaded for the release build.
+  web:
+    name: web (lint, typecheck, test, build, audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - name: licences (allow-list)
+        run: npm run licenses
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: i18n (id missing keys -> job summary; not a failure)
+        run: npm run i18n:report
+      - name: generated API types up to date (docs/api/openapi.json)
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/schema.gen.ts || {
+            echo "::error::web/src/api/schema.gen.ts is stale: run 'npm run gen:api' in web/ and commit it"
+            exit 1
+          }
+      - run: npm run build
+      # Playwright is not a web/ dependency (no browser in npm ci): install
+      # it for this step only (--no-save leaves the lockfile alone).
+      - name: browser smoke (CSP violations, console errors)
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.63.0
+          npx --no-install playwright install --with-deps chromium
+          npm run smoke
+      - name: record what was built (ADR-0022 §8)
+        run: |
+          {
+            echo "### web/dist"
+            echo
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- package-lock.json sha256: \`$(sha256sum package-lock.json | cut -d' ' -f1)\`"
+            echo "- index.html sha256: \`$(sha256sum dist/index.html | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  # The release binary embeds the UI built above (forge-web feature
+  # embed-ui; cargo never runs npm and fails without web/dist).
+  release:
+    name: release build (embed-ui)
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p forge-web -p forge-cli --all-targets --features forge-web/embed-ui,forge-cli/embed-ui -- -D warnings
+      # The embedded-asset tests (src/web_ui_tests.rs `embedded`) need no database.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run -p forge-web --lib --features embed-ui
+      - run: cargo build --release -p forge-cli --features embed-ui
+      - name: the binary reports the embedded UI (forge doctor web.ui)
+        run: |
+          ./target/release/forge doctor --json > doctor.json || true
+          python3 - <<'PY'
+          import json
+          checks = {c["name"]: c for c in json.load(open("doctor.json"))["checks"]}
+          ui = checks["web.ui"]
+          assert ui["status"] == "ok" and ui["detail"].startswith("embedded"), ui
+          print(ui["detail"])
+          PY

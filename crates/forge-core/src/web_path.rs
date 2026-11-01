@@ -157,15 +157,19 @@ pub enum InstanceRoute {
     /// `/-/projects/{id}/…` (ADR-0015 "固定リンク"): `rest` starts with the
     /// project id, a positive decimal `i64` without leading zeros.
     ProjectPermalink,
+    /// `/-/assets/{file}` (ADR-0015 Amendment M2, ADR-0022 §2): the UI's
+    /// built files; `rest` is exactly one segment (assets are flat).
+    Assets,
 }
 
 impl InstanceRoute {
-    pub const ALL: &'static [InstanceRoute] = &[Self::ProjectPermalink];
+    pub const ALL: &'static [InstanceRoute] = &[Self::ProjectPermalink, Self::Assets];
 
     /// The log / manifest name.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ProjectPermalink => "project_permalink",
+            Self::Assets => "assets",
         }
     }
 
@@ -173,6 +177,7 @@ impl InstanceRoute {
     fn word(self) -> &'static str {
         match self {
             Self::ProjectPermalink => "projects",
+            Self::Assets => "assets",
         }
     }
 }
@@ -307,7 +312,7 @@ pub enum ParsedPath {
     /// `/acme/forge-web.git/info/refs?service=…` and the two POSTs; `path`
     /// is the namespace with the `.git` removed once.
     Git { path: LookupPath, route: GitRoute },
-    /// `/-/projects/{id}/…`.
+    /// `/-/projects/{id}/…`, `/-/assets/{file}`.
     Instance {
         route: InstanceRoute,
         rest: TailSegments,
@@ -493,6 +498,11 @@ fn parse_instance(after: &[&str]) -> Result<ParsedPath, ForgeError> {
                 return Err(rejected("instance", "invalid_id"));
             }
         }
+        InstanceRoute::Assets => match rest.len() {
+            0 => return Err(rejected("instance", "missing_file")),
+            1 => {}
+            _ => return Err(rejected("instance", "nested_asset")),
+        },
     }
     let rest = TailSegments::decode(rest)?;
     Ok(ParsedPath::Instance { route, rest })
