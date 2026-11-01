@@ -407,22 +407,29 @@ receive-pack（MR4）と一緒に書く。
 - **この例外は CLI の経路だけ**（§8 と同じ）: HTTP の移動・名前の変更は `ProjectTransfer` / `GroupTransfer` / `UserRename` の
   `authorize()` と権限の表の行で判定する。
 
-## Amendment（2026-11-01、M2: ブラウザの 401、`SessionCreate`、無効化とセッション、トークンの発行はセッションだけ）
+## Amendment（2026-11-01、M2: `/api/v1` の Basic とブラウザの 401、`SessionCreate`、無効化とセッション、トークンの発行はセッションだけ、`link-identity` の例外）
 
 計画 10（承認 2026-11-01）の M2 の MR1 で決めたこと。セッションとログインの全体は ADR-0021。トークンの形式・照合・寿命（§1〜§6）は変えない。
 
-1. **ブラウザの要求の 401 に `Basic` のチャレンジを付けない**（Amendment D3 MR3 の「`WWW-Authenticate`」を変える）。
-   - `/api/v1/*` への要求に **`X-GitStation-Client: web`** があるか、**`Sec-Fetch-Site`** ヘッダーがある（＝ブラウザが送った）ときは、
-     401 の `WWW-Authenticate` を `Bearer realm="GitStation"` だけにする。`Basic` を付けると、ブラウザが fetch の 401 でパスワードの
-     入力画面を出し、入力された Basic の資格情報を覚えて以後の要求に自動で付ける（Cookie と並ぶもう 1 つの「自動で付く資格情報」になり、
-     CSRF の対策の前提を崩す）。
-   - SPA は API の要求に必ず `X-GitStation-Client: web` を付ける（`Sec-Fetch-Site` を送らない古いブラウザのため）。この値は認証にも認可にも
-     使わない（チャレンジの形だけを変える。偽っても得るものはない）。
-   - **git のルート（Smart HTTP）と raw / archive は今のまま** `Basic` と `Bearer` の両方を付ける（git は `Basic` のチャレンジで資格情報
-     ヘルパーに聞く。`smart_http_e2e.rs` の `git_without_credentials_gets_www_authenticate_basic` は変わらない）。
-   - 判定はエラーの描画（`error.rs`）の 1 か所のまま。描画にルートの種類と 2 つのヘッダーの有無を渡す（ヘッダーの値はログに出さない）。
-   - テスト（MR3）: 3 つの組（ヘッダーなし / `X-GitStation-Client: web` / `Sec-Fetch-Site`）× API と git のルート。E2E でブラウザが
-     入力画面を出さないことを確かめる（計画 10 §8）。
+1. **`/api/v1` は Basic を受け付けず、ブラウザに Basic のチャレンジを見せない**（§7 と Amendment D3 MR3 の「`WWW-Authenticate`」を変える。
+   2026-11-01 の設計レビューの HIGH で、最初の案「ブラウザのヘッダーがあるときだけ Basic のチャレンジを外す」から改めた）。
+   - 問題: ブラウザは 401 の `Basic` のチャレンジでパスワードの入力画面を出し、入力された資格情報（ここでは個人トークン）を覚えて、以後の
+     同じオリジンへの要求に **自動で** 付ける。Cookie と並ぶもう 1 つの自動で付く資格情報になり、「`Authorization` の要求は CSRF の対象外」
+     の前提を崩す。
+   - **`/api/v1/*` の `Authorization` は `Bearer` だけ**。`Basic` は FG-AUTH-0001（401、`reason=basic_not_allowed`。中のトークンは試さない）。
+     `/api/v1` の 401 の `WWW-Authenticate` は、どの要求でも `Bearer realm="GitStation"` だけ。`gstn` は既に Bearer なので変わらない。
+   - **Smart HTTP のルートは今のまま** Basic（パスワードがトークン）と Bearer を受け付け、401 に `Basic` と `Bearer` の両方を付ける
+     （git は `Basic` のチャレンジで資格情報ヘルパーに聞く。`git_without_credentials_gets_www_authenticate_basic` は変わらない）。
+   - **raw と archive** は Basic を受け付け続ける（`curl -u` などの git 以外のクライアント）が、要求に `Sec-Fetch-Mode` か `Sec-Fetch-Dest`
+     がある（ブラウザの移動・部分の読み込み）か、`__Host-gstn_session` の Cookie があるときは、401 に `Basic` を付けない（`Bearer` だけ）。
+     ブラウザが個人トークンを Basic の資格情報として覚えることがないようにする。
+   - CSRF の検査は「`Bearer` 以外のすべての要求」と「fetch metadata か `Origin` のある状態を変える要求（資格情報を問わない）」に掛ける
+     （ADR-0021 §6）。
+   - 判定はエラーの描画（`error.rs`）の 1 か所のまま。描画にルートの種類（API / git / raw・archive）と、ブラウザの印（`Sec-Fetch-Mode`・
+     `Sec-Fetch-Dest` の有無、`__Host-gstn_session` の有無）を渡す（ヘッダーの値はログに出さない）。
+   - 今の `forge-web/tests/token_principal.rs` は Basic の受け付けを公開でないテスト用の経路（`/admin/users`）で確かめている。MR3 で
+     「Basic はトークンとして受け付ける」の行を git と raw の経路に移し、`/api/v1` の Basic の拒否の行を足す。
+   - テスト（MR3）は ADR-0021 §6 の「MR3 に要るテスト」の一覧。E2E でブラウザが入力画面を出さないことを確かめる（計画 10 §8）。
 2. **入場の判定 `SessionCreate`**: OIDC のコールバックが、セッションを作る前に
    `authorize(Principal::anonymous(), Action::SessionCreate, Resource::Admission { access_role, account })` で判定する（ADR-0021 §3）。
    - `account` は `New`（最初のログインで作る）/ `Active` / `Disabled` / `NotHuman`（ボット・サービスアカウント）。allow は `access` のロールが
@@ -447,4 +454,16 @@ receive-pack（MR4）と一緒に書く。
      同じ形の 404）。
    - `TokenCreate`・`TokenList`・`TokenRevoke`・`UserDisable` を `app::PLANNED` から外すのは、ルートを入れる MR6。
 5. **変えないもの**: `forge admin token issue|revoke|list`・`user disable`・`bootstrap-admin` は CLI の経路のまま（§8 の例外）。
-   トークンの照合と、`Authorization` が 2 つ・Cookie と `Authorization` の両方のときの `ambiguous`（401）も今のまま。
+   トークンの照合と、`Authorization` が 2 つのときの `ambiguous`（401）も今のまま。Cookie と `Authorization` の両方のときの `ambiguous` は、
+   Cookie の名前 `__Host-gstn_session` だけで判定する（ADR-0021 §10）。
+6. **§8 の例外を `forge admin user link-identity` へ広げる**（D5 MR5 の Amendment と同じ扱い。2026-11-01 の設計レビューの MEDIUM）。
+   - 対象: `forge admin user link-identity --user <u> --issuer <iss> --subject <sub>`（ADR-0021 §4）。Keycloak の ID を既存の利用者に結ぶ。
+     管理者とボット・サービスアカウントの結び付け、自動の結び付けが FG-AUTH-0014 で止まったときの解消は、この経路だけで行う。
+   - **`authorize()` を通らない理由**: 呼び出し元はホストの操作者で、HTTP / git の主体（`Principal`）がない。本番では承認済みの Runbook
+     `oidc-identity-link` の手順としてだけ実行する（CLAUDE.md §3.7）。actor `system`、監査 `user.identity_linked`（`via=operator`、
+     `actor_label = forge-cli:<OS のアカウント>`）。
+   - **HTTP から到達できない理由**: 入口は `operator_link_identity` の 1 つだけで、`ChangeContext` の actor が `system` でなければ
+     FG-SYS-0001 `reason=operator_not_system` で断る。forge-web の書き込みは必ず `Actor::User`。forge-web のソースがこの入口の名前を
+     含まないことを、`forge_web_never_names_the_operator_only_user_commands` と同じ形のテストで守る（MR4）。
+   - この例外は CLI の経路だけ。HTTP に結び付けの操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
+   - CLAUDE.md §3.4 の例外の一覧への追記は、MR4 が入るときにユーザーに確かめてから行う（この MR では CLAUDE.md を変えない）。

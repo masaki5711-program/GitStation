@@ -1056,15 +1056,22 @@ URL の 3 つの形と判定の順序（上の「判定の順序」）は変え�
 | `assets` | `GET|HEAD /-/assets/{file}`（1 セグメント） | `WebShell` / `Instance` | 公開。資格情報を見ない | MR2 |
 | `auth` | `GET /-/auth/login`、`GET /-/auth/callback` | `WebLogin` / `Instance` | 公開 | MR4 |
 | `auth` | `POST /-/auth/backchannel-logout` | `OidcBackchannelLogout` / `Instance` | 公開。Cookie も `Authorization` も見ない（判定は JWT の検証の後） | MR5 |
+| `auth` | `POST /-/auth/logout` | `SessionLogout` / `Instance` | **公開でない**。`__Host-gstn_session` だけ、CSRF（本文の `csrf`）と `Origin` の検査。303 で Keycloak へ（ADR-0021 §8） | MR5 |
 
 - **資産の置き場所は `/-/assets/` に決める**。上の「トップレベルの予約語」の節の「静的なファイルは `/assets/…` か `/-/static/…` にだけ置く」
   を置き換える。トップレベルの `assets` は予約語のまま残す（名前空間に使わせない）。`/-/static` は作らない。
 - `assets` は、その語を持つ RouteDef がすべて `WebShell` なので公開の語になる（「判定の順序」の 4）。ただし殻ではなく、埋め込みの一覧にある
   ファイルだけを返す。一覧にない名前は FG-WEB-0001（`reason=unknown_route`、`part=instance`。殻は返さない）。
-- `auth` の下の語は固定の 3 つだけ。それ以外（`/-/auth`、`/-/auth/x`）は FG-WEB-0001。`auth` の語は公開でも、殻の「どのパスでも同じバイト」の
-  対象ではない（ログインの手順を行う）。`/-/auth/*` は DB を見る（callback と backchannel-logout）が、パスの解決はしない。
-- 登録の仕組みの今のテスト（公開の語の RouteDef はすべて `WebShell`）は、`auth` のために「公開の語の RouteDef は `WebShell`・`WebLogin`・
-  `OidcBackchannelLogout` のどれか」に広げる。この 3 つ以外の Action は公開にできない（テストで固定する）。
+- `auth` の下の語は固定の 4 つだけ（`login`、`callback`、`backchannel-logout`、`logout`）。それ以外（`/-/auth`、`/-/auth/x`）は FG-WEB-0001。
+  `/-/auth/*` は殻の「どのパスでも同じバイト」の対象ではない（ログインの手順を行う）。DB を見る（callback、backchannel-logout、logout）が、
+  パスの解決はしない。
+- **公開かどうかは `auth` では語の後ろの固定のセグメントごとに決める**（`logout` だけが公開でない）。「判定の順序」の 4 の「1 つでも公開でない
+  RouteDef がある語は認証を求める」をそのまま当てると、ログインの入口まで認証を求めてしまうため。インスタンスの語の RouteDef は
+  `(語, 固定のセグメント, verb)` で 1 つに決まる（`{param}` を持たない）ので、公開の判定のキーをそこまで広げても、名前空間の語の判定
+  （解決の前に語だけで決める）は変わらない。
+- 登録の仕組みの今のテスト（公開の語の RouteDef はすべて `WebShell`）は、「公開の RouteDef の Action は `WebShell`・`WebLogin`・
+  `OidcBackchannelLogout` のどれか」に広げる。この 3 つ以外の Action は公開にできない（テストで固定する）。`SessionLogout` が公開でないことも
+  テストで固定する。
 
 ### 予約するインスタンスの語（ルートを作らない）
 

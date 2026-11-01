@@ -31,7 +31,8 @@ Markdown の描き方、npm の取り寄せ方である。
 - Vite、React、TypeScript（`strict`、`noUncheckedIndexedAccess`）、React Router、TanStack Query、Radix（headless）、
   CSS Modules と CSS 変数のトークン。
 - **実行時に `<style>` を差し込む CSS-in-JS は使わない**（CSP の `style-src 'self'` を保つ）。React の `style` 属性は CSSOM 経由で
-  CSP の `style-src` に掛からないので許す。Radix の部品も同じ理由で使える。
+  CSP の `style-src` に掛からないので許す。**Radix の部品のうち `<style>` を差し込むものは使わない**（§3a。2026-11-01 の設計レビューの
+  MEDIUM で、「Radix の部品も同じ理由で使える」とした最初の文を改めた）。
 - API の型は `docs/api/openapi.json` から **`openapi-typescript` と `openapi-fetch` で生成する**（手書きしない）。生成物はコミットし、
   CI で再生成して差分がないことを確かめる（`gen-catalog --check` と同じ考え方）。
 - テスト: vitest、MSW、axe（a11y）、Playwright（E2E。認証は ADR-0021 §14 の `sso` の profile）。
@@ -67,7 +68,7 @@ Markdown の描き方、npm の取り寄せ方である。
 
 | 応答 | `Content-Security-Policy` | ほか |
 |---|---|---|
-| 殻（`index.html`） | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` | `Cache-Control: no-cache` |
+| 殻（`index.html`） | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' <Keycloak のオリジン>` | `Cache-Control: no-cache`。`form-action` の Keycloak のオリジンは、ログアウトのフォームの 303 の先（ADR-0021 §8。リダイレクトにも `form-action` が掛かる）。設定から作るヘッダーの値で、殻のバイトは変わらない。`auth.oidc` がなければ `'self'` だけ |
 | 資産 `/-/assets/*` | 殻と同じ | `Cache-Control: public, max-age=31536000, immutable`、`Cross-Origin-Resource-Policy: same-origin` |
 | API `/api/v1/*` | `default-src 'none'; frame-ancestors 'none'` | 認証付きは `Cache-Control: private, no-store`、`Vary: Authorization, Cookie` |
 | raw・画像・archive | `sandbox; default-src 'none'`（ADR-0015） | `Cross-Origin-Resource-Policy: same-origin`、`Content-Disposition`（ADR-0015） |
@@ -82,6 +83,37 @@ Markdown の描き方、npm の取り寄せ方である。
   - 構文の色付けは highlight.js の core と、言語の定義を遅延で読み込む（shiki は WASM を使うので採らない）。
   - Vite の設定で、モジュールの preload のインラインのスクリプトを出さない（`build.modulePreload.polyfill = false`）。
 - ブラウザのコンソールに CSP の違反が出ないことを、Playwright の素の起動で確かめる（MR2）。CSP の報告の受け口（`report-to`）は作らない（見送り）。
+
+### 3a. `<style>` を差し込む部品（Radix）と CSP
+
+Radix の一部の部品は、実行時に `<style>` の要素を差し込む。`style-src 'self'`（`style-src-elem` もこれに従う）はそれを止めるので、
+そのまま使うと部品が壊れるか、CSP の違反になる。
+
+- 差し込むもの（2026-11-01 の確認。版で変わりうるので MR2 で実物を確かめる）:
+  - `Dialog`・`AlertDialog`、`modal` の `Popover`・`DropdownMenu`・`Select` など: 中の `react-remove-scroll`（`react-style-singleton`）が、
+    スクロールを止めるための `<style>` を作る。中身には実行時に測ったスクロールバーの幅（`padding-right: <n>px`）が入る。
+  - `ScrollArea`: スクロールバーを隠す `<style>` を差し込む（中身は固定の文字列）。
+- 選択肢:
+
+  | 案 | 内容 | 判断 |
+  |---|---|---|
+  | nonce | 応答ごとの nonce を CSP と殻の `<meta>`（`react-style-singleton` が読む）に入れる | **採らない**。nonce は応答ごとに違う値を殻の HTML に書くので、殻が「どのパスでも同じバイト」でなくなる（ADR-0015。殻が要求ごとに変わるとキャッシュの検証と、「殻は要求の内容に依存しない」ことのテストが成り立たない）。殻を DB・セッションに依存させない原則には反しないが、同じバイトの契約を崩す |
+  | `style-src-elem` のハッシュ | 差し込む中身の SHA-256 を CSP に並べる | **採らない**。`react-remove-scroll` の中身はスクロールバーの幅で変わり、ハッシュを決められない。`ScrollArea` の固定の中身には使えるが、依存の版が上がるたびにハッシュが黙ってずれる |
+  | **部品を絞る・置き換える** | `<style>` を差し込まない部品だけを使う | **採用**。CSP と殻の契約をどちらも変えない |
+
+- 決定（採用した案の中身）:
+  - **モーダルは HTML の `<dialog>` 要素**（`showModal()`。フォーカスの閉じ込め、`Esc`、背景の `inert` はブラウザが行う）を、自前の薄い
+    部品（`web/src/ui/Modal.tsx`）で包んで使う。スクロールの停止は CSS（`html:has(dialog[open]) { overflow: hidden; }`、
+    `scrollbar-gutter: stable` で幅のずれを防ぐ）で行う。Radix の `Dialog`・`AlertDialog` は使わない。
+  - **メニュー・ポップオーバー・選択は `modal={false}`** で使う（`react-remove-scroll` を使わない）。`modal` を既定のまま使えないよう、
+    自前の包み（`web/src/ui/`）だけが Radix を import できるようにする（eslint の `no-restricted-imports`）。
+  - **`ScrollArea` は使わない**（ネイティブの `overflow: auto` と CSS の `scrollbar-*`）。
+  - 使ってよい Radix の部品は `web/src/ui/` の許可リストに書く。部品を足すときは、その部品を描いた画面で CSP の違反が出ないことを確かめる。
+- 守り:
+  - **MR2 の Playwright の「CSP の違反が出ない」検査を残し、広げる**: 素の起動に加えて、`web/src/ui/` の各部品を開いた状態の見本の画面
+    （開発用のルート。release には入れない）を巡回し、`securitypolicyviolation` のイベントとコンソールの CSP の違反が 0 であること。
+  - vitest で「`document.head` に `<style>` の要素が増えない」ことを、各部品を開いて閉じる操作で確かめる（jsdom の上で、CSP がなくても見つける）。
+  - 依存の更新の MR は、この 2 つが緑であることを条件にする。
 
 ### 4. フォントとブランド
 
