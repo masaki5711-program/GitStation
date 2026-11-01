@@ -13,7 +13,6 @@ export type RefsBody = S['RefsBody'];
 export type CreateProjectBody = S['CreateProject'];
 export type CreateGroupBody = S['CreateGroup'];
 export type Visibility = S['VisibilityName'];
-export type Kind = S['KindName'];
 export type DiffBody = S['DiffBody'];
 export type DiffFile = S['DiffFileBody'];
 export type Rev = S['RevBody'];

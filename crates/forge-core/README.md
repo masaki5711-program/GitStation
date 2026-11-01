@@ -19,9 +19,8 @@ never print a password. Every key is listed in `config::KEYS`.
 `TombstoneId`, `ProtectedRefId` (typed i64 ids), `RefName::parse` (git check-ref-format rules + no
 component starting with `-`; `branch()`, `tag()`).
 
-**Repositories and protected refs** (step D4 MR1; ADR-0004, ADR-0008):
-`RepositoryKind` (`spec`, `system`; `ALL`, `as_str`, `parse`; fixed at creation)
-and `RepositoryState` (`provisioning`, `ready`; same API) — the CHECKs of
+**Repositories and protected refs** (step D4 MR1; ADR-0008; the repository kind of ADR-0004 is gone, ADR-0023):
+`RepositoryState` (`provisioning`, `ready`; same API) — the CHECKs of
 `forge.repositories`. `RefPattern::parse` (FG-REPO-0013, rules checked in this
 order: ≤ 255 bytes `too_long`; starts with `refs/heads/` or `refs/tags/`
 `prefix`; at most one `*`, only in the last path component `wildcard`; with the
@@ -78,7 +77,7 @@ pending_deletion } }`; `owner() -> NamespaceOwner` (typed id), `kind()`.
 `NamespaceKind` (`user`, `group`, `project`). `ProjectAccessLoader::load_project(ProjectId,
 Option<UserId>) -> Option<ProjectRecord>` for routes that address a project by id
 (same contract; MR5): `ProjectRecord { id, access: ProjectAccess, namespace_id, path,
-display_name, description, kind: RepositoryKind, created_at }` — the access facts and
+display_name, description, created_at }` — the access facts and
 what `GET /api/v1/projects/{id}` shows after `authorize()`, from one row.
 `web_path::parse_positive_id` — the URL id rule (permalink and API: plain positive
 decimal, no leading zero, fits `i64`). Boxed futures (`LookupFuture`); no forge-auth types (forge-web
@@ -93,7 +92,7 @@ from forge-auth in step D2 (forge-auth re-exports them).
 joins in the commit that adds its writer (now `project.created` — integration class,
 D4 MR2 —, `repository.created`, `token.created`, `token.revoked`).
 `AuditDetails::ProjectCreated` (`project.created`: project, namespace, parent namespace
-and repository ids, repository kind, visibility, owner id) is also that event's payload. `VisibilityClass` (`integration`, `maintainer`, `deployment`,
+and repository ids, visibility, owner id) is also that event's payload. `VisibilityClass` (`integration`, `maintainer`, `deployment`,
 `admin`). `DedupKey::new(prefix: &'static str, &[DedupPart])` — parts are `Id(i64)`,
 `Hash(&[u8; 32])` (lowercase hex) and `Word(&'static str)`, so a client string
 cannot become a key (a `compile_fail` doc test); shape

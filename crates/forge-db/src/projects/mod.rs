@@ -15,7 +15,7 @@
 
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, RepoId, UserId};
 use forge_core::namespace_path::{MAX_DEPTH, MAX_FULL_PATH_LEN};
-use forge_core::{AuditDetails, PathSegment, RepositoryKind, Role, Visibility};
+use forge_core::{AuditDetails, PathSegment, Role, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
@@ -67,8 +67,6 @@ pub struct NewProject {
     pub display_name: String,
     pub description: String,
     pub visibility: Visibility,
-    /// The kind of the project's repository, fixed at creation (ADR-0004).
-    pub kind: RepositoryKind,
     /// The user creating the project, who becomes its direct Owner: an
     /// active human or service account. It must be the acting user of the
     /// change (`Actor::User` / `ServiceAccount` itself, the person of
@@ -83,7 +81,7 @@ pub struct NewProject {
 
 impl NewProject {
     /// A request with the defaults of step D plan answer 5: an empty
-    /// description, visibility `private`, repository kind `system`.
+    /// description, visibility `private`.
     pub fn new(segment: &str, parent: NamespaceId, display_name: &str, creator: UserId) -> Self {
         Self {
             segment: segment.to_owned(),
@@ -91,11 +89,16 @@ impl NewProject {
             display_name: display_name.to_owned(),
             description: String::new(),
             visibility: Visibility::Private,
-            kind: RepositoryKind::System,
             creator,
         }
     }
 }
+
+/// The value written to `forge.repositories.kind`, a column ADR-0023 left
+/// behind: there is no repository kind any more, but the column is NOT NULL
+/// with CHECK (`spec`, `system`) and migrations are append-only. Always the
+/// same constant; nothing reads it.
+const LEGACY_REPOSITORY_KIND: &str = "system";
 
 /// What `create` wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,14 +470,13 @@ where
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }
-    let kind = new.kind;
     let repository_id: i64 = tx
         .step(|c| async move {
             sqlx::query_scalar(
                 "INSERT INTO forge.repositories (project_id, kind) VALUES ($1, $2) RETURNING id",
             )
             .bind(project_id)
-            .bind(kind.as_str())
+            .bind(LEGACY_REPOSITORY_KIND)
             .fetch_one(c)
             .await
             .map_err(|e| query_error("projects.create.repository", e))
@@ -516,7 +518,6 @@ where
         namespace_id: created.namespace_id,
         parent_namespace_id: new.parent,
         repository_id,
-        kind,
         visibility,
         owner,
     };
@@ -528,7 +529,7 @@ where
 
 /// The audit row and the event of a project change (`project.created`,
 /// D4 MR4 `member.*`): both on the project (the event scope rule, ADR-0016
-/// Amendment D4); the event's payload is the audit details (ids, kinds,
+/// Amendment D4); the event's payload is the audit details (ids,
 /// roles). No dedup key: `project.created` names a new project and each
 /// member change is a new state, never a retry to absorb.
 pub(crate) fn evented_record(

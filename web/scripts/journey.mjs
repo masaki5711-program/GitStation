@@ -16,7 +16,6 @@ import axe from 'axe-core';
 import { chromium } from 'playwright';
 
 import { PNG, REFS, browse } from './journey-repo.mjs';
-import { PRESS_SPEC, SPEC_REFS, browseSpec } from './journey-portal.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
 
@@ -32,7 +31,6 @@ const forgeWeb = {
   display_name: 'Forge Web',
   description: 'The web UI',
   visibility: 'internal',
-  kind: 'system',
   created_at: '2026-10-01T00:00:00Z',
   role: 'developer',
 };
@@ -49,7 +47,7 @@ const group = {
 };
 
 function backend() {
-  const projects = [forgeWeb, PRESS_SPEC];
+  const projects = [forgeWeb];
   const unexpected = [];
   const settings = settingsBackend(CSRF);
   let nextId = 9;
@@ -83,21 +81,6 @@ function backend() {
       return true;
     }
 
-    // The portal's downloads (server routes; headers as ADR-0015): one chapter, one version.
-    const download = path.match(/^\/acme\/press-spec\/-\/(raw|archive)\//);
-    if (req.method === 'GET' && download) {
-      const zip = download[1] === 'archive';
-      res.writeHead(200, {
-        'Content-Type': zip ? 'application/zip' : 'text/plain; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${zip ? 'press-spec.zip' : 'chapter.md'}"`,
-        'Content-Security-Policy': "sandbox; default-src 'none'",
-        'X-Content-Type-Options': 'nosniff',
-        'Cross-Origin-Resource-Policy': 'same-origin',
-      });
-      res.end(zip ? 'PK' : '# synthetic');
-      return true;
-    }
-
     if (!signedIn) return sendError(res, 401, 'Sign-in is required.', 'req-401', 'FG-AUTH-0001'), true;
 
     if (key === 'GET /api/v1/session') {
@@ -120,8 +103,7 @@ function backend() {
       return sendJson(res, more.status, more.body), true;
     }
     if (key === 'GET /api/v1/projects') {
-      const kind = url.searchParams.get('kind');
-      return sendJson(res, 200, { items: projects.filter((p) => kind === null || p.kind === kind), has_more: false, next_cursor: null }), true;
+      return sendJson(res, 200, { items: projects, has_more: false, next_cursor: null }), true;
     }
     if (key === 'POST /api/v1/projects') {
       if (req.headers['x-gitstation-csrf'] !== CSRF) {
@@ -140,7 +122,6 @@ function backend() {
         display_name: input.display_name,
         description: input.description ?? '',
         visibility: input.visibility ?? 'private',
-        kind: input.kind ?? 'system',
         role: 'owner',
       };
       projects.push(created);
@@ -174,14 +155,6 @@ function backend() {
         ...(remainder === '' ? {} : { remainder }),
       }), true;
     }
-    const specRepo = path.match(/^\/api\/v1\/projects\/8\/repository\/(.+)$/);
-    if (req.method === 'GET' && specRepo) {
-      const answer = browseSpec(specRepo[1], url);
-      if (answer !== null) {
-        if (answer.error) return sendError(res, answer.status, ...answer.error), true;
-        return sendJson(res, 200, answer.body), true;
-      }
-    }
     const repo = path.match(/^\/api\/v1\/projects\/7\/repository\/(.+)$/);
     if (req.method === 'GET' && repo) {
       const answer = browse(repo[1], url);
@@ -196,7 +169,7 @@ function backend() {
       if (p === undefined) return sendError(res, 404, 'Not found.', 'req-404', 'FG-WEB-0001'), true;
       if (one[2] === undefined) return sendJson(res, 200, p), true;
       const filled = p.id === 7;
-      const refs = p.id === 8 ? SPEC_REFS : filled ? REFS : { default_branch: null, refs: [], truncated: false };
+      const refs = filled ? REFS : { default_branch: null, refs: [], truncated: false };
       return sendJson(res, 200, refs), true;
     }
     unexpected.push(key);
@@ -491,58 +464,6 @@ async function main() {
       if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
       await check(name);
     }
-    await page.setViewportSize({ width: 1100, height: 800 });
-
-    // 6d. The document portal: list -> specification -> confirmed version ->
-    // differences -> downloads, then a narrow screen in Indonesian.
-    await page.goto(`${base}/`, { waitUntil: 'networkidle' });
-    await page.locator('section[aria-labelledby="home-specs"]').getByRole('link', { name: 'Press Spec' }).click();
-    await expectPath('/acme/press-spec/-/docs', 'portal');
-    await page.getByRole('heading', { level: 1, name: /Press Spec/ }).waitFor();
-    await page.getByRole('navigation', { name: 'Table of chapters' }).waitFor();
-    await page.getByTestId('markdown').waitFor();
-    await page.getByRole('row', { name: /rev-2/ }).waitFor();
-    await check('40-portal');
-    await page.getByRole('link', { name: 'Open rev-2' }).click();
-    await page.getByText('Showing version: rev-2').waitFor();
-    await page.getByRole('link', { name: 'parts list' }).waitFor();
-    await check('41-portal-confirmed-version');
-    await page.getByText('Versions and downloads').click();
-    await page.getByRole('link', { name: 'Changes from the previous version (rev-2, compared with rev-1)' }).click();
-    await page.getByRole('heading', { level: 2, name: 'Differences by chapter' }).waitFor();
-    await page.getByRole('region', { name: 'Changed lines' }).waitFor();
-    const changeText = await page.getByRole('region', { name: 'Changed lines' }).innerText();
-    if (!changeText.includes('Added line') || !changeText.includes('Removed line')) {
-      problems.push(`portal differences are not told in words: ${changeText}`);
-    }
-    await check('42-portal-differences');
-    const [zip] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Download this whole version as one file' }).click(),
-    ]);
-    if (!zip.suggestedFilename().endsWith('.zip')) problems.push(`portal zip: ${zip.suggestedFilename()}`);
-    const [chapter] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Download this chapter' }).click(),
-    ]);
-    if (chapter.suggestedFilename() === '') problems.push('portal chapter download has no file name');
-    await expectPath('/acme/press-spec/-/docs', 'portal stays after downloads');
-    await page.setViewportSize({ width: 375, height: 800 });
-    await page.evaluate(() => window.localStorage.setItem('gitstation.lang', 'id'));
-    for (const [path, name] of [
-      ['/acme/press-spec/-/docs?version=rev-2&compare=rev-1', '43-portal-compare-375-id'],
-      ['/acme/press-spec/-/docs', '44-portal-375-id'],
-    ]) {
-      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
-      await page.getByRole('heading', { level: 1, name: /Press Spec/ }).waitFor();
-      await page.getByRole('navigation', { name: 'Daftar bab', includeHidden: true }).waitFor({ state: 'attached' });
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
-      await check(name);
-    }
-    await page.evaluate(() => window.localStorage.removeItem('gitstation.lang'));
     await page.setViewportSize({ width: 1100, height: 800 });
 
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.

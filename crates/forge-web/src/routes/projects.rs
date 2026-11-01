@@ -127,8 +127,6 @@ pub struct ProjectBody {
     pub description: String,
     /// `private` or `internal`.
     pub visibility: String,
-    /// The repository kind: `spec` or `system`.
-    pub kind: String,
     /// UTC, RFC 3339.
     pub created_at: String,
     /// The caller's effective role (`guest` … `owner`); `null` without one
@@ -139,8 +137,7 @@ pub struct ProjectBody {
 
 /// The API shape of one project for the caller (the single builder):
 /// `id`, `namespace_id`, `path` (current full path), `name` (its last
-/// segment), `display_name`, `description`, `visibility`, `kind` (the
-/// repository kind, `spec` / `system`), `created_at` (UTC, RFC 3339) and
+/// segment), `display_name`, `description`, `visibility`, `created_at` (UTC, RFC 3339) and
 /// `role` (the caller's effective role, `null` without one — an
 /// administrator or a reader of an internal project). The id, visibility
 /// and role come from the proof; the rest from the same loaded row, whose
@@ -209,7 +206,6 @@ fn body_of(
         display_name: record.display_name.clone(), // clone: the record is borrowed
         description: record.description.clone(),
         visibility: visibility.as_str().to_owned(),
-        kind: record.kind.as_str().to_owned(),
         created_at: record.created_at.clone(),
         role: role.map(|r| Role::as_str(r).to_owned()),
     }

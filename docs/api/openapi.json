@@ -494,17 +494,6 @@
           "display_name": {
             "type": "string"
           },
-          "kind": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/KindName",
-                "description": "Default `system`."
-              }
-            ]
-          },
           "namespace_id": {
             "description": "The parent: a personal or a group namespace (`namespace_id` of a\nuser, of `GET /api/v1/groups/{id}` or of the resolver).",
             "format": "int64",
@@ -932,14 +921,6 @@
         ],
         "type": "object"
       },
-      "KindName": {
-        "description": "A repository kind in a request (ADR-0004; fixed at creation).",
-        "enum": [
-          "spec",
-          "system"
-        ],
-        "type": "string"
-      },
       "ListedGroup": {
         "additionalProperties": false,
         "description": "A group as a list shows it.",
@@ -1131,10 +1112,6 @@
             "minimum": 1,
             "type": "integer"
           },
-          "kind": {
-            "description": "The repository kind: `spec` or `system`.",
-            "type": "string"
-          },
           "name": {
             "description": "The path's last segment.",
             "type": "string"
@@ -1168,7 +1145,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],
@@ -2847,15 +2823,6 @@
             "description": "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
             "in": "query",
             "name": "cursor",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "spec or system: only projects of this repository kind",
-            "in": "query",
-            "name": "kind",
             "required": false,
             "schema": {
               "type": "string"

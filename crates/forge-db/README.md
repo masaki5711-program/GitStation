@@ -147,9 +147,9 @@ connection, mapping driver errors to registered codes, migrations
   the viewer's `role`); `load_project(&Db, ProjectId, viewer) ->
   Result<Option<forge_core::ProjectRecord>, ForgeError>` (MR5: the same one statement
   also returns the project's namespace — `full_path` confirmed against its segments —
-  names, repository kind and `created_at` in UTC; `project_access` is its `access`;
+  names and `created_at` in UTC; `project_access` is its `access`;
   FG-DB-0021 `project_path_unconfirmed` / `stored_path_invalid` /
-  `project_without_repository` / `unknown_repository_kind` for rows it cannot read). **One statement per call, whatever the answer**
+  `project_without_repository` for rows it cannot read). **One statement per call, whatever the answer**
   (`RESOLVE_SQL`, `PROJECT_ACCESS_SQL`): it always returns exactly one row (an
   aggregate without `GROUP BY` drives `LEFT JOIN`s), so live / moved / deleted /
   absent, visible / invisible and signed-in / anonymous (`$2` NULL) issue the same
@@ -330,7 +330,7 @@ Raised by `repositories` (D4 MR3b): FG-REPO-0012 RepositoryProvisioningStuck (al
 `project_id`, `age_ms`, `job_state`, `threshold_ms`), FG-REPO-0014 (`repository_ready`
 from `reprovision`), FG-REPO-0005 (`resource=repository`, `reason=absent`), FG-SYS-0001
 (`invalid_job_payload`, `unexpected_dedup`, `unknown_repository_state` /
-`unknown_repository_kind` / `invalid_provision_token` for a row outside its CHECKs).
+`invalid_provision_token` for a row outside its CHECKs).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
@@ -436,7 +436,7 @@ column that is both.
 `project` / `id` or `project_id`; `updated_at` unaudited). A project's path is its
 `namespaces` row (`kind = 'project'`, `owner_id = projects.id`; no `namespace_id`
 column); `deleted_at` / `purge_after` both or neither, no DELETE yet (D5).
-`repositories`: one per project (`project_id` UNIQUE), `kind` spec | system fixed —
+`repositories`: one per project (`project_id` UNIQUE), `kind` (ADR-0023: no longer a concept; the column stays because migrations are append-only, and `projects::create` always writes the constant `system`; nothing reads it) —
 forge_app may UPDATE only `state` (provisioning | ready) and `ready_at` (set exactly
 when ready; the guard trigger `repositories_state_forward` — XF001, FG-DB-0009
 `rejected`, enabled ALWAYS, compared by doctor — allows only provisioning → ready and

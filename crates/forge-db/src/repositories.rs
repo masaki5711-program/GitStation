@@ -38,7 +38,7 @@ use forge_core::ids::{ProjectId, RepoId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
     AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, PushReplay, Pusher,
-    RepositoryKind, RepositoryState, RequestId,
+    RepositoryState, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
@@ -273,27 +273,24 @@ async fn lock_repository(
     conn: &mut PgConnection,
     repo: RepoId,
     query: &'static str,
-) -> Result<(ProjectId, RepositoryKind, RepositoryState), ForgeError> {
-    let row: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT project_id, kind, state FROM forge.repositories WHERE id = $1 FOR UPDATE",
-    )
-    .bind(repo.get())
-    .fetch_optional(conn)
-    .await
-    .map_err(|e| query_error(query, e))?;
-    let Some((project, kind, state)) = row else {
+) -> Result<(ProjectId, RepositoryState), ForgeError> {
+    let row: Option<(i64, String)> =
+        sqlx::query_as("SELECT project_id, state FROM forge.repositories WHERE id = $1 FOR UPDATE")
+            .bind(repo.get())
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| query_error(query, e))?;
+    let Some((project, state)) = row else {
         return Err(not_found(repo));
     };
-    let kind = RepositoryKind::parse(&kind)
-        .ok_or_else(|| corrupt("unknown_repository_kind", repo.get()))?;
-    Ok((ProjectId::new(project), kind, state_of(&state, repo.get())?))
+    Ok((ProjectId::new(project), state_of(&state, repo.get())?))
 }
 
 /// Mark `repo` ready (its bare directory exists): state `ready`,
 /// `ready_at = now()`, one `repository.created` audit row on resource
 /// (`project`, project id) with `project_id` set, and one
 /// `repository.created` event of that project (integration class, payload
-/// ids and kind, dedup `repository_created:<repo_id>`) — one transaction.
+/// ids, dedup `repository_created:<repo_id>`) — one transaction.
 /// The row is locked first, so concurrent calls serialize; an already
 /// ready repository is [`MarkReady::AlreadyReady`] and writes nothing (no
 /// second event). `ctx` is the provisioning job's (actor `System`, the
@@ -324,7 +321,7 @@ pub async fn mark_ready_within(
 }
 
 async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, ForgeError> {
-    let (project_id, kind, state) = tx
+    let (project_id, state) = tx
         .step(|c| lock_repository(c, repo, "repositories.mark_ready.lock"))
         .await?;
     match state {
@@ -362,7 +359,6 @@ async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, Forg
     let details = AuditDetails::RepositoryCreated {
         project_id,
         repository_id: repo,
-        kind,
     };
     let event_type = details
         .event_type()
@@ -730,7 +726,7 @@ pub async fn reprovision(
     repo: RepoId,
 ) -> Result<Reprovisioned, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let (project_id, _kind, state) = tx
+    let (project_id, state) = tx
         .step(|c| lock_repository(c, repo, "repositories.reprovision.lock"))
         .await?;
     match state {

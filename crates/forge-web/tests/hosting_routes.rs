@@ -231,7 +231,6 @@ async fn projects_are_created_updated_and_made_internal_through_the_routes() {
         "namespace_id": alice.namespace_id.get(),
         "path": "web",
         "display_name": "Web",
-        "kind": "spec",
     });
     // bob may not create in alice's personal namespace.
     let foreign = call(
@@ -249,11 +248,31 @@ async fn projects_are_created_updated_and_made_internal_through_the_routes() {
     let created = call(r(), "POST", "/api/v1/projects", as_alice.clone(), Some(new)).await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.json);
     assert_eq!(created.json["path"], "alice/web");
-    assert_eq!(created.json["kind"], "spec");
+    assert!(created.json.get("kind").is_none(), "{}", created.json);
     assert_eq!(created.json["visibility"], "private");
     assert_eq!(created.json["role"], "owner");
     let id = created.json["id"].as_i64().expect("id");
     let project_ns = created.json["namespace_id"].as_i64().expect("namespace");
+
+    // ADR-0023: the repository kind is gone from the create body. The
+    // body is strict, so the old `kind` field is refused (never ignored).
+    let with_kind = call(
+        r(),
+        "POST",
+        "/api/v1/projects",
+        as_alice.clone(),
+        Some(json!({
+            "namespace_id": alice.namespace_id.get(),
+            "path": "docs",
+            "display_name": "Docs",
+            "kind": "spec",
+        })),
+    )
+    .await;
+    assert_eq!(
+        (with_kind.status, code(&with_kind)),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006")
+    );
 
     // A project namespace as parent is the same 404 as an absent id.
     let under_project = call(

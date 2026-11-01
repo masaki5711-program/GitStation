@@ -8,7 +8,7 @@ import type { ListedGroup, Project } from './types';
 
 export function projectsQuery(
   api: ApiClient,
-  filter: { membership?: boolean; kind?: 'spec' | 'system' } = {},
+  filter: { membership?: boolean } = {},
 ) {
   return queryOptions({
     queryKey: ['projects', filter],
@@ -22,7 +22,6 @@ export function projectsQuery(
                 limit: 100,
                 ...(cursor === undefined ? {} : { cursor }),
                 ...(filter.membership === true ? { membership: 'true' } : {}),
-                ...(filter.kind === undefined ? {} : { kind: filter.kind }),
               },
             },
           }),

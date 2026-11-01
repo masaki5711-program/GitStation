@@ -353,25 +353,22 @@ fn an_expired_cursor_is_cursor_invalid_rule_expired() {
 #[test]
 fn the_filters_are_parsed_strictly_per_list() {
     let f = parse_filters(
-        Some("kind=spec&membership=true&state=pending_deletion&limit=5"),
+        Some("membership=true&state=pending_deletion&limit=5"),
         List::Projects,
     )
     .expect("all");
-    assert_eq!(f.kind, Some(forge_core::RepositoryKind::Spec));
     assert!(f.membership && f.pending_deletion);
     assert_eq!(
         parse_filters(None, List::Projects).expect("none"),
         Filter::NONE
     );
     assert_eq!(
-        parse_query(Some("kind=system&limit=3"))
+        parse_query(Some("membership=true&limit=3"))
             .expect("paging")
             .limit,
         3
     );
     let cases = [
-        (List::Projects, "kind=other", "kind", "invalid_value"),
-        (List::Projects, "kind=", "kind", "invalid_value"),
         (
             List::Projects,
             "membership=yes",
@@ -379,8 +376,12 @@ fn the_filters_are_parsed_strictly_per_list() {
             "invalid_value",
         ),
         (List::Projects, "state=deleted", "state", "invalid_value"),
-        (List::Projects, "kind=spec&kind=spec", "kind", "repeated"),
-        (List::Groups, "kind=spec", "query", "unknown_parameter"),
+        (
+            List::Projects,
+            "membership=true&membership=true",
+            "membership",
+            "repeated",
+        ),
         (
             List::Groups,
             "state=pending_deletion",
@@ -402,6 +403,29 @@ fn the_filters_are_parsed_strictly_per_list() {
     }
 }
 
+/// ADR-0023: there is no `kind` filter any more; `?kind=` is an unknown
+/// parameter like any other (rejected, not ignored).
+#[test]
+fn the_removed_kind_filter_is_an_unknown_parameter() {
+    for query in [
+        "kind=spec",
+        "kind=system",
+        "kind=",
+        "membership=true&kind=spec",
+    ] {
+        let err = parse_query(Some(query)).expect_err(query);
+        assert_eq!(
+            rule(&err),
+            (
+                ErrorCode::RequestInvalid,
+                "query".to_owned(),
+                "unknown_parameter".to_owned()
+            ),
+            "{query}"
+        );
+    }
+}
+
 /// M2 MR6: a cursor is bound to its filters — under any other filter set
 /// it fails the tag, and without filters the purpose is M1's.
 #[test]
@@ -409,7 +433,7 @@ fn a_cursor_opens_only_under_its_own_filters() {
     let keys = keys();
     let alice = UserId::new(1);
     let spec = Filter {
-        kind: Some(forge_core::RepositoryKind::Spec),
+        membership: true,
         ..Filter::NONE
     };
     let cursor = next_cursor(&keys, List::Projects, alice, &spec, Some(7))
@@ -421,14 +445,6 @@ fn a_cursor_opens_only_under_its_own_filters() {
     );
     let others = [
         Filter::NONE,
-        Filter {
-            kind: Some(forge_core::RepositoryKind::System),
-            ..Filter::NONE
-        },
-        Filter {
-            membership: true,
-            ..spec
-        },
         Filter {
             pending_deletion: true,
             ..spec

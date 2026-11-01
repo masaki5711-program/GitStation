@@ -1,5 +1,5 @@
 // Home (plan 10 §4.2): my projects (the ones I hold a role in) with a filter,
-// specifications, my groups and what I looked at recently (this browser only).
+// my groups and what I looked at recently (this browser only).
 // No "coming soon" frames: a section appears when it has something to show,
 // the main list always shows its loading / empty / error state.
 import { useQuery } from '@tanstack/react-query';
@@ -15,7 +15,6 @@ import controls from '../components/controls.module.css';
 import { QueryError } from '../components/QueryError';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
 import { GroupList, ProjectList } from '../features/Lists';
-import { SpecList } from './portal/SpecList';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
 import styles from './Home.module.css';
@@ -45,7 +44,6 @@ export function Home() {
   const recent = useMemo(() => readRecent(), []);
 
   const mine = useQuery(projectsQuery(api, { membership: true }));
-  const specs = useQuery(projectsQuery(api, { kind: 'spec' }));
   const groups = useQuery(groupsQuery(api, { membership: true }));
 
   const needle = filter.trim().toLowerCase();
@@ -134,24 +132,7 @@ export function Home() {
           ))}
       </Block>
 
-      {!mine.isError && specs.isError && (
-        <Block id="home-specs" title={t('home.specs')}>
-          <QueryError
-            error={specs.error}
-            onRetry={() => {
-              void specs.refetch();
-            }}
-          />
-        </Block>
-      )}
-      {specs.isSuccess && specs.data.items.length > 0 && (
-        <Block id="home-specs" title={t('home.specs')}>
-          <SpecList items={specs.data.items} />
-          <Truncated all={specs.data} />
-        </Block>
-      )}
-
-      {!mine.isError && !specs.isError && groups.isError && (
+      {!mine.isError && groups.isError && (
         <Block id="home-groups" title={t('home.groups')}>
           <QueryError
             error={groups.error}

@@ -236,7 +236,6 @@
                 "display_name",
                 "description",
                 "visibility",
-                "kind",
                 "created_at",
                 "role"
               ],
@@ -294,12 +293,6 @@
           "id": {
             "type": "integer"
           },
-          "kind": {
-            "enum": [
-              "spec",
-              "system"
-            ]
-          },
           "name": {
             "type": "string"
           },
@@ -330,7 +323,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],
@@ -375,13 +367,6 @@
           "required": false
         },
         {
-          "description": "spec | system (server default system; fixed at creation).",
-          "kind": "option",
-          "name": "--kind",
-          "repeatable": false,
-          "required": false
-        },
-        {
           "description": "private | internal (server default private).",
           "kind": "option",
           "name": "--visibility",
@@ -390,7 +375,7 @@
         }
       ],
       "examples": [
-        "gstn project create --namespace-id 3 --path app --display-name 'Team app' --kind system"
+        "gstn project create --namespace-id 3 --path app --display-name 'Team app'"
       ],
       "name": "project create",
       "output": {
@@ -406,12 +391,6 @@
           },
           "id": {
             "type": "integer"
-          },
-          "kind": {
-            "enum": [
-              "spec",
-              "system"
-            ]
           },
           "name": {
             "type": "string"
@@ -443,7 +422,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],
@@ -499,12 +477,6 @@
           "id": {
             "type": "integer"
           },
-          "kind": {
-            "enum": [
-              "spec",
-              "system"
-            ]
-          },
           "name": {
             "type": "string"
           },
@@ -535,7 +507,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],
@@ -591,12 +562,6 @@
           "id": {
             "type": "integer"
           },
-          "kind": {
-            "enum": [
-              "spec",
-              "system"
-            ]
-          },
           "name": {
             "type": "string"
           },
@@ -627,7 +592,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],
@@ -811,12 +775,6 @@
           "id": {
             "type": "integer"
           },
-          "kind": {
-            "enum": [
-              "spec",
-              "system"
-            ]
-          },
           "name": {
             "type": "string"
           },
@@ -847,7 +805,6 @@
           "display_name",
           "description",
           "visibility",
-          "kind",
           "created_at",
           "role"
         ],

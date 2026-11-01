@@ -58,7 +58,6 @@ function smokeApi(_req, res, url) {
       display_name: 'Forge Web',
       description: '',
       visibility: 'internal',
-      kind: 'system',
       created_at: '2026-10-01T00:00:00Z',
       role: 'developer',
     });

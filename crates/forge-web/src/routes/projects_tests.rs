@@ -15,8 +15,7 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use forge_auth::{Credential, Principal, Scope};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    NamespaceId, NamespacePath, ProjectAccess, ProjectId, ProjectRecord, RepositoryKind, Role,
-    UserId, Visibility,
+    NamespaceId, NamespacePath, ProjectAccess, ProjectId, ProjectRecord, Role, UserId, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use http_body_util::BodyExt;
@@ -95,7 +94,6 @@ fn record(id: i64, visibility: Visibility, role: Option<Role>, deleted: bool) ->
         path: NamespacePath::parse(&format!("acme/p{id}")).expect("path"),
         display_name: format!("Project {id}"),
         description: "synthetic".to_owned(),
-        kind: RepositoryKind::Spec,
         created_at: "2026-10-31T09:00:00Z".to_owned(),
         repository: forge_core::ProjectRepository {
             id: forge_core::RepoId::new(id),
@@ -234,7 +232,6 @@ async fn a_reader_gets_the_project_view_and_it_is_never_shared_cached() {
             "display_name": "Project 1",
             "description": "synthetic",
             "visibility": "private",
-            "kind": "spec",
             "created_at": "2026-10-31T09:00:00Z",
             "role": "reporter",
         })

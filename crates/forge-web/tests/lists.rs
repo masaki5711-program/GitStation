@@ -661,7 +661,7 @@ async fn a_failing_list_request_returns_its_slots() {
     }
 }
 
-/// M2 MR6: the filters `kind`, `membership` and `state=pending_deletion`
+/// M2 MR6: the filters `membership` and `state=pending_deletion`
 /// narrow what `authorize()` allowed (pending deletion is decided with
 /// `ProjectRestore`: only what the caller may restore), and a cursor is
 /// bound to the filters it was handed out under.
@@ -670,16 +670,7 @@ async fn the_filters_narrow_what_authorize_allowed_and_bind_the_cursor() {
     let t = FreshDb::migrated().await;
     let alice = user(&t, "alice").await;
     let bob = user(&t, "bob").await;
-    let spec = projects::create(
-        &t.db,
-        &ctx("req-project-spec"),
-        &NewProject {
-            kind: forge_core::RepositoryKind::Spec,
-            ..NewProject::new("spec", bob.namespace_id, "spec", bob.user_id)
-        },
-    )
-    .await
-    .expect("project");
+    let first = project(&t, &bob, "first", Visibility::Private).await;
     let sys = project(&t, &bob, "sys", Visibility::Private).await;
     let open = project(&t, &alice, "open", Visibility::Internal).await;
     let rep = project(&t, &alice, "rep", Visibility::Private).await;
@@ -718,28 +709,30 @@ async fn the_filters_narrow_what_authorize_allowed_and_bind_the_cursor() {
     assert_eq!(
         ids(&all),
         [
-            spec.project_id.get(),
+            first.project_id.get(),
             sys.project_id.get(),
             open.project_id.get(),
             rep.project_id.get()
         ]
     );
-    let (_, specs) = page("/api/v1/projects?kind=spec", bob.user_id).await;
-    assert_eq!(ids(&specs), [spec.project_id.get()]);
-    let (_, systems) = page("/api/v1/projects?kind=system", bob.user_id).await;
-    assert_eq!(
-        ids(&systems),
-        [
-            sys.project_id.get(),
-            open.project_id.get(),
-            rep.project_id.get()
-        ]
-    );
+    // ADR-0023: the repository-kind filter is gone; it is an unknown
+    // parameter (rejected, never silently ignored).
+    for kind in ["spec", "system"] {
+        let uri: &'static str = if kind == "spec" {
+            "/api/v1/projects?kind=spec"
+        } else {
+            "/api/v1/projects?kind=system"
+        };
+        let (status, bad) = page(uri, bob.user_id).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {bad}");
+        assert_eq!(bad["error_code"], ErrorCode::RequestInvalid.id());
+    }
+    assert!(all["items"][0].get("kind").is_none(), "no kind in the body");
     let (_, mine) = page("/api/v1/projects?membership=true", bob.user_id).await;
     assert_eq!(
         ids(&mine),
         [
-            spec.project_id.get(),
+            first.project_id.get(),
             sys.project_id.get(),
             rep.project_id.get()
         ],
@@ -758,22 +751,25 @@ async fn the_filters_narrow_what_authorize_allowed_and_bind_the_cursor() {
     let (status, bad) = page("/api/v1/groups?kind=spec", bob.user_id).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
 
-    // A cursor handed out under kind=system opens only under kind=system.
-    let (_, first) = get(
+    // A cursor handed out under membership=true opens only under it.
+    let (_, page_one) = get(
         app(&counting, 1),
-        "/api/v1/projects?kind=system&limit=1",
+        "/api/v1/projects?membership=true&limit=1",
         Some(session(bob.user_id)),
     )
     .await;
-    let cursor = first["next_cursor"].as_str().expect("a cursor").to_owned();
+    let cursor = page_one["next_cursor"]
+        .as_str()
+        .expect("a cursor")
+        .to_owned();
     let (status, next) = get(
         app(&counting, 1000),
-        &format!("/api/v1/projects?kind=system&cursor={cursor}"),
+        &format!("/api/v1/projects?membership=true&cursor={cursor}"),
         Some(session(bob.user_id)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{next}");
-    for other in ["kind=spec&", "", "membership=true&kind=system&"] {
+    for other in ["state=live&", "", "state=pending_deletion&"] {
         let (status, refused) = get(
             app(&counting, 1000),
             &format!("/api/v1/projects?{other}cursor={cursor}"),

@@ -218,21 +218,6 @@ impl PushRole {
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Spec,
-    System,
-}
-
-impl Kind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Spec => "spec",
-            Self::System => "system",
-        }
-    }
-}
-
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Visibility {
     Private,
     Internal,
@@ -286,9 +271,6 @@ pub enum ProjectCommand {
         display_name: String,
         #[arg(long, value_parser = parse_description)]
         description: Option<String>,
-        /// spec | system (server default: system; fixed at creation).
-        #[arg(long, value_enum)]
-        kind: Option<Kind>,
         /// private | internal (server default: private).
         #[arg(long, value_enum)]
         visibility: Option<Visibility>,

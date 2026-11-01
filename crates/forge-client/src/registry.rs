@@ -43,9 +43,9 @@ const fn arg(
     }
 }
 
-const PROJECT_FIELDS: &str = r#"{"type":"object","required":["id","namespace_id","path","name","display_name","description","visibility","kind","created_at","role"],"properties":{"id":{"type":"integer"},"namespace_id":{"type":"integer"},"path":{"type":"string"},"name":{"type":"string"},"display_name":{"type":"string"},"description":{"type":"string"},"visibility":{"enum":["private","internal"]},"kind":{"enum":["spec","system"]},"created_at":{"type":"string"},"role":{"type":["string","null"]}}}"#;
+const PROJECT_FIELDS: &str = r#"{"type":"object","required":["id","namespace_id","path","name","display_name","description","visibility","created_at","role"],"properties":{"id":{"type":"integer"},"namespace_id":{"type":"integer"},"path":{"type":"string"},"name":{"type":"string"},"display_name":{"type":"string"},"description":{"type":"string"},"visibility":{"enum":["private","internal"]},"created_at":{"type":"string"},"role":{"type":["string","null"]}}}"#;
 const PROJECT_SCHEMA: &str = PROJECT_FIELDS;
-const PROJECT_PAGE_SCHEMA: &str = r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","namespace_id","path","name","display_name","description","visibility","kind","created_at","role"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#;
+const PROJECT_PAGE_SCHEMA: &str = r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","namespace_id","path","name","display_name","description","visibility","created_at","role"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#;
 const GROUP_SCHEMA: &str = r#"{"type":"object","required":["id","namespace_id","parent_id","path","name","display_name","description","created_at","role"],"properties":{"id":{"type":"integer"},"namespace_id":{"type":"integer"},"parent_id":{"type":["integer","null"]},"path":{"type":"string"},"name":{"type":"string"},"display_name":{"type":"string"},"description":{"type":"string"},"created_at":{"type":"string"},"role":{"type":["string","null"]}}}"#;
 const MEMBER_SCHEMA: &str = r#"{"type":"object","required":["user_id","username","display_name","role","active","created_at"],"properties":{"user_id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"role":{"type":"string"},"active":{"type":"boolean"},"created_at":{"type":"string"}}}"#;
 const MOVE_SCHEMA: &str = r#"{"type":"object","required":["id","kind","namespace_id","old_path","path","tombstones","projects","reclaimed_tombstones"],"properties":{"id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"namespace_id":{"type":"integer"},"old_path":{"type":"string"},"path":{"type":"string"},"tombstones":{"type":"integer"},"projects":{"type":"integer"},"reclaimed_tombstones":{"type":"integer"}}}"#;
@@ -141,10 +141,9 @@ pub const COMMANDS: &[CommandSpec] = &[
             arg("--path", "option", true, "The path segment of the new project."),
             arg("--display-name", "option", true, "The display name."),
             arg("--description", "option", false, "A description."),
-            arg("--kind", "option", false, "spec | system (server default system; fixed at creation)."),
             arg("--visibility", "option", false, "private | internal (server default private)."),
         ],
-        examples: &["gstn project create --namespace-id 3 --path app --display-name 'Team app' --kind system"],
+        examples: &["gstn project create --namespace-id 3 --path app --display-name 'Team app'"],
         scopes: &["api"],
         routes: &["POST /api/v1/projects"],
         output: PROJECT_SCHEMA,

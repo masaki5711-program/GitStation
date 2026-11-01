@@ -5,10 +5,6 @@ export function visibilityLabel(t: TFunction, v: string): string {
   return v === 'internal' ? t('visibility.internal') : t('visibility.private');
 }
 
-export function kindLabel(t: TFunction, kind: string): string {
-  return kind === 'spec' ? t('kind.spec') : t('kind.system');
-}
-
 export function roleLabel(t: TFunction, role: string | null): string | null {
   switch (role) {
     case 'guest':

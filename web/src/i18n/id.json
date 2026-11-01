@@ -46,7 +46,6 @@
     "mineEmptyHint": "Buat dengan \"Proyek baru\", atau minta administrator proyek menambahkan Anda.",
     "filter": "Saring menurut nama atau jalur",
     "filterEmpty": "Tidak ada proyek yang cocok.",
-    "specs": "Spesifikasi",
     "groups": "Grup Anda",
     "recent": "Baru dilihat",
     "recentHint": "Hanya diingat di peramban ini."
@@ -74,7 +73,6 @@
     "pathHelp": "Huruf kecil, angka, tanda hubung, titik, dan garis bawah; 1 sampai 64 karakter. Jika diubah nanti, URL ikut berubah.",
     "description": "Deskripsi (opsional)",
     "visibility": "Visibilitas",
-    "kind": "Jenis",
     "nameRequired": "Masukkan nama.",
     "pathInvalid": "Gunakan huruf kecil, angka, tanda hubung, titik, dan garis bawah, diawali dan diakhiri huruf atau angka.",
     "parentRequired": "Pilih tempat membuatnya.",
@@ -85,12 +83,6 @@
     "internal": "Internal",
     "privateHelp": "Hanya anggota yang dapat melihatnya.",
     "internalHelp": "Semua orang yang masuk di dalam perusahaan dapat melihatnya. Hanya anggota yang dapat mengubahnya."
-  },
-  "kind": {
-    "spec": "Spesifikasi",
-    "system": "Sistem",
-    "specHelp": "Untuk dokumen seperti spesifikasi peralatan.",
-    "systemHelp": "Untuk sumber program atau sistem."
   },
   "role": {
     "guest": "Tamu",
@@ -454,83 +446,5 @@
     "restore": "Pulihkan",
     "restoreOf": "Pulihkan {{name}}",
     "title": "Proyek yang dihapus"
-  },
-  "plain": {
-    "spec": "Spesifikasi",
-    "latest": "Terbaru (sedang dikerjakan)",
-    "working": "Versi yang sedang dikerjakan",
-    "confirmed": "Versi yang dikonfirmasi",
-    "version": "Versi"
-  },
-  "portal": {
-    "backToProject": "Kembali ke proyek",
-    "technicalView": "Buka tampilan teknis",
-    "openSpec": "Buka sebagai spesifikasi",
-    "listEmpty": "Belum ada spesifikasi.",
-    "empty": {
-      "title": "Spesifikasi ini belum memiliki isi",
-      "body": "Setelah dokumen ditambahkan, bab dan teksnya muncul di sini."
-    },
-    "versionsTruncated": "Versinya terlalu banyak; hanya sebagian yang dapat ditampilkan.",
-    "showVersion": "Versi yang ditampilkan",
-    "compareWith": "Versi pembanding",
-    "compareNone": "Jangan bandingkan",
-    "show": "Tampilkan",
-    "noConfirmed": "Belum ada versi yang dikonfirmasi. Hanya versi terbaru yang sedang dikerjakan yang dapat ditampilkan.",
-    "confirmedOn": "Dikonfirmasi pada",
-    "message": "Pesan",
-    "newestConfirmed": "Versi terkonfirmasi terbaru",
-    "showing": "Ditampilkan",
-    "open": "Buka",
-    "openOf": "Buka {{name}}",
-    "changes": "Perubahan dari versi sebelumnya",
-    "changesOf": "Perubahan dari versi sebelumnya ({{name}}, dibandingkan dengan {{previous}})",
-    "downloadVersion": "Unduh semua berkas sebagai satu berkas",
-    "downloadVersionOf": "Unduh semua berkas sebagai satu berkas: {{name}}",
-    "listCut": "Hanya {{count}} versi terkonfirmasi terbaru yang ditampilkan.",
-    "versionMissing": {
-      "title": "Versi itu tidak ditemukan",
-      "body": "Versi tersebut tidak ada, atau Anda tidak boleh melihatnya.",
-      "latest": "Buka yang terbaru (sedang dikerjakan)"
-    },
-    "comparing": "Menampilkan perbedaan antara {{from}} dan {{to}}",
-    "viewing": "Versi yang ditampilkan: {{version}}",
-    "differences": "Perbedaan per bab",
-    "chapters": "Bab",
-    "downloadAll": "Unduh seluruh versi ini sebagai satu berkas",
-    "stopComparing": "Berhenti membandingkan",
-    "compareMissing": "Versi pembanding tidak ditemukan, sehingga perbedaan tidak ditampilkan.",
-    "chaptersCut": "Babnya terlalu banyak; hanya yang pertama yang ditampilkan.",
-    "noChapters": "Versi ini tidak memiliki bab yang dapat dibaca.",
-    "chapterList": "Daftar bab",
-    "chapterMissing": "Versi ini tidak memiliki bab tersebut.",
-    "firstChapter": "Buka bab pertama",
-    "downloadChapter": "Unduh bab ini",
-    "readChapter": "Baca bab ini sampai habis",
-    "chapterBinary": "Bab ini tidak dapat ditampilkan sebagai teks ({{size}}). Unduh untuk membukanya.",
-    "chapterCut": "Bab ini panjang, jadi hanya bagian awal yang ditampilkan. Seluruhnya dapat diunduh.",
-    "chapterEmpty": "Bab ini kosong.",
-    "compare": {
-      "unchanged": "Tidak ada perbedaan pada bab ini.",
-      "chapterAdded": "Bab ini baru pada versi ini.",
-      "chapterRemoved": "Bab ini dihapus pada versi ini.",
-      "noText": "Perubahan pada bab ini tidak dapat ditampilkan sebagai teks.",
-      "tooLarge": "Perubahannya terlalu besar untuk ditampilkan.",
-      "nameOnly": "Isinya tidak berubah (hanya namanya atau hal serupa).",
-      "linesLabel": "Baris yang berubah",
-      "gap": "Baris yang tidak berubah dilewati",
-      "addedLine": "Baris ditambahkan: ",
-      "removedLine": "Baris dihapus: ",
-      "rowsCut": "Hanya {{count}} baris pertama yang ditampilkan.",
-      "truncated": "Perbandingannya sangat besar, jadi sebagian perubahan tidak ditampilkan.",
-      "added": "Ditambahkan",
-      "removed": "Dihapus",
-      "changed": "Diubah",
-      "count": "Bab yang berubah: {{count}}",
-      "others": "{{count}} berkas lain yang bukan bab juga berubah.",
-      "legend": "Baris yang ditambahkan ditandai dengan + dan garis bawah; baris yang dihapus ditandai dengan − dan coretan."
-    },
-    "versionsPanel": "Versi dan unduhan",
-    "messageLine": "Pesan: {{message}}"
   }
 }

@@ -78,21 +78,8 @@ export const PROJECT = {
   display_name: 'Forge Web',
   description: 'The web UI',
   visibility: 'internal',
-  kind: 'system',
   created_at: '2026-10-01T00:00:00Z',
   role: 'developer',
-};
-
-export const SPEC = {
-  ...PROJECT,
-  id: 8,
-  path: 'acme/press-spec',
-  name: 'press-spec',
-  display_name: 'Press Spec',
-  description: '',
-  visibility: 'private',
-  kind: 'spec',
-  role: null,
 };
 
 export const GROUP = {

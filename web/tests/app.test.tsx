@@ -91,8 +91,7 @@ describe('CSP: no injected <style> (ADR-0022 §3a)', () => {
     const before = document.querySelectorAll('style').length;
     const server = mockServer({
       ...signedIn(),
-      'GET /api/v1/projects': (c) =>
-        c.query.get('kind') === 'spec' ? page([]) : page([PROJECT]),
+      'GET /api/v1/projects': () => page([PROJECT]),
       'GET /api/v1/groups': () => page([]),
     });
     await renderApp({ fetch: server.fetch });

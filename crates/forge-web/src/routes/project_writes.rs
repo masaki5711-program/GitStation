@@ -33,7 +33,7 @@ use forge_auth::{
     Authorized, LoadedGroup, LoadedParent, LoadedUserNamespace, ParentCtx, ProjectCtx, ResourceCtx,
     UnresolvedCtx, UnresolvedReason, VisibilityChangeCtx,
 };
-use forge_core::{NamespaceId, ProjectId, RepositoryKind, UserId, Visibility};
+use forge_core::{NamespaceId, ProjectId, UserId, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::{NewProjectFields, Parent as HostedParent, Patch};
 use serde::Deserialize;
@@ -73,14 +73,6 @@ impl VisibilityName {
     }
 }
 
-/// A repository kind in a request (ADR-0004; fixed at creation).
-#[derive(Debug, Clone, Copy, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum KindName {
-    Spec,
-    System,
-}
-
 /// `POST /api/v1/projects`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -97,9 +89,6 @@ pub struct CreateProject {
     /// Default `private`.
     #[serde(default)]
     pub visibility: Option<VisibilityName>,
-    /// Default `system`.
-    #[serde(default)]
-    pub kind: Option<KindName>,
 }
 
 /// `PATCH /api/v1/projects/{id}`: at least one field.
@@ -326,10 +315,6 @@ pub async fn create(state: AppState, request: Dispatched<ParentCtx, CreateProjec
             visibility: input
                 .visibility
                 .map_or(Visibility::Private, VisibilityName::visibility),
-            kind: match input.kind {
-                Some(KindName::Spec) => RepositoryKind::Spec,
-                Some(KindName::System) | None => RepositoryKind::System,
-            },
         };
         let created = hosting(&state)?
             .create_project(&write_request(&w), &w.proof, &fields)

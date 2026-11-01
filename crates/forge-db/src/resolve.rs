@@ -29,7 +29,7 @@ use forge_core::ids::{GroupId, NamespaceId, ProjectId, TombstoneId, UserId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
     LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord, ProjectRepository,
-    RepoId, RepositoryKind, RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
+    RepoId, RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -110,8 +110,7 @@ pub(crate) const PROJECT_ACCESS_SQL: &str = concat!(
        a.steps, a.truncs, a.roles, \
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
-       p.display_name, p.description, r.kind AS repository_kind, \
-       r.id AS repository_id, r.state AS repository_state, \
+       p.display_name, p.description, r.id AS repository_id, r.state AS repository_state, \
        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM agg a LEFT JOIN forge.projects p ON p.id = $1 \
      LEFT JOIN forge.namespaces n ON p.id IS NOT NULL AND n.kind = 'project' AND n.owner_id = $1 \
@@ -167,7 +166,6 @@ pub(crate) struct ProjectAccessRow {
     confirmed: Option<bool>,
     display_name: Option<String>,
     description: Option<String>,
-    repository_kind: Option<String>,
     repository_id: Option<i64>,
     repository_state: Option<String>,
     created_at: Option<String>,
@@ -448,7 +446,7 @@ pub async fn project_access(
 /// (`project_without_namespace` / `project_without_repository`), a stored
 /// path that its segments do not confirm (`project_path_unconfirmed`) or
 /// that does not parse (`stored_path_invalid`), and an unknown visibility
-/// or repository kind.
+/// or repository state.
 pub async fn load_project(
     db: &Db,
     project: ProjectId,
@@ -499,14 +497,6 @@ pub(crate) fn interpret_project(
             .with_context("namespace_id", namespace_id)
             .with_context("rule", parse_rule(&e))
     })?;
-    let raw_kind = row
-        .repository_kind
-        .ok_or_else(|| invalid("project_without_repository").with_context("project_id", id))?;
-    let kind = RepositoryKind::parse(&raw_kind).ok_or_else(|| {
-        invalid("unknown_repository_kind")
-            .with_context("project_id", id)
-            .with_context("raw", bounded(&raw_kind))
-    })?;
     // NOT NULL columns of the projects row the statement found.
     let (Some(display_name), Some(description), Some(created_at)) =
         (row.display_name, row.description, row.created_at)
@@ -527,7 +517,6 @@ pub(crate) fn interpret_project(
         path,
         display_name,
         description,
-        kind,
         created_at,
         repository,
     }))

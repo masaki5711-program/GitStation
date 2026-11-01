@@ -7,7 +7,6 @@ import {
   PROJECT,
   REFS_EMPTY,
   SESSION,
-  SPEC,
   apiError,
   mockServer,
   page,
@@ -15,24 +14,23 @@ import {
 } from './mock';
 import { json, renderApp } from './render';
 
-const lists = (mine: unknown[], specs: unknown[] = [], groups: unknown[] = []) => ({
+const lists = (mine: unknown[], groups: unknown[] = []) => ({
   ...signedIn(),
-  'GET /api/v1/projects': (c: { query: URLSearchParams }) =>
-    c.query.get('kind') === 'spec' ? page(specs) : page(mine),
+  'GET /api/v1/projects': () => page(mine),
   'GET /api/v1/groups': () => page(groups),
 });
 
 describe('home', () => {
-  it('shows my projects, specifications and groups in the UI language', async () => {
-    const server = mockServer(lists([PROJECT], [SPEC], [LISTED_GROUP]));
+  it('shows my projects and groups in the UI language', async () => {
+    const server = mockServer(lists([PROJECT], [LISTED_GROUP]));
     await renderApp({ fetch: server.fetch, lang: 'en' });
     expect(await screen.findByRole('heading', { name: 'Your projects' })).toBeTruthy();
     expect(await screen.findByText('Forge Web')).toBeTruthy();
-    expect(await screen.findByText('Press Spec')).toBeTruthy();
     expect(await screen.findByText('Acme Plant')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Specifications' })).toBeTruthy();
     // The main list asks for the projects I hold a role in.
-    const mine = server.to('GET', '/api/v1/projects').find((c) => c.query.get('kind') === null);
+    const mine = server.to('GET', '/api/v1/projects')[0];
+    // ADR-0023: no repository-kind filter is sent.
+    expect(mine?.query.get('kind')).toBeNull();
     expect(mine?.query.get('membership')).toBe('true');
     expect(mine?.headers.get('accept-language')).toBe('en');
     expect(server.unmatched).toEqual([]);
@@ -50,7 +48,6 @@ describe('home', () => {
     await renderApp({ fetch: server.fetch });
     expect(screen.getByText('読み込んでいます…')).toBeTruthy();
     expect(await screen.findByText('あなたがメンバーのプロジェクトはまだありません。')).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: '仕様書' })).toBeNull();
     expect(screen.queryByRole('heading', { name: '自分のグループ' })).toBeNull();
     expect(screen.queryByRole('heading', { name: '最近見たもの' })).toBeNull();
   });
@@ -71,8 +68,7 @@ describe('home', () => {
     let n = 0;
     const server = mockServer({
       ...signedIn(),
-      'GET /api/v1/projects': (c) => {
-        if (c.query.get('kind') === 'spec') return page([]);
+      'GET /api/v1/projects': () => {
         n += 1;
         // A page can be empty while more follow; the last says so.
         return page(n === 1 ? [] : [{ ...PROJECT, id: n, path: `acme/p${n}`, display_name: `P${n}` }], {
@@ -85,7 +81,7 @@ describe('home', () => {
     await renderApp({ fetch: server.fetch });
     expect(await screen.findByText('P2')).toBeTruthy();
     expect(await screen.findByText('P3')).toBeTruthy();
-    const mineCalls = server.to('GET', '/api/v1/projects').filter((c) => c.query.get('kind') === null);
+    const mineCalls = server.to('GET', '/api/v1/projects');
     expect(mineCalls.map((c) => c.query.get('cursor'))).toEqual([null, 'cur1', 'cur2']);
     expect(screen.queryByText(/一部しか表示していません/)).toBeNull();
   });
@@ -94,12 +90,10 @@ describe('home', () => {
     let fail = true;
     const server = mockServer({
       ...signedIn(),
-      'GET /api/v1/projects': (c) =>
-        c.query.get('kind') === 'spec'
-          ? page([])
-          : fail
-            ? apiError(500, '一覧を読めませんでした。', 'req-list-1', 'FG-DB-0001')
-            : page([PROJECT]),
+      'GET /api/v1/projects': () =>
+        fail
+          ? apiError(500, '一覧を読めませんでした。', 'req-list-1', 'FG-DB-0001')
+          : page([PROJECT]),
       'GET /api/v1/groups': () => page([]),
     });
     const { container } = await renderApp({ fetch: server.fetch });
@@ -149,7 +143,9 @@ describe('create a project', () => {
     expect((d.getByLabelText<HTMLInputElement>(/^パス/)).value).toBe('new-one');
     fireEvent.change(d.getByLabelText('説明（省略できます）'), { target: { value: 'hello' } });
     fireEvent.click(d.getByLabelText('社内に公開'));
-    fireEvent.click(d.getByLabelText('仕様書'));
+    // ADR-0023: the form has no kind choice any more.
+    expect(d.queryByLabelText('仕様書')).toBeNull();
+    expect(d.queryByLabelText('システム')).toBeNull();
     fireEvent.click(d.getByRole('button', { name: 'プロジェクトを作る' }));
 
     expect(await screen.findByRole('heading', { name: 'New One' })).toBeTruthy();
@@ -160,7 +156,6 @@ describe('create a project', () => {
       path: 'new-one',
       description: 'hello',
       visibility: 'internal',
-      kind: 'spec',
     });
     expect(post?.headers.get('x-gitstation-csrf')).toBe(SESSION.csrf_token);
     expect(screen.getByTestId('location').textContent).toBe('/acme/new-one');

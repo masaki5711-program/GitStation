@@ -198,7 +198,10 @@ async fn the_project_route_reads_through_the_real_loader() {
     assert_eq!(view["name"], "web");
     assert_eq!(view["display_name"], "Web");
     assert_eq!(view["visibility"], "private");
-    assert_eq!(view["kind"], "system");
+    assert!(
+        view.get("kind").is_none(),
+        "the project view no longer carries a kind (ADR-0023)"
+    );
     assert_eq!(view["role"], "owner");
     assert!(view["created_at"]
         .as_str()

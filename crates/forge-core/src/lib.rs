@@ -51,7 +51,7 @@ pub use push_log::{PushApplied, PushAppliedRef, PUSH_APPLIED_EVENT};
 pub use ref_name::RefName;
 pub use ref_pattern::RefPattern;
 pub use ref_protection::{ProtectionLoader, ProtectionRule, ProtectionRules};
-pub use repository::{RepositoryKind, RepositoryState};
+pub use repository::RepositoryState;
 pub use request_id::RequestId;
 pub use role::{Role, Visibility};
 pub use scope::Scope;

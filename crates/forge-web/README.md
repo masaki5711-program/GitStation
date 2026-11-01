@@ -127,8 +127,8 @@ admitted proof.
   `FG-AUTH-0003`, a token without `read_api` / `api` `FG-AUTH-0002` (on a
   visible project). The body comes from `project_view(proof, record)`, the
   one builder of a project's API shape: `{ id, namespace_id, path, name,
-  display_name, description, visibility, kind, created_at, role }` (`kind`
-  = repository kind, `role` = the caller's effective role or `null`);
+  display_name, description, visibility, created_at, role }` (`role` = the
+  caller's effective role or `null`; there is no `kind` since ADR-0023);
   `Cache-Control: private, no-store`, `Vary: Authorization, Cookie`.
 - Route (M1 phase 8b MR6, `src/routes/users.rs`): `GET|HEAD /api/v1/user`
   (`UserSelfRead`, `read_api`): `{ id, username, display_name, is_admin,
