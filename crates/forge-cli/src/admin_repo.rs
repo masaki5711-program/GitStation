@@ -13,19 +13,24 @@
 //! written (`FG-GIT-0012`, runbook push-record-failed) from their
 //! `forge.git.push_applied` log lines (`forge_core::PushApplied`, the line
 //! forge-web logs before recording). Every line is read and checked before
-//! anything is written; lines of other events are skipped. Each push is
-//! recorded by `forge_db::repositories::record_push` with the **logged**
-//! request id and pusher (the audit row's `actor_label` names the CLI and
-//! the OS account), so the dedup key is the one the original attempt used:
-//! a push already recorded is reported as such and nothing changes, and
-//! the command can be run again after a partial failure. A mutating
-//! command: in production an approved runbook step.
+//! anything is written; lines of other events are skipped. Then every
+//! push is checked against the database (`repositories::check_replay`: the
+//! repository exists, belongs to the logged project, the logged pusher
+//! exists) before the first write. Each push is then recorded in its own
+//! transaction by `forge_db::repositories::replay_push` under the
+//! **logged** request id, so the dedup key is the one the original attempt
+//! used: a push already recorded is reported as such and nothing changes,
+//! and the command can be run again after a partial failure. The actor is
+//! the operator (`system`, `actor_label` naming the CLI and the OS
+//! account); the logged pusher is recorded as `replayed_from`, never as the
+//! actor (the file is not trusted to say who acted). A mutating command:
+//! in production an approved runbook step.
 
 use std::path::Path;
 
 use forge_core::config::DatabaseConfig;
 use forge_core::ids::{ProjectId, RepoId};
-use forge_core::{PushApplied, PushRecord, PushRecorded, Pusher, RequestId};
+use forge_core::{PushApplied, PushRecord, PushRecorded, PushReplay, Pusher, RequestId};
 use forge_db::repositories::{self, Reprovisioned};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
@@ -151,12 +156,28 @@ pub(crate) async fn record_push_with(
     text: &str,
 ) -> Result<String, ForgeError> {
     let pushes = pushes_in(text)?;
-    let label = context(request_id).actor_label;
+    let replay_of = |pusher: &Pusher| PushReplay {
+        pusher: pusher.user,
+        credential_id: pusher.credential_id,
+    };
+    // All or nothing up to the first write: every line must name an
+    // existing repository of its logged project and an existing pusher.
+    for (n, (pusher, logged_project, push)) in pushes.iter().enumerate() {
+        repositories::check_replay(db, *logged_project, replay_of(pusher), push)
+            .await
+            .map_err(|e| {
+                e.with_context("push", n + 1)
+                    .with_context("push_request_id", &pusher.request_id)
+            })?;
+    }
+    // The operator acts (system + the CLI's label); the logged pusher goes
+    // into the record as `replayed_from`.
+    let operator = context(request_id);
     let mut out = String::new();
     for (pusher, logged_project, push) in &pushes {
-        let mut ctx = repositories::push_context(pusher);
-        ctx.actor_label = label.clone(); // clone: one label for every replayed push
-        let done = repositories::record_push(db, &ctx, push)
+        let mut ctx = operator.clone(); // clone: one operator context per replayed push
+        ctx.request_id = pusher.request_id.clone(); // clone: the logged id keys the record
+        let done = repositories::replay_push(db, &ctx, *logged_project, replay_of(pusher), push)
             .await
             .map_err(|e| e.with_context("push_request_id", &pusher.request_id))?;
         let outcome = match done {

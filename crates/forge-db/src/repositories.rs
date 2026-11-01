@@ -37,8 +37,8 @@ use std::time::Duration;
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, Pusher, RepositoryKind,
-    RepositoryState, RequestId,
+    AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, PushReplay, Pusher,
+    RepositoryKind, RepositoryState, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
@@ -774,20 +774,77 @@ async fn repository_project(
     project.map(ProjectId::new).ok_or_else(|| not_found(repo))
 }
 
+/// `FG-GIT-0012 reason=push_log_invalid` for a replayed log line that does
+/// not match the database (`field` names what).
+fn replay_mismatch(field: &'static str, repo: RepoId) -> ForgeError {
+    ForgeError::new(ErrorCode::PushRecordFailed)
+        .with_context("reason", "push_log_invalid")
+        .with_context("field", field)
+        .with_context("repo_id", repo.get())
+}
+
+/// What a replayed log line claims, checked against the database: the
+/// repository exists (`FG-REPO-0005`), belongs to `logged_project`
+/// (`push_log_invalid field=project_id`) and the logged pusher is a user
+/// (`push_log_invalid field=user_id`). One statement.
+async fn check_replay_on<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    repo: RepoId,
+) -> Result<ProjectId, ForgeError> {
+    let row: Option<(i64, bool)> = sqlx::query_as(
+        "SELECT r.project_id, EXISTS (SELECT 1 FROM forge.users AS u WHERE u.id = $2) \
+         FROM forge.repositories AS r WHERE r.id = $1",
+    )
+    .bind(repo.get())
+    .bind(replay.pusher.get())
+    .fetch_optional(executor)
+    .await
+    .map_err(|e| query_error("repositories.replay_push.check", e))?;
+    let Some((project, user_exists)) = row else {
+        return Err(not_found(repo));
+    };
+    if project != logged_project.get() {
+        return Err(replay_mismatch("project_id", repo));
+    }
+    if !user_exists {
+        return Err(replay_mismatch("user_id", repo));
+    }
+    Ok(ProjectId::new(project))
+}
+
+/// The replay's checks ([`replay_push`]) without writing: the CLI runs it
+/// for every logged push before the first write, so a file with one
+/// mismatching line writes nothing.
+pub async fn check_replay(
+    db: &Db,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    push: &PushRecord,
+) -> Result<(), ForgeError> {
+    push.check()?;
+    db.within("repositories.replay_push.check", async {
+        check_replay_on(db.write_pool(), logged_project, replay, push.repository_id).await
+    })
+    .await
+    .map(|_| ())
+}
+
 /// Record one applied push (M1 phase 9 MR2, ADR-0008, ADR-0016 §5 / §6):
 /// git has updated the refs already, so this writes no state — one
 /// `repository.pushed` audit row on (`project`, the repository's project)
 /// with `project_id` set, and one `repository.pushed` event (integration
 /// class, aggregate `repository` / id, the same project) with dedup key
 /// [`push_dedup_key`], in one `ChangeTx`. The details and the payload are
-/// [`forge_core::push::push_json`] of the updates sorted by ref name, at
-/// most 100 refs and 20 commits per ref within their byte budgets, with
-/// `total_refs` / `total_commits` and explicit `refs_truncated` /
-/// `commits_truncated`. A key already recorded is
-/// [`PushRecorded::Deduped`]: nothing is written.
+/// [`forge_core::push::push_json`] of the updates (force and delete refs
+/// first), at most 100 refs and 20 commits per ref within their byte
+/// budgets, with per-kind counts, `total_refs` / `total_commits` and
+/// explicit `refs_truncated` / `commits_truncated`. A key already recorded
+/// is [`PushRecorded::Deduped`]: nothing is written.
 ///
-/// `ctx.request_id` is the push request's id (part of the key): the
-/// replay (`forge admin repo record-push`) passes the logged one.
+/// `ctx` is the push's own ([`push_context`]: actor = the pusher,
+/// `ctx.request_id` = the push request's id, part of the key).
 ///
 /// Errors (nothing is written): `FG-DB-0010 reason=invalid_push_record`
 /// (`PushRecord::check`), `FG-REPO-0005` (`resource=repository`) for an
@@ -797,15 +854,48 @@ pub async fn record_push(
     ctx: &ChangeContext,
     push: &PushRecord,
 ) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, None).await
+}
+
+/// Record a push from its `forge.git.push_applied` log line (the runbook
+/// replay, `forge admin repo record-push`). `ctx` is the operator's (actor
+/// `system`, `actor_label` naming the CLI and the OS account) with
+/// `ctx.request_id` = the **logged** push request id, so the dedup key is
+/// the original attempt's and an already recorded push is `Deduped`. The
+/// logged pusher is not trusted as the actor: it goes into the details and
+/// the payload as `replayed_from`. Inside the change, [`check_replay`]'s
+/// checks run first: the repository's project must be `logged_project` and
+/// the pusher must exist (`FG-GIT-0012 reason=push_log_invalid` with
+/// `field` = `project_id` / `user_id`), else nothing is written.
+pub async fn replay_push(
+    db: &Db,
+    ctx: &ChangeContext,
+    logged_project: ProjectId,
+    replay: PushReplay,
+    push: &PushRecord,
+) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, Some((logged_project, replay))).await
+}
+
+async fn record(
+    db: &Db,
+    ctx: &ChangeContext,
+    push: &PushRecord,
+    replay: Option<(ProjectId, PushReplay)>,
+) -> Result<PushRecorded, ForgeError> {
     push.check()?;
     let dedup_key = push_dedup_key(&ctx.request_id, push)?;
     let repo = push.repository_id;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let project_id = tx.step(|c| repository_project(c, repo)).await?;
+    let project_id = match replay {
+        None => tx.step(|c| repository_project(c, repo)).await?,
+        Some((logged, who)) => tx.step(|c| check_replay_on(c, logged, who, repo)).await?,
+    };
     let details = AuditDetails::RepositoryPushed {
         project_id,
         repository_id: repo,
         updates: push.sorted_updates(),
+        replayed_from: replay.map(|(_, who)| who),
     };
     let event_type = details
         .event_type()

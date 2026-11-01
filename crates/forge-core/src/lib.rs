@@ -37,7 +37,7 @@ pub use namespace_resolver::{
     ProjectRecord, Resolution, Resolved, ResolvedTarget,
 };
 pub use push::{
-    ObjectId, PushRecord, PushRecorded, PushRecorder, PushUpdateKind, PushedRef, Pusher,
+    ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedRef, Pusher,
 };
 pub use push_log::{PushApplied, PushAppliedRef, PUSH_APPLIED_EVENT};
 pub use ref_name::RefName;

@@ -4,7 +4,8 @@
 //! connection.
 
 use forge_core::{
-    EventType, ObjectId, PushRecorder, PushUpdateKind, PushedRef, RefName, UserId, VisibilityClass,
+    EventType, ObjectId, PushRecorder, PushReplay, PushUpdateKind, PushedRef, RefName, UserId,
+    VisibilityClass,
 };
 use forge_errors::ErrorCode;
 use sqlx::postgres::PgConnection;
@@ -162,16 +163,26 @@ async fn every_push_writes_one_audit_row_and_one_event() {
             )
         })
         .collect();
-    // Sorted by ref name, each update classified.
+    // Each update classified; force and delete first, then create and
+    // fast-forward.
     assert_eq!(
         refs,
         [
-            ("refs/heads/main", "fast_forward"),
-            ("refs/heads/old", "delete"),
             ("refs/heads/rewrite", "force"),
+            ("refs/heads/old", "delete"),
             ("refs/tags/v1", "create"),
+            ("refs/heads/main", "fast_forward"),
         ]
     );
+    for (key, n) in [
+        ("created", 1),
+        ("fast_forward", 1),
+        ("forced", 1),
+        ("deleted", 1),
+    ] {
+        assert_eq!(details[key], n, "{key}");
+    }
+    assert_eq!(details["replayed_from"], serde_json::Value::Null);
     let source: (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT host(source_ip), user_agent FROM forge.audit_log WHERE action = 'repository.pushed'",
     )
@@ -392,5 +403,80 @@ async fn an_invalid_or_unknown_push_writes_nothing() {
     let mut su = t.superuser().await;
     assert!(audit_rows(&mut su).await.is_empty());
     assert!(event_rows(&mut su).await.is_empty());
+    t.drop_now().await;
+}
+
+/// The runbook replay: the actor is the operator (`system` with the CLI's
+/// label), the logged pusher is `replayed_from`; a logged project or pusher
+/// that does not match the database is refused before anything is written.
+#[tokio::test]
+async fn a_replay_names_the_operator_and_checks_the_log_against_the_database() {
+    let t = FreshDb::migrated().await;
+    let (p, fred) = project(&t, "fred").await;
+    let (other, _) = project(&t, "gina").await;
+    let push = PushRecord {
+        repository_id: p.repository_id,
+        updates: vec![update(
+            "refs/heads/main",
+            'a',
+            'b',
+            PushUpdateKind::FastForward,
+        )],
+    };
+    let mut ctx = ChangeContext::new(Actor::System, rid("req-push-logged"));
+    ctx.actor_label = Some("forge-cli:operator".to_owned());
+    let who = PushReplay {
+        pusher: fred,
+        credential_id: Some(42),
+    };
+    // Another project than the repository's, an unknown pusher.
+    for (project_id, replay, field) in [
+        (other.project_id, who, "project_id"),
+        (
+            p.project_id,
+            PushReplay {
+                pusher: UserId::new(987_654),
+                credential_id: None,
+            },
+            "user_id",
+        ),
+    ] {
+        let err = check_replay(&t.db, project_id, replay, &push)
+            .await
+            .expect_err(field);
+        assert_reason(&err, ErrorCode::PushRecordFailed, "push_log_invalid");
+        assert!(err.to_string().contains(&format!("field={field}")), "{err}");
+        let err = replay_push(&t.db, &ctx, project_id, replay, &push)
+            .await
+            .expect_err(field);
+        assert!(err.to_string().contains(&format!("field={field}")), "{err}");
+    }
+    let mut su = t.superuser().await;
+    assert!(audit_rows(&mut su).await.is_empty());
+    check_replay(&t.db, p.project_id, who, &push)
+        .await
+        .expect("matches");
+    let done = replay_push(&t.db, &ctx, p.project_id, who, &push)
+        .await
+        .expect("replayed");
+    assert_eq!(done, PushRecorded::Recorded);
+    let audits = audit_rows(&mut su).await;
+    assert_eq!(audits.len(), 1);
+    let (actor_kind, actor_user, _, _, _, request, details) = &audits[0];
+    assert_eq!(actor_kind, "system");
+    assert_eq!(*actor_user, None);
+    assert_eq!(request, "req-push-logged");
+    assert_eq!(
+        details["replayed_from"],
+        serde_json::json!({ "user_id": fred.get(), "credential_id": 42 })
+    );
+    let events = event_rows(&mut su).await;
+    assert_eq!(events[0].7["replayed_from"]["user_id"], fred.get());
+    // The live push of the same request id and updates is the same key.
+    let live = push_context(&pusher(fred, "req-push-logged"));
+    assert_eq!(
+        record_push(&t.db, &live, &push).await.expect("live"),
+        PushRecorded::Deduped
+    );
     t.drop_now().await;
 }

@@ -14,7 +14,7 @@ push の ref の更新は git が行い、DB のトランザクションには�
 - ログに `error_code=FG-GIT-0012` が出た
   - `reason=record_failed`: `record_push` がすべての試行で失敗した。`repo_id`、`refs`、`attempts`、`cause_code`（最後の失敗のコード）、
     `request_id`（push の要求のもの）
-  - `reason=push_log_invalid`（`field`、`line`）/ `push_log_empty` / `push_log_unreadable` / `push_log_too_large`:
+  - `reason=push_log_invalid`（`field`、`line` または `push`。`field=project_id` / `user_id` はログと DB の不一致）/ `push_log_empty` / `push_log_unreadable` / `push_log_too_large`:
     下の Mitigate 2 の `forge admin repo record-push` が、渡されたファイルを使えなかった（push はまだ記録されていない）
 
 ## Impact
@@ -62,10 +62,18 @@ push の ref の更新は git が行い、DB のトランザクションには�
    - **冪等**: 重複除去の鍵は `repository_pushed:<repo_id>:<sha256(request_id ‖ 名前順の ref の更新)>` で、ログに残った
      request_id から作る。同じファイルを何度実行しても 1 件しか記録されない。途中で失敗したら、原因を直して同じファイルで
      もう一度実行してよい（記録済みのものは `already recorded` になる）。
-   - 監査の行の行者は push した利用者（`user`、ログの `user_id`）、`request_id` は push の要求のもの、`actor_label` は
-     `forge-cli:<OS のアカウント>`（再投入した人）。CLI 自身の `request_id` は CLI のログ `forge.admin.repo.push_recorded` にある。
-   - ファイルの中の push の行は、書き込む前にすべて読んで確かめる。1 行でも読めなければ何も書かない
-     （`FG-GIT-0012 reason=push_log_invalid`、`field` と `line`）。
+   - **行者は再投入した運用者**: 監査の行・イベントの行者は `system`、`actor_label` は `forge-cli:<OS のアカウント>`。
+     ファイルの中身は信用しないので、ログに書かれた push した利用者は行者にせず、詳細とペイロードの
+     `replayed_from: {user_id, credential_id}` に入れる。`request_id` は push の要求のもの（ログの行と結び付く）。
+     CLI 自身の `request_id` は CLI のログ `forge.admin.repo.push_recorded`（`push_request_id` も持つ）にある。
+   - **書く前にすべて確かめる**: まずファイルの中の push の行をすべて読んで確かめ（1 行でも読めなければ
+     `FG-GIT-0012 reason=push_log_invalid`、`field` と `line`）、次にすべての push を DB と照合する
+     （リポジトリが存在する — 無ければ `FG-REPO-0005`、リポジトリのプロジェクトがログの `project_id` と同じ — 違えば
+     `push_log_invalid field=project_id`、ログの `user_id` の利用者が存在する — 無ければ `field=user_id`。`push` = 何番目の push か）。
+     ここまでで 1 件でも失敗すれば何も書かない。
+   - **書き込みは push ごとに 1 つのトランザクション**: 照合の後、push を 1 件ずつ記録する。途中で DB が落ちるなどして
+     失敗すると、それより前の push は記録済み、後のものは未記録のまま残る（ファイル全体の 1 トランザクションではない）。
+     そのまま同じファイルでもう一度実行すれば、記録済みのものは `already recorded` になり、残りだけが記録される。
 3. 手で `forge.audit_log` / `forge.events` に INSERT しない（封印と連携の順序が壊れる）。ログの行を手で書き換えない
    （`request_id` や ref を変えると別の push として記録される）。
 
@@ -77,6 +85,9 @@ push の ref の更新は git が行い、DB のトランザクションには�
 
 ## Escalate
 
+- `push_log_invalid field=project_id` / `user_id`: ログの行が別のリポジトリ・利用者を指している（行の取り違え、
+  手で書き換えたファイル、ID の巻き戻った復元）。そのまま記録しない。正しい行かを確かめ、分からなければセキュリティの
+  事案として扱う。
 - `cause_code=FG-DB-0010 reason=invalid_push_record`、または `push_log_invalid` が続く: forge-web の不具合。
   ログの行（ref の名前を含む。社外に出さない）と `rule` / `field` を添えて開発者に渡す。
 - `forge.git.push_applied` の行が見つからない（ログの保持期間を過ぎた、ログが欠けた）: 再投入できない。どの push が

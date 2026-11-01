@@ -775,9 +775,12 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   だけ（forge-web は `forge_core::PushRecorder` を通して呼ぶ。forge-db に依存しない）。git が ref を更新した後に、状態の表は書かず、
   監査の行 `repository.pushed`（リソース `project` / そのリポジトリのプロジェクトの ID、`project_id` あり、行者は push した利用者）と
   イベント `repository.pushed`（集約 `repository` / `repositories.id`、同じ `project_id`）を 1 つの `ChangeTx` で書く。
-- **ペイロード**: `forge_core::push::push_json`。`{project_id, repository_id, total_refs, refs_truncated, total_commits,
-  commits_truncated, refs: [{ref, old, new, kind, total_commits, commits, commits_truncated}]}`。`kind` は `create` /
-  `fast_forward` / `force` / `delete`。ref は名前順に最大 100 件、コミットは ref ごとに最大 20 件（§5 の上限）。
+- **ペイロード**: `forge_core::push::push_json`。`{project_id, repository_id, total_refs, refs_truncated, created, fast_forward,
+  forced, deleted, total_commits, commits_truncated, replayed_from, refs: [{ref, old, new, kind, total_commits, commits,
+  commits_truncated}]}`。`kind` は `create` / `fast_forward` / `force` / `delete`。種類ごとの件数は一覧に載らなかった分も含む。
+  ref は最大 100 件、コミットは ref ごとに最大 20 件（§5 の上限）。並びは `force`、`delete`、`create`、`fast_forward` の順
+  （それぞれの中は名前順）で、切り詰めても履歴の書き換えと削除が残る（データベースのレビューの MEDIUM）。
+  `replayed_from` は再投入のときだけ `{user_id, credential_id}`、それ以外は `null`。
   §5 の「64 KiB を超えたら FG-DB-0010 で書き込みを失敗させる」は、push については **失敗させずに切り詰める** に改める:
   ref の名前は 1024 バイトまで許されるので、100 件 × 20 コミットは 64 KiB に収まらないことがある。書き込みを失敗させると
   push の記録そのものが失われる（ref は既に更新済み）ので、決まったバイト数の中で組み立て（イベントは 48 KiB、監査の詳細は
@@ -794,8 +797,15 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
     （テスト `aba_pushes_are_three_events`）。
   - **再試行と再投入は 1 件**: 同じ要求の再試行（MR4 の 3 回）と、Runbook `push-record-failed` の再投入
     （`forge admin repo record-push --from-log`）は、ログの `forge.git.push_applied` の行に残った request_id をそのまま使うので
-    同じ鍵になり、既に記録されていれば `Deduped`（何も書かない）。再投入の監査の行は、行者が push した利用者、`request_id` が
-    push の要求のもの、`actor_label` が `forge-cli:<OS のアカウント>`。
+    同じ鍵になり、既に記録されていれば `Deduped`（何も書かない）。
+  - **再投入の行者は運用者**（データベースのレビューの MEDIUM）: ファイルは検証されていない入力なので、ログに書かれた
+    利用者を行者にしない。`repositories::replay_push` の監査の行とイベントの行者は `system`、`actor_label` は
+    `forge-cli:<OS のアカウント>`、`request_id` は push の要求のもの。元の push した利用者は `replayed_from: {user_id,
+    credential_id}` に入れる。通常の push（MR4）の行者は push した利用者（`Actor::User`）のまま。
+  - **再投入の照合**: 変更の中で、リポジトリのプロジェクトがログの `project_id` と同じこと、ログの `user_id` の利用者が
+    存在することを確かめ、違えば `FG-GIT-0012 reason=push_log_invalid`（`field` = `project_id` / `user_id`）で何も書かない。
+    CLI は書く前にファイルのすべての push を同じ照合（`repositories::check_replay`）にかける。書き込みは push ごとに 1 つの
+    変更なので、途中で失敗したら同じファイルで再実行する（記録済みのものは `Deduped`）。
 - **`forge.git.push_applied`**: forge-web が git の終了後、記録の前に必ず出すログの行の形は `forge_core::PushApplied`（serde の型、
   版 `v = 1`、未知の項目は拒否）で定め、書く側（`PushApplied::log`）と読む側（`PushApplied::from_log_line`）が同じ型を使う。
   記録が書けなければ `FG-GIT-0012` PushRecordFailed（alert、Runbook `push-record-failed`、`PushRecord::failed`）。

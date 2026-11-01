@@ -20,7 +20,7 @@ git updated the refs of a push (outside any database transaction, ADR-0008), but
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`, `repo_id`, `refs` (updates in the push), `attempts`, `cause_code` (the code of the last failure: FG-DB-0001 unreachable, FG-DB-0002 query failed or timed out, FG-DB-0010 the record was refused) and the push's `request_id`. The same request id has one earlier `event=forge.git.push_applied` line (info) with the full ref list in `push`: that line is the replay input. Check the database first (forge doctor, runbook db-unavailable). For push_log_*: `field` names the part of the line that did not parse (the value is not logged).
+The log event carries `reason`, `repo_id`, `refs` (updates in the push), `attempts`, `cause_code` (the code of the last failure: FG-DB-0001 unreachable, FG-DB-0002 query failed or timed out, FG-DB-0010 the record was refused) and the push's `request_id`. The same request id has one earlier `event=forge.git.push_applied` line (info) with the full ref list in `push`: that line is the replay input. Check the database first (forge doctor, runbook db-unavailable). For push_log_*: `field` names the part of the line that did not parse (the value is not logged), with `line`; `field=project_id` / `user_id` (with `push`, the push's position in the file) means the line names a repository of another project or a pusher that does not exist — the replay checks every push against the database before the first write and writes nothing then.
 
 ## 対処 (fix)
 

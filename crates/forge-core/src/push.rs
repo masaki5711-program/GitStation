@@ -47,7 +47,7 @@ pub const AUDIT_BUDGET: usize = 6 * 1024;
 pub const EVENT_BUDGET: usize = 48 * 1024;
 /// What the top-level fields of [`push_json`] take at most (counted
 /// against the budget before any ref).
-const HEADER_BYTES: usize = 256;
+const HEADER_BYTES: usize = 512;
 
 /// A git object name: 40 (SHA-1) or 64 (SHA-256) lowercase hex digits.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -254,27 +254,54 @@ fn ref_entry(u: &PushedRef, listed: usize) -> serde_json::Value {
     })
 }
 
+/// The original pusher of a push recorded by the runbook replay (`forge
+/// admin repo record-push`): the replay's actor is the operator, the
+/// pusher named by the log line goes into the JSON as `replayed_from`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PushReplay {
+    pub pusher: UserId,
+    pub credential_id: Option<i64>,
+}
+
+/// The listing order of the kinds: the history-rewriting and removing
+/// updates first, so they survive truncation.
+fn listing_rank(kind: PushUpdateKind) -> u8 {
+    match kind {
+        PushUpdateKind::Force => 0,
+        PushUpdateKind::Delete => 1,
+        PushUpdateKind::Create => 2,
+        PushUpdateKind::FastForward => 3,
+    }
+}
+
 /// The JSON of a push, built within `budget` serialized bytes:
 /// `{"project_id","repository_id","total_refs","refs_truncated",
-/// "total_commits","commits_truncated","refs":[{"ref","old","new","kind",
-/// "total_commits","commits","commits_truncated"}]}`. `updates` are listed
-/// in the given order (sorted by name: [`PushRecord::sorted_updates`]), at
-/// most [`MAX_LISTED_REFS`], each with at most [`MAX_LISTED_COMMITS`]
-/// commits; a ref that does not fit with its commits is listed without
-/// them, and the list stops at the first ref that does not fit at all.
-/// What is left out is always stated: `refs_truncated` (fewer refs than
-/// `total_refs`) and `commits_truncated` (fewer commits than
-/// `total_commits`, per ref and overall).
+/// "created","fast_forward","forced","deleted","total_commits",
+/// "commits_truncated","replayed_from","refs":[{"ref","old","new","kind",
+/// "total_commits","commits","commits_truncated"}]}`. The four kind counts
+/// cover every update (listed or not); `replayed_from` is
+/// `{"user_id","credential_id"}` of the original pusher for a replayed
+/// push, else `null`. Refs are listed force first, then delete, create,
+/// fast-forward, each group in the given order (pass them sorted by name:
+/// [`PushRecord::sorted_updates`]), at most [`MAX_LISTED_REFS`], each with
+/// at most [`MAX_LISTED_COMMITS`] commits; a ref that does not fit with its
+/// commits is listed without them, and the list stops at the first ref
+/// that does not fit at all. What is left out is always stated:
+/// `refs_truncated` (fewer refs than `total_refs`) and `commits_truncated`
+/// (fewer commits than `total_commits`, per ref and overall).
 pub fn push_json(
     project: ProjectId,
     repository: RepoId,
     updates: &[PushedRef],
+    replayed_from: Option<PushReplay>,
     budget: usize,
 ) -> serde_json::Value {
+    let mut ordered: Vec<&PushedRef> = updates.iter().collect();
+    ordered.sort_by_key(|u| listing_rank(u.kind)); // stable: name order stays within a kind
     let mut used = HEADER_BYTES;
     let mut refs = Vec::new();
     let mut listed_commits: u64 = 0;
-    for u in updates.iter().take(MAX_LISTED_REFS) {
+    for u in ordered.into_iter().take(MAX_LISTED_REFS) {
         let listed = u.commits.len().min(MAX_LISTED_COMMITS);
         let full = ref_entry(u, listed);
         let size = full.to_string().len() + 1;
@@ -293,13 +320,22 @@ pub fn push_json(
         refs.push(bare);
     }
     let total_commits: u64 = updates.iter().map(|u| u.total_commits).sum();
+    let count = |kind| updates.iter().filter(|u| u.kind == kind).count();
     serde_json::json!({
         "project_id": project.get(),
         "repository_id": repository.get(),
         "total_refs": updates.len(),
         "refs_truncated": refs.len() < updates.len(),
+        "created": count(PushUpdateKind::Create),
+        "fast_forward": count(PushUpdateKind::FastForward),
+        "forced": count(PushUpdateKind::Force),
+        "deleted": count(PushUpdateKind::Delete),
         "total_commits": total_commits,
         "commits_truncated": listed_commits < total_commits,
+        "replayed_from": replayed_from.map(|r| serde_json::json!({
+            "user_id": r.pusher.get(),
+            "credential_id": r.credential_id,
+        })),
         "refs": refs,
     })
 }

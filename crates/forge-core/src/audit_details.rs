@@ -3,7 +3,7 @@
 
 use crate::event_type::EventType;
 use crate::ids::{NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
-use crate::push::{push_json, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
+use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
@@ -150,6 +150,9 @@ pub enum AuditDetails {
         project_id: ProjectId,
         repository_id: RepoId,
         updates: Vec<PushedRef>,
+        /// The original pusher when the runbook replay recorded it (the
+        /// row's actor is then the operator).
+        replayed_from: Option<PushReplay>,
     },
 }
 
@@ -384,7 +387,14 @@ impl AuditDetails {
                 project_id,
                 repository_id,
                 updates,
-            } => push_json(*project_id, *repository_id, updates, AUDIT_BUDGET),
+                replayed_from,
+            } => push_json(
+                *project_id,
+                *repository_id,
+                updates,
+                *replayed_from,
+                AUDIT_BUDGET,
+            ),
         }
     }
 
@@ -397,7 +407,14 @@ impl AuditDetails {
                 project_id,
                 repository_id,
                 updates,
-            } => push_json(*project_id, *repository_id, updates, EVENT_BUDGET),
+                replayed_from,
+            } => push_json(
+                *project_id,
+                *repository_id,
+                updates,
+                *replayed_from,
+                EVENT_BUDGET,
+            ),
             Self::UserCreated { .. }
             | Self::UserDisabled { .. }
             | Self::AdminBootstrapped { .. }

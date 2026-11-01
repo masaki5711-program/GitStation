@@ -151,7 +151,7 @@ mod record_push {
 
     async fn pushed_rows(t: &FreshDb) -> Vec<serde_json::Value> {
         t.json_rows(
-            "SELECT actor_kind, actor_user_id, request_id, actor_label FROM forge.audit_log \
+            "SELECT actor_kind, actor_user_id, request_id, actor_label, details FROM forge.audit_log \
              WHERE action = 'repository.pushed' ORDER BY id",
         )
         .await
@@ -192,8 +192,10 @@ mod record_push {
         let rows = pushed_rows(&t).await;
         assert_eq!(rows.len(), 1, "{rows:?}");
         let row = &rows[0];
-        assert_eq!(row["actor_kind"], "user");
-        assert_eq!(row["actor_user_id"], owner);
+        // The operator acts; the logged pusher is `replayed_from`.
+        assert_eq!(row["actor_kind"], "system");
+        assert_eq!(row["actor_user_id"], serde_json::Value::Null);
+        assert_eq!(row["details"]["replayed_from"]["user_id"], owner);
         // The logged request id: the audit row joins the push's log lines.
         assert_eq!(row["request_id"], "req-push-lost");
         assert!(
@@ -224,6 +226,52 @@ mod record_push {
         assert!(err.to_string().contains("line=2"), "{err}");
         // Checked before anything is written: the good line was not recorded.
         assert!(pushed_rows(&t).await.is_empty());
+        // A line whose project is not the repository's, after a good one:
+        // checked against the database before the first write.
+        let owner = t
+            .json_rows("SELECT id FROM forge.users WHERE username = 'sven'")
+            .await[0]["id"]
+            .as_i64()
+            .expect("owner");
+        let good = push_line(
+            p.repository_id,
+            p.project_id,
+            UserId::new(owner),
+            "req-push-a",
+        );
+        let wrong_project = push_line(
+            p.repository_id,
+            ProjectId::new(p.project_id.get() + 1000),
+            UserId::new(owner),
+            "req-push-b",
+        );
+        let err = record_push_with(&t.db, &cli, &format!("{good}\n{wrong_project}\n"))
+            .await
+            .expect_err("project mismatch");
+        assert_reason(&err, ErrorCode::PushRecordFailed, "push_log_invalid");
+        assert!(err.to_string().contains("field=project_id"), "{err}");
+        assert!(err.to_string().contains("push=2"), "{err}");
+        let unknown_repo = push_line(
+            RepoId::new(987_654),
+            p.project_id,
+            UserId::new(owner),
+            "req-push-c",
+        );
+        let err = record_push_with(&t.db, &cli, &format!("{good}\n{unknown_repo}\n"))
+            .await
+            .expect_err("unknown repository");
+        assert_eq!(err.code(), ErrorCode::NotFound);
+        let unknown_user = push_line(
+            p.repository_id,
+            p.project_id,
+            UserId::new(987_654),
+            "req-push-d",
+        );
+        let err = record_push_with(&t.db, &cli, &unknown_user)
+            .await
+            .expect_err("unknown pusher");
+        assert!(err.to_string().contains("field=user_id"), "{err}");
+        assert!(pushed_rows(&t).await.is_empty(), "nothing written");
         let missing = std::env::temp_dir().join("forge-no-such-push-log-file");
         let err = read_log(&missing).expect_err("missing");
         assert_reason(&err, ErrorCode::PushRecordFailed, "push_log_unreadable");

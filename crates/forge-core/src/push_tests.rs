@@ -226,6 +226,7 @@ fn the_json_lists_refs_and_commits_and_says_what_it_left_out() {
         ProjectId::new(3),
         push.repository_id,
         &push.sorted_updates(),
+        None,
         EVENT_BUDGET,
     );
     assert_eq!(v["project_id"], 3);
@@ -234,14 +235,104 @@ fn the_json_lists_refs_and_commits_and_says_what_it_left_out() {
     assert_eq!(v["refs_truncated"], false);
     assert_eq!(v["total_commits"], 35);
     assert_eq!(v["commits_truncated"], true);
+    assert_eq!(v["created"], 0);
+    assert_eq!(v["fast_forward"], 1);
+    assert_eq!(v["forced"], 0);
+    assert_eq!(v["deleted"], 1);
+    assert_eq!(v["replayed_from"], serde_json::Value::Null);
+    // The delete is listed before the fast-forward.
     let refs = v["refs"].as_array().expect("refs");
-    assert_eq!(refs[0]["ref"], "refs/heads/main");
-    assert_eq!(refs[0]["kind"], "fast_forward");
-    assert_eq!(refs[0]["commits"].as_array().map(Vec::len), Some(20));
-    assert_eq!(refs[0]["commits_truncated"], true);
-    assert_eq!(refs[1]["ref"], "refs/heads/old");
-    assert_eq!(refs[1]["kind"], "delete");
-    assert_eq!(refs[1]["commits_truncated"], false);
+    assert_eq!(refs[0]["ref"], "refs/heads/old");
+    assert_eq!(refs[0]["kind"], "delete");
+    assert_eq!(refs[0]["commits_truncated"], false);
+    assert_eq!(refs[1]["ref"], "refs/heads/main");
+    assert_eq!(refs[1]["kind"], "fast_forward");
+    assert_eq!(refs[1]["commits"].as_array().map(Vec::len), Some(20));
+    assert_eq!(refs[1]["commits_truncated"], true);
+}
+
+/// Force and delete updates are listed first (each kind in name order), so
+/// truncation drops creates and fast-forwards before them; the kind counts
+/// cover every update.
+#[test]
+fn force_and_delete_refs_survive_truncation() {
+    let mut updates: Vec<PushedRef> = (0..150)
+        .map(|i| {
+            update(
+                &format!("refs/heads/a{i:03}"),
+                zero(),
+                oid('a'),
+                PushUpdateKind::Create,
+            )
+        })
+        .collect();
+    updates.extend((0..40).map(|i| {
+        update(
+            &format!("refs/heads/f{i:03}"),
+            oid('a'),
+            oid('b'),
+            PushUpdateKind::FastForward,
+        )
+    }));
+    for n in ["refs/heads/z2", "refs/heads/z1"] {
+        updates.push(update(n, oid('a'), oid('c'), PushUpdateKind::Force));
+    }
+    updates.push(update(
+        "refs/heads/y",
+        oid('a'),
+        zero(),
+        PushUpdateKind::Delete,
+    ));
+    let push = record(updates);
+    push.check().expect("valid");
+    let replay = PushReplay {
+        pusher: UserId::new(11),
+        credential_id: Some(5),
+    };
+    for budget in [AUDIT_BUDGET, EVENT_BUDGET] {
+        let v = push_json(
+            ProjectId::new(3),
+            push.repository_id,
+            &push.sorted_updates(),
+            Some(replay),
+            budget,
+        );
+        assert!(json_len(&v) <= budget);
+        assert_eq!(v["total_refs"], 193);
+        assert_eq!(v["refs_truncated"], true);
+        assert_eq!(v["created"], 150);
+        assert_eq!(v["fast_forward"], 40);
+        assert_eq!(v["forced"], 2);
+        assert_eq!(v["deleted"], 1);
+        assert_eq!(
+            v["replayed_from"],
+            serde_json::json!({ "user_id": 11, "credential_id": 5 })
+        );
+        let listed: Vec<(&str, &str)> = v["refs"]
+            .as_array()
+            .expect("refs")
+            .iter()
+            .map(|r| {
+                (
+                    r["ref"].as_str().unwrap_or_default(),
+                    r["kind"].as_str().unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed.get(..4),
+            Some(
+                &[
+                    ("refs/heads/z1", "force"),
+                    ("refs/heads/z2", "force"),
+                    ("refs/heads/y", "delete"),
+                    ("refs/heads/a000", "create"),
+                ][..]
+            ),
+            "{budget}"
+        );
+        assert!(listed.iter().all(|(_, k)| *k != "fast_forward"), "{budget}");
+    }
 }
 
 #[test]
@@ -262,7 +353,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
     push.check().expect("valid");
     let sorted = push.sorted_updates();
     for budget in [AUDIT_BUDGET, EVENT_BUDGET] {
-        let v = push_json(ProjectId::new(3), push.repository_id, &sorted, budget);
+        let v = push_json(ProjectId::new(3), push.repository_id, &sorted, None, budget);
         assert!(json_len(&v) <= budget, "{} > {budget}", json_len(&v));
         assert_eq!(v["total_refs"], 1000);
         assert_eq!(v["refs_truncated"], true);
@@ -287,6 +378,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
         ProjectId::new(3),
         push.repository_id,
         &push.sorted_updates(),
+        None,
         EVENT_BUDGET,
     );
     assert_eq!(
@@ -301,6 +393,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
         ProjectId::new(3),
         push.repository_id,
         &push.sorted_updates(),
+        None,
         AUDIT_BUDGET,
     );
     assert!(json_len(&audit) <= AUDIT_BUDGET);
@@ -318,6 +411,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
         ProjectId::new(3),
         RepoId::new(7),
         std::slice::from_ref(&huge),
+        None,
         2048,
     );
     assert_eq!(v["refs"][0]["commits"].as_array().map(Vec::len), Some(0));
@@ -326,7 +420,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
     assert_eq!(v["refs_truncated"], false);
     huge.commits.clear();
     huge.total_commits = 0;
-    let v = push_json(ProjectId::new(3), RepoId::new(7), &[huge], 2048);
+    let v = push_json(ProjectId::new(3), RepoId::new(7), &[huge], None, 2048);
     assert_eq!(v["commits_truncated"], false);
 }
 
