@@ -21,6 +21,9 @@ import { GroupPage, UserPage } from './GroupPage';
 import { NotFound } from './NotFound';
 import { ProjectPage } from './ProjectPage';
 import { RepoViews } from './repo/RepoViews';
+import { Account } from './settings/Account';
+import { GroupViews } from './settings/GroupSettings';
+import { useSession } from '../session/session';
 
 const encode = (segments: string[]) => segments.map(encodeURIComponent).join('/');
 
@@ -39,6 +42,7 @@ export function NamespaceRoute() {
 function Resolved({ path, view }: { path: string; view: string[] | null }) {
   const api = useApi();
   const location = useLocation();
+  const me = useSession().user.id;
   const prefix = view === null;
   const resolution = useQuery({
     queryKey: ['resolve', path, prefix],
@@ -78,11 +82,20 @@ function Resolved({ path, view }: { path: string; view: string[] | null }) {
       const tail = view.length > 0 ? `/-/${encode(view)}` : '';
       return <Navigate replace to={`/${r.canonical_path}${tail}${rest}`} state={movedState} />;
     }
-    return r.kind === 'project' && r.project_id != null ? (
-      <RepoViews projectId={r.project_id} project={r.canonical_path} view={view} />
-    ) : (
-      <NotFound />
-    );
+    if (r.kind === 'project' && r.project_id != null) {
+      return <RepoViews projectId={r.project_id} project={r.canonical_path} view={view} />;
+    }
+    const word = view[0];
+    if (r.kind === 'group' && r.group_id != null && view.length === 1) {
+      if (word === 'settings' || word === 'members') {
+        return <GroupViews groupId={r.group_id} word={word} />;
+      }
+    }
+    // Account settings: the person's own namespace only.
+    if (r.kind === 'user' && word === 'settings' && view.length === 1 && r.user_id === me) {
+      return <Account path={r.canonical_path} />;
+    }
+    return <NotFound />;
   }
 
   if (r.kind === 'project' && r.remainder !== undefined && r.remainder !== null && r.remainder !== '') {

@@ -713,10 +713,10 @@ describe('branches and tags', () => {
 });
 
 describe('words and addresses', () => {
-  it('settings and members are the "not yet" screen, any other word is 404', async () => {
+  it('settings and members are screens, any other word is 404', async () => {
     const server = mockServer(repoRoutes());
     await renderApp({ fetch: server.fetch, path: `${BASE}/settings`, lang: 'en' });
-    expect(await screen.findByRole('heading', { name: 'This screen is not available yet' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeTruthy();
     const other = mockServer(repoRoutes());
     await renderApp({ fetch: other.fetch, path: `${BASE}/pull`, lang: 'en' });
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeTruthy();

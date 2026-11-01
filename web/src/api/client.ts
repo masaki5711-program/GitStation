@@ -162,3 +162,19 @@ export async function call<T>(
   }
   return result.data;
 }
+
+/** Like [`call`] for an answer that has no body on success (204): only a
+ * failed answer throws. */
+export async function callNoContent(
+  run: () => Promise<{ error?: unknown; response: Response }>,
+): Promise<void> {
+  let result: { error?: unknown; response: Response };
+  try {
+    result = await run();
+  } catch (e) {
+    if (e instanceof ApiFailure || isAbort(e)) throw e;
+    if (e instanceof TypeError) throw new ApiFailure({ kind: 'network' }, e);
+    throw unexpectedFailure(e, 'an API call');
+  }
+  if (!result.response.ok) throw new ApiFailure(toFailure(result.response, result.error));
+}

@@ -1,7 +1,7 @@
 // `/{project}/-/{word}/…` for a project that exists (ADR-0015 screen words):
-// the repository screens. The project's name and a small navigation frame
-// every screen; each screen has its own h1. Words that are real but not built
-// yet (settings, members: the next release) say so; any other word is 404.
+// the repository screens, settings and members. The project's name and a
+// small navigation frame every screen; each screen has its own h1. Any other
+// word is 404.
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,7 +13,7 @@ import { Loading } from '../../components/Loading';
 import { MovedNotice } from '../../components/MovedNotice';
 import { encodePath } from '../../features/repoUrls';
 import { rememberProject } from '../../hooks/recent';
-import { NotFound, Unavailable } from '../NotFound';
+import { NotFound } from '../NotFound';
 import { BlameScreen } from './BlameScreen';
 import { BlobScreen } from './BlobScreen';
 import { CommitScreen } from './CommitScreen';
@@ -22,10 +22,11 @@ import { CompareScreen } from './CompareScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
+import { MembersScreen } from '../settings/Members';
+import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const NOT_YET = ['settings', 'members'];
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members'];
 
 export function RepoViews({
   projectId,
@@ -54,7 +55,6 @@ export function RepoViews({
     if (known !== undefined) rememberProject({ path: known.path, name: known.display_name });
   }, [known]);
 
-  if (NOT_YET.includes(word)) return <Unavailable backTo={`/${encodePath(project)}`} />;
   if (!SCREEN_WORDS.includes(word)) return <NotFound />;
   if (info.isPending) return <Loading />;
   if (info.isError) {
@@ -93,6 +93,12 @@ export function RepoViews({
     case 'compare':
       screen = <CompareScreen projectId={projectId} project={project} spec={spec} />;
       break;
+    case 'settings':
+      screen = <ProjectSettings projectId={projectId} />;
+      break;
+    case 'members':
+      screen = <MembersScreen scope={{ kind: 'project', id: projectId }} />;
+      break;
     case 'branches':
       screen = <RefsScreen projectId={projectId} project={project} type="branch" />;
       break;
@@ -107,6 +113,8 @@ export function RepoViews({
     { words: ['branches'], to: `${base}/-/branches`, label: t('repo.branches') },
     { words: ['tags'], to: `${base}/-/tags`, label: t('repo.tags') },
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
+    { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
+    { words: ['settings'], to: `${base}/-/settings`, label: t('settings.title') },
   ];
   return (
     <>

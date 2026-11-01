@@ -112,6 +112,12 @@ function RepositoryState({
           <li>
             <Link to={`${base}/-/compare`}>{t('repo.compare')}</Link>
           </li>
+          <li>
+            <Link to={`${base}/-/members`}>{t('members.title')}</Link>
+          </li>
+          <li>
+            <Link to={`${base}/-/settings`}>{t('settings.title')}</Link>
+          </li>
         </ul>
       </nav>
     </section>

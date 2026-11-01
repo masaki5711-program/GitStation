@@ -55,7 +55,7 @@ function useNamePath() {
 
 /** Invalid submit: this summary takes the focus and is announced (WCAG 3.3.1,
  * 4.1.3); the fields below carry aria-invalid and their own message. */
-function ErrorSummary({ errors, attempt }: { errors: string[]; attempt: number }) {
+export function ErrorSummary({ errors, attempt }: { errors: string[]; attempt: number }) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
   const has = errors.length > 0;

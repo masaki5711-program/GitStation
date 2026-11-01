@@ -71,3 +71,15 @@
   color: var(--gs-color-link);
   font: inherit;
 }
+
+.links {
+  margin: 0 0 var(--gs-space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.link {
+  composes: interactive from './controls.module.css';
+  display: block;
+  padding: var(--gs-space-2) 0;
+}
