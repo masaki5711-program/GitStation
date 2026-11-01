@@ -1,7 +1,7 @@
 # ADR-0004: リポジトリの種類（spec / system）と仕様駆動開発
 
 **Date**: 2026-10-26
-**Status**: accepted
+**Status**: accepted（リポジトリの種類 `spec` / `system` と文書ポータルの部分は ADR-0023 が置き換えた。要件 ID、`@req`、`.forge/repo.yml` の `specs:`、文脈 API は有効）
 **Deciders**: Masaki Fujikawa（ユーザー）、Claude
 
 ## Context
@@ -59,3 +59,15 @@
 - 4 つの表（`projects`、`repositories`、`project_members`、`protected_refs`）はすべて、プロジェクトの監査の行（`resource_type = 'project'`、
   `resource_id` = プロジェクトの ID）で覆う（ADR-0016 §1 の状態の表）。状態の変更にも監査の行が要る
   （テスト `a_repository_state_change_needs_a_project_audit_row`）。
+
+## Amendment（2026-11-01、ADR-0023: 種類と文書ポータルをやめる）
+
+利用者の決定（2026-11-01）により、次を置き換える。上の記述は経緯として残す。
+
+- **リポジトリの種類 `spec` / `system` はやめる**（Decision の 1 項目め・2 項目め）。すべてのリポジトリは同じ種類。リポジトリの仕様はそのリポジトリの
+  `spec/`（案 A を既定）に置く。複数のシステムで共有する仕様は、特別な種類のないふつうのリポジトリに置き、`.forge/repo.yml` の
+  `specs: - repo: <パス> version: <タグ> scope: [...]` で版を固定して参照する。「仕様を持つ」は中身から導く。
+- **文書ポータルはやめる**（Alternatives の「文書ポータルの方針」も同様）。画面の系統はリポジトリの画面 1 つ。
+- Amendment（2026-10-31、D4 MR1）の `repositories.kind` は、列としては残る（マイグレーションは追記のみ）が使われなくなる。
+- 有効のままのもの: 要件 ID、`@req`、`spec-lint` / `spec-trace` / `spec-conformance` / `spec-drift`、AI 向けの文脈 API と MCP。
+- リポジトリをまたぐ連携は M3 の別項目（順序: 参照の解析 → ずれの通知 → Kanflow への複数登録）。詳細は ADR-0023、計画 03。

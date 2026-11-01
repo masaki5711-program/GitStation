@@ -140,7 +140,7 @@ GitStation 側の API はすべて `authorize()` を通し、権限の表に行�
            │ 1 回のログイン（Keycloak、OIDC）
            ├─ Kanflow（OIDC クライアント kanflow）
            ├─ GitStation（OIDC クライアント gitstation）
-           ├─ 文書ポータル / Web Studio（GitStation の画面）
+           ├─ ~~文書ポータル /~~ Web Studio（GitStation の画面。2026-11-01: 文書ポータルは取り下げ。リポジトリの画面に置き換わる）
            └─ BankMasalah など他のアプリ
 ```
 
@@ -165,13 +165,13 @@ GitStation 側の API はすべて `authorize()` を通し、権限の表に行�
 
 ### 8.4 ポータルとの連携
 
-- ポータルのアプリの一覧に Kanflow・GitStation・文書ポータルを載せる。
+- ポータルのアプリの一覧に Kanflow・GitStation~~・文書ポータル~~ を載せる。
 - **自分宛ての項目**: 08 の「承認待ち」と担当のタスクを、ポータルにも要約で出す（Kanflow の API から。詳細はリンクで Kanflow へ）。
 - 画面の上部の共通のヘッダー（アプリの切り替え、利用者、ログアウト）はポータルのものにそろえる。GitStation のロゴ・アイコンは `docs/brand/` のファイルを使う。
 
 ### 8.5 完了の条件
 
-ポータルから 1 回ログインして、Kanflow・GitStation・文書ポータルを行き来でき、ログアウトが全部に効く。Keycloak で無効にした人は、次の操作から入れない。git のトークンと MCP は本人として動き続ける。
+ポータルから 1 回ログインして、Kanflow・GitStation~~・文書ポータル~~ を行き来でき、ログアウトが全部に効く。Keycloak で無効にした人は、次の操作から入れない。git のトークンと MCP は本人として動き続ける。
 
 ## 9. 元の設計書との食い違いと、この文書の決定
 
