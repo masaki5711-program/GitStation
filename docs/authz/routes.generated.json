@@ -32,6 +32,14 @@
     "word": "fixed"
   },
   {
+    "action": "UserSelfRead",
+    "method": "GET",
+    "path": "/api/v1/user",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "Health",
     "method": "GET",
     "path": "/healthz",

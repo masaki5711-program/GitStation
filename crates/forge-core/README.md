@@ -104,7 +104,8 @@ forge-db writers repeat.
 forge-web does not depend on forge-db): `readiness::ReadinessProbe` and
 `Authenticator` (step D3 MR3, ADR-0019 §7) — `authenticate(&RequestId,
 presented: &str) -> Result<TokenIdentity, ForgeError>` (`token_id`,
-`user_id`, `is_admin`, `scopes`, `is_agent`; the presented token is a secret
+`user_id`, `username`, `display_name` (phase 8b MR6, for `GET /api/v1/user`),
+`is_admin`, `scopes`, `is_agent`; the presented token is a secret
 and is never logged). forge-db's `Db` implements both.
 Feature `test-support`: `path_vectors::accepted()` / `rejected()`, the shared
 segment vectors; `DedupKey::unchecked` (malformed keys for the writers' tests).
@@ -143,3 +144,12 @@ service_unsupported; `part`; `rule`).
 - A new top-level reserved word needs an ADR-0015 amendment. The planned
   `ReservedNameOccupied` doctor check (ADR-0015) is not built yet, so existing
   names are not checked against a new word.
+
+**Opaque list cursors** (M1 phase 8b MR6, `cursor`): `CursorKeys::parse(text)`
+(the `api.cursor_keys_file` format, `<kid> <hex>` per line, AES-256 keys),
+`encode(purpose, payload) -> String` and `decode(purpose, cursor) ->
+Vec<u8>`: AES-256-GCM, base64url, version 1, the newest kid encrypts and
+every listed kid decrypts; `purpose` binds a cursor to one list and one
+caller. Every failure is `FG-WEB-0006 reason=cursor_invalid` with a `rule`
+and never the value. `Config::api.cursor_keys()` reads the file
+(`ApiConfig`).

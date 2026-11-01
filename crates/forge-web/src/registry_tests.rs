@@ -46,7 +46,7 @@ fn a_proof_for_another_action_is_refused() {
     // MR4 must c: WebShell and UserCreate proofs have the same type; the
     // gate compares the action at run time, before any handler.
     let proof = prove(&Principal::anonymous(), Action::WebShell, InstanceCtx).expect("public");
-    let Err(err) = admit(Action::UserCreate, proof, admitted()) else {
+    let Err(err) = admit(Action::UserCreate, proof, admitted(), ()) else {
         panic!("a WebShell proof must not admit a UserCreate route");
     };
     assert_eq!(err.code(), ErrorCode::Internal);
@@ -57,7 +57,7 @@ fn a_proof_for_another_action_is_refused() {
 
     let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
     let proof = prove(&admin, Action::UserCreate, InstanceCtx).expect("admin");
-    let Err(err) = admit(Action::Metrics, proof, admitted()) else {
+    let Err(err) = admit(Action::Metrics, proof, admitted(), ()) else {
         panic!("a UserCreate proof must not admit a Metrics route");
     };
     assert_eq!(err.code(), ErrorCode::Internal);
@@ -66,7 +66,7 @@ fn a_proof_for_another_action_is_refused() {
 #[test]
 fn a_proof_for_the_route_action_is_admitted_with_its_target() {
     let proof = prove(&Principal::anonymous(), Action::WebShell, InstanceCtx).expect("public");
-    let Ok(dispatched) = admit(Action::WebShell, proof, admitted()) else {
+    let Ok(dispatched) = admit(Action::WebShell, proof, admitted(), ()) else {
         panic!("same action");
     };
     assert_eq!(dispatched.proof().action(), Action::WebShell);
@@ -487,4 +487,173 @@ fn verbs_round_trip_through_http_methods() {
     }
     assert_eq!(Verb::of(&Method::OPTIONS), None);
     assert!(Verb::Head.is_safe() && Verb::Get.is_safe() && !Verb::Post.is_safe());
+}
+
+// ── M1 phase 8b MR6: body routes ──
+
+/// A synthetic body type.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+struct Change {
+    #[allow(dead_code)] // read by serde only
+    name: String,
+}
+
+struct NoBodyLoad;
+
+impl BodyLoader<AppState, Change> for NoBodyLoad {
+    type Ctx = InstanceCtx;
+    fn load<'a>(
+        &'a self,
+        _: &'a AppState,
+        _: &'a Parts,
+        _: &'a Change,
+        _: Option<UserId>,
+    ) -> LoadFuture<'a, InstanceCtx> {
+        Box::pin(async {
+            Ok(Lookup::Found {
+                ctx: InstanceCtx,
+                canonical: None,
+                tombstone: None,
+                project: None,
+            })
+        })
+    }
+}
+
+async fn change(_: AppState, _: Dispatched<InstanceCtx, Change>) -> &'static str {
+    "changed"
+}
+
+fn body_route(verb: Verb, action: Action, cap: usize) -> Registry<AppState> {
+    Registry::new().route_with_body(verb, "/api/v1/x", action, "x", cap, NoBodyLoad, change)
+}
+
+/// MR4 musts for body routes: a safe verb, a public action, a cap out of
+/// range or a path taken twice is refused at startup; a proof for another
+/// action is refused before the handler, body or not.
+#[test]
+fn body_routes_that_do_not_fit_are_a_startup_error() {
+    for (registry, reason) in [
+        (
+            body_route(Verb::Get, Action::UserSelfRead, 1024),
+            "body_route_needs_an_unsafe_verb",
+        ),
+        (
+            body_route(Verb::Head, Action::UserSelfRead, 1024),
+            "body_route_needs_an_unsafe_verb",
+        ),
+        (
+            body_route(Verb::Post, Action::Health, 1024),
+            "body_route_must_authenticate",
+        ),
+        (
+            body_route(Verb::Post, Action::UserSelfRead, 0),
+            "body_limit_out_of_range",
+        ),
+        (
+            body_route(Verb::Post, Action::UserSelfRead, 64 * 1024 + 1),
+            "body_limit_out_of_range",
+        ),
+        (
+            body_route(Verb::Post, Action::UserSelfRead, 1024).route(
+                Verb::Post,
+                "/api/v1/x",
+                Action::UserSelfRead,
+                "again",
+                shell,
+            ),
+            "duplicate POST /api/v1/x",
+        ),
+        (
+            Registry::new().responds::<Change>(Verb::Get, "/api/v1/none"),
+            "responds: no route GET /api/v1/none",
+        ),
+    ] {
+        let text = problems(registry);
+        assert!(text.contains(reason), "{reason}: {text}");
+    }
+    assert_eq!(
+        problems(body_route(Verb::Patch, Action::UserSelfRead, 64 * 1024)),
+        ""
+    );
+
+    let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
+    let proof = prove(&admin, Action::UserSelfRead, InstanceCtx).expect("signed in");
+    let input = Change {
+        name: "synthetic".into(),
+    };
+    let Err(err) = admit(Action::UserCreate, proof, admitted(), input) else {
+        panic!("a UserSelfRead proof must not admit a UserCreate body route");
+    };
+    assert!(
+        err.to_string().contains("reason=proof_action_mismatch"),
+        "{err}"
+    );
+}
+
+/// The OpenAPI document carries a body route's strict schema and cap, a
+/// documented response, and `{id}` as a positive integer.
+#[test]
+fn openapi_documents_bodies_responses_and_typed_ids() {
+    let registry = body_route(Verb::Post, Action::UserSelfRead, 4096)
+        .route(
+            Verb::Get,
+            "/api/v1/x/{id}",
+            Action::UserSelfRead,
+            "one",
+            shell,
+        )
+        .responds::<Change>(Verb::Get, "/api/v1/x/{id}");
+    let doc: Value = serde_json::from_str(&openapi_json(registry.defs(), "1")).expect("json");
+    let post = &doc["paths"]["/api/v1/x"]["post"];
+    assert_eq!(
+        post["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/Change"
+    );
+    assert_eq!(post["x-forge-max-body-bytes"], 4096);
+    let get = &doc["paths"]["/api/v1/x/{id}"]["get"];
+    assert_eq!(get["parameters"][0]["schema"]["type"], "integer");
+    assert_eq!(get["parameters"][0]["schema"]["minimum"], 1);
+    assert_eq!(
+        get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/Change"
+    );
+    let change = &doc["components"]["schemas"]["Change"];
+    assert_eq!(change["additionalProperties"], false, "{change}");
+    assert!(doc["components"].get("x-forge-schema-conflicts").is_none());
+}
+
+/// Every product body route and documented response is strict
+/// (`deny_unknown_fields` → `additionalProperties: false`), every documented
+/// schema has one shape, and the document is the same twice.
+#[test]
+fn the_product_openapi_is_strict_and_deterministic() {
+    let registry = crate::app::registry();
+    let first = openapi_json(registry.defs(), "1");
+    assert_eq!(first, openapi_json(crate::app::registry().defs(), "1"));
+    let doc: Value = serde_json::from_str(&first).expect("json");
+    assert!(doc["components"].get("x-forge-schema-conflicts").is_none());
+    for (name, schema) in doc["components"]["schemas"].as_object().expect("schemas") {
+        if schema["type"] == "object" {
+            assert_eq!(schema["additionalProperties"], false, "{name}");
+        }
+    }
+    for def in registry.defs() {
+        if let Some((_, cap)) = def.request {
+            assert!(cap <= crate::body::MAX_JSON_BODY_BYTES, "{}", def.path);
+        }
+    }
+    let user = &doc["paths"]["/api/v1/user"]["get"];
+    assert_eq!(user["x-forge-action"], "UserSelfRead");
+    assert_eq!(
+        user["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/UserSelf"
+    );
+    let project = &doc["paths"]["/api/v1/projects/{id}"]["get"];
+    assert_eq!(project["parameters"][0]["schema"]["type"], "integer");
+    assert_eq!(
+        project["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ProjectBody"
+    );
 }

@@ -40,6 +40,9 @@ pub(crate) enum Actor {
     /// the agent rules deny only the merge family, so a push is decided
     /// exactly like the human token's (rows pin it).
     AgentTokenWriteRepository,
+    /// Developer with a `read_api` token issued with `is_agent` (the flag
+    /// is not an authorization input yet: decided like a human's token).
+    AgentTokenReadApi,
     /// Developer with an `api` token.
     DevTokenApi,
     /// Owner with a `read_api` token.
@@ -156,7 +159,7 @@ impl Actor {
                 token(false, &[Scope::WriteRepository])
             }
             Actor::DevTokenApi => token(false, &[Scope::Api]),
-            Actor::OwnerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::OwnerTokenReadApi | Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
             Actor::NonMember
@@ -177,6 +180,7 @@ impl Actor {
             | Actor::DevTokenReadRepository
             | Actor::DevTokenWriteRepository
             | Actor::AgentTokenWriteRepository
+            | Actor::AgentTokenReadApi
             | Actor::DevTokenApi => Some(Role::Developer),
             Actor::Maintainer => Some(Role::Maintainer),
             Actor::Owner | Actor::OwnerTokenReadApi => Some(Role::Owner),

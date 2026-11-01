@@ -9,9 +9,9 @@
 //! revealed only after `authorize()` allowed — and is logged as
 //! `namespace.redirected` (warn).
 //!
-//! A missing, repeated or malformed `path` parameter is answered like an
-//! absent path (`FG-REPO-0005`, logged with `lookup=`) until request
-//! validation gets its own code (FG-WEB-0006 `RequestInvalid`, phase 8b);
+//! A missing, repeated or malformed `path` parameter is `FG-WEB-0006
+//! reason=param_invalid param=path rule=missing|repeated|malformed|invalid`
+//! (phase 8b MR6), decided from the string alone after authentication;
 //! such a request issues no resolver call (its shape, not the data, is
 //! what differs).
 
@@ -20,13 +20,42 @@ use axum::http::request::Parts;
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use forge_auth::{ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason};
+use forge_auth::{ResolvedCtx, ResolvedVia};
 use forge_core::{LookupPath, NamespaceOwner, UserId};
-use serde_json::json;
+use forge_errors::{ErrorCode, ForgeError};
+use serde::Serialize;
 
 use crate::app::AppState;
+use crate::body::param_invalid;
 use crate::dispatch::{path_resolve_ctx, resolve_bounded};
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup};
+
+/// The route's path.
+pub const PATH: &str = "/api/v1/namespaces/resolve";
+
+/// Which namespace a path names. Exactly one of `project_id`, `group_id`,
+/// `user_id` is present, by `kind`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Resolution {
+    #[schema(minimum = 1)]
+    pub namespace_id: i64,
+    /// `project`, `group` or `user`.
+    pub kind: String,
+    /// The namespace's current path (a moved path: the target's).
+    pub canonical_path: String,
+    /// A `moved` tombstone led here.
+    pub moved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 1)]
+    pub project_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 1)]
+    pub group_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 1)]
+    pub user_id: Option<i64>,
+}
 
 /// The query parameter holding the path.
 const PARAM: &str = "path";
@@ -44,15 +73,8 @@ impl Loader<AppState> for PathParam {
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, ResolvedCtx> {
         Box::pin(async move {
-            let path = match lookup_param(parts.uri.query()) {
-                Ok(path) => path,
-                Err(why) => {
-                    return Ok(Lookup::Unresolved {
-                        ctx: UnresolvedCtx::new(UnresolvedReason::Absent),
-                        why: Some(why),
-                    })
-                }
-            };
+            let path =
+                lookup_param(parts.uri.query()).map_err(|rule| param_invalid(PARAM, rule))?;
             let resolution = resolve_bounded(state, &path, viewer).await?;
             Ok(match path_resolve_ctx(resolution, &path) {
                 Ok((ctx, canonical, tombstone)) => Lookup::Found {
@@ -67,8 +89,8 @@ impl Loader<AppState> for PathParam {
     }
 }
 
-/// The `path` parameter, folded for lookup. `Err` names what was wrong
-/// (logged as `lookup`, never the value).
+/// The `path` parameter, folded for lookup. `Err` names the rule it broke
+/// (logged as `rule`, never the value).
 pub(crate) fn lookup_param(query: Option<&str>) -> Result<LookupPath, &'static str> {
     let mut values = query
         .unwrap_or_default()
@@ -76,15 +98,15 @@ pub(crate) fn lookup_param(query: Option<&str>) -> Result<LookupPath, &'static s
         .filter_map(|pair| pair.split_once('=').filter(|(k, _)| *k == PARAM))
         .map(|(_, v)| v);
     let Some(raw) = values.next() else {
-        return Err("path_param_missing");
+        return Err("missing");
     };
     if values.next().is_some() {
-        return Err("path_param_repeated");
+        return Err("repeated");
     }
-    let decoded = percent_decode(raw).ok_or("path_param_malformed")?;
+    let decoded = percent_decode(raw).ok_or("malformed")?;
     let trimmed = decoded.strip_prefix('/').unwrap_or(&decoded);
     let segments: Vec<&str> = trimmed.split('/').collect();
-    LookupPath::fold(&segments).map_err(|_| "path_param_invalid")
+    LookupPath::fold(&segments).map_err(|_| "invalid")
 }
 
 /// Strict percent-decoding (a `%` must start two hex digits; `+` is not a
@@ -112,7 +134,13 @@ fn percent_decode(raw: &str) -> Option<String> {
 pub async fn resolve(_state: AppState, request: Dispatched<ResolvedCtx>) -> Response {
     let proof = request.proof();
     let moved = proof.ctx().via() == ResolvedVia::Moved;
-    let path = request.canonical_path().map(|p| p.full_path());
+    let Some(path) = request.canonical_path().map(|p| p.full_path()) else {
+        // The loader always hands the path with a found namespace.
+        let err = ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "canonical_path_missing")
+            .with_context("namespace_id", proof.id().get());
+        return request.ctx().fail(err).into_response();
+    };
     if let (true, Some(tombstone)) = (moved, request.via_tombstone()) {
         tracing::warn!(
             target: "forge_web::namespaces",
@@ -123,19 +151,19 @@ pub async fn resolve(_state: AppState, request: Dispatched<ResolvedCtx>) -> Resp
             "namespace.redirected"
         );
     }
-    let (owner_key, owner_id) = match proof.ctx().owner() {
-        NamespaceOwner::User(id) => ("user_id", id.get()),
-        NamespaceOwner::Group(id) => ("group_id", id.get()),
-        NamespaceOwner::Project(id) => ("project_id", id.get()),
+    let mut body = Resolution {
+        namespace_id: proof.id().get(),
+        kind: proof.ctx().view().kind().to_owned(),
+        canonical_path: path,
+        moved,
+        project_id: None,
+        group_id: None,
+        user_id: None,
     };
-    let mut body = json!({
-        "namespace_id": proof.id().get(),
-        "kind": proof.ctx().view().kind(),
-        "canonical_path": path,
-        "moved": moved,
-    });
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert(owner_key.to_owned(), json!(owner_id));
+    match proof.ctx().owner() {
+        NamespaceOwner::User(id) => body.user_id = Some(id.get()),
+        NamespaceOwner::Group(id) => body.group_id = Some(id.get()),
+        NamespaceOwner::Project(id) => body.project_id = Some(id.get()),
     }
     let mut res = Json(body).into_response();
     let headers = res.headers_mut();

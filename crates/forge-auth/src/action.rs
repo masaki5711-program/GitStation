@@ -56,6 +56,10 @@ actions! {
     UserCreate,
     UserDisable,
     AuditRead,
+    /// `GET /api/v1/user`: the caller's own account (any active signed-in
+    /// user; `read_api` on a token). Decided on the instance: there is no
+    /// other user to see.
+    UserSelfRead,
     // --- web (ADR-0015) ---
     /// `GET /api/v1/namespaces/resolve?path=`: which namespace a path names,
     /// decided by whether the caller can see it (`Resource::Unresolved` /
@@ -92,6 +96,7 @@ impl Action {
             | Action::GroupRead
             | Action::TokenList
             | Action::AuditRead
+            | Action::UserSelfRead
             | Action::PathResolve
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate

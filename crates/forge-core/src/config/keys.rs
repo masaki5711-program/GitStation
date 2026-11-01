@@ -67,6 +67,10 @@ pub const KEYS: &[Key] = &[
         "server.read_idle_timeout_ms",
         "FORGE_SERVER_READ_IDLE_TIMEOUT_MS",
     ),
+    number(
+        "server.body_read_timeout_ms",
+        "FORGE_SERVER_BODY_READ_TIMEOUT_MS",
+    ),
     text("storage.root", "FORGE_STORAGE_ROOT"),
     text("database.url", "FORGE_DATABASE_URL"),
     text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),
@@ -120,6 +124,8 @@ pub const KEYS: &[Key] = &[
         "database.migrate_statement_timeout_ms",
         "FORGE_DATABASE_MIGRATE_STATEMENT_TIMEOUT_MS",
     ),
+    // M1 phase 8b MR6: the AES-256-GCM keys of the opaque list cursors.
+    text("api.cursor_keys_file", "FORGE_API_CURSOR_KEYS_FILE"),
     // C8: the HMAC keys of the audit seal (ADR-0018 §4).
     text("audit.seal_keys_file", "FORGE_AUDIT_SEAL_KEYS_FILE"),
     // M1 phase 9 MR3: Smart HTTP limits (ADR-0007 amendment).

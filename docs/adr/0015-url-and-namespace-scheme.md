@@ -818,3 +818,21 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   shallow、`--filter=blob:none`、`api` スコープのトークンの拒否、メンバーでない人への 404（ないパスとバイト単位で同じ）、名前の変更後の
   302、削除の墓標の 404、dumb HTTP の 404 / 400、参照されていないオブジェクトの拒否（v0 / v2）、切断で git を回収、枠の不足の 503、
   準備中の 503、本文の上限。
+
+## Amendment（2026-11-01、M1 phase 8b MR6: 引数の誤りは FG-WEB-0006、本文のある固定ルート、一覧のカーソル）
+
+- **引数の形の誤りは FG-WEB-0006 `RequestInvalid`（400）**。MR4 / MR5 では「ないものと同じ FG-REPO-0005」としていたものを切り替えた:
+  `GET /api/v1/projects/{id}` の `{id}` が先頭 0 なしの正の 10 進数でない（`0`、`01`、`+1`、`%31`、`i64` の範囲外）→ `reason=param_invalid
+  param=id rule=not_positive_decimal`、`GET /api/v1/namespaces/resolve` の `path` がない・重複・エスケープの誤り・パスの規則に合わない →
+  `param=path rule=missing|repeated|malformed|invalid`。どれも **文字列だけで、認証の後、照会の前に** 決める。数字が指すはずのものが
+  読めるか・見えないか・ないかに関わらず、request_id を除いて **バイト単位で同じ** 400（テスト `a_malformed_id_is_the_same_400_whatever_it_would_name`、
+  `path_resolve_denials_are_identical_and_cost_one_lookup`）。形の正しい ID のない・見えないは、これまでどおり同じ 404 のまま。
+  形を知らせても存在は漏れない（どの資源にも触れていない）。ログの `lookup=` はなくなり、`param` と `rule` になった。
+- **存在の等しさ（MR4 の must）は本文のあるルートにも及ぶ**: 本文の形の誤りは読み込みの前の 400 で、どの資源にも触れない（テストの読み込み器で
+  照会 0 回を確かめる）。本文が指す資源の存在と可視性は、`BodyLoader` が読んだものを `authorize()` が決める（ないものと見えないものは同じ答え）。
+- **一覧のカーソル**（MR7b で使う。今は forge-core の API とテストだけ）: `forge_core::cursor::CursorKeys::encode(purpose, payload)` /
+  `decode(purpose, cursor)`。形式は `base64url( 版 1 | kid u16 | nonce 96 bit | 暗号文 | タグ )`、AES-256-GCM（ADR-0016 と同じ方式）、
+  関連データは `"forge-cursor" | 版 | kid | purpose`。`purpose` が一覧と呼び出し元を結びつける（`projects.list:user=42` など）ので、
+  別の一覧・別の利用者のカーソルはタグで落ちる。走査したが見えなかった行の ID も、飛ばした数も、カーソルからは読めない。鍵は
+  `api.cursor_keys_file`（ADR-0013 の Amendment）。改ざん・切り詰め・知らない kid・別の purpose・書式の誤りは FG-WEB-0006
+  `reason=cursor_invalid`（`rule=too_long|encoding|truncated|version|kid|tag`）で、**カーソルの値はログに出さない**。タグの照合は定数時間。

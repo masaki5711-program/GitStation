@@ -9,13 +9,15 @@
 //! differs: `absent` / `not_visible`); pending deletion is `FG-REPO-0006`
 //! to a caller who can see the project and the same `FG-REPO-0005` to
 //! anyone else (ADR-0010 matrix rows). An id that is not a plain positive
-//! decimal (`0`, `01`, `+1`, `%31`, beyond `i64`) is answered like an
-//! absent project without a lookup (logged `lookup=id_param_invalid`) until
-//! request validation gets its own code (FG-WEB-0006, phase 8b).
+//! decimal (`0`, `01`, `+1`, `%31`, beyond `i64`) is `FG-WEB-0006
+//! reason=param_invalid param=id` (phase 8b MR6), decided from the string
+//! alone, after authentication and without a lookup: the same 400 whatever
+//! the digits would name.
 //!
 //! The body is [`project_view`], the one builder of a project's API shape
-//! (ADR-0015 MR5 amendment): reused by the list and write endpoints of
-//! phase 8b. `HEAD` is the `GET` route (axum answers it without the body).
+//! ([`ProjectBody`], ADR-0015 MR5 amendment): reused by the list and write
+//! endpoints of phase 8b. `HEAD` is the `GET` route (axum answers it
+//! without the body).
 
 use axum::http::header::{CACHE_CONTROL, VARY};
 use axum::http::request::Parts;
@@ -25,9 +27,11 @@ use axum::Json;
 use forge_auth::{Authorized, LoadedProject, ProjectCtx, UnresolvedCtx, UnresolvedReason};
 use forge_core::{parse_positive_id, ProjectId, ProjectRecord, Role, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::app::AppState;
+use crate::body::param_invalid;
 use crate::dispatch::loaded_project;
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup};
 
@@ -51,10 +55,7 @@ impl Loader<AppState> for ProjectById {
     ) -> LoadFuture<'a, ProjectCtx> {
         Box::pin(async move {
             let Some(id) = id_param(parts.uri.path()) else {
-                return Ok(Lookup::Unresolved {
-                    ctx: UnresolvedCtx::new(UnresolvedReason::Absent),
-                    why: Some("id_param_invalid"),
-                });
+                return Err(param_invalid("id", "not_positive_decimal"));
             };
             let Some(record) = load_bounded(state, id, viewer).await? else {
                 return Ok(Lookup::Unresolved {
@@ -108,6 +109,33 @@ async fn load_bounded(
     }
 }
 
+// Built only by `project_view`; its doc comment is the schema description.
+/// A project as the API shows it.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    #[schema(minimum = 1)]
+    pub namespace_id: i64,
+    /// The current full path (`group/sub/project`).
+    pub path: String,
+    /// The path's last segment.
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    /// `private` or `internal`.
+    pub visibility: String,
+    /// The repository kind: `spec` or `system`.
+    pub kind: String,
+    /// UTC, RFC 3339.
+    pub created_at: String,
+    /// The caller's effective role (`guest` … `owner`); `null` without one
+    /// (an administrator, or a reader of an internal project).
+    #[schema(required = true)]
+    pub role: Option<String>,
+}
+
 /// The API shape of one project for the caller (the single builder):
 /// `id`, `namespace_id`, `path` (current full path), `name` (its last
 /// segment), `display_name`, `description`, `visibility`, `kind` (the
@@ -135,18 +163,23 @@ pub fn project_view(
         .last()
         .map(|s| s.as_str().to_owned())
         .unwrap_or_default();
-    Ok(json!({
-        "id": proof.id().get(),
-        "namespace_id": record.namespace_id.get(),
-        "path": record.path.full_path(),
-        "name": name,
-        "display_name": record.display_name,
-        "description": record.description,
-        "visibility": view.visibility.as_str(),
-        "kind": record.kind.as_str(),
-        "created_at": record.created_at,
-        "role": view.role.map(Role::as_str),
-    }))
+    let body = ProjectBody {
+        id: proof.id().get(),
+        namespace_id: record.namespace_id.get(),
+        path: record.path.full_path(),
+        name,
+        display_name: record.display_name.clone(), // clone: the record is borrowed
+        description: record.description.clone(),
+        visibility: view.visibility.as_str().to_owned(),
+        kind: record.kind.as_str().to_owned(),
+        created_at: record.created_at.clone(),
+        role: view.role.map(|r| Role::as_str(r).to_owned()),
+    };
+    serde_json::to_value(body).map_err(|e| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "project_view_serialize")
+            .with_source(e)
+    })
 }
 
 /// `GET|HEAD /api/v1/projects/{id}`: the project's view, never cached by a

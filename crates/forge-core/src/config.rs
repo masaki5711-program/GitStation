@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
+mod api;
 mod audit;
 mod database;
 mod git_http;
@@ -22,6 +23,8 @@ mod secret;
 mod server_limits;
 mod tls;
 
+pub use api::ApiConfig;
+pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
@@ -37,6 +40,7 @@ const NAMESPACES: &[&str] = &[
     "FORGE_SERVER_",
     "FORGE_STORAGE_",
     "FORGE_DATABASE_",
+    "FORGE_API_",
     "FORGE_AUDIT_",
     "FORGE_GIT_",
 ];
@@ -117,6 +121,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub database: DatabaseConfig,
+    /// `api.*` (the cursor keys, M1 phase 8b MR6).
+    pub api: ApiConfig,
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
@@ -337,6 +343,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
                 600_000,
             )?,
         },
+        api: ApiConfig::new(password_path("api.cursor_keys_file")?),
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
     }
@@ -373,6 +380,7 @@ fn server_limits<'a>(
             ms(d.write_idle_timeout),
         )?,
         read_idle_timeout: millis(get, "server.read_idle_timeout_ms", ms(d.read_idle_timeout))?,
+        body_read_timeout: millis(get, "server.body_read_timeout_ms", ms(d.body_read_timeout))?,
     }
     .validate()
 }

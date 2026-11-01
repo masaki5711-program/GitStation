@@ -57,6 +57,15 @@ rustix = { version = "1", default-features = false, features = ["std", "process"
 # wrapper (the workspace forbids unsafe code). MIT.
 win32job = "2"
 # ── end M1 phase 9 MR1 ──
+# ── M1 phase 8b MR6: API request bodies, cursors, OpenAPI ──
+# AES-256-GCM for the opaque keyset cursor (ADR-0016 names AES-256-GCM);
+# RustCrypto, Apache-2.0 OR MIT; >= 0.10.3 (GHSA-423w-p2w9-r7vq fixed).
+# The nonce comes from getrandom (no rand_core OsRng feature).
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+# OpenAPI schemas of request / response bodies from the Rust types; MIT OR
+# Apache-2.0. Only the derive and the model are used (no web framework glue).
+utoipa = { version = "5", default-features = false, features = ["macros"] }
+# ── end M1 phase 8b MR6 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

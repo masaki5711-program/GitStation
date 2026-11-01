@@ -278,6 +278,17 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::AuditRead, W::Owner, F::PrivateProject, Allow),
     row(A::AuditRead, W::Maintainer, F::PrivateProject, deny(E::Forbidden)),
     row(A::AuditRead, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    // --- UserSelfRead (`GET /api/v1/user`, M1 phase 8b MR6) ---
+    row(A::UserSelfRead, W::Developer, F::Instance, Allow),
+    row(A::UserSelfRead, W::Admin, F::Instance, Allow),
+    row(A::UserSelfRead, W::AgentTokenReadApi, F::Instance, Allow),
+    row(A::UserSelfRead, W::OwnerTokenReadApi, F::Instance, Allow),
+    row(A::UserSelfRead, W::DevTokenApi, F::Instance, Allow),
+    row(A::UserSelfRead, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::UserSelfRead, W::Disabled, F::Instance, deny(E::AccountDisabled)),
+    row(A::UserSelfRead, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::UserSelfRead, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
+    row(A::UserSelfRead, W::DevTokenWriteRepository, F::Instance, deny(E::InsufficientScope)),
     // --- PathResolve (`GET /api/v1/namespaces/resolve?path=`, ADR-0015) ---
     // Decided by "can see" (Guest on private resolves), not by a read role.
     // The `prefix=true` rows (ADR-0015) arrive with that mode in M2.

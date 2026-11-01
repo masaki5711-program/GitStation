@@ -5,6 +5,7 @@
 //! - [`context`] — request id + language per request, access log
 //! - [`error`] — the single error renderer (`error_code`, `user_message`,
 //!   `request_id` only; logged once)
+//! - [`body`] — strict JSON request bodies of the write routes (phase 8b)
 //! - `auth` — token authentication (Bearer / Basic with the token as the
 //!   password) on every non-public route
 //! - `dispatch` — the one dispatcher for namespace URLs (ADR-0015's seven
@@ -15,6 +16,7 @@
 
 pub mod app;
 mod auth;
+pub mod body;
 pub mod context;
 mod dispatch;
 pub mod error;
@@ -25,7 +27,7 @@ pub mod routes;
 pub mod server;
 
 pub use app::{app, registry as route_registry, AppConfig, AppState, Lookups};
-pub use auth::BoundedAuthenticator;
+pub use auth::{BoundedAuthenticator, CallerProfile};
 pub use context::Ctx;
 pub use error::ApiError;
 pub use routes::git::{GitHttpLimits, PushTasks, SmartHttp};

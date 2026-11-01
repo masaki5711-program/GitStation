@@ -25,12 +25,29 @@
 //! needs_clone::<Dispatched<InstanceCtx>>();
 //! ```
 //!
-//! Two ways in:
+//! A body route's request is no different: the parsed body travels inside
+//! the `Dispatched`, which still cannot be built outside this module.
+//!
+//! ```compile_fail
+//! use forge_web::registry::Dispatched;
+//! use forge_auth::InstanceCtx;
+//! #[derive(Default)]
+//! struct Change;
+//! let forged: Dispatched<InstanceCtx, Change> = Default::default();
+//! ```
+//!
+//! Three ways in:
 //! - [`Registry::route`] / [`Registry::route_with`]: a fixed path
 //!   (`/api/v1/…`, `/healthz`), mounted on the axum router. The registry
 //!   authenticates (non-public), loads the resource with a [`Loader`]
 //!   (`InstanceCtx` for `route`), calls `prove(principal, def.action, ctx)`
 //!   and admits the proof.
+//! - [`Registry::route_with_body`]: a fixed write route with a strict JSON
+//!   body (M1 phase 8b MR6). The registry authenticates, reads the body
+//!   ([`crate::body::read_json`]: `Content-Type`, the route's cap ≤ 64 KiB,
+//!   unknown fields refused — all before any lookup), then a
+//!   [`BodyLoader`] loads with the parsed body, `prove()` decides and the
+//!   admitted proof reaches the handler with the body.
 //! - [`Registry::scoped`]: a namespace URL (`/{ns}`, `/{ns}/-/{word}/…`,
 //!   `/{ns}.git/…`, `/-/projects/{id}/…`), served by the one dispatcher
 //!   (`crate::dispatch`) on the raw path, in ADR-0015's seven steps.
@@ -58,7 +75,9 @@ use forge_core::{
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Map, Value};
+use utoipa::openapi::{RefOr, Schema};
 
+use crate::body::{RequestBody, MAX_JSON_BODY_BYTES};
 use crate::context::Ctx;
 
 /// HTTP methods the routes use. `Head` is registered explicitly for the
@@ -248,7 +267,51 @@ pub struct RouteDef {
     pub query_key: Option<(&'static str, &'static str)>,
     pub action: Action,
     pub summary: &'static str,
+    /// The JSON request body (`route_with_body`), with its cap.
+    pub request: Option<(SchemaDoc, usize)>,
+    /// The success response body, when documented ([`Registry::responds`]).
+    pub response: Option<SchemaDoc>,
 }
+
+/// A named OpenAPI schema of a Rust type (utoipa), for the generated
+/// `openapi.json`. Compared by name: one name, one type.
+#[derive(Clone, Copy)]
+pub struct SchemaDoc {
+    pub name: fn() -> String,
+    /// The type's schema and the schemas it references.
+    pub schemas: fn() -> Vec<(String, RefOr<Schema>)>,
+}
+
+impl SchemaDoc {
+    pub fn of<T: utoipa::ToSchema>() -> Self {
+        fn name<T: utoipa::ToSchema>() -> String {
+            T::name().into_owned()
+        }
+        fn schemas<T: utoipa::ToSchema>() -> Vec<(String, RefOr<Schema>)> {
+            let mut all = vec![(T::name().into_owned(), T::schema())];
+            T::schemas(&mut all);
+            all
+        }
+        Self {
+            name: name::<T>,
+            schemas: schemas::<T>,
+        }
+    }
+}
+
+impl std::fmt::Debug for SchemaDoc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SchemaDoc({})", (self.name)())
+    }
+}
+
+impl PartialEq for SchemaDoc {
+    fn eq(&self, other: &Self) -> bool {
+        (self.name)() == (other.name)()
+    }
+}
+
+impl Eq for SchemaDoc {}
 
 impl RouteDef {
     /// The manifest `word` (`fixed` for a fixed route).
@@ -260,32 +323,35 @@ impl RouteDef {
 /// The future an [`Endpoint`] returns.
 pub type HandlerFuture = Pin<Box<dyn Future<Output = Response> + Send>>;
 
-/// A handler: `async fn(state, Dispatched<R>) -> impl IntoResponse`. It can
-/// only run with a [`Dispatched`], which only the registry makes.
-pub trait Endpoint<S, R: ResourceCtx>: Send + Sync + 'static {
-    fn call(&self, state: S, request: Dispatched<R>) -> HandlerFuture;
+/// A handler: `async fn(state, Dispatched<R, B>) -> impl IntoResponse`
+/// (`B` = `()` but for a body route). It can only run with a
+/// [`Dispatched`], which only the registry makes.
+pub trait Endpoint<S, R: ResourceCtx, B = ()>: Send + Sync + 'static {
+    fn call(&self, state: S, request: Dispatched<R, B>) -> HandlerFuture;
 }
 
-impl<S, R, F, Fut, O> Endpoint<S, R> for F
+impl<S, R, B, F, Fut, O> Endpoint<S, R, B> for F
 where
     R: ResourceCtx + 'static,
-    F: Fn(S, Dispatched<R>) -> Fut + Send + Sync + 'static,
+    F: Fn(S, Dispatched<R, B>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = O> + Send + 'static,
     O: IntoResponse,
 {
-    fn call(&self, state: S, request: Dispatched<R>) -> HandlerFuture {
+    fn call(&self, state: S, request: Dispatched<R, B>) -> HandlerFuture {
         let fut = self(state, request);
         Box::pin(async move { fut.await.into_response() })
     }
 }
 
-/// The request a handler receives: the proof, the request context and what
-/// is left of the HTTP request. Private fields, no `Clone` / `Default`, one
-/// constructor (`admit`, this module): holding one means the registry
-/// checked `proof.action()` against the route's action.
-pub struct Dispatched<R: ResourceCtx> {
+/// The request a handler receives: the proof, the request context, what is
+/// left of the HTTP request and, on a body route, the parsed body. Private
+/// fields, no `Clone` / `Default`, one constructor (`admit`, this module):
+/// holding one means the registry checked `proof.action()` against the
+/// route's action.
+pub struct Dispatched<R: ResourceCtx, B = ()> {
     proof: Authorized<R>,
     request: Admitted,
+    input: B,
 }
 
 /// The parts of a request a handler may read.
@@ -301,7 +367,13 @@ struct Admitted {
     repository: Option<ProjectRepository>,
 }
 
-impl<R: ResourceCtx> Dispatched<R> {
+impl<R: ResourceCtx, B> Dispatched<R, B> {
+    /// The parsed request body of a body route (`()` elsewhere): the same
+    /// value the [`BodyLoader`] loaded with and `authorize()` decided on.
+    pub fn input(&self) -> &B {
+        &self.input
+    }
+
     /// The decision (action, target id, context). Handlers take the target
     /// id from here, never from the path.
     pub fn proof(&self) -> &Authorized<R> {
@@ -379,6 +451,15 @@ impl<R: ResourceCtx> Dispatched<R> {
             .map(|t| t.0)
     }
 
+    /// What the authenticator knows of the caller's account (username,
+    /// display name, flags; `None` without one — a session, M2).
+    pub fn caller(&self) -> Option<&crate::auth::CallerProfile> {
+        self.request
+            .parts
+            .extensions
+            .get::<crate::auth::CallerProfile>()
+    }
+
     /// The proof, the principal and the body (receive-pack decides every
     /// ref on the project proof after it read the command list).
     pub fn into_proof_and_body(self) -> (Authorized<R>, Principal, Body) {
@@ -389,18 +470,23 @@ impl<R: ResourceCtx> Dispatched<R> {
 /// The only constructor of [`Dispatched`]: the proof must be for the
 /// route's own action (ADR-0015 MR4 must a). A mismatch is a programming
 /// error, never a pass: `FG-SYS-0001 reason=proof_action_mismatch`.
-fn admit<R: ResourceCtx>(
+fn admit<R: ResourceCtx, B>(
     route_action: Action,
     proof: Authorized<R>,
     request: Admitted,
-) -> Result<Dispatched<R>, ForgeError> {
+    input: B,
+) -> Result<Dispatched<R, B>, ForgeError> {
     if proof.action() != route_action {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "proof_action_mismatch")
             .with_context("route_action", route_action.name())
             .with_context("proof_action", proof.action().name()));
     }
-    Ok(Dispatched { proof, request })
+    Ok(Dispatched {
+        proof,
+        request,
+        input,
+    })
 }
 
 /// What a [`Loader`] found for the request.
@@ -461,6 +547,22 @@ impl<S: Sync> Loader<S> for InstanceLoader {
             })
         })
     }
+}
+
+/// Loads the resource a body route decides on, from the request, the
+/// **parsed body** and the state, for `viewer`. The registry calls it after
+/// authentication and after the body was read and validated, before
+/// `prove()`; a loader never decides (a body naming something the caller
+/// may not see is answered by `authorize()`, like an absent one).
+pub trait BodyLoader<S, B>: Send + Sync + 'static {
+    type Ctx: ResourceCtx<Id: Send> + Send + 'static;
+    fn load<'a>(
+        &'a self,
+        state: &'a S,
+        parts: &'a Parts,
+        body: &'a B,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, Self::Ctx>;
 }
 
 /// What the dispatcher needs from the state.
@@ -628,9 +730,117 @@ impl<S: DispatchState> Registry<S> {
         L: Loader<S>,
         H: Endpoint<S, L::Ctx>,
     {
+        if !self.push_fixed(verb, path, action, summary, None) {
+            return self;
+        }
+        let loader = Arc::new(loader);
+        let endpoint: Arc<dyn Endpoint<S, L::Ctx>> = Arc::new(handler);
+        let serve = move |State(state): State<S>, req: Request| {
+            let loader = Arc::clone(&loader);
+            let endpoint = Arc::clone(&endpoint);
+            async move { serve_fixed(state, req, action, &*loader, &*endpoint).await }
+        };
+        self.mount(path, action, axum::routing::on(verb.filter(), serve));
+        self
+    }
+
+    /// Register a write route `verb path` with a strict JSON body of type
+    /// `B`, at most `max_body_bytes` (1 ..= 64 KiB), deciding `action` on
+    /// what `loader` loads **with the parsed body** (M1 phase 8b MR6).
+    ///
+    /// Order, each step before the next can run: authentication (as for
+    /// [`Registry::route_with`]) → the body ([`crate::body::read_json`]:
+    /// `Content-Type`, size, idle, strict JSON → `FG-WEB-0006` /
+    /// `FG-WEB-0009`, no lookup) → the loader → `prove()` → `admit()` (the
+    /// proof's action must be the route's) → the handler, which gets the
+    /// body as [`Dispatched::input`]. A safe verb, a public action or a cap
+    /// out of range is a startup error (`FG-WEB-0004`).
+    #[allow(clippy::too_many_arguments)] // route_with's signature plus the cap
+    #[must_use]
+    pub fn route_with_body<L, B, H>(
+        mut self,
+        verb: Verb,
+        path: &'static str,
+        action: Action,
+        summary: &'static str,
+        max_body_bytes: usize,
+        loader: L,
+        handler: H,
+    ) -> Self
+    where
+        L: BodyLoader<S, B>,
+        B: RequestBody,
+        H: Endpoint<S, L::Ctx, B>,
+    {
+        let label = format!("{} {path}", verb.as_str());
+        let problem = if verb.is_safe() {
+            Some("body_route_needs_an_unsafe_verb")
+        } else if action.is_public() {
+            Some("body_route_must_authenticate")
+        } else if max_body_bytes == 0 || max_body_bytes > MAX_JSON_BODY_BYTES {
+            Some("body_limit_out_of_range")
+        } else {
+            None
+        };
+        if let Some(reason) = problem {
+            self.problems.push(format!("{label}: {reason}"));
+            return self;
+        }
+        let request = Some((SchemaDoc::of::<B>(), max_body_bytes));
+        if !self.push_fixed(verb, path, action, summary, request) {
+            return self;
+        }
+        let loader = Arc::new(loader);
+        let endpoint: Arc<dyn Endpoint<S, L::Ctx, B>> = Arc::new(handler);
+        let serve = move |State(state): State<S>, req: Request| {
+            let loader = Arc::clone(&loader);
+            let endpoint = Arc::clone(&endpoint);
+            async move {
+                serve_fixed_body(
+                    state,
+                    req,
+                    (path, action, max_body_bytes),
+                    &*loader,
+                    &*endpoint,
+                )
+                .await
+            }
+        };
+        self.mount(path, action, axum::routing::on(verb.filter(), serve));
+        self
+    }
+
+    /// Document the success body of the fixed route `verb path` (its
+    /// `200` response in `openapi.json`). An unknown route is a startup
+    /// error (`FG-WEB-0004`).
+    #[must_use]
+    pub fn responds<T: utoipa::ToSchema>(mut self, verb: Verb, path: &'static str) -> Self {
+        match self
+            .defs
+            .iter_mut()
+            .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
+        {
+            Some(def) => def.response = Some(SchemaDoc::of::<T>()),
+            None => self
+                .problems
+                .push(format!("responds: no route {} {path}", verb.as_str())),
+        }
+        self
+    }
+
+    /// Validate and record a fixed route's definition; `false` (with a
+    /// problem) when it cannot be mounted.
+    fn push_fixed(
+        &mut self,
+        verb: Verb,
+        path: &'static str,
+        action: Action,
+        summary: &'static str,
+        request: Option<(SchemaDoc, usize)>,
+    ) -> bool {
         if !valid_path(path) {
             self.problems.push(format!("invalid path {path:?}"));
-            return self;
+            return false;
         }
         if self
             .defs
@@ -640,7 +850,7 @@ impl<S: DispatchState> Registry<S> {
             // axum would panic on an overlapping route; fail at build instead.
             self.problems
                 .push(format!("duplicate {} {path}", verb.as_str()));
-            return self;
+            return false;
         }
         self.defs.push(RouteDef {
             scope: RouteScope::Fixed,
@@ -650,15 +860,15 @@ impl<S: DispatchState> Registry<S> {
             query_key: None,
             action,
             summary,
+            request,
+            response: None,
         });
-        let loader = Arc::new(loader);
-        let endpoint: Arc<dyn Endpoint<S, L::Ctx>> = Arc::new(handler);
-        let serve = move |State(state): State<S>, req: Request| {
-            let loader = Arc::clone(&loader);
-            let endpoint = Arc::clone(&endpoint);
-            async move { serve_fixed(state, req, action, &*loader, &*endpoint).await }
-        };
-        let mut one = axum::routing::on(verb.filter(), serve);
+        true
+    }
+
+    /// Mount a fixed route's method router, behind authentication and the
+    /// guard unless the action is public.
+    fn mount(&mut self, path: &'static str, action: Action, mut one: MethodRouter<S>) {
         if !action.is_public() {
             // The later route_layer runs first: token authentication builds
             // the principal, then the guard requires it.
@@ -674,7 +884,6 @@ impl<S: DispatchState> Registry<S> {
             None => one,
         };
         self.routers.insert(path, merged);
-        self
     }
 
     /// Register a scoped route for the dispatcher (ADR-0015): `(scope, verb,
@@ -751,6 +960,8 @@ impl<S: DispatchState> Registry<S> {
             query_key,
             action,
             summary,
+            request: None,
+            response: None,
         };
         self.defs.push(def.clone());
         self.scoped.entries.push(ScopedEntry { def, handler });
@@ -791,8 +1002,21 @@ impl<S: DispatchState> Registry<S> {
     }
 }
 
-/// A fixed route: load, prove, admit, call (the principal was set by the
-/// authentication layer; public routes decide as anonymous).
+/// The principal of a fixed route's request (set by the authentication
+/// layer; public routes decide as anonymous).
+fn fixed_principal(parts: &Parts, action: Action) -> Principal {
+    if action.is_public() {
+        Principal::anonymous()
+    } else {
+        parts
+            .extensions
+            .get::<Principal>()
+            .cloned()
+            .unwrap_or_else(Principal::anonymous)
+    }
+}
+
+/// A fixed route: load, prove, admit, call.
 async fn serve_fixed<S, L>(
     state: S,
     req: Request,
@@ -806,62 +1030,103 @@ where
 {
     let (parts, body) = req.into_parts();
     let ctx = Ctx::of(&parts);
-    let principal = if action.is_public() {
-        Principal::anonymous()
-    } else {
-        parts
-            .extensions
-            .get::<Principal>()
-            .cloned()
-            .unwrap_or_else(Principal::anonymous)
-    };
-    let lookup = match loader.load(&state, &parts, principal.user()).await {
-        Ok(lookup) => lookup,
-        Err(e) => {
-            return ctx
-                .fail(e.with_context("action", action.name()))
-                .into_response()
-        }
-    };
-    let (resource, canonical, tombstone, project) = match lookup {
-        Lookup::Found {
-            ctx: r,
-            canonical,
-            tombstone,
-            project,
-        } => (r, canonical, tombstone, project),
-        Lookup::Unresolved {
-            ctx: unresolved,
-            why,
-        } => {
-            let err = deny_unresolved(&principal, action, unresolved);
-            let err = match why {
-                Some(why) => err.with_context("lookup", why),
-                None => err,
-            };
-            return ctx.fail(err).into_response();
-        }
-    };
-    let proof = match prove(&principal, action, resource) {
-        Ok(proof) => proof,
-        Err(e) => return ctx.fail(e).into_response(),
-    };
-    let admitted = Admitted {
-        ctx: ctx.clone(), // clone: the error path below still needs it
+    let principal = fixed_principal(&parts, action);
+    let lookup = loader.load(&state, &parts, principal.user()).await;
+    let request = Admitted {
+        ctx: ctx.clone(), // clone: the error paths still need it
         principal,
         parts,
         body,
         tail: TailSegments::default(),
-        canonical,
-        tombstone,
-        project,
+        canonical: None,
+        tombstone: None,
+        project: None,
         repository: None,
     };
-    let handled = match admit(action, proof, admitted) {
-        Ok(dispatched) => endpoint.call(state, dispatched),
-        Err(e) => return ctx.fail(e).into_response(),
+    match decide(action, lookup, request, ()) {
+        Ok(dispatched) => endpoint.call(state, dispatched).await,
+        Err(e) => ctx.fail(e).into_response(),
+    }
+}
+
+/// A body route: read the body (before any lookup), load with it, prove,
+/// admit, call.
+async fn serve_fixed_body<S, L, B>(
+    state: S,
+    req: Request,
+    (path, action, cap): (&'static str, Action, usize),
+    loader: &L,
+    endpoint: &dyn Endpoint<S, L::Ctx, B>,
+) -> Response
+where
+    S: Send + Sync + 'static,
+    L: BodyLoader<S, B>,
+    B: RequestBody,
+{
+    let (parts, body) = req.into_parts();
+    let ctx = Ctx::of(&parts);
+    let input: B = match crate::body::read_json(&parts, body, cap).await {
+        Ok(input) => input,
+        Err(e) => {
+            return ctx
+                .fail(
+                    e.with_context("action", action.name())
+                        .with_context("route", path),
+                )
+                .into_response()
+        }
     };
-    handled.await
+    let principal = fixed_principal(&parts, action);
+    let lookup = loader.load(&state, &parts, &input, principal.user()).await;
+    let request = Admitted {
+        ctx: ctx.clone(), // clone: the error paths still need it
+        principal,
+        parts,
+        body: Body::empty(), // read above: a handler gets the parsed input
+        tail: TailSegments::default(),
+        canonical: None,
+        tombstone: None,
+        project: None,
+        repository: None,
+    };
+    match decide(action, lookup, request, input) {
+        Ok(dispatched) => endpoint.call(state, dispatched).await,
+        Err(e) => ctx.fail(e).into_response(),
+    }
+}
+
+/// The loader's answer → `prove()` → `admit()`: the one path from a fixed
+/// route's lookup to a handler (a loader error, an unresolved lookup and a
+/// denial all end here, before any handler).
+fn decide<R: ResourceCtx, B>(
+    action: Action,
+    lookup: Result<Lookup<R>, ForgeError>,
+    mut request: Admitted,
+    input: B,
+) -> Result<Dispatched<R, B>, ForgeError> {
+    let lookup = lookup.map_err(|e| e.with_context("action", action.name()))?;
+    let resource = match lookup {
+        Lookup::Found {
+            ctx,
+            canonical,
+            tombstone,
+            project,
+        } => {
+            request.canonical = canonical;
+            request.tombstone = tombstone;
+            request.project = project;
+            ctx
+        }
+        Lookup::Unresolved { ctx, why } => {
+            let err = deny_unresolved(&request.principal, action, ctx);
+            return Err(match why {
+                Some(why) => err.with_context("lookup", why),
+                None => err,
+            });
+        }
+    };
+    let proof = prove(&request.principal, action, resource)?;
+    admit(action, proof, request, input)
 }
 
 /// Decide an unresolved path through `prove()` (one decision point). It
@@ -914,6 +1179,7 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
             project: None,
             repository,
         },
+        (),
     )
 }
 
@@ -952,10 +1218,27 @@ pub fn routes_json(defs: &[RouteDef], planned: &[Action]) -> String {
 
 /// `Git/docs/api/openapi.json` (OpenAPI 3.1): the fixed routes only — a
 /// scoped route spans several segments and is not an API operation
-/// (ADR-0015). Request / response schemas join with utoipa (MR6); every
-/// operation documents the error body and the security requirement.
+/// (ADR-0015). Every operation documents the error body and the security
+/// requirement; a body route its `requestBody` (the Rust type's schema,
+/// utoipa) and `x-forge-max-body-bytes`; a documented route its `200`
+/// body. `{id}` is a positive int64. Deterministic: every map is sorted.
 pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
     let mut paths: BTreeMap<&str, Map<String, Value>> = BTreeMap::new();
+    let mut schemas: BTreeMap<String, Value> = BTreeMap::new();
+    schemas.insert("Error".into(), error_schema());
+    let mut problems: Vec<String> = Vec::new();
+    let mut add_schemas = |doc: &SchemaDoc| -> String {
+        for (name, schema) in (doc.schemas)() {
+            let value = serde_json::to_value(&schema).unwrap_or(Value::Null);
+            if let Some(existing) = schemas.get(&name) {
+                if existing != &value {
+                    problems.push(name.clone()); // one name, two shapes
+                }
+            }
+            schemas.insert(name, value);
+        }
+        format!("#/components/schemas/{}", (doc.name)())
+    };
     for d in defs.iter().filter(|d| d.scope == RouteScope::Fixed) {
         let mut op = Map::new();
         op.insert("operationId".into(), json!(operation_id(d.verb, d.path)));
@@ -968,48 +1251,90 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
         if !params.is_empty() {
             let list: Vec<Value> = params
                 .iter()
-                .map(|p| json!({ "name": p, "in": "path", "required": true, "schema": { "type": "string" } }))
+                .map(|p| json!({ "name": p, "in": "path", "required": true, "schema": param_schema(p) }))
                 .collect();
             op.insert("parameters".into(), Value::Array(list));
         }
-        op.insert(
-            "responses".into(),
+        if let Some((doc, cap)) = &d.request {
+            let reference = add_schemas(doc);
+            op.insert(
+                "requestBody".into(),
+                json!({
+                    "required": true,
+                    "content": { "application/json": { "schema": { "$ref": reference } } }
+                }),
+            );
+            op.insert("x-forge-max-body-bytes".into(), json!(cap));
+        }
+        let mut responses = Map::new();
+        if let Some(doc) = &d.response {
+            let reference = add_schemas(doc);
+            responses.insert(
+                "200".into(),
+                json!({
+                    "description": "Success",
+                    "content": { "application/json": { "schema": { "$ref": reference } } }
+                }),
+            );
+        }
+        responses.insert(
+            "default".into(),
             json!({
-                "default": {
-                    "description": "Error: registered code, localized message, request id",
-                    "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
-                }
+                "description": "Error: registered code, localized message, request id",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
             }),
         );
+        op.insert("responses".into(), Value::Object(responses));
         paths
             .entry(d.path)
             .or_default()
             .insert(d.verb.as_str().to_ascii_lowercase(), Value::Object(op));
+    }
+    let mut components = json!({
+        "securitySchemes": {
+            "bearerToken": { "type": "http", "scheme": "bearer", "description": "Personal access token" }
+        },
+        "schemas": schemas,
+    });
+    if !problems.is_empty() {
+        // Never silently pick one: the generated file says so, and the
+        // registry test fails on it.
+        if let Some(obj) = components.as_object_mut() {
+            obj.insert("x-forge-schema-conflicts".into(), json!(problems));
+        }
     }
     let doc = json!({
         "openapi": "3.1.0",
         "info": { "title": "GitStation API", "version": version },
         "paths": paths,
         "security": [ { "bearerToken": [] } ],
-        "components": {
-            "securitySchemes": {
-                "bearerToken": { "type": "http", "scheme": "bearer", "description": "Personal access token" }
-            },
-            "schemas": {
-                "Error": {
-                    "type": "object",
-                    "required": ["error_code", "user_message", "request_id"],
-                    "additionalProperties": false,
-                    "properties": {
-                        "error_code": { "type": "string", "pattern": "^FG-[A-Z]+-[0-9]{4}$" },
-                        "user_message": { "type": "string" },
-                        "request_id": { "type": "string" }
-                    }
-                }
-            }
-        }
+        "components": components,
     });
     pretty(&doc)
+}
+
+/// The error body every operation can answer.
+fn error_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["error_code", "user_message", "request_id"],
+        "additionalProperties": false,
+        "properties": {
+            "error_code": { "type": "string", "pattern": "^FG-[A-Z]+-[0-9]{4}$" },
+            "user_message": { "type": "string" },
+            "request_id": { "type": "string" }
+        }
+    })
+}
+
+/// A path parameter's schema: an `{id}` is a plain positive decimal
+/// (anything else is `FG-WEB-0006`); every other parameter a string.
+fn param_schema(name: &str) -> Value {
+    if name == "id" || name.ends_with("_id") {
+        json!({ "type": "integer", "format": "int64", "minimum": 1 })
+    } else {
+        json!({ "type": "string" })
+    }
 }
 
 /// A document-unique OpenAPI operationId from the method and the path

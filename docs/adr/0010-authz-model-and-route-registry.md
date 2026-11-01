@@ -160,3 +160,30 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - 新しい Action `PathResolve`（`read_api`）と `WebShell`（公開）を足し、`Resource::Unresolved` / `Resource::Resolved` を足した（細部は ADR-0015 の
   同じ日付の Amendment）。公開の Action は `Health` と `WebShell` の 2 つになった。どちらもルートがまだないので `app::PLANNED` に入れ、
   `gen-authz` で `docs/authz/*.generated.json` を作り直した（OpenAPI は変わらない）。
+
+## Amendment（2026-11-01、M1 phase 8b MR6: 本文のあるルート、`UserSelfRead`、OpenAPI の schema）
+
+書き込みの API（MR7a / MR8）は、認可の入力（与えるロール、保護の段階、可視性、親）が本文にある。そこで、本文を読み込みの **前** に読み、
+大きさを抑え、型に直す登録の口を足した（`feat/web-api-request-body`）。決めた点は次のとおり。
+
+- **`Registry::route_with_body::<L, B>`**（`route_with` と同じ並びに、本文の上限を足した形）。順序は **認証 → 本文 → 読み込み → `prove()` →
+  `admit()` → ハンドラ** で、前の段で止まれば後の段は動かない。本文は `forge_web::body::read_json` が読む:
+  `Content-Type: application/json`（`charset=utf-8` だけ可）でなければ FG-WEB-0006 `reason=content_type`、ルートの上限（1 〜 64 KiB、登録時に
+  検査。サーバー全体の `body_limit_bytes` も超えない）を `Content-Length` で超えれば読まずに、流れの途中で超えればそこで FG-WEB-0009
+  `RequestTooLarge`（413、`declared=true|false`）、止まった本文はサーバーの読み取りの無通信の上限（FG-WEB-0002 `operation=request_read`）、
+  JSON は厳格（`#[serde(deny_unknown_fields)]`）で、誤りは FG-WEB-0006 の `reason=json_syntax | unknown_field | missing_field | type`。
+  ログに出すのは欄の名前と位置だけで、**値は出さない**（serde のメッセージは値を引用するので使わない）。
+- **MR4 の must はそのまま**: 本文は `Dispatched<R, B>` の中でだけハンドラに届き（`input()`）、`Dispatched` は引き続き `admit()` だけが作る
+  （`compile_fail` の doctest を 1 つ足した）。`admit()` は本文があっても `proof.action() == def.action` を確かめる。安全な動詞（GET / HEAD）、
+  公開の Action、範囲外の上限、重複は起動時の FG-WEB-0004。`BodyLoader::load(state, parts, &B, viewer)` は判定しない（本文が見えないものを
+  指していても、ないものと同じく `authorize()` が答える）。読み込みと判定の道は `route_with` と同じ 1 つの関数（`registry::decide`）にまとめた。
+- **新しい Action `UserSelfRead`**（`GET /api/v1/user`、`read_api`）。`Resource::Instance` に対して、有効なサインイン済みの利用者すべてを許す。
+  matrix の行: 許可 5（Developer、管理者、エージェントのトークン、`read_api` / `api` のトークン）、拒否 5（匿名 FG-AUTH-0001、無効 2 行
+  FG-AUTH-0004、`read_repository` / `write_repository` だけのトークン FG-AUTH-0002）。`is_agent` はまだ判定の入力ではない（MR8）ので、
+  エージェントの行は人のトークンと同じに決まる。応答の `{id, username, display_name, is_admin, is_agent, token_scopes}` は、認証が同じ文で
+  読んだ値（`TokenIdentity` に `username` / `display_name` を足した）で、2 回目の照会はしない。
+- **OpenAPI**: 登録に schema を足した（`RouteDef::request` / `response`、utoipa の `ToSchema` から）。本文のあるルートは `requestBody` と
+  `x-forge-max-body-bytes`、`Registry::responds::<T>(verb, path)` を付けたルートは `200` の本文を持つ。`{id}` は正の int64。
+  `ProjectBody`（`project_view` が組み立てる唯一の形）、`UserSelf`、`Resolution` を載せた。生成は決定的（すべての map を並べ替える）で、
+  同じ名前に 2 つの形があれば `x-forge-schema-conflicts` として出し、テストが落ちる。utoipa（5.x）と aes-gcm（0.10.3）は
+  `cargo deny check` と `cargo audit` を通してから入れた。

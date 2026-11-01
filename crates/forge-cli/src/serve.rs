@@ -48,7 +48,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
         let state = app_state(&db, database).with_smart_http(smart_http);
-        let router = forge_web::app(state, app_config_for(database, &cfg.git_http))?;
+        let router = forge_web::app(
+            state,
+            app_config_for(database, &cfg.git_http, &cfg.server.limits),
+        )?;
         let listener = forge_web::server::bind(bind).await?;
         tracing::info!(
             bind,
@@ -159,10 +162,15 @@ fn request_timeout_for(database: &DatabaseConfig) -> Duration {
 /// The application config `forge serve` runs with. git POSTs get
 /// `git.http.timeout_ms` instead of the request timeout (they read the
 /// whole request first, under their own idle and size limits).
-fn app_config_for(database: &DatabaseConfig, git_http: &GitHttpConfig) -> AppConfig {
+fn app_config_for(
+    database: &DatabaseConfig,
+    git_http: &GitHttpConfig,
+    server: &forge_core::config::ServerLimitsConfig,
+) -> AppConfig {
     AppConfig {
         request_timeout: request_timeout_for(database),
         git_rpc_timeout: git_http.timeout,
+        body_read_timeout: server.body_read_timeout,
         ..AppConfig::default()
     }
 }
@@ -235,7 +243,7 @@ mod tests {
         for pairs in configs {
             let cfg = load(None, &Env::from_pairs(pairs.clone())).expect("config");
             let db = &cfg.database;
-            let request = app_config_for(db, &cfg.git_http).request_timeout;
+            let request = app_config_for(db, &cfg.git_http, &cfg.server.limits).request_timeout;
             let needed = auth_timeout_for(db) + lookup_timeout_for(db);
             assert!(request > needed, "{pairs:?}: {request:?} <= {needed:?}");
             assert!(

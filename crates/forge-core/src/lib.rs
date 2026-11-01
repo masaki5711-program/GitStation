@@ -4,6 +4,7 @@
 pub mod audit_details;
 pub mod authenticator;
 pub mod config;
+pub mod cursor;
 pub mod dedup_key;
 pub mod event_type;
 pub mod ids;
@@ -28,6 +29,7 @@ pub mod web_path;
 
 pub use audit_details::AuditDetails;
 pub use authenticator::{Authenticator, TokenIdentity};
+pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
@@ -55,6 +57,8 @@ pub use web_path::{
 
 #[cfg(test)]
 mod audit_details_tests;
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod dedup_key_tests;
 #[cfg(test)]

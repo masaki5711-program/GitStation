@@ -23,6 +23,8 @@ async fn issued_token_authenticates_to_its_owner_with_its_scopes() {
         TokenIdentity {
             token_id: issued.token_id,
             user_id: alice,
+            username: "alice".to_owned(),
+            display_name: "Someone".to_owned(),
             is_admin: false,
             scopes: vec![Scope::ReadApi, Scope::WriteRepository],
             is_agent: false,

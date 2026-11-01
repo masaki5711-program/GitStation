@@ -174,6 +174,22 @@ pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct TokenCredential(pub(crate) i64);
 
+/// What the authenticator returned about the caller's account, next to the
+/// `Principal` (`GET /api/v1/user` shows it; never an authorization input:
+/// `authorize()` reads the `Principal` only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerProfile {
+    pub username: String,
+    pub display_name: String,
+    /// The account's administrator flag (rights also need a session or the
+    /// token's `admin` scope: `Principal::admin_rights`).
+    pub is_admin: bool,
+    /// The token was issued for an AI agent (ADR-0017 §4.0).
+    pub is_agent: bool,
+    /// The token's scopes (`None` for a session).
+    pub token_scopes: Option<Vec<forge_core::Scope>>,
+}
+
 /// Turn the request's credentials into a `Principal` extension (none
 /// without an `Authorization` header); a rejection is the finished
 /// response. The fixed routes' middleware and the dispatcher's step 4 (a
@@ -232,6 +248,13 @@ pub(crate) async fn authenticate_request(req: &mut Request) -> Result<(), Box<Re
         .await
     {
         Ok(identity) => {
+            req.extensions_mut().insert(CallerProfile {
+                username: identity.username,
+                display_name: identity.display_name,
+                is_admin: identity.is_admin,
+                is_agent: identity.is_agent,
+                token_scopes: Some(identity.scopes.clone()), // clone: the principal holds them too
+            });
             req.extensions_mut().insert(Principal::authenticated(
                 identity.user_id,
                 identity.is_admin,

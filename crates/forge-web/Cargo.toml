@@ -25,6 +25,8 @@ futures-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 serde.workspace = true
+# M1 phase 8b MR6: request / response schemas in docs/api/openapi.json.
+utoipa.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true

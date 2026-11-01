@@ -1,7 +1,7 @@
 //! `GET|HEAD /api/v1/projects/{id}` (M1 phase 8 MR5) with a scripted
 //! loader that counts its calls: the view's shape, `HEAD` without a body,
 //! byte-identical denials for absent / invisible / pending deletion seen by
-//! a non-member / a malformed id, exactly one loader call per request that
+//! a non-member, one 400 for every malformed id, exactly one loader call per request that
 //! reaches the loader (none before authentication or for a malformed id),
 //! token scopes, and the loader's failures.
 
@@ -262,10 +262,9 @@ async fn head_answers_the_same_headers_without_a_body() {
     assert_eq!(script.calls(), 3, "one loader call per request");
 }
 
-/// No such id, a project the caller cannot see, a project pending deletion
-/// the caller cannot see, and an id that is not a plain positive decimal:
-/// the same bytes but the request id. Each resolved id costs exactly one
-/// loader call; a malformed id none.
+/// No such id, a project the caller cannot see and a project pending
+/// deletion the caller cannot see: the same bytes but the request id. Each
+/// costs exactly one loader call.
 #[tokio::test]
 async fn absent_invisible_and_malformed_ids_are_identical_denials() {
     let script = Arc::new(script());
@@ -279,10 +278,23 @@ async fn absent_invisible_and_malformed_ids_are_identical_denials() {
     // An administrator gets the same 404 for an id that does not exist.
     let admin = send(&script, "GET", &uri(999), Some(session(true, true))).await;
     answers.push(admin.without_request_id());
-    let before = script.calls();
+    assert!(answers.iter().all(|a| a == &answers[0]));
+}
+
+/// An id that is not a plain positive decimal is FG-WEB-0006 (phase 8b
+/// MR6), decided from the string without a lookup: byte-identical whether
+/// its digits would name a readable (`01`), an invisible (`02`) or no
+/// project (`0999`), for a member, an administrator and a wrong-scope token.
+#[tokio::test]
+async fn a_malformed_id_is_the_same_400_whatever_it_would_name() {
+    let script = Arc::new(script());
+    let mut answers = Vec::new();
+    let repo_only = token(&[Scope::ReadRepository]);
     for raw in [
-        "0",
         "01",
+        "02",
+        "0999",
+        "0",
         "+1",
         "-1",
         "%31",
@@ -290,11 +302,15 @@ async fn absent_invisible_and_malformed_ids_are_identical_denials() {
         "abc",
         "9223372036854775808",
     ] {
-        let answer = send(&script, "GET", &uri(raw), Some(member())).await;
-        assert_eq!(answer.without_request_id(), answers[0], "{raw}");
+        for who in [member(), session(true, true), repo_only.clone()] {
+            let answer = send(&script, "GET", &uri(raw), Some(who)).await;
+            assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{raw}");
+            assert_eq!(answer.code(), ErrorCode::RequestInvalid.id(), "{raw}");
+            answers.push(answer.without_request_id());
+        }
     }
-    assert_eq!(script.calls(), before, "a malformed id is not looked up");
     assert!(answers.iter().all(|a| a == &answers[0]));
+    assert_eq!(script.calls(), 0, "a malformed id is not looked up");
 }
 
 /// Pending deletion and the Guest role are decided by `authorize()` as the
