@@ -14,7 +14,7 @@ use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
 
@@ -296,94 +296,100 @@ pub async fn disable_with(
     guard: Guard,
 ) -> Result<DisableOutcome, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    tx.step(lock_admin_set).await?;
-    let row: Option<(String, String, bool)> = tx
-        .step(|c| async move {
-            sqlx::query_as("SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE")
+    let outcome = async {
+        tx.step(lock_admin_set).await?;
+        let row: Option<(String, String, bool)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE",
+                )
                 .bind(user.get())
                 .fetch_optional(c)
                 .await
                 .map_err(|e| query_error("users.disable.lock", e))
-        })
-        .await?;
-    let Some((kind, state, is_admin)) = row else {
-        return Err(not_found());
-    };
-    if state == "disabled" {
-        // Dropping the transaction rolls back the lock; nothing was written.
-        return Ok(DisableOutcome::AlreadyDisabled);
-    }
-    let kind = UserKind::parse(&kind).ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "unknown_user_kind")
-            .with_context("table", "users")
-    })?;
-    let leaves = tx
-        .step(|c| admin::what_disable_leaves(c, user, kind, is_admin))
-        .await?;
-    let forced = guard == Guard::Force;
-    if !forced {
-        if let Some(refused) = leaves.refusal(user) {
-            // Dropping the transaction rolls back the locks; nothing was
-            // written and no token was revoked.
-            return Err(refused);
+            })
+            .await?;
+        let Some((kind, state, is_admin)) = row else {
+            return Err(not_found());
+        };
+        if state == "disabled" {
+            // Nothing was written; `settle` rolls the lock back explicitly.
+            return Ok(Settle::Discard(DisableOutcome::AlreadyDisabled));
         }
-    }
-    tx.step(|c| async move {
-        sqlx::query("UPDATE forge.users SET state = 'disabled', updated_at = now() WHERE id = $1")
+        let kind = UserKind::parse(&kind).ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "unknown_user_kind")
+                .with_context("table", "users")
+        })?;
+        let leaves = tx
+            .step(|c| admin::what_disable_leaves(c, user, kind, is_admin))
+            .await?;
+        let forced = guard == Guard::Force;
+        if !forced {
+            if let Some(refused) = leaves.refusal(user) {
+                // Nothing was written and no token was revoked; `settle` rolls
+                // the locks back explicitly.
+                return Err(refused);
+            }
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.users SET state = 'disabled', updated_at = now() WHERE id = $1",
+            )
             .bind(user.get())
             .execute(c)
             .await
             .map_err(|e| query_error("users.disable.update", e))
-    })
-    .await?;
-    // ADR-0019: the user's active tokens die with the account, in the same
-    // change, so re-enabling the user never revives them. `tokens::issue`
-    // locks the user row too, so no token is issued in between.
-    let revoked: Vec<(i64, String)> = tx
-        .step(|c| async move {
-            sqlx::query_as(
-                "UPDATE forge.tokens SET revoked_at = now(), revoked_reason = 'user_disabled' \
-                 WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() \
-                 RETURNING id, public_id",
-            )
-            .bind(user.get())
-            .fetch_all(c)
-            .await
-            .map_err(|e| query_error("users.disable.revoke_tokens", e))
         })
         .await?;
-    let details = AuditDetails::UserDisabled {
-        kind,
-        revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
-        forced,
-        ownerless_groups: leaves.ownerless_count(),
-        ownerless_projects: leaves.ownerless_project_count(),
-        left_without_admin: leaves.without_admin,
-    };
-    let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
-    // One token.revoked event per token (at most MAX_ACTIVE_TOKENS = 50,
-    // inside the 100 events one change may carry).
-    for (token_id, public_id) in revoked {
-        let token = AuditDetails::TokenRevoked {
-            token_id,
-            user,
-            public_id,
-        };
-        record.events.push(crate::tokens::event(&token, token_id)?);
-    }
-    tx.commit(record)
-        .await?
-        .require_recorded(details.action())?;
-    Ok(if leaves.is_clean() {
-        DisableOutcome::Disabled
-    } else {
-        DisableOutcome::DisabledPastGuard {
+        // ADR-0019: the user's active tokens die with the account, in the same
+        // change, so re-enabling the user never revives them. `tokens::issue`
+        // locks the user row too, so no token is issued in between.
+        let revoked: Vec<(i64, String)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "UPDATE forge.tokens SET revoked_at = now(), revoked_reason = 'user_disabled' \
+                 WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() \
+                 RETURNING id, public_id",
+                )
+                .bind(user.get())
+                .fetch_all(c)
+                .await
+                .map_err(|e| query_error("users.disable.revoke_tokens", e))
+            })
+            .await?;
+        let details = AuditDetails::UserDisabled {
+            kind,
+            revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
+            forced,
             ownerless_groups: leaves.ownerless_count(),
             ownerless_projects: leaves.ownerless_project_count(),
             left_without_admin: leaves.without_admin,
+        };
+        let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
+        // One token.revoked event per token (at most MAX_ACTIVE_TOKENS = 50,
+        // inside the 100 events one change may carry).
+        for (token_id, public_id) in revoked {
+            let token = AuditDetails::TokenRevoked {
+                token_id,
+                user,
+                public_id,
+            };
+            record.events.push(crate::tokens::event(&token, token_id)?);
         }
-    })
+        let outcome = if leaves.is_clean() {
+            DisableOutcome::Disabled
+        } else {
+            DisableOutcome::DisabledPastGuard {
+                ownerless_groups: leaves.ownerless_count(),
+                ownerless_projects: leaves.ownerless_project_count(),
+                left_without_admin: leaves.without_admin,
+            }
+        };
+        Ok(Settle::Commit(record, outcome))
+    }
+    .await;
+    tx.settle("user.disabled", outcome).await
 }
 
 /// The id of the user named `username` (the operator CLI names users this

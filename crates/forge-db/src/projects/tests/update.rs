@@ -451,3 +451,74 @@ async fn load_parent_names_groups_users_and_refuses_projects() {
     );
     t.drop_now().await;
 }
+
+/// `FOR UPDATE NOWAIT` on the project row from another connection.
+async fn row_free(su: &mut PgConnection, id: i64) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(&format!(
+        "BEGIN; SELECT id FROM forge.projects WHERE id = {id} FOR UPDATE NOWAIT; ROLLBACK"
+    ))
+    .execute(&mut *su)
+    .await
+    .map(|_| ())
+}
+
+/// A denial and an unchanged update roll back explicitly (`ChangeTx::settle`):
+/// the project row is free the moment the call returns. A dropped
+/// transaction would roll back later, from the pool's return task (sqlx
+/// 0.8; handoff D4), and `FOR UPDATE NOWAIT` could fail here.
+#[tokio::test]
+async fn a_denial_or_an_unchanged_update_releases_the_row_lock_at_once() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let web = create_ok(&t, &project("web", alice.namespace_id, alice.user_id)).await;
+    let mut su = t.superuser().await;
+    let id = web.project_id.get();
+    let patch = ProjectPatch {
+        display_name: Some("Project web".into()),
+        description: None,
+    };
+    for round in 0..20 {
+        let denied = update_decided(
+            &t.db,
+            &ctx(&format!("req-deny-{round}")),
+            web.project_id,
+            alice.user_id,
+            &patch,
+            |_| Err::<(), _>(deny()),
+        )
+        .await;
+        assert!(denied.is_err());
+        row_free(&mut su, id)
+            .await
+            .expect("the denial released the row");
+        let (unchanged, ()) = update_decided(
+            &t.db,
+            &ctx(&format!("req-same-{round}")),
+            web.project_id,
+            alice.user_id,
+            &patch,
+            |_| Ok(()),
+        )
+        .await
+        .expect("unchanged");
+        assert_eq!(unchanged, Updated::Unchanged);
+        row_free(&mut su, id)
+            .await
+            .expect("the unchanged update released the row");
+        let (same, ()) = change_visibility_decided(
+            &t.db,
+            &ctx(&format!("req-vis-{round}")),
+            web.project_id,
+            alice.user_id,
+            Visibility::Private,
+            |_| Ok(()),
+        )
+        .await
+        .expect("unchanged");
+        assert_eq!(same, VisibilityOutcome::Unchanged);
+        row_free(&mut su, id)
+            .await
+            .expect("the unchanged visibility released the row");
+    }
+    t.drop_now().await;
+}

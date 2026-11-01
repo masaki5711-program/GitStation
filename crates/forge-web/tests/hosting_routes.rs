@@ -335,6 +335,35 @@ async fn projects_are_created_updated_and_made_internal_through_the_routes() {
         (maintainer.status, code(&maintainer)),
         (StatusCode::FORBIDDEN, "FG-AUTH-0003")
     );
+    // An agent's token never changes visibility, even the Owner's.
+    let agent = Principal::authenticated(
+        alice.user_id,
+        false,
+        true,
+        Credential::Token(vec![forge_core::Scope::Api]),
+    )
+    .as_agent(true);
+    let by_agent = call(
+        r(),
+        "PUT",
+        &visibility,
+        agent.clone(),
+        Some(json!({"visibility": "internal"})),
+    )
+    .await;
+    assert_eq!(
+        (by_agent.status, code(&by_agent)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003")
+    );
+    let agent_update = call(
+        r(),
+        "PATCH",
+        &one,
+        agent,
+        Some(json!({"description": "by agent"})),
+    )
+    .await;
+    assert_eq!(agent_update.status, StatusCode::OK, "{}", agent_update.json);
     let internal = call(
         r(),
         "PUT",

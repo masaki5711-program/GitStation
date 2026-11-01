@@ -183,7 +183,8 @@ impl<R: ResourceCtx> Authorized<R> {
                 account.is_admin,
                 account.active,
                 self.principal.credential().clone(), // clone: the new proof owns its principal
-            ),
+            )
+            .as_agent(self.principal.is_agent()),
             None => Principal::anonymous(),
         };
         prove(&principal, self.action, fresh)

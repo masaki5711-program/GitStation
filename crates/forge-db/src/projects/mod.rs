@@ -21,7 +21,7 @@ use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
 use crate::change::{
-    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome,
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
 };
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
@@ -213,10 +213,9 @@ fn check_actor(ctx: &ChangeContext, creator: UserId) -> Result<(), ForgeError> {
 struct Placement {
     full_path: String,
     depth: i16,
-    /// The parent namespace: a group's id, or a personal namespace's user.
-    parent: ParentOwner,
 }
 
+/// The parent namespace: a group's id, or a personal namespace's user.
 #[derive(Debug, Clone, Copy)]
 enum ParentOwner {
     Group(GroupId),
@@ -242,14 +241,11 @@ async fn place(
     let Some((kind, owner_id, parent_path, parent_depth)) = row else {
         return Err(not_found("namespace"));
     };
-    let owner = match kind.as_str() {
-        "group" => ParentOwner::Group(GroupId::new(owner_id)),
-        "user" => {
-            check_namespace_owner(conn, owner_id).await?;
-            ParentOwner::User(UserId::new(owner_id))
-        }
+    match kind.as_str() {
+        "group" => {}
+        "user" => check_namespace_owner(conn, owner_id).await?,
         _ => return Err(request_invalid("parent_not_owner_namespace")),
-    };
+    }
     let depth = parent_depth.saturating_add(1);
     if usize::try_from(depth).map_or(true, |d| d > MAX_DEPTH) {
         return Err(ForgeError::new(ErrorCode::NamespacePathInvalid)
@@ -263,13 +259,15 @@ async fn place(
             .with_context("reason", "path_too_long")
             .with_context("len", len));
     }
-    Ok(Placement {
-        full_path,
-        depth,
-        parent: owner,
-    })
+    Ok(Placement { full_path, depth })
 }
 
+/// **Callers**: the operator CLI and the worker (actor `system`) and the
+/// tests. A route never calls this directly: it goes through forge-hosting,
+/// whose `create_project` uses [`create_decided`] (the decision inside the
+/// transaction). Only forge-hosting calls the `*_decided` commands
+/// (`forge-hosting/tests/decided_callers.rs`).
+///
 /// Insert the project, its namespace (`kind = 'project'`, `owner_id =
 /// projects.id`), its repository (`provisioning`, `new.kind`) and the
 /// creator as direct Owner, enqueue the `repository.provision` job
@@ -349,17 +347,50 @@ async fn create_in<D, P>(
 where
     D: FnOnce(&ProjectCreateFacts) -> Result<P, ForgeError>,
 {
-    // Never top level, so the reserved top-level words are allowed.
-    let segment = PathSegment::parse(&new.segment)?;
-    validate(new)?;
     check_actor(ctx, new.creator)?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let placement = tx.step(|c| place(c, &segment, new.parent)).await?;
+    let outcome = create_steps(&mut tx, ctx, new, decide).await;
+    tx.settle("project.created", outcome).await
+}
+
+/// The parent's kind and owner, locked `FOR SHARE` (as `place` reads it):
+/// what `decide` needs before any name or field rule is checked.
+async fn lock_parent_owner(
+    conn: &mut PgConnection,
+    parent: NamespaceId,
+) -> Result<ParentOwner, ForgeError> {
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT kind, owner_id FROM forge.namespaces WHERE id = $1 FOR SHARE")
+            .bind(parent.get())
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| query_error("projects.create.parent_owner_kind", e))?;
+    match row {
+        None => Err(not_found("namespace")),
+        Some((kind, owner)) if kind == "group" => Ok(ParentOwner::Group(GroupId::new(owner))),
+        Some((kind, owner)) if kind == "user" => Ok(ParentOwner::User(UserId::new(owner))),
+        Some(_) => Err(request_invalid("parent_not_owner_namespace")),
+    }
+}
+
+/// [`create_in`]'s steps after `BEGIN`, up to the record to commit. With
+/// `decide`, the decision comes first (M1 phase 8b MR7a LOW-5): a caller
+/// who may not create gets the denial, never a name or field error.
+async fn create_steps<D, P>(
+    tx: &mut ChangeTx,
+    ctx: &ChangeContext,
+    new: &NewProject,
+    decide: Option<D>,
+) -> Result<Settle<(CreatedProject, Option<P>)>, ForgeError>
+where
+    D: FnOnce(&ProjectCreateFacts) -> Result<P, ForgeError>,
+{
     let decided = match decide {
         None => None,
         Some(decide) => {
             let (creator, namespace) = (new.creator, new.parent);
-            let parent = match placement.parent {
+            let owner = tx.step(|c| lock_parent_owner(c, namespace)).await?;
+            let parent = match owner {
                 ParentOwner::Group(group) => {
                     let roles = tx
                         .step(|c| lock_roles(c, RoleAnchor::Namespace(namespace), creator))
@@ -376,6 +407,10 @@ where
             Some(decide(&ProjectCreateFacts { account, parent })?)
         }
     };
+    // Never top level, so the reserved top-level words are allowed.
+    let segment = PathSegment::parse(&new.segment)?;
+    validate(new)?;
+    let placement = tx.step(|c| place(c, &segment, new.parent)).await?;
     tx.step(|c| check_creator(c, new.creator)).await?;
     let path = placement.full_path.as_str();
     tx.step(|c| lock_path(c, path)).await?;
@@ -471,10 +506,10 @@ where
         visibility,
         owner,
     };
-    tx.commit(evented_record(&details, created.project_id)?)
-        .await?
-        .require_recorded(details.action())?;
-    Ok((created, decided))
+    Ok(Settle::Commit(
+        evented_record(&details, created.project_id)?,
+        (created, decided),
+    ))
 }
 
 /// The audit row and the event of a project change (`project.created`,

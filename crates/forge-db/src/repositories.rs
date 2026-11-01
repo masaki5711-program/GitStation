@@ -323,7 +323,8 @@ async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, Forg
         .step(|c| lock_repository(c, repo, "repositories.mark_ready.lock"))
         .await?;
     if state == RepositoryState::Ready {
-        // Dropping the transaction rolls it back: nothing was written.
+        // Nothing was written; release the lock now, not on drop.
+        tx.rollback("repository.created").await;
         return Ok(MarkReady::AlreadyReady { project_id });
     }
     let updated = tx

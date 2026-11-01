@@ -12,7 +12,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
-use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
@@ -174,8 +174,9 @@ pub async fn create(
 ) -> Result<CreatedGroup, ForgeError> {
     let segment = parse_segment(new)?;
     validate(new)?;
-    let tx = ChangeTx::begin(db, ctx).await?;
-    finish_create(tx, new, &segment).await
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = finish_create(&mut tx, new, &segment).await;
+    tx.settle("group.created", outcome).await
 }
 
 fn parse_segment(new: &NewGroup) -> Result<PathSegment, ForgeError> {
@@ -185,12 +186,13 @@ fn parse_segment(new: &NewGroup) -> Result<PathSegment, ForgeError> {
     }
 }
 
-/// Everything of [`create`] after `BEGIN` (shared with [`create_decided`]).
+/// Everything of [`create`] after `BEGIN` up to the record to commit
+/// (shared with [`create_decided`]; the caller settles the change).
 async fn finish_create(
-    mut tx: ChangeTx,
+    tx: &mut ChangeTx,
     new: &NewGroup,
     segment: &PathSegment,
-) -> Result<CreatedGroup, ForgeError> {
+) -> Result<Settle<CreatedGroup>, ForgeError> {
     let placement = tx.step(|c| place(c, segment, new.parent)).await?;
     if !tx.step(|c| member_candidate(c, new.owner)).await? {
         return Err(request_invalid("owner_inactive"));
@@ -254,10 +256,10 @@ async fn finish_create(
         parent_namespace_id: placement.parent,
         owner,
     };
-    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, group_id))
-        .await?
-        .require_recorded(details.action())?;
-    Ok(created)
+    Ok(Settle::Commit(
+        ChangeRecord::audit_only(&details, RESOURCE, group_id),
+        created,
+    ))
 }
 
 // ── M1 phase 8b MR7a: writes decided inside their transaction ──
@@ -317,7 +319,8 @@ async fn lock_group_namespace(
 /// role on it re-read under `FOR SHARE` on the membership rows, and the
 /// creator's account row locked; `decide` (forge-hosting:
 /// `Authorized::reconfirm`) sees those facts and its error rolls everything
-/// back. `owner` is the creator (the acting user) and becomes the first
+/// back (explicitly, as every exit that does not commit). The name and
+/// field rules run after `decide`. `owner` is the creator (the acting user) and becomes the first
 /// Owner. Errors as [`create`], plus whatever `decide` returns.
 pub async fn create_decided<P>(
     db: &Db,
@@ -334,34 +337,39 @@ pub async fn create_decided<P>(
         description: fields.description.clone(),
         owner,
     };
-    let segment = match parent {
-        GroupParent::TopLevel => PathSegment::parse_top_level(&new.segment)?,
-        GroupParent::Group(_) => PathSegment::parse(&new.segment)?,
-    };
-    validate(&new)?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let parent_access = match parent {
-        GroupParent::TopLevel => None,
-        GroupParent::Group(group) => {
-            let namespace = tx.step(|c| lock_group_namespace(c, group)).await?;
-            let roles = tx
-                .step(|c| lock_roles(c, RoleAnchor::Group(group), owner))
-                .await?;
-            new.parent = Some(namespace);
-            Some(GroupAccess {
-                group,
-                namespace,
-                role: roles.native,
-            })
-        }
-    };
-    let account = tx.step(|c| lock_account(c, owner)).await?;
-    let decided = decide(&GroupCreateFacts {
-        account,
-        parent: parent_access,
-    })?;
-    let created = finish_create(tx, &new, &segment).await?;
-    Ok((created, decided))
+    let outcome = async {
+        let parent_access = match parent {
+            GroupParent::TopLevel => None,
+            GroupParent::Group(group) => {
+                let namespace = tx.step(|c| lock_group_namespace(c, group)).await?;
+                let roles = tx
+                    .step(|c| lock_roles(c, RoleAnchor::Group(group), owner))
+                    .await?;
+                new.parent = Some(namespace);
+                Some(GroupAccess {
+                    group,
+                    namespace,
+                    role: roles.native,
+                })
+            }
+        };
+        let account = tx.step(|c| lock_account(c, owner)).await?;
+        let decided = decide(&GroupCreateFacts {
+            account,
+            parent: parent_access,
+        })?;
+        // The name and field rules after the decision: a caller who may not
+        // create gets the denial, never a hint about the body.
+        let segment = parse_segment(&new)?;
+        validate(&new)?;
+        Ok(match finish_create(&mut tx, &new, &segment).await? {
+            Settle::Commit(record, created) => Settle::Commit(record, (created, decided)),
+            Settle::Discard(created) => Settle::Discard((created, decided)),
+        })
+    }
+    .await;
+    tx.settle("group.created", outcome).await
 }
 
 /// A change to a group's display name and / or description (`None` =
@@ -459,66 +467,71 @@ pub async fn update_decided<P>(
     patch: &GroupPatch,
     decide: impl FnOnce(&GroupUpdateFacts) -> Result<P, ForgeError>,
 ) -> Result<(Updated, P), ForgeError> {
-    validate_patch(patch)?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let stored: Option<(String, String, i64)> = tx
-        .step(|c| async move {
-            sqlx::query_as(
-                "SELECT g.display_name, g.description, n.id FROM forge.groups g \
-                 JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
-                 WHERE g.id = $1 FOR UPDATE OF g",
+    let outcome = async {
+        let stored: Option<(String, String, i64)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT g.display_name, g.description, n.id FROM forge.groups g \
+                     JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
+                     WHERE g.id = $1 FOR UPDATE OF g",
+                )
+                .bind(group.get())
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error("groups.update.lock", e))
+            })
+            .await?;
+        let Some((display_name, description, namespace)) = stored else {
+            return Err(not_found("group"));
+        };
+        let roles = tx
+            .step(|c| lock_roles(c, RoleAnchor::Group(group), viewer))
+            .await?;
+        let account = tx.step(|c| lock_account(c, viewer)).await?;
+        let decided = decide(&GroupUpdateFacts {
+            account,
+            group: GroupAccess {
+                group,
+                namespace: NamespaceId::new(namespace),
+                role: roles.native,
+            },
+        })?;
+        // The field rules after the decision (as for the create).
+        validate_patch(patch)?;
+        let fields = changed_fields(
+            patch.display_name.as_deref(),
+            patch.description.as_deref(),
+            &display_name,
+            &description,
+        );
+        if fields.is_empty() {
+            return Ok(Settle::Discard((Updated::Unchanged, decided)));
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.groups SET display_name = coalesce($2, display_name), \
+                 description = coalesce($3, description), updated_at = now() WHERE id = $1",
             )
             .bind(group.get())
-            .fetch_optional(c)
+            .bind(patch.display_name.as_deref())
+            .bind(patch.description.as_deref())
+            .execute(c)
             .await
-            .map_err(|e| query_error("groups.update.lock", e))
+            .map_err(|e| query_error("groups.update", e))
         })
         .await?;
-    let Some((display_name, description, namespace)) = stored else {
-        return Err(not_found("group"));
-    };
-    let roles = tx
-        .step(|c| lock_roles(c, RoleAnchor::Group(group), viewer))
-        .await?;
-    let account = tx.step(|c| lock_account(c, viewer)).await?;
-    let decided = decide(&GroupUpdateFacts {
-        account,
-        group: GroupAccess {
-            group,
-            namespace: NamespaceId::new(namespace),
-            role: roles.native,
-        },
-    })?;
-    let fields = changed_fields(
-        patch.display_name.as_deref(),
-        patch.description.as_deref(),
-        &display_name,
-        &description,
-    );
-    if fields.is_empty() {
-        return Ok((Updated::Unchanged, decided));
+        let details = AuditDetails::GroupUpdated {
+            group_id: group,
+            fields: fields.clone(), // clone: the caller gets the list too
+        };
+        Ok(Settle::Commit(
+            ChangeRecord::audit_only(&details, RESOURCE, group.get()),
+            (Updated::Changed(fields), decided),
+        ))
     }
-    tx.step(|c| async move {
-        sqlx::query(
-            "UPDATE forge.groups SET display_name = coalesce($2, display_name), \
-             description = coalesce($3, description), updated_at = now() WHERE id = $1",
-        )
-        .bind(group.get())
-        .bind(patch.display_name.as_deref())
-        .bind(patch.description.as_deref())
-        .execute(c)
-        .await
-        .map_err(|e| query_error("groups.update", e))
-    })
-    .await?;
-    let details = AuditDetails::GroupUpdated {
-        group_id: group,
-        fields: fields.clone(), // clone: the caller gets the list too
-    };
-    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, group.get()))
-        .await?
-        .require_recorded(details.action())?;
-    Ok((Updated::Changed(fields), decided))
+    .await;
+    tx.settle("group.updated", outcome).await
 }
 
 // ── end M1 phase 8b MR7a ──

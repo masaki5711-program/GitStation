@@ -17,7 +17,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use super::{evented_record, not_found, request_invalid, RESOURCE};
 use crate::access::{lock_account, Account};
-use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::groups::{changed_fields, check_fields, Updated};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
@@ -131,7 +131,9 @@ async fn facts(
 /// Change a project's display name and / or description for `viewer`,
 /// deciding inside the transaction (module docs). One `project.updated`
 /// audit row on the project (audit-only in M1) naming the changed fields,
-/// or [`Updated::Unchanged`] (nothing written). Errors: `FG-REPO-0014` (a
+/// or [`Updated::Unchanged`] (nothing written). Every exit that does not
+/// commit rolls back explicitly (`ChangeTx::settle`); the field rules run
+/// after `decide`. Errors: `FG-REPO-0014` (a
 /// field, `empty_update`), `FG-REPO-0005 resource=project`, and whatever
 /// `decide` returns.
 pub async fn update_decided<P>(
@@ -142,58 +144,62 @@ pub async fn update_decided<P>(
     patch: &ProjectPatch,
     decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
 ) -> Result<(Updated, P), ForgeError> {
-    if patch.display_name.is_none() && patch.description.is_none() {
-        return Err(request_invalid("empty_update"));
-    }
-    check_fields(
-        patch.display_name.as_deref(),
-        patch.description.as_deref(),
-        request_invalid,
-    )?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let locked = lock(&mut tx, project).await?;
-    let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
-    let fields = changed_fields(
-        patch.display_name.as_deref(),
-        patch.description.as_deref(),
-        &locked.display_name,
-        &locked.description,
-    );
-    if fields.is_empty() {
-        return Ok((Updated::Unchanged, decided));
+    let outcome = async {
+        let locked = lock(&mut tx, project).await?;
+        let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
+        // The field rules after the decision: a caller who may not update
+        // gets the denial, never a hint about the body.
+        if patch.display_name.is_none() && patch.description.is_none() {
+            return Err(request_invalid("empty_update"));
+        }
+        check_fields(
+            patch.display_name.as_deref(),
+            patch.description.as_deref(),
+            request_invalid,
+        )?;
+        let fields = changed_fields(
+            patch.display_name.as_deref(),
+            patch.description.as_deref(),
+            &locked.display_name,
+            &locked.description,
+        );
+        if fields.is_empty() {
+            return Ok(Settle::Discard((Updated::Unchanged, decided)));
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.projects SET display_name = coalesce($2, display_name), \
+                 description = coalesce($3, description), updated_at = now() WHERE id = $1",
+            )
+            .bind(project.get())
+            .bind(patch.display_name.as_deref())
+            .bind(patch.description.as_deref())
+            .execute(c)
+            .await
+            .map_err(|e| query_error("projects.update", e))
+        })
+        .await?;
+        let details = AuditDetails::ProjectUpdated {
+            project_id: project,
+            fields: fields.clone(), // clone: the caller gets the list too
+        };
+        let mut record = ChangeRecord::audit_only(&details, RESOURCE, project.get());
+        // A project's audit row names its project (the event scope rule).
+        record.audit.project_id = Some(project);
+        Ok(Settle::Commit(record, (Updated::Changed(fields), decided)))
     }
-    tx.step(|c| async move {
-        sqlx::query(
-            "UPDATE forge.projects SET display_name = coalesce($2, display_name), \
-             description = coalesce($3, description), updated_at = now() WHERE id = $1",
-        )
-        .bind(project.get())
-        .bind(patch.display_name.as_deref())
-        .bind(patch.description.as_deref())
-        .execute(c)
-        .await
-        .map_err(|e| query_error("projects.update", e))
-    })
-    .await?;
-    let details = AuditDetails::ProjectUpdated {
-        project_id: project,
-        fields: fields.clone(), // clone: the caller gets the list too
-    };
-    let mut record = ChangeRecord::audit_only(&details, RESOURCE, project.get());
-    // A project's audit row names its project (the event scope rule).
-    record.audit.project_id = Some(project);
-    tx.commit(record)
-        .await?
-        .require_recorded(details.action())?;
-    Ok((Updated::Changed(fields), decided))
+    .await;
+    tx.settle("project.updated", outcome).await
 }
 
 /// Set a project's visibility to `to` for `viewer`, deciding inside the
 /// transaction (module docs; `decide` sees the current visibility). One
 /// `project.visibility_changed` audit row and event (maintainer class)
 /// with `from` / `to`, or [`VisibilityOutcome::Unchanged`] when it already
-/// is `to` (nothing written). Errors: `FG-REPO-0005 resource=project` and
-/// whatever `decide` returns.
+/// is `to` (nothing written). Every exit that does not commit rolls back
+/// explicitly (`ChangeTx::settle`). Errors: `FG-REPO-0005
+/// resource=project` and whatever `decide` returns.
 pub async fn change_visibility_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -203,28 +209,35 @@ pub async fn change_visibility_decided<P>(
     decide: impl FnOnce(&ProjectUpdateFacts) -> Result<P, ForgeError>,
 ) -> Result<(VisibilityOutcome, P), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let locked = lock(&mut tx, project).await?;
-    let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
-    let from = locked.visibility;
-    if from == to {
-        return Ok((VisibilityOutcome::Unchanged, decided));
-    }
-    tx.step(|c| async move {
-        sqlx::query("UPDATE forge.projects SET visibility = $2, updated_at = now() WHERE id = $1")
+    let outcome = async {
+        let locked = lock(&mut tx, project).await?;
+        let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
+        let from = locked.visibility;
+        if from == to {
+            return Ok(Settle::Discard((VisibilityOutcome::Unchanged, decided)));
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.projects SET visibility = $2, updated_at = now() WHERE id = $1",
+            )
             .bind(project.get())
             .bind(to.as_str())
             .execute(c)
             .await
             .map_err(|e| query_error("projects.change_visibility", e))
-    })
-    .await?;
-    let details = AuditDetails::ProjectVisibilityChanged {
-        project_id: project,
-        from,
-        to,
-    };
-    tx.commit(evented_record(&details, project)?)
-        .await?
-        .require_recorded(details.action())?;
-    Ok((VisibilityOutcome::Changed { from }, decided))
+        })
+        .await?;
+        let details = AuditDetails::ProjectVisibilityChanged {
+            project_id: project,
+            from,
+            to,
+        };
+        let record = evented_record(&details, project)?;
+        Ok(Settle::Commit(
+            record,
+            (VisibilityOutcome::Changed { from }, decided),
+        ))
+    }
+    .await;
+    tx.settle("project.visibility_changed", outcome).await
 }

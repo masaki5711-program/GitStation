@@ -1165,3 +1165,13 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   `conditional` / `full` を有効にする設定の画面に表示する。
 - **時期**: 決定的な規則は M3（Checks API と一緒。`gstn` からも使える）。AI の判定は LLM ゲートウェイ（M3 と並行して作り始める）。
   **`conditional` / `full` は、`forge/risk` の 2 層が動いてからでないと選べない**。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: `is_agent` を認可の入力にする）
+
+- `forge_auth::Principal` に `is_agent`（`Principal::as_agent` / `is_agent`）を持たせ、forge-web はトークンの `is_agent`
+  （§4.0）からそれを立てる。`Authorized::reconfirm` も引き継ぐ。
+- **エージェントの資格情報は `ProjectVisibilityChange` を拒否される**（`FG-AUTH-0003 reason=agent_token`）。Owner でも管理者でも
+  同じ。プロジェクトを全員に公開するかは人が決める。`PUT /api/v1/projects/{id}/visibility` がこの MR で公開されるため、MR8 の
+  予定を前倒しした。MR8 で `ProtectedRefManage` と `MemberManage` に同じ拒否を広げる。
+- プロジェクト・グループの作成と更新（`ProjectCreate`、`ProjectUpdate`、`GroupCreateTopLevel`、`SubgroupCreate`、`GroupUpdate`、
+  `GroupRead`）は、エージェントにも人のトークンと同じ判定で許す。権限の表に、7 つのアクションすべてのエージェントの許可・拒否の行がある。

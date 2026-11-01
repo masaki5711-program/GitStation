@@ -197,7 +197,9 @@ pub(crate) enum RoleAnchor {
 /// [`load_project_roles`], so a write decides on the roles it holds until
 /// it commits (M1 phase 8b MR7a; no time-of-check / time-of-use gap). The
 /// caller locks the target row first and the user row after (the lock
-/// order of `projects::members`). Errors as the read-pool loaders.
+/// order of `projects::members`). A lock wait is bounded by the write
+/// pool's session `lock_timeout` (`pool.rs`): `FG-DB-0002
+/// reason=lock_timeout`. Errors as the read-pool loaders.
 pub(crate) async fn lock_roles(
     conn: &mut PgConnection,
     anchor: RoleAnchor,

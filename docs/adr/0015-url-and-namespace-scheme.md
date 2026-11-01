@@ -851,3 +851,7 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   ため。別の呼び出し元で判定し直す道は作らない。
 - 親がプロジェクトの名前空間である `POST /api/v1/projects` は、存在しない id と同じ `FG-REPO-0005`（`UnresolvedReason::KindMismatch`、
   `lookup=parent_is_project`）。
+- 他人の個人の名前空間への `POST /api/v1/projects` は `FG-AUTH-0003`（`reason=foreign_namespace`）のまま（レビュー LOW-6、受け入れ）。
+  個人の名前空間は署名済みの全員に見える（解決の API が答える）ので、404 にしても隠せるものがない。
+- 書き込みでは、名前と項目の規則（`FG-REPO-0007`/`0011`/`0014`）は判定の後に調べる。権限を失った呼び出し元には拒否を返し、
+  本文についての手がかりを返さない。拒否・変更なしなど commit しない出口は、すべて明示的に ROLLBACK する（`ChangeTx::settle`）。

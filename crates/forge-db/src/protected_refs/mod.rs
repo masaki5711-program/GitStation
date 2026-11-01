@@ -255,7 +255,8 @@ pub async fn change(
     let current = tx.step(|c| lock_rule(c, project, rule)).await?;
     let from = current.push_min_role;
     if from == push_min_role {
-        // Dropping the transaction releases the locks; nothing was written.
+        // Nothing was written; release the locks now, not on drop.
+        tx.rollback("protected_ref.updated").await;
         return Ok(RuleChange::Unchanged);
     }
     tx.step(|c| async move {

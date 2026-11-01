@@ -531,3 +531,21 @@ fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
         .expect_err("the token carries no admin scope");
     assert_eq!(err.code(), ErrorCode::Forbidden);
 }
+
+#[test]
+fn reconfirm_keeps_the_agent_flag() {
+    let agent = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]))
+        .as_agent(true);
+    let proof = prove(&agent, Action::ProjectUpdate, project(2, Some(Role::Owner)))
+        .expect("agents update projects");
+    let again = proof
+        .reconfirm(
+            crate::AccountFacts {
+                active: true,
+                is_admin: false,
+            },
+            project(2, Some(Role::Owner)),
+        )
+        .expect("still allowed");
+    assert!(again.principal().is_agent());
+}

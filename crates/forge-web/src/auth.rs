@@ -255,13 +255,17 @@ pub(crate) async fn authenticate_request(req: &mut Request) -> Result<(), Box<Re
                 is_agent: identity.is_agent,
                 token_scopes: Some(identity.scopes.clone()), // clone: the principal holds them too
             });
-            req.extensions_mut().insert(Principal::authenticated(
-                identity.user_id,
-                identity.is_admin,
-                // `authenticate` refuses a disabled owner (FG-AUTH-0004).
-                true,
-                Credential::Token(identity.scopes),
-            ));
+            req.extensions_mut().insert(
+                Principal::authenticated(
+                    identity.user_id,
+                    identity.is_admin,
+                    // `authenticate` refuses a disabled owner (FG-AUTH-0004).
+                    true,
+                    Credential::Token(identity.scopes),
+                )
+                // ADR-0017 §4.0: an authorization input since M1 phase 8b MR7a.
+                .as_agent(identity.is_agent),
+            );
             // Which token: the push record names it (`Pusher::credential_id`).
             req.extensions_mut()
                 .insert(TokenCredential(identity.token_id));

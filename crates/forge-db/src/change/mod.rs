@@ -18,7 +18,7 @@ use forge_errors::{ErrorCode, ForgeError};
 mod tx;
 mod validate;
 
-pub(crate) use tx::ChangeTx;
+pub(crate) use tx::{ChangeTx, Settle};
 // The event checks DerivedTx shares (subscribers, C5).
 pub(crate) use validate::{dedup_key_ok, numbers_are_safe, MAX_PAYLOAD_BYTES};
 

@@ -12,7 +12,9 @@
 //!    `FG-REPO-0006` (restore excepted);
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
 //! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
-//!    carries administrator rights only with the `admin` scope);
+//!    carries administrator rights only with the `admin` scope); an agent's
+//!    credential on an action kept for people → `FG-AUTH-0003
+//!    reason=agent_token` (`ProjectVisibilityChange`);
 //! 6. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, and `FG-GIT-0008` below the minimum push role
@@ -192,6 +194,13 @@ pub fn authorize(
         (Action::ProjectUpdate, Resource::Project(p)) => need(Role::Maintainer, p.role),
 
         (Action::ProjectVisibilityChange, Resource::VisibilityChange { project, .. }) => {
+            // Exposing a project to every signed-in user is a person's
+            // decision (ADR-0017 amendment, M1 phase 8b MR7a): an agent's
+            // credential is refused whatever its role, administrators
+            // included.
+            if principal.is_agent() {
+                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
+            }
             need(Role::Owner, project.role)
         }
 

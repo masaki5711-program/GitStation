@@ -27,6 +27,9 @@ pub struct Principal {
     is_admin: bool,
     active: bool,
     credential: Credential,
+    /// The credential was issued for an AI agent (ADR-0017 §4.0; an
+    /// authorization input since M1 phase 8b MR7a).
+    agent: bool,
 }
 
 impl Principal {
@@ -37,6 +40,7 @@ impl Principal {
             is_admin: false,
             active: false,
             credential: Credential::Session,
+            agent: false,
         }
     }
 
@@ -52,7 +56,23 @@ impl Principal {
             is_admin,
             active,
             credential,
+            agent: false,
         }
+    }
+
+    /// The same caller, with a credential issued for an AI agent
+    /// (`tokens.is_agent`, ADR-0017 §4.0). Agents are denied the actions
+    /// ADR-0017 keeps for people (`ProjectVisibilityChange` since M1 phase
+    /// 8b MR7a; `ProtectedRefManage` and `MemberManage` join in MR8).
+    #[must_use]
+    pub fn as_agent(mut self, agent: bool) -> Self {
+        self.agent = agent;
+        self
+    }
+
+    /// The credential was issued for an AI agent.
+    pub fn is_agent(&self) -> bool {
+        self.agent
     }
 
     pub fn user(&self) -> Option<UserId> {
