@@ -11,9 +11,10 @@
 //! OS account), outside `authorize()` as the other operator commands
 //! (ADR-0019 §8); the grace period is never shortened.
 //!
-//! Each project's failure is logged once by the batch; the command prints
-//! one line per project and a summary (`failed=<n>`), so a failure is never
-//! silent, and the exit code is 0 only when nothing failed.
+//! Each project's failure is logged once by the batch (`FG-REPO-0020`); the
+//! command prints one line per project and a summary (`failed=<n>`), then
+//! fails with `FG-REPO-0021` (warn) so the exit code is 0 only when nothing
+//! failed. A project another purge holds is `deferred in_progress`.
 
 use forge_core::config::Config;
 use forge_core::RequestId;
@@ -54,9 +55,9 @@ pub(crate) async fn dry_run(db: &Db) -> Result<String, ForgeError> {
 }
 
 /// One batch now; the per-project lines and the summary. Failed projects
-/// were logged by the batch; the command then fails with `FG-REPO-0020`
-/// `reason=batch_failed` naming how many (the summary error the CLI
-/// boundary logs, not a second copy of each failure).
+/// were logged (`FG-REPO-0020`, alert) by the batch; the command then fails
+/// with `FG-REPO-0021` PurgeBatchIncomplete (warn, not an alert) naming how
+/// many, so the exit code is non-zero without a second alert.
 pub(crate) async fn purge_now(
     db: &Db,
     root: StorageRoot,
@@ -80,7 +81,7 @@ pub(crate) async fn purge_now(
                 }
             }
             Outcome::Skipped(reason) => reason,
-            Outcome::Deferred => "provisioning_running",
+            Outcome::Deferred(reason) => reason,
             Outcome::Failed(code) => {
                 failed += 1;
                 code.id()
@@ -110,7 +111,7 @@ pub(crate) async fn purge_now(
     if failed > 0 {
         // The lines are still shown: stdout first, then the failure.
         crate::emit(&out)?;
-        return Err(ForgeError::new(ErrorCode::RepositoryPurgeStuck)
+        return Err(ForgeError::new(ErrorCode::PurgeBatchIncomplete)
             .with_context("reason", "batch_failed")
             .with_context("failed", failed)
             .with_context("purged", purged));
@@ -165,8 +166,9 @@ mod tests {
         t.drop_now().await;
     }
 
-    /// A failed project makes `--now` fail with `FG-REPO-0020
-    /// reason=batch_failed` (after its line was printed).
+    /// A failed project makes `--now` fail with `FG-REPO-0021
+    /// reason=batch_failed` (warn: the project's own FG-REPO-0020 is the
+    /// one alert), after its line was printed.
     #[tokio::test]
     async fn now_fails_when_a_project_could_not_be_purged() {
         let t = FreshDb::migrated().await;
@@ -181,7 +183,8 @@ mod tests {
         let err = purge_now(&t.db, storage.root.clone(), &rid) // clone: the purger's own handle
             .await
             .expect_err("failed");
-        assert_eq!(err.code(), ErrorCode::RepositoryPurgeStuck);
+        assert_eq!(err.code(), ErrorCode::PurgeBatchIncomplete);
+        assert_ne!(err.code().severity(), forge_errors::Severity::Alert);
         let text = err.to_string();
         assert!(
             text.contains("reason=batch_failed") && text.contains("failed=1"),

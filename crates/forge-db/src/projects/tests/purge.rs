@@ -429,3 +429,44 @@ async fn restore_and_purge_start_racing_have_exactly_one_winner() {
     }
     t.drop_now().await;
 }
+
+/// The purge lock is exclusive per project, independent of other projects,
+/// and ends with `release` or with its dropped session.
+#[tokio::test]
+async fn the_purge_lock_is_exclusive_and_ends_with_release_or_drop() {
+    let t = FreshDb::migrated().await;
+    let (a, b) = (ProjectId::new(7), ProjectId::new(8));
+    let held = purge::PurgeLock::try_acquire(&t.db, a)
+        .await
+        .expect("lock")
+        .expect("free");
+    assert_eq!(held.project(), a);
+    assert!(purge::PurgeLock::try_acquire(&t.db, a)
+        .await
+        .expect("lock")
+        .is_none());
+    let other = purge::PurgeLock::try_acquire(&t.db, b)
+        .await
+        .expect("lock")
+        .expect("another project is free");
+    held.release().await;
+    let again = purge::PurgeLock::try_acquire(&t.db, a)
+        .await
+        .expect("lock")
+        .expect("released");
+    drop(again);
+    let mut freed = None;
+    for _ in 0..100 {
+        freed = purge::PurgeLock::try_acquire(&t.db, a).await.expect("lock");
+        if freed.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    freed
+        .expect("the dropped session ended its lock")
+        .release()
+        .await;
+    other.release().await;
+    t.drop_now().await;
+}

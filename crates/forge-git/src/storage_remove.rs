@@ -84,6 +84,40 @@ impl StorageRoot {
         Ok(Removal { existed, swept })
     }
 
+    /// [`StorageRoot::remove_until`] without a deadline, blocking (run it on
+    /// the blocking pool): the purge (D5 MR4) runs it in a task that keeps
+    /// the project's purge lock until it really ends, so a removal slower
+    /// than the purge's wait is never started twice on the same tree.
+    pub fn remove_blocking(&self, id: RepoId) -> Result<Removal, ForgeError> {
+        let path = self.path_for(id);
+        let Some(shard) = path.parent().map(Path::to_path_buf) else {
+            return Err(rejected("outside_root").with_context("repo_id", id));
+        };
+        if !self.shard_present(&shard, id)? {
+            return Ok(Removal {
+                existed: false,
+                swept: 0,
+            });
+        }
+        let existed = match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(e) => return Err(io_failed("inspect", e).with_context("repo_id", id)),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(rejected("symlink").with_context("repo_id", id))
+            }
+            Ok(meta) if !meta.is_dir() => {
+                return Err(rejected("not_dir").with_context("repo_id", id))
+            }
+            Ok(_) => match std::fs::rename(&path, aside(&shard, id)) {
+                Ok(()) => true,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+                Err(e) => return Err(io_failed("rename", e).with_context("repo_id", id)),
+            },
+        };
+        let swept = sweep(&shard, id)?;
+        Ok(Removal { existed, swept })
+    }
+
     /// Whether the shard directory exists, checked as a real directory under
     /// the root with no symlink on the way (`FG-REPO-0001` otherwise).
     fn shard_present(&self, shard: &Path, id: RepoId) -> Result<bool, ForgeError> {
@@ -114,11 +148,7 @@ impl StorageRoot {
         if !meta.is_dir() {
             return Err(rejected("not_dir").with_context("repo_id", id));
         }
-        let aside: PathBuf = shard.join(format!(
-            ".purge-{}-{}.git",
-            id.get(),
-            Uuid::new_v4().simple()
-        ));
+        let aside = aside(shard, id);
         budget
             .fs("rename", id, async {
                 match tokio::fs::rename(path, &aside).await {
@@ -130,6 +160,15 @@ impl StorageRoot {
             })
             .await
     }
+}
+
+/// A fresh name to set the repository directory of `id` aside to.
+fn aside(shard: &Path, id: RepoId) -> PathBuf {
+    shard.join(format!(
+        ".purge-{}-{}.git",
+        id.get(),
+        Uuid::new_v4().simple()
+    ))
 }
 
 /// Delete every leftover directory of `id` in `shard` (blocking); returns

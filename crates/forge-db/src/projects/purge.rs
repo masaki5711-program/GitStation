@@ -33,15 +33,112 @@
 //!
 //! [`due`] lists the projects to purge, oldest `purge_after` first,
 //! without locks (each one is re-checked under its locks).
+//!
+//! [`PurgeLock`] keeps two purges of one project apart (the worker and
+//! `forge admin project purge --now`, two workers, a removal still running
+//! after its deadline): a **session** advisory lock on its own connection,
+//! held from before `start` until after `finish` (and, after a cut
+//! removal, until the removal really ends). Its key is the two-`int4` form
+//! `(PURGE_LOCK_CLASS, project id mod 2^31-1)`: PostgreSQL keeps the
+//! one-`bigint` keys (the path locks `hashtextextended('namespace:' ||
+//! path, 0)`, the bootstrap-admin lock) apart from the two-`int4` keys, and
+//! the other two-`int4` users take class 1718579815 (sequencer 1, seal 8).
+//! A collision of two project ids only defers one of them a run.
 
 use forge_core::ids::{NamespaceId, ProjectId, RepoId, TombstoneId, UserId};
 use forge_core::{AuditDetails, DedupKey, DedupPart, RepositoryState};
 use forge_errors::{ErrorCode, ForgeError};
 
+use sqlx::pool::PoolConnection;
+use sqlx::Postgres;
+
 use super::RESOURCE;
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
+use crate::error_map::connect_error;
 use crate::namespaces::lock_path;
 use crate::{query_error, Db};
+
+/// The class (first `int4`) of the purge's session advisory lock, `FGPU`.
+pub const PURGE_LOCK_CLASS: i32 = 0x4647_5055;
+
+/// The session advisory lock of one project's purge (module docs). Release
+/// it with [`PurgeLock::release`]; dropped without it, its connection is
+/// closed instead of going back to the pool, which ends the lock too
+/// (never handed to another user still held).
+#[derive(Debug)]
+pub struct PurgeLock {
+    conn: Option<PoolConnection<Postgres>>,
+    project: ProjectId,
+}
+
+impl PurgeLock {
+    /// Take the lock of `project` if nobody holds it: `None` when another
+    /// purge of it is in progress. Errors: `FG-DB-0001` (no connection),
+    /// `FG-DB-0002`.
+    pub async fn try_acquire(db: &Db, project: ProjectId) -> Result<Option<Self>, ForgeError> {
+        db.within("projects.purge.lock", async {
+            let mut conn = db
+                .write_pool()
+                .acquire()
+                .await
+                .map_err(|e| connect_error(db.target(), e))?;
+            let taken: bool = sqlx::query_scalar(
+                "SELECT pg_catalog.pg_try_advisory_lock($1::int4, ($2::bigint % 2147483647)::int4)",
+            )
+            .bind(PURGE_LOCK_CLASS)
+            .bind(project.get())
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| query_error("projects.purge.lock", e))?;
+            Ok(taken.then_some(Self {
+                conn: Some(conn),
+                project,
+            }))
+        })
+        .await
+    }
+
+    /// The project it locks.
+    pub fn project(&self) -> ProjectId {
+        self.project
+    }
+
+    /// Unlock and give the connection back. A failed unlock closes the
+    /// connection instead (the lock ends with the session); it is logged
+    /// here, the only place that knows, and never fails the purge.
+    pub async fn release(mut self) {
+        let Some(mut conn) = self.conn.take() else {
+            return;
+        };
+        let unlocked = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            sqlx::query_scalar::<_, bool>(
+                "SELECT pg_catalog.pg_advisory_unlock($1::int4, ($2::bigint % 2147483647)::int4)",
+            )
+            .bind(PURGE_LOCK_CLASS)
+            .bind(self.project.get())
+            .fetch_one(&mut *conn),
+        )
+        .await;
+        if !matches!(unlocked, Ok(Ok(true))) {
+            tracing::warn!(
+                target: "forge_db",
+                project_id = self.project.get(),
+                "the purge lock could not be released; its connection is closed instead"
+            );
+            drop(conn.detach());
+        }
+    }
+}
+
+impl Drop for PurgeLock {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            // Closing the session ends its advisory lock.
+            drop(conn.detach());
+        }
+    }
+}
 
 /// The prefix of the `project.purged` event's dedup key,
 /// `project_purged:<project_id>` (project ids are never reused).

@@ -145,3 +145,35 @@ async fn a_passed_deadline_removes_nothing_and_says_deadline() {
     assert!(err.to_string().contains("reason=deadline"), "{err}");
     assert!(path.exists(), "nothing was removed");
 }
+
+#[tokio::test]
+async fn the_blocking_removal_removes_sweeps_and_refuses_like_the_bounded_one() {
+    let (_d, root) = root();
+    let (_h, git) = git();
+    let id = RepoId::new(77);
+    let path = root
+        .init_bare(&git, id, Uuid::new_v4(), None)
+        .await
+        .expect("created");
+    let shard = path.parent().expect("shard").to_path_buf();
+    std::fs::create_dir_all(shard.join(".tmp-77-x.git")).expect("leftover");
+    let removed = root.remove_blocking(id).expect("removed");
+    assert_eq!(
+        removed,
+        Removal {
+            existed: true,
+            swept: 2
+        }
+    );
+    assert!(!path.exists());
+    assert_eq!(
+        root.remove_blocking(id).expect("again"),
+        Removal {
+            existed: false,
+            swept: 0
+        }
+    );
+    std::fs::write(&path, b"x").expect("file");
+    let err = root.remove_blocking(id).expect_err("a file");
+    assert_eq!(err.code(), ErrorCode::StoragePathRejected, "{err}");
+}

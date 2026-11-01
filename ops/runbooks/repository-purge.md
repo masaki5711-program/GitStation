@@ -16,6 +16,14 @@
    墓標で塞ぎ（`owner_at_write` = 削除したユーザー）、監査 `project.purged` とイベント `project.purged`（admin クラス、
    `dedup_key` = `project_purged:<project_id>`）を書く。古いパスの `moved` の墓標は行き先を失い（転送が終わる）、パスは塞いだまま。
 
+**1 つのプロジェクトの完全削除は同時に 1 つだけ**: 1〜4 はプロジェクトごとのセッションの advisory lock（キーは 2 つの int4 の形
+`(0x46475055, project_id mod 2^31-1)`。パスのロックの 1 つの bigint のキーとは別の空間）を持ったまま行う。worker と
+`forge admin project purge --now`、2 つの worker が同じプロジェクトに当たると、ロックを取れなかった方は `deferred`
+（`reason=in_progress`、`forge.repo.purge_deferred`、info）になる。エラーでも alert でもない。ディレクトリの削除はロックを持った
+別のタスクで動き、120 秒で終わらなければその回は `deferred`（`reason=removal_running`）にして削除は裏で続ける。削除が本当に終わるまで
+ロックは放さないので、次の回は `in_progress` で待ち、同じディレクトリを 2 回消し始めることはない。終わった後の回が段 4 を行う。
+worker が止まるとセッションが閉じてロックも消える。
+
 成功すると worker のログに `forge.repo.purged`（`project_id`、`repo_id`、`tombstone_id`、`redirects_ended`、`storage_removed`、
 `swept`、`resumed`、`overdue_s`、`duration_ms`）が 1 行出る。
 
@@ -23,8 +31,10 @@
 
 - worker のログ（`task=purge` の実行の中）、または `forge admin project purge --now` のログに `FG-REPO-0020` RepositoryPurgeStuck（alert）
   - `step=start`: 開始のトランザクションが失敗した（DB）
+  - `step=lock`: ロックを取るための DB の接続・問い合わせが失敗した
+  - `step=provision_check`: 作成のジョブの状態を読めなかった（DB）
   - `step=storage`: ディレクトリを消せなかった（`cause_code=FG-REPO-0001` シンボリックリンクかファイルがある、
-    `FG-REPO-0003` I/O の失敗、`reason=deadline` は 120 秒で終わらなかった）
+    `FG-REPO-0003` I/O の失敗）。120 秒を超えただけなら失敗ではなく `deferred removal_running`
   - `step=finish`: 行の削除のトランザクションが失敗した（DB）
 - 同じ `project_id` が毎回失敗する（詰まっている）。1 回だけで、その後に同じ `project_id` の `forge.repo.purged` があれば一時的なもの。
 - `FG-REPO-0019 reason=purging` で復元を断られた利用者からの問い合わせ（完全削除が始まったまま終わっていない）
@@ -49,8 +59,10 @@
    - `forge admin repo-path <repo_id>` でパスと有無。シャードの中の残り: `ls -la <shard>`（`.purge-<repo_id>-*`、`.tmp-<repo_id>-*`）。
    - `cause_code=FG-REPO-0001`（`reason=symlink` / `not_dir`、`leftover` があればそのパス）: forge はそこにシンボリックリンクやファイルを
      作らない。手を加えられた可能性がある。`ls -la`、`readlink -f <path>` で何を指しているか確かめる → `repo-storage.md`。
-   - `cause_code=FG-REPO-0003`: `df -h <root>`、ルートの所有者と権限、カーネルのログ。`reason=deadline` は削除が 120 秒を超えた
-     （大きなリポジトリ、遅い保存先）。裏で削除が続いていることがあり、次の回で残りを消す。
+   - `cause_code=FG-REPO-0003`: `df -h <root>`、ルートの所有者と権限、カーネルのログ。
+   - `deferred removal_running` / `in_progress` が何回も続く: 裏の削除がまだ終わっていない（大きなリポジトリ、遅い保存先）。
+     `ls <shard>` の `.purge-<repo_id>-*` が小さくなっていくか見る。裏の削除が失敗したら `forge.repo.purge_removal_ended`（warn）が出て、
+     次の回でやり直す。
 5. `step=start` / `step=finish` のとき: `cause_code` の Runbook（`FG-DB-0001` / `FG-DB-0002` → `db-unavailable.md`）。
    `cause_code=FG-DB-0009 reason=rejected`（`step=start`）は DB のガードが `purging` を断った: プロジェクトが削除待ちでない、または
    猶予がまだ終わっていない（時計のずれ、間に確定した復元）。次の回は `purge_after` を読み直して飛ばすので、繰り返すなら時計を見る。
@@ -68,7 +80,8 @@
    - 1 回分（最大 20 件）を worker と同じ手順で実行する。猶予期間は短くならない（`purge_after` を過ぎたものだけ）。
    - 何度実行してもよい: 消えたディレクトリはエラーにならず、行とイベントは 1 回だけ書かれる。止まったところから再開する。
    - 出力: プロジェクトごとに 1 行（`purged` / `skipped` / `deferred` / `failed` とその理由・コード、`request_id`）と
-     `purged=<n> failed=<n> other=<n>`。失敗があれば終了コードは 0 以外（`FG-REPO-0020 reason=batch_failed`）。
+     `purged=<n> failed=<n> other=<n>`。失敗があれば終了コードは 0 以外（`FG-REPO-0021` PurgeBatchIncomplete、warn。
+     alert は各プロジェクトの `FG-REPO-0020` の 1 回だけ）。worker が同じプロジェクトを処理中なら `deferred in_progress`（失敗ではない）。
 
 ## Verify
 

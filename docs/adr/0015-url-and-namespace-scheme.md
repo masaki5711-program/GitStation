@@ -987,5 +987,12 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - **失敗**: 1 件の失敗は、その場（タスクの中）で 1 回だけ FG-REPO-0020 RepositoryPurgeStuck（alert、`step` = start / storage / finish、
   `cause_code`、元のエラーを `source`、`overdue_s`）でログし、次のプロジェクトへ進む。次の回で止まったところから再開する
   （`purging` は `ready` に戻らない）。一覧の読み取りの失敗だけが回の失敗（監督者がログしてバックオフ）。
+- **同時実行の排除**（fd19f2a のレビューの MEDIUM）: 1 件の段 1〜3 は、プロジェクトのセッションの advisory lock
+  （forge-db `PurgeLock`、`pg_try_advisory_lock(0x46475055, project_id mod 2^31-1)`。2 つの int4 のキーは 1 つの bigint のパスのロックと
+  別の空間、2 つの int4 の他の使い手は class 1718579815）を持って行う。取れなければ `Deferred("in_progress")`（エラーでも alert でもない）。
+  保存先の削除（`StorageRoot::remove_blocking`）はロックを持つ別のタスクで動き、120 秒待っても終わらなければ
+  `Deferred("removal_running")`: タスクは削除が本当に終わってからロックを放す（同じ木に 2 つ目の `remove_dir_all` を始めない）。
+  `storage_removed` は `existed || swept > 0`。作成のジョブの状態の読み取りの失敗は `step=provision_check`。`--now` のまとめは
+  FG-REPO-0021 PurgeBatchIncomplete（warn）で終了コードだけを 0 以外にする（alert は各プロジェクトの FG-REPO-0020 だけ）。
 - **見送り（MR4 の外）**: `forge doctor` の「`purging` のまま古い」検査（今は毎回のログの FG-REPO-0020 で分かる）、
   `purge_after` の部分索引（M1 の件数では `LIMIT` 付きの全件走査で足りる）。

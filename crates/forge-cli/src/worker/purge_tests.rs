@@ -17,6 +17,7 @@ use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 use forge_errors::ErrorCode;
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use super::*;
 use crate::worker::loop_tests::Captured;
@@ -287,21 +288,9 @@ async fn a_failed_purge_is_repository_purge_stuck_and_retried_next_run() {
         rows_of(&t, web.project_id).await,
         (1, Some("purging".to_owned()))
     );
-    // A removal slower than its deadline is the same failure, retryable.
+    // Once the file is gone, the next run finishes it.
     std::fs::remove_file(&path).expect("unlink");
     std::fs::create_dir_all(&path).expect("a directory again");
-    let mut slow = purger(&t, &storage);
-    slow.storage_timeout = Duration::ZERO;
-    let (done, events) = batch(&slow).await;
-    assert_eq!(
-        done[0].outcome,
-        Outcome::Failed(ErrorCode::RepositoryPurgeStuck)
-    );
-    let text = format!("{events:?}");
-    assert!(text.contains("cause_code=FG-REPO-0003"), "{text}");
-    assert!(text.contains("reason=deadline"), "{text}");
-    assert!(path.exists(), "nothing removed past the deadline");
-    // The next run with time to spare finishes it.
     let (done, _) = batch(&purger(&t, &storage)).await;
     assert_eq!(
         done[0].outcome,
@@ -365,5 +354,130 @@ async fn a_run_past_its_budget_leaves_the_rest_for_the_next_run() {
     assert_eq!(rows_of(&t, web.project_id).await.0, 1);
     let (done, _) = batch(&purger(&t, &storage)).await;
     assert_eq!(done.len(), 1);
+    t.drop_now().await;
+}
+
+/// A removal that waits until the test lets it go: it reports on `started`
+/// when it runs, then removes for real.
+fn gated(
+    storage: &Storage,
+) -> (
+    Remover,
+    mpsc::UnboundedReceiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (started_tx, started) = mpsc::unbounded_channel();
+    let (go, gate) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new(gate);
+    let root = storage.root.clone(); // clone: the remover owns its handle
+    let remover: Remover = Arc::new(move |repo| {
+        let _ = started_tx.send(());
+        let held = gate
+            .lock()
+            .map_err(|_| ForgeError::new(ErrorCode::Internal))?;
+        // A closed sender lets the removal go as well.
+        let _ = held.recv();
+        root.remove_blocking(repo)
+    });
+    (remover, started, go)
+}
+
+/// Wait (bounded) until nobody holds the purge lock of `project`.
+async fn until_unlocked(t: &FreshDb, project: ProjectId) {
+    for _ in 0..250 {
+        if let Some(lock) = db_purge::PurgeLock::try_acquire(&t.db, project)
+            .await
+            .expect("lock")
+        {
+            lock.release().await;
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the purge lock of {project:?} stayed held");
+}
+
+/// The worker and `forge admin project purge --now` on the same project:
+/// the one holding the purge lock deletes, the other is deferred
+/// (`in_progress`, no error, no alert); one event, one deletion.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_concurrent_worker_and_cli_purge_delete_once() {
+    let t = FreshDb::migrated().await;
+    let (_dir, storage) = storage();
+    let (alice, web) = project(&t, "alice").await;
+    provision(&t, &storage).await;
+    delete(&t, web.project_id, alice).await;
+    expire(&t, web.project_id).await;
+    let (remover, mut started, go) = gated(&storage);
+    let mut worker = purger(&t, &storage);
+    worker.remover = remover;
+    let running = tokio::spawn(async move { purge_batch(&worker, BATCH).await });
+    started.recv().await.expect("the worker's removal started");
+    let rid = RequestId::parse("req-cli-concurrent").expect("request id");
+    let out = crate::admin_project::purge_now(&t.db, storage.root.clone(), &rid) // clone: the CLI's own handle
+        .await
+        .expect("the CLI defers, it does not fail");
+    assert!(out.contains("\tdeferred\tin_progress\t"), "{out}");
+    assert!(out.ends_with("purged=0 failed=0 other=1\n"), "{out}");
+    drop(go);
+    let done = running.await.expect("join").expect("batch");
+    assert_eq!(
+        done[0].outcome,
+        Outcome::Purged {
+            storage_removed: true
+        }
+    );
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.events WHERE event_type = 'project.purged'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(rows_of(&t, web.project_id).await, (0, None));
+    t.drop_now().await;
+}
+
+/// A removal that outlasts the run's wait goes on holding the purge lock:
+/// that run and the next are deferred (`removal_running`, `in_progress`),
+/// not FG-REPO-0020; once it has ended, the next run finishes the purge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_removal_still_running_after_its_wait_defers_the_next_run() {
+    let t = FreshDb::migrated().await;
+    let (_dir, storage) = storage();
+    let (alice, web) = project(&t, "alice").await;
+    provision(&t, &storage).await;
+    delete(&t, web.project_id, alice).await;
+    expire(&t, web.project_id).await;
+    let (remover, mut started, go) = gated(&storage);
+    let mut slow = purger(&t, &storage);
+    slow.remover = remover;
+    slow.storage_timeout = Duration::from_millis(100);
+    let done = purge_batch(&slow, BATCH).await.expect("batch");
+    started.recv().await.expect("the removal started");
+    assert_eq!(done[0].outcome, Outcome::Deferred("removal_running"));
+    let done = purge_batch(&purger(&t, &storage), BATCH)
+        .await
+        .expect("batch");
+    assert_eq!(done[0].outcome, Outcome::Deferred("in_progress"));
+    assert_eq!(
+        rows_of(&t, web.project_id).await,
+        (1, Some("purging".to_owned()))
+    );
+    drop(go);
+    until_unlocked(&t, web.project_id).await;
+    let done = purge_batch(&purger(&t, &storage), BATCH)
+        .await
+        .expect("batch");
+    // The background removal deleted the directory; this run swept nothing.
+    assert_eq!(
+        done[0].outcome,
+        Outcome::Purged {
+            storage_removed: false
+        }
+    );
+    assert!(storage.root.existing(web.repository_id).is_err());
+    assert_eq!(rows_of(&t, web.project_id).await, (0, None));
     t.drop_now().await;
 }
