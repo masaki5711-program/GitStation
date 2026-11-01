@@ -254,3 +254,33 @@ Answers (recommended, adopted): server is Linux, Windows dev uses a Job Object; 
 v2 unreferenced-object fetch: test first, block with `uploadpack.allowAnySHA1InWant=false` if served, record in ADR-0007.
 Reviewers: rust / security / git-protocol / silent-failure on MR1, MR3, MR4; authz-matrix on MR3, MR4; database +
 error-contract on MR2; pr-test-analyzer on all.
+
+## M1 phase 8b plan (planner, 2026-11-01) — approved under the user's standing "推奨で進める"
+
+Premises found: write routes need the body read, bounded and typed BEFORE load (authorize inputs live in the body: role to add,
+protection level, visibility, parent) → `registry::route_with_body`; forge-db lacks `projects::update`, visibility change and
+`groups::update` (+ audit variants); actions ProjectList / GroupList / UserSelfRead do not exist yet; GroupCtx / UserNamespaceCtx
+arrive with the first non-public group route; TOCTOU → forge-hosting loads facts INSIDE the write transaction (FOR SHARE on role
+rows), calls authorize() there, then writes; a keyset cursor must not reveal scanned-but-invisible ids → opaque AEAD cursor;
+`is_agent` is not an authz input yet → once ProtectedRefManage is routed an agent could drop a protection and push (CRITICAL-class)
+→ MR8 makes it one; DefaultBodyLimit 413 has no FG code.
+Lists: **L1** (authorize every scanned row, AEAD cursor with key file `api_cursor_keys`, scan budget 1000/page, limit ≤100);
+switch to an SQL superset (L2) in M2 only if instances exceed ~10k projects per scan (ADR-0010 amendment then).
+MRs: **MR6** `feat/web-api-request-body` → {**MR7a** `feat/hosting-project-group-writes` ∥ **MR7b** `feat/web-api-lists`} →
+**MR8** `feat/hosting-members-protected-refs`; `gstn` is a separate series: `feat/client-gstn-core` after MR6 (auth incl.
+git-credential, api, help --json, schema, OS keyring + 0600 fallback), `feat/client-gstn-hosting` after MR8. repo rename /
+transfer / delete wait for D5 (planned in the C-1 gate).
+- MR6: body plumbing (strict JSON, deny_unknown_fields, ≤64 KiB per route), AEAD keyset cursor in forge-core, utoipa after
+  cargo deny/audit, `GET /api/v1/user` (UserSelfRead), path/id param errors → FG-WEB-0006. Codes: FG-WEB-0006 RequestInvalid,
+  FG-WEB-0009 RequestTooLarge (FG-WEB-0008 = MR0 ServerBusy).
+- MR7a: new crate forge-hosting (web → hosting → auth/db; ADR-0001 amendment + dependency gate), GroupCtx / UserNamespaceCtx,
+  `POST /api/v1/groups` (top level) + `POST /api/v1/groups/{id}/subgroups`, `GET|PATCH /api/v1/groups/{id}`,
+  `POST /api/v1/projects`, `PATCH /api/v1/projects/{id}`, `PUT /api/v1/projects/{id}/visibility` (Owner), forge-db update
+  functions; events: `project.visibility_changed` (maintainer class); `project.updated` / `group.updated` audit-only until M3.
+- MR7b: `GET /api/v1/projects`, `GET /api/v1/groups` through a ProjectPageLoader trait, rows filtered by authorize().
+- MR8: members (from-role loaded in the transaction, last-owner rule) and protected-refs CRUD; `is_agent` denied ProtectedRefManage,
+  MemberManage, ProjectVisibilityChange (FG-AUTH-0003 reason=agent_token; ADR-0017/0019 amendment); FG-REPO-0017
+  ProtectedRefPatternTaken (409) if duplicates are not already a 409.
+Answers (recommended, adopted): L1; is_agent becomes an authz input in MR8; project parent in the body, subgroups via their own
+route; project.updated / group.updated audit-only in M1; gstn as a separate series. Opus for MR6/MR7a/MR8 core and security
+reviews; Sonnet for schemas, docs regeneration, matrix boilerplate, list tests and most gstn glue.
