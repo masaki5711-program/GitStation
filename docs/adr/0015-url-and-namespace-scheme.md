@@ -1008,13 +1008,18 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - **移動と名前の変更は 1 つのルート**。`namespace_id` を省くと今の親（名前の変更）、`path` を省くと今の名前。グループを
   トップレベルへ移すのは `"top_level": true` だけ（項目の書き忘れでトップレベルへ移ることはない。`namespace_id` と同時は
   FG-WEB-0006）。変化のない要求は FG-REPO-0015 `same_location`。
-- **名前の変更の判定**（ADR の「名前だけの変更は、移動先 = 今の親として扱う（role: 自分の実効ロール）」の実装）: 移動先が今の親の
-  グループのとき、移動先のロールではなく **移動するリソースでの呼び出し元のロール** で判定する（ローダーと、トランザクションの
-  中の再判定の両方。forge-hosting `moves::target_of`）。プロジェクトの Owner は親のグループで Developer でも名前を変えられ、
-  サブグループの Owner は親に役割がなくても名前を変えられる。今の親が個人の名前空間なら `PersonalNamespace`（その本人か管理者）、
-  トップレベルのグループの名前の変更は `TopLevel`（管理者だけ。作成と同じ）。
+- **名前の変更の判定は `authorize()` が持つ**（ADR の「名前だけの変更は、移動先 = 今の親として扱う（role: 自分の実効ロール）」の
+  実装。レビューの指摘で forge-auth に移した）: 移動先が今の親のときは、新しい移動先 **`TransferTarget::CurrentParent { top_level }`**
+  （ローダーと forge-hosting の文脈は `LoadedTransferTarget::CurrentParent { namespace }`）。`ProjectTransfer` ではプロジェクトの
+  Owner だけで許可（親のグループで Developer でも、親が個人の名前空間でも。`top_level: true` はプロジェクトにはなく拒否）、
+  `GroupTransfer` ではグループの Owner だけで許可（サブグループの Owner は親に役割がなくてよい）、`top_level: true`（トップレベルの
+  グループの名前の変更）は管理者だけ（作成と同じ）。ローダーとトランザクションは読んだものを書き写すだけで、方針を持たない。
+  トランザクションでロックした親が証明の親と違えば（間に移動された）、ロックした親をそのまま移動先として判定する
+  （テスト `a_rename_proof_whose_project_moved_meanwhile_is_decided_as_a_move`）。権限の表に `TransferRename`、
+  `GroupTransferRename`、`GroupTransferRenameTopLevel` の許可と拒否の行を足した。
 - **ローダー**: プロジェクト（`GET` と同じ 1 回の読み取り、削除待ちも読む → 410 / 404 は `authorize()` が決める）、今の親
-  （リソースのパスの親を resolver で 1 回）、移動先（`Hosting::parent`。無い・プロジェクトの名前空間・見えないは同じ
+  （リソースのパスの親を resolver で 1 回。親のパスが解決できない — 間に移動された — ときはリソースから読み直し、3 回続けば
+  存在しないのと同じ FG-REPO-0005 を `authorize()` が答える。`authorize()` より前に 503 を返すと、見えない人にも存在が分かるため）、移動先（`Hosting::parent`。無い・プロジェクトの名前空間・見えないは同じ
   `NotVisible` = FG-REPO-0005 `target_not_visible`）。ユーザーの名前の変更は id だけで判定する（管理者以外にユーザーの有無を
   知らせない。無いユーザーは管理者に FG-REPO-0005 `resource=user`）。
 - **墓標の解放のローダー**: forge-db `tombstones::load_by_path`（読み取りのプール、ロックなし）。`moved` の墓標の行き先は、
@@ -1030,9 +1035,9 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   FG-AUTH-0003 403、FG-REPO-0005 404）。**`Retry-After` は付けない**（計画にない。最も古い移動の時刻を答えると移動の履歴が分かる）。
 - **運用の CLI**: `forge admin project move <id> --namespace <ns> --path <seg> [--reclaim]`、`forge admin group move <id>
   (--namespace <ns> | --top-level) --path <seg> [--reclaim]`、`forge admin user rename <username> <new> [--reclaim]`。
-  actor `system`、`RateLimit::Exempt`（計画の答え: 運用の CLI だけが回数の制限の外）、`authorize()` の外（ADR-0019 §8 の
-  運用のコマンドと同じ扱い）。`*_decided` を呼べるのは forge-hosting だけなので（テスト `decided_callers`）、
+  actor `system`、`RateLimit::Exempt`（計画の答え: 運用の CLI だけが回数の制限の外）、`authorize()` の外（単一判定点の例外。
+  ADR-0019 の Amendment「D5 MR5: §8 の例外を運用の移動・名前の変更のコマンドへ広げる」に、HTTP から到達できない理由とともに記した）。`*_decided` を呼べるのは forge-hosting だけなので（テスト `decided_callers`）、
   `Hosting::operator_*` を通す。ロールを読む呼び出し元はいないので、ユーザー id 0（存在しない）でロックする。
-- 権限の表の行（純粋な `authorize()`）は MR1 のまま。ルートごとの行（Owner / Maintainer / 管理者 / 読み取りのトークン /
+- 権限の表の行（純粋な `authorize()`）は MR1 の行に名前の変更の行を足した。ルートごとの行（Owner / Maintainer / 管理者 / 読み取りのトークン /
   `admin` のない管理者のトークン / エージェント / 他人 / 削除待ち / 不正な id）は `forge-web/tests/namespace_move_routes.rs`、
   Owner の降格と移動の競合は `forge-hosting/tests/moves.rs`。

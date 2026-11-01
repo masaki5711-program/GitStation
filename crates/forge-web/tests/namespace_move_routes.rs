@@ -965,3 +965,127 @@ async fn a_user_rename_is_for_administrators_only() {
     assert_eq!(events[0]["n"], 1);
     w.t.drop_now().await;
 }
+
+/// Release rows the first route test does not cover (D5 MR5 review): a
+/// `moved` tombstone is the absent 404 to an administrator's token without
+/// `admin` and to the Owner of the old parent who has no role on the
+/// target; a `deleted` one is 403 to a parent member who is not its
+/// recorded owner and 404 to a caller without a role in its parent.
+#[tokio::test]
+async fn tombstone_release_denies_by_the_target_and_the_parent() {
+    let w = world().await;
+    let r = || router(&w.t.db);
+    let carol = user(&w.t, "carol", false).await;
+    member(&w.t, w.acme.group_id, carol.user_id, Role::Owner).await;
+    // web leaves acme for alice's personal namespace: carol (Owner of acme,
+    // so of web until now) has no role on it any more.
+    let moved = call(
+        r(),
+        "POST",
+        &format!("/api/v1/projects/{}/transfer", w.web),
+        session(w.alice.user_id, false),
+        Some(json!({"namespace_id": w.alice.namespace_id.get()})),
+    )
+    .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.json);
+    let release = "/api/v1/namespaces/tombstones/release";
+    let old = || Some(json!({"path": "acme/web"}));
+    for who in [
+        token(w.root.user_id, true, Scope::Api, false),
+        session(carol.user_id, false),
+    ] {
+        let a = call(r(), "POST", release, who, old()).await;
+        assert_eq!(
+            (a.status, code(&a)),
+            (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+            "{}",
+            a.json
+        );
+    }
+    // An administrator with the `admin` scope sees every target.
+    let a = call(r(), "POST", release, admin_token(w.root.user_id), old()).await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.json);
+
+    // A deleted tombstone below acme recorded for alice (synthetic row,
+    // as the purge writes it).
+    w.t.commit_audited(
+        ("project", w.web),
+        &[format!(
+            "INSERT INTO forge.namespace_tombstones (old_path, kind, parent_namespace_id, \
+             owner_at_write, cause_type, cause_id) \
+             VALUES ('acme/gone', 'deleted', {}, {}, 'project', {})",
+            w.acme.namespace_id.get(),
+            w.alice.user_id.get(),
+            w.web
+        )],
+    )
+    .await;
+    let gone = || Some(json!({"path": "acme/gone"}));
+    for (who, want) in [
+        // carol owns acme but is not the recorded owner
+        (
+            session(carol.user_id, false),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ),
+        // maint has a role in acme, not Owner, not recorded
+        (
+            session(w.maint.user_id, false),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        ),
+        // bob has no role in acme: the same 404 as no tombstone
+        (
+            session(w.bob.user_id, false),
+            (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        ),
+        (
+            token(w.root.user_id, true, Scope::Api, false),
+            (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        ),
+    ] {
+        let a = call(r(), "POST", release, who, gone()).await;
+        assert_eq!((a.status, code(&a)), want, "{}", a.json);
+        only_user_message(&a);
+    }
+    // The recorded owner, still Owner of acme, releases it.
+    let a = call(
+        r(),
+        "POST",
+        release,
+        session(w.alice.user_id, false),
+        gone(),
+    )
+    .await;
+    assert_eq!(a.status, StatusCode::OK, "{}", a.json);
+    assert_eq!(a.json, json!({"path": "acme/gone", "kind": "deleted"}));
+    w.t.drop_now().await;
+}
+
+/// A group cannot move below itself or one of its descendants: 409
+/// FG-REPO-0015 (`cycle`), nothing written.
+#[tokio::test]
+async fn a_group_moved_into_its_own_descendant_is_transfer_invalid() {
+    let w = world().await;
+    let r = || router(&w.t.db);
+    let platform = group(&w.t, "platform", Some(w.acme.namespace_id), w.alice.user_id).await;
+    let infra = group(&w.t, "infra", Some(platform.namespace_id), w.alice.user_id).await;
+    for target in [infra.namespace_id, platform.namespace_id] {
+        let a = call(
+            r(),
+            "POST",
+            &format!("/api/v1/groups/{}/transfer", platform.group_id.get()),
+            session(w.alice.user_id, false),
+            Some(json!({"namespace_id": target.get()})),
+        )
+        .await;
+        // into infra: a cycle; into itself: a cycle too (its own namespace)
+        assert_eq!(
+            (a.status, code(&a)),
+            (StatusCode::CONFLICT, "FG-REPO-0015"),
+            "{}",
+            a.json
+        );
+        only_user_message(&a);
+    }
+    assert_eq!(moves(&w.t).await, 0);
+    w.t.drop_now().await;
+}

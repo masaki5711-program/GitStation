@@ -6,12 +6,11 @@
 //!
 //! A transfer is also the rename: the body names the new parent
 //! (`namespace_id`; omitted = the current parent) and the new last segment
-//! (`path`; omitted = the current one). With the current parent the target
-//! is decided on the caller's own role on the resource (ADR-0015: "名前だけ
-//! の変更は、移動先 = 今の親として扱う"), so a project's or a subgroup's
-//! Owner renames it without any role on the parent; a top-level group's
-//! rename is a move to the top level (administrators only, like its
-//! creation). A group moves to the top level only with `"top_level": true`
+//! (`path`; omitted = the current one). The current parent is the target
+//! `CurrentParent`, which `authorize()` decides (ADR-0015: "名前だけの変更
+//! は、移動先 = 今の親として扱う"; a project's or a subgroup's Owner renames
+//! it without any role on the parent; a top-level group's rename is an
+//! administrator's) — the loaders only describe what they read. A group moves to the top level only with `"top_level": true`
 //! (never because a field was left out).
 //!
 //! As every write route: the registry authenticates, reads the strict body,
@@ -41,7 +40,7 @@ use forge_auth::{
     TombstoneCtx, TransferCtx, UserRenameCtx,
 };
 use forge_core::{
-    GroupId, LookupPath, NamespaceId, NamespacePath, Resolution, ResolvedTarget, Role, UserId,
+    GroupId, LookupPath, NamespaceId, NamespacePath, Resolution, ResolvedTarget, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::{MoveOutcome, MoveRequest, Parent as HostedParent};
@@ -194,43 +193,48 @@ fn parent_path(path: &NamespacePath) -> Result<Option<LookupPath>, ForgeError> {
     }
 }
 
-/// The current parent of a live namespace (by its path; a parent moved a
-/// moment ago is followed through its tombstone): its namespace and the
-/// target it is as a parent. `own_role` is the caller's role on the moved
-/// resource (a rename is decided on it).
+/// How often a loader reads the resource and its parent again when the
+/// parent's path no longer resolves (the resource moved in between).
+const LOAD_ATTEMPTS: u32 = 3;
+
+/// The namespace of a live namespace's current parent, by the parent's
+/// path (a parent moved a moment ago is followed through its tombstone).
+/// `None` when the path no longer resolves: the resource moved between the
+/// two reads, and the caller reads both again.
 async fn current_parent(
     state: &AppState,
     path: &LookupPath,
     viewer: Option<UserId>,
-    own_role: Option<Role>,
-) -> Result<(NamespaceId, LoadedTransferTarget), ForgeError> {
+) -> Result<Option<NamespaceId>, ForgeError> {
     let resolved = match resolve_bounded(state, path, viewer).await? {
         Resolution::Live(r) | Resolution::Moved { resolved: r, .. } => r,
-        Resolution::Deleted { .. } | Resolution::Absent => {
-            // The resource's own path was just read, so its parent was
-            // live: it moved twice in between. Nothing was written; the
-            // request may be retried.
-            return Err(ForgeError::new(ErrorCode::NamespaceMoveContended)
-                .with_context("command", "load")
-                .with_context("last_reason", "parent_unresolved"));
-        }
+        Resolution::Deleted { .. } | Resolution::Absent => return Ok(None),
     };
-    let namespace = resolved.namespace_id;
-    let target = match resolved.target {
-        ResolvedTarget::Group { id, .. } => LoadedTransferTarget::Group {
-            namespace,
-            group: LoadedGroup { id, role: own_role },
-        },
-        ResolvedTarget::User(owner) => {
-            LoadedTransferTarget::User(LoadedUserNamespace { namespace, owner })
+    if let ResolvedTarget::Project { .. } = resolved.target {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "parent_is_project")
+            .with_context("namespace_id", resolved.namespace_id.get()));
+    }
+    Ok(Some(resolved.namespace_id))
+}
+
+/// The target of a body naming `requested` (`None` = keep the parent) for a
+/// resource whose parent is `current` (`None` = the top level): the
+/// current parent is a rename (`CurrentParent`, decided by `authorize()`),
+/// any other is loaded as the caller sees it.
+async fn target_for(
+    state: &AppState,
+    requested: Option<NamespaceId>,
+    current: Option<NamespaceId>,
+    viewer: Option<UserId>,
+) -> Result<LoadedTransferTarget, ForgeError> {
+    match requested {
+        None => Ok(LoadedTransferTarget::CurrentParent { namespace: current }),
+        Some(ns) if Some(ns) == current => {
+            Ok(LoadedTransferTarget::CurrentParent { namespace: current })
         }
-        ResolvedTarget::Project { .. } => {
-            return Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "parent_is_project")
-                .with_context("namespace_id", namespace.get()))
-        }
-    };
-    Ok((namespace, target))
+        Some(ns) => named_target(state, ns, viewer).await,
+    }
 }
 
 /// The parent named by a body's `namespace_id`, as `viewer` sees it: an
@@ -286,27 +290,40 @@ impl BodyLoader<AppState, TransferProject> for ProjectToMove {
             if body.namespace_id.is_some_and(|n| n < 1) {
                 return Err(invalid_namespace_id());
             }
-            let Some(record) = projects::load_bounded(state, id, viewer).await? else {
-                return Ok(absent());
+            // The project and its parent's namespace; read again when the
+            // parent's path stopped resolving in between (a move raced). If
+            // that keeps happening the answer is the absent 404 decided by
+            // `authorize()` — never an error a stranger could tell apart.
+            let mut tries = 0;
+            let (record, current) = loop {
+                tries += 1;
+                let Some(record) = projects::load_bounded(state, id, viewer).await? else {
+                    return Ok(absent());
+                };
+                if record.id != id {
+                    return Err(ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "loaded_another_project")
+                        .with_context("project_id", id.get())
+                        .with_context("loaded_project_id", record.id.get()));
+                }
+                let parent = parent_path(&record.path)?.ok_or_else(|| {
+                    ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "project_at_top_level")
+                        .with_context("project_id", id.get())
+                })?;
+                match current_parent(state, &parent, viewer).await? {
+                    Some(ns) => break (record, ns),
+                    None if tries < LOAD_ATTEMPTS => {}
+                    None => return Ok(absent()),
+                }
             };
-            if record.id != id {
-                return Err(ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "loaded_another_project")
-                    .with_context("project_id", id.get())
-                    .with_context("loaded_project_id", record.id.get()));
-            }
-            let parent = parent_path(&record.path)?.ok_or_else(|| {
-                ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "project_at_top_level")
-                    .with_context("project_id", id.get())
-            })?;
-            let (current, rename_target) =
-                current_parent(state, &parent, viewer, record.access.role).await?;
-            let target = match body.namespace_id.map(NamespaceId::new) {
-                None => rename_target,
-                Some(ns) if ns == current => rename_target,
-                Some(ns) => named_target(state, ns, viewer).await?,
-            };
+            let target = target_for(
+                state,
+                body.namespace_id.map(NamespaceId::new),
+                Some(current),
+                viewer,
+            )
+            .await?;
             Ok(Lookup::Found {
                 ctx: TransferCtx::new(projects::loaded(&record), target),
                 canonical: Some(record.path.clone()), // clone: the record moves on too
@@ -344,34 +361,42 @@ impl BodyLoader<AppState, TransferGroup> for GroupToMove {
                     .with_context("rule", "with_namespace_id"));
             }
             let hosting = hosting(state)?;
-            let Some(record) = bounded(state, "group_load", hosting.group(id, viewer)).await?
-            else {
-                return Ok(absent());
+            // As for a project: read again when the parent's path stopped
+            // resolving; the absent 404 if that keeps happening.
+            let mut tries = 0;
+            let (record, current) = loop {
+                tries += 1;
+                let Some(record) = bounded(state, "group_load", hosting.group(id, viewer)).await?
+                else {
+                    return Ok(absent());
+                };
+                if record.id != id {
+                    return Err(ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "loaded_another_group")
+                        .with_context("group_id", id.get())
+                        .with_context("loaded_group_id", record.id.get()));
+                }
+                let Some(parent) = parent_path(&record.path)? else {
+                    break (record, None);
+                };
+                match current_parent(state, &parent, viewer).await? {
+                    Some(ns) => break (record, Some(ns)),
+                    None if tries < LOAD_ATTEMPTS => {}
+                    None => return Ok(absent()),
+                }
             };
-            if record.id != id {
-                return Err(ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "loaded_another_group")
-                    .with_context("group_id", id.get())
-                    .with_context("loaded_group_id", record.id.get()));
-            }
-            let target = if top_level {
-                LoadedTransferTarget::TopLevel
-            } else {
-                match parent_path(&record.path)? {
-                    // A top-level group: a rename stays at the top level.
-                    None => match body.namespace_id {
-                        None => LoadedTransferTarget::TopLevel,
-                        Some(ns) => named_target(state, NamespaceId::new(ns), viewer).await?,
-                    },
-                    Some(parent) => {
-                        let (current, rename_target) =
-                            current_parent(state, &parent, viewer, record.role).await?;
-                        match body.namespace_id.map(NamespaceId::new) {
-                            None => rename_target,
-                            Some(ns) if ns == current => rename_target,
-                            Some(ns) => named_target(state, ns, viewer).await?,
-                        }
-                    }
+            let target = match (top_level, current) {
+                // Already at the top level: a rename there.
+                (true, None) => LoadedTransferTarget::CurrentParent { namespace: None },
+                (true, Some(_)) => LoadedTransferTarget::TopLevel,
+                (false, _) => {
+                    target_for(
+                        state,
+                        body.namespace_id.map(NamespaceId::new),
+                        current,
+                        viewer,
+                    )
+                    .await?
                 }
             };
             Ok(Lookup::Found {

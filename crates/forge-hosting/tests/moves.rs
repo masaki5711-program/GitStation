@@ -160,3 +160,83 @@ async fn a_transfer_proof_is_bound_to_its_target_and_action() {
     assert_eq!(err.code(), ErrorCode::Internal);
     t.drop_now().await;
 }
+
+/// The rename fallback (D5 MR5 review): a proof decided as a rename below
+/// acme (`CurrentParent`, Owner of the project is enough) whose project
+/// was moved to beta before the command locked it. The command builds the
+/// target from the locked parent — acme is now another group, where bob is
+/// only a Developer — and `authorize()` refuses: nothing moves back.
+#[tokio::test]
+async fn a_rename_proof_whose_project_moved_meanwhile_is_decided_as_a_move() {
+    let t = FreshDb::migrated().await;
+    let hosting = Hosting::new(t.db.clone());
+    let alice = user(&t, "alice", false).await;
+    let bob = user(&t, "bob", false).await;
+    let acme = group(&t, "acme", alice.user_id).await;
+    let beta = group(&t, "beta", alice.user_id).await;
+    groups::add_member(
+        &t.db,
+        &system("req-bob-acme"),
+        acme.group_id,
+        bob.user_id,
+        Role::Developer,
+    )
+    .await
+    .expect("bob develops in acme");
+    let web = project(&t, "web", acme, alice.user_id).await;
+    projects::add_member(
+        &t.db,
+        &system("req-bob-web"),
+        web.project_id,
+        bob.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("bob owns web");
+    let as_bob = session(bob.user_id, false);
+    let loaded = project_ctx(&hosting, &as_bob, web.project_id).await;
+    let proof = prove(
+        &as_bob,
+        Action::ProjectTransfer,
+        TransferCtx::new(
+            loaded,
+            LoadedTransferTarget::CurrentParent {
+                namespace: Some(acme.namespace_id),
+            },
+        ),
+    )
+    .expect("a rename is allowed");
+    // The operator moves web to beta before bob's rename runs.
+    hosting
+        .operator_move_project(
+            &system("req-op-move"),
+            web.project_id,
+            &forge_db::namespaces::Destination {
+                parent: Some(beta.namespace_id),
+                segment: "web".into(),
+            },
+            false,
+        )
+        .await
+        .expect("operator move");
+    let err = hosting
+        .move_project(
+            &request("req-rename"),
+            &proof,
+            &MoveRequest {
+                segment: "site".into(),
+                reclaim: false,
+            },
+        )
+        .await
+        .expect_err("now a move into acme");
+    assert_eq!(err.code(), ErrorCode::Forbidden, "{err:?}");
+    let rows = t
+        .json_rows(&format!(
+            "SELECT full_path FROM forge.namespaces WHERE id = {}",
+            web.namespace_id.get()
+        ))
+        .await;
+    assert_eq!(rows[0]["full_path"], "beta/web", "not moved back");
+    t.drop_now().await;
+}

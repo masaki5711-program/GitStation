@@ -112,6 +112,13 @@ pub(crate) enum Fixture {
     GroupTransferToTopLevel,
     /// Moving a group into the caller's own personal namespace (never).
     GroupTransferToNamespace,
+    /// Renaming a private project the caller has the actor's role on: the
+    /// target is its current parent group (D5 MR5).
+    TransferRename,
+    /// Renaming a group (below its current parent group).
+    GroupTransferRename,
+    /// Renaming a top-level group (it stays at the top level).
+    GroupTransferRenameTopLevel,
     /// Renaming another user (D5).
     UserRenameOther,
     /// Renaming oneself.
@@ -379,6 +386,15 @@ impl Fixture {
             Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
             Fixture::GroupTransferToNamespace => {
                 group_transfer(TransferTarget::PersonalNamespace { owner: ME })
+            }
+            Fixture::TransferRename => {
+                transfer(private, TransferTarget::CurrentParent { top_level: false })
+            }
+            Fixture::GroupTransferRename => {
+                group_transfer(TransferTarget::CurrentParent { top_level: false })
+            }
+            Fixture::GroupTransferRenameTopLevel => {
+                group_transfer(TransferTarget::CurrentParent { top_level: true })
             }
             Fixture::UserRenameOther => Resource::UserRename { target_user: OTHER },
             Fixture::UserRenameSelf => Resource::UserRename { target_user: ME },

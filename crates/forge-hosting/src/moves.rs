@@ -12,14 +12,12 @@
 //! written. The proof's id binds the destination: a proof for one parent
 //! never moves the resource below another (`reconfirm_target_mismatch`).
 //!
-//! **A rename keeps the parent** (ADR-0015 "名前だけの変更は、移動先 = 今の
-//! 親として扱う"): when the new parent is the current one, the target is
-//! decided on the caller's own role on the resource — a project's Owner
-//! renames it in a group where they are only a Developer, a subgroup's
-//! Owner renames it — never on the parent's role. A top-level group's
-//! rename is a move to the top level (administrators only, as its creation);
-//! a project in a personal namespace is renamed by that namespace's user or
-//! an administrator.
+//! **A rename keeps the parent**: when the locked parent is the one the
+//! move names, the target is `LoadedTransferTarget::CurrentParent` and
+//! `authorize()` decides it (ADR-0015 "名前だけの変更は、移動先 = 今の親と
+//! して扱う"; D5 MR5 review: the rule lives in forge-auth, not here). If the
+//! resource moved between the registry's check and the lock, the target is
+//! built from the locked parent and decided on it.
 //!
 //! **Retry**: a move whose transaction lost an unavoidable deadlock or found
 //! its subtree changing while it locked it (`FG-DB-0002 retryable=true`:
@@ -55,14 +53,17 @@ pub struct MoveRequest {
     pub reclaim: bool,
 }
 
-/// The new target as forge-auth decides it, from what the transaction
-/// locked. `rename` (the parent is unchanged) decides a group target on
-/// `own_role`, the caller's role on the moved resource.
+/// The new target as the transaction locked it: the resource's current
+/// parent (`rename`: the locked parent is `parent`) is `CurrentParent`, for
+/// `authorize()` to decide; any other parent is described as it is.
 fn target_of(
     target: TargetAccess,
     rename: bool,
-    own_role: Option<forge_core::Role>,
+    parent: Option<forge_core::NamespaceId>,
 ) -> LoadedTransferTarget {
+    if rename {
+        return LoadedTransferTarget::CurrentParent { namespace: parent };
+    }
     match target {
         TargetAccess::TopLevel => LoadedTransferTarget::TopLevel,
         TargetAccess::Group {
@@ -71,10 +72,7 @@ fn target_of(
             role,
         } => LoadedTransferTarget::Group {
             namespace,
-            group: LoadedGroup {
-                id: group,
-                role: if rename { own_role } else { role },
-            },
+            group: LoadedGroup { id: group, role },
         },
         TargetAccess::PersonalNamespace { namespace, owner } => {
             LoadedTransferTarget::User(LoadedUserNamespace { namespace, owner })
@@ -171,7 +169,7 @@ impl Hosting {
                 options,
                 |facts| {
                     let rename = facts.source_parent == Some(parent);
-                    let target = target_of(facts.target, rename, facts.project.access.role);
+                    let target = target_of(facts.target, rename, Some(parent));
                     let fresh = TransferCtx::new(loaded(&facts.project), target);
                     proof.reconfirm(account(facts.account), fresh).map(drop)
                 },
@@ -215,7 +213,7 @@ impl Hosting {
                 options,
                 |facts| {
                     let rename = facts.source_parent == parent;
-                    let target = target_of(facts.target, rename, facts.group.role);
+                    let target = target_of(facts.target, rename, parent);
                     let fresh = GroupTransferCtx::new(
                         LoadedGroup {
                             id: facts.group.group,
