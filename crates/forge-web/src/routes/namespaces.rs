@@ -21,7 +21,7 @@ use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::{ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason};
-use forge_core::{LookupPath, UserId};
+use forge_core::{LookupPath, NamespaceOwner, UserId};
 use serde_json::json;
 
 use crate::app::AppState;
@@ -59,6 +59,7 @@ impl Loader<AppState> for PathParam {
                     ctx,
                     canonical: Some(canonical),
                     tombstone,
+                    project: None,
                 },
                 Err(ctx) => Lookup::Unresolved { ctx, why: None },
             })
@@ -103,8 +104,11 @@ fn percent_decode(raw: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// The answer: the namespace id and kind from the proof, the current path
-/// (moved: the target's path now) and whether a tombstone led here.
+/// The answer: the namespace id, kind and owner id from the proof, the
+/// current path (moved: the target's path now) and whether a tombstone led
+/// here. The owner id is the kind's own key (`project_id`, `group_id` or
+/// `user_id`), revealed only now that `authorize()` allowed (MR5): a
+/// client can go on to `GET /api/v1/projects/{project_id}`.
 pub async fn resolve(_state: AppState, request: Dispatched<ResolvedCtx>) -> Response {
     let proof = request.proof();
     let moved = proof.ctx().via() == ResolvedVia::Moved;
@@ -119,13 +123,21 @@ pub async fn resolve(_state: AppState, request: Dispatched<ResolvedCtx>) -> Resp
             "namespace.redirected"
         );
     }
-    let mut res = Json(json!({
+    let (owner_key, owner_id) = match proof.ctx().owner() {
+        NamespaceOwner::User(id) => ("user_id", id.get()),
+        NamespaceOwner::Group(id) => ("group_id", id.get()),
+        NamespaceOwner::Project(id) => ("project_id", id.get()),
+    };
+    let mut body = json!({
         "namespace_id": proof.id().get(),
         "kind": proof.ctx().view().kind(),
         "canonical_path": path,
         "moved": moved,
-    }))
-    .into_response();
+    });
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert(owner_key.to_owned(), json!(owner_id));
+    }
+    let mut res = Json(body).into_response();
     let headers = res.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
     headers.insert(VARY, HeaderValue::from_static("Authorization, Cookie"));

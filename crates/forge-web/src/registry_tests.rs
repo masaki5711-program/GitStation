@@ -36,6 +36,7 @@ fn admitted() -> Admitted {
         tail: TailSegments::default(),
         canonical: None,
         tombstone: None,
+        project: None,
     }
 }
 

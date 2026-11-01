@@ -18,12 +18,13 @@ admitted proof.
   be called outside the registry and a proof for another action is refused
   (ADR-0015 MR4 musts a–c). It exposes `proof()` (action, target id,
   context), `ctx()`, `principal()`, `method()`, `headers()`, `raw_query()`,
-  `tail()` (the validated segments after a route word), `canonical_path()`
-  and `via_tombstone()` (revealed only after `authorize()`), `into_body()`.
+  `tail()` (the validated segments after a route word), `canonical_path()`,
+  `via_tombstone()` and `project()` (the `ProjectRecord` a project was loaded
+  from; revealed only after `authorize()`), `into_body()`.
 - `registry::Registry::route(Verb, path, Action, summary, handler)` — a fixed
   path deciding on the instance (`InstanceCtx`); `route_with(.., loader,
   handler)` — a fixed path deciding on what a `Loader` loads (one lookup;
-  `Lookup::Found { ctx, canonical, tombstone }` or `Lookup::Unresolved`,
+  `Lookup::Found { ctx, canonical, tombstone, project }` or `Lookup::Unresolved`,
   which `prove()` denies). The only way to add a route (a test fails on
   `Router::new` / `.route("..")` / `.nest` outside the registry). Every
   non-public fixed route gets token authentication and then the
@@ -57,16 +58,33 @@ admitted proof.
   reaches the handler. The resolver call is bounded by
   `AppState::lookup_timeout` (`FG-WEB-0002 operation=namespace_resolve`).
 - Routes (MR4): `GET /api/v1/namespaces/resolve?path=` (`PathResolve`:
-  `{ namespace_id, kind, canonical_path, moved }`, `Cache-Control: private,
-  no-store`; a missing / repeated / malformed `path` is answered like an
-  absent path until FG-WEB-0006, phase 8b) and the SPA shell (`WebShell`,
+  `{ namespace_id, kind, canonical_path, moved }` plus, since MR5, the
+  owner's id under the kind's key — `project_id`, `group_id` or `user_id` —
+  after `authorize()` allowed; `Cache-Control: private, no-store`; a
+  missing / repeated / malformed `path` is answered like an absent path
+  until FG-WEB-0006, phase 8b) and the SPA shell (`WebShell`,
   `src/routes/shell.rs`: the same bytes for every page — namespace home,
   `/-/tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags`
   `settings` `members`, group `settings` / `members`, `/-/projects/{id}/…`;
   GET and HEAD).
+- Route (MR5, `src/routes/projects.rs`): `GET|HEAD /api/v1/projects/{id}`
+  (`ProjectRead`; HEAD is the GET route without the body). One
+  `ProjectAccessLoader::load_project` call per request (bounded by
+  `lookup_timeout`, `FG-WEB-0002 operation=project_load`), then `prove()`:
+  no such id, an invisible project, pending deletion to a caller who cannot
+  see the project and an id that is not a plain positive decimal
+  (`lookup=id_param_invalid`, no lookup) are byte-identical `FG-REPO-0005`;
+  pending deletion to a caller who can see it is `FG-REPO-0006`, a Guest
+  `FG-AUTH-0003`, a token without `read_api` / `api` `FG-AUTH-0002` (on a
+  visible project). The body comes from `project_view(proof, record)`, the
+  one builder of a project's API shape: `{ id, namespace_id, path, name,
+  display_name, description, visibility, kind, created_at, role }` (`kind`
+  = repository kind, `role` = the caller's effective role or `null`);
+  `Cache-Control: private, no-store`, `Vary: Authorization, Cookie`.
 - `AppState::new(version, probes, authenticator, Lookups { namespaces,
   projects })` — the authenticator (`forge_core::Authenticator`) and the
-  lookups (`forge_core::NamespaceResolver`, `ProjectAccessLoader`, each
+  lookups (`forge_core::NamespaceResolver`, `ProjectAccessLoader` —
+  `load_project`, one statement with the access facts and the details — each
   `Arc<dyn …>`) are required; `forge serve` passes the database
   (`forge_db::tokens::authenticate`, `forge_db::resolve`), so forge-web never
   depends on forge-db. `with_lookup_timeout` (serve: acquire + statement
@@ -166,6 +184,9 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 - JSON / path / query rejections wrapped into `ApiError` before the first
   route that takes a body (phase 8).
 - `gen-authz --check` in CI and self-heal (needs cargo in the gate runner).
+- OpenAPI types the `{id}` of `/api/v1/projects/{id}` as a string and has no
+  response schema yet (utoipa, MR6); the repository state is not part of
+  the project view (ADR-0015 Amendment MR5).
 
 **Gotchas**
 - OpenAPI is generated from the registry with `serde_json` for now; request /
@@ -175,6 +196,8 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 **Tests**: `cargo nextest run -p forge-web` (no network beyond loopback;
 `tests/token_principal.rs` uses a fake authenticator; `src/dispatch_tests.rs`
 a scripted resolver that counts calls and the shared
-`tests/fixtures/url-vectors.json`; `tests/member_roles.rs` and
-`tests/namespace_tombstone_routes.rs` need the development database). The real-`git` token tests are named in
+`tests/fixtures/url-vectors.json`; `src/routes/projects_tests.rs` a
+scripted project loader that counts calls; `tests/member_roles.rs`,
+`tests/namespace_tombstone_routes.rs` and `tests/project_read.rs` need the
+development database). The real-`git` token tests are named in
 ADR-0019 "見送り" and land with Smart HTTP (phase 9).

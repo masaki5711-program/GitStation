@@ -12,6 +12,12 @@
   - `reason=unknown_namespace_kind` / `unknown_tombstone_kind` / `unknown_visibility`: 保存された種類・可視性が CHECK の外の値（`raw` に保存値）
   - `reason=namespace_without_project`: `kind = 'project'` の名前空間に、対応する `forge.projects` の行がない
   - `reason=project_without_namespace`: `forge.projects` の行に、`kind = 'project'` の名前空間がない
+  - ID によるプロジェクトの読み込み（`GET /api/v1/projects/{id}`、M1 phase 8 MR5）だけのもの:
+    - `reason=project_path_unconfirmed`: プロジェクトの名前空間の保存された `full_path` が、親をたどってつないだセグメントと一致しない
+      （`moved_path_unconfirmed` と同じ食い違い。`namespace_id` に名前空間）
+    - `reason=stored_path_invalid`（`project_id` 付き）: プロジェクトの `full_path` が `NamespacePath::parse` を通らない（`rule` に理由）
+    - `reason=project_without_repository`: `forge.projects` の行に `forge.repositories` の行がない（1 対 1 対 1 の片側が消えている）
+    - `reason=unknown_repository_kind`: `forge.repositories.kind` が CHECK の外の値（`raw` に保存値）
 - ロールの連鎖が壊れている場合（ループ、不明なロール）は、同じ読み込みでも FG-DB-0018（Runbook `membership-data`）になる。
 
 ## Impact
@@ -35,10 +41,11 @@
      FROM forge.namespace_tombstones WHERE id = <tombstone_id>;
    SELECT id, visibility, deleted_at, purge_after FROM forge.projects WHERE id = <project_id>;
    SELECT id, full_path FROM forge.namespaces WHERE kind = 'project' AND owner_id = <project_id>;
+   SELECT id, project_id, kind, state FROM forge.repositories WHERE project_id = <project_id>;
    ```
 
 3. 制約が残っているか: `SELECT conname FROM pg_constraint WHERE conname IN ('namespaces_segment', 'namespaces_kind',
-   'namespace_tombstones_kind', 'projects_visibility');`
+   'namespace_tombstones_kind', 'projects_visibility', 'repositories_kind');`
 4. いつ誰が変えたか: `forge_audit.ddl_audit`（制約・トリガーの変更）と、`forge.audit_log` の `user.*` / `group.*` / `project.*` の行（正しい履歴）を見る。
    監査の行のない変更は、トリガーが無効だった時間がある — Runbook `append-only-violation` も確かめる。
 

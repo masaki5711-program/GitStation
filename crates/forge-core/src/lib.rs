@@ -31,7 +31,7 @@ pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, Tombstone
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
     NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
-    Resolution, Resolved, ResolvedTarget,
+    ProjectRecord, Resolution, Resolved, ResolvedTarget,
 };
 pub use ref_name::RefName;
 pub use ref_pattern::RefPattern;
@@ -41,7 +41,8 @@ pub use role::{Role, Visibility};
 pub use scope::Scope;
 pub use user_kind::UserKind;
 pub use web_path::{
-    log_safe_path, parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord, TailSegments,
+    log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
+    RouteWord, TailSegments,
 };
 
 #[cfg(test)]

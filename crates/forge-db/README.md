@@ -127,7 +127,7 @@ connection, mapping driver errors to registered codes, migrations
   audit details). Path lock and tombstone checks as for groups. `creator` must be the
   acting user (`Actor::System`, the operator / worker, may name anyone). `CreatedProject {
   project_id, namespace_id, repository_id, provision_job }`.
-- `resolve::{resolve, project_access}` and `impl forge_core::NamespaceResolver /
+- `resolve::{resolve, load_project, project_access}` and `impl forge_core::NamespaceResolver /
   ProjectAccessLoader for Db` (M1 phase 8 MR3, ADR-0015 Amendment MR3; `forge serve`
   injects the `Db` into forge-web like the authenticator):
   `resolve(&Db, &LookupPath, viewer: Option<UserId>) -> Result<Resolution, ForgeError>` —
@@ -136,7 +136,12 @@ connection, mapping driver errors to registered codes, migrations
   ProjectId, viewer) -> Result<Option<forge_core::ProjectAccess>, ForgeError>`
   (`None` = no such project; it replaces D4's `projects::access` and its
   `ProjectAccess { visibility, pending_deletion }` — one type, forge-core's, now with
-  the viewer's `role`). **One statement per call, whatever the answer**
+  the viewer's `role`); `load_project(&Db, ProjectId, viewer) ->
+  Result<Option<forge_core::ProjectRecord>, ForgeError>` (MR5: the same one statement
+  also returns the project's namespace — `full_path` confirmed against its segments —
+  names, repository kind and `created_at` in UTC; `project_access` is its `access`;
+  FG-DB-0021 `project_path_unconfirmed` / `stored_path_invalid` /
+  `project_without_repository` / `unknown_repository_kind` for rows it cannot read). **One statement per call, whatever the answer**
   (`RESOLVE_SQL`, `PROJECT_ACCESS_SQL`): it always returns exactly one row (an
   aggregate without `GROUP BY` drives `LEFT JOIN`s), so live / moved / deleted /
   absent, visible / invisible and signed-in / anonymous (`$2` NULL) issue the same

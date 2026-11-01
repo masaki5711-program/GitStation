@@ -556,6 +556,32 @@ fn project_permalink_needs_a_positive_id() {
     }
 }
 
+/// The id rule of the permalink is the API's too (`/api/v1/projects/{id}`).
+#[test]
+fn positive_ids_are_plain_decimal_without_a_leading_zero() {
+    assert_eq!(crate::parse_positive_id("1"), Some(1));
+    assert_eq!(
+        crate::parse_positive_id("9223372036854775807"),
+        Some(i64::MAX)
+    );
+    for raw in [
+        "",
+        "0",
+        "00",
+        "01",
+        "+1",
+        "-1",
+        "1e3",
+        "%31",
+        " 1",
+        "1 ",
+        "9223372036854775808",
+        "\u{0661}",
+    ] {
+        assert_eq!(crate::parse_positive_id(raw), None, "{raw:?}");
+    }
+}
+
 #[test]
 fn shapes_and_lookup_paths() {
     let home = parse_web_path("/acme/x", None).expect("home");

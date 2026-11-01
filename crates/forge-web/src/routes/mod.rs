@@ -5,4 +5,5 @@
 
 pub mod health;
 pub mod namespaces;
+pub mod projects;
 pub mod shell;

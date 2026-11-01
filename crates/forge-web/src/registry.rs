@@ -52,7 +52,9 @@ use forge_auth::{
     prove, Action, Authorized, InstanceCtx, Principal, ProjectCtx, ResourceCtx, UnresolvedCtx,
 };
 use forge_core::web_path::{GitRoute, InstanceRoute, RouteWord};
-use forge_core::{NamespacePath, NamespaceResolver, TailSegments, TombstoneId, UserId};
+use forge_core::{
+    NamespacePath, NamespaceResolver, ProjectRecord, TailSegments, TombstoneId, UserId,
+};
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Map, Value};
 
@@ -294,6 +296,7 @@ struct Admitted {
     tail: TailSegments,
     canonical: Option<NamespacePath>,
     tombstone: Option<TombstoneId>,
+    project: Option<ProjectRecord>,
 }
 
 impl<R: ResourceCtx> Dispatched<R> {
@@ -346,6 +349,13 @@ impl<R: ResourceCtx> Dispatched<R> {
         self.request.tombstone
     }
 
+    /// The project row the loader read with the context (a project loaded
+    /// by id, `GET /api/v1/projects/{id}`), revealed only after
+    /// `authorize()`; `None` for every other route. Its `id` is the proof's.
+    pub fn project(&self) -> Option<&ProjectRecord> {
+        self.request.project.as_ref()
+    }
+
     pub fn into_body(self) -> Body {
         self.request.body
     }
@@ -370,12 +380,15 @@ fn admit<R: ResourceCtx>(
 
 /// What a [`Loader`] found for the request.
 pub enum Lookup<R> {
-    /// The resource context to decide on; `canonical` is the target's
-    /// current path, handed to the handler only after `authorize()`.
+    /// The resource context to decide on; `canonical` (the target's
+    /// current path), `tombstone` and `project` (the row a project was
+    /// loaded from, with what its route shows) are handed to the handler
+    /// only after `authorize()`.
     Found {
         ctx: R,
         canonical: Option<NamespacePath>,
         tombstone: Option<TombstoneId>,
+        project: Option<ProjectRecord>,
     },
     /// Nothing the route can act on: decided by `authorize()` like every
     /// other request (`FG-REPO-0005`, after authentication). `why` is
@@ -419,6 +432,7 @@ impl<S: Sync> Loader<S> for InstanceLoader {
                 ctx: InstanceCtx,
                 canonical: None,
                 tombstone: None,
+                project: None,
             })
         })
     }
@@ -784,12 +798,13 @@ where
                 .into_response()
         }
     };
-    let (resource, canonical, tombstone) = match lookup {
+    let (resource, canonical, tombstone, project) = match lookup {
         Lookup::Found {
             ctx: r,
             canonical,
             tombstone,
-        } => (r, canonical, tombstone),
+            project,
+        } => (r, canonical, tombstone, project),
         Lookup::Unresolved {
             ctx: unresolved,
             why,
@@ -814,6 +829,7 @@ where
         tail: TailSegments::default(),
         canonical,
         tombstone,
+        project,
     };
     let handled = match admit(action, proof, admitted) {
         Ok(dispatched) => endpoint.call(state, dispatched),
@@ -867,6 +883,7 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
             tail,
             canonical,
             tombstone: None,
+            project: None,
         },
     )
 }

@@ -23,8 +23,8 @@ pub use model::{
     RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
 };
 pub use prove::{
-    prove, Authorized, InstanceCtx, LoadedNamespace, LoadedProject, ProjectCtx, ResolvedCtx,
-    ResourceCtx, UnresolvedCtx,
+    prove, Authorized, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, ProjectCtx,
+    ResolvedCtx, ResourceCtx, UnresolvedCtx,
 };
 
 #[cfg(test)]

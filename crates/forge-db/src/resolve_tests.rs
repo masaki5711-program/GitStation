@@ -909,10 +909,10 @@ async fn the_db_is_the_resolver_and_the_project_access_loader() {
     );
     assert_eq!(
         loader
-            .project_access(web.project_id, None)
+            .load_project(web.project_id, None)
             .await
-            .expect("project_access"),
-        project_access(&t.db, web.project_id, None)
+            .expect("load_project"),
+        load_project(&t.db, web.project_id, None)
             .await
             .expect("direct")
     );
@@ -1032,6 +1032,157 @@ async fn a_cycle_in_the_resolved_chain_is_membership_data_invalid() {
             ErrorCode::MembershipDataInvalid,
             "namespace_chain_too_deep",
         );
+    }
+    t.drop_now().await;
+}
+
+// ── load_project: the details of GET /api/v1/projects/{id} (MR5) ─────────
+
+/// The details come from the same statement as the access facts: the
+/// current path (after a rename), the names, the repository kind and the
+/// creation time in UTC.
+#[tokio::test]
+async fn load_project_returns_the_details_with_the_access_facts() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let web = projects::create(
+        &t.db,
+        &ctx("req-project-web"),
+        &NewProject {
+            visibility: Visibility::Internal,
+            description: "synthetic description".to_owned(),
+            kind: forge_core::RepositoryKind::Spec,
+            ..NewProject::new("web", alice.namespace_id, "Web site", alice.user_id)
+        },
+    )
+    .await
+    .expect("project");
+    let record = load_project(&t.db, web.project_id, Some(alice.user_id))
+        .await
+        .expect("load")
+        .expect("exists");
+    assert_eq!(record.id, web.project_id);
+    assert_eq!(record.namespace_id, web.namespace_id);
+    assert_eq!(record.path.full_path(), "alice/web");
+    assert_eq!(record.display_name, "Web site");
+    assert_eq!(record.description, "synthetic description");
+    assert_eq!(record.kind, forge_core::RepositoryKind::Spec);
+    assert_eq!(
+        record.access,
+        ProjectAccess {
+            visibility: Visibility::Internal,
+            role: Some(Role::Owner),
+            pending_deletion: false
+        }
+    );
+    let at = record.created_at.as_bytes();
+    assert_eq!(at.len(), 20, "{}", record.created_at);
+    assert!(
+        at[4] == b'-' && at[10] == b'T' && at[19] == b'Z',
+        "{}",
+        record.created_at
+    );
+    // Another viewer: the same details, its own role.
+    let other = load_project(&t.db, web.project_id, Some(bob.user_id))
+        .await
+        .expect("load")
+        .expect("exists");
+    assert_eq!(other.access.role, None);
+    assert_eq!(other.path, record.path);
+
+    // A rename (segments and full_path together) is the current path.
+    let (pid, ns) = (web.project_id.get(), web.namespace_id.get());
+    apply(
+        &t,
+        &[rewrite(
+            "project",
+            pid,
+            web.namespace_id,
+            "site",
+            "alice/site",
+        )],
+    )
+    .await;
+    let renamed = load_project(&t.db, web.project_id, None)
+        .await
+        .expect("load")
+        .expect("exists");
+    assert_eq!(renamed.path.full_path(), "alice/site", "namespace {ns}");
+    assert_eq!(
+        project_access(&t.db, web.project_id, None)
+            .await
+            .expect("facts"),
+        Some(renamed.access)
+    );
+    assert_eq!(
+        load_project(&t.db, ProjectId::new(9_999), Some(alice.user_id))
+            .await
+            .expect("absent"),
+        None
+    );
+    t.drop_now().await;
+}
+
+/// A stored path its segments do not confirm, a missing repository row and
+/// an unknown repository kind are FG-DB-0021, never answered from a guess.
+#[tokio::test]
+async fn a_project_row_this_build_cannot_read_is_namespace_data_invalid() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let unconfirmed = project(
+        &t,
+        "web",
+        alice.namespace_id,
+        alice.user_id,
+        Visibility::Private,
+    )
+    .await;
+    let no_repo = project(
+        &t,
+        "api",
+        alice.namespace_id,
+        alice.user_id,
+        Visibility::Private,
+    )
+    .await;
+    let odd_kind = project(
+        &t,
+        "doc",
+        alice.namespace_id,
+        alice.user_id,
+        Visibility::Private,
+    )
+    .await;
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
+         UPDATE forge.namespaces SET full_path = 'alice/elsewhere' WHERE id = {ns}; \
+         ALTER TABLE forge.namespaces ENABLE TRIGGER USER; \
+         ALTER TABLE forge.repositories DISABLE TRIGGER USER; \
+         DELETE FROM forge.repositories WHERE project_id = {no_repo}; \
+         ALTER TABLE forge.repositories DROP CONSTRAINT repositories_kind; \
+         UPDATE forge.repositories SET kind = 'library' WHERE project_id = {odd}; \
+         ALTER TABLE forge.repositories ENABLE TRIGGER USER",
+        ns = unconfirmed.namespace_id.get(),
+        no_repo = no_repo.project_id.get(),
+        odd = odd_kind.project_id.get(),
+    ))
+    .await;
+    for (p, reason) in [
+        (&unconfirmed, "project_path_unconfirmed"),
+        (&no_repo, "project_without_repository"),
+        (&odd_kind, "unknown_repository_kind"),
+    ] {
+        let err = load_project(&t.db, p.project_id, Some(alice.user_id))
+            .await
+            .expect_err(reason);
+        assert_reason(&err, ErrorCode::NamespaceDataInvalid, reason);
+        let shown = err.to_string();
+        assert!(
+            shown.contains(&format!("project_id={}", p.project_id.get())),
+            "{shown}"
+        );
+        assert!(!shown.contains("alice/"), "no path in the log: {shown}");
     }
     t.drop_now().await;
 }

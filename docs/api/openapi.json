@@ -56,6 +56,35 @@
         "x-forge-action": "PathResolve"
       }
     },
+    "/api/v1/projects/{id}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read one project by id (ADR-0015 MR5)",
+        "x-forge-action": "ProjectRead"
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "get_healthz",

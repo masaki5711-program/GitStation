@@ -1,11 +1,11 @@
-use forge_core::{NamespaceId, ProjectId};
+use forge_core::{GroupId, NamespaceId, ProjectId, UserId};
 use forge_errors::ErrorCode;
 
 use crate::matrix::{Actor, Fixture, ME, ROWS};
 use crate::{
     authorize, prove, Action, Credential, InstanceCtx, LoadedNamespace, LoadedProject,
-    NamespaceView, Principal, ProjectCtx, ProjectView, ResolvedCtx, ResolvedVia, Resource,
-    ResourceCtx, Role, Scope, UnresolvedCtx, UnresolvedReason, Visibility,
+    LoadedTarget, NamespaceView, Principal, ProjectCtx, ProjectView, ResolvedCtx, ResolvedVia,
+    Resource, ResourceCtx, Role, Scope, UnresolvedCtx, UnresolvedReason, Visibility,
 };
 
 /// Any matrix resource as a context (the id is irrelevant to the decision).
@@ -44,11 +44,26 @@ fn project(id: i64, role: Option<Role>) -> ProjectCtx {
     })
 }
 
+/// A resolved context whose target has `view` (owner ids are fixed per
+/// kind: user 1, group 3, project 9).
 fn resolved(id: i64, via: ResolvedVia, view: NamespaceView) -> ResolvedCtx {
+    let target = match view {
+        NamespaceView::User => LoadedTarget::User(UserId::new(1)),
+        NamespaceView::Group { role } => LoadedTarget::Group {
+            id: GroupId::new(3),
+            role,
+        },
+        NamespaceView::Project(p) => LoadedTarget::Project(LoadedProject {
+            id: ProjectId::new(9),
+            visibility: p.visibility,
+            role: p.role,
+            pending_deletion: p.pending_deletion,
+        }),
+    };
     ResolvedCtx::new(LoadedNamespace {
         namespace: NamespaceId::new(id),
         via,
-        view,
+        target,
     })
 }
 

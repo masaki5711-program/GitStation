@@ -84,7 +84,7 @@
 
 use std::fmt;
 
-use forge_core::{NamespaceId, ProjectId};
+use forge_core::{GroupId, NamespaceId, NamespaceOwner, ProjectId, UserId};
 use forge_errors::ForgeError;
 
 use crate::action::Action;
@@ -230,17 +230,54 @@ impl ResourceCtx for ProjectCtx {
     }
 }
 
+/// What a resolved namespace belongs to, with the caller's facts about it:
+/// the kind, the owner's id and the facts in one value, so they cannot
+/// disagree (built from one resolver row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadedTarget {
+    /// A personal namespace and its user.
+    User(UserId),
+    /// A group and the caller's effective role on it.
+    Group { id: GroupId, role: Option<Role> },
+    /// A project and the caller's access facts.
+    Project(LoadedProject),
+}
+
+impl LoadedTarget {
+    /// The view `authorize()` decides on.
+    pub fn view(&self) -> NamespaceView {
+        match *self {
+            LoadedTarget::User(_) => NamespaceView::User,
+            LoadedTarget::Group { role, .. } => NamespaceView::Group { role },
+            LoadedTarget::Project(p) => NamespaceView::Project(ProjectView {
+                visibility: p.visibility,
+                role: p.role,
+                pending_deletion: p.pending_deletion,
+            }),
+        }
+    }
+
+    /// The owner (kind and id).
+    pub fn owner(&self) -> NamespaceOwner {
+        match *self {
+            LoadedTarget::User(id) => NamespaceOwner::User(id),
+            LoadedTarget::Group { id, .. } => NamespaceOwner::Group(id),
+            LoadedTarget::Project(p) => NamespaceOwner::Project(p.id),
+        }
+    }
+}
+
 /// A path's resolution as loaded for the caller (one row: the namespace id,
-/// how the path reached it, and the caller's view of it).
+/// how the path reached it, and what it belongs to with the caller's facts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadedNamespace {
     pub namespace: NamespaceId,
     pub via: ResolvedVia,
-    pub view: NamespaceView,
+    pub target: LoadedTarget,
 }
 
-/// A path that resolved to a namespace (`PathResolve`). The id and the view
-/// come from the same [`LoadedNamespace`].
+/// A path that resolved to a namespace (`PathResolve`). The id, the owner
+/// and the view come from the same [`LoadedNamespace`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedCtx {
     resolved: LoadedNamespace,
@@ -256,7 +293,13 @@ impl ResolvedCtx {
     }
 
     pub fn view(&self) -> NamespaceView {
-        self.resolved.view
+        self.resolved.target.view()
+    }
+
+    /// What the namespace belongs to (the project, group or user id a
+    /// handler may reveal once `authorize()` allowed).
+    pub fn owner(&self) -> NamespaceOwner {
+        self.resolved.target.owner()
     }
 }
 
@@ -267,7 +310,7 @@ impl ResourceCtx for ResolvedCtx {
     fn resource(&self) -> Resource {
         Resource::Resolved {
             via: self.resolved.via,
-            view: self.resolved.view,
+            view: self.resolved.target.view(),
         }
     }
     fn id(&self) -> NamespaceId {

@@ -726,3 +726,44 @@ impl<S> Registry<S> {
   `GitCommand` は、利用者の値を `revision()`（`--end-of-options` の後ろ）か `path()`（`--` の後ろ）でしか受け付けない。forge-web が forge-git に
   依存した時点で赤くなるテスト（`the_dispatcher_runs_no_git_and_tails_keep_leading_dashes`）を置き、phase 9 で置き場所を示させる。
 - `is_git_operation()` の意味を「git でも行う」に変えた（文書だけ。値は変えない）。
+
+## Amendment（2026-11-01、M1 phase 8 MR5: `GET|HEAD /api/v1/projects/{id}` と解決の API の `project_id`）
+
+ID でプロジェクトを読む API を forge-web に作った（`feat/web-api-project-read`、`forge_web::routes::projects`）。決めた点は次のとおり。
+
+- **ルート**: `GET /api/v1/projects/{id}`（`ProjectRead`）。固定のパスのルートなので、`HEAD` は axum が同じ GET のルート（認証 → 読み込み → `prove()`）で
+  本文なしに答える（解決の API と同じ。manifest と OpenAPI には GET の行だけが出る）。`ProjectRead` を `app::PLANNED` から外した。
+- **読み込みは 1 回の呼び出し・1 つの文**（MR4 の「注入したが未使用」の `ProjectAccessLoader` を使う）。トレイトの形を
+  `ProjectAccessLoader::load_project(ProjectId, viewer) -> Option<ProjectRecord>` に変えた。`ProjectRecord` は forge-core の 1 つの値で、
+  認可の入力（`ProjectAccess`）と、許可の後に見せる詳細（`namespace_id`、今のパス、`display_name`、`description`、リポジトリの種類、`created_at`）を
+  **同じ文の同じ行** から持つ。認可の後に 2 つ目の照会をしない（許可された要求だけ照会が増える形にも、読み込みと表示の間で別のプロジェクトに
+  変わる形にもしない）。forge-db は `resolve::load_project`（`PROJECT_ACCESS_SQL` に名前空間とリポジトリの `LEFT JOIN` を足した 1 つの文）で、
+  D4 の `project_access` はその `access` を返す包みとして残した。
+  - プロジェクトの `full_path` は、親をたどってつないだセグメントとの一致で確かめる（`moved` の墓標の行き先と同じ）。読めない行は FG-DB-0021 の新しい
+    `reason`: `project_path_unconfirmed`、`stored_path_invalid`（`project_id` 付き）、`project_without_repository`、`unknown_repository_kind`
+    （Runbook `namespace-data` に追記）。
+  - 呼び出しは `AppState::lookup_timeout` で抑え、超えたら FG-WEB-0002（`operation=project_load`）。読み込みが別の ID の行を返したら判定せず
+    FG-SYS-0001（`loaded_another_project`）。
+- **ID の読み方**: 生のパスの `{id}` を、固定リンクと同じ規則（`forge_core::parse_positive_id`: 先頭が 0 でない 10 進数、`i64` の正の値。
+  符号・`%31`・範囲外は不可）で読む。規則に合わない ID は、FG-WEB-0006 `RequestInvalid`（phase 8b）までは、ないプロジェクトと同じ FG-REPO-0005
+  （ログに `lookup=id_param_invalid`）にし、照会しない（`path` の引数の誤りと同じ扱い）。
+- **拒否は `authorize()` が決める**（新しい規則はない。matrix の `ProjectRead` の行を、許可 10・拒否 15 に増やした）:
+  ないプロジェクト、見えないプロジェクト、見えない人にとっての削除の猶予中、規則に合わない ID は、request_id を除いて **バイト単位で同じ** 404
+  （テストで比べる）。違いはログの `reason`（`absent` / `not_visible`）と `lookup` だけ。見える人にとっての削除の猶予中は FG-REPO-0006（管理者も）、
+  Guest は FG-AUTH-0003（Guest はメンバーなので存在は秘密ではない。`PathResolve` は通る）。`read_api`（または `api`）のないトークンは、
+  見えるプロジェクトで FG-AUTH-0002、ない・見えないプロジェクトでは同じ 404（可視性の判定がスコープより前）。認証なし・無効は読み込みの前に
+  FG-AUTH-0001 / 0004（照会 0 回）。
+- **応答の形は 1 つの組み立て関数**（計画の「W1 は M3、ProjectView の組み立ては今 1 つに」）: `routes::projects::project_view(proof, record)` が
+  `{ id, namespace_id, path, name, display_name, description, visibility, kind, created_at, role }` を作る。`id`・`visibility`・`role` は証明から、
+  残りは同じ行から読み、行の ID が証明の ID と違えば FG-SYS-0001（`project_details_mismatch`）。`kind` はリポジトリの種類（`spec` / `system`）、
+  `name` は最後のセグメント、`created_at` は UTC の RFC 3339、`role` は呼び出し元の実効ロール（ない人 — 管理者、internal の読み手 — は `null`）。
+  削除の猶予中は `ProjectRead` が拒否するので欄にしない。リポジトリの置き場所・状態などの内部の値は出さない。phase 8b の一覧と書き込みの API も
+  これを使う。`Cache-Control: private, no-store`、`Vary: Authorization, Cookie`（解決の API と同じ）。
+- **許可の後に渡す値**: `Lookup::Found` と `Dispatched` に `project`（`ProjectRecord`）を足した（`canonical_path` / `via_tombstone` と同じく、
+  `authorize()` の後でだけハンドラが読める。ほかのルートでは `None`）。
+- **解決の API の所有者の ID**（MR4 の未決）: `GET /api/v1/namespaces/resolve` は、許可の後でだけ、種類ごとの鍵で所有者の ID を返す
+  （`project_id` / `group_id` / `user_id` のどれか 1 つ）。クライアントは `project_id` で上の API を呼べる。拒否の応答には何も足さない。
+  証明と ID を結びつけるため、forge-auth の `LoadedNamespace` の `view` を `target: LoadedTarget`（`User(UserId)` / `Group { id, role }` /
+  `Project(LoadedProject)`）に置き換え、`view()` と `owner()` を同じ値から導く（種類・ID・認可の入力が食い違えない）。
+- **残り**: OpenAPI の `{id}` の型と応答の schema は utoipa（MR6）で付ける（今は文字列）。リポジトリの状態（`provisioning` / `ready`）は欄にしない
+  （SPA が要る時に足す）。`prefix=true` と解決の回数の制限は M2、応答時間の下限は必要になってから（MR3 の残り）。
