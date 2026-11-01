@@ -10,7 +10,10 @@
 //! (forge-web does not depend on forge-db): as the readiness probe and as
 //! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7),
 //! and as the dispatcher's lookups (`forge_db::resolve`: path → namespace
-//! and project by id, ADR-0015 MR3 / MR4).
+//! and project by id, ADR-0015 MR3 / MR4), and as the list routes' page
+//! loaders (`forge_db::lists`, M1 phase 8b MR7b) with the cursor keys of
+//! `api.cursor_keys_file` — required: `serve` does not start without them
+//! (`FG-SYS-0002`).
 //!
 //! Smart HTTP (M1 phase 9 MR3): `storage.root` is required; git runs from
 //! `PATH` with HOME pinned to the storage root (as the worker does), its
@@ -27,7 +30,8 @@ use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_web::{
-    AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lookups, ServerLimits, SmartHttp,
+    AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lists, Lookups, ServerLimits,
+    SmartHttp,
 };
 
 use crate::runtime::block_on;
@@ -38,6 +42,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // credentials (ADR-0018): their password files belong to other configs.
     database.reject_privileged_logins()?;
     let storage = StorageRoot::open(cfg.storage_root()?)?;
+    // The list routes seal their cursors with these keys (M1 phase 8b
+    // MR7b): read once, before anything binds — missing or invalid is
+    // FG-SYS-0002 config_key=api.cursor_keys_file (runbook config-invalid).
+    let cursor_keys = Arc::new(cfg.api.require_cursor_keys()?);
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http);
         forge_git::version::detect(&smart_http.git).await?;
@@ -47,7 +55,16 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // the database (forge-web reads both through forge-core traits).
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
-        let state = app_state(&db, database).with_smart_http(smart_http);
+        let state = app_state(&db, database)
+            .with_smart_http(smart_http)
+            .with_lists(
+                Lists::new(
+                    Arc::new(db.clone()),
+                    Arc::new(db.clone()), // clone: the pool handle is shared
+                    cursor_keys,
+                )
+                .with_api_config(&cfg.api),
+            );
         let router = forge_web::app(
             state,
             app_config_for(database, &cfg.git_http, &cfg.server.limits),

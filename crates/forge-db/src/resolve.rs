@@ -147,15 +147,16 @@ struct ProjectFacts {
 /// The chain, one array element per step in step order (NULL arrays when
 /// there is no target).
 #[derive(Debug, sqlx::FromRow)]
-struct ChainRoles {
+pub(crate) struct ChainRoles {
     steps: Option<Vec<i32>>,
     truncs: Option<Vec<bool>>,
     roles: Option<Vec<Option<String>>>,
 }
 
-/// The one row of [`PROJECT_ACCESS_SQL`].
+/// The one row of [`PROJECT_ACCESS_SQL`] (also one row of a project page,
+/// `crate::lists`: the same columns).
 #[derive(Debug, sqlx::FromRow)]
-struct ProjectAccessRow {
+pub(crate) struct ProjectAccessRow {
     #[sqlx(flatten)]
     project: ProjectFacts,
     #[sqlx(flatten)]
@@ -169,21 +170,33 @@ struct ProjectAccessRow {
     created_at: Option<String>,
 }
 
+impl ProjectAccessRow {
+    /// The projects row's id (`None`: no such project).
+    pub(crate) fn project_id(&self) -> Option<i64> {
+        self.project.project_id
+    }
+}
+
 /// `FG-DB-0021` with its `reason`.
-fn invalid(reason: &'static str) -> ForgeError {
+pub(crate) fn invalid(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::NamespaceDataInvalid).with_context("reason", reason)
 }
 
 /// A stored value for the log, bounded (the column is unchecked text once
 /// its CHECK is gone).
-fn bounded(raw: &str) -> String {
+pub(crate) fn bounded(raw: &str) -> String {
     raw.chars().take(32).collect()
 }
 
 impl ChainRoles {
+    /// No chain step at all (the anchor namespace is missing).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.steps.as_ref().is_none_or(Vec::is_empty)
+    }
+
     /// The viewer's roles over the chain ([`fold_chain`]: `FG-DB-0018` on a
     /// truncated chain or an unknown role). An empty chain has no role.
-    fn fold(
+    pub(crate) fn fold(
         self,
         resource: &'static str,
         id: i64,
@@ -453,7 +466,7 @@ pub async fn load_project(
 }
 
 /// Fold the one row of [`PROJECT_ACCESS_SQL`]. Pure (no statement).
-fn interpret_project(
+pub(crate) fn interpret_project(
     row: ProjectAccessRow,
     project: ProjectId,
     viewer: Option<UserId>,
@@ -465,7 +478,7 @@ fn interpret_project(
     let (Some(namespace_id), Some(full_path)) = (row.namespace_id, row.full_path) else {
         return Err(invalid("project_without_namespace").with_context("project_id", id));
     };
-    if row.chain.steps.as_ref().is_none_or(Vec::is_empty) {
+    if row.chain.is_empty() {
         return Err(invalid("project_without_namespace").with_context("project_id", id));
     }
     let roles = row.chain.fold("project", id, viewer)?;
@@ -512,7 +525,7 @@ fn interpret_project(
 }
 
 /// The `NamespacePath::parse` reason of `e`, bounded (logged as `rule`).
-fn parse_rule(e: &ForgeError) -> String {
+pub(crate) fn parse_rule(e: &ForgeError) -> String {
     e.context()
         .iter()
         .find(|(k, _)| *k == "reason")

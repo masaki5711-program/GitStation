@@ -59,6 +59,11 @@ pub struct AppState {
     /// 8b MR7a; `forge serve` always sets it; without it those routes
     /// answer `FG-SYS-0001 reason=hosting_unconfigured`).
     pub hosting: Option<Arc<forge_hosting::Hosting>>,
+    /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
+    /// `forge serve` always sets them, refusing to start without
+    /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
+    /// reason=lists_unconfigured`).
+    pub lists: Option<Arc<routes::lists::Lists>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -89,6 +94,7 @@ impl AppState {
             lookup_timeout: Duration::from_secs(5),
             smart_http: None,
             hosting: None,
+            lists: None,
         }
     }
 
@@ -101,6 +107,12 @@ impl AppState {
     #[must_use]
     pub fn with_smart_http(mut self, smart_http: routes::git::SmartHttp) -> Self {
         self.smart_http = Some(Arc::new(smart_http));
+        self
+    }
+
+    #[must_use]
+    pub fn with_lists(mut self, lists: routes::lists::Lists) -> Self {
+        self.lists = Some(Arc::new(lists));
         self
     }
 
@@ -126,6 +138,7 @@ impl std::fmt::Debug for AppState {
             .field("probe_timeout", &self.probe_timeout)
             .field("lookup_timeout", &self.lookup_timeout)
             .field("smart_http", &self.smart_http.as_ref().map(|s| s.limits))
+            .field("lists", &self.lists.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -240,6 +253,29 @@ pub fn registry() -> Registry<AppState> {
             routes::projects::read,
         )
         .responds::<routes::projects::ProjectBody>(Verb::Get, routes::projects::PATH)
+        // Lists (M1 phase 8b MR7b): each row decided by authorize().
+        .route(
+            Verb::Get,
+            routes::lists::PROJECTS_PATH,
+            Action::ProjectList,
+            "List the projects the caller may read (keyset, opaque cursor)",
+            routes::lists::projects,
+        )
+        .responds::<routes::lists::ProjectPage>(Verb::Get, routes::lists::PROJECTS_PATH)
+        .queries(
+            Verb::Get,
+            routes::lists::PROJECTS_PATH,
+            routes::lists::QUERY,
+        )
+        .route(
+            Verb::Get,
+            routes::lists::GROUPS_PATH,
+            Action::GroupList,
+            "List the groups the caller may read (keyset, opaque cursor)",
+            routes::lists::groups,
+        )
+        .responds::<routes::lists::GroupPage>(Verb::Get, routes::lists::GROUPS_PATH)
+        .queries(Verb::Get, routes::lists::GROUPS_PATH, routes::lists::QUERY)
         .route(
             Verb::Get,
             routes::users::PATH,

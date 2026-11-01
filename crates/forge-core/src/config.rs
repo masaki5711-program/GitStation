@@ -343,7 +343,24 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
                 600_000,
             )?,
         },
-        api: ApiConfig::new(password_path("api.cursor_keys_file")?),
+        api: ApiConfig::new(
+            password_path("api.cursor_keys_file")?,
+            positive(
+                get,
+                "api.list_max_concurrent",
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT,
+            )?,
+            positive(
+                get,
+                "api.list_max_concurrent_per_principal",
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT_PER_PRINCIPAL,
+            )?,
+            Duration::from_secs(u64::from(positive(
+                get,
+                "api.cursor_max_age_s",
+                ApiConfig::DEFAULT_CURSOR_MAX_AGE_S,
+            )?)),
+        )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
     }

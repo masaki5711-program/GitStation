@@ -8,6 +8,7 @@ pub mod cursor;
 pub mod dedup_key;
 pub mod event_type;
 pub mod ids;
+pub mod list_page;
 pub mod namespace_path;
 pub mod namespace_resolver;
 #[cfg(any(test, feature = "test-support"))]
@@ -33,6 +34,7 @@ pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
     GroupRecord, NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess,

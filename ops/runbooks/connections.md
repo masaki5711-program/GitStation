@@ -22,6 +22,8 @@
 |---|---|---|
 | 接続の総数（`server.max_connections`） | 1024 | `FG-WEB-0008 reason=connection_limit`（503） |
 | 1 つの接続元の接続数（`server.max_connections_per_peer`、総数以下。IPv6 は /64 単位、IPv4 は 1 アドレス） | 64 | `FG-WEB-0008 reason=peer_limit`（503） |
+| 一覧（`GET /api/v1/projects` / `/groups`）を同時に走らせる数（`api.list_max_concurrent`） | 16 | `FG-WEB-0008 reason=list_concurrency scope=global`（503、`Retry-After: 1`、接続は閉じない） |
+| 1 人の利用者が同時に走らせる一覧の数（`api.list_max_concurrent_per_principal`、総数以下） | 2 | `FG-WEB-0008 reason=list_concurrency scope=principal`（待たせず即 503） |
 | ヘッダを読み終えるまで・keep-alive の無通信（`server.header_read_timeout_ms`、`keep_alive_max_ms` 以下） | 30 秒 | 接続を閉じる（デバッグログのみ） |
 | 1 つの接続の寿命（`server.keep_alive_max_ms`） | 10 分 | 処理中のリクエストが終わってから閉じる（長い git の応答は切らない） |
 | 1 つの接続のリクエスト数（`server.keep_alive_max_requests`） | 1000 | 最後の応答に `Connection: close` |
@@ -38,6 +40,9 @@
   合わせて上げること（プロキシが接続を使い回すなら、その数より十分大きく）。
 - `FG-WEB-0008` のログは 1 秒に 1 行まで。その間の拒否の数は次の行の `suppressed` に入り、拒否が止まって 1 秒たつと（またはシャットダウン時に）`reason=summary` の 1 行で残りの数が出る。
 
+- 一覧は `limit` に関わらず 1 回に最大 1001 行を走査する（ADR-0010 の Amendment、計画 L1）。上の 2 つの上限はその負荷を抑えるためのもので、
+  カーソルの有効期間は `api.cursor_max_age_s`（既定 86400 秒。過ぎると `FG-WEB-0006 cursor_invalid rule=expired`、クライアントは先頭から取り直す）。
+
 ## Diagnose（読み取りのみ）
 
 1. ログを `error_code=FG-WEB-0008` で引く。`reason`（`peer_limit` / `connection_limit`）、`peer`、`limit`、`open`、`suppressed`
@@ -52,12 +57,20 @@
 4. `FG-WEB-0002 operation=response_write`: `peer` と `idle_ms`。同じ `peer` で続くなら、遅い回線かクライアントの不具合。
    リバースプロキシ経由なら、プロキシがクライアントの遅さを吸収せずに forge へ伝えている（バッファリングの設定を見る）。
 
+5. `reason=list_concurrency`: `scope=principal` は 1 人の利用者（スクリプトや画面の自動更新）が一覧を重ねて呼んでいる。同じ `request_id` 前後の
+   ログで利用者を特定し、持ち主に連絡する。`scope=global` は走査が遅くて詰まっていることが多い: 同じ時間帯の
+   `FG-WEB-0002 operation=project_page|group_page`（一覧の 1 ページの走査が `lookup` の時間内に終わらない）と `FG-DB-0001` を確かめる。
+   遅い原因（DB の負荷、プロジェクト / グループ数の急増）を先に直す。上限を上げるのは DB に余裕があるときだけ。
+
 ## Mitigate
 
 1. 暴走したクライアント: そのクライアントを止める（持ち主に連絡）。必要なら前段のプロキシ / ファイアウォールで接続元を制限する。
    `[MUTATING — needs approval]` ロールバック: 設定を戻して再読み込みする。
 2. プロキシの後ろで `peer_limit`: `server.max_connections_per_peer`（と必要なら `server.max_connections`）を上げて再起動する。
    総数以下に保つ。ファイルディスクリプタの上限（`LimitNOFILE`）が総数より大きいことを先に確かめる。
+   `[MUTATING — needs approval]` ロールバック: 元の値に戻して再起動する。
+2a. 一覧の `list_concurrency`: 遅い走査（`projects.page` / `groups.page` の時間超過）の原因を直す、または暴走したクライアントを止める。
+   それでも正当な負荷なら `api.list_max_concurrent`（と必要なら `api.list_max_concurrent_per_principal`、総数以下）を上げて再起動する。
    `[MUTATING — needs approval]` ロールバック: 元の値に戻して再起動する。
 3. 正当な負荷の `connection_limit`: `server.max_connections` を上げて再起動する（CPU・メモリ・DB のプールに余裕があるか確認）。
    `[MUTATING — needs approval]` ロールバック: 元の値に戻して再起動する。

@@ -151,6 +151,14 @@ pub fn project_view(
     proof: &Authorized<ProjectCtx>,
     record: &ProjectRecord,
 ) -> Result<Value, ForgeError> {
+    to_json(project_body(proof, record)?)
+}
+
+/// [`project_view`] as the typed body (the lists embed it, MR7b).
+pub fn project_body(
+    proof: &Authorized<ProjectCtx>,
+    record: &ProjectRecord,
+) -> Result<ProjectBody, ForgeError> {
     if record.id != *proof.id() {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "project_details_mismatch")
@@ -158,7 +166,7 @@ pub fn project_view(
             .with_context("details_project_id", record.id.get()));
     }
     let view = proof.ctx().view();
-    build(record, view.visibility, view.role)
+    Ok(body_of(record, view.visibility, view.role))
 }
 
 /// The API shape of a project the caller just wrote (phase 8b MR7a): the
@@ -166,21 +174,34 @@ pub fn project_view(
 /// after the commit for the caller (its access facts give visibility and
 /// role). Only a handler whose command committed calls it.
 pub(crate) fn written_project_view(record: &ProjectRecord) -> Result<Value, ForgeError> {
-    build(record, record.access.visibility, record.access.role)
+    to_json(body_of(
+        record,
+        record.access.visibility,
+        record.access.role,
+    ))
 }
 
-fn build(
+fn to_json(body: ProjectBody) -> Result<Value, ForgeError> {
+    serde_json::to_value(body).map_err(|e| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "project_view_serialize")
+            .with_source(e)
+    })
+}
+
+/// The one place the body's fields are filled.
+fn body_of(
     record: &ProjectRecord,
     visibility: forge_core::Visibility,
     role: Option<Role>,
-) -> Result<Value, ForgeError> {
+) -> ProjectBody {
     let name = record
         .path
         .segments()
         .last()
         .map(|s| s.as_str().to_owned())
         .unwrap_or_default();
-    let body = ProjectBody {
+    ProjectBody {
         id: record.id.get(),
         namespace_id: record.namespace_id.get(),
         path: record.path.full_path(),
@@ -191,12 +212,7 @@ fn build(
         kind: record.kind.as_str().to_owned(),
         created_at: record.created_at.clone(),
         role: role.map(|r| Role::as_str(r).to_owned()),
-    };
-    serde_json::to_value(body).map_err(|e| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "project_view_serialize")
-            .with_source(e)
-    })
+    }
 }
 
 /// `GET|HEAD /api/v1/projects/{id}`: the project's view, never cached by a

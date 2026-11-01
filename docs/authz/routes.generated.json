@@ -16,6 +16,14 @@
     "word": "project_permalink"
   },
   {
+    "action": "GroupList",
+    "method": "GET",
+    "path": "/api/v1/groups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "GroupCreateTopLevel",
     "method": "POST",
     "path": "/api/v1/groups",
@@ -51,6 +59,14 @@
     "action": "PathResolve",
     "method": "GET",
     "path": "/api/v1/namespaces/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectList",
+    "method": "GET",
+    "path": "/api/v1/projects",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

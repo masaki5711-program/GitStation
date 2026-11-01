@@ -7,9 +7,15 @@
 //! own payload, encrypted and authenticated with AES-256-GCM:
 //!
 //! ```text
-//! base64url_nopad( version:u8 = 1 | kid:u16 BE | nonce:[u8; 12] | ciphertext | tag:[u8; 16] )
+//! base64url_nopad( version:u8 = 2 | kid:u16 BE | nonce:[u8; 12] | ciphertext | tag:[u8; 16] )
+//! plaintext = issued_at:u64 BE (Unix seconds) | payload
 //! aad = "forge-cursor" | version | kid | purpose
 //! ```
+//!
+//! - The issue time is inside the sealed plaintext, so it is authenticated
+//!   like the payload; [`CursorKeys::decode`] refuses a cursor older than
+//!   the caller's `max_age` (`rule=expired`). A time in the future (a
+//!   clock stepped back) counts as age zero.
 //!
 //! - `purpose` binds the cursor to one list and one caller (e.g.
 //!   `projects.list:user=42`): a cursor of another list or another caller
@@ -20,8 +26,8 @@
 //!   waits for the old cursors to age out, then removes the old one.
 //! - Verification is the AEAD tag check (constant time). Every failure is
 //!   `FG-WEB-0006 reason=cursor_invalid` with a `rule` (`too_long`,
-//!   `encoding`, `truncated`, `version`, `kid`, `tag`) and **never the
-//!   cursor's value**.
+//!   `encoding`, `truncated`, `version`, `kid`, `tag`, `expired`) and
+//!   **never the cursor's value**.
 //!
 //! The nonce is 96 random bits from the operating system per cursor; with
 //! one key the collision bound (2^-32 after 2^32 cursors) is far beyond an
@@ -32,13 +38,15 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use forge_errors::{ErrorCode, ForgeError};
+use std::time::Duration;
 
 /// The only format version this build writes and reads.
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 const DOMAIN: &[u8] = b"forge-cursor";
 const KID_BYTES: usize = 2;
 const NONCE_BYTES: usize = 12;
 const TAG_BYTES: usize = 16;
+const ISSUED_BYTES: usize = 8;
 const HEADER_BYTES: usize = 1 + KID_BYTES + NONCE_BYTES;
 /// An AES-256 key.
 pub const KEY_BYTES: usize = 32;
@@ -46,7 +54,8 @@ pub const KEY_BYTES: usize = 32;
 pub const MAX_PAYLOAD_BYTES: usize = 512;
 /// The longest cursor text accepted (longer is `rule=too_long`, refused
 /// before decoding).
-pub const MAX_CURSOR_CHARS: usize = (HEADER_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES).div_ceil(3) * 4;
+pub const MAX_CURSOR_CHARS: usize =
+    (HEADER_BYTES + ISSUED_BYTES + MAX_PAYLOAD_BYTES + TAG_BYTES).div_ceil(3) * 4;
 
 /// The configuration key that names the key file (errors name it).
 pub const KEYS_CONFIG_KEY: &str = "api.cursor_keys_file";
@@ -147,6 +156,16 @@ impl CursorKeys {
     /// reason=cursor_payload_too_large`); no random bytes is `FG-SYS-0001
     /// reason=rng_unavailable`.
     pub fn encode(&self, purpose: &str, payload: &[u8]) -> Result<String, ForgeError> {
+        self.encode_at(purpose, payload, unix_now()?)
+    }
+
+    /// [`CursorKeys::encode`] with an explicit issue time (Unix seconds).
+    pub fn encode_at(
+        &self,
+        purpose: &str,
+        payload: &[u8],
+        issued_at: u64,
+    ) -> Result<String, ForgeError> {
         if payload.len() > MAX_PAYLOAD_BYTES {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "cursor_payload_too_large")
@@ -158,12 +177,15 @@ impl CursorKeys {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "rng_unavailable")
         })?;
         let aad = aad(key.kid, purpose);
+        let mut plain = Vec::with_capacity(ISSUED_BYTES + payload.len());
+        plain.extend_from_slice(&issued_at.to_be_bytes());
+        plain.extend_from_slice(payload);
         let sealed = key
             .cipher
             .encrypt(
                 Nonce::from_slice(&nonce),
                 Payload {
-                    msg: payload,
+                    msg: &plain,
                     aad: &aad,
                 },
             )
@@ -179,9 +201,25 @@ impl CursorKeys {
     }
 
     /// Open a cursor minted by [`CursorKeys::encode`] for the same
-    /// `purpose`. Every failure is `FG-WEB-0006 reason=cursor_invalid` with
-    /// a `rule`; the value is never logged.
-    pub fn decode(&self, purpose: &str, cursor: &str) -> Result<Vec<u8>, ForgeError> {
+    /// `purpose`, no older than `max_age`. Every failure is `FG-WEB-0006
+    /// reason=cursor_invalid` with a `rule`; the value is never logged.
+    pub fn decode(
+        &self,
+        purpose: &str,
+        cursor: &str,
+        max_age: Duration,
+    ) -> Result<Vec<u8>, ForgeError> {
+        self.decode_at(purpose, cursor, max_age, unix_now()?)
+    }
+
+    /// [`CursorKeys::decode`] at an explicit time (Unix seconds).
+    pub fn decode_at(
+        &self,
+        purpose: &str,
+        cursor: &str,
+        max_age: Duration,
+        now: u64,
+    ) -> Result<Vec<u8>, ForgeError> {
         if cursor.len() > MAX_CURSOR_CHARS {
             return Err(cursor_invalid("too_long"));
         }
@@ -201,7 +239,8 @@ impl CursorKeys {
         let kid = u16::from_be_bytes(kid);
         let key = self.get(kid).ok_or_else(|| cursor_invalid("kid"))?;
         let aad = aad(kid, purpose);
-        key.cipher
+        let plain = key
+            .cipher
             .decrypt(
                 Nonce::from_slice(nonce),
                 Payload {
@@ -209,8 +248,27 @@ impl CursorKeys {
                     aad: &aad,
                 },
             )
-            .map_err(|_| cursor_invalid("tag"))
+            .map_err(|_| cursor_invalid("tag"))?;
+        let (issued, payload) = plain
+            .split_first_chunk::<ISSUED_BYTES>()
+            .ok_or_else(|| cursor_invalid("truncated"))?;
+        let issued_at = u64::from_be_bytes(*issued);
+        if now.saturating_sub(issued_at) > max_age.as_secs() {
+            return Err(cursor_invalid("expired"));
+        }
+        Ok(payload.to_vec())
     }
+}
+
+/// The wall clock in Unix seconds (`FG-SYS-0001 reason=clock_unavailable`
+/// when it is before the epoch).
+fn unix_now() -> Result<u64, ForgeError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|_| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "clock_unavailable")
+        })
 }
 
 /// The associated data: the domain, the header and the purpose.

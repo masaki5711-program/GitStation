@@ -153,3 +153,10 @@ every listed kid decrypts; `purpose` binds a cursor to one list and one
 caller. Every failure is `FG-WEB-0006 reason=cursor_invalid` with a `rule`
 and never the value. `Config::api.cursor_keys()` reads the file
 (`ApiConfig`).
+
+**List page scans** (M1 phase 8b MR7b, `list_page`): `ProjectPageLoader::project_page(after:
+Option<ProjectId>, viewer: UserId, max_rows) -> Vec<ProjectRecord>` and
+`GroupPageLoader::group_page(...) -> Vec<GroupListing>` (`GroupListing { id, viewer_role,
+namespace_id, path, display_name, description, created_at }`): every row after `after` in
+ascending id order, visible or not — forge-web decides each with `authorize()`. One
+statement per call whatever the rows (the contract forge-db's `lists` keeps).

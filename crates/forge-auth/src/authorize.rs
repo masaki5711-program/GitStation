@@ -309,6 +309,11 @@ pub fn authorize(
         // was checked above); the handler shows the principal's own data.
         (Action::UserSelfRead, Resource::Instance) => Ok(()),
 
+        // Listing is open to every active signed-in user (the scope was
+        // checked above); what a list shows is decided row by row with
+        // `ProjectRead` / `GroupRead` (M1 phase 8b MR7b, never in SQL).
+        (Action::ProjectList | Action::GroupList, Resource::Instance) => Ok(()),
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -320,6 +325,7 @@ pub fn authorize(
             Action::RepoRead
             | Action::RepoPush
             | Action::ProjectRead
+            | Action::ProjectList
             | Action::ProjectCreate
             | Action::ProjectUpdate
             | Action::ProjectVisibilityChange
@@ -329,6 +335,7 @@ pub fn authorize(
             | Action::ProtectedRefManage
             | Action::MemberManage
             | Action::GroupRead
+            | Action::GroupList
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate

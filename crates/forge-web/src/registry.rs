@@ -272,6 +272,17 @@ pub struct RouteDef {
     /// The success response body and its status, when documented
     /// ([`Registry::responds`]: `200`; [`Registry::responds_created`]: `201`).
     pub response: Option<(SchemaDoc, u16)>,
+    /// The documented query parameters ([`Registry::queries`]).
+    pub query: &'static [QueryParam],
+}
+
+/// One optional query parameter of a fixed route, for `openapi.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryParam {
+    pub name: &'static str,
+    pub description: &'static str,
+    /// `(minimum, maximum)` for an integer parameter; `None` = a string.
+    pub integer_range: Option<(i64, i64)>,
 }
 
 /// A named OpenAPI schema of a Rust type (utoipa), for the generated
@@ -884,6 +895,29 @@ impl<S: DispatchState> Registry<S> {
         self
     }
 
+    /// Document the optional query parameters of the fixed route `verb
+    /// path` in `openapi.json` (the handler parses them). An unknown route
+    /// is a startup error (`FG-WEB-0004`).
+    #[must_use]
+    pub fn queries(
+        mut self,
+        verb: Verb,
+        path: &'static str,
+        params: &'static [QueryParam],
+    ) -> Self {
+        match self
+            .defs
+            .iter_mut()
+            .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
+        {
+            Some(def) => def.query = params,
+            None => self
+                .problems
+                .push(format!("queries: no route {} {path}", verb.as_str())),
+        }
+        self
+    }
+
     /// Validate and record a fixed route's definition; `false` (with a
     /// problem) when it cannot be mounted.
     fn push_fixed(
@@ -918,6 +952,7 @@ impl<S: DispatchState> Registry<S> {
             summary,
             request,
             response: None,
+            query: &[],
         });
         true
     }
@@ -1018,6 +1053,7 @@ impl<S: DispatchState> Registry<S> {
             summary,
             request: None,
             response: None,
+            query: &[],
         };
         self.defs.push(def.clone());
         self.scoped.entries.push(ScopedEntry { def, handler });
@@ -1309,11 +1345,21 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
             op.insert("security".into(), json!([]));
         }
         let params: BTreeSet<&str> = path_params(d.path).collect();
-        if !params.is_empty() {
-            let list: Vec<Value> = params
-                .iter()
-                .map(|p| json!({ "name": p, "in": "path", "required": true, "schema": param_schema(p) }))
-                .collect();
+        let mut list: Vec<Value> = params
+            .iter()
+            .map(
+                |p| json!({ "name": p, "in": "path", "required": true, "schema": param_schema(p) }),
+            )
+            .collect();
+        list.extend(d.query.iter().map(|q| {
+            let schema = match q.integer_range {
+                Some((min, max)) => json!({ "type": "integer", "minimum": min, "maximum": max }),
+                None => json!({ "type": "string" }),
+            };
+            json!({ "name": q.name, "in": "query", "required": false,
+                    "description": q.description, "schema": schema })
+        }));
+        if !list.is_empty() {
             op.insert("parameters".into(), Value::Array(list));
         }
         if let Some((doc, cap)) = &d.request {

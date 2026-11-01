@@ -5,10 +5,12 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use forge_errors::{ErrorCode, ForgeError};
+use std::time::Duration;
 
 use crate::cursor::{CursorKeys, MAX_CURSOR_CHARS, MAX_PAYLOAD_BYTES};
 
 const PURPOSE: &str = "projects.list:user=42";
+const AGE: Duration = Duration::from_secs(3600);
 
 fn keys(lines: &[(u16, &str)]) -> CursorKeys {
     let text: String = lines
@@ -38,14 +40,14 @@ fn a_cursor_round_trips_and_reveals_nothing_of_its_payload() {
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
     assert!(!cursor.contains("1234"));
-    assert_eq!(k.decode(PURPOSE, &cursor).expect("decode"), payload);
+    assert_eq!(k.decode(PURPOSE, &cursor, AGE).expect("decode"), payload);
     // A fresh nonce each time: the same position never yields the same text.
     let again = k.encode(PURPOSE, payload).expect("encode");
     assert_ne!(cursor, again);
     let full = k.encode(PURPOSE, &[7u8; MAX_PAYLOAD_BYTES]).expect("max");
     assert!(full.len() <= MAX_CURSOR_CHARS, "{}", full.len());
     assert_eq!(
-        k.decode(PURPOSE, &full).expect("max").len(),
+        k.decode(PURPOSE, &full, AGE).expect("max").len(),
         MAX_PAYLOAD_BYTES
     );
     let over = k
@@ -67,7 +69,7 @@ fn tampered_truncated_foreign_and_rotated_out_cursors_are_cursor_invalid() {
         let mut flipped = bytes.clone();
         flipped[i] ^= 0x01;
         let err = k
-            .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&flipped))
+            .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&flipped), AGE)
             .expect_err("flipped");
         let r = rule(&err);
         let want = match i {
@@ -79,17 +81,17 @@ fn tampered_truncated_foreign_and_rotated_out_cursors_are_cursor_invalid() {
     }
     // Another list or another caller: the tag does not verify.
     let err = k
-        .decode("projects.list:user=43", &cursor)
+        .decode("projects.list:user=43", &cursor, AGE)
         .expect_err("other caller");
     assert_eq!(rule(&err), "tag");
     // Truncation: shorter than header + tag, or a cut tag.
     let err = k
-        .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&bytes[..20]))
+        .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&bytes[..20]), AGE)
         .expect_err("short");
     assert_eq!(rule(&err), "truncated");
     bytes.pop();
     let err = k
-        .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&bytes))
+        .decode(PURPOSE, &URL_SAFE_NO_PAD.encode(&bytes), AGE)
         .expect_err("cut tag");
     assert_eq!(rule(&err), "tag");
     // Not base64url (padding, `+`, `/`, spaces) and absurd lengths.
@@ -99,30 +101,30 @@ fn tampered_truncated_foreign_and_rotated_out_cursors_are_cursor_invalid() {
         format!(" {cursor}"),
         String::new(),
     ] {
-        let err = k.decode(PURPOSE, &bad).expect_err("encoding");
+        let err = k.decode(PURPOSE, &bad, AGE).expect_err("encoding");
         assert!(
             ["encoding", "truncated"].contains(&rule(&err).as_str()),
             "{bad}"
         );
     }
     let err = k
-        .decode(PURPOSE, &"A".repeat(MAX_CURSOR_CHARS + 1))
+        .decode(PURPOSE, &"A".repeat(MAX_CURSOR_CHARS + 1), AGE)
         .expect_err("long");
     assert_eq!(rule(&err), "too_long");
 
     // A key from another installation, and a key rotated out.
     let other = keys(&[(1, "cd")]);
     assert_eq!(
-        rule(&other.decode(PURPOSE, &cursor).expect_err("foreign")),
+        rule(&other.decode(PURPOSE, &cursor, AGE).expect_err("foreign")),
         "tag"
     );
     let rotated = keys(&[(2, "ef")]);
     assert_eq!(
-        rule(&rotated.decode(PURPOSE, &cursor).expect_err("gone")),
+        rule(&rotated.decode(PURPOSE, &cursor, AGE).expect_err("gone")),
         "kid"
     );
     // The error never carries the cursor.
-    let err = other.decode(PURPOSE, &cursor).expect_err("foreign");
+    let err = other.decode(PURPOSE, &cursor, AGE).expect_err("foreign");
     assert!(!format!("{err} {err:?}").contains(&cursor));
 }
 
@@ -133,13 +135,13 @@ fn rotation_encrypts_with_the_newest_kid_and_still_opens_the_older_ones() {
     let both = keys(&[(2, "cd"), (1, "ab")]);
     assert_eq!(both.encrypting().kid(), 2);
     assert_eq!(
-        both.decode(PURPOSE, &before).expect("old kid"),
+        both.decode(PURPOSE, &before, AGE).expect("old kid"),
         b"old position"
     );
     let after = both.encode(PURPOSE, b"new position").expect("encode");
     assert_eq!(URL_SAFE_NO_PAD.decode(&after).expect("b64")[1..3], [0, 2]);
     assert_eq!(
-        rule(&old.decode(PURPOSE, &after).expect_err("new kid")),
+        rule(&old.decode(PURPOSE, &after, AGE).expect_err("new kid")),
         "kid"
     );
 }
@@ -173,4 +175,24 @@ fn a_bad_cursor_key_file_names_the_line_but_never_its_content() {
     }
     let k = keys(&[(5, "ab")]);
     assert!(!format!("{k:?}").contains("ab"), "{k:?}");
+}
+
+/// The issue time is sealed with the payload: a cursor older than `max_age`
+/// is `rule=expired`, the boundary and a clock stepped back are still valid.
+#[test]
+fn a_cursor_older_than_the_max_age_is_expired() {
+    let k = keys(&[(1, "ab")]);
+    let cursor = k.encode_at(PURPOSE, b"position", 1_000).expect("encode");
+    let ok = |now| k.decode_at(PURPOSE, &cursor, AGE, now);
+    assert_eq!(ok(1_000).expect("fresh"), b"position");
+    assert_eq!(ok(1_000 + 3_600).expect("at the limit"), b"position");
+    assert_eq!(ok(500).expect("clock stepped back"), b"position");
+    assert_eq!(rule(&ok(1_000 + 3_601).expect_err("expired")), "expired");
+    assert_eq!(rule(&ok(u64::MAX).expect_err("long after")), "expired");
+    // The expiry check never hides the other failures: a foreign caller is
+    // still `tag`, whatever the age.
+    let err = k
+        .decode_at("projects.list:user=43", &cursor, AGE, 1_000 + 10_000)
+        .expect_err("other caller");
+    assert_eq!(rule(&err), "tag");
 }
