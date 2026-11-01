@@ -2278,6 +2278,430 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Only commits that changed this path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Commits per page, 1..=100 (server default 30).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (use the same --path).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse commits --project 7 --ref main --json",
+        "gstn browse commits --project 7 --ref main --path src/lib.rs --limit 50 --cursor <next_cursor>"
+      ],
+      "name": "browse commits",
+      "output": {
+        "properties": {
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "parents",
+                "author_name",
+                "author_email",
+                "authored_at",
+                "committer_name",
+                "committer_email",
+                "committed_at",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "head": {
+            "type": "string"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref",
+          "head",
+          "path",
+          "commits",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/commits"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a revision's history, newest first, one page at a time (optionally only the commits that changed --path)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The full commit id (40 or 64 hexadecimal digits).",
+          "kind": "positional",
+          "name": "oid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Print the patches too (--json always has them).",
+          "kind": "flag",
+          "name": "--patch",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --patch",
+        "gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --json"
+      ],
+      "name": "browse commit",
+      "output": {
+        "properties": {
+          "commit": {
+            "required": [
+              "oid",
+              "parents",
+              "author_name",
+              "author_email",
+              "authored_at",
+              "committer_name",
+              "committer_email",
+              "committed_at",
+              "subject"
+            ],
+            "type": "object"
+          },
+          "diff": {
+            "properties": {
+              "files": {
+                "items": {
+                  "properties": {
+                    "omitted": {
+                      "enum": [
+                        "too_large",
+                        "total_cap",
+                        "not_utf8",
+                        null
+                      ]
+                    },
+                    "patch": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "added",
+                        "modified",
+                        "deleted",
+                        "renamed",
+                        "copied",
+                        "type_changed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "old_path",
+                    "new_path",
+                    "old_mode",
+                    "new_mode",
+                    "old_oid",
+                    "new_oid",
+                    "similarity",
+                    "binary",
+                    "patch",
+                    "omitted"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "files",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "message",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/commits/{oid}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one commit: message and the diff against its first parent (per-file patches under server caps; --patch prints them)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The base: a full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The head, named like --from.",
+          "kind": "option",
+          "name": "--to",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Print the patches too (--json always has them).",
+          "kind": "flag",
+          "name": "--patch",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse compare --project 7 --from v1.0 --to main --json"
+      ],
+      "name": "browse compare",
+      "output": {
+        "properties": {
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "parents",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "type": "boolean"
+          },
+          "diff": {
+            "required": [
+              "files",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "from": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "to": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "commits",
+          "commits_truncated",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/compare"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Compare two revisions: the commits --to has and --from does not, and the tree diff from --from to --to (capped; truncated past the caps)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file's path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse blame --project 7 --ref main --path src/lib.rs",
+        "gstn browse blame --project 7 --ref main --path src/lib.rs --json"
+      ],
+      "name": "browse blame",
+      "output": {
+        "properties": {
+          "binary": {
+            "type": "boolean"
+          },
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "author_name",
+                "author_email",
+                "author_time",
+                "author_tz",
+                "summary",
+                "boundary",
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "hunks": {
+            "items": {
+              "required": [
+                "commit",
+                "start",
+                "orig_start",
+                "lines"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "size",
+          "binary",
+          "hunks",
+          "commits",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/blame"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show who last changed each line of a file (hunks; at most 10000 lines; binary files have none)."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",

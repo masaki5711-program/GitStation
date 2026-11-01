@@ -124,6 +124,16 @@ pub fn parse_id(raw: &str) -> Result<i64, String> {
     }
 }
 
+/// A full commit id (40 or 64 hex digits), lower-cased. It is formatted
+/// into the request path, so nothing else may pass.
+pub fn parse_oid(raw: &str) -> Result<String, String> {
+    if matches!(raw.len(), 40 | 64) && raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(raw.to_ascii_lowercase())
+    } else {
+        Err("a commit id is 40 (or 64) hexadecimal digits".to_string())
+    }
+}
+
 fn parse_limit(raw: &str) -> Result<u32, String> {
     match raw.parse::<u32>() {
         Ok(n) if (1..=100).contains(&n) => Ok(n),
@@ -538,6 +548,57 @@ pub enum BrowseCommand {
     },
     /// One file's head (text; binary files say so).
     File {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: String,
+        #[arg(long, value_parser = parse_text)]
+        path: String,
+    },
+    /// A page of a revision's history, newest first.
+    Commits {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag.
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: String,
+        /// Only commits that changed this path.
+        #[arg(long, value_parser = parse_text)]
+        path: Option<String>,
+        /// Commits per page, 1..=100 (server default 30).
+        #[arg(long, value_parser = parse_limit)]
+        limit: Option<u32>,
+        /// Continue after this next_cursor (same --path).
+        #[arg(long, value_parser = parse_text)]
+        cursor: Option<String>,
+    },
+    /// One commit: message and changed files (--patch: and the patches).
+    Commit {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The full commit id (40 or 64 hexadecimal digits).
+        #[arg(value_parser = parse_oid)]
+        oid: String,
+        /// Print the patches too.
+        #[arg(long)]
+        patch: bool,
+    },
+    /// Compare two revisions: the commits `to` has and `from` does not, and the changed files.
+    Compare {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The base: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        from: String,
+        /// The head: a commit id, a branch or a tag.
+        #[arg(long, value_parser = parse_text)]
+        to: String,
+        /// Print the patches too.
+        #[arg(long)]
+        patch: bool,
+    },
+    /// Who last changed each line of a file.
+    Blame {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
         #[arg(long = "ref", value_parser = parse_text)]
