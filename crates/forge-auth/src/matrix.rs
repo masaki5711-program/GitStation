@@ -101,6 +101,13 @@ pub(crate) enum Fixture {
     /// Changing (`Some`) or removing (`None`) a user who is no direct
     /// member of a private project (MR8).
     MissingMember(Option<Role>),
+    /// The same on a group (MR8 review).
+    GroupMissingMember(Option<Role>),
+    /// Removing (`None`) or demoting (`Some(to)`) the last **direct**
+    /// Owner of a subgroup: not the last Owner — every subgroup inherits
+    /// the top-level group's Owner, which always keeps one (D2 / D4 MR4
+    /// rule), so `removes_last_owner` is `false` (MR8 review).
+    SubgroupLastDirectOwner(Option<Role>),
     /// Changing a protection's minimum push role (None = unprotected).
     ProtectionChange {
         from: Option<Role>,
@@ -323,6 +330,20 @@ impl Fixture {
             Fixture::MissingMember(to) => member(
                 MembershipScope::Project(private),
                 MembershipChange::Missing { to },
+            ),
+            Fixture::GroupMissingMember(to) => member(
+                MembershipScope::Group { role },
+                MembershipChange::Missing { to },
+            ),
+            Fixture::SubgroupLastDirectOwner(to) => member(
+                MembershipScope::Group { role },
+                match to {
+                    None => MembershipChange::Remove { from: Role::Owner },
+                    Some(to) => MembershipChange::Change {
+                        from: Role::Owner,
+                        to,
+                    },
+                },
             ),
             Fixture::ProtectionChange { from, to } => Resource::RefProtectionChange {
                 project: private,

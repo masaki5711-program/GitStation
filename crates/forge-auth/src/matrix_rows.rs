@@ -354,6 +354,17 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MemberManage, W::Developer, F::MissingMember(None), deny(E::Forbidden)),
     row(A::MemberManage, W::NonMember, F::MissingMember(None), deny(E::NotFound)),
     row(A::MemberManage, W::Admin, F::DeletedProjectMember(M::Add(R::Guest)), deny(E::PendingDeletion)),
+    // MR8 review: a group's non-member (the command then answers 409 not_member)
+    row(A::MemberManage, W::Maintainer, F::GroupMissingMember(None), Allow),
+    row(A::MemberManage, W::Maintainer, F::GroupMissingMember(Some(R::Developer)), Allow),
+    row(A::MemberManage, W::Maintainer, F::GroupMissingMember(Some(R::Owner)), deny(E::Forbidden)),
+    row(A::MemberManage, W::Developer, F::GroupMissingMember(None), deny(E::Forbidden)),
+    // MR8 review: a subgroup's last direct Owner is not its last Owner (the top level keeps one)
+    row(A::MemberManage, W::Owner, F::SubgroupLastDirectOwner(None), Allow),
+    row(A::MemberManage, W::Owner, F::SubgroupLastDirectOwner(Some(R::Developer)), Allow),
+    row(A::MemberManage, W::Admin, F::SubgroupLastDirectOwner(None), Allow),
+    row(A::MemberManage, W::Maintainer, F::SubgroupLastDirectOwner(None), deny(E::Forbidden)),
+    row(A::MemberManage, W::AgentOwnerTokenApi, F::SubgroupLastDirectOwner(None), deny(E::Forbidden)),
     // tokens
     row(A::MemberManage, W::MaintainerTokenApi, F::ProjectMember(M::Add(R::Developer)), Allow),
     row(A::MemberManage, W::MaintainerTokenApi, F::GroupMember(M::Add(R::Developer)), Allow),

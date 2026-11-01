@@ -7,8 +7,10 @@
 //!
 //! As for the MR7a writes: the registry authenticates, reads the strict
 //! body, loads (the project or group with the one loader call of its `GET`
-//! route, and — for a change or a removal — the member's **direct** role,
-//! never the request's) and proves; forge-hosting decides again inside the
+//! route, and — for a change or a removal by a caller who could manage
+//! members, Maintainer and above — the member's **direct** role, never the
+//! request's; anyone else is decided on `from = None` and denied on their
+//! own role, without the member being read) and proves; forge-hosting decides again inside the
 //! write transaction on the member's role read under the lock and on
 //! whether the change would leave the project or group without an Owner
 //! (computed there, so the registry's decision always says "not the last
@@ -36,7 +38,9 @@ use crate::app::AppState;
 use crate::body::{param_invalid, request_invalid};
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam};
 use crate::routes::projects::{self, PREFIX as PROJECT_PREFIX};
-use crate::routes::write::{absent, bounded, hosting, id_in, json, no_store, write_request};
+use crate::routes::write::{
+    absent, bounded, hosting, id_in, json, no_store, read_if_manager, write_request,
+};
 
 /// `GET` / `POST` a project's members.
 pub const PROJECT_MEMBERS: &str = "/api/v1/projects/{id}/members";
@@ -260,12 +264,16 @@ async fn project_member_lookup(
         return Ok(absent());
     };
     let hosting = hosting(state)?;
-    let from = bounded(
-        state,
-        "member_role_load",
-        hosting.project_member_role(id, member),
-    )
-    .await?;
+    // The member's role only for a caller who could manage members.
+    let from = read_if_manager(project.role, || {
+        bounded(
+            state,
+            "member_role_load",
+            hosting.project_member_role(id, member),
+        )
+    })
+    .await?
+    .flatten();
     Ok(found(ProjectMemberCtx::new(
         project,
         membership(member, intent.on(from)),
@@ -284,12 +292,16 @@ async fn group_member_lookup(
         return Ok(absent());
     };
     let hosting = hosting(state)?;
-    let from = bounded(
-        state,
-        "member_role_load",
-        hosting.group_member_role(id, member),
-    )
-    .await?;
+    // The member's role only for a caller who could manage members.
+    let from = read_if_manager(group.role, || {
+        bounded(
+            state,
+            "member_role_load",
+            hosting.group_member_role(id, member),
+        )
+    })
+    .await?
+    .flatten();
     Ok(found(GroupMemberCtx::new(
         group,
         membership(member, intent.on(from)),

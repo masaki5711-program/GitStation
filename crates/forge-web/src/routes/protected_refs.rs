@@ -6,7 +6,9 @@
 //! above their own role.
 //!
 //! The registry loads the project (the one loader call of its `GET` route)
-//! and, for a change or a delete, the rule's stored minimum push role (the
+//! and, for a change or a delete by a caller who could manage protections
+//! (Maintainer and above; others are decided on `from = None` without the
+//! rule being read), the rule's stored minimum push role (the
 //! decision's `from`, never the request's; a rule this build cannot read
 //! counts as Owner-level, an absent one as none, then `FG-REPO-0005
 //! resource=protected_ref`), and proves; forge-hosting decides again inside
@@ -31,7 +33,9 @@ use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
 use crate::routes::members::RoleName;
 use crate::routes::projects::{self, PREFIX};
-use crate::routes::write::{absent, bounded, hosting, id_in, json, no_store, write_request};
+use crate::routes::write::{
+    absent, bounded, hosting, id_in, json, no_store, read_if_manager, write_request,
+};
 
 /// `GET` / `POST` a project's rules.
 pub const COLLECTION: &str = "/api/v1/projects/{id}/protected-refs";
@@ -153,17 +157,20 @@ async fn rule_lookup(
         return Ok(absent());
     };
     let hosting = hosting(state)?;
-    let stored = bounded(
-        state,
-        "protected_ref_load",
-        hosting.protected_ref_state(id, rule),
-    )
+    // The rule's level only for a caller who could manage protections.
+    let stored = read_if_manager(project.role, || {
+        bounded(
+            state,
+            "protected_ref_load",
+            hosting.protected_ref_state(id, rule),
+        )
+    })
     .await?;
     Ok(found(RefProtectionCtx::new(
         project,
         LoadedProtection {
             rule: Some(rule),
-            from: protection_level(stored),
+            from: stored.and_then(protection_level),
             to,
         },
     )))
