@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts and `GET /-/auth/callback` 20 callbacks per peer per minute, each with its own counter (an IPv6 peer counts as its /64), so nobody can flood the identity provider's authorization or token endpoint through GitStation. A refused callback also clears the state cookie, so the user starts the sign-in again. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`.
+A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts and `GET /-/auth/callback` 20 callbacks per peer per minute, each with its own counter (an IPv6 peer counts as its /64), so nobody can flood the identity provider's authorization or token endpoint through GitStation. `GET /api/v1/namespaces/resolve?prefix=true` (M2 MR6, the SPA's rescue of GitHub-shaped URLs, ADR-0015) allows 60 requests per signed-in user per minute (`route=resolve_prefix`; one request resolves every leading prefix of the path), checked before any lookup. A refused callback also clears the state cookie, so the user starts the sign-in again. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `route` (`login` or `callback`), `limit` and `window_s` (never the address, which is personal data). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019.
+The log event carries `route` (`login`, `callback` or `resolve_prefix`), `limit` and `window_s` (never the address, which is personal data; `resolve_prefix` also `retry_after_s`). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019.
 
 ## 対処 (fix)
 

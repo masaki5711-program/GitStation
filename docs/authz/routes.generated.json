@@ -48,6 +48,38 @@
     "word": "project_permalink"
   },
   {
+    "action": "UserAdminList",
+    "method": "GET",
+    "path": "/api/v1/admin/users",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserDisable",
+    "method": "POST",
+    "path": "/api/v1/admin/users/{id}/disable",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionList",
+    "method": "GET",
+    "path": "/api/v1/admin/users/{id}/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/admin/users/{id}/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "GroupList",
     "method": "GET",
     "path": "/api/v1/groups",
@@ -347,6 +379,54 @@
     "action": "UserSelfRead",
     "method": "GET",
     "path": "/api/v1/user",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionList",
+    "method": "GET",
+    "path": "/api/v1/user/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/user/sessions/{public_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenList",
+    "method": "GET",
+    "path": "/api/v1/user/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenCreate",
+    "method": "POST",
+    "path": "/api/v1/user/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/user/tokens/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserSearch",
+    "method": "GET",
+    "path": "/api/v1/users",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -680,23 +760,7 @@
     "word": "tree"
   },
   {
-    "action": "TokenCreate",
-    "planned": true
-  },
-  {
-    "action": "TokenList",
-    "planned": true
-  },
-  {
-    "action": "TokenRevoke",
-    "planned": true
-  },
-  {
     "action": "UserCreate",
-    "planned": true
-  },
-  {
-    "action": "UserDisable",
     "planned": true
   },
   {

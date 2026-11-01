@@ -8,7 +8,7 @@
 use forge_errors::ErrorCode;
 
 use crate::action::Action;
-use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role};
+use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role, SessionRoute};
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
@@ -189,6 +189,12 @@ pub(crate) enum Fixture {
     OwnAdminTokenRequest,
     /// Creating a token for another user.
     ForeignTokenRequest,
+    /// The caller's own sessions (`own`) or another user's, through
+    /// `route` (M2 MR6, ADR-0021 §17).
+    Session {
+        own: bool,
+        route: SessionRoute,
+    },
     Instance,
     /// A path resolved (live) to a private project.
     ResolvedPrivate,
@@ -524,6 +530,10 @@ impl Fixture {
             Fixture::ForeignTokenRequest => Resource::TokenRequest {
                 owner: OTHER,
                 scopes: vec![Scope::ReadRepository],
+            },
+            Fixture::Session { own, route } => Resource::Session {
+                owner: if own { ME } else { OTHER },
+                route,
             },
             Fixture::Instance => Resource::Instance,
             Fixture::ResolvedPrivate => {

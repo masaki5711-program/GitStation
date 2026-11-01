@@ -276,6 +276,12 @@ pub enum Resource {
     Token {
         owner: UserId,
     },
+    /// The web sessions of `owner` (`SessionList` / `SessionRevoke`, M2
+    /// MR6, ADR-0021 §17), reached through `route`.
+    Session {
+        owner: UserId,
+        route: SessionRoute,
+    },
     /// A token about to be created for `owner` with these scopes.
     TokenRequest {
         owner: UserId,
@@ -297,6 +303,16 @@ pub enum Resource {
         via: ResolvedVia,
         view: NamespaceView,
     },
+}
+
+/// Which route reaches a user's sessions (ADR-0021 §17): the user's own
+/// (`/api/v1/user/sessions…`, sessions only, another user's session is
+/// not found — for administrators too) or the administration's
+/// (`/api/v1/admin/users/{id}/sessions`, administrator rights).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRoute {
+    Own,
+    Admin,
 }
 
 /// The account a signed-in identity belongs to, as the login's linking step

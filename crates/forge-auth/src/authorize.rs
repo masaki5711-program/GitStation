@@ -8,7 +8,8 @@
 //!    `not_human`);
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
 //!    then session-only actions (`SessionRead`): a token → `FG-AUTH-0002
-//!    reason=session_required` (M2 MR3, ADR-0021 §17);
+//!    reason=session_required` (M2 MR3, ADR-0021 §17; the own-route
+//!    `SessionList` / `SessionRevoke` decide the same in their arm, MR6);
 //! 3. `PathResolve` only: token scope → `FG-AUTH-0002` here, before the
 //!    path is looked at (the same 403 for every path);
 //!    a path that resolved to nothing (`Unresolved`, any non-public action)
@@ -36,8 +37,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::model::{
     AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
-    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease,
-    TransferTarget, UnresolvedReason, Visibility,
+    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, SessionRoute,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -442,7 +443,9 @@ pub fn authorize(
 
         (Action::TokenCreate, Resource::TokenRequest { owner, scopes }) => {
             // A token never mints tokens: a leaked token could otherwise
-            // widen its scopes and outlive its own revocation.
+            // widen its scopes and outlive its own revocation. Refused
+            // above as session-only (FG-AUTH-0002, M2 MR6); kept as the
+            // backstop should the action ever leave that list.
             if matches!(principal.credential(), Credential::Token(_)) {
                 return Err(deny(ErrorCode::Forbidden).with_context("reason", "token_cannot_mint"));
             }
@@ -465,8 +468,50 @@ pub fn authorize(
             }
         }
 
-        (Action::UserCreate | Action::UserDisable | Action::Metrics, Resource::Instance) => {
+        (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
+        }
+        // Disabling a person is a person's decision (M2 MR6): an agent's
+        // credential is refused, administrators' agents included. The
+        // administration guard (last administrator, last Owner) is the
+        // command's, always enforced over HTTP.
+        (Action::UserDisable, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+        // Finding users by name (the member picker): every active signed-in
+        // user (the scope was checked above); names only.
+        (Action::UserSearch, Resource::Instance) => Ok(()),
+
+        // Web sessions (M2 MR6, ADR-0021 §17).
+        (Action::SessionList | Action::SessionRevoke, Resource::Session { owner, route }) => {
+            match route {
+                // The user's own route: sessions only (a token never sees
+                // or ends a browser session), and another user's session is
+                // not found — administrators included (they use the
+                // administration route).
+                SessionRoute::Own => {
+                    if let Credential::Token(scopes) = principal.credential() {
+                        let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
+                        return Err(deny(ErrorCode::InsufficientScope)
+                            .with_context("reason", "session_required")
+                            .with_context("token_scopes", held.join(",")));
+                    }
+                    if *owner == user {
+                        Ok(())
+                    } else {
+                        Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_session"))
+                    }
+                }
+                // The administration's route: administrator rights; ending
+                // someone's sessions is a person's decision.
+                SessionRoute::Admin => {
+                    if action == Action::SessionRevoke {
+                        people_only()?;
+                    }
+                    admin_only()
+                }
+            }
         }
 
         // Every active signed-in user reads their own account (the scope
@@ -518,9 +563,13 @@ pub fn authorize(
             | Action::TokenRevoke
             | Action::UserCreate
             | Action::UserDisable
+            | Action::UserSearch
+            | Action::UserAdminList
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead
+            | Action::SessionList
+            | Action::SessionRevoke
             | Action::SessionCreate
             | Action::PathResolve
             | Action::Metrics,
@@ -537,6 +586,7 @@ pub fn authorize(
             | Resource::RefProtectionChange { .. }
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
+            | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
             | Resource::Resolved { .. },
@@ -587,6 +637,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Token { .. }
+        | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
         | Resource::GroupTransfer { .. }
@@ -631,6 +682,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::RefProtectionChange { .. }
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
+        | Resource::Session { .. }
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
         | Resource::Unresolved(_)

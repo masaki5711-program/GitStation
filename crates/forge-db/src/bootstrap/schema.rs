@@ -32,6 +32,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.purge_delete_guard()",
     // ── M2 MR3: a session's revocation is final (20261103100100) ──
     "forge.web_sessions_revocation_guard()",
+    // ── M2 MR6: sessions are deleted only 30 days after they ended (20261104100000) ──
+    "forge.web_sessions_purge_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -44,6 +46,13 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "web_sessions_revocation_final",
         "CREATE TRIGGER web_sessions_revocation_final BEFORE UPDATE ON forge.web_sessions \
          FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_revocation_guard()",
+    ),
+    // ── M2 MR6: the purge's DELETE only 30 days after a session ended (20261104100000) ──
+    (
+        "web_sessions",
+        "web_sessions_purge_only",
+        "CREATE TRIGGER web_sessions_purge_only BEFORE DELETE ON forge.web_sessions \
+         FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_purge_guard()",
     ),
     (
         "repositories",
@@ -449,7 +458,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         (
             "forge.web_sessions",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                // M2 MR6: DELETE for the purge (20261104100000, guarded).
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", WEB_SESSIONS_APP_UPDATE),
                 columns("forge_ro", "SELECT", WEB_SESSIONS_RO),
             ]

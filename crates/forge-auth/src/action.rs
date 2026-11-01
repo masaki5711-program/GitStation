@@ -76,11 +76,25 @@ actions! {
     /// Release a namespace tombstone (`Resource::Tombstone`, ADR-0015, D5).
     NamespaceTombstoneRelease,
     // --- REST API: tokens and users ---
+    /// `POST /api/v1/user/tokens` (M2 MR6): create a token for oneself.
+    /// Sessions only (ADR-0019 Amendment M2 4): a token never creates a
+    /// token (`FG-AUTH-0002 reason=session_required`).
     TokenCreate,
+    /// `GET /api/v1/user/tokens` (M2 MR6): one's own tokens.
     TokenList,
+    /// `DELETE /api/v1/user/tokens/{id}` (M2 MR6).
     TokenRevoke,
     UserCreate,
+    /// `POST /api/v1/admin/users/{id}/disable` (M2 MR6): administrators,
+    /// never an agent; the administration guard always holds over HTTP
+    /// (`users::Guard::Enforce`, ADR-0019 §10).
     UserDisable,
+    /// `GET /api/v1/users?search=` (M2 MR6): find users by name for the
+    /// member picker (any active signed-in user; names only).
+    UserSearch,
+    /// `GET /api/v1/admin/users` (M2 MR6): every user with its state
+    /// (administrators; a token needs the `admin` scope).
+    UserAdminList,
     /// Change a user's username and personal namespace path
     /// (`Resource::UserRename`, ADR-0015, D5): administrators only.
     UserRename,
@@ -94,6 +108,14 @@ actions! {
     /// token is `FG-AUTH-0002 reason=session_required` (a token has no
     /// session to read, and must never learn a CSRF token).
     SessionRead,
+    /// `GET /api/v1/user/sessions` (one's own, sessions only) and `GET
+    /// /api/v1/admin/users/{id}/sessions` (administrators), M2 MR6,
+    /// ADR-0021 §17 (`Resource::Session`).
+    SessionList,
+    /// `DELETE /api/v1/user/sessions/{id}` (one's own, sessions only) and
+    /// `DELETE /api/v1/admin/users/{id}/sessions` (administrators, every
+    /// active session of the user), M2 MR6, ADR-0021 §17.
+    SessionRevoke,
     /// `GET /-/auth/login`, `GET /-/auth/callback`: start and finish the
     /// OIDC sign-in (M2 MR4, ADR-0021 §3). Public: the caller has no
     /// session yet; what the callback admits is decided by `SessionCreate`.
@@ -134,7 +156,7 @@ impl Action {
     /// token is refused whatever its scopes (`FG-AUTH-0002
     /// reason=session_required`, before the resource is looked at).
     pub fn is_session_only(self) -> bool {
-        matches!(self, Action::SessionRead)
+        matches!(self, Action::SessionRead | Action::TokenCreate)
     }
 
     /// Also performed through the git protocol (Smart HTTP). `RepoRead` is
@@ -153,6 +175,7 @@ impl Action {
             Action::Health
             | Action::WebShell
             | Action::SessionRead
+            | Action::TokenCreate
             | Action::WebLogin
             | Action::SessionCreate => None,
             Action::RepoRead => Some(Scope::ReadRepository),
@@ -165,6 +188,9 @@ impl Action {
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList
+            | Action::SessionList
+            | Action::UserSearch
+            | Action::UserAdminList
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::PathResolve
@@ -183,8 +209,8 @@ impl Action {
             | Action::GroupTransfer
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
-            | Action::TokenCreate
             | Action::TokenRevoke
+            | Action::SessionRevoke
             | Action::UserCreate
             | Action::UserDisable => Some(Scope::Api),
         }

@@ -28,10 +28,14 @@ fn forge_web_never_names_the_operator_only_user_commands() {
         format!("{}{}", "operator_link_", "identity"),
         format!("{}{}", "link_by_", "operator"),
     ];
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../forge-web/src");
+    // M2 MR6: forge-hosting serves the HTTP account routes too.
     let mut files = Vec::new();
-    rust_files(&src, &mut files);
-    assert!(!files.is_empty(), "no sources under {}", src.display());
+    for dir in ["../forge-web/src", "../forge-hosting/src"] {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
+        let before = files.len();
+        rust_files(&src, &mut files);
+        assert!(files.len() > before, "no sources under {}", src.display());
+    }
     let mut offenders = Vec::new();
     for file in files {
         let text =

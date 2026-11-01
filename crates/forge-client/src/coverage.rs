@@ -24,6 +24,45 @@ pub enum Coverage {
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
+    // M2 MR6: tokens, sessions, users.
+    ("GET", "/api/v1/user/tokens", Coverage::Command("token list")),
+    (
+        "POST",
+        "/api/v1/user/tokens",
+        Coverage::BrowserOnly("sessions only: a token never creates a token (FG-AUTH-0002 session_required); create one in the browser"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/tokens/{id}",
+        Coverage::Command("token revoke"),
+    ),
+    (
+        "GET",
+        "/api/v1/user/sessions",
+        Coverage::BrowserOnly("your web sessions; tokens are refused (ADR-0021 §17)"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/user/sessions/{public_id}",
+        Coverage::BrowserOnly("ending one of your web sessions; tokens are refused (ADR-0021 §17)"),
+    ),
+    ("GET", "/api/v1/users", Coverage::Command("user search")),
+    ("GET", "/api/v1/admin/users", Coverage::Command("user list")),
+    (
+        "POST",
+        "/api/v1/admin/users/{id}/disable",
+        Coverage::Command("user disable"),
+    ),
+    (
+        "GET",
+        "/api/v1/admin/users/{id}/sessions",
+        Coverage::Command("user sessions"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/admin/users/{id}/sessions",
+        Coverage::Command("user end-sessions"),
+    ),
     (
         "GET",
         "/api/v1/session",

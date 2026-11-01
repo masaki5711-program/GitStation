@@ -19,8 +19,8 @@
 use forge_core::{GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId};
 
 use crate::model::{
-    MembershipChange, MembershipScope, ProjectView, Resource, Role, TombstoneRelease,
-    TransferTarget, Visibility,
+    MembershipChange, MembershipScope, ProjectView, Resource, Role, Scope, SessionRoute,
+    TombstoneRelease, TransferTarget, Visibility,
 };
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
@@ -513,5 +513,161 @@ impl ResourceCtx for TombstoneCtx {
     }
     fn id(&self) -> TombstoneId {
         self.tombstone.id
+    }
+}
+
+// ── M2 MR6: tokens, sessions and user administration ──
+
+/// One personal access token as loaded (its id and owner from one row):
+/// `TokenRevoke`. The id is the token's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenCtx {
+    token_id: i64,
+    owner: UserId,
+}
+
+impl TokenCtx {
+    pub fn new(token_id: i64, owner: UserId) -> Self {
+        Self { token_id, owner }
+    }
+
+    pub fn owner(&self) -> UserId {
+        self.owner
+    }
+}
+
+impl sealed::Sealed for TokenCtx {}
+
+impl ResourceCtx for TokenCtx {
+    type Id = i64;
+    fn resource(&self) -> Resource {
+        Resource::Token { owner: self.owner }
+    }
+    fn id(&self) -> i64 {
+        self.token_id
+    }
+}
+
+/// The tokens of `owner` as a whole (`TokenList`): the id is the owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenOwnerCtx {
+    owner: UserId,
+}
+
+impl TokenOwnerCtx {
+    pub fn new(owner: UserId) -> Self {
+        Self { owner }
+    }
+}
+
+impl sealed::Sealed for TokenOwnerCtx {}
+
+impl ResourceCtx for TokenOwnerCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::Token { owner: self.owner }
+    }
+    fn id(&self) -> UserId {
+        self.owner
+    }
+}
+
+/// A token about to be created for `owner` with `scopes` (`TokenCreate`):
+/// the id is the owner, so the proof names whose token it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenRequestCtx {
+    owner: UserId,
+    scopes: Vec<Scope>,
+}
+
+impl TokenRequestCtx {
+    pub fn new(owner: UserId, scopes: Vec<Scope>) -> Self {
+        Self { owner, scopes }
+    }
+
+    /// The scopes that were decided on.
+    pub fn scopes(&self) -> &[Scope] {
+        &self.scopes
+    }
+}
+
+impl sealed::Sealed for TokenRequestCtx {}
+
+impl ResourceCtx for TokenRequestCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::TokenRequest {
+            owner: self.owner,
+            scopes: self.scopes.clone(), // clone: the context keeps its scopes
+        }
+    }
+    fn id(&self) -> UserId {
+        self.owner
+    }
+}
+
+/// The web sessions of `owner` through `route` (`SessionList`,
+/// `SessionRevoke`; ADR-0021 §17). `session` is the one session a route
+/// acts on (`None`: all of the owner's). The id is the owner and the
+/// session together, so a proof for one session cannot revoke another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCtx {
+    owner: UserId,
+    session: Option<i64>,
+    route: SessionRoute,
+}
+
+impl SessionCtx {
+    pub fn new(owner: UserId, session: Option<i64>, route: SessionRoute) -> Self {
+        Self {
+            owner,
+            session,
+            route,
+        }
+    }
+
+    /// The route the sessions were reached through.
+    pub fn route(&self) -> SessionRoute {
+        self.route
+    }
+}
+
+impl sealed::Sealed for SessionCtx {}
+
+impl ResourceCtx for SessionCtx {
+    type Id = (UserId, Option<i64>);
+    fn resource(&self) -> Resource {
+        Resource::Session {
+            owner: self.owner,
+            route: self.route,
+        }
+    }
+    fn id(&self) -> (UserId, Option<i64>) {
+        (self.owner, self.session)
+    }
+}
+
+/// A user an administrator acts on (`UserDisable`): decided on the
+/// instance (administrator rights), the proof carries the target user.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserTargetCtx {
+    target: UserId,
+}
+
+impl UserTargetCtx {
+    pub fn new(target: UserId) -> Self {
+        Self { target }
+    }
+}
+
+impl sealed::Sealed for UserTargetCtx {}
+
+impl ResourceCtx for UserTargetCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::Instance
+    }
+    fn id(&self) -> UserId {
+        self.target
     }
 }

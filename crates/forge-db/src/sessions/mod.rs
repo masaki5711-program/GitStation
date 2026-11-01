@@ -35,8 +35,13 @@ macro_rules! utc {
 
 // Declared after `utc!` so the submodule can use it (textual macro scope).
 mod auth;
+// M2 MR6: the session list and the purge of old rows.
+mod list;
+mod purge;
 
 pub use auth::{authenticate, SessionStore};
+pub use list::{is_public_id, list, owner, SessionInfo, SessionList, MAX_LISTED};
+pub use purge::{purge_expired, Purged, MAX_BATCH as PURGE_MAX_BATCH, PURGE_AFTER_DAYS};
 
 /// The audit resource type of session changes (tables.toml `audit_resource`).
 const RESOURCE: &str = "user";

@@ -90,6 +90,8 @@ pub struct AppState {
     pub login_limiter: Arc<routes::auth::LoginLimiter>,
     /// The callback's rate limit per peer (`FG-WEB-0010`, counted apart).
     pub callback_limiter: Arc<routes::auth::LoginLimiter>,
+    /// `resolve?prefix=true`'s rate limit per caller (M2 MR6, `FG-WEB-0010`).
+    pub resolve_limiter: Arc<routes::namespaces::PrefixLimiter>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -126,6 +128,7 @@ impl AppState {
             oidc: None,
             login_limiter: Arc::default(),
             callback_limiter: Arc::default(),
+            resolve_limiter: Arc::default(),
         }
     }
 
@@ -243,15 +246,7 @@ impl Default for AppConfig {
 /// resources: phase 8b).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
-pub const PLANNED: &[Action] = &[
-    Action::TokenCreate,
-    Action::TokenList,
-    Action::TokenRevoke,
-    Action::UserCreate,
-    Action::UserDisable,
-    Action::AuditRead,
-    Action::Metrics,
-];
+pub const PLANNED: &[Action] = &[Action::UserCreate, Action::AuditRead, Action::Metrics];
 
 /// Actions decided inside another route's handler, never a route's own
 /// (M2 MR4): `SessionCreate` is decided in `GET /-/auth/callback`
@@ -326,7 +321,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
         .queries(
             Verb::Get,
             routes::lists::PROJECTS_PATH,
-            routes::lists::QUERY,
+            routes::lists::PROJECTS_QUERY,
         )
         .route(
             Verb::Get,
@@ -336,7 +331,11 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::lists::groups,
         )
         .responds::<routes::lists::GroupPage>(Verb::Get, routes::lists::GROUPS_PATH)
-        .queries(Verb::Get, routes::lists::GROUPS_PATH, routes::lists::QUERY)
+        .queries(
+            Verb::Get,
+            routes::lists::GROUPS_PATH,
+            routes::lists::GROUPS_QUERY,
+        )
         .route(
             Verb::Get,
             routes::users::PATH,
@@ -369,9 +368,14 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             "Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next",
             routes::auth::callback,
         )
-        .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    history_routes(browse_routes(git_routes(shell_routes(member_routes(
-        move_routes(hosting_routes(fixed)),
+        .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH)
+        .queries(
+            Verb::Get,
+            routes::namespaces::PATH,
+            routes::namespaces::QUERY,
+        );
+    account_routes(history_routes(browse_routes(git_routes(shell_routes(
+        member_routes(move_routes(hosting_routes(fixed))),
     )))))
 }
 
@@ -388,6 +392,104 @@ pub fn registry() -> Registry<AppState> {
 #[doc(hidden)]
 pub fn registry_without_content_routes() -> Registry<AppState> {
     registry_without_content()
+}
+
+/// Tokens, sessions, the user search and the user administration (M2 MR6,
+/// plan 10 §5, ADR-0021 §17).
+fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::{directory as d, tokens as t, user_sessions as s};
+    registry
+        .route_with(
+            Verb::Get,
+            t::COLLECTION,
+            Action::TokenList,
+            "The caller's personal access tokens (never a secret)",
+            t::OwnTokens,
+            t::list,
+        )
+        .responds::<t::TokenList>(Verb::Get, t::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            t::COLLECTION,
+            Action::TokenCreate,
+            "Create a personal access token for the caller (never with a token; the secret is shown once)",
+            t::MAX_BODY,
+            t::NewToken,
+            t::create,
+        )
+        .responds_created::<t::CreatedToken>(Verb::Post, t::COLLECTION)
+        .route_with(
+            Verb::Delete,
+            t::ONE,
+            Action::TokenRevoke,
+            "Revoke one of the caller's tokens",
+            t::TokenToRevoke,
+            t::revoke,
+        )
+        .responds_no_content(Verb::Delete, t::ONE)
+        .route_with(
+            Verb::Get,
+            s::OWN,
+            Action::SessionList,
+            "The caller's active web sessions (sessions only)",
+            s::OwnSessions,
+            s::list,
+        )
+        .responds::<s::SessionItems>(Verb::Get, s::OWN)
+        .route_with(
+            Verb::Delete,
+            s::OWN_ONE,
+            Action::SessionRevoke,
+            "End one of the caller's web sessions (sessions only)",
+            s::OwnSessionToRevoke,
+            s::revoke,
+        )
+        .responds_no_content(Verb::Delete, s::OWN_ONE)
+        .route_with(
+            Verb::Get,
+            s::ADMIN,
+            Action::SessionList,
+            "A user's active web sessions (administrators)",
+            s::UserSessions,
+            s::list,
+        )
+        .responds::<s::SessionItems>(Verb::Get, s::ADMIN)
+        .route_with(
+            Verb::Delete,
+            s::ADMIN,
+            Action::SessionRevoke,
+            "End every web session of a user (administrators, never an agent)",
+            s::UserSessions,
+            s::revoke_all,
+        )
+        .responds::<s::SessionsRevoked>(Verb::Delete, s::ADMIN)
+        .route(
+            Verb::Get,
+            d::SEARCH,
+            Action::UserSearch,
+            "Find active users by username prefix or display name (names only, at most 20)",
+            d::search,
+        )
+        .responds::<d::UserNames>(Verb::Get, d::SEARCH)
+        .queries(Verb::Get, d::SEARCH, d::SEARCH_QUERY)
+        .route(
+            Verb::Get,
+            d::ADMIN_USERS,
+            Action::UserAdminList,
+            "Every user with its state (administrators; keyset, opaque cursor)",
+            d::admin_users,
+        )
+        .responds::<d::AdminUserPage>(Verb::Get, d::ADMIN_USERS)
+        .queries(Verb::Get, d::ADMIN_USERS, d::ADMIN_QUERY)
+        .route_with(
+            Verb::Post,
+            d::DISABLE,
+            Action::UserDisable,
+            "Disable a user (administrators, never an agent; the administration guard always holds)",
+            d::UserToDisable,
+            d::disable,
+        )
+        .responds::<d::Disabled>(Verb::Post, d::DISABLE)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

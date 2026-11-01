@@ -15,7 +15,10 @@
 //! and, when any subscriber is registered, the event subscribers
 //! (`subscribers`, C5: woken by the sequencer's NOTIFY or the 5 s poll),
 //! and the purge of projects whose grace period is over (`purge`, D5 MR4:
-//! every `hosting.purge_interval_secs`, at once again after a full batch).
+//! every `hosting.purge_interval_secs`, at once again after a full batch),
+//! and the purge of web sessions 30 days past their end (`session_purge`,
+//! M2 MR6: every `web.session_purge_interval_secs`, at once again after a
+//! full batch).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -47,6 +50,9 @@ pub(crate) mod provision;
 pub(crate) mod purge;
 // ── end D5 MR4 ──
 mod seal;
+// ── M2 MR6: the session purge ──
+mod session_purge;
+// ── end M2 MR6 ──
 // ── C5: event subscribers ──
 mod subscribers;
 // ── end C5 ──
@@ -83,6 +89,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
         let purge = Some(PurgeTask {
             purger,
             interval: cfg.hosting.purge_interval,
+            session_interval: cfg.web.session_purge_interval,
         });
         let result = run(&db, keys, &storage, purge, stopped).await;
         signal.abort();
@@ -112,13 +119,17 @@ enum Task {
     /// The purge of expired projects (`purge::run_purge`).
     Purge,
     // ── end D5 MR4 ──
+    /// The purge of ended web sessions (`session_purge`, M2 MR6).
+    SessionPurge,
 }
 
-/// The purge task's handles and period (`hosting.purge_interval_secs`).
+/// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
+/// M2 MR6: the session purge's `web.session_purge_interval_secs`).
 #[derive(Clone)]
 pub(crate) struct PurgeTask {
     pub(crate) purger: purge::Purger,
     pub(crate) interval: Duration,
+    pub(crate) session_interval: Duration,
 }
 
 /// Every task of this worker.
@@ -137,6 +148,7 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
     // ── D5 MR4: the purge needs the storage root (not in the loop tests) ──
     if purge.is_some() {
         tasks.push(Task::Purge);
+        tasks.push(Task::SessionPurge);
     }
     tasks
 }
@@ -178,6 +190,7 @@ impl Task {
             Self::AuditSeal => "audit_seal",
             Self::Subscribers => subscribers::NAME,
             Self::Purge => purge::NAME,
+            Self::SessionPurge => session_purge::NAME,
         }
     }
 
@@ -193,6 +206,10 @@ impl Task {
                 .purge
                 .as_ref()
                 .map_or(MAX_BACKOFF, |purge| purge.interval),
+            Self::SessionPurge => shared
+                .purge
+                .as_ref()
+                .map_or(MAX_BACKOFF, |purge| purge.session_interval),
         }
     }
 
@@ -233,6 +250,7 @@ impl Task {
                     .with_context("task", self.name())
                     .with_context("reason", "purge_unconfigured")),
             },
+            Self::SessionPurge => session_purge::run_session_purge(db).await,
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")

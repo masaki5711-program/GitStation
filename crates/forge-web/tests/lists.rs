@@ -660,3 +660,128 @@ async fn a_failing_list_request_returns_its_slots() {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
+
+/// M2 MR6: the filters `kind`, `membership` and `state=pending_deletion`
+/// narrow what `authorize()` allowed (pending deletion is decided with
+/// `ProjectRestore`: only what the caller may restore), and a cursor is
+/// bound to the filters it was handed out under.
+#[tokio::test]
+async fn the_filters_narrow_what_authorize_allowed_and_bind_the_cursor() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let bob = user(&t, "bob").await;
+    let spec = projects::create(
+        &t.db,
+        &ctx("req-project-spec"),
+        &NewProject {
+            kind: forge_core::RepositoryKind::Spec,
+            ..NewProject::new("spec", bob.namespace_id, "spec", bob.user_id)
+        },
+    )
+    .await
+    .expect("project");
+    let sys = project(&t, &bob, "sys", Visibility::Private).await;
+    let open = project(&t, &alice, "open", Visibility::Internal).await;
+    let rep = project(&t, &alice, "rep", Visibility::Private).await;
+    let _hidden = project(&t, &alice, "hidden", Visibility::Private).await;
+    let gone = project(&t, &bob, "gone", Visibility::Private).await;
+    projects::add_member(
+        &t.db,
+        &ctx("req-member"),
+        rep.project_id,
+        bob.user_id,
+        Role::Reporter,
+    )
+    .await
+    .expect("member");
+    t.commit_audited(
+        ("project", gone.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET deleted_at = now(), \
+             purge_after = now() + interval '7 days' WHERE id = {}",
+            gone.project_id.get()
+        )],
+    )
+    .await;
+    let g_bob = group(&t, "gbob", bob.user_id).await;
+    let _g_alice = group(&t, "galice", alice.user_id).await;
+    let counting = Arc::new(Counting {
+        db: t.db.clone(), // clone: the pool handle is shared
+        pages: AtomicUsize::new(0),
+    });
+    let page = |uri: &'static str, who: UserId| {
+        let counting = Arc::clone(&counting);
+        async move { get(app(&counting, 1000), uri, Some(session(who))).await }
+    };
+    let (status, all) = page("/api/v1/projects", bob.user_id).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(
+        ids(&all),
+        [
+            spec.project_id.get(),
+            sys.project_id.get(),
+            open.project_id.get(),
+            rep.project_id.get()
+        ]
+    );
+    let (_, specs) = page("/api/v1/projects?kind=spec", bob.user_id).await;
+    assert_eq!(ids(&specs), [spec.project_id.get()]);
+    let (_, systems) = page("/api/v1/projects?kind=system", bob.user_id).await;
+    assert_eq!(
+        ids(&systems),
+        [
+            sys.project_id.get(),
+            open.project_id.get(),
+            rep.project_id.get()
+        ]
+    );
+    let (_, mine) = page("/api/v1/projects?membership=true", bob.user_id).await;
+    assert_eq!(
+        ids(&mine),
+        [
+            spec.project_id.get(),
+            sys.project_id.get(),
+            rep.project_id.get()
+        ],
+        "not the internal project without a role"
+    );
+    let (_, pending) = page("/api/v1/projects?state=pending_deletion", bob.user_id).await;
+    assert_eq!(ids(&pending), [gone.project_id.get()]);
+    let (_, none) = page("/api/v1/projects?state=pending_deletion", alice.user_id).await;
+    assert_eq!(
+        ids(&none),
+        Vec::<i64>::new(),
+        "another's project pending deletion stays hidden"
+    );
+    let (_, groups) = page("/api/v1/groups?membership=true", bob.user_id).await;
+    assert_eq!(ids(&groups), [g_bob.group_id.get()]);
+    let (status, bad) = page("/api/v1/groups?kind=spec", bob.user_id).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+
+    // A cursor handed out under kind=system opens only under kind=system.
+    let (_, first) = get(
+        app(&counting, 1),
+        "/api/v1/projects?kind=system&limit=1",
+        Some(session(bob.user_id)),
+    )
+    .await;
+    let cursor = first["next_cursor"].as_str().expect("a cursor").to_owned();
+    let (status, next) = get(
+        app(&counting, 1000),
+        &format!("/api/v1/projects?kind=system&cursor={cursor}"),
+        Some(session(bob.user_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    for other in ["kind=spec&", "", "membership=true&kind=system&"] {
+        let (status, refused) = get(
+            app(&counting, 1000),
+            &format!("/api/v1/projects?{other}cursor={cursor}"),
+            Some(session(bob.user_id)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{other}: {refused}");
+        assert_eq!(refused["error_code"], ErrorCode::RequestInvalid.id());
+    }
+    t.drop_now().await;
+}

@@ -174,15 +174,24 @@ fn a_cursor_opens_only_for_its_list_and_caller() {
     let keys = keys();
     let alice = UserId::new(1);
     let bob = UserId::new(2);
-    let cursor = next_cursor(&keys, List::Projects, alice, Some(42))
+    let cursor = next_cursor(&keys, List::Projects, alice, &Filter::NONE, Some(42))
         .expect("seal")
         .expect("a cursor");
     assert_eq!(
-        open_cursor(&keys, List::Projects, alice, Some(&cursor), AGE).expect("own"),
+        open_cursor(
+            &keys,
+            List::Projects,
+            alice,
+            &Filter::NONE,
+            Some(&cursor),
+            AGE
+        )
+        .expect("own"),
         Some(42)
     );
     for (list, who) in [(List::Projects, bob), (List::Groups, alice)] {
-        let err = open_cursor(&keys, list, who, Some(&cursor), AGE).expect_err("foreign");
+        let err =
+            open_cursor(&keys, list, who, &Filter::NONE, Some(&cursor), AGE).expect_err("foreign");
         assert_eq!(err.code(), ErrorCode::RequestInvalid);
         assert!(
             err.context()
@@ -192,16 +201,23 @@ fn a_cursor_opens_only_for_its_list_and_caller() {
         );
     }
     assert_eq!(
-        next_cursor(&keys, List::Projects, alice, None).expect("none"),
+        next_cursor(&keys, List::Projects, alice, &Filter::NONE, None).expect("none"),
         None
     );
     // A payload that is not one positive id.
     for payload in [&[0u8; 4][..], &0i64.to_be_bytes(), &(-1i64).to_be_bytes()] {
         let sealed = keys
-            .encode(&List::Projects.purpose(alice), payload)
+            .encode(&List::Projects.purpose(alice, &Filter::NONE), payload)
             .expect("seal");
-        let err =
-            open_cursor(&keys, List::Projects, alice, Some(&sealed), AGE).expect_err("payload");
+        let err = open_cursor(
+            &keys,
+            List::Projects,
+            alice,
+            &Filter::NONE,
+            Some(&sealed),
+            AGE,
+        )
+        .expect_err("payload");
         assert!(
             err.context()
                 .iter()
@@ -302,12 +318,13 @@ fn the_global_cap_refuses_at_once_and_returns_both_the_permit_and_the_claim() {
 fn an_expired_cursor_is_cursor_invalid_rule_expired() {
     let keys = CursorKeys::parse(&format!("1 {}\n", "ab".repeat(32))).expect("keys");
     let alice = UserId::new(42);
-    let purpose = List::Projects.purpose(alice);
+    let purpose = List::Projects.purpose(alice, &Filter::NONE);
     let old = keys
         .encode_at(&purpose, &5i64.to_be_bytes(), 1_000)
         .expect("seal");
     // Opened at the real clock the 1970 cursor is far past any max age.
-    let err = open_cursor(&keys, List::Projects, alice, Some(&old), AGE).expect_err("expired");
+    let err = open_cursor(&keys, List::Projects, alice, &Filter::NONE, Some(&old), AGE)
+        .expect_err("expired");
     assert_eq!(
         rule(&err),
         (
@@ -316,9 +333,119 @@ fn an_expired_cursor_is_cursor_invalid_rule_expired() {
             "expired".to_owned()
         )
     );
-    let fresh = next_cursor(&keys, List::Projects, alice, Some(5)).expect("seal");
+    let fresh = next_cursor(&keys, List::Projects, alice, &Filter::NONE, Some(5)).expect("seal");
     assert_eq!(
-        open_cursor(&keys, List::Projects, alice, fresh.as_deref(), AGE).expect("fresh"),
+        open_cursor(
+            &keys,
+            List::Projects,
+            alice,
+            &Filter::NONE,
+            fresh.as_deref(),
+            AGE
+        )
+        .expect("fresh"),
         Some(5)
+    );
+}
+
+/// M2 MR6: the filters, strictly; a filter the list does not have is an
+/// unknown parameter.
+#[test]
+fn the_filters_are_parsed_strictly_per_list() {
+    let f = parse_filters(
+        Some("kind=spec&membership=true&state=pending_deletion&limit=5"),
+        List::Projects,
+    )
+    .expect("all");
+    assert_eq!(f.kind, Some(forge_core::RepositoryKind::Spec));
+    assert!(f.membership && f.pending_deletion);
+    assert_eq!(
+        parse_filters(None, List::Projects).expect("none"),
+        Filter::NONE
+    );
+    assert_eq!(
+        parse_query(Some("kind=system&limit=3"))
+            .expect("paging")
+            .limit,
+        3
+    );
+    let cases = [
+        (List::Projects, "kind=other", "kind", "invalid_value"),
+        (List::Projects, "kind=", "kind", "invalid_value"),
+        (
+            List::Projects,
+            "membership=yes",
+            "membership",
+            "invalid_value",
+        ),
+        (List::Projects, "state=deleted", "state", "invalid_value"),
+        (List::Projects, "kind=spec&kind=spec", "kind", "repeated"),
+        (List::Groups, "kind=spec", "query", "unknown_parameter"),
+        (
+            List::Groups,
+            "state=pending_deletion",
+            "query",
+            "unknown_parameter",
+        ),
+    ];
+    for (list, query, param, expected) in cases {
+        let err = parse_filters(Some(query), list).expect_err(query);
+        assert_eq!(
+            rule(&err),
+            (
+                ErrorCode::RequestInvalid,
+                param.to_owned(),
+                expected.to_owned()
+            ),
+            "{query}"
+        );
+    }
+}
+
+/// M2 MR6: a cursor is bound to its filters — under any other filter set
+/// it fails the tag, and without filters the purpose is M1's.
+#[test]
+fn a_cursor_opens_only_under_its_own_filters() {
+    let keys = keys();
+    let alice = UserId::new(1);
+    let spec = Filter {
+        kind: Some(forge_core::RepositoryKind::Spec),
+        ..Filter::NONE
+    };
+    let cursor = next_cursor(&keys, List::Projects, alice, &spec, Some(7))
+        .expect("seal")
+        .expect("a cursor");
+    assert_eq!(
+        open_cursor(&keys, List::Projects, alice, &spec, Some(&cursor), AGE).expect("same"),
+        Some(7)
+    );
+    let others = [
+        Filter::NONE,
+        Filter {
+            kind: Some(forge_core::RepositoryKind::System),
+            ..Filter::NONE
+        },
+        Filter {
+            membership: true,
+            ..spec
+        },
+        Filter {
+            pending_deletion: true,
+            ..spec
+        },
+    ];
+    for other in others {
+        let err = open_cursor(&keys, List::Projects, alice, &other, Some(&cursor), AGE)
+            .expect_err("another filter");
+        assert!(
+            err.context()
+                .iter()
+                .any(|(k, v)| *k == "rule" && v == "tag"),
+            "{other:?}: {err}"
+        );
+    }
+    assert_eq!(
+        List::Projects.purpose(alice, &Filter::NONE),
+        "projects.list:user=1"
     );
 }

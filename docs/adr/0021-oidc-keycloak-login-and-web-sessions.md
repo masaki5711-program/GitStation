@@ -516,3 +516,14 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 26 | MEDIUM（レビュー） | JWKS のキャッシュがロックを持ったまま取得を待ち（最長 5 秒）、失敗は 60 秒の制限に数えない | 状態のロックは読み書きの間だけ。取得は 1 本ずつ（single flight）で、待っていた呼び出しは前の取得の結果を使う。**失敗も含めすべての試行が 60 秒の制限に入る**（最初の取得も）。60 秒以内に失敗していて使える鍵がなければ FG-AUTH-0015 `call=jwks reason=backoff`（呼び出しなし）。復旧からログインが戻るまで最長 60 秒 |
 | 27 | MEDIUM（レビュー） | コールバックに回数の制限がない。満杯の制限の表が全員を断る。毒された表が黙って断る | コールバックもピアごとに 20 回 / 60 秒（開始とは別に数える、`route=callback`）。満杯のときは最も古いピアを追い出す。毒された表は FG-SYS-0001 `reason=login_limiter_poisoned` を 1 回ログに出して断る |
 | 28 | LOW（レビュー） | 時計が 1970 年より前だと 0 秒として扱い、期限の検査が通る | FG-SYS-0001 `reason=clock_before_epoch` |
+
+### 実装で決めた点（2026-11-01、M2 MR6 `feat/web-ui-support-api` の実装）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 29 | MEDIUM | §17 の `Resource::Session { owner }` だけでは、利用者のルートで管理者が他人のセッションを消せてしまう（管理者の権利で通る） | **`Resource::Session { owner, route: SessionRoute::Own \| Admin }`**。`Own`: トークンは FG-AUTH-0002 `session_required`、他人のセッションは管理者も FG-REPO-0005 `foreign_session`。`Admin`: 管理者の権利（トークンは `admin` スコープ）、`SessionRevoke` はエージェントを拒否。権限の表に `SessionList` 17 行、`SessionRevoke` 16 行 |
+| 30 | LOW | 利用者のルートで消すセッションを数字の id で指すと、一覧に内部の id が出る | `DELETE /api/v1/user/sessions/{public_id}`（16 桁の 16 進、形が違えば FG-WEB-0006 `param=public_id`）。一覧は `public_id`・作成・最後の操作・2 つの期限・`oidc`・`current` だけ（最大 100 件、`truncated`） |
+| 31 | LOW | 利用者のルートで、トークンの呼び出し元は「ない `public_id`」に 404、「ある `public_id`」に 403 を受ける（ローダーが行を読んだ後に `authorize()` が判定するため） | 受け入れた。`public_id` は 64 bit の乱数で推測できない。トークンはセッションの中身に一切触れない |
+| 32 | LOW | 管理者の一括の失効と一覧のルートで、存在しない利用者 | 一括の失効は `sessions::revoke_all` の FG-REPO-0005。一覧は空の一覧（行を読まない） |
+| 33 | LOW | 古い行の掃除（MR3 の引き継ぎ §4b の宿題） | `forge worker` のタスク `session_purge`（`web.session_purge_interval_secs`、既定 3600、60〜86 400）。失効か絶対の期限から **30 日** を過ぎた行を 1 回の変更で最大 500 行、id の順、`FOR UPDATE SKIP LOCKED`。持ち主ごとに監査 `session.purged`（`{"user_id","purged_sessions"}`、actor `system`、最初の行が変更の行、残りは `ChangeRecord.affected`）。満杯のバッチの後はすぐもう 1 回。マイグレーション `20261104100000`（追記）で `forge_app` に DELETE、ガード `forge.web_sessions_purge_guard()` / トリガー `web_sessions_purge_only`（ALWAYS、XF001 → FG-DB-0009）が 30 日より新しい行の DELETE をどのロールでも拒む。doctor の期待値と `tables.toml` に登録 |
+

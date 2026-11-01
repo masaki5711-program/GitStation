@@ -875,6 +875,13 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "browse compare",
             "browse blame",
             "user rename",
+            "user search",
+            "user list",
+            "user disable",
+            "user sessions",
+            "user end-sessions",
+            "token list",
+            "token revoke",
             "api",
             "help",
             "schema"

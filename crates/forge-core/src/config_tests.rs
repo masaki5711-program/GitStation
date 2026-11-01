@@ -1280,3 +1280,36 @@ fn auth_oidc_is_all_or_nothing_and_validated() {
         "invalid",
     );
 }
+
+/// `web.session_purge_interval_secs` (M2 MR6): default 1 h, env, and the
+/// 60..=86400 range (FG-SYS-0002 naming the key).
+#[test]
+fn web_session_purge_interval_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.web.session_purge_interval, Duration::from_secs(3600));
+    for (value, secs) in [("60", 60), ("86400", 86_400)] {
+        let cfg = load(
+            None,
+            &env(&[("FORGE_WEB_SESSION_PURGE_INTERVAL_SECS", value)]),
+        )
+        .expect(value);
+        assert_eq!(cfg.web.session_purge_interval, Duration::from_secs(secs));
+    }
+    for (value, reason) in [
+        ("59", "below_min"),
+        ("86401", "above_max"),
+        ("x", "invalid"),
+    ] {
+        let err = load(
+            None,
+            &env(&[("FORGE_WEB_SESSION_PURGE_INTERVAL_SECS", value)]),
+        )
+        .expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("web.session_purge_interval_secs") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
