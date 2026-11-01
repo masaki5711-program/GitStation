@@ -306,6 +306,11 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::ProjectTransfer, W::Maintainer, F::TransferToOwnNamespace, deny(E::Forbidden)),
     row(A::ProjectTransfer, W::Owner, F::TransferToForeignNamespace, deny(E::Forbidden)),
     row(A::ProjectTransfer, W::Admin, F::TransferToForeignNamespace, Allow),
+    row(A::ProjectTransfer, W::AdminTokenAdmin, F::TransferToForeignNamespace, Allow),
+    // without the admin scope: no admin rights, and the private source is not visible
+    row(A::ProjectTransfer, W::AdminTokenApi, F::TransferToForeignNamespace, deny(E::NotFound)),
+    row(A::ProjectTransfer, W::DisabledAdmin, F::Transfer { target: None }, deny(E::AccountDisabled)),
+    row(A::ProjectTransfer, W::AgentAdminTokenAdmin, F::TransferToTopLevel, deny(E::Forbidden)),
     // a project never lives at the top level: administrators are denied too
     row(A::ProjectTransfer, W::Owner, F::TransferToTopLevel, deny(E::Forbidden)),
     row(A::ProjectTransfer, W::Admin, F::TransferToTopLevel, deny(E::Forbidden)),
@@ -389,8 +394,22 @@ pub(crate) const ROWS: &[Row] = &[
     // no parent (a top-level group or a user): administrators only
     row(A::NamespaceTombstoneRelease, W::Admin, F::ReleaseTopLevel, Allow),
     row(A::NamespaceTombstoneRelease, W::AdminTokenAdmin, F::ReleaseTopLevel, Allow),
-    row(A::NamespaceTombstoneRelease, W::Owner, F::ReleaseTopLevel, deny(E::Forbidden)),
-    row(A::NamespaceTombstoneRelease, W::AdminTokenApi, F::ReleaseTopLevel, deny(E::Forbidden)),
+    // non-administrators: the same 404 as no tombstone (no probing of deleted top-level paths)
+    row(A::NamespaceTombstoneRelease, W::Owner, F::ReleaseTopLevel, deny(E::NotFound)),
+    row(A::NamespaceTombstoneRelease, W::AdminTokenApi, F::ReleaseTopLevel, deny(E::NotFound)),
+    // no role in the parent: 404 for people and agents alike (visibility before the agent check)
+    row(A::NamespaceTombstoneRelease, W::Owner, F::ReleaseDeletedNoRole, deny(E::NotFound)),
+    row(A::NamespaceTombstoneRelease, W::AgentOwnerTokenApi, F::ReleaseDeletedNoRole, deny(E::NotFound)),
+    row(A::NamespaceTombstoneRelease, W::AgentAdminTokenAdmin, F::ReleaseDeletedNoRole, deny(E::Forbidden)),
+    row(A::NamespaceTombstoneRelease, W::Admin, F::ReleaseDeletedNoRole, Allow),
+    // an administrator's token without the admin scope has no admin rights (no role: 404)
+    row(A::NamespaceTombstoneRelease, W::AdminTokenApi, F::ReleaseDeleted { recorded: false }, deny(E::NotFound)),
+    row(A::NamespaceTombstoneRelease, W::AdminTokenAdmin, F::ReleaseDeleted { recorded: false }, Allow),
+    row(A::NamespaceTombstoneRelease, W::Anonymous, F::ReleaseDeleted { recorded: true }, deny(E::Unauthenticated)),
+    row(A::NamespaceTombstoneRelease, W::Developer, F::ReleaseDeleted { recorded: false }, deny(E::Forbidden)),
+    row(A::NamespaceTombstoneRelease, W::Developer, F::ReleaseDeleted { recorded: true }, deny(E::Forbidden)),
+    row(A::NamespaceTombstoneRelease, W::Developer, F::ReleaseMoved { visible: true }, deny(E::Forbidden)),
+    row(A::NamespaceTombstoneRelease, W::NonMember, F::ReleaseMoved { visible: true }, deny(E::Forbidden)),
     row(A::NamespaceTombstoneRelease, W::Anonymous, F::ReleaseMoved { visible: true }, deny(E::Unauthenticated)),
     row(A::NamespaceTombstoneRelease, W::OwnerTokenReadApi, F::ReleaseMoved { visible: true }, deny(E::InsufficientScope)),
     row(A::NamespaceTombstoneRelease, W::AgentOwnerTokenApi, F::ReleaseMoved { visible: true }, deny(E::Forbidden)),

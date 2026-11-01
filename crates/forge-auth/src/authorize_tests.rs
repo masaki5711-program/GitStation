@@ -837,9 +837,19 @@ fn former_owner_cannot_release_deleted_tombstone() {
         has_parent: false,
     });
     let err = authorize(&session(), release, &top).expect_err("no parent: admins only");
+    assert_eq!(err.code(), ErrorCode::NotFound);
     assert!(
-        reason_of(&err).contains("reason=top_level_tombstone"),
+        reason_of(&err).contains("reason=tombstone_not_visible"),
         "{err}"
+    );
+    // An agent gets the same 404 as a person on a tombstone it cannot see.
+    let agent = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]))
+        .as_agent(true);
+    assert_eq!(
+        authorize(&agent, release, &deleted(None))
+            .expect_err("agent")
+            .code(),
+        ErrorCode::NotFound
     );
     assert!(authorize(&admin_session(), release, &top).is_ok());
     // A moved tombstone: its target's current Owner takes it back.

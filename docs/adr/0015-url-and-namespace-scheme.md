@@ -878,8 +878,7 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
     （`reason=group_to_personal_namespace`）。
   - `UserRename`: 管理者だけ（本人も拒否）。
   - `NamespaceTombstoneRelease`: `moved` は行き先の今の Owner か管理者。削除の墓標は、記録した Owner が親の名前空間で今も Owner のとき
-    だけ（それ以外は管理者。親がなければ管理者だけ、`reason=top_level_tombstone`）。記録した Owner のアカウントが無効なら、呼び出し元の
-    検査で先に `FG-AUTH-0004` になる。
+    だけ（それ以外は管理者。親がなければ管理者だけ）。
 - **見えない移動先は同じ 404**: 移動先のグループが見えないとき、**および存在しないとき**、読み込みは `visible: false`
   （`LoadedTransferTarget::NotVisible`）で答え、`FG-REPO-0005 reason=target_not_visible` にする。**管理者も同じ**（管理者には
   すべてのグループが見えるので、管理者の `visible: false` は「ない」の意味であり、親のない移動として通してはいけない）。順序は
@@ -887,8 +886,12 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - **ADR の形からの変更（2 点）**:
   - `TombstoneRelease::Moved` に `target_visible: bool` を足す。見えない行き先への `moved` の墓標の解放は、墓標がないのと同じ
     `FG-REPO-0005 reason=tombstone_not_visible`（403 にすると private のプロジェクトの古いパスの存在が分かる）。管理者も同じ。
-  - 削除の墓標で、呼び出し元が親の名前空間に役割を持たない（管理者でない）ときは `FG-REPO-0005 reason=tombstone_not_visible`。
-    役割はあるが記録した Owner でない、または Owner でないときは `FG-AUTH-0003 reason=not_recorded_owner`。
+  - 削除の墓標で、管理者でない呼び出し元が親の名前空間に役割を持たないとき、**および親がない（トップレベルの）墓標のとき**は
+    `FG-REPO-0005 reason=tombstone_not_visible`（ない墓標と同じ 404。削除したトップレベルのパスを探れないようにする）。この判定は
+    スコープとエージェントの検査より前に行うので、エージェントも人と同じ 404 を受け取る。役割はあるが記録した Owner でない、
+    または Owner でないときは `FG-AUTH-0003 reason=not_recorded_owner`。
+  - 無効にされた記録した Owner には専用の規則を置かない。呼び出し元が有効かの検査（`FG-AUTH-0004`）で先に拒否され、その墓標を
+    解放できるのは管理者だけになる（管理者は削除の墓標の判定の先頭で許可される）。
 - 封印された文脈: `TransferCtx`（id = `(ProjectId, Option<NamespaceId>)`、移動先の親の名前空間。`None` はトップレベル）、
   `GroupTransferCtx`（id = `(GroupId, Option<NamespaceId>)`）、`UserRenameCtx`（id = `UserId`）、`TombstoneCtx`（`LoadedTombstone`、
   id = `TombstoneId`）。証明は移動元と移動先を一緒に束ねるので、ある移動先への証明で別の場所へは移せない。

@@ -99,7 +99,8 @@ pub fn authorize(
     // cannot see (or that does not exist): the same 404 (ADR-0015).
     // Administrators too: the loader shows them every target, so for them
     // `visible: false` means "absent" — never a pass to a missing parent.
-    if let Some(reason) = hidden_target(resource) {
+    // Before the scope and agent checks, so every caller gets the same 404.
+    if let Some(reason) = hidden_target(resource, admin) {
         return Err(deny(ErrorCode::NotFound).with_context("reason", reason));
     }
 
@@ -313,23 +314,15 @@ pub fn authorize(
                     caller_parent_role,
                     has_parent,
                 } => {
+                    // A non-administrator without a role in the parent
+                    // (always so without a parent) got the 404 above.
                     if admin {
                         return Ok(());
                     }
-                    if !has_parent {
-                        return Err(deny(ErrorCode::Forbidden)
-                            .with_context("required_role", "admin")
-                            .with_context("reason", "top_level_tombstone"));
-                    }
-                    // No role in the parent: the same 404 as no tombstone
-                    // (a deleted private project's old path is not shown).
-                    if caller_parent_role.is_none() {
-                        return Err(deny(ErrorCode::NotFound)
-                            .with_context("reason", "tombstone_not_visible"));
-                    }
                     // The recorded owner, still Owner of the parent (an
                     // inactive one was refused above with FG-AUTH-0004).
-                    if recorded_owner == Some(user)
+                    if has_parent
+                        && recorded_owner == Some(user)
                         && caller_parent_role.is_some_and(|r| r >= Role::Owner)
                     {
                         Ok(())
@@ -535,20 +528,44 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
 
 /// The log `reason` when the far side of a resource is hidden from the
 /// caller: a transfer's target group, or a moved tombstone's target.
-fn hidden_target(resource: &Resource) -> Option<&'static str> {
+fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
     if let Resource::Transfer { target, .. } | Resource::GroupTransfer { target, .. } = resource {
         if matches!(target, TransferTarget::Group { visible: false, .. }) {
             return Some("target_not_visible");
         }
     }
-    if let Resource::Tombstone(TombstoneRelease::Moved {
-        target_visible: false,
-        ..
-    }) = resource
-    {
-        return Some("tombstone_not_visible");
+    match resource {
+        Resource::Tombstone(TombstoneRelease::Moved {
+            target_visible: false,
+            ..
+        }) => Some("tombstone_not_visible"),
+        // A deleted tombstone is seen through the parent: no role there (or
+        // no parent at all) is the same 404 as no tombstone, for every
+        // non-administrator (no probing of deleted paths).
+        Resource::Tombstone(TombstoneRelease::Deleted {
+            caller_parent_role,
+            has_parent,
+            ..
+        }) if !admin && (!has_parent || caller_parent_role.is_none()) => {
+            Some("tombstone_not_visible")
+        }
+        Resource::Tombstone(TombstoneRelease::Moved { .. } | TombstoneRelease::Deleted { .. })
+        | Resource::Instance
+        | Resource::Group { .. }
+        | Resource::Namespace { .. }
+        | Resource::Project(_)
+        | Resource::Ref { .. }
+        | Resource::Transfer { .. }
+        | Resource::GroupTransfer { .. }
+        | Resource::UserRename { .. }
+        | Resource::Membership { .. }
+        | Resource::RefProtectionChange { .. }
+        | Resource::VisibilityChange { .. }
+        | Resource::Token { .. }
+        | Resource::TokenRequest { .. }
+        | Resource::Unresolved(_)
+        | Resource::Resolved { .. } => None,
     }
-    None
 }
 
 /// Members see their projects; every signed-in user sees internal ones.

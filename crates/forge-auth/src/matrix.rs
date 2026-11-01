@@ -125,6 +125,9 @@ pub(crate) enum Fixture {
     ReleaseDeleted {
         recorded: bool,
     },
+    /// Releasing a `deleted` tombstone whose recorded owner is the caller,
+    /// while the caller has no role in its parent (whatever the actor).
+    ReleaseDeletedNoRole,
     /// Releasing a `deleted` tombstone without a parent (a top-level group
     /// or a user) whose recorded owner is the caller.
     ReleaseTopLevel,
@@ -384,6 +387,11 @@ impl Fixture {
                     has_parent: true,
                 })
             }
+            Fixture::ReleaseDeletedNoRole => Resource::Tombstone(TombstoneRelease::Deleted {
+                recorded_owner: Some(ME),
+                caller_parent_role: None,
+                has_parent: true,
+            }),
             Fixture::ReleaseTopLevel => Resource::Tombstone(TombstoneRelease::Deleted {
                 recorded_owner: Some(ME),
                 caller_parent_role: None,
