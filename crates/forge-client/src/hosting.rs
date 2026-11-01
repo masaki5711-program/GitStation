@@ -13,7 +13,7 @@
 use crate::app::{config_for, emit, require_token, usage, EnvFn, Io};
 use crate::cli::{
     Cli, GroupCommand, ListArgs, MemberCommand, MemberTarget, NamespaceCommand, ProjectCommand,
-    ProtectedRefCommand,
+    ProtectedRefCommand, UserCommand,
 };
 use crate::error::{sanitize, ClientError, Result};
 use crate::http::{ApiClient, Method, PageLimits, PageShape, LIST_PAGES, MEMBER_PAGES};
@@ -245,6 +245,61 @@ pub fn project(cli: &Cli, cmd: &ProjectCommand, env: EnvFn<'_>, io: &mut Io<'_>)
             );
             emit(io, cli, body, &human)
         }
+        ProjectCommand::Visibility {
+            id,
+            visibility,
+            yes,
+        } => {
+            confirm(*yes, "changing a project's visibility")?;
+            let req = json!({"visibility": visibility.as_str()});
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Put,
+                &format!("/api/v1/projects/{id}/visibility"),
+                &[],
+                Some(&req),
+            )?;
+            let human = format!(
+                "Project {} ({}) is now {}",
+                text(&body, "id"),
+                text(&body, "path"),
+                text(&body, "visibility")
+            );
+            emit(io, cli, body, &human)
+        }
+        ProjectCommand::Move {
+            id,
+            namespace_id,
+            path,
+            reclaim,
+            yes,
+        } => {
+            confirm(*yes, "moving or renaming a project")?;
+            if namespace_id.is_none() && path.is_none() {
+                return Err(usage(
+                    "nothing_to_change (pass --namespace-id and/or --path)",
+                ));
+            }
+            let mut m = Map::new();
+            if let Some(n) = namespace_id {
+                m.insert("namespace_id".to_string(), json!(n));
+            }
+            put_opt(&mut m, "path", path.as_ref());
+            if *reclaim {
+                m.insert("reclaim".to_string(), json!(true));
+            }
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Post,
+                &format!("/api/v1/projects/{id}/transfer"),
+                &[],
+                Some(&Value::Object(m)),
+            )?;
+            let human = move_human("project", &body);
+            emit(io, cli, body, &human)
+        }
         ProjectCommand::Delete { id, yes } => {
             confirm(*yes, "deleting a project")?;
             let c = client(cli, env, io)?;
@@ -278,6 +333,19 @@ pub fn project(cli: &Cli, cmd: &ProjectCommand, env: EnvFn<'_>, io: &mut Io<'_>)
             emit(io, cli, body, &human)
         }
     }
+}
+
+/// The result of a move or rename: where it went and what it left behind.
+fn move_human(label: &str, body: &Value) -> String {
+    format!(
+        "Moved {label} {}: {} -> {}\ntombstones: {}  projects: {}  reclaimed: {}",
+        text(body, "id"),
+        text(body, "old_path"),
+        text(body, "path"),
+        text(body, "tombstones"),
+        text(body, "projects"),
+        text(body, "reclaimed_tombstones"),
+    )
 }
 
 fn list(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>, path: &str, a: &ListArgs) -> Result<Value> {
@@ -367,6 +435,72 @@ pub fn group(cli: &Cli, cmd: &GroupCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
                 text(&body, "id"),
                 text(&body, "path")
             );
+            emit(io, cli, body, &human)
+        }
+        GroupCommand::Move {
+            id,
+            namespace_id,
+            top_level,
+            path,
+            reclaim,
+            yes,
+        } => {
+            confirm(*yes, "moving or renaming a group")?;
+            if namespace_id.is_none() && !top_level && path.is_none() {
+                return Err(usage(
+                    "nothing_to_change (pass --namespace-id, --top-level and/or --path)",
+                ));
+            }
+            let mut m = Map::new();
+            if let Some(n) = namespace_id {
+                m.insert("namespace_id".to_string(), json!(n));
+            }
+            if *top_level {
+                m.insert("top_level".to_string(), json!(true));
+            }
+            put_opt(&mut m, "path", path.as_ref());
+            if *reclaim {
+                m.insert("reclaim".to_string(), json!(true));
+            }
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Post,
+                &format!("/api/v1/groups/{id}/transfer"),
+                &[],
+                Some(&Value::Object(m)),
+            )?;
+            let human = move_human("group", &body);
+            emit(io, cli, body, &human)
+        }
+    }
+}
+
+// ── user ───────────────────────────────────────────────────────────────
+
+pub fn user(cli: &Cli, cmd: &UserCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
+    match cmd {
+        UserCommand::Rename {
+            id,
+            username,
+            reclaim,
+            yes,
+        } => {
+            confirm(*yes, "renaming a user")?;
+            let mut m = Map::new();
+            m.insert("username".to_string(), json!(username));
+            if *reclaim {
+                m.insert("reclaim".to_string(), json!(true));
+            }
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Post,
+                &format!("/api/v1/users/{id}/rename"),
+                &[],
+                Some(&Value::Object(m)),
+            )?;
+            let human = move_human("user", &body);
             emit(io, cli, body, &human)
         }
     }
@@ -500,6 +634,28 @@ pub fn protected_ref(
             );
             emit(io, cli, body, &human)
         }
+        ProtectedRefCommand::Edit {
+            project,
+            rule_id,
+            push_min_role,
+        } => {
+            let req = json!({"push_min_role": push_min_role.as_str()});
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Patch,
+                &format!("/api/v1/projects/{project}/protected-refs/{rule_id}"),
+                &[],
+                Some(&req),
+            )?;
+            let human = format!(
+                "Rule {} ({}) now needs {} to push",
+                text(&body, "id"),
+                text(&body, "pattern"),
+                text(&body, "push_min_role")
+            );
+            emit(io, cli, body, &human)
+        }
         ProtectedRefCommand::Remove {
             project,
             rule_id,
@@ -556,6 +712,24 @@ pub fn namespace(cli: &Cli, cmd: &NamespaceCommand, env: EnvFn<'_>, io: &mut Io<
                 text(&body, id_key),
                 text(&body, "canonical_path"),
                 text(&body, "namespace_id"),
+            );
+            emit(io, cli, body, &human)
+        }
+        NamespaceCommand::ReleasePath { path, yes } => {
+            confirm(*yes, "releasing a namespace tombstone")?;
+            let req = json!({"path": path});
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Post,
+                "/api/v1/namespaces/tombstones/release",
+                &[],
+                Some(&req),
+            )?;
+            let human = format!(
+                "Released {} ({} tombstone); the path can be used again",
+                text(&body, "path"),
+                text(&body, "kind")
             );
             emit(io, cli, body, &human)
         }

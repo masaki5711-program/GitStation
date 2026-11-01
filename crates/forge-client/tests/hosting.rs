@@ -1010,3 +1010,411 @@ fn every_hosting_command_is_described_for_machines() {
     }
     assert_eq!(by_name("project list")["scopes"], json!(["read_api"]));
 }
+
+// ── visibility, moves, renames, releases (feat/client-gstn-hosting-more) ──
+
+const MOVE: &str = r#"{"id":7,"kind":"project","namespace_id":21,"old_path":"team/app","path":"other/app","tombstones":1,"projects":1,"reclaimed_tombstones":0}"#;
+
+fn req_of(srv: &Mock) -> (String, String, Value) {
+    let r = srv.seen().pop().expect("a request");
+    let b = serde_json::from_str(&r.body).expect("json body");
+    (r.method, r.target, b)
+}
+
+/// Each destructive command: no `--yes` means a usage error (exit 2,
+/// `confirmation_required`) before any token read or request.
+#[test]
+fn moves_renames_visibility_and_release_need_yes_before_anything_happens() {
+    let srv = Mock::start(|_| ok(MOVE));
+    let sb = Sandbox::new();
+    for args in [
+        vec!["project", "visibility", "7", "--visibility", "internal"],
+        vec!["project", "move", "7", "--path", "x"],
+        vec!["group", "move", "3", "--top-level"],
+        vec!["user", "rename", "12", "--username", "robert"],
+        vec!["namespace", "release-path", "team/old"],
+    ] {
+        let mut a = args.clone();
+        a.push("--json");
+        // no token either: the guard comes first
+        let o = sb.run(&srv.url, &a, "");
+        assert_eq!(o.code, 2, "{args:?}: {}", o.stderr);
+        let e = o.err_json();
+        assert_eq!(e["error_code"], "FG-CLI-0001");
+        assert!(e["detail"]
+            .as_str()
+            .unwrap()
+            .contains("confirmation_required"));
+    }
+    assert!(srv.seen().is_empty());
+}
+
+#[test]
+fn project_visibility_puts_the_visibility() {
+    let srv = Mock::start(|_| ok(&PROJECT.replace("private", "internal")));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "project",
+            "visibility",
+            "7",
+            "--visibility",
+            "internal",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("PUT", "/api/v1/projects/7/visibility")
+    );
+    assert_eq!(b, json!({"visibility":"internal"}));
+    assert_eq!(o.json()["visibility"], "internal");
+    let h = gstn(
+        &sb,
+        &srv,
+        &[
+            "project",
+            "visibility",
+            "7",
+            "--visibility",
+            "private",
+            "--yes",
+        ],
+    );
+    assert!(h.stdout.contains("Project 7 (team/app) is now"));
+    // an unknown visibility is rejected locally
+    let n = srv.seen().len();
+    let bad = gstn(
+        &sb,
+        &srv,
+        &[
+            "project",
+            "visibility",
+            "7",
+            "--visibility",
+            "public",
+            "--yes",
+        ],
+    );
+    assert_eq!(bad.code, 2);
+    assert_eq!(srv.seen().len(), n);
+}
+
+#[test]
+fn project_move_and_rename_send_only_what_was_given() {
+    let srv = Mock::start(|_| ok(MOVE));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "project",
+            "move",
+            "7",
+            "--namespace-id",
+            "21",
+            "--path",
+            "app",
+            "--reclaim",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("POST", "/api/v1/projects/7/transfer")
+    );
+    assert_eq!(b, json!({"namespace_id":21,"path":"app","reclaim":true}));
+    assert_eq!(o.json()["path"], "other/app");
+
+    // a rename: --path alone
+    let r = gstn(
+        &sb,
+        &srv,
+        &["project", "move", "7", "--path", "app2", "--yes"],
+    );
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    assert_eq!(body_of(&srv), json!({"path":"app2"}));
+    assert!(r.stdout.contains("Moved project 7: team/app -> other/app"));
+    assert!(r.stdout.contains("tombstones: 1"));
+
+    // nothing to change: no request
+    let n = srv.seen().len();
+    let e = gstn(&sb, &srv, &["project", "move", "7", "--yes", "--json"]);
+    assert_eq!(e.code, 2);
+    assert!(e.err_json()["detail"]
+        .as_str()
+        .unwrap()
+        .contains("nothing_to_change"));
+    assert_eq!(srv.seen().len(), n);
+    for bad in [
+        vec!["project", "move", "0", "--path", "x", "--yes"],
+        vec!["project", "move", "7", "--namespace-id", "-1", "--yes"],
+        vec!["project", "move", "7", "--path", "", "--yes"],
+    ] {
+        assert_eq!(gstn(&sb, &srv, &bad).code, 2, "{bad:?}");
+    }
+    assert_eq!(srv.seen().len(), n);
+}
+
+#[test]
+fn group_move_takes_a_namespace_or_top_level() {
+    let srv = Mock::start(|_| ok(&MOVE.replace("project", "group")));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "group",
+            "move",
+            "3",
+            "--namespace-id",
+            "9",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("POST", "/api/v1/groups/3/transfer")
+    );
+    assert_eq!(b, json!({"namespace_id":9}));
+
+    // --namespace is the same flag
+    let a = gstn(
+        &sb,
+        &srv,
+        &["group", "move", "3", "--namespace", "9", "--yes"],
+    );
+    assert_eq!(a.code, 0, "{}", a.stderr);
+    assert_eq!(body_of(&srv), json!({"namespace_id":9}));
+    assert!(a.stdout.contains("Moved group 7"));
+
+    let t = gstn(
+        &sb,
+        &srv,
+        &[
+            "group",
+            "move",
+            "3",
+            "--top-level",
+            "--path",
+            "platform",
+            "--yes",
+        ],
+    );
+    assert_eq!(t.code, 0, "{}", t.stderr);
+    assert_eq!(body_of(&srv), json!({"top_level":true,"path":"platform"}));
+
+    let n = srv.seen().len();
+    // both, or neither: usage errors, no request
+    let both = gstn(
+        &sb,
+        &srv,
+        &[
+            "group",
+            "move",
+            "3",
+            "--namespace-id",
+            "9",
+            "--top-level",
+            "--yes",
+        ],
+    );
+    assert_eq!(both.code, 2);
+    let none = gstn(&sb, &srv, &["group", "move", "3", "--yes", "--json"]);
+    assert_eq!(none.code, 2);
+    assert!(none.err_json()["detail"]
+        .as_str()
+        .unwrap()
+        .contains("nothing_to_change"));
+    assert_eq!(srv.seen().len(), n);
+}
+
+#[test]
+fn user_rename_posts_the_username() {
+    let srv = Mock::start(|_| ok(&MOVE.replace("project", "user")));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "user",
+            "rename",
+            "12",
+            "--username",
+            "robert",
+            "--reclaim",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("POST", "/api/v1/users/12/rename")
+    );
+    assert_eq!(b, json!({"username":"robert","reclaim":true}));
+    let h = gstn(
+        &sb,
+        &srv,
+        &["user", "rename", "12", "--username", "robert", "--yes"],
+    );
+    assert_eq!(body_of(&srv), json!({"username":"robert"}));
+    assert!(h.stdout.contains("Moved user 7"));
+    // --username is required
+    assert_eq!(gstn(&sb, &srv, &["user", "rename", "12", "--yes"]).code, 2);
+}
+
+#[test]
+fn namespace_release_path_posts_the_path_in_the_body() {
+    let srv = Mock::start(|_| ok(r#"{"path":"team/old app","kind":"moved"}"#));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "namespace",
+            "release-path",
+            "team/old app",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("POST", "/api/v1/namespaces/tombstones/release")
+    );
+    assert_eq!(b, json!({"path":"team/old app"}));
+    let h = gstn(
+        &sb,
+        &srv,
+        &["namespace", "release-path", "team/old", "--yes"],
+    );
+    assert!(h.stdout.contains("Released") && h.stdout.contains("moved tombstone"));
+}
+
+#[test]
+fn protected_ref_edit_patches_the_push_role() {
+    let srv = Mock::start(|_| ok(&RULE.replace("maintainer", "owner")));
+    let sb = Sandbox::new();
+    let edit = |role: &'static str| {
+        vec![
+            "protected-ref",
+            "edit",
+            "--project",
+            "7",
+            "--rule-id",
+            "2",
+            "--push-min-role",
+            role,
+        ]
+    };
+    let mut a = edit("owner");
+    a.push("--json");
+    let o = gstn(&sb, &srv, &a);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, b) = req_of(&srv);
+    assert_eq!(
+        (m.as_str(), t.as_str()),
+        ("PATCH", "/api/v1/projects/7/protected-refs/2")
+    );
+    assert_eq!(b, json!({"push_min_role":"owner"}));
+    assert_eq!(o.json()["push_min_role"], "owner");
+    let h = gstn(&sb, &srv, &edit("owner"));
+    assert!(h
+        .stdout
+        .contains("Rule 2 (refs/heads/main) now needs owner"));
+    let n = srv.seen().len();
+    assert_eq!(gstn(&sb, &srv, &edit("guest")).code, 2);
+    assert_eq!(srv.seen().len(), n);
+}
+
+#[test]
+fn move_commands_render_server_errors_without_internals() {
+    for (status, code, exit) in [(403, "FG-AUTH-0003", 3), (409, "FG-REPO-0010", 5)] {
+        let srv = error_server(status, code);
+        let sb = Sandbox::new();
+        for args in [
+            vec![
+                "project",
+                "visibility",
+                "7",
+                "--visibility",
+                "internal",
+                "--yes",
+            ],
+            vec!["project", "move", "7", "--path", "x", "--yes"],
+            vec!["group", "move", "3", "--top-level", "--yes"],
+            vec!["user", "rename", "12", "--username", "r", "--yes"],
+            vec!["namespace", "release-path", "a/b", "--yes"],
+            vec![
+                "protected-ref",
+                "edit",
+                "--project",
+                "7",
+                "--rule-id",
+                "2",
+                "--push-min-role",
+                "owner",
+            ],
+        ] {
+            let o = gstn(&sb, &srv, &args);
+            assert_eq!(o.code, exit, "{args:?}: {}", o.stderr);
+            assert!(o.stdout.is_empty());
+            assert!(
+                o.stderr.contains("操作できません。")
+                    && o.stderr.contains("request_id=req-77")
+                    && o.stderr.contains(code)
+            );
+            assert!(!o.all().contains("SELECT") && !o.all().contains(TOKEN));
+        }
+    }
+}
+
+#[test]
+fn move_commands_document_yes_and_need_a_login() {
+    let sb = Sandbox::new();
+    let v = sb.run("", &["help", "--json"], "").json();
+    for n in [
+        "project visibility",
+        "project move",
+        "group move",
+        "user rename",
+        "namespace release-path",
+    ] {
+        let c = v["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == n)
+            .unwrap_or_else(|| panic!("{n} missing"));
+        assert_eq!(c["scopes"], json!(["api"]));
+        assert!(c["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["name"] == "--yes" && a["required"] == true));
+    }
+    // with --yes but no login: exit 3, no request
+    let srv = Mock::start(|_| ok("{}"));
+    let o = sb.run(
+        &srv.url,
+        &["user", "rename", "12", "--username", "r", "--yes"],
+        "",
+    );
+    assert_eq!(o.code, 3);
+    assert!(srv.seen().is_empty());
+}

@@ -129,6 +129,17 @@ fn every_api_route_is_covered_or_planned() {
     }
 }
 
+/// The hosting-more series is done: every route has a dedicated command.
+#[test]
+fn no_route_is_left_planned() {
+    for (m, p, cov) in API_ROUTES {
+        assert!(
+            matches!(cov, Coverage::Command(_)),
+            "{m} {p} is still planned: {cov:?}"
+        );
+    }
+}
+
 #[test]
 fn exit_codes_map_from_registered_codes_and_status() {
     let m = |status, code| ClientError::from_server(status, code, "m", None).exit();

@@ -48,6 +48,7 @@ const PROJECT_SCHEMA: &str = PROJECT_FIELDS;
 const PROJECT_PAGE_SCHEMA: &str = r#"{"type":"object","required":["items","next_cursor","has_more"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","namespace_id","path","name","display_name","description","visibility","kind","created_at","role"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#;
 const GROUP_SCHEMA: &str = r#"{"type":"object","required":["id","namespace_id","parent_id","path","name","display_name","description","created_at","role"],"properties":{"id":{"type":"integer"},"namespace_id":{"type":"integer"},"parent_id":{"type":["integer","null"]},"path":{"type":"string"},"name":{"type":"string"},"display_name":{"type":"string"},"description":{"type":"string"},"created_at":{"type":"string"},"role":{"type":["string","null"]}}}"#;
 const MEMBER_SCHEMA: &str = r#"{"type":"object","required":["user_id","username","display_name","role","active","created_at"],"properties":{"user_id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"role":{"type":"string"},"active":{"type":"boolean"},"created_at":{"type":"string"}}}"#;
+const MOVE_SCHEMA: &str = r#"{"type":"object","required":["id","kind","namespace_id","old_path","path","tombstones","projects","reclaimed_tombstones"],"properties":{"id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"namespace_id":{"type":"integer"},"old_path":{"type":"string"},"path":{"type":"string"},"tombstones":{"type":"integer"},"projects":{"type":"integer"},"reclaimed_tombstones":{"type":"integer"}}}"#;
 const PROTECTED_REF_SCHEMA: &str = r#"{"type":"object","required":["id","pattern","push_min_role","created_at","updated_at"],"properties":{"id":{"type":"integer"},"pattern":{"type":"string"},"push_min_role":{"type":"string"},"created_at":{"type":"string"},"updated_at":{"type":"string"}}}"#;
 
 pub const GLOBAL_ARGS: &[ArgSpec] = &[
@@ -158,6 +159,34 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: PROJECT_SCHEMA,
     },
     CommandSpec {
+        name: "project visibility",
+        summary: "Set a project's visibility (private | internal). Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The project id."),
+            arg("--visibility", "option", true, "private | internal"),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn project visibility 7 --visibility internal --yes"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/visibility"],
+        output: PROJECT_SCHEMA,
+    },
+    CommandSpec {
+        name: "project move",
+        summary: "Move a project to another namespace and/or rename it (--path alone). Its old path stops working for others. Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The project id."),
+            arg("--namespace-id", "option", false, "The new parent namespace id (at least one of --namespace-id, --path)."),
+            arg("--path", "option", false, "The new last path segment."),
+            arg("--reclaim", "flag", false, "Take back an old path of this very project (A -> B -> A)."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn project move 7 --namespace-id 4 --yes", "gstn project move 7 --path app2 --yes"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/transfer"],
+        output: MOVE_SCHEMA,
+    },
+    CommandSpec {
         name: "project delete",
         summary: "Delete a project; it stays restorable for the grace period. Needs --yes.",
         args: &[
@@ -226,6 +255,22 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["PATCH /api/v1/groups/{id}"],
         output: GROUP_SCHEMA,
+    },
+    CommandSpec {
+        name: "group move",
+        summary: "Move a group and its subtree and/or rename it. Old paths stop working for others. Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The group id."),
+            arg("--namespace-id", "option", false, "The new parent group's namespace id (alias --namespace; not with --top-level)."),
+            arg("--top-level", "flag", false, "Move to the top level (administrators only)."),
+            arg("--path", "option", false, "The new last path segment (at least one of --namespace-id, --top-level, --path)."),
+            arg("--reclaim", "flag", false, "Take back an old path of this group's subtree."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn group move 3 --namespace-id 9 --yes", "gstn group move 3 --top-level --yes", "gstn group move 3 --path platform --yes"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/groups/{id}/transfer"],
+        output: MOVE_SCHEMA,
     },
     CommandSpec {
         name: "member list",
@@ -307,6 +352,19 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: PROTECTED_REF_SCHEMA,
     },
     CommandSpec {
+        name: "protected-ref edit",
+        summary: "Change a rule's minimum push role (the pattern is fixed: remove the rule and add another).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--rule-id", "option", true, "The rule id (from protected-ref list)."),
+            arg("--push-min-role", "option", true, "developer | maintainer | owner"),
+        ],
+        examples: &["gstn protected-ref edit --project 7 --rule-id 2 --push-min-role owner"],
+        scopes: &["api"],
+        routes: &["PATCH /api/v1/projects/{id}/protected-refs/{rule_id}"],
+        output: PROTECTED_REF_SCHEMA,
+    },
+    CommandSpec {
         name: "protected-ref remove",
         summary: "Remove a protected ref rule. Needs --yes.",
         args: &[
@@ -327,6 +385,32 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/namespaces/resolve"],
         output: r#"{"type":"object","required":["namespace_id","kind","canonical_path","moved"],"properties":{"namespace_id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"canonical_path":{"type":"string"},"moved":{"type":"boolean"},"project_id":{"type":"integer"},"group_id":{"type":"integer"},"user_id":{"type":"integer"}}}"#,
+    },
+    CommandSpec {
+        name: "namespace release-path",
+        summary: "Release a moved or deleted path's tombstone so the path can be used again. Needs --yes.",
+        args: &[
+            arg("path", "positional", true, "The tombstoned full path, exactly (group/sub/project)."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn namespace release-path team/old-app --yes"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/namespaces/tombstones/release"],
+        output: r#"{"type":"object","required":["path","kind"],"properties":{"path":{"type":"string"},"kind":{"enum":["moved","deleted"]}}}"#,
+    },
+    CommandSpec {
+        name: "user rename",
+        summary: "Rename a user and their personal namespace (administrators). Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The user id."),
+            arg("--username", "option", true, "The new username (also the personal namespace path)."),
+            arg("--reclaim", "flag", false, "Take back an old username of this very user."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn user rename 12 --username robert --yes"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/users/{id}/rename"],
+        output: MOVE_SCHEMA,
     },
     CommandSpec {
         name: "api",

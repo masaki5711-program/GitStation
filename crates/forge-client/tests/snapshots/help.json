@@ -559,6 +559,192 @@
           "required": true
         },
         {
+          "description": "private | internal",
+          "kind": "option",
+          "name": "--visibility",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project visibility 7 --visibility internal --yes"
+      ],
+      "name": "project visibility",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "spec",
+              "system"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "kind",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/visibility"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set a project's visibility (private | internal). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new parent namespace id (at least one of --namespace-id, --path).",
+          "kind": "option",
+          "name": "--namespace-id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new last path segment.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Take back an old path of this very project (A -> B -> A).",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project move 7 --namespace-id 4 --yes",
+        "gstn project move 7 --path app2 --yes"
+      ],
+      "name": "project move",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/transfer"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Move a project to another namespace and/or rename it (--path alone). Its old path stops working for others. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "Confirm (gstn never prompts).",
           "kind": "flag",
           "name": "--yes",
@@ -1000,6 +1186,108 @@
     {
       "args": [
         {
+          "description": "The group id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new parent group's namespace id (alias --namespace; not with --top-level).",
+          "kind": "option",
+          "name": "--namespace-id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Move to the top level (administrators only).",
+          "kind": "flag",
+          "name": "--top-level",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new last path segment (at least one of --namespace-id, --top-level, --path).",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Take back an old path of this group's subtree.",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn group move 3 --namespace-id 9 --yes",
+        "gstn group move 3 --top-level --yes",
+        "gstn group move 3 --path platform --yes"
+      ],
+      "name": "group move",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/groups/{id}/transfer"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Move a group and its subtree and/or rename it. Old paths stop working for others. Needs --yes."
+    },
+    {
+      "args": [
+        {
           "description": "The project id (exactly one of --project, --group).",
           "kind": "option",
           "name": "--project",
@@ -1421,6 +1709,69 @@
           "required": true
         },
         {
+          "description": "developer | maintainer | owner",
+          "kind": "option",
+          "name": "--push-min-role",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn protected-ref edit --project 7 --rule-id 2 --push-min-role owner"
+      ],
+      "name": "protected-ref edit",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "push_min_role": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/protected-refs/{rule_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a rule's minimum push role (the pattern is fixed: remove the rule and add another)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The rule id (from protected-ref list).",
+          "kind": "option",
+          "name": "--rule-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
           "description": "Confirm (gstn never prompts).",
           "kind": "flag",
           "name": "--yes",
@@ -1516,6 +1867,139 @@
         "read_api"
       ],
       "summary": "Which project, group or user a full path names (and its ids)."
+    },
+    {
+      "args": [
+        {
+          "description": "The tombstoned full path, exactly (group/sub/project).",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn namespace release-path team/old-app --yes"
+      ],
+      "name": "namespace release-path",
+      "output": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "moved",
+              "deleted"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/namespaces/tombstones/release"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Release a moved or deleted path's tombstone so the path can be used again. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new username (also the personal namespace path).",
+          "kind": "option",
+          "name": "--username",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Take back an old username of this very user.",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user rename 12 --username robert --yes"
+      ],
+      "name": "user rename",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/users/{id}/rename"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Rename a user and their personal namespace (administrators). Needs --yes."
     },
     {
       "args": [
