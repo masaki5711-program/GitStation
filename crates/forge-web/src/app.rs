@@ -370,8 +370,8 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::auth::callback,
         )
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    browse_routes(git_routes(shell_routes(member_routes(move_routes(
-        hosting_routes(fixed),
+    history_routes(browse_routes(git_routes(shell_routes(member_routes(
+        move_routes(hosting_routes(fixed)),
     )))))
 }
 
@@ -436,6 +436,52 @@ fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
         .responds::<b::BlobBody>(Verb::Get, b::BLOB)
         .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+}
+
+/// The history half of the browse API (`RepoBrowse`, `read_api`; M2 MR8):
+/// commits, one commit with its diff, compare and blame.
+fn history_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::history as h;
+    registry
+        .route_with(
+            Verb::Get,
+            h::COMMITS,
+            Action::RepoBrowse,
+            "A page of a revision's history, newest first (keyset cursor; optionally one path)",
+            h::COMMITS_OF,
+            h::commits,
+        )
+        .responds::<h::CommitsBody>(Verb::Get, h::COMMITS)
+        .queries(Verb::Get, h::COMMITS, h::COMMITS_QUERY)
+        .route_with(
+            Verb::Get,
+            h::COMMIT,
+            Action::RepoBrowse,
+            "One commit: message and the diff against its first parent (capped; truncated past the caps)",
+            h::CommitOf,
+            h::commit,
+        )
+        .responds::<h::CommitDetailBody>(Verb::Get, h::COMMIT)
+        .route_with(
+            Verb::Get,
+            h::COMPARE,
+            Action::RepoBrowse,
+            "Compare two revisions: the commits to has and from does not, and the tree diff (capped)",
+            h::COMPARE_OF,
+            h::compare,
+        )
+        .responds::<h::CompareBody>(Verb::Get, h::COMPARE)
+        .queries(Verb::Get, h::COMPARE, h::COMPARE_QUERY)
+        .route_with(
+            Verb::Get,
+            h::BLAME,
+            Action::RepoBrowse,
+            "Who last changed each line of a file (hunks; capped at 10 000 lines; binary files have none)",
+            h::BLAME_OF,
+            h::blame,
+        )
+        .responds::<h::BlameBody>(Verb::Get, h::BLAME)
+        .queries(Verb::Get, h::BLAME, h::BLAME_QUERY)
 }
 
 /// The content routes raw / archive (`RepoRead`, `read_repository`; M2

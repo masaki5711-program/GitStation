@@ -15,7 +15,7 @@ use super::*;
 use crate::{Git, GitConfig, StorageRoot};
 
 /// Plumbing on the bare repository (test setup only; synthetic content).
-fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
+pub(super) fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
     use std::io::Write as _;
     let mut cmd = Command::new("git");
     cmd.arg("--git-dir")
@@ -41,11 +41,11 @@ fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
         .to_owned()
 }
 
-fn blob(repo: &Path, content: &[u8]) -> String {
+pub(super) fn blob(repo: &Path, content: &[u8]) -> String {
     plumb(repo, &["hash-object", "-w", "--stdin"], Some(content))
 }
 
-fn mktree(repo: &Path, entries: &[(&str, &str, &str, &str)]) -> String {
+pub(super) fn mktree(repo: &Path, entries: &[(&str, &str, &str, &str)]) -> String {
     let mut input = String::new();
     for (mode, kind, oid, name) in entries {
         input.push_str(&format!("{mode} {kind} {oid}\t{name}\n"));
@@ -53,7 +53,7 @@ fn mktree(repo: &Path, entries: &[(&str, &str, &str, &str)]) -> String {
     plumb(repo, &["mktree"], Some(input.as_bytes()))
 }
 
-fn commit(repo: &Path, tree: &str, parent: Option<&str>) -> String {
+pub(super) fn commit(repo: &Path, tree: &str, parent: Option<&str>) -> String {
     let mut args = vec!["commit-tree", tree, "-m", "synthetic"];
     if let Some(p) = parent {
         args.extend(["-p", p]);
@@ -61,33 +61,33 @@ fn commit(repo: &Path, tree: &str, parent: Option<&str>) -> String {
     plumb(repo, &args, None)
 }
 
-fn update_ref(repo: &Path, name: &str, oid: &str) {
+pub(super) fn update_ref(repo: &Path, name: &str, oid: &str) {
     plumb(repo, &["update-ref", name, oid], None);
 }
 
-struct Fixture {
-    _home: tempfile::TempDir,
-    _root: tempfile::TempDir,
-    home: PathBuf,
-    git: Git,
-    storage: StorageRoot,
-    id: RepoId,
-    path: PathBuf,
+pub(super) struct Fixture {
+    pub(super) _home: tempfile::TempDir,
+    pub(super) _root: tempfile::TempDir,
+    pub(super) home: PathBuf,
+    pub(super) git: Git,
+    pub(super) storage: StorageRoot,
+    pub(super) id: RepoId,
+    pub(super) path: PathBuf,
 }
 
 impl Fixture {
-    fn browser(&self, limits: BrowseLimits) -> Browser {
+    pub(super) fn browser(&self, limits: BrowseLimits) -> Browser {
         Browser::new(self.git.clone(), self.storage.clone(), limits)
     }
 
     /// A browser whose git is `bin` (the repository stays real).
-    fn browser_with_bin(&self, bin: &Path, limits: BrowseLimits) -> Browser {
+    pub(super) fn browser_with_bin(&self, bin: &Path, limits: BrowseLimits) -> Browser {
         let git = Git::new(GitConfig::new(bin, &self.home));
         Browser::new(git, self.storage.clone(), limits)
     }
 }
 
-async fn fixture() -> Fixture {
+pub(super) async fn fixture() -> Fixture {
     let home = tempfile::tempdir().expect("home");
     let root = tempfile::tempdir().expect("root");
     let git = Git::new(GitConfig::new("git", home.path()));
@@ -179,7 +179,7 @@ fn history(repo: &Path) -> History {
     }
 }
 
-fn reason(err: &ForgeError) -> String {
+pub(super) fn reason(err: &ForgeError) -> String {
     err.context()
         .iter()
         .find(|(k, _)| *k == "reason")
@@ -572,7 +572,7 @@ async fn archives_stream_zip_and_tar_gz_below_the_prefix() {
 
 /// A fake `git` (synthetic): records its pid, then becomes `body`.
 #[cfg(unix)]
-fn fake_git(dir: &Path, body: &str) -> PathBuf {
+pub(super) fn fake_git(dir: &Path, body: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let path = dir.join("fake-git.sh");
     std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
@@ -826,7 +826,7 @@ fn a_blob_entry_without_a_size_is_git_process_failed() {
 /// A fake git that answers one subcommand shape itself and runs the real
 /// one for everything else (synthetic).
 #[cfg(unix)]
-fn wrapping_git(dir: &Path, condition: &str, answer: &str) -> PathBuf {
+pub(super) fn wrapping_git(dir: &Path, condition: &str, answer: &str) -> PathBuf {
     fake_git(
         dir,
         &format!("if {condition}; then\n{answer}\nexit 0\nfi\nexec git \"$@\""),

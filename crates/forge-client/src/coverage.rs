@@ -154,6 +154,26 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ),
     (
         "GET",
+        "/api/v1/projects/{id}/repository/commits",
+        Coverage::Command("browse commits"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/commits/{oid}",
+        Coverage::Command("browse commit"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/compare",
+        Coverage::Command("browse compare"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/repository/blame",
+        Coverage::Command("browse blame"),
+    ),
+    (
+        "GET",
         "/api/v1/projects/{id}/protected-refs",
         Coverage::Command("protected-ref list"),
     ),

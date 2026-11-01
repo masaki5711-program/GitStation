@@ -11,6 +11,7 @@ pub mod git;
 pub mod git_push;
 pub mod groups;
 pub mod health;
+pub mod history;
 pub mod lists;
 pub mod members;
 pub mod moves;

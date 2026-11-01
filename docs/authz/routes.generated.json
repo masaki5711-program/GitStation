@@ -250,7 +250,39 @@
   {
     "action": "RepoBrowse",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/blame",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/repository/blob",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/commits",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/commits/{oid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/compare",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

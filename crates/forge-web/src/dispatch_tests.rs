@@ -1137,6 +1137,7 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         "routes/content.rs",
         "routes/git.rs",
         "routes/git_push.rs",
+        "routes/history.rs",
         "git_stream.rs",
     ];
     let mut used_in = Vec::new();

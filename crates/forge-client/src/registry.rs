@@ -51,6 +51,8 @@ const MEMBER_SCHEMA: &str = r#"{"type":"object","required":["user_id","username"
 const MOVE_SCHEMA: &str = r#"{"type":"object","required":["id","kind","namespace_id","old_path","path","tombstones","projects","reclaimed_tombstones"],"properties":{"id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"namespace_id":{"type":"integer"},"old_path":{"type":"string"},"path":{"type":"string"},"tombstones":{"type":"integer"},"projects":{"type":"integer"},"reclaimed_tombstones":{"type":"integer"}}}"#;
 const PROTECTED_REF_SCHEMA: &str = r#"{"type":"object","required":["id","pattern","push_min_role","created_at","updated_at"],"properties":{"id":{"type":"integer"},"pattern":{"type":"string"},"push_min_role":{"type":"string"},"created_at":{"type":"string"},"updated_at":{"type":"string"}}}"#;
 
+const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","message","diff"],"properties":{"commit":{"type":"object","required":["oid","parents","author_name","author_email","authored_at","committer_name","committer_email","committed_at","subject"]},"message":{"type":"string"},"diff":{"type":"object","required":["files","truncated"],"properties":{"files":{"type":"array","items":{"type":"object","required":["status","old_path","new_path","old_mode","new_mode","old_oid","new_oid","similarity","binary","patch","omitted"],"properties":{"status":{"enum":["added","modified","deleted","renamed","copied","type_changed"]},"patch":{"type":["string","null"]},"omitted":{"enum":["too_large","total_cap","not_utf8",null]}}}},"truncated":{"type":"boolean"}}}}}"#;
+
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
 
 pub const GLOBAL_ARGS: &[ArgSpec] = &[
@@ -449,6 +451,61 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/repository/blob"],
         output: r#"{"type":"object","required":["ref","path","name","type","mode","oid","size","binary","content","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"name":{"type":"string"},"type":{"enum":["blob","symlink"]},"mode":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"content":{"type":["string","null"]},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "browse commits",
+        summary: "List a revision's history, newest first, one page at a time (optionally only the commits that changed --path).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", true, "A full commit id, a branch or a tag."),
+            arg("--path", "option", false, "Only commits that changed this path."),
+            arg("--limit", "option", false, "Commits per page, 1..=100 (server default 30)."),
+            arg("--cursor", "option", false, "Continue after this next_cursor (use the same --path)."),
+        ],
+        examples: &["gstn browse commits --project 7 --ref main --json", "gstn browse commits --project 7 --ref main --path src/lib.rs --limit 50 --cursor <next_cursor>"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/commits"],
+        output: r#"{"type":"object","required":["ref","head","path","commits","next_cursor","has_more"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"head":{"type":"string"},"path":{"type":"string"},"commits":{"type":"array","items":{"type":"object","required":["oid","parents","author_name","author_email","authored_at","committer_name","committer_email","committed_at","subject"]}},"next_cursor":{"type":["string","null"]},"has_more":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "browse commit",
+        summary: "Show one commit: message and the diff against its first parent (per-file patches under server caps; --patch prints them).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("oid", "positional", true, "The full commit id (40 or 64 hexadecimal digits)."),
+            arg("--patch", "flag", false, "Print the patches too (--json always has them)."),
+        ],
+        examples: &["gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --patch", "gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/commits/{oid}"],
+        output: COMMIT_DETAIL_SCHEMA,
+    },
+    CommandSpec {
+        name: "browse compare",
+        summary: "Compare two revisions: the commits --to has and --from does not, and the tree diff from --from to --to (capped; truncated past the caps).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--from", "option", true, "The base: a full commit id, a branch or a tag."),
+            arg("--to", "option", true, "The head, named like --from."),
+            arg("--patch", "flag", false, "Print the patches too (--json always has them)."),
+        ],
+        examples: &["gstn browse compare --project 7 --from v1.0 --to main --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/compare"],
+        output: r#"{"type":"object","required":["from","to","commits","commits_truncated","diff"],"properties":{"from":{"type":"object","required":["type","name","full_name","commit"]},"to":{"type":"object","required":["type","name","full_name","commit"]},"commits":{"type":"array","items":{"type":"object","required":["oid","parents","subject"]}},"commits_truncated":{"type":"boolean"},"diff":{"type":"object","required":["files","truncated"]}}}"#,
+    },
+    CommandSpec {
+        name: "browse blame",
+        summary: "Show who last changed each line of a file (hunks; at most 10000 lines; binary files have none).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", true, "A full commit id, a branch or a tag."),
+            arg("--path", "option", true, "The file's path."),
+        ],
+        examples: &["gstn browse blame --project 7 --ref main --path src/lib.rs", "gstn browse blame --project 7 --ref main --path src/lib.rs --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/blame"],
+        output: r#"{"type":"object","required":["ref","path","oid","size","binary","hunks","commits","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"hunks":{"type":"array","items":{"type":"object","required":["commit","start","orig_start","lines"]}},"commits":{"type":"array","items":{"type":"object","required":["oid","author_name","author_email","author_time","author_tz","summary","boundary","path"]}},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
         name: "user rename",
