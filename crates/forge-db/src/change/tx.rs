@@ -15,7 +15,7 @@ use sqlx::postgres::{PgConnection, Postgres};
 use sqlx::Transaction;
 
 use super::validate::{fit_sizes, fitted, sanitized, validate};
-use super::{ChangeContext, ChangeRecord, Committed, DomainEvent};
+use super::{AuditEntry, ChangeContext, ChangeRecord, Committed, DomainEvent};
 use crate::jobs::{enqueue_on, Enqueued, NewJob};
 use crate::{query_error, Db};
 
@@ -126,12 +126,13 @@ impl ChangeTx {
                 .iter()
                 .map(|e| e.payload.to_string())
                 .collect();
-            let details = record.audit.details.to_string();
+            let details: Vec<String> = record.audit_rows().map(|a| a.details.to_string()).collect();
             let (details_bytes, payload_bytes) = stored_sizes(&mut tx, &details, &payloads).await?;
-            let record = fit_sizes(record, details_bytes, &payload_bytes)?;
+            let record = fit_sizes(record, &details_bytes, &payload_bytes)?;
             // The details may have been replaced by a marker (≤ 8 KiB either way).
-            let details = record.audit.details.to_string();
-            insert_audit(&mut tx, &ctx, &record, &details).await?;
+            for audit in record.audit_rows() {
+                insert_audit(&mut tx, &ctx, audit, &audit.details.to_string()).await?;
+            }
             let mut ids = Vec::with_capacity(record.events.len());
             for (event, payload) in record.events.iter().zip(&payloads) {
                 match insert_event(&mut tx, &ctx, event, payload).await? {
@@ -252,15 +253,18 @@ async fn bounded<T>(
     }
 }
 
-/// The stored sizes of the details and payloads, measured as the table
-/// CHECKs measure them.
+/// The stored sizes of the details (one per audit row) and payloads,
+/// measured as the table CHECKs measure them.
 async fn stored_sizes(
     conn: &mut PgConnection,
-    details: &str,
+    details: &[String],
     payloads: &[String],
-) -> Result<(i32, Vec<i32>), ForgeError> {
+) -> Result<(Vec<i32>, Vec<i32>), ForgeError> {
     sqlx::query_as(
-        "SELECT pg_catalog.pg_column_size($1::jsonb), ARRAY(SELECT          pg_catalog.pg_column_size(p.v::jsonb) FROM unnest($2::text[]) WITH ORDINALITY          AS p(v, n) ORDER BY p.n)",
+        "SELECT ARRAY(SELECT pg_catalog.pg_column_size(d.v::jsonb) FROM unnest($1::text[]) \
+         WITH ORDINALITY AS d(v, n) ORDER BY d.n), ARRAY(SELECT \
+         pg_catalog.pg_column_size(p.v::jsonb) FROM unnest($2::text[]) WITH ORDINALITY \
+         AS p(v, n) ORDER BY p.n)",
     )
     .bind(details)
     .bind(payloads)
@@ -272,10 +276,9 @@ async fn stored_sizes(
 async fn insert_audit(
     conn: &mut PgConnection,
     ctx: &ChangeContext,
-    record: &ChangeRecord,
+    audit: &AuditEntry,
     details: &str,
 ) -> Result<(), ForgeError> {
-    let audit = &record.audit;
     let (credential, claimed, key_id, assertion) = match &ctx.actor {
         super::Actor::UserViaServiceAccount {
             credential_id,

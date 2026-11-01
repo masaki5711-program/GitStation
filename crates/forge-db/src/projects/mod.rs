@@ -24,12 +24,13 @@ use crate::change::{
     Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
 };
 use crate::jobs::{Enqueued, JobId};
-use crate::namespaces::{is_tombstoned, lock_path, path_taken};
+use crate::namespaces::{check_parent_path, is_tombstoned, lock_path, path_taken};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, repositories, Db};
 
 mod member_writes;
 mod members;
+mod moves;
 pub(crate) mod ownership;
 mod update;
 
@@ -40,6 +41,7 @@ pub use member_writes::{
 };
 pub(crate) use members::lock_project;
 pub use members::{add_member, change_member, remove_member};
+pub use moves::{move_decided, ProjectMoveFacts};
 pub use ownership::{ownerless, Ownerless};
 pub use update::{
     change_visibility_decided, update_decided, ProjectAccessFacts, ProjectPatch,
@@ -419,6 +421,10 @@ where
     tx.step(|c| check_creator(c, new.creator)).await?;
     let path = placement.full_path.as_str();
     tx.step(|c| lock_path(c, path)).await?;
+    // The path locked is the path inserted (D5 MR2): the parent did not
+    // move between `place` and the lock.
+    let parent_ns = new.parent;
+    tx.step(|c| check_parent_path(c, parent_ns, path)).await?;
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }
@@ -542,6 +548,7 @@ pub(crate) fn evented_record(
             error_code: None,
             details: value.clone(), // clone: the same JSON is the event payload
         },
+        affected: Vec::new(),
         events: vec![DomainEvent {
             event_type,
             schema_version: 1,

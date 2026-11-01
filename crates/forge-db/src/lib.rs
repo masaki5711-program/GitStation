@@ -31,6 +31,10 @@
 //!   the provisioning job's definition and records applied pushes
 //!   (`record_push`, `forge_core::PushRecorder`); [`protected_refs`] loads
 //!   the push's rule snapshot (`rules_for`, `forge_core::ProtectionLoader`).
+//! - [`namespaces`] moves a namespace subtree (D5: `projects::move_decided`,
+//!   `groups::move_decided`, `users::rename_decided`; `FG-REPO-0015`,
+//!   `FG-REPO-0018`); [`tombstones`] releases a tombstone
+//!   (`release_decided`).
 //! - [`resolve`] implements `forge_core::NamespaceResolver` and
 //!   `ProjectAccessLoader` on [`Db`]: path (or project id) → target and the
 //!   viewer's authorization inputs in one statement (`FG-DB-0021`).
@@ -62,7 +66,7 @@ pub mod sequencer;
 pub mod subscribers;
 // ── end C5 ──
 // ── D1: users and namespaces ──
-mod namespaces;
+pub mod namespaces;
 pub mod users;
 #[cfg(test)]
 mod users_constraint_tests;
@@ -96,6 +100,9 @@ pub mod lists;
 // ── M1 phase 8b MR8: direct member lists ──
 pub mod members;
 // ── end M1 phase 8b MR8 ──
+// ── D5 MR2: namespace moves and tombstone releases ──
+pub mod tombstones;
+// ── end D5 MR2 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

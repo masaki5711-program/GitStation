@@ -13,18 +13,20 @@ use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
-use crate::namespaces::{is_tombstoned, lock_path, path_taken};
+use crate::namespaces::{check_parent_path, is_tombstoned, lock_path, path_taken};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
 
 mod member_writes;
 mod members;
+mod moves;
 mod read;
 
 pub use member_writes::{
     add_member_decided, change_member_decided, remove_member_decided, GroupMemberFacts,
 };
 pub use members::{add_member, change_member, remove_member, MemberChange};
+pub use moves::{move_decided, GroupMoveFacts};
 pub use read::load;
 
 /// The audit resource type of groups and their members (tables.toml).
@@ -203,6 +205,11 @@ async fn finish_create(
     }
     let path = placement.full_path.as_str();
     tx.step(|c| lock_path(c, path)).await?;
+    // The path locked is the path inserted (D5 MR2): the parent did not
+    // move between `place` and the lock.
+    if let Some(parent) = placement.parent {
+        tx.step(|c| check_parent_path(c, parent, path)).await?;
+    }
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }

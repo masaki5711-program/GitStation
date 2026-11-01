@@ -332,12 +332,14 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]
             .concat(),
         ),
+        // D5 MR2: DELETE for the purge (migration 20261102100000).
         (
             "forge.namespaces",
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
                 "forge_app:UPDATE",
+                "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),
         ),
@@ -384,22 +386,23 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end D3 ──
-        // ── D4: no DELETE on projects / repositories yet (D5), repository
-        // kind fixed (UPDATE of state and ready_at only), the read pool
-        // without provision_token, TRUNCATE for no one ──
+        // ── D4: repository kind fixed (UPDATE of state and ready_at only),
+        // the read pool without provision_token, TRUNCATE for no one; D5
+        // MR2: DELETE on projects / repositories for the purge ──
         (
             "forge.projects",
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
                 "forge_app:UPDATE",
+                "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),
         ),
         (
             "forge.repositories",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", &["state", "ready_at"]),
                 columns("forge_ro", "SELECT", REPOSITORIES_RO),
             ]

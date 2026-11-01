@@ -149,6 +149,7 @@ txn_audited_columns = []
 
 # ── D4: projects and what belongs to them (ADR-0004, ADR-0008, ADR-0016 §1).
 # Every change is audited on its project (resource 'project'). ──
+# D5 MR2: deleted_by (who deleted it) is audited like the other columns.
 [tables.projects]
 guarded = false
 kind = "audited"

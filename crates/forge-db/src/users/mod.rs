@@ -19,9 +19,11 @@ use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
 
 mod admin;
+mod rename;
 
 pub(crate) use admin::lock_admin_set;
 pub use admin::{administration, bootstrap_admin, Administration, Bootstrap, Bootstrapped};
+pub use rename::{rename_decided, UserRenameFacts};
 
 /// Where a user's credentials are checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

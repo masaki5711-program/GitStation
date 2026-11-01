@@ -36,6 +36,10 @@ fn only_forge_hosting_calls_the_decided_commands() {
         "remove_member",
         "change",
         "delete",
+        // D5 MR2: moves, renames and tombstone releases
+        "move",
+        "rename",
+        "release",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

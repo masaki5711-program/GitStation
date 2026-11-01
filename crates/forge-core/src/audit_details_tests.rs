@@ -465,3 +465,80 @@ fn update_details_name_fields_only_and_the_visibility_change_is_a_maintainer_eve
         }
     }
 }
+
+/// D5 MR2: the move details are ids, counts and grouped role changes —
+/// never a path or a name — and audit-only.
+#[test]
+fn move_details_carry_ids_counts_and_grouped_role_changes_only() {
+    use crate::ids::{GroupId, ProjectId, TombstoneId};
+    use crate::move_details::SHOWN_ROLE_CHANGES;
+    use crate::{MoveSummary, RoleChange, TombstoneKind};
+    let summary = |changes: usize| MoveSummary {
+        namespace_id: NamespaceId::new(4),
+        from_parent: Some(NamespaceId::new(2)),
+        to_parent: None,
+        renamed: true,
+        nodes: 3,
+        projects: 1,
+        reclaimed_tombstones: 0,
+        role_changes: (0..changes)
+            .map(|n| RoleChange {
+                user: UserId::new(i64::try_from(n).expect("n") + 10),
+                from: (n % 2 == 0).then_some(Role::Developer),
+                to: None,
+            })
+            .collect(),
+        role_changes_truncated: false,
+    };
+    let moved = AuditDetails::GroupMoved {
+        group_id: GroupId::new(9),
+        summary: summary(3),
+    };
+    assert_eq!(
+        moved.to_value(),
+        json!({
+            "group_id": 9, "namespace_id": 4, "from_parent_id": 2, "to_parent_id": null,
+            "renamed": true, "nodes": 3, "projects": 1, "reclaimed_tombstones": 0,
+            "role_changes": {"developer>none": [10, 12], "none>none": [11]},
+            "role_changes_count": 3, "role_changes_truncated": false,
+        })
+    );
+    let many = AuditDetails::UserRenamed {
+        user_id: UserId::new(1),
+        summary: summary(SHOWN_ROLE_CHANGES + 5),
+    }
+    .to_value();
+    assert_eq!(many["role_changes_truncated"], true);
+    assert_eq!(many["role_changes_count"], SHOWN_ROLE_CHANGES + 5);
+    let with = AuditDetails::ProjectMovedWithAncestor {
+        project_id: ProjectId::new(5),
+        namespace_id: NamespaceId::new(6),
+        moved_namespace_id: NamespaceId::new(4),
+    };
+    let released = AuditDetails::TombstoneReleased {
+        tombstone_id: TombstoneId::new(8),
+        kind: TombstoneKind::Moved,
+        namespace_id: None,
+        reclaim: true,
+    };
+    assert_eq!(
+        released.to_value(),
+        json!({"tombstone_id": 8, "kind": "moved", "namespace_id": null, "reclaim": true})
+    );
+    let project = AuditDetails::ProjectMoved {
+        project_id: ProjectId::new(5),
+        summary: summary(0),
+    };
+    assert_eq!(project.action(), "project.moved");
+    assert_eq!(with.action(), "project.moved");
+    assert_eq!(moved.action(), "group.moved");
+    assert_eq!(released.action(), "namespace_tombstone.released");
+    for details in [moved, with, released, project] {
+        assert_eq!(details.event_type(), None, "audit-only in MR2");
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS.iter().chain(&["path", "full_path", "segment"]) {
+            assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
+        }
+    }
+}

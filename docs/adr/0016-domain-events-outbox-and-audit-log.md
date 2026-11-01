@@ -837,3 +837,14 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - **`project.updated` / `group.updated`** は M1 では監査のみ（段階 8b の計画の回答）。details は `{project_id, fields}` /
   `{group_id, fields}` で、`fields` は変わった項目の名前（`display_name`、`description`）だけ — 値（自由入力の文字列）は残さない。
   `project.updated` の監査の行は `project_id` を持つ（イベントの範囲の規則）。値が変わらない更新は何も書かない。
+
+## Amendment（2026-11-02、手順 D5 MR2: 変更ごとに複数の監査の行）
+
+- `ChangeRecord` は、変更の監査の行（`audit`）に加えて、変更した他のリソースごとの監査の行（`affected`、最大 2000）を持てる。部分木の移動は、
+  動かしたリソースの行（`project.moved` / `group.moved` / `user.renamed`）に加え、部分木の中のプロジェクトごとに `project.moved` の行
+  （`project`/`projects.id`、`project_id` あり、details `{project_id, namespace_id, moved_namespace_id}`）を書く。ADR-0015 D1 の
+  「部分木のパスの書き換えは 1 行の監査でまとめる」の注記を閉じる: 各プロジェクトの監査の履歴に移動が残る。
+- 規則: すべての行は同じ outcome（`audit_outcome_mismatch`）。リソースが `project` の行は、どれも `project_id = resource_id`
+  （`audit_scope_mismatch`）。**イベントの範囲の規則はイベントごとに確かめる**: イベントの `project_id` は、その変更のどれかの監査の行の
+  `project_id` と等しい（`event_scope_mismatch`）。大きさの検査（8 KiB）も行ごと。
+- `project.moved`、`group.moved`、`user.renamed`、`namespace_tombstone.released` は MR2 では監査のみ。

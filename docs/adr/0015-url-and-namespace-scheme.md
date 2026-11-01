@@ -863,3 +863,33 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   持ち（メンバーの変更は FG-REPO-0010 `last_owner`、無効化は FG-AUTH-0009 `last_owner` で守る）、その Owner はすべてのサブグループに
   継承されるので、サブグループが有効な Owner を失うことはない。権限の表の `SubgroupLastDirectOwner` の行がこれを固定する（Owner と
   管理者は許可、Maintainer は自分より上の役割として拒否、エージェントは拒否）。
+
+## Amendment（2026-11-02、手順 D5 MR2: 部分木の移動、墓標の解放、`reclaim`）
+
+- **移動は 1 つの手続き**（`forge_db::namespaces::move_subtree`）。プロジェクトの移管・名前の変更（`projects::move_decided`）、グループの
+  移管・名前の変更（`groups::move_decided`）、ユーザーの名前の変更（`users::rename_decided`、ユーザー名と個人の名前空間のパスを一緒に変える）は
+  どれもこれを使う。認可は MR7a と同じく、ロックの後で `decide` の閉包が判定する（forge-db は forge-auth の型を持たない）。
+- **ロックの順**: リソースの行（`FOR UPDATE`）→ 部分木の名前空間の行（`FOR UPDATE`、id の順。ロックした集合が変わらなくなるまで読み直す）→
+  移動先の親（`FOR SHARE`）と呼び手の所属の行 → 呼び手のアカウント → 判定 → 古いパスと新しいパスのすべての advisory lock（バイト順）。
+  作成は親を `FOR SHARE` で読むので、移動より先に確定するか（移動が読み直して子を一緒に動かす）、移動の確定を待って新しいパスを読む。
+  さらに作成は、パスのロックの後で `親の full_path || '/' || segment = ロックしたパス` を確かめ、違えば FG-REPO-0009 `reason=parent_moved`。
+- **同じトランザクションで検査する**（何も書かない、FG-REPO-0015 `TransferInvalid`、409）: 部分木が 1000 を超える（`subtree_too_large`）、
+  移動先の種類（`target_kind`: プロジェクトはグループか個人の名前空間の下、グループはグループの下かトップレベル、ユーザーはトップレベル）、
+  変化がない（`same_location`）、個人の名前空間の持ち主が bot（`parent_owner_bot`）か無効（`parent_owner_inactive`）、循環（`cycle`）、
+  深さ 20 超（`too_deep`）、新しいパスが 255 文字超（`path_too_long`）。子孫も含めたすべての新しいパスについて、生きているパスと墓標との
+  衝突は FG-REPO-0009（`sibling` / `tombstoned`）。
+- **書き込み**: 深さを制限した 1 つの再帰の `UPDATE` で部分木を書き換え、節ごとに `moved` の墓標を 1 行書く（`cause` = 動かしたリソース、
+  `owner_at_write` = 操作したユーザー、system なら NULL）。継承のロールが変わる利用者（移動元と移動先の親の連鎖の差、最大 1000 件、
+  超えたら truncated）を監査の details に残す（遷移ごとに user id をまとめ、最初の 400 件まで）。
+- **回数の制限**: 名前空間（墓標の cause）ごとに 24 時間で 10 回（FG-REPO-0018 `RenameRateLimited`、429）。数えるのは `moved` の墓標の
+  `created_at` の種類の数（1 回の移動 = 1 トランザクション）。管理者も対象で、運用の CLI（actor `system`、`RateLimit::Exempt`）だけ除外。
+  既知の限界: 解放した墓標は数えない（解放は監査に残る）。
+- **`reclaim`（A → B → A）**: `MoveOptions::reclaim` のとき、新しいパスにある墓標のうち、**そのパスへ移る同じ名前空間を指す** `moved` の墓標だけを、
+  同じトランザクションで解放してから移動する。別の名前空間を指す墓標や `deleted` の墓標は、引き続き FG-REPO-0009 `tombstoned`。
+  「墓標は解放されるまで必ず塞ぐ」の規則は変えない（解放と移動を 1 つの変更にするだけ）。
+- **解放**（`tombstones::release_decided`）: パスの advisory lock を先に取り、それから墓標の行を読む（forge_app は墓標の表に UPDATE を
+  持たないので行ロックはできない。墓標を消すのは解放と `reclaim` だけで、どちらもパスのロックを先に取るので、それで直列になる）。
+  `decide` には `TombstoneAccess::Moved { target, target_role }`（行き先がある `moved`）か `Deleted { recorded_owner, caller_parent_role,
+  has_parent }` を渡す。監査の行は墓標の cause のリソースに `namespace_tombstone.released`。
+- MR2 では移動は監査のみ（イベントなし）。グループの移動は最大 1000 のプロジェクトに及び、1 つの変更のイベントの上限（100）を超えるため、
+  移動のイベントの形は MR5 で決める。
