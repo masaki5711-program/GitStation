@@ -239,6 +239,14 @@ admitted proof.
   with an empty / `.` / `..` / control segment) and percent-decoded once.
   `tree` lists ≤ 5 000 entries, `blob` ≤ 1 MiB of text (`binary: true`
   without content for NUL / non-UTF-8), both with `truncated`.
+- Routes (M2 MR8, `src/routes/history.rs`; `RepoBrowse`, `read_api`): `GET
+  …/repository/commits?ref=&path=&limit=&cursor=` (keyset cursor that continues from the commit the
+  first page read; `next_cursor`, `has_more`), `…/commits/{oid}` (full id only; `CommitOf` loader, the
+  oid is checked after `authorize()`; message + diff against the first parent), `…/compare?from=&to=`,
+  `…/blame?ref=&path=`. Diffs carry per-file `patch` (`""` for a change without hunks), `binary`,
+  `omitted` (`too_large` / `total_cap` / `not_utf8`) and `truncated`; blame returns hunks and the
+  commits they name. Same access path and strict query parameters as the MR7 routes; a cursor that
+  does not belong to the path is `FG-WEB-0006 reason=cursor_invalid`.
 - Routes (M2 MR7, `src/routes/content.rs`; `RepoRead`, `read_repository`,
   cookies accepted — `Surface::Content`): `GET|HEAD {path}/-/raw/{ref}/{file…}`
   and `{path}/-/archive/{ref}.{zip|tar.gz}`. raw ≤ 4 MiB is read whole and

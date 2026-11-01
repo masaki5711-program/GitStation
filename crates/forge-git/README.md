@@ -122,6 +122,29 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     stream pools instead). Caps are `GitCommand::output_truncated(cap)` (crate-internal): git is killed
     and reaped at the cap, `truncated = true`, never an error.
   - `RepoPath::parse` / `from_segments`: no empty, `.`, `..` or control segment, ≤ 4096 bytes.
+  - History (M2 MR8, `browse/{history,diff,blame}.rs`; the module is split into `browse/{path,refs,tree,
+    content,history,diff,blame}.rs`):
+    - `commits(repo, tip, &RepoPath, limit, Option<&LogCursor>) -> CommitPage` — `log -z --format=…
+      -n N [--skip K] --end-of-options <tip> [-- <path>]`, fields split at `0x1f`, ≤ `max_log_page` 100.
+      `LogCursor { tip, last, skip }` (`v1.<tip>.<last>.<skip>`, `parse` is strict): the next page
+      continues from the cursor's own tip and reads the anchor again (the first record must be `last`,
+      else `FG-WEB-0006 reason=cursor_invalid rule=anchor`: a cursor of another path is refused, never
+      guessed). A cursor's tip is checked to be a commit first.
+    - `commit(repo, oid) -> CommitDetail` (message + `Diff` against the first parent; a root commit
+      against nothing via `--root`), `compare(repo, from, to) -> Comparison` (`log to ^from` ≤
+      `max_compare_commits` 200 + the two-tree diff; `compare_timeout` 20 s).
+    - `Diff` = two `diff-tree -r -M` runs: `--raw -z --no-abbrev` (the exact file list, ≤
+      `max_diff_files` 500) and `-p` (≤ `max_diff_bytes` 2 MiB, git killed there), the patch split at
+      its `diff --git ` lines and matched to the files in order (a type change is two chunks). A
+      mismatch is `FG-GIT-0003 reason=diff_chunk_mismatch`, never a guess. A patch is whole or absent:
+      `PatchOmitted::{TooLarge (> `max_file_patch_bytes` 256 KiB), TotalCap, NotUtf8}`; a git-binary
+      change is `binary` without a patch. External diff drivers and textconv are off.
+    - `blame(repo, commit, &RepoPath) -> Blame` — `blame --porcelain -L 1,<cap+1> <commit> -- <path>`
+      (git's blame rejects `--end-of-options`; the operand is a validated full hex id), hunks of
+      consecutive lines per commit, ≤ `max_blame_lines` 10 000 else `truncated`, a file with NUL or a
+      non-UTF-8 line is `binary` (no hunks); `blame_timeout` 20 s.
+    - Commit text (names, subjects, messages) is decoded as UTF-8 with replacement characters (display
+      only); the ids and the cursor position never are.
 - **gzip** (`gzip`): `GzipDecoder::new(cap)` → `push(chunk)` / `finish()`, `decode_capped(body, cap)`.
   Over the cap → FG-GIT-0013 `limit=gzip_decompressed` (decoding stops there); corrupt /
   truncated / trailing data → FG-GIT-0014 `reason=gzip`.
@@ -207,8 +230,7 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   `waitid` (Linux, macOS — not OpenBSD).
 - File size: `command.rs` ~490 lines and `stream.rs` ~680 (target 400) — split
   the env/argv builder and the supervisor out when MR3/MR4 touch them.
-  `browse.rs` (M2 MR7) is ~1 100 lines: split it into `browse/{refs,tree,content}.rs` when MR8 adds
-  commits / compare / blame.
+  `browse/` (split in M2 MR8) is ~2 700 lines with its tests; `browse/refs.rs` is the largest module.
 - Browse: tree entry names that are not UTF-8 are shown lossily (`�`) and cannot be requested back;
   raw files over 4 MiB are always downloads (no image sniff on a stream).
 - `Revision::object_id` accepts 40 or 64 hex digits regardless of the
