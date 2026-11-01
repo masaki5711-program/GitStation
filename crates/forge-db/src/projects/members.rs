@@ -38,7 +38,7 @@ const CAP: i32 = {
 };
 
 /// `FG-REPO-0010` with its `reason`.
-fn membership_conflict(reason: &'static str) -> ForgeError {
+pub(super) fn membership_conflict(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::MembershipConflict).with_context("reason", reason)
 }
 
@@ -69,7 +69,10 @@ pub(crate) async fn lock_project(
 
 /// The user who may become a member: present (`FG-REPO-0005`), not a bot
 /// (`FG-REPO-0010` `bot_member`). Read `FOR SHARE`, after the project lock.
-async fn member_candidate(conn: &mut PgConnection, user: UserId) -> Result<(), ForgeError> {
+pub(super) async fn member_candidate(
+    conn: &mut PgConnection,
+    user: UserId,
+) -> Result<(), ForgeError> {
     let kind: Option<String> =
         sqlx::query_scalar("SELECT kind FROM forge.users WHERE id = $1 FOR SHARE")
             .bind(user.get())
@@ -85,19 +88,49 @@ async fn member_candidate(conn: &mut PgConnection, user: UserId) -> Result<(), F
 
 /// The user's direct role in the project, `None` = not a member. A stored
 /// role outside the five is `FG-DB-0018` `unknown_role`.
-async fn direct_role(
+pub(super) async fn direct_role(
     conn: &mut PgConnection,
     project: ProjectId,
     user: UserId,
 ) -> Result<Option<Role>, ForgeError> {
-    let role: Option<String> = sqlx::query_scalar(
+    role_of(
+        conn,
         "SELECT role FROM forge.project_members WHERE project_id = $1 AND user_id = $2",
+        project,
+        user,
     )
-    .bind(project.get())
-    .bind(user.get())
-    .fetch_optional(conn)
     .await
-    .map_err(|e| query_error("projects.member_role", e))?;
+}
+
+/// [`direct_role`] with the membership row locked `FOR UPDATE` (M1 phase
+/// 8b MR8): the decided member commands act on the role they read, so a
+/// write to that row from anywhere waits for them or is seen by them.
+pub(super) async fn direct_role_for_update(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    role_of(
+        conn,
+        "SELECT role FROM forge.project_members WHERE project_id = $1 AND user_id = $2 FOR UPDATE",
+        project,
+        user,
+    )
+    .await
+}
+
+async fn role_of(
+    conn: &mut PgConnection,
+    sql: &'static str,
+    project: ProjectId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    let role: Option<String> = sqlx::query_scalar(sql)
+        .bind(project.get())
+        .bind(user.get())
+        .fetch_optional(conn)
+        .await
+        .map_err(|e| query_error("projects.member_role", e))?;
     role.map(|raw| {
         Role::parse(&raw).ok_or_else(|| {
             // The role loader's code and context (FG-DB-0018, runbook
@@ -153,6 +186,20 @@ async fn keep_an_owner(
     project: ProjectId,
     leaving: UserId,
 ) -> Result<(), ForgeError> {
+    if !owners_remain(conn, project, leaving).await? {
+        return Err(membership_conflict("last_owner").with_context("project_id", project.get()));
+    }
+    Ok(())
+}
+
+/// Whether an active Owner stays once `leaving` stops being a direct one
+/// (the remaining Owners' user rows locked `FOR SHARE`, as
+/// [`keep_an_owner`]).
+pub(super) async fn owners_remain(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    leaving: UserId,
+) -> Result<bool, ForgeError> {
     let remaining: Vec<i64> = sqlx::query_scalar(REMAINING_OWNERS)
         .bind(project.get())
         .bind(leaving.get())
@@ -160,10 +207,7 @@ async fn keep_an_owner(
         .fetch_all(conn)
         .await
         .map_err(|e| query_error("projects.owner_count", e))?;
-    if remaining.is_empty() {
-        return Err(membership_conflict("last_owner").with_context("project_id", project.get()));
-    }
-    Ok(())
+    Ok(!remaining.is_empty())
 }
 
 /// Commit with one audit row on (`project`, id) and its `member.*` event.
@@ -173,7 +217,7 @@ async fn keep_an_owner(
 /// `MembershipChange::{Change, Remove}`). Otherwise the membership changed
 /// in between (e.g. a promotion to Owner) and the authorization no longer
 /// holds: `FG-REPO-0010` `role_changed` with `expected` / `actual`.
-fn check_from(stored: Role, from: Role) -> Result<(), ForgeError> {
+pub(super) fn check_from(stored: Role, from: Role) -> Result<(), ForgeError> {
     if stored == from {
         return Ok(());
     }

@@ -41,7 +41,23 @@ lands (M1 phase 5).
   (`Id = NamespaceId`; `via()`, `view()`) and
   `UnresolvedCtx::new(UnresolvedReason)` (`Id = ()`; `reason()`; `prove`
   denies it for every non-public action). The lookup layer builds the row from
-  one query result; new context types are added here.
+  one query result; new context types are added here. M1 phase 8b MR8:
+  `ProjectMemberCtx::new(LoadedProject, LoadedMembership { member, change,
+  removes_last_owner })` (`Id = (ProjectId, UserId)`), `GroupMemberCtx`
+  (`Id = (GroupId, UserId)`) and `RefProtectionCtx::new(LoadedProject,
+  LoadedProtection { rule, from, to })` (`Id = (ProjectId,
+  Option<ProtectedRefId>)`): the member (rule) is part of the id, so a proof
+  for one cannot act on another; `from` is the member's **direct** role (the
+  rule's stored level) as loaded, never the request's.
+- Agents (`Principal::as_agent`, ADR-0017 amendments MR7a / MR8) are refused
+  `ProjectVisibilityChange`, `MemberManage` and `ProtectedRefManage`
+  (`FG-AUTH-0003 reason=agent_token`, after visibility and scope, whatever the
+  role); every other action is decided as for the same person's token.
+- `MemberList` / `ProtectedRefList` (MR8, `read_api`): a project's as
+  `ProjectRead` (Reporter; every signed-in user on an internal project), a
+  group's members for every signed-in user. `MembershipChange::Missing { to }`
+  (MR8) is a change / removal of a user who is no direct member, decided like
+  the least change naming `to` (Maintainer needed).
 - `Principal::authenticated(user, is_admin, active, Credential)` /
   `Principal::anonymous()` — no permissive defaults; `admin_rights()` is true
   for an administrator in a session, or with a token carrying `Scope::Admin`.

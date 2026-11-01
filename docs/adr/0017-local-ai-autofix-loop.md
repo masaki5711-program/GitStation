@@ -1175,3 +1175,12 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   予定を前倒しした。MR8 で `ProtectedRefManage` と `MemberManage` に同じ拒否を広げる。
 - プロジェクト・グループの作成と更新（`ProjectCreate`、`ProjectUpdate`、`GroupCreateTopLevel`、`SubgroupCreate`、`GroupUpdate`、
   `GroupRead`）は、エージェントにも人のトークンと同じ判定で許す。権限の表に、7 つのアクションすべてのエージェントの許可・拒否の行がある。
+
+## Amendment（2026-11-01、M1 段階 8b MR8: メンバーと保護 ref もエージェントには許さない）
+
+- **エージェントの資格情報は `MemberManage` と `ProtectedRefManage` も拒否される**（`FG-AUTH-0003 reason=agent_token`）。Maintainer
+  でも Owner でも管理者でも同じ。誰に役割を与えるか、保護を外して次の push を通すかは人が決める（エージェントが自分や別のエージェントの
+  アカウントの役割を上げる、保護を外してから push する、という経路を閉じる）。判定の順は可視性 → スコープ → エージェント → 役割で、
+  見えないプロジェクトには 404、スコープ不足には FG-AUTH-0002 が先に返る。
+- 一覧（`MemberList`、`ProtectedRefList`）はエージェントにも人のトークンと同じ判定で許す。
+- 権限の表に、Maintainer・Owner・管理者のエージェントのトークンの拒否の行と、`read_api` のエージェントの一覧の許可の行がある。

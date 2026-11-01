@@ -14,7 +14,8 @@
 //! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
 //!    carries administrator rights only with the `admin` scope); an agent's
 //!    credential on an action kept for people → `FG-AUTH-0003
-//!    reason=agent_token` (`ProjectVisibilityChange`);
+//!    reason=agent_token` (`ProjectVisibilityChange`, `MemberManage`,
+//!    `ProtectedRefManage`);
 //! 6. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, and `FG-GIT-0008` below the minimum push role
@@ -204,7 +205,21 @@ pub fn authorize(
             need(Role::Owner, project.role)
         }
 
+        // The direct members and the protection rules are read like the
+        // project (Reporter; every signed-in user on an internal project).
+        (Action::MemberList | Action::ProtectedRefList, Resource::Project(p)) => {
+            need(Role::Reporter, read_role(p))
+        }
+        // A group's members, like the group, are visible to every signed-in user.
+        (Action::MemberList, Resource::Group { .. }) => Ok(()),
+
         (Action::ProtectedRefManage, Resource::RefProtectionChange { project, from, to }) => {
+            // Lifting a protection lets the next push through: a person's
+            // decision (ADR-0017 amendment, M1 phase 8b MR8), whatever the
+            // agent's role.
+            if principal.is_agent() {
+                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
+            }
             need(Role::Maintainer, project.role)?;
             // Nobody changes a protection above their own role: a Maintainer
             // cannot lift (or set) an Owner-level protection.
@@ -242,6 +257,12 @@ pub fn authorize(
                 removes_last_owner,
             },
         ) => {
+            // Who holds a role is a person's decision (ADR-0017 amendment,
+            // M1 phase 8b MR8): an agent could otherwise raise itself or
+            // another agent's account.
+            if principal.is_agent() {
+                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
+            }
             let caller = match scope {
                 MembershipScope::Project(p) => p.role,
                 MembershipScope::Group { role } => *role,
@@ -254,6 +275,7 @@ pub fn authorize(
                 MembershipChange::Add(to) => *to,
                 MembershipChange::Change { from, to } => (*from).max(*to),
                 MembershipChange::Remove { from } => *from,
+                MembershipChange::Missing { to } => to.unwrap_or(Role::Guest),
             };
             if !(admin || caller.is_some_and(|r| highest <= r)) {
                 return Err(deny(ErrorCode::Forbidden)
@@ -334,6 +356,8 @@ pub fn authorize(
             | Action::ProjectRestore
             | Action::ProtectedRefManage
             | Action::MemberManage
+            | Action::MemberList
+            | Action::ProtectedRefList
             | Action::GroupRead
             | Action::GroupList
             | Action::GroupCreateTopLevel

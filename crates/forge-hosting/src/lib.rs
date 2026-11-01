@@ -1,5 +1,6 @@
 //! forge-hosting: the group and project write commands of the API (M1
-//! phase 8b MR7a). A feature crate (ADR-0001 amendment): forge-web →
+//! phase 8b MR7a), and the member and protected-ref commands (MR8). A
+//! feature crate (ADR-0001 amendment): forge-web →
 //! forge-hosting → forge-auth / forge-db; it runs no SQL of its own.
 //!
 //! **Every command is decided twice by the one decision point, and the
@@ -19,24 +20,31 @@
 //! (`FG-SYS-0001 reason=proof_action_mismatch`), never a pass.
 
 use forge_auth::{
-    AccountFacts, Action, Authorized, Credential, GroupCtx, InstanceCtx, LoadedGroup, LoadedParent,
-    LoadedProject, LoadedUserNamespace, ParentCtx, Principal, ProjectCtx, ResourceCtx,
-    VisibilityChangeCtx,
+    AccountFacts, Action, Authorized, Credential, GroupCtx, GroupMemberCtx, InstanceCtx,
+    LoadedGroup, LoadedMembership, LoadedParent, LoadedProject, LoadedProtection,
+    LoadedUserNamespace, MembershipChange, ParentCtx, Principal, ProjectCtx, ProjectMemberCtx,
+    RefProtectionCtx, ResourceCtx, VisibilityChangeCtx,
 };
 use forge_core::{
-    GroupId, GroupRecord, NamespaceId, ProjectId, ProjectRecord, RepositoryKind, RequestId, UserId,
-    Visibility,
+    GroupId, GroupRecord, NamespaceId, ProjectId, ProjectRecord, ProtectedRefId, RefPattern,
+    RepositoryKind, RequestId, Role, UserId, Visibility,
 };
 use forge_db::access::Account;
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::groups::{self, GroupFields, GroupParent, GroupPatch};
+use forge_db::members::{self, MemberScope};
 use forge_db::projects::{self, NewProject, ProjectPatch};
+use forge_db::protected_refs::{self, RuleState};
 use forge_db::resolve::{self, ParentRecord};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
-pub use forge_db::groups::{CreatedGroup, Updated};
+pub use forge_db::groups::{CreatedGroup, MemberChange, Updated};
+pub use forge_db::members::{MemberRow, MAX_PAGE as MAX_MEMBER_PAGE};
 pub use forge_db::projects::{CreatedProject, VisibilityOutcome};
+/// A protection rule's state as a route loader reads it.
+pub use forge_db::protected_refs::RuleState as ProtectionRuleState;
+pub use forge_db::protected_refs::{RuleChange, StoredRule};
 
 /// The parent of a new project as a viewer sees it (the `POST
 /// /api/v1/projects` loader).
@@ -157,6 +165,77 @@ impl Hosting {
         viewer: Option<UserId>,
     ) -> Result<Option<Parent>, ForgeError> {
         resolve::load_parent(&self.db, namespace, viewer).await
+    }
+
+    /// One page of a project's direct members (`after` = the last user id
+    /// of the previous page).
+    pub async fn project_members(
+        &self,
+        project: ProjectId,
+        after: Option<UserId>,
+        limit: usize,
+    ) -> Result<Vec<MemberRow>, ForgeError> {
+        members::page(&self.db, MemberScope::Project(project), after, limit).await
+    }
+
+    /// One page of a group's direct members.
+    pub async fn group_members(
+        &self,
+        group: GroupId,
+        after: Option<UserId>,
+        limit: usize,
+    ) -> Result<Vec<MemberRow>, ForgeError> {
+        members::page(&self.db, MemberScope::Group(group), after, limit).await
+    }
+
+    /// One direct member of a project (`None` = not one).
+    pub async fn project_member(
+        &self,
+        project: ProjectId,
+        member: UserId,
+    ) -> Result<Option<MemberRow>, ForgeError> {
+        members::one(&self.db, MemberScope::Project(project), member).await
+    }
+
+    /// One direct member of a group (`None` = not one).
+    pub async fn group_member(
+        &self,
+        group: GroupId,
+        member: UserId,
+    ) -> Result<Option<MemberRow>, ForgeError> {
+        members::one(&self.db, MemberScope::Group(group), member).await
+    }
+
+    /// `member`'s direct role in `project` (`None` = not a direct member).
+    pub async fn project_member_role(
+        &self,
+        project: ProjectId,
+        member: UserId,
+    ) -> Result<Option<Role>, ForgeError> {
+        members::direct_role(&self.db, MemberScope::Project(project), member).await
+    }
+
+    /// `member`'s direct role in `group`.
+    pub async fn group_member_role(
+        &self,
+        group: GroupId,
+        member: UserId,
+    ) -> Result<Option<Role>, ForgeError> {
+        members::direct_role(&self.db, MemberScope::Group(group), member).await
+    }
+
+    /// Every protection rule of `project`.
+    pub async fn protected_refs(&self, project: ProjectId) -> Result<Vec<StoredRule>, ForgeError> {
+        protected_refs::list(&self.db, project).await
+    }
+
+    /// The state of one rule of `project` (for a loader).
+    pub async fn protected_ref_state(
+        &self,
+        project: ProjectId,
+        rule: ProtectedRefId,
+    ) -> Result<RuleState, ForgeError> {
+        protected_refs::rule_state(&self.db, project, rule).await
     }
 
     // ── writes, each decided again inside its transaction ──
@@ -337,6 +416,335 @@ impl Hosting {
             })
             .await?;
         Ok(outcome)
+    }
+}
+
+impl Hosting {
+    // ── M1 phase 8b MR8: members ──
+
+    /// `POST /api/v1/projects/{id}/members` (`MemberManage`, `Add`): the
+    /// member and the role the proof was decided for. Decided again on the
+    /// locked facts (the member is still `Add`; an existing member is then
+    /// `FG-REPO-0010 already_member`).
+    pub async fn add_project_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<ProjectMemberCtx>,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        let role = granted(proof.ctx().membership().change, Kind::Add)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (project, member) = *proof.id();
+        projects::add_member_decided(&self.db, &ctx, project, user, member, role, |facts| {
+            let fresh = ProjectMemberCtx::new(
+                loaded(&facts.project),
+                membership(
+                    member,
+                    MembershipChange::Add(role),
+                    facts.removes_last_owner,
+                ),
+            );
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await
+    }
+
+    /// `PATCH /api/v1/projects/{id}/members/{user_id}` (`MemberManage`):
+    /// the role the proof was decided for; `from` is the member's direct
+    /// role re-read under the lock (a member gone meanwhile is decided as
+    /// `Missing` and answered `FG-REPO-0010 not_member`).
+    pub async fn change_project_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<ProjectMemberCtx>,
+    ) -> Result<MemberChange, ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        let to = granted(proof.ctx().membership().change, Kind::Change)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (project, member) = *proof.id();
+        let (changed, ()) =
+            projects::change_member_decided(&self.db, &ctx, project, user, member, to, |facts| {
+                let change = match facts.member_role {
+                    Some(from) => MembershipChange::Change { from, to },
+                    None => MembershipChange::Missing { to: Some(to) },
+                };
+                let fresh = ProjectMemberCtx::new(
+                    loaded(&facts.project),
+                    membership(member, change, facts.removes_last_owner),
+                );
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok(changed)
+    }
+
+    /// `DELETE /api/v1/projects/{id}/members/{user_id}` (`MemberManage`).
+    pub async fn remove_project_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<ProjectMemberCtx>,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        removal(proof.ctx().membership().change)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (project, member) = *proof.id();
+        projects::remove_member_decided(&self.db, &ctx, project, user, member, |facts| {
+            let fresh = ProjectMemberCtx::new(
+                loaded(&facts.project),
+                membership(member, removed(facts.member_role), facts.removes_last_owner),
+            );
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await
+    }
+
+    /// `POST /api/v1/groups/{id}/members` (`MemberManage`, `Add`).
+    pub async fn add_group_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<GroupMemberCtx>,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        let role = granted(proof.ctx().membership().change, Kind::Add)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (group, member) = *proof.id();
+        groups::add_member_decided(&self.db, &ctx, group, user, member, role, |facts| {
+            let fresh = GroupMemberCtx::new(
+                LoadedGroup {
+                    id: facts.group,
+                    role: facts.role,
+                },
+                membership(
+                    member,
+                    MembershipChange::Add(role),
+                    facts.removes_last_owner,
+                ),
+            );
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await
+    }
+
+    /// `PATCH /api/v1/groups/{id}/members/{user_id}` (`MemberManage`).
+    pub async fn change_group_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<GroupMemberCtx>,
+    ) -> Result<MemberChange, ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        let to = granted(proof.ctx().membership().change, Kind::Change)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (group, member) = *proof.id();
+        let (changed, ()) =
+            groups::change_member_decided(&self.db, &ctx, group, user, member, to, |facts| {
+                let change = match facts.member_role {
+                    Some(from) => MembershipChange::Change { from, to },
+                    None => MembershipChange::Missing { to: Some(to) },
+                };
+                let fresh = GroupMemberCtx::new(
+                    LoadedGroup {
+                        id: facts.group,
+                        role: facts.role,
+                    },
+                    membership(member, change, facts.removes_last_owner),
+                );
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok(changed)
+    }
+
+    /// `DELETE /api/v1/groups/{id}/members/{user_id}` (`MemberManage`).
+    pub async fn remove_group_member(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<GroupMemberCtx>,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::MemberManage)?;
+        removal(proof.ctx().membership().change)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (group, member) = *proof.id();
+        groups::remove_member_decided(&self.db, &ctx, group, user, member, |facts| {
+            let fresh = GroupMemberCtx::new(
+                LoadedGroup {
+                    id: facts.group,
+                    role: facts.role,
+                },
+                membership(member, removed(facts.member_role), facts.removes_last_owner),
+            );
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await
+    }
+
+    // ── M1 phase 8b MR8: protected refs ──
+
+    /// `POST /api/v1/projects/{id}/protected-refs` (`ProtectedRefManage`,
+    /// `from: None`): `pattern` with the minimum push role the proof was
+    /// decided for.
+    pub async fn create_protected_ref(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<RefProtectionCtx>,
+        pattern: &RefPattern,
+    ) -> Result<ProtectedRefId, ForgeError> {
+        require(proof.action(), Action::ProtectedRefManage)?;
+        let wanted = proof.ctx().protection();
+        let (None, Some(to)) = (wanted.rule, wanted.to) else {
+            return Err(shape_mismatch("protected_ref_create"));
+        };
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let project = proof.id().0;
+        let (rule, ()) =
+            protected_refs::create_decided(&self.db, &ctx, project, user, pattern, to, |facts| {
+                let fresh = RefProtectionCtx::new(
+                    loaded(&facts.project),
+                    LoadedProtection {
+                        rule: None,
+                        from: protection_level(facts.rule),
+                        to: Some(to),
+                    },
+                );
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok(rule)
+    }
+
+    /// `PATCH /api/v1/projects/{id}/protected-refs/{rule_id}`: the minimum
+    /// push role the proof was decided for; `from` re-read under the lock.
+    pub async fn change_protected_ref(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<RefProtectionCtx>,
+    ) -> Result<RuleChange, ForgeError> {
+        require(proof.action(), Action::ProtectedRefManage)?;
+        let wanted = proof.ctx().protection();
+        let (Some(rule), Some(to)) = (wanted.rule, wanted.to) else {
+            return Err(shape_mismatch("protected_ref_change"));
+        };
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let project = proof.id().0;
+        let (changed, ()) =
+            protected_refs::change_decided(&self.db, &ctx, project, rule, user, to, |facts| {
+                let fresh = RefProtectionCtx::new(
+                    loaded(&facts.project),
+                    LoadedProtection {
+                        rule: Some(rule),
+                        from: protection_level(facts.rule),
+                        to: Some(to),
+                    },
+                );
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok(changed)
+    }
+
+    /// `DELETE /api/v1/projects/{id}/protected-refs/{rule_id}`.
+    pub async fn delete_protected_ref(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<RefProtectionCtx>,
+    ) -> Result<(), ForgeError> {
+        require(proof.action(), Action::ProtectedRefManage)?;
+        let wanted = proof.ctx().protection();
+        let (Some(rule), None) = (wanted.rule, wanted.to) else {
+            return Err(shape_mismatch("protected_ref_delete"));
+        };
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let project = proof.id().0;
+        protected_refs::delete_decided(&self.db, &ctx, project, rule, user, |facts| {
+            let fresh = RefProtectionCtx::new(
+                loaded(&facts.project),
+                LoadedProtection {
+                    rule: Some(rule),
+                    from: protection_level(facts.rule),
+                    to: None,
+                },
+            );
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await
+    }
+}
+
+/// Which member command a proof is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Add,
+    Change,
+}
+
+/// `FG-SYS-0001 reason=proof_shape_mismatch`: a proof decided for another
+/// kind of change than the command's (a programming error, never a pass).
+fn shape_mismatch(command: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::Internal)
+        .with_context("reason", "proof_shape_mismatch")
+        .with_context("command", command)
+}
+
+/// The role an add (`Add(to)`) or a change (`Change { to }` /
+/// `Missing { to: Some(to) }`) proof was decided for.
+fn granted(change: MembershipChange, kind: Kind) -> Result<Role, ForgeError> {
+    match (kind, change) {
+        (Kind::Add, MembershipChange::Add(to))
+        | (
+            Kind::Change,
+            MembershipChange::Change { to, .. } | MembershipChange::Missing { to: Some(to) },
+        ) => Ok(to),
+        (Kind::Add, _) => Err(shape_mismatch("member_add")),
+        (Kind::Change, _) => Err(shape_mismatch("member_change")),
+    }
+}
+
+/// A removal proof: `Remove { .. }` or `Missing { to: None }`.
+fn removal(change: MembershipChange) -> Result<(), ForgeError> {
+    match change {
+        MembershipChange::Remove { .. } | MembershipChange::Missing { to: None } => Ok(()),
+        MembershipChange::Add(_)
+        | MembershipChange::Change { .. }
+        | MembershipChange::Missing { to: Some(_) } => Err(shape_mismatch("member_remove")),
+    }
+}
+
+/// The removal of a member whose direct role is `role` (`None` = not one).
+fn removed(role: Option<Role>) -> MembershipChange {
+    match role {
+        Some(from) => MembershipChange::Remove { from },
+        None => MembershipChange::Missing { to: None },
+    }
+}
+
+fn membership(
+    member: UserId,
+    change: MembershipChange,
+    removes_last_owner: bool,
+) -> LoadedMembership {
+    LoadedMembership {
+        member,
+        change,
+        removes_last_owner,
+    }
+}
+
+/// The `from` of a protection change: the stored level; an unreadable row
+/// counts as Owner-level (only an Owner or an administrator removes it),
+/// an absent one as none (the command then answers 404).
+pub fn protection_level(state: RuleState) -> Option<Role> {
+    match state {
+        RuleState::New | RuleState::Absent => None,
+        RuleState::Level(role) => Some(role),
+        RuleState::Unreadable => Some(Role::Owner),
     }
 }
 

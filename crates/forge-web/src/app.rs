@@ -187,8 +187,6 @@ pub const PLANNED: &[Action] = &[
     Action::ProjectTransfer,
     Action::ProjectDelete,
     Action::ProjectRestore,
-    Action::ProtectedRefManage,
-    Action::MemberManage,
     Action::TokenCreate,
     Action::TokenList,
     Action::TokenRevoke,
@@ -285,7 +283,132 @@ pub fn registry() -> Registry<AppState> {
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    git_routes(shell_routes(hosting_routes(fixed)))
+    git_routes(shell_routes(member_routes(hosting_routes(fixed))))
+}
+
+/// Members and protected refs (M1 phase 8b MR8): the lists decided on the
+/// project or group, every change proved on the member's direct role or
+/// the rule's level as loaded, and decided again inside its transaction
+/// (forge-hosting) on what it locks.
+fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::{members as m, protected_refs as pr};
+    registry
+        .route_with(
+            Verb::Get,
+            m::PROJECT_MEMBERS,
+            Action::MemberList,
+            "List a project's direct members (Reporter; internal: every signed-in user)",
+            m::ProjectMembersOf,
+            m::list_project,
+        )
+        .responds::<m::MemberPage>(Verb::Get, m::PROJECT_MEMBERS)
+        .queries(Verb::Get, m::PROJECT_MEMBERS, m::QUERY)
+        .route_with_body(
+            Verb::Post,
+            m::PROJECT_MEMBERS,
+            Action::MemberManage,
+            "Add a direct project member (Maintainer; at most the caller's role)",
+            m::MAX_BODY,
+            m::NewProjectMember,
+            m::add_project,
+        )
+        .responds_created::<m::MemberBody>(Verb::Post, m::PROJECT_MEMBERS)
+        .route_with_body(
+            Verb::Patch,
+            m::PROJECT_MEMBER,
+            Action::MemberManage,
+            "Change a direct project member's role (Maintainer; never above the caller's role)",
+            m::MAX_BODY,
+            m::ProjectMemberToChange,
+            m::change_project,
+        )
+        .responds::<m::MemberBody>(Verb::Patch, m::PROJECT_MEMBER)
+        .route_with(
+            Verb::Delete,
+            m::PROJECT_MEMBER,
+            Action::MemberManage,
+            "Remove a direct project member (Maintainer; never the last Owner)",
+            m::ProjectMemberToRemove,
+            m::remove_project,
+        )
+        .responds_no_content(Verb::Delete, m::PROJECT_MEMBER)
+        .route_with(
+            Verb::Get,
+            m::GROUP_MEMBERS,
+            Action::MemberList,
+            "List a group's direct members (every signed-in user)",
+            m::GroupMembersOf,
+            m::list_group,
+        )
+        .responds::<m::MemberPage>(Verb::Get, m::GROUP_MEMBERS)
+        .queries(Verb::Get, m::GROUP_MEMBERS, m::QUERY)
+        .route_with_body(
+            Verb::Post,
+            m::GROUP_MEMBERS,
+            Action::MemberManage,
+            "Add a direct group member (Maintainer; at most the caller's role)",
+            m::MAX_BODY,
+            m::NewGroupMember,
+            m::add_group,
+        )
+        .responds_created::<m::MemberBody>(Verb::Post, m::GROUP_MEMBERS)
+        .route_with_body(
+            Verb::Patch,
+            m::GROUP_MEMBER,
+            Action::MemberManage,
+            "Change a direct group member's role (Maintainer; never above the caller's role)",
+            m::MAX_BODY,
+            m::GroupMemberToChange,
+            m::change_group,
+        )
+        .responds::<m::MemberBody>(Verb::Patch, m::GROUP_MEMBER)
+        .route_with(
+            Verb::Delete,
+            m::GROUP_MEMBER,
+            Action::MemberManage,
+            "Remove a direct group member (Maintainer; a top-level group keeps an Owner)",
+            m::GroupMemberToRemove,
+            m::remove_group,
+        )
+        .responds_no_content(Verb::Delete, m::GROUP_MEMBER)
+        .route_with(
+            Verb::Get,
+            pr::COLLECTION,
+            Action::ProtectedRefList,
+            "List a project's protected ref rules (Reporter; internal: every signed-in user)",
+            pr::RulesOf,
+            pr::list,
+        )
+        .responds::<pr::ProtectedRefRules>(Verb::Get, pr::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            pr::COLLECTION,
+            Action::ProtectedRefManage,
+            "Add a protected ref rule (Maintainer; at most the caller's role)",
+            pr::MAX_BODY,
+            pr::NewRule,
+            pr::create,
+        )
+        .responds_created::<pr::ProtectedRefBody>(Verb::Post, pr::COLLECTION)
+        .route_with_body(
+            Verb::Patch,
+            pr::ONE,
+            Action::ProtectedRefManage,
+            "Change a rule's minimum push role (Maintainer; never above the caller's role)",
+            pr::MAX_BODY,
+            pr::RuleToChange,
+            pr::change,
+        )
+        .responds::<pr::ProtectedRefBody>(Verb::Patch, pr::ONE)
+        .route_with(
+            Verb::Delete,
+            pr::ONE,
+            Action::ProtectedRefManage,
+            "Delete a protected ref rule (Maintainer; never above the caller's role)",
+            pr::RuleToDelete,
+            pr::delete,
+        )
+        .responds_no_content(Verb::Delete, pr::ONE)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

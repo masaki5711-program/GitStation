@@ -48,6 +48,14 @@ actions! {
     ProjectRestore,
     ProtectedRefManage,
     MemberManage,
+    /// `GET /api/v1/projects/{id}/members`, `GET /api/v1/groups/{id}/members`:
+    /// the direct members (M1 phase 8b MR8). A project's as `ProjectRead`
+    /// (Reporter; every signed-in user on an internal project), a group's
+    /// for every signed-in user (groups are internal).
+    MemberList,
+    /// `GET /api/v1/projects/{id}/protected-refs`: the protection rules
+    /// (M1 phase 8b MR8), as `ProjectRead`.
+    ProtectedRefList,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -101,6 +109,8 @@ impl Action {
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
             | Action::ProjectList
+            | Action::MemberList
+            | Action::ProtectedRefList
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList

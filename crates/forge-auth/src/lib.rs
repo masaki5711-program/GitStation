@@ -27,9 +27,10 @@ pub use model::{
     RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
 };
 pub use prove::{
-    prove, AccountFacts, Authorized, GroupCtx, InstanceCtx, LoadedGroup, LoadedNamespace,
-    LoadedParent, LoadedProject, LoadedTarget, LoadedUserNamespace, ParentCtx, ProjectCtx,
-    ResolvedCtx, ResourceCtx, UnresolvedCtx, UserNamespaceCtx, VisibilityChangeCtx,
+    prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, InstanceCtx, LoadedGroup,
+    LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection, LoadedTarget,
+    LoadedUserNamespace, ParentCtx, ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
+    ResourceCtx, UnresolvedCtx, UserNamespaceCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 

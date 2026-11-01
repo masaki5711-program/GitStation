@@ -28,12 +28,16 @@ use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, repositories, Db};
 
+mod member_writes;
 mod members;
 pub(crate) mod ownership;
 mod update;
 
 pub use crate::groups::MemberChange;
 pub use crate::groups::Updated;
+pub use member_writes::{
+    add_member_decided, change_member_decided, remove_member_decided, ProjectMemberFacts,
+};
 pub(crate) use members::lock_project;
 pub use members::{add_member, change_member, remove_member};
 pub use ownership::{ownerless, Ownerless};
@@ -41,6 +45,7 @@ pub use update::{
     change_visibility_decided, update_decided, ProjectAccessFacts, ProjectPatch,
     ProjectUpdateFacts, VisibilityOutcome,
 };
+pub(crate) use update::{facts as locked_access_facts, lock as lock_access};
 
 /// The audit resource type of projects, their repository and members
 /// (tables.toml), and the aggregate of their events.

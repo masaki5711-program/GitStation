@@ -145,6 +145,16 @@ fn invisible_private_project_is_not_found() {
                 removes_last_owner: false,
             },
         ),
+        (
+            Action::MemberManage,
+            Resource::Membership {
+                scope: MembershipScope::Project(invisible),
+                change: MembershipChange::Missing { to: None },
+                removes_last_owner: false,
+            },
+        ),
+        (Action::MemberList, Resource::Project(invisible)),
+        (Action::ProtectedRefList, Resource::Project(invisible)),
     ];
     for (action, resource) in resources {
         let err = authorize(&session(), action, &resource).expect_err("not visible");
@@ -163,6 +173,8 @@ fn pending_deletion_blocks_everything_but_restore() {
         Action::ProjectRead,
         Action::ProjectUpdate,
         Action::ProjectDelete,
+        Action::MemberList,
+        Action::ProtectedRefList,
     ] {
         let err = authorize(&session(), action, &deleted).expect_err("pending deletion");
         assert_eq!(err.code(), ErrorCode::PendingDeletion, "{action:?}");
@@ -555,4 +567,106 @@ fn an_agent_token_is_refused_the_visibility_change_only() {
         )
         .is_ok());
     }
+}
+
+/// M1 phase 8b MR8: an agent's credential never manages members or
+/// protections — a Maintainer's, an Owner's or an administrator's alike,
+/// with `reason=agent_token` — while the same caller without `is_agent`
+/// may, and the agent still reads the lists (ADR-0017 amendment MR8).
+#[test]
+fn an_agent_token_is_refused_member_and_protection_changes() {
+    let add = |role| Resource::Membership {
+        scope: MembershipScope::Project(project(Some(role))),
+        change: MembershipChange::Add(Role::Developer),
+        removes_last_owner: false,
+    };
+    let group_add = Resource::Membership {
+        scope: MembershipScope::Group {
+            role: Some(Role::Owner),
+        },
+        change: MembershipChange::Add(Role::Developer),
+        removes_last_owner: false,
+    };
+    let lift = |role| Resource::RefProtectionChange {
+        project: project(Some(role)),
+        from: Some(Role::Maintainer),
+        to: None,
+    };
+    for (admin, role) in [
+        (false, Role::Maintainer),
+        (false, Role::Owner),
+        (true, Role::Owner),
+    ] {
+        let scopes = if admin {
+            vec![Scope::Api, Scope::Admin]
+        } else {
+            vec![Scope::Api]
+        };
+        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        let agent = human.clone().as_agent(true);
+        for (action, resource) in [
+            (Action::MemberManage, add(role)),
+            (Action::MemberManage, group_add.clone()),
+            (Action::ProtectedRefManage, lift(role)),
+        ] {
+            let err = authorize(&agent, action, &resource).expect_err("agents never");
+            assert_eq!(err.code(), ErrorCode::Forbidden, "{action:?}");
+            assert!(err.to_string().contains("reason=agent_token"), "{err}");
+            assert!(authorize(&human, action, &resource).is_ok(), "{action:?}");
+        }
+        for action in [Action::MemberList, Action::ProtectedRefList] {
+            assert!(authorize(&agent, action, &Resource::Project(project(Some(role)))).is_ok());
+        }
+    }
+}
+
+/// Nobody raises their own role: a Developer adding themself (or anyone)
+/// as Owner needs Maintainer, a Maintainer promoting themself to Owner is
+/// above their own role (M1 phase 8b MR8). `authorize()` does not need to
+/// know who the member is: the role being granted is capped by the
+/// caller's.
+#[test]
+fn self_elevation_is_denied() {
+    let on = |caller: Role, change| Resource::Membership {
+        scope: MembershipScope::Project(project(Some(caller))),
+        change,
+        removes_last_owner: false,
+    };
+    let err = authorize(
+        &session(),
+        Action::MemberManage,
+        &on(Role::Developer, MembershipChange::Add(Role::Owner)),
+    )
+    .expect_err("developer");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(
+        err.to_string().contains("required_role=maintainer"),
+        "{err}"
+    );
+    let err = authorize(
+        &session(),
+        Action::MemberManage,
+        &on(
+            Role::Maintainer,
+            MembershipChange::Change {
+                from: Role::Maintainer,
+                to: Role::Owner,
+            },
+        ),
+    )
+    .expect_err("maintainer to owner");
+    assert!(err.to_string().contains("reason=above_own_role"), "{err}");
+    // A user who is no member: the role asked for is still capped.
+    let err = authorize(
+        &session(),
+        Action::MemberManage,
+        &on(
+            Role::Maintainer,
+            MembershipChange::Missing {
+                to: Some(Role::Owner),
+            },
+        ),
+    )
+    .expect_err("missing to owner");
+    assert!(err.to_string().contains("reason=above_own_role"), "{err}");
 }

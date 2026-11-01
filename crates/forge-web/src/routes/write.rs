@@ -9,7 +9,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::{ResourceCtx, UnresolvedCtx, UnresolvedReason};
-use forge_core::parse_positive_id;
+use forge_core::{parse_positive_id, Role};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::{Hosting, WriteRequest};
 use serde::Serialize;
@@ -86,4 +86,66 @@ pub(crate) fn no_store(status: StatusCode, body: Value) -> Response {
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
     headers.insert(VARY, HeaderValue::from_static("Authorization, Cookie"));
     res
+}
+
+/// Whether a caller holding `role` on the target could manage its members
+/// or protections (Maintainer and above): only then does a loader read the
+/// member's role or the rule's level (M1 phase 8b MR8 review). Everyone
+/// else is decided on `from = None` — `authorize()` denies them on the
+/// caller's role before the target's matters, so the answer is the same,
+/// and nothing about the member or rule is read for them. Administrators
+/// hold no role here (a loader does not know the caller's rights): they are
+/// decided on `from = None` too, and the write path re-reads the real value
+/// under the lock and decides again.
+pub(crate) fn may_manage(role: Option<Role>) -> bool {
+    role.is_some_and(|r| r >= Role::Maintainer)
+}
+
+/// `read()` only when [`may_manage`] (`None` otherwise).
+pub(crate) async fn read_if_manager<T, F, Fut>(
+    role: Option<Role>,
+    read: F,
+) -> Result<Option<T>, ForgeError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, ForgeError>>,
+{
+    if may_manage(role) {
+        read().await.map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A counting loader: a caller below Maintainer (or without a role)
+    /// never triggers the member / rule read.
+    #[tokio::test]
+    async fn only_a_possible_manager_triggers_the_target_read() {
+        let reads = AtomicUsize::new(0);
+        let read = || async {
+            reads.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, ForgeError>(Some(Role::Owner))
+        };
+        for role in [
+            None,
+            Some(Role::Guest),
+            Some(Role::Reporter),
+            Some(Role::Developer),
+        ] {
+            let got = read_if_manager(role, read).await.expect("no read");
+            assert_eq!(got, None, "{role:?}");
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
+        for role in [Role::Maintainer, Role::Owner] {
+            let got = read_if_manager(Some(role), read).await.expect("read");
+            assert_eq!(got, Some(Some(Role::Owner)));
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
+    }
 }

@@ -376,3 +376,12 @@ receive-pack（MR4）と一緒に書く。
   これまで `is_agent` は `GET /api/v1/user` で見せるだけだった。拒否される操作は ADR-0017 の Amendment（MR7a）を参照。
 - 書き込みのトランザクションの中の再判定（`Authorized::reconfirm`）は、ユーザー・資格情報・スコープ・`is_agent` を引き継ぎ、
   有効か・管理者かだけを users 行（`FOR SHARE`）から読み直す。
+
+## Amendment（2026-11-01、M1 段階 8b MR8: `is_agent` で拒否される操作が増える）
+
+- `is_agent` のトークンは `ProjectVisibilityChange` に加えて `MemberManage` と `ProtectedRefManage` も拒否される（ADR-0017 の
+  Amendment MR8）。トランザクションの中の再判定（`Authorized::reconfirm`）も `is_agent` を引き継ぐので、レジストリの判定の後に
+  権限が変わっても同じ。
+- メンバーと保護 ref の一覧・変更のルートは `read_api` / `api` のスコープ（`write_repository` だけのトークンは FG-AUTH-0002）。
+- 最後の Owner の計算（`removes_last_owner`）はプロジェクトと最上位のグループだけ。サブグループは最上位の Owner を必ず継承する
+  （無効化のガード FG-AUTH-0009 が最上位の唯一の有効な Owner を守る）ので対象外。ADR-0015 の Amendment（MR8）を参照。

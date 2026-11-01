@@ -222,12 +222,27 @@ connection, mapping driver errors to registered codes, migrations
   `change(.., ProjectId, ProtectedRefId, Role) -> RuleChange { Changed { from } | Unchanged }`
   (the minimum push role only), `delete(.., ProjectId, ProtectedRefId)`. The project row is
   locked first; at most `MAX_RULES` = 100 rules per project (`too_many_rules`), no two
-  patterns equal by `RefPattern::key()` (`duplicate_pattern`, non-ASCII case included),
+  patterns equal by `RefPattern::key()` (FG-REPO-0017 `duplicate_pattern` since M1 phase 8b
+  MR8, non-ASCII case included),
   `push_min_role` Developer / Maintainer / Owner. One `protected_ref.*` audit row on
   (`project`, id) and one `protected_ref.*` event (maintainer class, payload = the details,
   no dedup key) each. `delete` does not parse the row, so a rule this build cannot read
   (FG-DB-0020) can be deleted; its details carry `stored_invalid` and the stored text,
   bounded. No authorization here (`Action::ProtectedRefManage` is the route's).
+- M1 phase 8b MR8 — the API's commands, decided inside their transaction (only
+  forge-hosting calls them, `decided_callers` test): `projects::{add,change,remove}_member_decided`
+  (`ProjectMemberFacts { account, project, member_role, removes_last_owner }`),
+  `groups::{add,change,remove}_member_decided` (`GroupMemberFacts`) and
+  `protected_refs::{create,change,delete}_decided` (`ProtectionFacts { account, project, rule:
+  RuleState::{New, Absent, Level, Unreadable} }`). Lock order: target row `FOR UPDATE` (project /
+  group; for a rule then the rule row `FOR UPDATE`), the caller's membership rows `FOR SHARE`, the
+  caller's account row, then the member's direct membership row `FOR UPDATE` and — when the
+  change takes an Owner away — the remaining Owners' user rows `FOR SHARE`. `decide` sees the
+  member's direct role (the `from`) and the last-owner fact; conflicts (`already_member`,
+  `not_member`, `bot_member`, 404 rule, FG-DB-0020 on a change of an unreadable rule) and the
+  last-owner backstop come after it; every non-commit exit rolls back (`ChangeTx::settle`).
+  Reads for the route loaders: `members::{page, one, direct_role}` (`MemberScope`, keyset by
+  user id, `MAX_PAGE` = 100) and `protected_refs::{list, rule_state}`.
 - `protected_refs::levels_for(&Db, ProjectId, &RefName) -> Result<Vec<Role>, ForgeError>`:
   the `push_min_role` of every rule whose pattern matches the ref ignoring case, in rule
   id order — feed it to `forge_auth::RefProtection::effective` (strictest wins); the
@@ -296,8 +311,9 @@ Raised by the project member commands (D4 MR4): FG-REPO-0010 (`already_member`,
 (`resource=project` / `user`, `reason=absent`), FG-DB-0018 (`unknown_role`,
 `resource=project`), FG-SYS-0001 (`project_without_namespace`). `Ownerless::check`:
 FG-AUTH-0010 (`ownerless_project`, `ownerless_projects`, `project_ids`).
-Raised by `protected_refs` (D4 MR5): FG-REPO-0013 (`duplicate_pattern`, `too_many_rules`
-with `rules`, `push_min_role`), FG-REPO-0005 (`resource=project` / `protected_ref`,
+Raised by `protected_refs` (D4 MR5): FG-REPO-0013 (`too_many_rules`
+with `rules`, `push_min_role`), FG-REPO-0017 ProtectedRefPatternTaken (409, MR8:
+`duplicate_pattern` / `unique_index`, `project_id`), FG-REPO-0005 (`resource=project` / `protected_ref`,
 `reason=absent`), FG-DB-0020 ProtectedRefDataInvalid (alert: `too_many_stored_rules`,
 `stored_pattern_invalid`, `stored_push_min_role_invalid`; ids only, never the pattern).
 Raised by `resolve`: FG-DB-0021 NamespaceDataInvalid (alert: `stored_path_invalid` with

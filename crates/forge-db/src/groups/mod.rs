@@ -17,9 +17,13 @@ use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
 
+mod member_writes;
 mod members;
 mod read;
 
+pub use member_writes::{
+    add_member_decided, change_member_decided, remove_member_decided, GroupMemberFacts,
+};
 pub use members::{add_member, change_member, remove_member, MemberChange};
 pub use read::load;
 

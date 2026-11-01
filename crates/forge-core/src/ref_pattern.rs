@@ -89,7 +89,7 @@ impl RefPattern {
     }
 
     /// The pattern case-folded (see `fold`): two rules of one project must not share it
-    /// (FG-REPO-0013 `duplicate_pattern`; the database backstop
+    /// (FG-REPO-0017 `duplicate_pattern` since M1 phase 8b MR8; the database backstop
     /// `protected_refs_project_pattern` folds ASCII letters only).
     pub fn key(&self) -> &str {
         &self.key

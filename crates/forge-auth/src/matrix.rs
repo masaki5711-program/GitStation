@@ -48,6 +48,11 @@ pub(crate) enum Actor {
     AgentOwnerTokenApi,
     /// Administrator with an `api` + `admin` token issued with `is_agent`.
     AgentAdminTokenAdmin,
+    /// Maintainer with an `api` token issued with `is_agent` (M1 phase 8b
+    /// MR8: the role that would otherwise manage members and protections).
+    AgentMaintainerTokenApi,
+    /// Maintainer with an `api` token (M1 phase 8b MR8).
+    MaintainerTokenApi,
     /// Developer with an `api` token.
     DevTokenApi,
     /// Owner with a `read_api` token.
@@ -89,11 +94,29 @@ pub(crate) enum Fixture {
     LastOwnerRemoval,
     /// Removing the last Owner of a group.
     GroupLastOwnerRemoval,
+    /// Demoting the last Owner of a private project to Maintainer (MR8).
+    LastOwnerDemotion,
+    /// Demoting the last Owner of a group to Maintainer (MR8).
+    GroupLastOwnerDemotion,
+    /// Changing (`Some`) or removing (`None`) a user who is no direct
+    /// member of a private project (MR8).
+    MissingMember(Option<Role>),
+    /// The same on a group (MR8 review).
+    GroupMissingMember(Option<Role>),
+    /// Removing (`None`) or demoting (`Some(to)`) the last **direct**
+    /// Owner of a subgroup: not the last Owner — every subgroup inherits
+    /// the top-level group's Owner, which always keeps one (D2 / D4 MR4
+    /// rule), so `removes_last_owner` is `false` (MR8 review).
+    SubgroupLastDirectOwner(Option<Role>),
     /// Changing a protection's minimum push role (None = unprotected).
     ProtectionChange {
         from: Option<Role>,
         to: Option<Role>,
     },
+    /// Adding a Maintainer protection on an internal project (MR8).
+    InternalProtectionChange,
+    /// Adding a Maintainer protection on a project pending deletion (MR8).
+    DeletedProtectionChange,
     /// Making a private project internal.
     MakeInternal,
     /// Making an internal project private (M1 phase 8b MR7a).
@@ -177,6 +200,8 @@ impl Actor {
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
             Actor::AgentAdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]).as_agent(true),
+            Actor::AgentMaintainerTokenApi => token(false, &[Scope::Api]).as_agent(true),
+            Actor::MaintainerTokenApi => token(false, &[Scope::Api]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -198,7 +223,9 @@ impl Actor {
             | Actor::AgentTokenReadApi
             | Actor::AgentTokenApi
             | Actor::DevTokenApi => Some(Role::Developer),
-            Actor::Maintainer => Some(Role::Maintainer),
+            Actor::Maintainer | Actor::AgentMaintainerTokenApi | Actor::MaintainerTokenApi => {
+                Some(Role::Maintainer)
+            }
             Actor::Owner | Actor::OwnerTokenReadApi | Actor::AgentOwnerTokenApi => {
                 Some(Role::Owner)
             }
@@ -284,10 +311,54 @@ impl Fixture {
                 change: MembershipChange::Remove { from: Role::Owner },
                 removes_last_owner: true,
             },
+            Fixture::LastOwnerDemotion => Resource::Membership {
+                scope: MembershipScope::Project(private),
+                change: MembershipChange::Change {
+                    from: Role::Owner,
+                    to: Role::Maintainer,
+                },
+                removes_last_owner: true,
+            },
+            Fixture::GroupLastOwnerDemotion => Resource::Membership {
+                scope: MembershipScope::Group { role },
+                change: MembershipChange::Change {
+                    from: Role::Owner,
+                    to: Role::Maintainer,
+                },
+                removes_last_owner: true,
+            },
+            Fixture::MissingMember(to) => member(
+                MembershipScope::Project(private),
+                MembershipChange::Missing { to },
+            ),
+            Fixture::GroupMissingMember(to) => member(
+                MembershipScope::Group { role },
+                MembershipChange::Missing { to },
+            ),
+            Fixture::SubgroupLastDirectOwner(to) => member(
+                MembershipScope::Group { role },
+                match to {
+                    None => MembershipChange::Remove { from: Role::Owner },
+                    Some(to) => MembershipChange::Change {
+                        from: Role::Owner,
+                        to,
+                    },
+                },
+            ),
             Fixture::ProtectionChange { from, to } => Resource::RefProtectionChange {
                 project: private,
                 from,
                 to,
+            },
+            Fixture::InternalProtectionChange => Resource::RefProtectionChange {
+                project: internal,
+                from: None,
+                to: Some(Role::Maintainer),
+            },
+            Fixture::DeletedProtectionChange => Resource::RefProtectionChange {
+                project: deleted,
+                from: None,
+                to: Some(Role::Maintainer),
             },
             Fixture::MakeInternal => Resource::VisibilityChange {
                 project: private,

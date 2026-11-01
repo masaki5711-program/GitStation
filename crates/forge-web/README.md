@@ -123,6 +123,27 @@ admitted proof.
   the list and the caller (`FG-WEB-0006 cursor_invalid`); other parameters
   `FG-WEB-0006 param_invalid`. Answer `{ items, next_cursor, has_more }`;
   `FG-WEB-0002 operation=project_page|group_page` on a slow scan.
+- Routes (M1 phase 8b MR8, `src/routes/members.rs`, `src/routes/protected_refs.rs`):
+  `GET|POST /api/v1/projects/{id}/members`, `PATCH|DELETE
+  /api/v1/projects/{id}/members/{user_id}`, the same under
+  `/api/v1/groups/{id}/members`, `GET|POST /api/v1/projects/{id}/protected-refs`
+  and `PATCH|DELETE /api/v1/projects/{id}/protected-refs/{rule_id}`. Lists:
+  `MemberList` / `ProtectedRefList` (`read_api`; a project's as `ProjectRead`
+  — a Guest of a private project is `FG-AUTH-0003`; a group's for every
+  signed-in user); members are paged by user id (`limit` 1..=100, default 20,
+  `after` = the previous `next_after`). Changes: `MemberManage` /
+  `ProtectedRefManage` (`api`). The loader reads the project or group and,
+  for a change or removal, the member's **direct** role or the rule's stored
+  level (the decision's `from`, never the request's; a non-member is decided
+  as `MembershipChange::Missing`, an absent rule as `from = to = None`, an
+  unreadable rule as Owner-level); forge-hosting decides again in the
+  transaction, where the last-owner fact is computed (`FG-AUTH-0003
+  reason=last_owner`, 403). Agents are refused every change (`reason=
+  agent_token`). Answers: the member / rule re-read after the commit (`201`
+  for a create, `200` for a change), `204` for a delete (`Registry::
+  responds_no_content`); a duplicate pattern is `FG-REPO-0017` (409), a bad
+  one `FG-REPO-0013` (400, parsed after the decision), a non-member
+  `FG-REPO-0010 not_member` (409), an absent rule `FG-REPO-0005`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body

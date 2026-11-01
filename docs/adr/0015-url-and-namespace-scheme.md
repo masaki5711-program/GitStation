@@ -855,3 +855,11 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   個人の名前空間は署名済みの全員に見える（解決の API が答える）ので、404 にしても隠せるものがない。
 - 書き込みでは、名前と項目の規則（`FG-REPO-0007`/`0011`/`0014`）は判定の後に調べる。権限を失った呼び出し元には拒否を返し、
   本文についての手がかりを返さない。拒否・変更なしなど commit しない出口は、すべて明示的に ROLLBACK する（`ChangeTx::settle`）。
+
+## Amendment（2026-11-01、M1 段階 8b MR8: サブグループの最後の直接の Owner）
+
+- メンバーの API（`MemberManage`）の `removes_last_owner` は、プロジェクトと**最上位の**グループについてだけ真になる。サブグループの
+  最後の直接の Owner は外せる・降格できる（D2 のユーザーの決定と D4 MR4 の規則）: 最上位のグループは有効な直接の Owner を必ず 1 人
+  持ち（メンバーの変更は FG-REPO-0010 `last_owner`、無効化は FG-AUTH-0009 `last_owner` で守る）、その Owner はすべてのサブグループに
+  継承されるので、サブグループが有効な Owner を失うことはない。権限の表の `SubgroupLastDirectOwner` の行がこれを固定する（Owner と
+  管理者は許可、Maintainer は自分より上の役割として拒否、エージェントは拒否）。
