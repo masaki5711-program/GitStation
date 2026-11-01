@@ -18,7 +18,7 @@
 | GitStation | Rust 製の 2 プロセス構成（`forge serve` と `forge worker`）＋ PostgreSQL 16。ブラウザの画面（SPA）は `embed-ui` で `forge` に埋め込める。**TLS は持たない**（リバースプロキシの仕事）。 |
 | Kanflow | Next.js 16 / Prisma 7 / MySQL 8.4。本番は Windows 11 の常駐サービス構成。ワーカー（翻訳・AI 監視）は別プロセス。Collabora と Ollama は任意。 |
 | **連携の現状** | **GitStation↔Kanflow の機械的な連携（Webhook、イベント履歴 API、`GitStationSource`）は、どちらのリポジトリにもまだ無い**（§5.1）。明日つなげるのは「同じ利用者が Claude Code から `gstn`（GitStation）と Kanflow MCP の両方を使う」形と、ブランチ名の PBI 番号の規約まで。 |
-| 画面 | GitStation の UI は M2 の範囲がそろった（MR9〜MR12）: ログイン、ホーム、グループ・プロジェクトの一覧と作成、リポジトリ閲覧（木・ファイル・コミット・差分・比較・blame）、設定・メンバー・トークン・セッション・管理、文書ポータル（`kind=spec` の読み取り専用。**2026-11-01 の決定で取り下げが決まっている。このビルドには含まれるが、機能として試験・案内しない。ADR-0023**）。**画面を使うには Keycloak でのログインが要る**。Keycloak が無ければ `gstn` と API で操作する。 |
+| 画面 | GitStation の UI は M2 の範囲がそろった（MR9〜MR11）: ログイン、ホーム、グループ・プロジェクトの一覧と作成、リポジトリ閲覧（木・ファイル・コミット・差分・比較・blame）、設定・メンバー・トークン・セッション・管理。文書ポータルとリポジトリの種類 `spec` / `system` は 2026-11-01 の決定で取り下げ、このビルドから**削除済み**（ADR-0023）。**画面を使うには Keycloak でのログインが要る**。Keycloak が無ければ `gstn` と API で操作する。 |
 | ブラウザのログイン | OIDC（Keycloak）だけ。**Keycloak 無しだと画面から入れない**（`gstn` とトークンは使える）。Keycloak は IoT プラットフォーム側が用意する想定（§3.9）。 |
 | 実機の検証 | GitHub の CI は一度も動いていない。Keycloak の E2E、Kanflow の実 MySQL のテストと E2E も**未実行**（§7）。つまり**初めての実機**であり、手順どおりに進まない箇所が出る前提で、§8 の runbook を手元に置く。 |
 
@@ -92,12 +92,11 @@ flowchart LR
 
 | リポジトリ | ブランチ | コミット | 出典 |
 |---|---|---|---|
-| GitStation | `claude/brave-cray-w62c35` | `f95e2e8559f987bfc9b843d8c32c359ef16f296d`（M2 の MR1〜MR12 をすべて統合 = M2 の実装完了） | `git log -1` で確認（この文書の作成時） |
-| Kanflow | `claude/brave-cray-w62c35` | `23db573f14552f609ebae3270b1cde063fbf98a9`（PBI の機密フラグ D-5 まで） | 同上 |
+| GitStation | `claude/brave-cray-w62c35` | `f1a9e503aa316d85e072df3f56000902ec0f5864`（M2 の実装 + ADR-0023 で文書ポータルと `kind` を削除） | `git log -1` で確認（この文書の作成時） |
+| Kanflow | `claude/brave-cray-w62c35` | `21e8804e6e2d41482d2e6ae8295657dcc1127c4e`（PBI の機密フラグ D-5 まで + テストサーバーの案内の文書） | 同上 |
 
 - GitStation の `main` はこのブランチの祖先（`8fea414`）で古い。**ブランチ `claude/brave-cray-w62c35` の先端を使う**。
-  M2 の MR1〜MR12（認証・セッション・閲覧 API・画面・文書ポータル）はすべて**含まれる**(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
-  **ただし 2026-11-01 の決定（ADR-0023）で、文書ポータル（MR12）とリポジトリの種類 `spec` / `system`（`kind`）は取り下げが決まった。明日のデプロイの `f95e2e8` にはまだ含まれるが、コードの削除は後続の MR で行う。試験ではこの 2 つを確かめなくてよい。**
+  M2 の MR1〜MR11（認証・セッション・閲覧 API・画面）が含まれる。MR12 の文書ポータルとリポジトリの種類 `kind` は ADR-0023 で**削除済み**（作成の本文に `kind` を送ると 400 FG-WEB-0006、一覧の `?kind=` も 400）(出典: `git log`、`docs/adr/0023-drop-repository-kinds-and-document-portal.md`)。
 - 取得元: 両リポジトリとも `origin` は GitHub の私設リポジトリ（`git remote -v`）。**テストサーバーから GitHub に届くか、社内ミラーが要るかは「未確認」**。届かないなら、PC で `git bundle` を作って持ち込む（提案）。
 - 作業の前にコミットを固定する: `git checkout --detach <上の SHA>`（提案。再現性のため）。
 
@@ -147,7 +146,7 @@ flowchart LR
 
 ```bash
 cd <GITSTATION_SRC>
-git checkout --detach f95e2e8559f987bfc9b843d8c32c359ef16f296d   # 提案: 固定
+git checkout --detach f1a9e503aa316d85e072df3f56000902ec0f5864   # 提案: 固定
 
 # (a) 画面 (SPA) — 先にビルドする。build.rs は web/dist が無いと失敗する
 cd web
@@ -415,7 +414,7 @@ gstn project list
 gstn project view <PROJECT_ID>                         # リポジトリが ready になるまで待つ (worker が作る)
 ```
 
-- 項目の根拠: `gstn project create` の引数は `crates/forge-client/src/cli.rs`（`--namespace-id`、`--path`、`--display-name`、`--kind spec|system`、`--visibility private|internal`）。`--kind` は省略でき、省略時はサーバーの既定（`system`）になる。**`kind` は 2026-11-01 に取り下げが決まった（ADR-0023）ので、指定しない。**
+- 項目の根拠: `gstn project create` の引数は `crates/forge-client/src/cli.rs`（`--namespace-id`、`--path`、`--display-name`、`--visibility private|internal`）。`--kind` は ADR-0023 で削除した。
 - プロジェクトを作ると `repository.provision` のジョブが入り、**`forge worker` がベアリポジトリを作る**（`forge.repo.provisioned` ログ）(出典: `ops/runbooks/repository-provisioning.md`)。`provisioning` のまま 10 分を超えると `forge doctor` が `FG-REPO-0012`（alert）。
 
 ```bash
@@ -468,7 +467,7 @@ GitStation は次の形を求める（出典: `docs/adr/0021-oidc-keycloak-login
 - 入場の条件: ID トークンに `access` ロールがあること。無い・利用者が無効だと `FG-AUTH-0013`。社員番号が既存の利用者と衝突すると `FG-AUTH-0014`（`auto_link=false` のときなど）(出典: `docs/handoff/2026-11-01-m2-mr4.md` §2〜§3、`ops/runbooks/oidc-login.md`)。
 - Keycloak に届かなくても、ログイン済みのセッション・git・トークンの API・`gstn` は動き続ける。`/readyz` は Keycloak を見ない（ADR-0021 §10）。
 - 確認: `forge doctor` の `auth.oidc`（discovery・JWKS・時計のずれ・issuer の一致）。ブラウザで `https://<TEST_SERVER_HOST>/-/auth/login` → Keycloak → `/-/auth/callback` → 戻る。
-- ログイン後はホームが開く。ホーム → プロジェクト → ファイル・コミット、設定 → トークン（~~仕様書のプロジェクトの「文書ポータル」~~ は 2026-11-01 に取り下げが決まったので、確かめない）。
+- ログイン後はホームが開く。ホーム → プロジェクト → ファイル・コミット、設定 → トークン。仕様は各リポジトリの `spec/` の Markdown を、リポジトリの画面で読む（ADR-0023）。
 - `auth.oidc` を設定しなければ `/-/auth/login` は `FG-AUTH-0018`（503）を返す。`gstn` とトークンだけで試験するなら、この節は飛ばしてよい。
 
 ---
@@ -501,7 +500,7 @@ GRANT ALL PRIVILEGES ON scrum_tool.* TO 'scrum_app'@'127.0.0.1';
 
 ```bash
 cd <KANFLOW_SRC>
-git checkout --detach f95e2e8559f987bfc9b843d8c32c359ef16f296d      # 提案: 固定
+git checkout --detach 21e8804e6e2d41482d2e6ae8295657dcc1127c4e      # 提案: 固定（Kanflow）
 cd app
 # 社内で registry.npmjs.org が遮断されている場合 (出典: README.md): npm config set registry https://registry.yarnpkg.com/
 npm ci                      # CI は npm ci (出典: .github/workflows/ci.yml)。README は npm install
@@ -732,7 +731,7 @@ cargo run -q -p forge-web --bin gen-authz -- --check
 - 同時に複数の全体テストを走らせない（dev の Postgres が落ちた実績。CLAUDE.md）。DB に繋がらないときは**黙ってスキップせず失敗**する。
 - 一部だけ回す例（MR8 の確認と同じ形）: `FORGE_TEST_DATABASE_URL=… cargo nextest run -p forge-web -p forge-git -p forge-auth -p forge-core -p forge-errors -p forge-client -j 2`（761 件通過・1 件 skip が記録）(出典: `docs/handoff/2026-11-01-m2-mr8.md` §4)。
 - Web の UI: `cd web && npm ci --ignore-scripts && npm run lint && npm run typecheck && npm test`。`npm run smoke` は Chromium が要る (出典: `web/README.md`)。
-- 直近の完全な全体テストの記録: 2026-11-01、`f95e2e8`（M2 の MR12 まで統合）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**、web は `npx vitest run` → **404 件合格**（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
+- 直近の完全な全体テストの記録: 2026-11-01、`e99b691`（ADR-0023 のコードの変更まで。デプロイの版との差は文書だけ）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**、web は `npx vitest run` → **362 件合格**（文書ポータルの削除でテストが減った）（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
 
 #### Kanflow（vitest / Playwright）
 
@@ -762,14 +761,14 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 |---|---|---|
 | MR5（ログアウト、バックチャネルのログアウト、5 分ごとのリフレッシュの確認、FG-AUTH-0017） | **統合済み**（`8649cc6`）。レビュー（security / rust / database / authz-matrix）の HIGH 1 件を修正し再レビューで承認。本物の Keycloak での E2E は未実行 | `docs/handoff/2026-11-01-m2-mr5.md`、`docs/adr/0021-oidc-keycloak-login-and-web-sessions.md` |
 | MR6（トークン・セッション・利用者検索・管理者の一覧と無効化の API、`gstn token`/`user`、期限切れセッションの削除） | **統合済み**（`2d72558`）。レビューの HIGH 1 件（他人のトークンの失効）を修正し再レビューで承認。管理者が他人のトークンを失効する API は見送り | `docs/handoff/2026-11-01-m2-mr6.md`、`docs/api/openapi.json` |
-| UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **統合済み**。各 MR で TypeScript / a11y / design（MR10 は security も）のレビューの HIGH を直し再レビューで承認。web の単体テスト 404 件、Playwright の通し（43 画面、axe 違反 0）は**スタンドインのサーバー相手**。実 `forge serve` と本物の Keycloak での通し、Firefox・Safari は未確認。文書ポータルの使いやすさの確かめ（人の作業）は未実施（**文書ポータルは 2026-11-01 に取り下げ。この確かめは不要**） | `docs/handoff/2026-11-01-m2-mr9.md`〜`-mr12.md` |
+| UI の画面 MR9〜MR11（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン） | **統合済み**（MR12 の文書ポータルは ADR-0023 で削除）。各 MR で TypeScript / a11y / design（MR10 は security も）のレビューの HIGH を直し再レビューで承認。web の単体テスト 362 件、Playwright の通し（axe 違反 0）は**スタンドインのサーバー相手**。実 `forge serve` と本物の Keycloak での通し、Firefox・Safari は未確認 | `docs/handoff/2026-11-01-m2-mr9.md`〜`-mr12.md` |
 | トークンの画面での発行 | 画面あり（MR11、ブラウザのセッションが要る）。CLI は `forge admin token issue` | §3.6 |
 | 閲覧の API | commits / commit / compare / blame / refs / resolve / tree / blob / raw / archive は**統合済み** | `docs/handoff/…-mr7.md`、`…-mr8.md` |
-| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ、リポジトリをまたぐ連携（仕様の参照・ずれの通知・Kanflow への複数登録） | M3 以降（未実装）。~~文書ポータルのアップロード・承認・編集~~ は文書ポータルごと取り下げ（2026-11-01、ADR-0023。M2 の読み取り専用版は `f95e2e8` に含まれるが削除予定） | `README.md` ロードマップ |
+| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ、リポジトリをまたぐ連携（仕様の参照・ずれの通知・Kanflow への複数登録） | M3 以降（未実装）。文書ポータルは取り下げ・削除済み（ADR-0023）。仕様の承認は MR の承認で行い、Kanflow からも承認できるようにする（計画 02 F-36、M3 以降） | `README.md` ロードマップ |
 | Kanflow 連携 | §5.1 のとおり未実装 | 計画 02 §13 |
 | GitHub Actions の CI | **一度も動いていない**。main か PR で 1 回動かすのが MR2 の CI 追加の前提 | `docs/plan/10-m2-plan.md` §8、`docs/ci.md` |
 | Keycloak の E2E（本物の Keycloak と通す）、realm JSON の実機での取り込み | **未実行**（realm の JSON は構文確認のみ） | `docs/handoff/2026-11-01-m2-mr4.md` §6 |
-| ワークスペース全体のテスト | `f95e2e8` で Rust **1607 件合格・1 件 skip**、web 404 件合格（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
+| ワークスペース全体のテスト | `e99b691` で Rust **1607 件合格・1 件 skip**、web 362 件合格（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
 | MR4 のレビュー | security / rust（エラー契約・握りつぶしを含む）/ database / authz-matrix を実施。CRITICAL・HIGH なし。MEDIUM の指摘を `4e1c861` で修正し、指摘した評価役の再レビューで承認のうえ統合 | `docs/handoff/2026-11-01-m2-mr4.md`、`git log` |
 | MR7・MR8 のレビュー | MR7: git-protocol / security / authz-matrix / rust を実施、HIGH 1 件を `c1cb52d` で修正し再レビューで承認。MR8: git-protocol / rust / authz-matrix を実施、HIGH 3 件を `2c9b15e` で修正し再レビューで承認。どちらも承認後に統合 | `docs/handoff/…-mr7.md`、`…-mr8.md`、`git log` |
 | 持ち越し | OIDC の discovery にキャッシュ期限が無い（Keycloak 側のエンドポイント変更時は再起動）／state Cookie のサーバー側の 1 回限りは未実装／Keycloak イメージの digest 固定／秘密の走査の許可リスト／`web.hsts` の設定キー未実装／深いカーソル（`--skip`）は O(n²)（上限と時間切れで抑制）／木の項目名が UTF-8 でないものの扱い／3 ドットの比較・`--follow` なし／`git.browse.*` の設定なし | `docs/handoff/2026-11-01-m2-mr4.md` §7、`…-mr8.md` §6、`docs/adr/0022-…` |
