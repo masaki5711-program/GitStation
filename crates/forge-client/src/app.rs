@@ -6,6 +6,7 @@ use crate::config::{Config, Overrides};
 use crate::credential;
 use crate::error::{ClientError, Exit, Result};
 use crate::gitcfg;
+use crate::hosting;
 use crate::http::{ApiClient, Method};
 use crate::registry;
 use crate::store::{Token, TokenStore};
@@ -103,11 +104,16 @@ pub fn project(v: Value, fields: &[String]) -> Value {
     };
     match v {
         Value::Object(mut m) => {
-            if let Some(Value::Array(items)) = m.remove("items") {
+            let list_key = ["items", "members", "rules"]
+                .into_iter()
+                .find(|k| matches!(m.get(*k), Some(Value::Array(_))));
+            if let Some((key, Value::Array(items))) =
+                list_key.and_then(|k| m.remove(k).map(|v| (k, v)))
+            {
                 let items = items.into_iter().map(|i| project(i, fields)).collect();
                 let mut out = Map::new();
-                out.insert("items".to_string(), Value::Array(items));
-                for k in ["next_cursor", "has_more"] {
+                out.insert(key.to_string(), Value::Array(items));
+                for k in ["next_cursor", "next_after", "has_more"] {
                     if let Some(x) = m.remove(k) {
                         out.insert(k.to_string(), x);
                     }
@@ -122,7 +128,7 @@ pub fn project(v: Value, fields: &[String]) -> Value {
     }
 }
 
-fn emit(io: &mut Io<'_>, cli: &Cli, value: Value, human: &str) -> Result<()> {
+pub(crate) fn emit(io: &mut Io<'_>, cli: &Cli, value: Value, human: &str) -> Result<()> {
     if cli.json {
         let v = project(value, &cli.fields);
         let text = if io.stdout_tty {
@@ -137,7 +143,7 @@ fn emit(io: &mut Io<'_>, cli: &Cli, value: Value, human: &str) -> Result<()> {
     }
 }
 
-fn config_for(cli: &Cli, env: EnvFn<'_>) -> Result<Config> {
+pub(crate) fn config_for(cli: &Cli, env: EnvFn<'_>) -> Result<Config> {
     Config::load(
         env,
         &Overrides {
@@ -187,6 +193,11 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
             )
         }
         Command::Auth { command } => auth(cli, command, env, exe, io),
+        Command::Project { command } => hosting::project(cli, command, env, io),
+        Command::Group { command } => hosting::group(cli, command, env, io),
+        Command::Member { command } => hosting::member(cli, command, env, io),
+        Command::ProtectedRef { command } => hosting::protected_ref(cli, command, env, io),
+        Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),
     }
 }
@@ -195,7 +206,7 @@ fn token_store(cfg: &Config, env: EnvFn<'_>) -> Result<TokenStore> {
     TokenStore::open(&cfg.dir, &env("GSTN_CREDENTIAL_STORE").unwrap_or_default())
 }
 
-fn require_token(
+pub(crate) fn require_token(
     cfg: &Config,
     env: EnvFn<'_>,
     io: &mut Io<'_>,
@@ -374,7 +385,7 @@ fn git_credential(cli: &Cli, op: GitOperation, env: EnvFn<'_>, io: &mut Io<'_>) 
 
 // ── api ────────────────────────────────────────────────────────────────
 
-fn usage(reason: impl Into<String>) -> ClientError {
+pub(crate) fn usage(reason: impl Into<String>) -> ClientError {
     ClientError::local(
         ErrorCode::CliUsageInvalid,
         format!("reason={}", reason.into()),

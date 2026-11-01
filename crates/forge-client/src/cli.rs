@@ -33,6 +33,36 @@ pub enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Projects: list, view, create, edit, delete, restore.
+    #[command(disable_help_subcommand = true)]
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    /// Groups: list, view, create, edit.
+    #[command(disable_help_subcommand = true)]
+    Group {
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
+    /// Direct members of a project or a group.
+    #[command(disable_help_subcommand = true)]
+    Member {
+        #[command(subcommand)]
+        command: MemberCommand,
+    },
+    /// Protected ref rules of a project.
+    #[command(name = "protected-ref", disable_help_subcommand = true)]
+    ProtectedRef {
+        #[command(subcommand)]
+        command: ProtectedRefCommand,
+    },
+    /// Namespace paths.
+    #[command(disable_help_subcommand = true)]
+    Namespace {
+        #[command(subcommand)]
+        command: NamespaceCommand,
+    },
     /// Call any REST API v1 route.
     Api(ApiArgs),
     /// Describe the commands (`--json` for machines).
@@ -67,6 +97,319 @@ pub enum AuthCommand {
         /// Register as `credential.<host>.helper` in the global git config.
         #[arg(long, conflicts_with = "operation")]
         install: bool,
+    },
+}
+
+/// The largest text the client sends in one field (the server has its own,
+/// stricter rules; this only stops absurd input before a request).
+const MAX_TEXT_BYTES: usize = 4096;
+
+/// A server id: a positive integer that fits the API's int64.
+pub fn parse_id(raw: &str) -> Result<i64, String> {
+    match raw.parse::<i64>() {
+        Ok(n) if n >= 1 => Ok(n),
+        _ => Err("an id is a positive whole number".to_string()),
+    }
+}
+
+fn parse_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=100).contains(&n) => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 100".to_string()),
+    }
+}
+
+fn check_text(raw: &str) -> Result<(), String> {
+    if raw.len() > MAX_TEXT_BYTES {
+        return Err(format!("at most {MAX_TEXT_BYTES} bytes"));
+    }
+    if raw
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Err("no control characters".to_string());
+    }
+    Ok(())
+}
+
+/// A required, non-blank single-line text (a path, a name, a pattern, a cursor).
+pub fn parse_text(raw: &str) -> Result<String, String> {
+    if raw.trim().is_empty() {
+        return Err("must not be empty".to_string());
+    }
+    if raw.chars().any(char::is_control) {
+        return Err("no control characters".to_string());
+    }
+    check_text(raw)?;
+    Ok(raw.to_string())
+}
+
+/// A free text that may be empty (a description).
+pub fn parse_description(raw: &str) -> Result<String, String> {
+    check_text(raw)?;
+    Ok(raw.to_string())
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Guest,
+    Reporter,
+    Developer,
+    Maintainer,
+    Owner,
+}
+
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Guest => "guest",
+            Self::Reporter => "reporter",
+            Self::Developer => "developer",
+            Self::Maintainer => "maintainer",
+            Self::Owner => "owner",
+        }
+    }
+}
+
+/// The roles that may be a protected ref's minimum pusher.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushRole {
+    Developer,
+    Maintainer,
+    Owner,
+}
+
+impl PushRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Developer => "developer",
+            Self::Maintainer => "maintainer",
+            Self::Owner => "owner",
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Spec,
+    System,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Spec => "spec",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Visibility {
+    Private,
+    Internal,
+}
+
+impl Visibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Internal => "internal",
+        }
+    }
+}
+
+/// Paging of a list command.
+#[derive(Args, Debug)]
+pub struct ListArgs {
+    /// Rows per page, 1..=100 (server default 20; 100 with --all).
+    #[arg(long, value_parser = parse_limit, value_name = "N")]
+    pub limit: Option<u32>,
+    /// Continue after this `next_cursor` (from a previous page).
+    #[arg(long, value_parser = parse_text, value_name = "CURSOR", conflicts_with = "all")]
+    pub cursor: Option<String>,
+    /// Follow next_cursor and merge every page (bounded).
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct IdArg {
+    /// The numeric id.
+    #[arg(value_parser = parse_id)]
+    pub id: i64,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProjectCommand {
+    /// List the projects you can see.
+    List(ListArgs),
+    /// Show one project.
+    View(IdArg),
+    /// Create a project in a namespace.
+    Create {
+        /// The parent namespace id (a user's, a group's, or from `namespace resolve`).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        namespace_id: i64,
+        /// The path segment of the new project.
+        #[arg(long, value_parser = parse_text)]
+        path: String,
+        #[arg(long, value_parser = parse_text)]
+        display_name: String,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+        /// spec | system (server default: system; fixed at creation).
+        #[arg(long, value_enum)]
+        kind: Option<Kind>,
+        /// private | internal (server default: private).
+        #[arg(long, value_enum)]
+        visibility: Option<Visibility>,
+    },
+    /// Change a project's display name or description.
+    Edit {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_text)]
+        display_name: Option<String>,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+    },
+    /// Delete a project (restorable for the grace period).
+    Delete {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm the deletion (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Restore a deleted project within its grace period.
+    Restore(IdArg),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GroupCommand {
+    /// List the groups you can see.
+    List(ListArgs),
+    /// Show one group.
+    View(IdArg),
+    /// Create a top-level group, or a subgroup with --parent-id.
+    Create {
+        #[arg(long, value_parser = parse_text)]
+        path: String,
+        #[arg(long, value_parser = parse_text)]
+        display_name: String,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+        /// Create it inside this group.
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        parent_id: Option<i64>,
+    },
+    /// Change a group's display name or description.
+    Edit {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_text)]
+        display_name: Option<String>,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+    },
+}
+
+/// Which object's members: exactly one of the two.
+#[derive(Args, Debug)]
+#[group(required = true, multiple = false)]
+pub struct MemberTarget {
+    /// The project id.
+    #[arg(long, value_parser = parse_id, value_name = "ID")]
+    pub project: Option<i64>,
+    /// The group id.
+    #[arg(long, value_parser = parse_id, value_name = "ID")]
+    pub group: Option<i64>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemberCommand {
+    /// List direct members.
+    List {
+        #[command(flatten)]
+        target: MemberTarget,
+        /// Members per page, 1..=100 (server default 20; 100 with --all).
+        #[arg(long, value_parser = parse_limit, value_name = "N")]
+        limit: Option<u32>,
+        /// Continue after this user id (a previous page's next_after).
+        #[arg(long, value_parser = parse_id, value_name = "USER_ID", conflicts_with = "all")]
+        after: Option<i64>,
+        /// Follow next_after and merge every page (bounded).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Make a user a direct member.
+    Add {
+        #[command(flatten)]
+        target: MemberTarget,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        user_id: i64,
+        #[arg(long, value_enum)]
+        role: Role,
+    },
+    /// Change a member's direct role.
+    #[command(name = "set-role")]
+    SetRole {
+        #[command(flatten)]
+        target: MemberTarget,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        user_id: i64,
+        #[arg(long, value_enum)]
+        role: Role,
+    },
+    /// Remove a direct member.
+    Remove {
+        #[command(flatten)]
+        target: MemberTarget,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        user_id: i64,
+        /// Confirm the removal (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProtectedRefCommand {
+    /// List a project's protected ref rules.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Protect a ref pattern.
+    Add {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// `refs/heads/…` or `refs/tags/…`, at most one `*` in the last part.
+        #[arg(long, value_parser = parse_text)]
+        pattern: String,
+        #[arg(long, value_enum)]
+        push_min_role: PushRole,
+    },
+    /// Remove a rule.
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        rule_id: i64,
+        /// Confirm the removal (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NamespaceCommand {
+    /// Which project, group or user a path names.
+    Resolve {
+        /// The full path, e.g. `team/app`.
+        #[arg(value_parser = parse_text)]
+        path: String,
     },
 }
 
