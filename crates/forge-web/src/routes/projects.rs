@@ -150,6 +150,19 @@ pub fn project_view(
     proof: &Authorized<ProjectCtx>,
     record: &ProjectRecord,
 ) -> Result<Value, ForgeError> {
+    let body = project_body(proof, record)?;
+    serde_json::to_value(body).map_err(|e| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "project_view_serialize")
+            .with_source(e)
+    })
+}
+
+/// [`project_view`] as the typed body (the lists embed it, MR7b).
+pub fn project_body(
+    proof: &Authorized<ProjectCtx>,
+    record: &ProjectRecord,
+) -> Result<ProjectBody, ForgeError> {
     if record.id != *proof.id() {
         return Err(ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "project_details_mismatch")
@@ -163,7 +176,7 @@ pub fn project_view(
         .last()
         .map(|s| s.as_str().to_owned())
         .unwrap_or_default();
-    let body = ProjectBody {
+    Ok(ProjectBody {
         id: proof.id().get(),
         namespace_id: record.namespace_id.get(),
         path: record.path.full_path(),
@@ -174,11 +187,6 @@ pub fn project_view(
         kind: record.kind.as_str().to_owned(),
         created_at: record.created_at.clone(),
         role: view.role.map(|r| Role::as_str(r).to_owned()),
-    };
-    serde_json::to_value(body).map_err(|e| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "project_view_serialize")
-            .with_source(e)
     })
 }
 

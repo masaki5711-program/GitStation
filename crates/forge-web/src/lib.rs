@@ -31,6 +31,7 @@ pub use auth::{BoundedAuthenticator, CallerProfile};
 pub use context::Ctx;
 pub use error::ApiError;
 pub use routes::git::{GitHttpLimits, PushTasks, SmartHttp};
+pub use routes::lists::Lists;
 pub use server::ServerLimits;
 
 /// Where the generated documents live, relative to the product root (`Git/`).

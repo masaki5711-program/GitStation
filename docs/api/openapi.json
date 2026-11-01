@@ -22,6 +22,87 @@
         ],
         "type": "object"
       },
+      "GroupPage": {
+        "additionalProperties": false,
+        "description": "A page of groups.",
+        "properties": {
+          "has_more": {
+            "description": "More rows may follow (a page can be short, even empty, when its\nscan budget ended first).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ListedGroup"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "ListedGroup": {
+        "additionalProperties": false,
+        "description": "A group as a list shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The current full path (`group/sub`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -81,6 +162,35 @@
           "kind",
           "created_at",
           "role"
+        ],
+        "type": "object"
+      },
+      "ProjectPage": {
+        "additionalProperties": false,
+        "description": "A page of projects.",
+        "properties": {
+          "has_more": {
+            "description": "More rows may follow (a page can be short, even empty, when its\nscan budget ended first).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectBody"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
         ],
         "type": "object"
       },
@@ -197,6 +307,57 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/groups": {
+      "get": {
+        "operationId": "get_api_v1_groups",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list and this caller)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List the groups the caller may read (keyset, opaque cursor)",
+        "x-forge-action": "GroupList"
+      }
+    },
     "/api/v1/namespaces/resolve": {
       "get": {
         "operationId": "get_api_v1_namespaces_resolve",
@@ -224,6 +385,57 @@
         },
         "summary": "Resolve a namespace path for the caller (ADR-0015)",
         "x-forge-action": "PathResolve"
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "operationId": "get_api_v1_projects",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list and this caller)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List the projects the caller may read (keyset, opaque cursor)",
+        "x-forge-action": "ProjectList"
       }
     },
     "/api/v1/projects/{id}": {

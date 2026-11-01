@@ -6,6 +6,7 @@
 pub mod git;
 pub mod git_push;
 pub mod health;
+pub mod lists;
 pub mod namespaces;
 pub mod projects;
 pub mod shell;

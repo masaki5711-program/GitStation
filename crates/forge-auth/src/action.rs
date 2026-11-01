@@ -35,6 +35,10 @@ actions! {
     RepoPush,
     // --- REST API: projects ---
     ProjectRead,
+    /// `GET /api/v1/projects`: may the caller list at all (any active
+    /// signed-in user; `read_api` on a token). Decided on the instance;
+    /// every row is then decided again with `ProjectRead` (M1 phase 8b).
+    ProjectList,
     ProjectCreate,
     ProjectUpdate,
     /// Private ⇄ internal: Owner only (exposes a project to every signed-in user).
@@ -46,6 +50,9 @@ actions! {
     MemberManage,
     // --- REST API: groups ---
     GroupRead,
+    /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
+    /// with `GroupRead` (M1 phase 8b).
+    GroupList,
     GroupCreateTopLevel,
     SubgroupCreate,
     GroupUpdate,
@@ -93,7 +100,9 @@ impl Action {
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
+            | Action::ProjectList
             | Action::GroupRead
+            | Action::GroupList
             | Action::TokenList
             | Action::AuditRead
             | Action::UserSelfRead

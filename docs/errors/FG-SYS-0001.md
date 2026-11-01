@@ -20,7 +20,7 @@ A failure that no more specific code describes reached a boundary. Every occurre
 
 ## 調べ方 (diagnosis)
 
-Filter logs by error_code=FG-SYS-0001 and the reported request_id; read the `context` and `source` fields and the span chain to find the origin crate and operation.
+Filter logs by error_code=FG-SYS-0001 and the reported request_id; read the `context` and `source` fields and the span chain to find the origin crate and operation. From the list routes: `reason=lists_unconfigured` (the server was built without the page loaders and cursor keys — `forge serve` always sets them, so this is a test or embedding error), `page_out_of_order` (the page loader returned ids not strictly ascending after the cursor: a loader bug, the page was refused rather than repeat or skip rows), `page_size_out_of_range` (a caller asked forge_db::lists for 0 or more than 10000 rows).
 
 ## 対処 (fix)
 

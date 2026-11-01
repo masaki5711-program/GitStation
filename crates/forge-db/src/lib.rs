@@ -87,6 +87,9 @@ pub mod protected_refs;
 // ── M1 phase 8 MR3: the namespace resolver ──
 pub mod resolve;
 // ── end M1 phase 8 MR3 ──
+// ── M1 phase 8b MR7b: list page scans ──
+pub mod lists;
+// ── end M1 phase 8b MR7b ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
