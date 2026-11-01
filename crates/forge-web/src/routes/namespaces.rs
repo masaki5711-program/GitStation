@@ -112,7 +112,7 @@ pub(crate) fn lookup_param(query: Option<&str>) -> Result<LookupPath, &'static s
 
 /// Strict percent-decoding (a `%` must start two hex digits; `+` is not a
 /// space: a namespace has neither).
-fn percent_decode(raw: &str) -> Option<String> {
+pub(crate) fn percent_decode(raw: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(raw.len());
     let mut iter = raw.bytes();
     while let Some(b) = iter.next() {

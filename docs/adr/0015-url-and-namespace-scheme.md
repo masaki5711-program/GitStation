@@ -1113,3 +1113,20 @@ URL の 3 つの形と判定の順序（上の「判定の順序」）は変え�
 - 公開の殻は DB も資格情報も見ず、どのパスにも同じバイトを返す（ADR-0022 §2）。
 - GitHub の形の URL の救済（`resolve?prefix=true`）は上の規則のまま（MR6 で実装。回数の制限は FG-WEB-0010）。
 - サーバーが返すリダイレクトの規則（`web.base_url` か相対パス）。`web.base_url` は ADR-0021 §12 で設定として足す（今の墓標の 302 は相対パス）。
+
+## Amendment（2026-11-01、M2 MR7: 閲覧の API と raw・archive の実装で決めたこと）
+
+上の M2 の Amendment（`RepoBrowse`、raw・archive のヘッダー、プレビュー用のオリジンを作らないこと）を実装したときに決めた点。
+
+| 点 | 決めたこと | 理由 |
+|---|---|---|
+| ref のキャッシュ | `for-each-ref` の結果をリポジトリごとに 5 秒（`BrowseLimits::refs_ttl`）、最大 256 リポジトリ。push の処理が終わるたびに消す（`RefsChanged`）。消した時刻をまたいで読んだ一覧は保存しない（世代の数） | 計画 10 §5 の「数秒のキャッシュ（push で消す）」。push の直後に古い ref を見せない |
+| ref の数の上限 | 一覧は 5 000 件で `truncated`。それを超えるリポジトリの解決は、キャッシュではなく候補の完全な名前だけを `for-each-ref --end-of-options <候補>` で git に聞く | 一覧の大きさを抑えつつ、解決は常に正しくする |
+| `?ref=` の形 | 40 / 64 桁の 16 進数（大文字小文字は問わず、小文字にする）、`refs/heads/…` / `refs/tags/…` の完全な名前、短い名前（ブランチ、次にタグ） | 画面と gstn が同じ値を渡せる。16 進数はコミットとしてだけ扱い、同じ名前のブランチには落とさない |
+| 注釈付きタグ | 1 段だけ剥がす（`%(*objectname)`）。木・blob を指すタグは `FG-REPO-0023 reason=not_a_commit` | 閲覧の対象はコミットだけ |
+| 上限を超える木とファイル | エラーにせず切り詰める（木 5 000 項目、blob 1 MiB、`truncated: true`）。git は上限で止めて回収する | 画面は「切り詰めました」と出せばよく、失敗ではない（計画 10 MR10 の表示） |
+| raw の型の判定 | 4 MiB 以下は全部を読んで判定し、超えるものは `application/octet-stream`（`attachment`）で流す。画像は拡張子と先頭のバイトの両方が合うときだけ。SVG に加えて HTML・XML・PDF の系統（`svgz`、`htm`、`xhtml`、`xht`、`shtml`、`mht`、`mhtml`、`xsl`、`xslt`）もダウンロードだけ | UTF-8 として正しいかは全体を見ないと決まらない。4 MiB を超える画像はダウンロードになる（M2 では受け入れる） |
+| archive の名前 | 中のディレクトリは `<プロジェクトの名前>-<コミットの先頭 12 桁>/`、ファイル名は `<プロジェクトの名前>-<ref（英数字と ._- 以外は ->）>.<拡張子>`。ref の後ろにパスが残れば `path_remainder` | prefix は forge が作る値だけにする（利用者の文字を git の引数に入れない） |
+| tar.gz | `-c tar.tar.gz.command=git archive gzip`（git 2.38 以上の内部の gzip）を毎回付ける | リポジトリの設定の外部コマンドを動かさない |
+| 同時実行の上限 | リポジトリごとに 8（取り込みの git の呼び出し）。超えたら待たずに `FG-GIT-0004 reason=repo_browse`。archive と大きい raw は既存の stream の上限（全体 16、利用者ごと 4）だけ | 1 つのリポジトリへの集中で全体の git の枠を使い切らない。長い stream を枠に入れると閲覧が止まる |
+| 閲覧の API の `ProjectRecord` | `ProjectRecord` に `repository`（id と状態）を足し、`load_project` と一覧の 1 つの文で読む | 閲覧の API はプロジェクトの id で届くので、解決の API と同じく 1 回の読み出しで repository まで分かる |

@@ -10,6 +10,7 @@
 //! `client_depends_only_on_forge_errors` below.
 
 pub mod app;
+pub mod browse;
 pub mod cli;
 pub mod config;
 pub mod coverage;

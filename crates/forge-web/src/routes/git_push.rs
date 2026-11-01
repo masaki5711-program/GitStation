@@ -600,6 +600,16 @@ struct BodyEnd {
     bytes_in: u64,
 }
 
+/// Drops the repository's cached browse ref list when the push task ends
+/// (M2 MR7; every way it ends).
+struct RefsChanged(forge_git::browse::Browser, forge_core::RepoId);
+
+impl Drop for RefsChanged {
+    fn drop(&mut self) {
+        self.0.invalidate(self.1);
+    }
+}
+
 /// receive-pack once it runs: forwards its answer, then records the push
 /// (steps 4–6). Owned by its own task, not by the request.
 struct Receiver {
@@ -625,6 +635,9 @@ impl Receiver {
         mut body: oneshot::Receiver<BodyEnd>,
         _task: super::git::PushTask,
     ) {
+        // Whatever happens below, the refs may have changed: the browse
+        // ref cache of this repository is dropped when the push ends.
+        let _refs_changed = RefsChanged(self.smart.browse.clone(), self.repository.id); // clone: a shared handle
         let mut body_done = false;
         let mut buf = vec![0u8; CHUNK];
         let read_error = loop {

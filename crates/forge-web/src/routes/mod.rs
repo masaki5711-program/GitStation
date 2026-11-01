@@ -4,6 +4,8 @@
 //! proof.
 
 pub mod assets;
+pub mod browse;
+pub mod content;
 pub mod git;
 pub mod git_push;
 pub mod groups;

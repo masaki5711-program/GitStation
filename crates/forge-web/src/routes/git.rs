@@ -43,6 +43,7 @@ use forge_auth::ProjectCtx;
 use forge_core::config::GitHttpConfig;
 use forge_core::{telemetry, ProjectRepository, ProtectionLoader, PushRecorder, RepositoryState};
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::smart_http::{advertisement_prefix, Phase, ProtocolVersion, Service};
 use forge_git::upload_request::{err_packet, parse_upload_pack_request};
 use forge_git::{Git, StorageRoot, WantLimits};
@@ -120,6 +121,10 @@ pub struct SmartHttp {
     /// The detached receive-pack tasks still running (graceful shutdown
     /// waits for them: [`SmartHttp::push_tasks`]).
     pub(crate) push_tasks: PushTasks,
+    /// The browse API and the raw / archive routes (M2 MR7): the same git
+    /// and storage, the browse limits, the per-repository cap and the ref
+    /// cache every push drops.
+    pub browse: Browser,
 }
 
 /// Counts running push tasks (a receive-pack the request no longer owns,
@@ -198,6 +203,11 @@ impl SmartHttp {
             cfg.max_streams_per_principal,
             cfg.acquire_timeout,
         );
+        let browse = Browser::new(
+            git.clone(),     // clone: a shared handle (pools, config)
+            storage.clone(), // clone: a path
+            BrowseLimits::default(),
+        );
         Self {
             git,
             storage,
@@ -205,7 +215,19 @@ impl SmartHttp {
             body_slots,
             push: None,
             push_tasks: PushTasks::default(),
+            browse,
         }
+    }
+
+    /// Other browse limits (tests; `forge serve` keeps the defaults).
+    #[must_use]
+    pub fn with_browse_limits(mut self, limits: BrowseLimits) -> Self {
+        self.browse = Browser::new(
+            self.git.clone(),     // clone: a shared handle
+            self.storage.clone(), // clone: a path
+            limits,
+        );
+        self
     }
 
     /// The running push tasks (`forge serve` waits for them on shutdown).

@@ -51,6 +51,8 @@ const MEMBER_SCHEMA: &str = r#"{"type":"object","required":["user_id","username"
 const MOVE_SCHEMA: &str = r#"{"type":"object","required":["id","kind","namespace_id","old_path","path","tombstones","projects","reclaimed_tombstones"],"properties":{"id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"namespace_id":{"type":"integer"},"old_path":{"type":"string"},"path":{"type":"string"},"tombstones":{"type":"integer"},"projects":{"type":"integer"},"reclaimed_tombstones":{"type":"integer"}}}"#;
 const PROTECTED_REF_SCHEMA: &str = r#"{"type":"object","required":["id","pattern","push_min_role","created_at","updated_at"],"properties":{"id":{"type":"integer"},"pattern":{"type":"string"},"push_min_role":{"type":"string"},"created_at":{"type":"string"},"updated_at":{"type":"string"}}}"#;
 
+const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
+
 pub const GLOBAL_ARGS: &[ArgSpec] = &[
     arg("--json", "flag", false, "Machine-readable output: JSON on stdout, and on failure a JSON error {error_code,user_message,request_id,retryable,detail} on stderr."),
     arg("--host", "option", false, "Server base URL (https://…); overrides GSTN_HOST and config.toml."),
@@ -397,6 +399,56 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["POST /api/v1/namespaces/tombstones/release"],
         output: r#"{"type":"object","required":["path","kind"],"properties":{"path":{"type":"string"},"kind":{"enum":["moved","deleted"]}}}"#,
+    },
+    CommandSpec {
+        name: "browse refs",
+        summary: "List a project's branches and tags (with the commit each peels to) and the default branch.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--type", "option", false, "branch | tag (default: both)."),
+        ],
+        examples: &["gstn browse refs --project 7 --json", "gstn browse refs --project 7 --type tag"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/refs"],
+        output: r#"{"type":"object","required":["default_branch","refs","truncated"],"properties":{"default_branch":{"type":["string","null"]},"refs":{"type":"array","items":{"type":"object","required":["name","full_name","type","commit","target"],"properties":{"name":{"type":"string"},"full_name":{"type":"string"},"type":{"enum":["branch","tag"]},"commit":{"type":["string","null"]},"target":{"type":"string"}}}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "browse resolve",
+        summary: "Split <ref>/<path> into a revision and a path (full commit id first, then the longest branch, then the longest tag).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("spec", "positional", true, "The part of a page URL after /-/tree/ or /-/blob/, e.g. feature/x/src/lib.rs."),
+        ],
+        examples: &["gstn browse resolve --project 7 feature/x/src/lib.rs --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/resolve"],
+        output: REVISION_PATH_SCHEMA,
+    },
+    CommandSpec {
+        name: "browse tree",
+        summary: "List one directory of a revision (capped by the server; truncated past the cap).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", true, "A full commit id, a branch or a tag (refs/heads/... / refs/tags/... or a short name)."),
+            arg("--path", "option", false, "The directory (default: the root)."),
+        ],
+        examples: &["gstn browse tree --project 7 --ref main --path src --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/tree"],
+        output: r#"{"type":"object","required":["ref","path","oid","entries","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"oid":{"type":"string"},"entries":{"type":"array","items":{"type":"object","required":["name","path","type","mode","oid","size"],"properties":{"name":{"type":"string"},"path":{"type":"string"},"type":{"enum":["tree","blob","symlink","submodule"]},"mode":{"type":"string"},"oid":{"type":"string"},"size":{"type":["integer","null"]}}}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "browse file",
+        summary: "Show one file of a revision: its text (at most 1 MiB; truncated past it), or that it is binary.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--ref", "option", true, "A full commit id, a branch or a tag."),
+            arg("--path", "option", true, "The file's path."),
+        ],
+        examples: &["gstn browse file --project 7 --ref main --path README.md", "gstn browse file --project 7 --ref v1.0 --path src/lib.rs --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/repository/blob"],
+        output: r#"{"type":"object","required":["ref","path","name","type","mode","oid","size","binary","content","truncated"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"]},"path":{"type":"string"},"name":{"type":"string"},"type":{"enum":["blob","symlink"]},"mode":{"type":"string"},"oid":{"type":"string"},"size":{"type":"integer"},"binary":{"type":"boolean"},"content":{"type":["string","null"]},"truncated":{"type":"boolean"}}}"#,
     },
     CommandSpec {
         name: "user rename",

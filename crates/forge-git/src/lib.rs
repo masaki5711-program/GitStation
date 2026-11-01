@@ -18,7 +18,12 @@
 //!   [`receive_report`] reads / rewrites receive-pack's report and builds
 //!   forge's in-band refusal, [`Git::fast_forwards`] / [`Git::new_commits`]
 //!   classify a push's updates and list their commits (M1 phase 9 MR4).
+//! - [`browse`] reads a repository for the browse API and the raw /
+//!   archive routes (M2 MR7): refs (cached, dropped on push), resolution of
+//!   a ref and a path, trees, blobs, raw files and archives, with caps,
+//!   timeouts and a per-repository limit.
 
+pub mod browse;
 mod command;
 mod config;
 pub mod gzip;

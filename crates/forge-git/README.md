@@ -97,6 +97,31 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   `encode` / `encode_data`, `PktReader` (async, one packet ≤ 65520 bytes), `encode_sideband` /
   `decode_sideband` (`Band::{Data, Progress, Error}`, ≤ 65515 data bytes per packet). Invalid
   framing → FG-GIT-0014 `reason=pkt_line` (`detail`).
+- **Browse** (`browse`, M2 MR7, ADR-0015 "ref とパスの境目"): `Browser::new(Git, StorageRoot,
+  BrowseLimits)` (cheap clone; forge-web keeps one in `SmartHttp::browse`).
+  - `refs(repo) -> Arc<RefList>` (`for-each-ref` of `refs/heads/` + `refs/tags/` only, NUL-separated
+    fields, tags peeled one level, `default_branch` from `%(HEAD)`, ≤ `max_refs` 5 000 else
+    `truncated`); cached per repository for `refs_ttl` (5 s), at most `max_cached_repos` (256);
+    `invalidate(repo)` (every push) drops it, and a list loaded across an invalidation is not stored.
+  - `resolve_ref(repo, "<oid | refs/heads/… | refs/tags/… | short>")` and
+    `resolve_spec(repo, &segments) -> ResolvedSpec { rev, path }` in ADR-0015's order (40 / 64-hex
+    commit id of any case first, then the longest branch, then the longest tag; candidates are
+    `RefName`-valid prefixes only, so `-n`, `--output=x` never match). A truncated ref list falls back
+    to `for-each-ref --end-of-options <exact candidates>`. Unknown → `FG-REPO-0023`
+    (`ref_not_found`, `not_a_commit`).
+  - `tree(repo, commit, &RepoPath)` (`ls-tree -z --long --full-tree --end-of-options <commit> --
+    <path>` for the entry, then `ls-tree -z --long <tree id>`; ≤ `max_tree_entries` 5 000),
+    `blob(…)` (`cat-file blob <blob id>`, ≤ `max_blob_bytes` 1 MiB), `raw_entry(…)`, `raw(…,
+    principal)` (≤ `raw_inline_max_bytes` 4 MiB read whole, larger a `GitStream`),
+    `archive(repo, commit, ArchiveFormat, prefix, principal) -> GitStream` (`-c
+    tar.tar.gz.command=git archive gzip`: gzip inside git, never a configured filter; `--prefix
+    <forge-made>/`). `FG-REPO-0023` `path_not_found`, `not_a_tree`, `not_a_blob`.
+  - One deadline per operation (`timeout`, 10 s; `FG-GIT-0002 operation=browse`); streams idle 60 s
+    / total 10 min (`stream_idle`, `stream_total`); at most `max_per_repo` (8) captured calls per
+    repository at once (`FG-GIT-0004 reason=repo_browse`, refused at once; streams are bounded by the
+    stream pools instead). Caps are `GitCommand::output_truncated(cap)` (crate-internal): git is killed
+    and reaped at the cap, `truncated = true`, never an error.
+  - `RepoPath::parse` / `from_segments`: no empty, `.`, `..` or control segment, ≤ 4096 bytes.
 - **gzip** (`gzip`): `GzipDecoder::new(cap)` → `push(chunk)` / `finish()`, `decode_capped(body, cap)`.
   Over the cap → FG-GIT-0013 `limit=gzip_decompressed` (decoding stops there); corrupt /
   truncated / trailing data → FG-GIT-0014 `reason=gzip`.
@@ -157,6 +182,7 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
 | FG-REPO-0002 StorageMissing | repository directory missing | `repo-storage` |
 | FG-REPO-0003 StorageIoFailed | permission / disk / I/O failure on the storage root | `repo-storage` |
 | FG-REPO-0004 RepoPathOccupied | creating a repository where something already exists | `repo-storage` |
+| FG-REPO-0023 RepositoryPathNotResolved | browse (M2 MR7): a ref, commit id or path the repository does not have (`reason`) | — |
 
 `FG-GIT-0005 InvalidRefName` is raised by `forge_core::RefName` and
 `Revision::object_id`.
@@ -181,6 +207,10 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   `waitid` (Linux, macOS — not OpenBSD).
 - File size: `command.rs` ~490 lines and `stream.rs` ~680 (target 400) — split
   the env/argv builder and the supervisor out when MR3/MR4 touch them.
+  `browse.rs` (M2 MR7) is ~1 100 lines: split it into `browse/{refs,tree,content}.rs` when MR8 adds
+  commits / compare / blame.
+- Browse: tree entry names that are not UTF-8 are shown lossily (`�`) and cannot be requested back;
+  raw files over 4 MiB are always downloads (no image sniff on a stream).
 - `Revision::object_id` accepts 40 or 64 hex digits regardless of the
   repository's object format; callers that compare against an approved SHA
   must pass the repository's format (before M3 merge / M4 deploy).

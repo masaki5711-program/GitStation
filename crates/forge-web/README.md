@@ -64,7 +64,7 @@ admitted proof.
 - The dispatcher (`src/dispatch.rs`, the router's fallback; ADR-0015 "判定の
   順序"): (1) `parse_web_path(req.uri().path(), req.uri().query())` on the raw
   path; (2) the vocabulary — no scoped route for `(verb, route)` is
-  `FG-WEB-0001` (never the shell: `/api/…`, dumb HTTP, `raw` / `archive` /
+  `FG-WEB-0001` (never the shell: `/api/…`, dumb HTTP, an unrouted verb /
   git until routed); (3) `service` is part of the git route; (4) a public
   word answers the shell without credentials or the database, any other
   word needs an active principal; (5) **exactly one**
@@ -229,8 +229,34 @@ admitted proof.
   (`0000`) is answered without git. The token id that authenticated the
   request is kept as a request extension (`Dispatched::credential_id`) for
   the record.
+- Routes (M2 MR7, `src/routes/browse.rs`; `RepoBrowse`, `read_api`,
+  ADR-0015 Amendment M2): `GET /api/v1/projects/{id}/repository/refs[?type=]`,
+  `…/resolve?spec=`, `…/tree?ref=&path=`, `…/blob?ref=&path=`. The loader
+  (`RepositoryOf`) reads the project by id once (`ProjectRecord.repository`
+  since MR7); after `prove()` a `provisioning` repository is `FG-REPO-0016`,
+  an unknown ref / path `FG-REPO-0023` (`reason`). Query parameters are
+  strict (`FG-WEB-0006`: unknown, repeated, missing `ref` / `spec`, a path
+  with an empty / `.` / `..` / control segment) and percent-decoded once.
+  `tree` lists ≤ 5 000 entries, `blob` ≤ 1 MiB of text (`binary: true`
+  without content for NUL / non-UTF-8), both with `truncated`.
+- Routes (M2 MR7, `src/routes/content.rs`; `RepoRead`, `read_repository`,
+  cookies accepted — `Surface::Content`): `GET|HEAD {path}/-/raw/{ref}/{file…}`
+  and `{path}/-/archive/{ref}.{zip|tar.gz}`. raw ≤ 4 MiB is read whole and
+  typed (image only when the extension and the magic bytes agree; SVG /
+  HTML / XML / PDF always `application/octet-stream` + `attachment`; UTF-8
+  without NUL `text/plain; charset=utf-8`), larger files stream as
+  octet-stream; archives stream (`git archive`, prefix
+  `<project>-<commit 12>/`). RFC 6266 `Content-Disposition`, `private,
+  no-store`, `Vary: Authorization, Cookie`; the CSP sandbox, `nosniff` and
+  CORP come from `security_headers`. `HEAD` starts no stream. The streams go
+  through `GitResponse` (cut on failure, `FG-GIT-0015` on disconnect).
+  `app::registry_without_content_routes()` (`test-support`) is the product
+  list without these two words, for tests that mount an echoing route.
+- Every finished push task drops the repository's cached browse ref list
+  (`RefsChanged` in `routes/git_push.rs`).
 - `AppState::with_smart_http(SmartHttp::new(git, storage,
-  GitHttpLimits).with_push(protection, recorder))` — `forge serve` always sets it (storage root required,
+  GitHttpLimits).with_push(protection, recorder))` (`SmartHttp::browse`: the
+  browse handle, `with_browse_limits` for tests) — `forge serve` always sets it (storage root required,
   git HOME = storage root, pools and timeouts from `git.http.*`); without it
   a git route is `FG-SYS-0001 reason=smart_http_unconfigured`, and without
   `with_push` receive-pack is `FG-SYS-0001 reason=push_unconfigured`.

@@ -63,6 +63,12 @@ pub enum Command {
         #[command(subcommand)]
         command: NamespaceCommand,
     },
+    /// Read a project's repository: refs, resolve, tree, file.
+    #[command(disable_help_subcommand = true)]
+    Browse {
+        #[command(subcommand)]
+        command: BrowseCommand,
+    },
     /// Users (administrators): rename.
     #[command(disable_help_subcommand = true)]
     User {
@@ -483,6 +489,61 @@ pub enum NamespaceCommand {
         /// Confirm the release (gstn never prompts).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefType {
+    Branch,
+    Tag,
+}
+
+impl RefType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Branch => "branch",
+            Self::Tag => "tag",
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BrowseCommand {
+    /// List the branches and tags.
+    Refs {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// Only branches or only tags.
+        #[arg(long = "type", value_enum)]
+        kind: Option<RefType>,
+    },
+    /// Split `<ref>/<path>` into a revision and a path.
+    Resolve {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// e.g. `feature/x/src/lib.rs`.
+        #[arg(value_parser = parse_text)]
+        spec: String,
+    },
+    /// One tree level.
+    Tree {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// A commit id, a branch or a tag.
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: String,
+        /// The directory (default: the root).
+        #[arg(long, value_parser = parse_text)]
+        path: Option<String>,
+    },
+    /// One file's head (text; binary files say so).
+    File {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long = "ref", value_parser = parse_text)]
+        rev: String,
+        #[arg(long, value_parser = parse_text)]
+        path: String,
     },
 }
 

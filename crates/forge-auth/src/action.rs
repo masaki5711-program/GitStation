@@ -33,6 +33,12 @@ actions! {
     RepoRead,
     /// One ref update in a git push (receive-pack).
     RepoPush,
+    /// The repository browse API (`GET /api/v1/projects/{id}/repository/…`:
+    /// refs, resolve, tree, blob; M2 MR7, ADR-0015 Amendment M2). Decided
+    /// like `RepoRead` (the same arm), but with the `read_api` scope: a
+    /// `read_repository` token (CI clones) does not read the JSON API, and a
+    /// `read_api` token still cannot clone.
+    RepoBrowse,
     // --- REST API: projects ---
     ProjectRead,
     /// `GET /api/v1/projects`: may the caller list at all (any active
@@ -130,6 +136,7 @@ impl Action {
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
+            | Action::RepoBrowse
             | Action::ProjectList
             | Action::MemberList
             | Action::ProtectedRefList
