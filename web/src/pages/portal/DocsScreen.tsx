@@ -16,6 +16,7 @@ import { MarkdownView } from '../../features/MarkdownView';
 import { formatBytes, formatDate } from '../../features/labels';
 import {
   changesPerChapter,
+  MAX_VERSIONS,
   confirmedVersions,
   latestCommit,
   parseView,
@@ -84,32 +85,45 @@ function Loaded({
   project: string;
   refs: NonNullable<ReturnType<typeof useRefs>['data']>;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [params] = useSearchParams();
   const view = parseView(params);
   const latest = latestCommit(refs);
-  const { items: confirmed, cut } = useMemo(() => confirmedVersions(refs), [refs]);
-  const commits = [...(latest === null ? [] : [latest]), ...confirmed.map((c) => c.commit)];
-  const moments = useMoments(projectId, commits);
-  const momentOf = (commit: string) => {
-    const i = commits.indexOf(commit);
-    return moments[i]?.data ?? null;
-  };
-
-  const versions: Version[] = sortByDate(
-    confirmed.map((c) => ({
-      name: c.name,
-      commit: c.commit,
-      at: momentOf(c.commit)?.at ?? null,
-      message: momentOf(c.commit)?.message ?? null,
-    })),
+  const { items: all, cut } = useMemo(() => confirmedVersions(refs), [refs]);
+  // The list and the pickers take the first MAX_VERSIONS; an address may name
+  // any confirmed version, so those are looked up as well.
+  const head = all.slice(0, MAX_VERSIONS);
+  const named = all.filter(
+    (c) => (c.name === view.version || c.name === view.compare) && !head.includes(c),
   );
+  const commits = [
+    ...(latest === null ? [] : [latest]),
+    ...head.map((c) => c.commit),
+    ...named.map((c) => c.commit),
+  ];
+  const moments = useMoments(projectId, commits);
+  const momentOf = (commit: string) => moments[commits.indexOf(commit)]?.data ?? null;
+  const toVersion = (c: { name: string; commit: string }) => ({
+    name: c.name,
+    commit: c.commit,
+    at: momentOf(c.commit)?.at ?? null,
+    message: momentOf(c.commit)?.message ?? null,
+  });
+  // Date order is applied before the cap, on the versions that were looked up.
+  const listed = sortByDate(head.map(toVersion)).slice(0, MAX_VERSIONS);
+  const pickable = sortByDate([...head, ...named].map(toVersion));
   const latestVersion: Version | null =
     latest === null
       ? null
       : { name: null, commit: latest, at: momentOf(latest)?.at ?? null, message: momentOf(latest)?.message ?? null };
 
-  if (latestVersion === null && versions.length === 0) {
+  const requested = view.version === null ? undefined : pickable.find((v) => v.name === view.version);
+  const selected: Version | undefined =
+    view.version === null ? (latestVersion ?? pickable[0]) : requested;
+  const older = view.compare === null ? undefined : pickable.find((v) => v.name === view.compare);
+  const comparing = selected !== undefined && older !== undefined && older.commit !== selected.commit;
+
+  if (latestVersion === null && pickable.length === 0) {
     return (
       <section aria-labelledby="portal-empty">
         <h2 id="portal-empty">{t('portal.empty.title')}</h2>
@@ -118,11 +132,17 @@ function Loaded({
     );
   }
 
-  const requested = view.version === null ? undefined : versions.find((v) => v.name === view.version);
-  const selected: Version | undefined =
-    view.version === null ? (latestVersion ?? versions[0]) : requested;
-  const olderRequested =
-    view.compare === null ? undefined : versions.find((v) => v.name === view.compare);
+  // One live region that is always in the page: it says what is shown, and
+  // its text changes when the version does.
+  let showing = '';
+  if (selected !== undefined) {
+    const label = versionName(selected, t('plain.latest'));
+    showing = comparing
+      ? t('portal.comparing', { from: versionName(older, t('plain.latest')), to: label })
+      : t('portal.viewing', { version: label });
+    if (selected.at !== null) showing += ` · ${formatDate(selected.at, i18n.language)}`;
+    if (selected.message !== null && selected.message !== '') showing += ` · ${selected.message}`;
+  }
 
   return (
     <>
@@ -131,16 +151,15 @@ function Loaded({
           {t('portal.versionsTruncated')}
         </p>
       )}
-      <VersionPicker
-        key={`${view.version ?? ''}|${view.compare ?? ''}`}
+      <p className={styles.showing} role="status">
+        {showing}
+      </p>
+      <VersionsPanel
         project={project}
         view={view}
         latest={latestVersion}
-        versions={versions}
-      />
-      <ConfirmedList
-        project={project}
-        versions={versions}
+        pickable={pickable}
+        listed={listed}
         selected={selected?.name ?? null}
         cut={cut}
       />
@@ -158,8 +177,8 @@ function Loaded({
           project={project}
           view={view}
           selected={selected}
-          older={olderRequested}
-          compareMissing={view.compare !== null && olderRequested === undefined}
+          older={older}
+          compareMissing={view.compare !== null && older === undefined}
         />
       )}
     </>
@@ -168,6 +187,52 @@ function Loaded({
 
 function versionName(v: Version, latestLabel: string): string {
   return v.name ?? latestLabel;
+}
+
+/** The versions, collapsed: the document is what the page is for, so the
+ * choice of version and the list of confirmed versions sit in one disclosure.
+ * It is open on the first visit (nothing chosen yet) and closes once a
+ * version has been chosen. */
+function VersionsPanel({
+  project,
+  view,
+  latest,
+  pickable,
+  listed,
+  selected,
+  cut,
+}: {
+  project: string;
+  view: PortalView;
+  latest: Version | null;
+  pickable: Version[];
+  listed: Version[];
+  selected: string | null;
+  cut: boolean;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(view.version === null && view.compare === null);
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    setOpen(false);
+  }, [view.version, view.compare]);
+  return (
+    <details
+      className={styles.panel}
+      open={open}
+      onToggle={(e) => {
+        setOpen(e.currentTarget.open);
+      }}
+    >
+      <summary className={styles.summary}>{t('portal.versionsPanel')}</summary>
+      <VersionPicker project={project} view={view} latest={latest} versions={pickable} />
+      <ConfirmedList project={project} versions={listed} selected={selected} cut={cut} />
+    </details>
+  );
 }
 
 function VersionPicker({
@@ -187,9 +252,25 @@ function VersionPicker({
   const compareId = useId();
   const [version, setVersion] = useState(view.version ?? '');
   const [compare, setCompare] = useState(view.compare ?? '');
+  // The form follows the address (Back, a link, a row's "Changes").
+  useEffect(() => {
+    setVersion(view.version ?? '');
+    setCompare(view.compare ?? '');
+  }, [view.version, view.compare]);
+  const chosen = version === '' ? latest : versions.find((v) => v.name === version);
+  // Only versions older than the chosen one can be "what changed since".
+  const chosenAt = chosen?.at == null ? null : new Date(chosen.at).getTime();
+  const olderOnes = versions.filter(
+    (v) =>
+      v.name !== version &&
+      (v.name === compare ||
+        chosenAt === null ||
+        v.at === null ||
+        new Date(v.at).getTime() < chosenAt),
+  );
   const describe = (v: Version) =>
-    [v.name ?? t('plain.latest'), v.at === null ? null : formatDate(v.at, i18n.language), v.message]
-      .filter((x): x is string => x !== null && x !== '')
+    [v.name ?? t('plain.latest'), v.at === null ? null : formatDate(v.at, i18n.language)]
+      .filter((x): x is string => x !== null)
       .join(' — ');
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
@@ -243,19 +324,20 @@ function VersionPicker({
             }}
           >
             <option value="">{t('portal.compareNone')}</option>
-            {versions
-              .filter((v) => v.name !== version)
-              .map((v) => (
-                <option key={v.commit + (v.name ?? '')} value={v.name ?? ''}>
-                  {describe(v)}
-                </option>
-              ))}
+            {olderOnes.map((v) => (
+              <option key={v.commit + (v.name ?? '')} value={v.name ?? ''}>
+                {describe(v)}
+              </option>
+            ))}
           </select>
         </div>
         <button type="submit" className={controls.primary}>
           {t('portal.show')}
         </button>
       </form>
+      {chosen?.message != null && chosen.message !== '' && (
+        <p className={styles.optionMessage}>{t('portal.messageLine', { message: chosen.message })}</p>
+      )}
     </section>
   );
 }
@@ -295,17 +377,18 @@ function ConfirmedList({
                 const name = v.name ?? '';
                 const previous = versions[i + 1];
                 return (
-                  <tr key={v.commit + name}>
+                  <tr key={v.commit + name} className={selected === name ? styles.rowShown : undefined}>
                     <th scope="row">
                       {name}
-                      {i === 0 && <span className={styles.badge}>{t('portal.newestConfirmed')}</span>}
-                      {selected === name && <span className={styles.badge}>{t('portal.showing')}</span>}
+                      {i === 0 && <span className={styles.badgeConfirmed}>{t('portal.newestConfirmed')}</span>}
+                      {selected === name && <span className={styles.badgeShowing}>{t('portal.showing')}</span>}
                     </th>
                     <td>{v.at === null ? '' : formatDate(v.at, i18n.language)}</td>
                     <td>{v.message ?? ''}</td>
                     <td>
                       <span className={styles.rowActions}>
                         <Link
+                          className={styles.link}
                           to={portalUrl(project, { version: name })}
                           aria-label={t('portal.openOf', { name })}
                         >
@@ -313,6 +396,7 @@ function ConfirmedList({
                         </Link>
                         {previous?.name != null && (
                           <Link
+                            className={styles.link}
                             to={portalUrl(project, { version: name, compare: previous.name })}
                             aria-label={t('portal.changesOf', { name, previous: previous.name })}
                           >
@@ -320,6 +404,7 @@ function ConfirmedList({
                           </Link>
                         )}
                         <a
+                          className={styles.link}
                           href={archiveUrl(project, v.commit, 'zip')}
                           aria-label={t('portal.downloadVersionOf', { name })}
                         >
@@ -354,7 +439,7 @@ function Reader({
   older: Version | undefined;
   compareMissing: boolean;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const comparing = older !== undefined && older.commit !== selected.commit;
   const chapters = useChapters(projectId, selected.commit);
   const olderChapters = useChapters(projectId, comparing ? older.commit : null);
@@ -363,8 +448,6 @@ function Reader({
     comparing ? older.commit : null,
     comparing ? selected.commit : null,
   );
-  const label = versionName(selected, t('plain.latest'));
-
   const pending = chapters.isPending || (comparing && (olderChapters.isPending || compare.isPending));
   const failure = chapters.error ?? (comparing ? (olderChapters.error ?? compare.error) : null);
 
@@ -391,22 +474,25 @@ function Reader({
       chapter,
     });
 
-  const lead = (
-    <p className={styles.showing} role="status">
-      {comparing
-        ? t('portal.comparing', { from: versionName(older, t('plain.latest')), to: label })
-        : t('portal.viewing', { version: label })}
-      {selected.at !== null && ` · ${formatDate(selected.at, i18n.language)}`}
-      {selected.message !== null && selected.message !== '' && ` · ${selected.message}`}
-    </p>
-  );
+  // After a new version or comparison is chosen the reader's heading takes
+  // the focus (the control that was used may be gone). A change of chapter
+  // alone is the chapter heading's business (ChapterPane).
+  const heading = useRef<HTMLHeadingElement>(null);
+  const firstRender = useRef(true);
+  const versionKey = `${selected.commit}|${comparing ? older.commit : ''}`;
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false;
+      return;
+    }
+    heading.current?.focus();
+  }, [versionKey]);
 
   return (
     <section aria-labelledby="portal-reader" className={styles.section}>
-      <h2 id="portal-reader" className={styles.sectionTitle}>
+      <h2 id="portal-reader" ref={heading} tabIndex={-1} className={styles.sectionTitle}>
         {comparing ? t('portal.differences') : t('portal.chapters')}
       </h2>
-      {lead}
       <p className={styles.actions}>
         <a className={controls.button} href={archiveUrl(project, selected.commit, 'zip')}>
           {t('portal.downloadAll')}
@@ -440,37 +526,7 @@ function Reader({
             <p>{t('portal.noChapters')}</p>
           ) : (
             <div className={styles.layout}>
-              <nav aria-label={t('portal.chapterList')} className={styles.toc}>
-                <ol>
-                  {list.map((c) => (
-                    <li key={c.chapter.path}>
-                      <Link
-                        to={link(c.chapter.path)}
-                        {...(current?.chapter.path === c.chapter.path
-                          ? { 'aria-current': 'page' as const }
-                          : {})}
-                      >
-                        {c.chapter.title}
-                      </Link>
-                      {comparing && c.kind !== 'same' && (
-                        <span className={styles.badge}>
-                          {c.kind === 'added'
-                            ? t('portal.compare.added')
-                            : c.kind === 'removed'
-                              ? t('portal.compare.removed')
-                              : t('portal.compare.changed')}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ol>
-                {comparing && (
-                  <p className={styles.tocNote}>
-                    {t('portal.compare.count', { count: list.filter((c) => c.kind !== 'same').length })}
-                    {others > 0 && ` ${t('portal.compare.others', { count: others })}`}
-                  </p>
-                )}
-              </nav>
+              <Toc list={list} current={current} comparing={comparing} others={others} link={link} />
               <div className={styles.content}>
                 {current === undefined ? (
                   <>
@@ -635,5 +691,68 @@ function ChapterBody({
         />
       )}
     </>
+  );
+}
+
+/** The chapter list. Beside the text on a wide screen (it stays in view while
+ * the text scrolls); folded away on a narrow one. A change's label is part of
+ * the link, so a screen reader hears "01-scope Changed". */
+function Toc({
+  list,
+  current,
+  comparing,
+  others,
+  link,
+}: {
+  list: ChapterChange[];
+  current: ChapterChange | undefined;
+  comparing: boolean;
+  others: number;
+  link: (chapter: string | null) => string;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(
+    typeof window.matchMedia !== 'function' || !window.matchMedia('(max-width: 48rem)').matches,
+  );
+  return (
+    <details
+      className={styles.toc}
+      open={open}
+      onToggle={(e) => {
+        setOpen(e.currentTarget.open);
+      }}
+    >
+      <summary className={styles.summary}>{t('portal.chapterList')}</summary>
+      <nav aria-label={t('portal.chapterList')}>
+        <ol>
+          {list.map((c) => (
+            <li key={c.chapter.path}>
+              <Link
+                className={styles.link}
+                to={link(c.chapter.path)}
+                {...(current?.chapter.path === c.chapter.path ? { 'aria-current': 'page' as const } : {})}
+              >
+                {c.chapter.title}
+                {comparing && c.kind !== 'same' && (
+                  <span className={styles.badge}>
+                    {c.kind === 'added'
+                      ? t('portal.compare.added')
+                      : c.kind === 'removed'
+                        ? t('portal.compare.removed')
+                        : t('portal.compare.changed')}
+                  </span>
+                )}
+              </Link>
+            </li>
+          ))}
+        </ol>
+        {comparing && (
+          <p className={styles.tocNote}>
+            {t('portal.compare.count', { count: list.filter((c) => c.kind !== 'same').length })}
+            {others > 0 && ` ${t('portal.compare.others', { count: others })}`}
+          </p>
+        )}
+      </nav>
+    </details>
   );
 }

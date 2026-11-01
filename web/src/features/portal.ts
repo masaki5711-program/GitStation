@@ -43,15 +43,16 @@ export interface Confirmed {
   commit: string;
 }
 
-/** The confirmed versions (tags that point at a commit), newest name first
- * by natural order (`rev-10` after `rev-9`), at most MAX_VERSIONS. The screen
- * re-sorts by date once the dates are known. */
+/** Every confirmed version (tag that points at a commit), newest name first
+ * by natural order (`rev-10` before `rev-9`). The screen takes the first
+ * MAX_VERSIONS of them for the list and the pickers; an address may name any
+ * of them. */
 export function confirmedVersions(refs: RefsBody): { items: Confirmed[]; cut: boolean } {
   const tags = refs.refs
     .filter((r): r is RefEntry & { commit: string } => r.type === 'tag' && r.commit !== null)
     .map((r) => ({ name: r.name, commit: r.commit }))
     .sort((a, b) => collator.compare(b.name, a.name));
-  return { items: tags.slice(0, MAX_VERSIONS), cut: tags.length > MAX_VERSIONS };
+  return { items: tags, cut: tags.length > MAX_VERSIONS };
 }
 
 /** The tip of the default branch: the latest work in progress. */
@@ -88,35 +89,36 @@ export interface ChapterChange {
 const chapterOfFile = (f: DiffFile) => f.new_path ?? f.old_path ?? '';
 
 /** The chapters of both versions, each with what happened to it. A chapter
- * that only the older version has was removed; one only the newer has is
- * new. Files of the comparison that are not chapters are only counted. */
+ * that only the older version has was removed (a renamed chapter's old path
+ * too; its new path is the changed one, so it is listed once); one only the
+ * newer has is new. Files of the comparison that are not chapters are only
+ * counted. */
 export function changesPerChapter(
   older: Chapter[],
   newer: Chapter[],
   diff: DiffBody,
 ): { chapters: ChapterChange[]; others: number } {
   const byPath = new Map<string, DiffFile>();
-  for (const f of diff.files) {
-    byPath.set(chapterOfFile(f), f);
-    if (f.old_path !== null) byPath.set(f.old_path, f);
-  }
+  for (const f of diff.files) byPath.set(chapterOfFile(f), f);
+  const inNewer = new Set(newer.map((c) => c.path));
   const seen = new Set<string>();
   const out: ChapterChange[] = [];
-  const known = new Set([...older, ...newer].map((c) => c.path));
   for (const c of [...newer, ...older]) {
     if (seen.has(c.path)) continue;
     seen.add(c.path);
     const file = byPath.get(c.path) ?? null;
     let kind: ChangeKind = 'same';
     if (file !== null) {
-      kind =
-        file.status === 'added' ? 'added' : file.status === 'deleted' ? 'removed' : 'changed';
+      kind = file.status === 'added' || file.status === 'copied' ? 'added' : file.status === 'deleted' ? 'removed' : 'changed';
+    } else if (!inNewer.has(c.path)) {
+      kind = 'removed';
     }
     out.push({ chapter: c, kind, file });
   }
   out.sort((a, b) => a.chapter.path.localeCompare(b.chapter.path, 'en', { numeric: true }));
-  const others = new Set(
-    diff.files.filter((f) => !known.has(chapterOfFile(f)) && !(f.old_path !== null && known.has(f.old_path))),
-  ).size;
+  const known = new Set(out.map((c) => c.chapter.path));
+  const others = diff.files.filter(
+    (f) => !known.has(chapterOfFile(f)) && !(f.old_path !== null && known.has(f.old_path)),
+  ).length;
   return { chapters: out, others };
 }

@@ -485,8 +485,8 @@
     "openOf": "Open {{name}}",
     "changes": "Changes from the previous version",
     "changesOf": "Changes from the previous version ({{name}}, compared with {{previous}})",
-    "downloadVersion": "Download all (zip)",
-    "downloadVersionOf": "Download all (zip): {{name}}",
+    "downloadVersion": "Download all files as one file",
+    "downloadVersionOf": "Download all files as one file: {{name}}",
     "listCut": "Only the newest {{count}} confirmed versions are listed.",
     "versionMissing": {
       "title": "That version was not found",
@@ -497,7 +497,7 @@
     "viewing": "Showing version: {{version}}",
     "differences": "Differences by chapter",
     "chapters": "Chapters",
-    "downloadAll": "Download this whole version (zip)",
+    "downloadAll": "Download this whole version as one file",
     "stopComparing": "Stop comparing",
     "compareMissing": "The version to compare with was not found, so no differences are shown.",
     "chaptersCut": "There are too many chapters; only the first ones are listed.",
@@ -529,6 +529,8 @@
       "count": "Chapters with changes: {{count}}",
       "others": "{{count}} other file(s) that are not chapters also changed.",
       "legend": "Added lines are marked with + and underlined; removed lines are marked with − and struck through."
-    }
+    },
+    "versionsPanel": "Versions and downloads",
+    "messageLine": "Message: {{message}}"
   }
 }

@@ -24,6 +24,9 @@ export function ChapterChanges({ kind, file }: { kind: ChangeKind; file: DiffFil
     () => (file?.patch === null || file?.patch === undefined ? [] : parsePatch(file.patch)),
     [file],
   );
+  // A chapter the newer version does not have, and no change to show for it
+  // (a renamed chapter's old name).
+  if (kind === 'removed' && file === null) return <p role="status">{t('portal.compare.chapterRemoved')}</p>;
   if (kind === 'same' || file === null) return <p>{t('portal.compare.unchanged')}</p>;
 
   let note: string | null = null;

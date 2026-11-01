@@ -485,8 +485,8 @@
     "openOf": "Buka {{name}}",
     "changes": "Perubahan dari versi sebelumnya",
     "changesOf": "Perubahan dari versi sebelumnya ({{name}}, dibandingkan dengan {{previous}})",
-    "downloadVersion": "Unduh semua (zip)",
-    "downloadVersionOf": "Unduh semua (zip): {{name}}",
+    "downloadVersion": "Unduh semua berkas sebagai satu berkas",
+    "downloadVersionOf": "Unduh semua berkas sebagai satu berkas: {{name}}",
     "listCut": "Hanya {{count}} versi terkonfirmasi terbaru yang ditampilkan.",
     "versionMissing": {
       "title": "Versi itu tidak ditemukan",
@@ -497,7 +497,7 @@
     "viewing": "Versi yang ditampilkan: {{version}}",
     "differences": "Perbedaan per bab",
     "chapters": "Bab",
-    "downloadAll": "Unduh seluruh versi ini (zip)",
+    "downloadAll": "Unduh seluruh versi ini sebagai satu berkas",
     "stopComparing": "Berhenti membandingkan",
     "compareMissing": "Versi pembanding tidak ditemukan, sehingga perbedaan tidak ditampilkan.",
     "chaptersCut": "Babnya terlalu banyak; hanya yang pertama yang ditampilkan.",
@@ -529,6 +529,8 @@
       "count": "Bab yang berubah: {{count}}",
       "others": "{{count}} berkas lain yang bukan bab juga berubah.",
       "legend": "Baris yang ditambahkan ditandai dengan + dan garis bawah; baris yang dihapus ditandai dengan − dan coretan."
-    }
+    },
+    "versionsPanel": "Versi dan unduhan",
+    "messageLine": "Pesan: {{message}}"
   }
 }

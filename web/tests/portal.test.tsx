@@ -73,7 +73,7 @@ describe('reading a specification', () => {
       '02-parts',
       '03-notes',
     ]);
-    expect(within(toc).getByRole('link', { name: '01-scope' }).getAttribute('aria-current')).toBe('page');
+    expect(within(toc).getByRole('link', { name: /^01-scope/ }).getAttribute('aria-current')).toBe('page');
     const body = await screen.findByTestId('markdown');
     expect(within(body).getByRole('heading', { name: 'Scope of the press line' })).toBeTruthy();
     // The latest work in progress is read at the tip of the default branch.
@@ -86,13 +86,16 @@ describe('reading a specification', () => {
     const select = await screen.findByLabelText('Version to show');
     await waitFor(() => {
       expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual([
-        'Latest (work in progress) — Oct 31, 2026 — Working draft of the next issue',
-        'rev-2 — Oct 20, 2026 — Second issue with the parts list',
-        'rev-1 — Oct 1, 2026 — First issue for approval',
+        'Latest (work in progress) — Oct 31, 2026',
+        'rev-2 — Oct 20, 2026',
+        'rev-1 — Oct 1, 2026',
       ]);
     });
-    // Choosing only picks; "Show" goes.
+    // The message is its own readable line, for the version chosen.
+    expect(screen.getByText('Message: Working draft of the next issue')).toBeTruthy();
     fireEvent.change(select, { target: { value: 'rev-1' } });
+    expect(screen.getByText('Message: First issue for approval')).toBeTruthy();
+    // Choosing only picks; "Show" goes.
     expect(screen.getByTestId('location').textContent).toBe(BASE);
     fireEvent.click(screen.getByRole('button', { name: 'Show' }));
     await waitFor(() => {
@@ -217,7 +220,7 @@ describe('differences between two versions', () => {
     expect(items).toEqual(['01-scopeChanged', '02-partsAdded']);
     expect(within(toc).getByText(/Chapters with changes: 2/)).toBeTruthy();
     expect(within(toc).getByText(/1 other file\(s\) that are not chapters also changed/)).toBeTruthy();
-    expect(within(toc).getByRole('link', { name: '01-scope' }).getAttribute('aria-current')).toBe('page');
+    expect(within(toc).getByRole('link', { name: /^01-scope/ }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows added and removed lines by a sign and by words, not by colour alone', async () => {
@@ -281,7 +284,7 @@ describe('differences between two versions', () => {
     await open(CMP, { compare: { ...COMPARE_B_C, diff: { truncated: true, files } } });
     expect(await screen.findByText('The changes in this chapter cannot be shown as text.')).toBeTruthy();
     expect(screen.getByText(/some changes are not shown/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: '02-parts' }));
+    fireEvent.click(screen.getByRole('link', { name: /^02-parts/ }));
     expect(await screen.findByText('The change is too large to show.')).toBeTruthy();
   });
 
@@ -311,16 +314,99 @@ describe('differences between two versions', () => {
   });
 });
 
+describe('layout of the reader', () => {
+  it('the versions panel is open on the first visit and folds once a version is chosen', async () => {
+    await open(BASE);
+    const panel = (await screen.findByText('Versions and downloads')).closest('details');
+    expect(panel?.open).toBe(true);
+    fireEvent.change(await screen.findByLabelText('Version to show'), { target: { value: 'rev-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    await waitFor(() => {
+      expect(screen.getByText('Versions and downloads').closest('details')?.open).toBe(false);
+    });
+  });
+
+  it('after "Show" the reader heading takes the focus and the picker stays mounted', async () => {
+    await open(BASE);
+    const select = await screen.findByLabelText('Version to show');
+    fireEvent.change(select, { target: { value: 'rev-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('portal-reader');
+    });
+    // Same element, now following the address.
+    expect(screen.getByLabelText('Version to show')).toBe(select);
+    expect((select as HTMLSelectElement).value).toBe('rev-2');
+  });
+
+  it('one status region stays in the page and its text follows the version', async () => {
+    await open(BASE);
+    await screen.findByLabelText('Version to show');
+    let status: HTMLElement | undefined;
+    await waitFor(() => {
+      status = screen.getAllByRole('status').find((s) => s.textContent.startsWith('Showing version'));
+      expect(status?.textContent).toContain('Latest (work in progress)');
+    });
+    fireEvent.change(await screen.findByLabelText('Version to show'), { target: { value: 'rev-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }));
+    await waitFor(() => {
+      expect(status?.isConnected).toBe(true);
+      expect(status?.textContent).toContain('Showing version: rev-2');
+    });
+  });
+
+  it('the picker offers to compare only with older versions', async () => {
+    await open(`${BASE}?version=rev-1`);
+    const compare = await screen.findByLabelText('Version to compare with');
+    await waitFor(() => {
+      expect(within(compare).getAllByRole('option').map((o) => (o as HTMLOptionElement).value)).toEqual(['']);
+    });
+  });
+
+  it('an address may name a confirmed version beyond the first 50 of the list', async () => {
+    const tags = Array.from({ length: 60 }, (_, i) => {
+      const name = `v${String(i + 1).padStart(2, '0')}`;
+      const commit = i.toString(16).padStart(2, '0').repeat(20);
+      return { name, full_name: `refs/tags/${name}`, type: 'tag', target: commit, commit };
+    });
+    await open(`${BASE}?version=v01`, { refs: { ...REFS, refs: [...REFS.refs.filter((r) => r.type === 'branch'), ...tags] } });
+    await waitFor(() => {
+      expect(screen.getAllByRole('status').some((s) => s.textContent.startsWith('Showing version: v01'))).toBe(true);
+    });
+    expect(screen.queryByRole('heading', { name: 'That version was not found' })).toBeNull();
+    expect(await screen.findByText(/Only the newest 50 confirmed versions are listed/)).toBeTruthy();
+  });
+
+  it('a renamed chapter is listed once as changed, its old name as removed', async () => {
+    const old = 'docs/specs/01-scope.md';
+    const renamed = 'docs/specs/01-overview.md';
+    await open(`${BASE}?version=rev-2&compare=rev-1`, {
+      chapters: { ...CHAPTERS, [B]: ['01-scope.md'], [C]: ['01-overview.md'] },
+      compare: {
+        ...COMPARE_B_C,
+        diff: {
+          truncated: false,
+          files: [{ ...COMPARE_B_C.diff.files[0], status: 'renamed', old_path: old, new_path: renamed, similarity: 80 }],
+        },
+      },
+    });
+    const toc = await screen.findByRole('navigation', { name: 'Table of chapters' });
+    expect(within(toc).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['01-overviewChanged', '01-scopeRemoved']);
+    fireEvent.click(within(toc).getByRole('link', { name: /^01-scope/ }));
+    expect(await screen.findByText('This chapter was removed in this version.')).toBeTruthy();
+  });
+});
+
 describe('downloads', () => {
   it('one chapter downloads from the server by the version id, and the whole version as a zip', async () => {
     await open(`${BASE}?version=rev-2`);
     const chapter = await screen.findByRole('link', { name: 'Download this chapter' });
     expect(chapter.getAttribute('href')).toBe(`/acme/press-spec/-/raw/${C}/docs/specs/01-scope.md`);
     expect(chapter.hasAttribute('download')).toBe(true);
-    const all = screen.getByRole('link', { name: 'Download this whole version (zip)' });
+    const all = screen.getByRole('link', { name: 'Download this whole version as one file' });
     expect(all.getAttribute('href')).toBe(`/acme/press-spec/-/archive/${C}.zip`);
     // The list offers the zip of every confirmed version.
-    const row = screen.getByRole('link', { name: 'Download all (zip): rev-1' });
+    const row = screen.getByRole('link', { name: 'Download all files as one file: rev-1' });
     expect(row.getAttribute('href')).toBe(`/acme/press-spec/-/archive/${B}.zip`);
   });
 
@@ -339,10 +425,27 @@ describe('downloads', () => {
 
 // The words of the version control system must not reach a reader. The check
 // reads both the dictionary of the portal and what is really drawn.
+// One glossary: each concept of the version control system, in each language,
+// with its plural and inflected forms. Every check below reads this table.
+const GLOSSARY: Record<string, Record<Language, RegExp[]>> = {
+  branch: { ja: [/ブランチ/], en: [/\bbranch/i], id: [/\bcabang/i] },
+  commit: { ja: [/コミット/], en: [/\bcommit/i], id: [/\bkomit/i] },
+  tag: { ja: [/タグ/], en: [/\btag(s|ged|ging)?\b/i], id: [/\btag(s)?\b/i] },
+  merge: { ja: [/マージ/], en: [/\bmerg(e|es|ed|ing)\b/i], id: [/\bgabung/i] },
+  repository: { ja: [/リポジトリ/], en: [/\brepositor(y|ies)\b/i, /\brepos?\b/i], id: [/\brepositori/i] },
+  revision: { ja: [/リビジョン/], en: [/\brevision/i], id: [/\brevisi\b/i] },
+  hash: { ja: [/ハッシュ/, /\bSHA\b/i], en: [/\bhash(es)?\b/i, /\bSHA\b/i], id: [/\bhash\b/i, /\bSHA\b/i] },
+  history: { ja: [/履歴/], en: [/\bhistor(y|ies)\b/i], id: [/\briwayat\b/i] },
+  clone: { ja: [/クローン/], en: [/\bclon(e|es|ed|ing)\b/i], id: [/\bklon/i] },
+  push: { ja: [/プッシュ/, /プル/], en: [/\bpush(es|ed|ing)?\b/i, /\bpull(s|ed|ing)?\b/i], id: [/\bpush\b/i] },
+  diff: { ja: [/差分/, /\bdiff\b/i], en: [/\bdiffs?\b/i], id: [/\bdiffs?\b/i] },
+  git: { ja: [/\bgit\b/i], en: [/\bgit\b/i], id: [/\bgit\b/i] },
+  ref: { ja: [/\bref\b/i, /\bHEAD\b/], en: [/\brefs?\b/i, /\bHEAD\b/], id: [/\bref\b/i, /\bHEAD\b/] },
+};
 const FORBIDDEN: Record<Language, RegExp[]> = {
-  ja: [/ブランチ/, /コミット/, /タグ/, /マージ/, /リポジトリ/, /リビジョン/, /ハッシュ/, /プッシュ/, /クローン/, /差分/, /\bgit\b/i, /\bSHA\b/i, /\bdiff\b/i, /\bref\b/i, /\bHEAD\b/],
-  en: [/\bbranch/i, /\bcommit/i, /\btag(s|ged)?\b/i, /\bmerge/i, /\brepositor/i, /\brepo\b/i, /\brevision/i, /\bhash\b/i, /\bclone\b/i, /\bpush/i, /\bpull\b/i, /\bdiff\b/i, /\bgit\b/i, /\bSHA\b/i, /\bref(s)?\b/i, /\bHEAD\b/],
-  id: [/\bcabang/i, /\bkomit/i, /\btag\b/i, /\bgabung/i, /\brepositori/i, /\brevisi\b/i, /\bhash\b/i, /\bklon\b/i, /\bdiff\b/i, /\bgit\b/i, /\bSHA\b/i, /\bref\b/i, /\bHEAD\b/, /\bpush\b/i],
+  ja: Object.values(GLOSSARY).flatMap((g) => g.ja),
+  en: Object.values(GLOSSARY).flatMap((g) => g.en),
+  id: Object.values(GLOSSARY).flatMap((g) => g.id),
 };
 
 type Dict = { [key: string]: string | Dict };

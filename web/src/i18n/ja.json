@@ -485,8 +485,8 @@
     "openOf": "「{{name}}」を開く",
     "changes": "前の版との違い",
     "changesOf": "前の版との違い（{{name}}、前の版は {{previous}}）",
-    "downloadVersion": "まとめてダウンロード（zip）",
-    "downloadVersionOf": "まとめてダウンロード（zip）：{{name}}",
+    "downloadVersion": "まとめて 1 つのファイルでダウンロード",
+    "downloadVersionOf": "まとめて 1 つのファイルでダウンロード：{{name}}",
     "listCut": "新しい {{count}} 件の確定した版だけを表示しています。",
     "versionMissing": {
       "title": "その版は見つかりません",
@@ -497,7 +497,7 @@
     "viewing": "表示中の版: {{version}}",
     "differences": "章ごとの違い",
     "chapters": "章",
-    "downloadAll": "この版をまとめてダウンロード（zip）",
+    "downloadAll": "この版を 1 つのファイルでまとめてダウンロード",
     "stopComparing": "比べるのをやめる",
     "compareMissing": "違いを見る相手の版が見つかりません。違いは表示していません。",
     "chaptersCut": "章が多すぎるため、先頭の一部だけを表示しています。",
@@ -529,6 +529,8 @@
       "count": "変更のある章: {{count}}",
       "others": "章以外のファイルにも {{count}} 件の変更があります。",
       "legend": "追加した行は「+」と下線、削除した行は「−」と取り消し線で示します。"
-    }
+    },
+    "versionsPanel": "版の選択と一覧・ダウンロード",
+    "messageLine": "メッセージ: {{message}}"
   }
 }

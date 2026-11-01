@@ -507,6 +507,7 @@ async function main() {
     await page.getByText('Showing version: rev-2').waitFor();
     await page.getByRole('link', { name: 'parts list' }).waitFor();
     await check('41-portal-confirmed-version');
+    await page.getByText('Versions and downloads').click();
     await page.getByRole('link', { name: 'Changes from the previous version (rev-2, compared with rev-1)' }).click();
     await page.getByRole('heading', { level: 2, name: 'Differences by chapter' }).waitFor();
     await page.getByRole('region', { name: 'Changed lines' }).waitFor();
@@ -517,7 +518,7 @@ async function main() {
     await check('42-portal-differences');
     const [zip] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Download this whole version (zip)' }).click(),
+      page.getByRole('link', { name: 'Download this whole version as one file' }).click(),
     ]);
     if (!zip.suggestedFilename().endsWith('.zip')) problems.push(`portal zip: ${zip.suggestedFilename()}`);
     const [chapter] = await Promise.all([
@@ -534,7 +535,7 @@ async function main() {
     ]) {
       await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
       await page.getByRole('heading', { level: 1, name: /Press Spec/ }).waitFor();
-      await page.getByRole('navigation', { name: 'Daftar bab' }).waitFor();
+      await page.getByRole('navigation', { name: 'Daftar bab', includeHidden: true }).waitFor({ state: 'attached' });
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );

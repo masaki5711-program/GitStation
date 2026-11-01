@@ -159,9 +159,15 @@ function useLeaveGuard(active: boolean, onLeave: () => void) {
       const to = target;
       setTarget(null);
       onLeave();
-      if (to?.kind === 'link') void navigate(to.to);
-      // Back: the sentinel is already gone; go on back one more entry.
-      else window.history.back();
+      if (to?.kind === 'link') {
+        // The sentinel is the top entry: replace it, so the stack is
+        // [page, new address] and Back returns to the page.
+        armed.current = false;
+        void navigate(to.to, { replace: true });
+      } else {
+        // Back: the sentinel is already gone; go on back one more entry.
+        window.history.back();
+      }
     },
   };
 }

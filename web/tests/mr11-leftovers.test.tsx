@@ -3,7 +3,13 @@
 // href handling, a repeat copy announced again, the "Token created" status
 // outside the secret panel, the danger-zone heading colour.
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { render } from '@testing-library/react';
+import { BrowserRouter } from 'react-router';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { createApiClient } from '../src/api/client';
+import { AppProviders, AppRoutes, createQueryClient } from '../src/App';
+import { createI18n } from '../src/i18n';
 
 import { mockServer, page, PROJECT, RESOLVE_PROJECT, signedIn } from './mock';
 import { json, renderApp } from './render';
@@ -48,6 +54,40 @@ const projectRoutes = () => ({
 });
 
 describe('MR11 leftovers', () => {
+  it('leaving through a link replaces the sentinel: no stray history entry, Back returns to the page', async () => {
+    const server = mockServer(user(tokenRoutes()));
+    window.history.replaceState(null, '', '/taro/-/settings');
+    const i18n = await createI18n('en');
+    const api = createApiClient({ language: () => i18n.language, fetch: server.fetch });
+    const queryClient = createQueryClient();
+    queryClient.setDefaultOptions({ queries: { retry: false } });
+    render(
+      <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </AppProviders>,
+    );
+    await screen.findByText('You have no tokens.');
+    const before = window.history.length;
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ci' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    await screen.findByTestId('token-secret');
+    // One sentinel entry on top while the secret is shown.
+    expect(window.history.length).toBe(before + 1);
+    fireEvent.click(screen.getByRole('link', { name: 'My sessions' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Leave and lose the token' }));
+    await screen.findByRole('heading', { name: 'My sessions' });
+    expect(window.location.search).toBe('?tab=sessions');
+    // [page, new address]: the sentinel became the new address.
+    expect(window.history.length).toBe(before + 1);
+    window.history.back();
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+    expect(window.location.pathname).toBe('/taro/-/settings');
+  });
+
   it('a protected-ref role change leaves a persistent success status', async () => {
     const rule = {
       id: 1, pattern: 'refs/heads/main', push_min_role: 'maintainer',
