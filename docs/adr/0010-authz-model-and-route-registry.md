@@ -204,6 +204,12 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - **カーソル**: 最後に消費した id（見せた行か、走査した行）を AES-256-GCM で封じる（`purpose = "projects.list:user=<id>"` /
   `"groups.list:user=<id>"`）。見えない行の id は漏れず、他人や他の一覧のカーソルは FG-WEB-0006 `cursor_invalid rule=tag`。
   `forge serve` は `api.cursor_keys_file` がなければ起動しない（FG-SYS-0002、Runbook `config-invalid`）。
+- **同時実行の上限と期限**（レビュー指摘の修正）: 一覧は `limit` に関わらず最大 1001 行を走査するので、同時に走る数を抑える。全体で
+  `api.list_max_concurrent`（既定 16）、1 人あたり `api.list_max_concurrent_per_principal`（既定 2、総数以下）。超えたら待たせず
+  FG-WEB-0008 `reason=list_concurrency`（`scope=global|principal`）を 503 + `Retry-After: 1` で返す（既存の ServerBusy を使う。枠は読み込みの間だけ
+  持ち、成功・失敗どちらでも返す）。設定は起動時に検証（FG-SYS-0002）。カーソルには発行時刻（秒）を封じた本文の中に入れ（形式の版は 2、
+  AEAD の対象）、`api.cursor_max_age_s`（既定 86400）より古いものは FG-WEB-0006 `cursor_invalid rule=expired`。遅い `projects.page` /
+  `groups.page` の手当ては runbook `connections`。
 - 残る漏れ: ページの件数から「この区間に見えない行がある」ことは分かる（L1 で受け入れた。SQL の上位集合 L2 への切り替えは M2 で
   1 走査あたり ~10k を超えたときに、この ADR の Amendment で決める）。
 - OpenAPI: `ProjectPage` / `GroupPage` / `ListedGroup` の schema と、`Registry::queries` で `limit` / `cursor` の query の parameter を載せた。

@@ -10,6 +10,7 @@
 //! needs it ([`ApiConfig::cursor_keys`]).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use forge_errors::ForgeError;
 
@@ -23,11 +24,40 @@ const MAX_KEYS_BYTES: u64 = 64 * 1024;
 #[derive(Debug)]
 pub struct ApiConfig {
     pub(super) cursor_keys_file: Option<PathBuf>,
+    /// `api.list_max_concurrent`: list requests running at once, in total
+    /// (default 16). Over it: `FG-WEB-0008 reason=list_concurrency`.
+    pub list_max_concurrent: u32,
+    /// `api.list_max_concurrent_per_principal`: list requests running at
+    /// once for one signed-in user (default 2, at most the total).
+    pub list_max_concurrent_per_principal: u32,
+    /// `api.cursor_max_age_s`: how long a cursor stays valid (default 24 h);
+    /// an older one is `FG-WEB-0006 cursor_invalid rule=expired`.
+    pub cursor_max_age: Duration,
 }
 
 impl ApiConfig {
-    pub(super) fn new(cursor_keys_file: Option<PathBuf>) -> Self {
-        Self { cursor_keys_file }
+    pub const DEFAULT_LIST_MAX_CONCURRENT: u32 = 16;
+    pub const DEFAULT_LIST_MAX_CONCURRENT_PER_PRINCIPAL: u32 = 2;
+    pub const DEFAULT_CURSOR_MAX_AGE_S: u32 = 86_400;
+
+    pub(super) fn new(
+        cursor_keys_file: Option<PathBuf>,
+        list_max_concurrent: u32,
+        list_max_concurrent_per_principal: u32,
+        cursor_max_age: Duration,
+    ) -> Result<Self, ForgeError> {
+        if list_max_concurrent_per_principal > list_max_concurrent {
+            return Err(invalid(
+                "api.list_max_concurrent_per_principal",
+                "above_max",
+            ));
+        }
+        Ok(Self {
+            cursor_keys_file,
+            list_max_concurrent,
+            list_max_concurrent_per_principal,
+            cursor_max_age,
+        })
     }
 
     /// Whether `api.cursor_keys_file` is configured.

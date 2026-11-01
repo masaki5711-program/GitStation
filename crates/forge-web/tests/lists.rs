@@ -527,3 +527,136 @@ async fn a_server_without_lists_fails_loudly() {
     assert_eq!(body["error_code"], ErrorCode::Internal.id());
     t.drop_now().await;
 }
+
+/// A project loader that waits for a gate (and can fail), so requests can be
+/// held in flight.
+struct Gated {
+    gate: Arc<tokio::sync::Semaphore>,
+    fail: bool,
+}
+
+impl forge_core::ProjectPageLoader for Gated {
+    fn project_page<'a>(
+        &'a self,
+        _: Option<ProjectId>,
+        _: UserId,
+        _: u32,
+    ) -> LookupFuture<'a, Vec<ProjectRecord>> {
+        Box::pin(async move {
+            let permit = self.gate.acquire().await.expect("gate open");
+            permit.forget();
+            if self.fail {
+                Err(forge_errors::ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "synthetic_loader_failure"))
+            } else {
+                Ok(Vec::new())
+            }
+        })
+    }
+}
+
+impl forge_core::GroupPageLoader for Gated {
+    fn group_page<'a>(
+        &'a self,
+        _: Option<GroupId>,
+        _: UserId,
+        _: u32,
+    ) -> LookupFuture<'a, Vec<GroupListing>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+fn gated_app(t: &FreshDb, gated: &Arc<Gated>, total: u32, per_user: u32) -> axum::Router {
+    let db = t.db.clone(); // clone: the pool handle is shared
+    let state = AppState::new(
+        "test",
+        Vec::new(),
+        Arc::new(NoTokens),
+        Lookups {
+            namespaces: Arc::new(db.clone()),
+            projects: Arc::new(db),
+        },
+    )
+    .with_lists(
+        Lists::new(
+            Arc::clone(gated) as Arc<dyn forge_core::ProjectPageLoader>,
+            Arc::clone(gated) as Arc<dyn forge_core::GroupPageLoader>,
+            keys(),
+        )
+        .with_concurrency(total, per_user),
+    );
+    forge_web::app(state, AppConfig::default()).expect("router")
+}
+
+async fn busy(router: axum::Router, who: UserId) -> (StatusCode, Option<String>) {
+    let mut req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/projects")
+        .body(Body::empty())
+        .expect("request");
+    req.extensions_mut().insert(session(who));
+    let res = router.oneshot(req).await.expect("infallible");
+    let retry = res
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    (res.status(), retry)
+}
+
+#[tokio::test]
+async fn list_requests_over_the_per_user_or_global_cap_get_503_and_slots_are_returned() {
+    let t = FreshDb::migrated().await;
+    let (alice, bob, carol) = (
+        user(&t, "alice").await,
+        user(&t, "bob").await,
+        user(&t, "carol").await,
+    );
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let gated = Arc::new(Gated {
+        gate: Arc::clone(&gate),
+        fail: false,
+    });
+    // Total 3, two per user.
+    let router = gated_app(&t, &gated, 3, 2);
+    let hold = |who: UserId| tokio::spawn(busy(router.clone(), who));
+    let (a1, a2) = (hold(alice.user_id), hold(alice.user_id));
+    // Let both reach the loader (they park on the gate).
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    // A third from alice: per-user cap, refused at once with Retry-After.
+    let (status, retry) = busy(router.clone(), alice.user_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(retry.as_deref(), Some("1"));
+    // Bob takes the last global slot; carol is then refused globally.
+    let b1 = hold(bob.user_id);
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    let (status, retry) = busy(router.clone(), carol.user_id).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(retry.as_deref(), Some("1"));
+    // Completion returns every slot.
+    gate.add_permits(3);
+    for h in [a1, a2, b1] {
+        assert_eq!(h.await.expect("task").0, StatusCode::OK);
+    }
+    gate.add_permits(2);
+    assert_eq!(busy(router.clone(), alice.user_id).await.0, StatusCode::OK);
+    assert_eq!(busy(router, carol.user_id).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_failing_list_request_returns_its_slots() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let gate = Arc::new(tokio::sync::Semaphore::new(100));
+    let gated = Arc::new(Gated { gate, fail: true });
+    let router = gated_app(&t, &gated, 1, 1);
+    // One slot only: if the failure leaked it, the second call would be 503.
+    for _ in 0..3 {
+        let (status, _) = busy(router.clone(), alice.user_id).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

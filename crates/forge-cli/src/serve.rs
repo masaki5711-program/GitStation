@@ -57,11 +57,14 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let push_tasks = smart_http.push_tasks();
         let state = app_state(&db, database)
             .with_smart_http(smart_http)
-            .with_lists(Lists::new(
-                Arc::new(db.clone()),
-                Arc::new(db.clone()), // clone: the pool handle is shared
-                cursor_keys,
-            ));
+            .with_lists(
+                Lists::new(
+                    Arc::new(db.clone()),
+                    Arc::new(db.clone()), // clone: the pool handle is shared
+                    cursor_keys,
+                )
+                .with_api_config(&cfg.api),
+            );
         let router = forge_web::app(
             state,
             app_config_for(database, &cfg.git_http, &cfg.server.limits),

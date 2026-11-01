@@ -16,6 +16,12 @@
 //!   statement, `SCAN_BUDGET + 1` rows: the extra one only says whether more
 //!   exist). When the budget ends before `limit` visible rows, the page is
 //!   short, with `has_more: true` and a cursor after the last row scanned.
+//! - **Concurrency caps** (`api.list_max_concurrent`, default 16 in total;
+//!   `api.list_max_concurrent_per_principal`, default 2 per user): a scan
+//!   costs up to `SCAN_BUDGET + 1` rows whatever `limit` is, so a list
+//!   request past either cap is refused at once, not queued: `FG-WEB-0008
+//!   reason=list_concurrency scope=global|principal` (503, `Retry-After`).
+//!   The slot is held for the loader call and returned on every path.
 //! - **Opaque cursor** ([`forge_core::cursor`]): the position is the last
 //!   id consumed (shown or scanned), sealed with AES-256-GCM for this list
 //!   and this caller (`purpose = "<list>:user=<id>"`), so it reveals no
@@ -33,19 +39,23 @@
 //! The answer is `{items, next_cursor, has_more}`; a project item is
 //! [`crate::routes::projects::project_view`]'s body, the one builder `GET /api/v1/projects/{id}` uses.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use axum::http::header::{CACHE_CONTROL, VARY};
+use axum::http::header::{CACHE_CONTROL, RETRY_AFTER, VARY};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::{authorize, prove, Action, InstanceCtx, Principal, ProjectCtx, Resource};
+use forge_core::config::ApiConfig;
 use forge_core::{
     parse_positive_id, CursorKeys, GroupId, GroupListing, GroupPageLoader, ProjectId,
     ProjectPageLoader, ProjectRecord, Role, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde::Serialize;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::app::AppState;
 use crate::body::param_invalid;
@@ -63,6 +73,8 @@ pub const GROUPS_PATH: &str = "/api/v1/groups";
 pub const SCAN_BUDGET: u32 = 1000;
 /// `limit` without the parameter.
 pub const DEFAULT_LIMIT: usize = 20;
+/// `Retry-After` of a refused list request, in seconds.
+const BUSY_RETRY_AFTER_SECS: &str = "1";
 /// The largest `limit`.
 pub const MAX_LIMIT: usize = 100;
 
@@ -89,6 +101,9 @@ pub struct Lists {
     pub keys: Arc<CursorKeys>,
     /// Rows scanned per page: [`SCAN_BUDGET`] (tests lower it).
     pub scan_budget: u32,
+    /// How long a cursor stays valid (`api.cursor_max_age_s`).
+    pub cursor_max_age: Duration,
+    slots: ListSlots,
 }
 
 impl Lists {
@@ -102,7 +117,38 @@ impl Lists {
             groups,
             keys,
             scan_budget: SCAN_BUDGET,
+            cursor_max_age: Duration::from_secs(u64::from(ApiConfig::DEFAULT_CURSOR_MAX_AGE_S)),
+            slots: ListSlots::new(
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT,
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT_PER_PRINCIPAL,
+            ),
         }
+    }
+
+    /// The `api.*` settings: concurrency caps and the cursor age.
+    #[must_use]
+    pub fn with_api_config(mut self, api: &ApiConfig) -> Self {
+        self.slots = ListSlots::new(
+            api.list_max_concurrent,
+            api.list_max_concurrent_per_principal,
+        );
+        self.cursor_max_age = api.cursor_max_age;
+        self
+    }
+
+    /// Cap the list requests at `total` running at once and `per_user` for
+    /// one user (tests; `forge serve` uses [`Lists::with_api_config`]).
+    #[must_use]
+    pub fn with_concurrency(mut self, total: u32, per_user: u32) -> Self {
+        self.slots = ListSlots::new(total, per_user);
+        self
+    }
+
+    /// Accept cursors up to `age` old.
+    #[must_use]
+    pub fn with_cursor_max_age(mut self, age: Duration) -> Self {
+        self.cursor_max_age = age;
+        self
     }
 
     /// Scan `budget` rows per page instead (1 ..= [`SCAN_BUDGET`]; tests).
@@ -110,6 +156,101 @@ impl Lists {
     pub fn with_scan_budget(mut self, budget: u32) -> Self {
         self.scan_budget = budget.clamp(1, SCAN_BUDGET);
         self
+    }
+}
+
+/// The list concurrency slots (see the module docs): a total and a per-user
+/// cap, both refused at once.
+#[derive(Debug)]
+struct ListSlots {
+    global: Arc<Semaphore>,
+    per_user: Arc<Mutex<HashMap<i64, u32>>>,
+    max_per_user: u32,
+    max: u32,
+}
+
+/// One held slot; the permit and the per-user claim return on drop.
+#[derive(Debug)]
+pub(crate) struct ListSlot {
+    _permit: OwnedSemaphorePermit,
+    _claim: Claim,
+}
+
+#[derive(Debug)]
+struct Claim {
+    user: i64,
+    per_user: Arc<Mutex<HashMap<i64, u32>>>,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let mut map = self
+            .per_user
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(held) = map.get_mut(&self.user) {
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                map.remove(&self.user);
+            }
+        }
+    }
+}
+
+impl ListSlots {
+    fn new(max: u32, max_per_user: u32) -> Self {
+        let max = max.max(1);
+        Self {
+            global: Arc::new(Semaphore::new(usize::try_from(max).unwrap_or(usize::MAX))),
+            per_user: Arc::new(Mutex::new(HashMap::new())),
+            max_per_user: max_per_user.max(1),
+            max,
+        }
+    }
+
+    fn busy(scope: &'static str, max: u32) -> ForgeError {
+        ForgeError::new(ErrorCode::ServerBusy)
+            .with_context("reason", "list_concurrency")
+            .with_context("scope", scope)
+            .with_context("max", max)
+    }
+
+    /// A slot for `user`, or `FG-WEB-0008 reason=list_concurrency` at once.
+    fn acquire(&self, user: UserId) -> Result<ListSlot, ForgeError> {
+        let user = user.get();
+        {
+            let mut map = self
+                .per_user
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let held = map.entry(user).or_insert(0);
+            if *held >= self.max_per_user {
+                return Err(Self::busy("principal", self.max_per_user));
+            }
+            *held += 1;
+        }
+        // From here the claim is returned on every path (drop).
+        let claim = Claim {
+            user,
+            per_user: Arc::clone(&self.per_user),
+        };
+        let permit = Arc::clone(&self.global)
+            .try_acquire_owned()
+            .map_err(|_| Self::busy("global", self.max))?;
+        Ok(ListSlot {
+            _permit: permit,
+            _claim: claim,
+        })
+    }
+
+    #[cfg(test)]
+    fn held(&self, user: UserId) -> u32 {
+        self.per_user
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&user.get())
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -237,11 +378,12 @@ fn open_cursor(
     list: List,
     viewer: UserId,
     cursor: Option<&str>,
+    max_age: Duration,
 ) -> Result<Option<i64>, ForgeError> {
     let Some(cursor) = cursor else {
         return Ok(None);
     };
-    let payload = keys.decode(&list.purpose(viewer), cursor)?;
+    let payload = keys.decode(&list.purpose(viewer), cursor, max_age)?;
     let id = <[u8; 8]>::try_from(payload.as_slice())
         .ok()
         .map(i64::from_be_bytes)
@@ -361,7 +503,14 @@ async fn project_page(
     let lists = state.lists.as_deref().ok_or_else(unconfigured)?;
     let query = parse_query(raw_query)?;
     let viewer = viewer(principal)?;
-    let after = open_cursor(&lists.keys, List::Projects, viewer, query.cursor.as_deref())?;
+    let after = open_cursor(
+        &lists.keys,
+        List::Projects,
+        viewer,
+        query.cursor.as_deref(),
+        lists.cursor_max_age,
+    )?;
+    let _slot = lists.slots.acquire(viewer)?;
     let rows: Vec<ProjectRecord> = bounded(
         state,
         List::Projects,
@@ -402,7 +551,14 @@ async fn group_page(
     let lists = state.lists.as_deref().ok_or_else(unconfigured)?;
     let query = parse_query(raw_query)?;
     let viewer = viewer(principal)?;
-    let after = open_cursor(&lists.keys, List::Groups, viewer, query.cursor.as_deref())?;
+    let after = open_cursor(
+        &lists.keys,
+        List::Groups,
+        viewer,
+        query.cursor.as_deref(),
+        lists.cursor_max_age,
+    )?;
+    let _slot = lists.slots.acquire(viewer)?;
     let rows: Vec<GroupListing> = bounded(
         state,
         List::Groups,
@@ -463,7 +619,15 @@ fn answer<T: Serialize>(
 ) -> Response {
     let page = match page {
         Ok(page) => page,
-        Err(e) => return request.ctx().fail(e).into_response(),
+        Err(e) => {
+            let busy = e.code() == ErrorCode::ServerBusy;
+            let mut res = request.ctx().fail(e).into_response();
+            if busy {
+                res.headers_mut()
+                    .insert(RETRY_AFTER, HeaderValue::from_static(BUSY_RETRY_AFTER_SECS));
+            }
+            return res;
+        }
     };
     let mut res = Json(page).into_response();
     let headers = res.headers_mut();

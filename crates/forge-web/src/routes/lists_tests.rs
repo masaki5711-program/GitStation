@@ -7,6 +7,8 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use super::*;
 
+const AGE: Duration = Duration::from_secs(3600);
+
 fn rule(err: &ForgeError) -> (ErrorCode, String, String) {
     let get = |k: &str| {
         err.context()
@@ -176,11 +178,11 @@ fn a_cursor_opens_only_for_its_list_and_caller() {
         .expect("seal")
         .expect("a cursor");
     assert_eq!(
-        open_cursor(&keys, List::Projects, alice, Some(&cursor)).expect("own"),
+        open_cursor(&keys, List::Projects, alice, Some(&cursor), AGE).expect("own"),
         Some(42)
     );
     for (list, who) in [(List::Projects, bob), (List::Groups, alice)] {
-        let err = open_cursor(&keys, list, who, Some(&cursor)).expect_err("foreign");
+        let err = open_cursor(&keys, list, who, Some(&cursor), AGE).expect_err("foreign");
         assert_eq!(err.code(), ErrorCode::RequestInvalid);
         assert!(
             err.context()
@@ -198,7 +200,8 @@ fn a_cursor_opens_only_for_its_list_and_caller() {
         let sealed = keys
             .encode(&List::Projects.purpose(alice), payload)
             .expect("seal");
-        let err = open_cursor(&keys, List::Projects, alice, Some(&sealed)).expect_err("payload");
+        let err =
+            open_cursor(&keys, List::Projects, alice, Some(&sealed), AGE).expect_err("payload");
         assert!(
             err.context()
                 .iter()
@@ -236,4 +239,86 @@ fn the_lists_are_documented_with_their_page_schemas_and_parameters() {
             .any(|f| f == "next_cursor"));
     }
     assert!(doc["components"]["schemas"].get("ListedGroup").is_some());
+}
+
+fn busy_scope(err: &ForgeError) -> (ErrorCode, String, String) {
+    let get = |k: &str| {
+        err.context()
+            .iter()
+            .find(|(key, _)| *key == k)
+            .map(|(_, v)| v.to_string())
+            .unwrap_or_default()
+    };
+    (err.code(), get("reason"), get("scope"))
+}
+
+#[test]
+fn the_per_user_cap_refuses_at_once_and_a_dropped_slot_is_returned() {
+    let slots = ListSlots::new(8, 2);
+    let (alice, bob) = (UserId::new(1), UserId::new(2));
+    let a1 = slots.acquire(alice).expect("first");
+    let a2 = slots.acquire(alice).expect("second");
+    assert_eq!(slots.held(alice), 2);
+    let err = slots.acquire(alice).expect_err("third");
+    assert_eq!(
+        busy_scope(&err),
+        (
+            ErrorCode::ServerBusy,
+            "list_concurrency".into(),
+            "principal".into()
+        )
+    );
+    // Another user is not affected, and a refusal leaks no claim.
+    let _b = slots.acquire(bob).expect("other user");
+    assert_eq!(slots.held(alice), 2);
+    drop(a1);
+    let _a3 = slots.acquire(alice).expect("returned on drop");
+    drop(a2);
+    assert_eq!(slots.held(alice), 1);
+}
+
+#[test]
+fn the_global_cap_refuses_at_once_and_returns_both_the_permit_and_the_claim() {
+    let slots = ListSlots::new(2, 2);
+    let (alice, bob, carol) = (UserId::new(1), UserId::new(2), UserId::new(3));
+    let _a = slots.acquire(alice).expect("a");
+    let b = slots.acquire(bob).expect("b");
+    let err = slots.acquire(carol).expect_err("full");
+    assert_eq!(
+        busy_scope(&err),
+        (
+            ErrorCode::ServerBusy,
+            "list_concurrency".into(),
+            "global".into()
+        )
+    );
+    // The refused caller's claim was returned (no leak toward her cap).
+    assert_eq!(slots.held(carol), 0);
+    drop(b);
+    let _c = slots.acquire(carol).expect("permit returned on drop");
+}
+
+#[test]
+fn an_expired_cursor_is_cursor_invalid_rule_expired() {
+    let keys = CursorKeys::parse(&format!("1 {}\n", "ab".repeat(32))).expect("keys");
+    let alice = UserId::new(42);
+    let purpose = List::Projects.purpose(alice);
+    let old = keys
+        .encode_at(&purpose, &5i64.to_be_bytes(), 1_000)
+        .expect("seal");
+    // Opened at the real clock the 1970 cursor is far past any max age.
+    let err = open_cursor(&keys, List::Projects, alice, Some(&old), AGE).expect_err("expired");
+    assert_eq!(
+        rule(&err),
+        (
+            ErrorCode::RequestInvalid,
+            String::new(),
+            "expired".to_owned()
+        )
+    );
+    let fresh = next_cursor(&keys, List::Projects, alice, Some(5)).expect("seal");
+    assert_eq!(
+        open_cursor(&keys, List::Projects, alice, fresh.as_deref(), AGE).expect("fresh"),
+        Some(5)
+    );
 }
