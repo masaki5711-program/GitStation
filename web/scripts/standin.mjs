@@ -32,7 +32,7 @@ const COMMON = {
   'Cross-Origin-Opener-Policy': 'same-origin',
 };
 
-/** `handle(req, res, url, body)` answers /api/ and /-/auth/ requests and
+/** `handle(req, res, url, body)` answers /api/, /-/auth/ and the raw / archive routes and
  * returns true when it did. `body` is the request body as text. */
 export function standIn(csp, handle) {
   const index = readFileSync(join(dist, 'index.html'));
@@ -42,7 +42,12 @@ export function standIn(csp, handle) {
     req.on('end', () => {
       const url = new URL(req.url ?? '/', 'http://x');
       const path = url.pathname;
-      if (path.startsWith('/api/') || path.startsWith('/-/auth/')) {
+      if (
+        path.startsWith('/api/') ||
+        path.startsWith('/-/auth/') ||
+        path.includes('/-/raw/') ||
+        path.includes('/-/archive/')
+      ) {
         if (handle(req, res, url, Buffer.concat(chunks).toString('utf8'))) return;
         res.writeHead(404, COMMON);
         res.end();

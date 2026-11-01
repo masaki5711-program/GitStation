@@ -24,7 +24,10 @@ import { inlineProblems } from './inline-check.mjs';
 import { dist, listen, sendJson, shellCsp, standIn } from './standin.mjs';
 
 
-/** A signed-in person and one empty project, so the pages render without a
+const C = 'a'.repeat(40);
+const REV = { type: 'branch', name: 'main', full_name: 'refs/heads/main', commit: C };
+
+/** A signed-in person and one project, so the pages render without a
  * failed request (a 4xx is logged by the browser as a console error). */
 function smokeApi(_req, res, url) {
   const path = url.pathname;
@@ -60,7 +63,32 @@ function smokeApi(_req, res, url) {
       role: 'developer',
     });
   } else if (path === '/api/v1/projects/1/repository/refs') {
-    sendJson(res, 200, { default_branch: null, refs: [], truncated: false });
+    sendJson(res, 200, {
+      default_branch: 'main',
+      truncated: false,
+      refs: [{ name: 'main', full_name: 'refs/heads/main', type: 'branch', target: C, commit: C }],
+    });
+  } else if (path === '/api/v1/projects/1/repository/resolve') {
+    const spec = url.searchParams.get('spec') ?? '';
+    const [, ...rest] = spec.split('/');
+    sendJson(res, 200, { ref: REV, path: rest.join('/') });
+  } else if (path === '/api/v1/projects/1/repository/tree') {
+    const entry = (name, type, size) => ({ name, path: name, type, mode: '100644', oid: 'e'.repeat(40), size });
+    sendJson(res, 200, {
+      ref: REV,
+      path: '',
+      oid: 'f'.repeat(40),
+      truncated: false,
+      entries: [entry('README.md', 'blob', 40), entry('lib.rs', 'blob', 30)],
+    });
+  } else if (path === '/api/v1/projects/1/repository/blob') {
+    const name = url.searchParams.get('path') ?? '';
+    const content =
+      name === 'README.md' ? '# Readme\n\nA [link](lib.rs) and `code`.\n\n```rust\nfn main() {}\n```\n' : 'fn main() {\n    // hi\n}\n';
+    sendJson(res, 200, {
+      ref: REV, path: name, name, type: 'blob', mode: '100644', oid: 'e'.repeat(40),
+      size: content.length, binary: false, content, truncated: false,
+    });
   } else {
     return false;
   }
@@ -102,7 +130,7 @@ async function main() {
         window.__cspViolation(`${e.violatedDirective} ${e.blockedURI}`);
       });
     });
-    for (const path of ['/', '/acme/forge-web/-/tree/main', '/-/projects/1']) {
+    for (const path of ['/', '/acme/forge-web/-/tree/main', '/acme/forge-web/-/blob/main/lib.rs', '/-/projects/1']) {
       const res = await page.goto(base + path, { waitUntil: 'networkidle' });
       if (res === null || res.status() !== 200) {
         problems.push(`${path}: status ${res?.status() ?? 'none'}`);
@@ -110,6 +138,9 @@ async function main() {
       }
       await page.waitForSelector('header img', { timeout: 10_000 });
       await page.waitForSelector('main h1', { timeout: 10_000 });
+      // The lazy chunks (syntax colours, Markdown) load under the shell CSP.
+      if (path.includes('/-/blob/')) await page.waitForSelector('.hljs-keyword', { timeout: 10_000 });
+      if (path.includes('/-/tree/')) await page.waitForSelector('[data-testid=markdown]', { timeout: 10_000 });
       const styles = await page.evaluate(() => document.querySelectorAll('style').length);
       if (styles !== 0) problems.push(`${path}: ${styles} <style> elements in the document`);
       console.log(`smoke: ${path} ok (${await page.locator('main h1').innerText()})`);

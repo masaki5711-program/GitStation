@@ -21,6 +21,7 @@ import {
   signedIn,
 } from './mock';
 import { json, renderApp } from './render';
+import { repoRoutes } from './repo-fixtures';
 
 async function violations(root: HTMLElement): Promise<string[]> {
   const result = await axe.run(root, {
@@ -101,12 +102,11 @@ describe('axe', () => {
   });
 
   it('project: filled and empty repository', async () => {
-    const routes = (refs: unknown) => ({
-      ...signedIn(),
-      'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
-      'GET /api/v1/projects/7': () => json(200, PROJECT),
-      'GET /api/v1/projects/7/repository/refs': () => json(200, refs),
-    });
+    const routes = (refs: unknown) =>
+      repoRoutes({
+        'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
+        'GET /api/v1/projects/7/repository/refs': () => json(200, refs),
+      });
     for (const refs of [REFS_FILLED, REFS_EMPTY]) {
       const server = mockServer(routes(refs));
       const { container, unmount } = await renderApp({ fetch: server.fetch, path: '/acme/forge-web' });

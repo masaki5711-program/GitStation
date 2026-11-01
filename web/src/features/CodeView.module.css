@@ -1,0 +1,96 @@
+/* Code: colours from the token set only; the highlight.js classes are global
+ * names, scoped here under .code. */
+.scroll {
+  overflow: auto;
+  max-width: 100%;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-code-surface);
+}
+
+.code {
+  margin: 0;
+  padding: var(--gs-space-2) 0;
+  font-size: var(--gs-font-size-sm);
+  line-height: 1.5;
+  counter-reset: line;
+  width: max-content;
+  min-width: 100%;
+}
+
+.line {
+  display: block;
+  min-height: 1.5em;
+  padding: 0 var(--gs-space-3) 0 0;
+  white-space: pre;
+  counter-increment: line;
+}
+
+.line::before {
+  content: counter(line);
+  display: inline-block;
+  min-width: 4ch;
+  margin-right: var(--gs-space-3);
+  padding: 0 var(--gs-space-2);
+  text-align: right;
+  color: var(--gs-color-text-muted);
+  user-select: none;
+}
+
+.line:target {
+  background: var(--gs-color-warning-surface);
+}
+
+.tokens :global(.hljs-keyword),
+.tokens :global(.hljs-selector-tag),
+.tokens :global(.hljs-literal),
+.tokens :global(.hljs-doctag),
+.tokens :global(.hljs-name) {
+  color: var(--gs-code-keyword);
+}
+
+.tokens :global(.hljs-string),
+.tokens :global(.hljs-regexp),
+.tokens :global(.hljs-addition),
+.tokens :global(.hljs-attribute),
+.tokens :global(.hljs-symbol) {
+  color: var(--gs-code-string);
+}
+
+.tokens :global(.hljs-comment),
+.tokens :global(.hljs-quote) {
+  color: var(--gs-code-comment);
+  font-style: italic;
+}
+
+.tokens :global(.hljs-number),
+.tokens :global(.hljs-deletion),
+.tokens :global(.hljs-bullet) {
+  color: var(--gs-code-number);
+}
+
+.tokens :global(.hljs-title),
+.tokens :global(.hljs-function),
+.tokens :global(.hljs-section),
+.tokens :global(.hljs-selector-id),
+.tokens :global(.hljs-selector-class) {
+  color: var(--gs-code-title);
+}
+
+.tokens :global(.hljs-built_in),
+.tokens :global(.hljs-type),
+.tokens :global(.hljs-meta),
+.tokens :global(.hljs-variable),
+.tokens :global(.hljs-template-variable),
+.tokens :global(.hljs-params),
+.tokens :global(.hljs-link) {
+  color: var(--gs-code-meta);
+}
+
+.tokens :global(.hljs-emphasis) {
+  font-style: italic;
+}
+
+.tokens :global(.hljs-strong) {
+  font-weight: bold;
+}
