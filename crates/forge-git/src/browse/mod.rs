@@ -26,6 +26,12 @@
 //!   at most [`BrowseLimits::max_per_repo`] captured browse calls run per
 //!   repository at once (more are `FG-GIT-0004 reason=repo_browse`, at
 //!   once); the global subprocess and stream pools still apply.
+//! - **History** (M2 MR8, `history.rs` / `diff.rs` / `blame.rs`): commits
+//!   (`log -z`, a cursor that is checked against the commit it names), one
+//!   commit and a comparison (`diff-tree` with per-file patches under
+//!   file / byte caps) and blame (`blame --porcelain`, 20 s). Blame and
+//!   compare have their own time limits; every captured call is one slot
+//!   of the repository's cap, like the rest.
 //! - **Ref cache**: the `for-each-ref` result is kept per repository for
 //!   [`BrowseLimits::refs_ttl`] (5 s) and dropped by
 //!   [`Browser::invalidate`] (every push). A list loaded while an
@@ -43,12 +49,18 @@ use tokio::time::Instant;
 use crate::command::Git;
 use crate::storage::StorageRoot;
 
+mod blame;
 mod content;
+mod diff;
+mod history;
 mod path;
 mod refs;
 mod tree;
 
+pub use blame::{Blame, BlameCommit, BlameHunk};
 pub use content::{ArchiveFormat, Blob, RawBlob, RawBody};
+pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
+pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
 pub use refs::{RefEntry, RefKind, RefList, ResolvedRev, ResolvedSpec, Target};
 pub use tree::{EntryKind, Tree, TreeEntry};
@@ -78,6 +90,25 @@ pub struct BrowseLimits {
     pub stream_idle: Duration,
     /// Streams: upper bound.
     pub stream_total: Duration,
+    /// One blame (all its git calls together; plan 10 §5).
+    pub blame_timeout: Duration,
+    /// One compare (its commit list and diff together).
+    pub compare_timeout: Duration,
+    /// Commits of one history page (`limit` is clamped to this).
+    pub max_log_page: usize,
+    /// How many commits a history cursor may have skipped.
+    pub max_log_skip: usize,
+    /// Commits a compare lists; more marks it `truncated`.
+    pub max_compare_commits: usize,
+    /// Files of one diff; more marks it `truncated`.
+    pub max_diff_files: usize,
+    /// Patch bytes git may produce for one diff (the sum over its files);
+    /// git is killed past it and the files after are `total_cap`.
+    pub max_diff_bytes: usize,
+    /// Patch bytes of one file; a larger patch is left out (`too_large`).
+    pub max_file_patch_bytes: usize,
+    /// Lines of one blame; more marks it `truncated`.
+    pub max_blame_lines: usize,
 }
 
 impl Default for BrowseLimits {
@@ -93,6 +124,15 @@ impl Default for BrowseLimits {
             raw_inline_max_bytes: 4 * 1024 * 1024,
             stream_idle: Duration::from_secs(60),
             stream_total: Duration::from_secs(600),
+            blame_timeout: Duration::from_secs(20),
+            compare_timeout: Duration::from_secs(20),
+            max_log_page: 100,
+            max_log_skip: 100_000,
+            max_compare_commits: 200,
+            max_diff_files: 500,
+            max_diff_bytes: 2 * 1024 * 1024,
+            max_file_patch_bytes: 256 * 1024,
+            max_blame_lines: 10_000,
         }
     }
 }
@@ -231,6 +271,9 @@ impl Browser {
         })
     }
 }
+
+#[cfg(test)]
+mod history_tests;
 
 #[cfg(test)]
 use forge_core::RefName;

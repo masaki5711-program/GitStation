@@ -250,7 +250,7 @@ impl Browser {
     }
 
     /// The commit a full id names (`not_a_commit` / `ref_not_found`).
-    async fn commit_of(
+    pub(super) async fn commit_of(
         &self,
         repo: RepoId,
         id: &str,

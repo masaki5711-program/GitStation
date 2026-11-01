@@ -74,7 +74,7 @@ impl ArchiveFormat {
 
 impl Browser {
     /// The blob entry at `path` (`not_a_blob` for a tree or a submodule).
-    async fn blob_entry(
+    pub(super) async fn blob_entry(
         &self,
         repo: RepoId,
         commit: &str,
