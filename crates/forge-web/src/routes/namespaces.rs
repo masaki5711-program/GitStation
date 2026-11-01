@@ -82,6 +82,7 @@ impl Loader<AppState> for PathParam {
                     canonical: Some(canonical),
                     tombstone,
                     project: None,
+                    group: None,
                 },
                 Err(ctx) => Lookup::Unresolved { ctx, why: None },
             })

@@ -70,8 +70,8 @@ use forge_auth::{
 };
 use forge_core::web_path::{GitRoute, InstanceRoute, RouteWord};
 use forge_core::{
-    NamespacePath, NamespaceResolver, ProjectRecord, ProjectRepository, TailSegments, TombstoneId,
-    UserId,
+    GroupRecord, NamespacePath, NamespaceResolver, ProjectRecord, ProjectRepository, TailSegments,
+    TombstoneId, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Map, Value};
@@ -269,8 +269,9 @@ pub struct RouteDef {
     pub summary: &'static str,
     /// The JSON request body (`route_with_body`), with its cap.
     pub request: Option<(SchemaDoc, usize)>,
-    /// The success response body, when documented ([`Registry::responds`]).
-    pub response: Option<SchemaDoc>,
+    /// The success response body and its status, when documented
+    /// ([`Registry::responds`]: `200`; [`Registry::responds_created`]: `201`).
+    pub response: Option<(SchemaDoc, u16)>,
     /// The documented query parameters ([`Registry::queries`]).
     pub query: &'static [QueryParam],
 }
@@ -375,6 +376,7 @@ struct Admitted {
     canonical: Option<NamespacePath>,
     tombstone: Option<TombstoneId>,
     project: Option<ProjectRecord>,
+    group: Option<Box<GroupRecord>>,
     repository: Option<ProjectRepository>,
 }
 
@@ -441,6 +443,13 @@ impl<R: ResourceCtx, B> Dispatched<R, B> {
         self.request.project.as_ref()
     }
 
+    /// The group row the loader read with the context (`GET
+    /// /api/v1/groups/{id}`, M1 phase 8b MR7a), revealed only after
+    /// `authorize()`; `None` for every other route. Its `id` is the proof's.
+    pub fn group(&self) -> Option<&GroupRecord> {
+        self.request.group.as_deref()
+    }
+
     /// The project's repository (storage id and state) the resolver read
     /// with the path (scoped project routes; Smart HTTP), revealed only
     /// after `authorize()`; `None` for every other route.
@@ -471,11 +480,36 @@ impl<R: ResourceCtx, B> Dispatched<R, B> {
             .get::<crate::auth::CallerProfile>()
     }
 
+    /// What a write handler keeps across its awaits (the request's body
+    /// stream is not `Sync`, so a handler must not hold the `Dispatched`
+    /// itself): the proof, the parsed input, the request context and the
+    /// token id (M1 phase 8b MR7a).
+    pub fn into_write(self) -> WriteParts<R, B> {
+        let credential_id = self.credential_id();
+        WriteParts {
+            proof: self.proof,
+            input: self.input,
+            ctx: self.request.ctx,
+            credential_id,
+        }
+    }
+
     /// The proof, the principal and the body (receive-pack decides every
     /// ref on the project proof after it read the command list).
     pub fn into_proof_and_body(self) -> (Authorized<R>, Principal, Body) {
         (self.proof, self.request.principal, self.request.body)
     }
+}
+
+/// A write handler's part of a [`Dispatched`] ([`Dispatched::into_write`]):
+/// still only reachable through the registry, and the proof stays
+/// unforgeable.
+pub struct WriteParts<R: ResourceCtx, B> {
+    pub proof: Authorized<R>,
+    pub input: B,
+    pub ctx: Ctx,
+    /// The personal access token the request authenticated with.
+    pub credential_id: Option<i64>,
 }
 
 /// The only constructor of [`Dispatched`]: the proof must be for the
@@ -511,6 +545,9 @@ pub enum Lookup<R> {
         canonical: Option<NamespacePath>,
         tombstone: Option<TombstoneId>,
         project: Option<ProjectRecord>,
+        /// The group row a group was loaded from (`None` elsewhere; boxed:
+        /// the variants stay small).
+        group: Option<Box<GroupRecord>>,
     },
     /// Nothing the route can act on: decided by `authorize()` like every
     /// other request (`FG-REPO-0005`, after authentication). `why` is
@@ -555,6 +592,7 @@ impl<S: Sync> Loader<S> for InstanceLoader {
                 canonical: None,
                 tombstone: None,
                 project: None,
+                group: None,
             })
         })
     }
@@ -831,10 +869,28 @@ impl<S: DispatchState> Registry<S> {
             .iter_mut()
             .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
         {
-            Some(def) => def.response = Some(SchemaDoc::of::<T>()),
+            Some(def) => def.response = Some((SchemaDoc::of::<T>(), 200)),
             None => self
                 .problems
                 .push(format!("responds: no route {} {path}", verb.as_str())),
+        }
+        self
+    }
+
+    /// Document the `201 Created` body of the fixed route `verb path` (a
+    /// create, M1 phase 8b MR7a). An unknown route is a startup error.
+    #[must_use]
+    pub fn responds_created<T: utoipa::ToSchema>(mut self, verb: Verb, path: &'static str) -> Self {
+        match self
+            .defs
+            .iter_mut()
+            .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
+        {
+            Some(def) => def.response = Some((SchemaDoc::of::<T>(), 201)),
+            None => self.problems.push(format!(
+                "responds_created: no route {} {path}",
+                verb.as_str()
+            )),
         }
         self
     }
@@ -1077,6 +1133,7 @@ where
         canonical: None,
         tombstone: None,
         project: None,
+        group: None,
         repository: None,
     };
     match decide(action, lookup, request, ()) {
@@ -1123,6 +1180,7 @@ where
         canonical: None,
         tombstone: None,
         project: None,
+        group: None,
         repository: None,
     };
     match decide(action, lookup, request, input) {
@@ -1147,10 +1205,12 @@ fn decide<R: ResourceCtx, B>(
             canonical,
             tombstone,
             project,
+            group,
         } => {
             request.canonical = canonical;
             request.tombstone = tombstone;
             request.project = project;
+            request.group = group;
             ctx
         }
         Lookup::Unresolved { ctx, why } => {
@@ -1213,6 +1273,7 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
             canonical,
             tombstone: None,
             project: None,
+            group: None,
             repository,
         },
         (),
@@ -1313,12 +1374,13 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
             op.insert("x-forge-max-body-bytes".into(), json!(cap));
         }
         let mut responses = Map::new();
-        if let Some(doc) = &d.response {
+        if let Some((doc, status)) = &d.response {
             let reference = add_schemas(doc);
+            let description = if *status == 201 { "Created" } else { "Success" };
             responses.insert(
-                "200".into(),
+                status.to_string(),
                 json!({
-                    "description": "Success",
+                    "description": description,
                     "content": { "application/json": { "schema": { "$ref": reference } } }
                 }),
             );

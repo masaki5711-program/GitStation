@@ -13,26 +13,34 @@
 //! namespace and the repository are written in ONE transaction, which is
 //! what keeps the 1:1:1 (the database does not).
 
-use forge_core::ids::{NamespaceId, ProjectId, RepoId, UserId};
+use forge_core::ids::{GroupId, NamespaceId, ProjectId, RepoId, UserId};
 use forge_core::namespace_path::{MAX_DEPTH, MAX_FULL_PATH_LEN};
-use forge_core::{AuditDetails, PathSegment, RepositoryKind, Visibility};
+use forge_core::{AuditDetails, PathSegment, RepositoryKind, Role, Visibility};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
+use crate::access::{lock_account, Account};
 use crate::change::{
-    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome,
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
 };
 use crate::jobs::{Enqueued, JobId};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
+use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, repositories, Db};
 
 mod members;
 pub(crate) mod ownership;
+mod update;
 
 pub use crate::groups::MemberChange;
+pub use crate::groups::Updated;
 pub(crate) use members::lock_project;
 pub use members::{add_member, change_member, remove_member};
 pub use ownership::{ownerless, Ownerless};
+pub use update::{
+    change_visibility_decided, update_decided, ProjectAccessFacts, ProjectPatch,
+    ProjectUpdateFacts, VisibilityOutcome,
+};
 
 /// The audit resource type of projects, their repository and members
 /// (tables.toml), and the aggregate of their events.
@@ -207,6 +215,13 @@ struct Placement {
     depth: i16,
 }
 
+/// The parent namespace: a group's id, or a personal namespace's user.
+#[derive(Debug, Clone, Copy)]
+enum ParentOwner {
+    Group(GroupId),
+    User(UserId),
+}
+
 /// The parent must be a user or group namespace (`FG-REPO-0014
 /// parent_not_owner_namespace` for a project), read `FOR SHARE` so it
 /// cannot move before the commit; the result must stay within `MAX_DEPTH`
@@ -247,6 +262,12 @@ async fn place(
     Ok(Placement { full_path, depth })
 }
 
+/// **Callers**: the operator CLI and the worker (actor `system`) and the
+/// tests. A route never calls this directly: it goes through forge-hosting,
+/// whose `create_project` uses [`create_decided`] (the decision inside the
+/// transaction). Only forge-hosting calls the `*_decided` commands
+/// (`forge-hosting/tests/decided_callers.rs`).
+///
 /// Insert the project, its namespace (`kind = 'project'`, `owner_id =
 /// projects.id`), its repository (`provisioning`, `new.kind`) and the
 /// creator as direct Owner, enqueue the `repository.provision` job
@@ -269,11 +290,126 @@ pub async fn create(
     ctx: &ChangeContext,
     new: &NewProject,
 ) -> Result<CreatedProject, ForgeError> {
+    type NoDecision = fn(&ProjectCreateFacts) -> Result<(), ForgeError>;
+    let (created, _) = create_in::<NoDecision, ()>(db, ctx, new, None).await?;
+    Ok(created)
+}
+
+/// [`create`] with the authorization decided **inside** the transaction
+/// (M1 phase 8b MR7a): after the parent namespace is locked (`place`,
+/// `FOR SHARE`), the creator's role on a group parent is re-read under
+/// `FOR SHARE` on the membership rows and the creator's account row is
+/// locked; `decide` (forge-hosting: `Authorized::reconfirm`) sees those
+/// facts before anything is written, and its error rolls back. Errors as
+/// [`create`], plus whatever `decide` returns.
+pub async fn create_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    new: &NewProject,
+    decide: impl FnOnce(&ProjectCreateFacts) -> Result<P, ForgeError>,
+) -> Result<(CreatedProject, P), ForgeError> {
+    let (created, decided) = create_in(db, ctx, new, Some(decide)).await?;
+    let decided = decided.ok_or_else(|| {
+        ForgeError::new(ErrorCode::Internal).with_context("reason", "decision_missing")
+    })?;
+    Ok((created, decided))
+}
+
+/// The parent of a project as the create transaction holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentAccess {
+    /// A group namespace and the creator's native role on the group.
+    Group {
+        namespace: NamespaceId,
+        group: GroupId,
+        role: Option<Role>,
+    },
+    /// A personal namespace and its owner.
+    User {
+        namespace: NamespaceId,
+        owner: UserId,
+    },
+}
+
+/// What [`create_decided`]'s `decide` sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectCreateFacts {
+    pub account: Account,
+    pub parent: ParentAccess,
+}
+
+async fn create_in<D, P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    new: &NewProject,
+    decide: Option<D>,
+) -> Result<(CreatedProject, Option<P>), ForgeError>
+where
+    D: FnOnce(&ProjectCreateFacts) -> Result<P, ForgeError>,
+{
+    check_actor(ctx, new.creator)?;
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = create_steps(&mut tx, ctx, new, decide).await;
+    tx.settle("project.created", outcome).await
+}
+
+/// The parent's kind and owner, locked `FOR SHARE` (as `place` reads it):
+/// what `decide` needs before any name or field rule is checked.
+async fn lock_parent_owner(
+    conn: &mut PgConnection,
+    parent: NamespaceId,
+) -> Result<ParentOwner, ForgeError> {
+    let row: Option<(String, i64)> =
+        sqlx::query_as("SELECT kind, owner_id FROM forge.namespaces WHERE id = $1 FOR SHARE")
+            .bind(parent.get())
+            .fetch_optional(conn)
+            .await
+            .map_err(|e| query_error("projects.create.parent_owner_kind", e))?;
+    match row {
+        None => Err(not_found("namespace")),
+        Some((kind, owner)) if kind == "group" => Ok(ParentOwner::Group(GroupId::new(owner))),
+        Some((kind, owner)) if kind == "user" => Ok(ParentOwner::User(UserId::new(owner))),
+        Some(_) => Err(request_invalid("parent_not_owner_namespace")),
+    }
+}
+
+/// [`create_in`]'s steps after `BEGIN`, up to the record to commit. With
+/// `decide`, the decision comes first (M1 phase 8b MR7a LOW-5): a caller
+/// who may not create gets the denial, never a name or field error.
+async fn create_steps<D, P>(
+    tx: &mut ChangeTx,
+    ctx: &ChangeContext,
+    new: &NewProject,
+    decide: Option<D>,
+) -> Result<Settle<(CreatedProject, Option<P>)>, ForgeError>
+where
+    D: FnOnce(&ProjectCreateFacts) -> Result<P, ForgeError>,
+{
+    let decided = match decide {
+        None => None,
+        Some(decide) => {
+            let (creator, namespace) = (new.creator, new.parent);
+            let owner = tx.step(|c| lock_parent_owner(c, namespace)).await?;
+            let parent = match owner {
+                ParentOwner::Group(group) => {
+                    let roles = tx
+                        .step(|c| lock_roles(c, RoleAnchor::Namespace(namespace), creator))
+                        .await?;
+                    ParentAccess::Group {
+                        namespace,
+                        group,
+                        role: roles.native,
+                    }
+                }
+                ParentOwner::User(owner) => ParentAccess::User { namespace, owner },
+            };
+            let account = tx.step(|c| lock_account(c, creator)).await?;
+            Some(decide(&ProjectCreateFacts { account, parent })?)
+        }
+    };
     // Never top level, so the reserved top-level words are allowed.
     let segment = PathSegment::parse(&new.segment)?;
     validate(new)?;
-    check_actor(ctx, new.creator)?;
-    let mut tx = ChangeTx::begin(db, ctx).await?;
     let placement = tx.step(|c| place(c, &segment, new.parent)).await?;
     tx.step(|c| check_creator(c, new.creator)).await?;
     let path = placement.full_path.as_str();
@@ -370,10 +506,10 @@ pub async fn create(
         visibility,
         owner,
     };
-    tx.commit(evented_record(&details, created.project_id)?)
-        .await?
-        .require_recorded(details.action())?;
-    Ok(created)
+    Ok(Settle::Commit(
+        evented_record(&details, created.project_id)?,
+        (created, decided),
+    ))
 }
 
 /// The audit row and the event of a project change (`project.created`,

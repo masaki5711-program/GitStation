@@ -61,6 +61,7 @@ impl BodyLoader<AppState, Change> for Shared {
                 canonical: None,
                 tombstone: None,
                 project: None,
+                group: None,
             })
         })
     }

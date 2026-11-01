@@ -36,13 +36,18 @@ pub(crate) enum Actor {
     /// Developer with a `write_repository` token.
     DevTokenWriteRepository,
     /// Developer with a `write_repository` token issued with `is_agent`
-    /// (ADR-0017 §4.0). The flag is not an authorization input yet (W1):
-    /// the agent rules deny only the merge family, so a push is decided
-    /// exactly like the human token's (rows pin it).
+    /// (ADR-0017 §4.0). A push is decided exactly like the human token's
+    /// (rows pin it); agents are denied only the actions kept for people.
     AgentTokenWriteRepository,
-    /// Developer with a `read_api` token issued with `is_agent` (the flag
-    /// is not an authorization input yet: decided like a human's token).
+    /// Developer with a `read_api` token issued with `is_agent`.
     AgentTokenReadApi,
+    /// Developer with an `api` token issued with `is_agent` (M1 phase 8b
+    /// MR7a).
+    AgentTokenApi,
+    /// Owner with an `api` token issued with `is_agent`.
+    AgentOwnerTokenApi,
+    /// Administrator with an `api` + `admin` token issued with `is_agent`.
+    AgentAdminTokenAdmin,
     /// Developer with an `api` token.
     DevTokenApi,
     /// Owner with a `read_api` token.
@@ -91,6 +96,10 @@ pub(crate) enum Fixture {
     },
     /// Making a private project internal.
     MakeInternal,
+    /// Making an internal project private (M1 phase 8b MR7a).
+    MakePrivate,
+    /// Making a private project pending deletion internal.
+    MakeInternalDeleted,
     OwnToken,
     ForeignToken,
     /// Creating an own token with plain scopes.
@@ -155,13 +164,19 @@ impl Actor {
             Actor::DisabledAdmin => session(true, false),
             Actor::Admin => session(true, true),
             Actor::DevTokenReadRepository => token(false, &[Scope::ReadRepository]),
-            Actor::DevTokenWriteRepository | Actor::AgentTokenWriteRepository => {
-                token(false, &[Scope::WriteRepository])
+            Actor::DevTokenWriteRepository => token(false, &[Scope::WriteRepository]),
+            Actor::AgentTokenWriteRepository => {
+                token(false, &[Scope::WriteRepository]).as_agent(true)
             }
             Actor::DevTokenApi => token(false, &[Scope::Api]),
-            Actor::OwnerTokenReadApi | Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::AgentTokenApi | Actor::AgentOwnerTokenApi => {
+                token(false, &[Scope::Api]).as_agent(true)
+            }
+            Actor::OwnerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]).as_agent(true),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
+            Actor::AgentAdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]).as_agent(true),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -181,16 +196,20 @@ impl Actor {
             | Actor::DevTokenWriteRepository
             | Actor::AgentTokenWriteRepository
             | Actor::AgentTokenReadApi
+            | Actor::AgentTokenApi
             | Actor::DevTokenApi => Some(Role::Developer),
             Actor::Maintainer => Some(Role::Maintainer),
-            Actor::Owner | Actor::OwnerTokenReadApi => Some(Role::Owner),
+            Actor::Owner | Actor::OwnerTokenReadApi | Actor::AgentOwnerTokenApi => {
+                Some(Role::Owner)
+            }
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
             | Actor::NonMember
             | Actor::Admin
             | Actor::AdminTokenApi
-            | Actor::AdminTokenAdmin => None,
+            | Actor::AdminTokenAdmin
+            | Actor::AgentAdminTokenAdmin => None,
         }
     }
 }
@@ -272,6 +291,14 @@ impl Fixture {
             },
             Fixture::MakeInternal => Resource::VisibilityChange {
                 project: private,
+                to: Visibility::Internal,
+            },
+            Fixture::MakePrivate => Resource::VisibilityChange {
+                project: internal,
+                to: Visibility::Private,
+            },
+            Fixture::MakeInternalDeleted => Resource::VisibilityChange {
+                project: deleted,
                 to: Visibility::Internal,
             },
             Fixture::OwnToken => Resource::Token { owner: ME },

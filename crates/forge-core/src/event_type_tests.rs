@@ -73,7 +73,8 @@ fn all_lists_every_event_type_once() {
             "protected_ref.created",
             "protected_ref.updated",
             "protected_ref.deleted",
-            "repository.pushed"
+            "repository.pushed",
+            "project.visibility_changed"
         ]
     );
 }

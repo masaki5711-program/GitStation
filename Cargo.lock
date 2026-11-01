@@ -597,6 +597,7 @@ dependencies = [
  "forge-db",
  "forge-errors",
  "forge-git",
+ "forge-hosting",
  "forge-web",
  "serde_json",
  "tempfile",
@@ -674,6 +675,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-hosting"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "forge-web"
 version = "0.1.0"
 dependencies = [
@@ -684,6 +698,7 @@ dependencies = [
  "forge-db",
  "forge-errors",
  "forge-git",
+ "forge-hosting",
  "forge-web",
  "futures-util",
  "http-body-util",

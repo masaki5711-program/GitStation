@@ -357,7 +357,8 @@ pub async fn revoke(
         return Err(not_found(AGGREGATE));
     };
     if revoked {
-        // Dropping the transaction rolls back the lock; nothing was written.
+        // Nothing was written; release the lock now, not on drop.
+        tx.rollback("token.revoked").await;
         return Ok(RevokeOutcome::AlreadyRevoked);
     }
     tx.step(|c| async move {

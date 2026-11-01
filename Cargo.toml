@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-web", "crates/forge-cli"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-web", "crates/forge-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,6 +15,7 @@ forge-core = { path = "crates/forge-core" }
 forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
 forge-db = { path = "crates/forge-db" }
+forge-hosting = { path = "crates/forge-hosting" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
 url = "2"

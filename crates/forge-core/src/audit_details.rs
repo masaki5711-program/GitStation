@@ -2,12 +2,34 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::event_type::EventType;
-use crate::ids::{NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
+use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
+
+/// A field an update changed (`project.updated`, `group.updated`): the
+/// name only, never the value (display names and descriptions are free
+/// text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ChangedField {
+    DisplayName,
+    Description,
+}
+
+impl ChangedField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DisplayName => "display_name",
+            Self::Description => "description",
+        }
+    }
+}
+
+fn field_names(fields: &[ChangedField]) -> Vec<&'static str> {
+    fields.iter().map(|f| f.as_str()).collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditDetails {
@@ -154,6 +176,25 @@ pub enum AuditDetails {
         /// row's actor is then the operator).
         replayed_from: Option<PushReplay>,
     },
+    // ── M1 phase 8b MR7a ──
+    /// `project.updated` (audit-only in M1): which fields changed.
+    ProjectUpdated {
+        project_id: ProjectId,
+        fields: Vec<ChangedField>,
+    },
+    /// `project.visibility_changed`: also the payload of the event
+    /// (maintainer class, ADR-0016 §5).
+    ProjectVisibilityChanged {
+        project_id: ProjectId,
+        from: Visibility,
+        to: Visibility,
+    },
+    /// `group.updated` (audit-only in M1): which fields changed.
+    GroupUpdated {
+        group_id: GroupId,
+        fields: Vec<ChangedField>,
+    },
+    // ── end M1 phase 8b MR7a ──
 }
 
 impl AuditDetails {
@@ -181,6 +222,9 @@ impl AuditDetails {
             Self::ProtectedRefUpdated { .. } => "protected_ref.updated",
             Self::ProtectedRefDeleted { .. } => "protected_ref.deleted",
             Self::RepositoryPushed { .. } => "repository.pushed",
+            Self::ProjectUpdated { .. } => "project.updated",
+            Self::ProjectVisibilityChanged { .. } => "project.visibility_changed",
+            Self::GroupUpdated { .. } => "group.updated",
         }
     }
 
@@ -211,6 +255,8 @@ impl AuditDetails {
             Self::ProtectedRefUpdated { .. } => Some(EventType::ProtectedRefUpdated),
             Self::ProtectedRefDeleted { .. } => Some(EventType::ProtectedRefDeleted),
             Self::RepositoryPushed { .. } => Some(EventType::RepositoryPushed),
+            Self::ProjectUpdated { .. } | Self::GroupUpdated { .. } => None,
+            Self::ProjectVisibilityChanged { .. } => Some(EventType::ProjectVisibilityChanged),
         }
     }
 
@@ -235,7 +281,10 @@ impl AuditDetails {
     /// ProtectedRefDeleted
     /// `{"protected_ref_id","pattern","push_min_role","stored_invalid"}`,
     /// ProtectedRefUpdated `{"protected_ref_id","pattern","from","to"}`,
-    /// RepositoryPushed: [`push_json`] within [`AUDIT_BUDGET`].
+    /// RepositoryPushed: [`push_json`] within [`AUDIT_BUDGET`],
+    /// ProjectUpdated `{"project_id","fields"}`, GroupUpdated
+    /// `{"group_id","fields"}` (field names only),
+    /// ProjectVisibilityChanged `{"project_id","from","to"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -395,6 +444,23 @@ impl AuditDetails {
                 *replayed_from,
                 AUDIT_BUDGET,
             ),
+            Self::ProjectUpdated { project_id, fields } => serde_json::json!({
+                "project_id": project_id.get(),
+                "fields": field_names(fields),
+            }),
+            Self::GroupUpdated { group_id, fields } => serde_json::json!({
+                "group_id": group_id.get(),
+                "fields": field_names(fields),
+            }),
+            Self::ProjectVisibilityChanged {
+                project_id,
+                from,
+                to,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "from": from.as_str(),
+                "to": to.as_str(),
+            }),
         }
     }
 
@@ -432,7 +498,10 @@ impl AuditDetails {
             | Self::ProjectMemberRemoved { .. }
             | Self::ProtectedRefCreated { .. }
             | Self::ProtectedRefUpdated { .. }
-            | Self::ProtectedRefDeleted { .. } => self.to_value(),
+            | Self::ProtectedRefDeleted { .. }
+            | Self::ProjectUpdated { .. }
+            | Self::ProjectVisibilityChanged { .. }
+            | Self::GroupUpdated { .. } => self.to_value(),
         }
     }
 }

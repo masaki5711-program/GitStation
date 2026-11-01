@@ -7,17 +7,21 @@
 
 use forge_core::ids::{GroupId, NamespaceId, UserId};
 use forge_core::namespace_path::{MAX_DEPTH, MAX_FULL_PATH_LEN};
-use forge_core::{AuditDetails, PathSegment};
+use forge_core::{AuditDetails, ChangedField, PathSegment, Role};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
-use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::access::{lock_account, Account};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
+use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
 
 mod members;
+mod read;
 
 pub use members::{add_member, change_member, remove_member, MemberChange};
+pub use read::load;
 
 /// The audit resource type of groups and their members (tables.toml).
 const RESOURCE: &str = "group";
@@ -61,21 +65,11 @@ fn not_found(resource: &'static str) -> ForgeError {
 /// The field rules of forge.groups (its CHECKs, migration 20261029100000),
 /// checked before anything is written: `FG-REPO-0011` with `reason` / `len`.
 fn validate(new: &NewGroup) -> Result<(), ForgeError> {
-    let fields = [
-        (new.display_name.as_str(), 1, 255, "display_name_length"),
-        (new.description.as_str(), 0, 2000, "description_length"),
-    ];
-    for (value, min, max, reason) in fields {
-        let len = value.chars().count();
-        if len < min || len > max {
-            return Err(request_invalid(reason).with_context("len", len));
-        }
-        // PostgreSQL text cannot hold NUL; refuse it here, not as a query error.
-        if value.contains('\0') {
-            return Err(request_invalid("nul_character").with_context("len", len));
-        }
-    }
-    Ok(())
+    check_fields(
+        Some(&new.display_name),
+        Some(&new.description),
+        request_invalid,
+    )
 }
 
 /// The user who may become a member: present, not a bot (`FG-REPO-0010`
@@ -178,13 +172,28 @@ pub async fn create(
     ctx: &ChangeContext,
     new: &NewGroup,
 ) -> Result<CreatedGroup, ForgeError> {
-    let segment = match new.parent {
-        None => PathSegment::parse_top_level(&new.segment)?,
-        Some(_) => PathSegment::parse(&new.segment)?,
-    };
+    let segment = parse_segment(new)?;
     validate(new)?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let placement = tx.step(|c| place(c, &segment, new.parent)).await?;
+    let outcome = finish_create(&mut tx, new, &segment).await;
+    tx.settle("group.created", outcome).await
+}
+
+fn parse_segment(new: &NewGroup) -> Result<PathSegment, ForgeError> {
+    match new.parent {
+        None => PathSegment::parse_top_level(&new.segment),
+        Some(_) => PathSegment::parse(&new.segment),
+    }
+}
+
+/// Everything of [`create`] after `BEGIN` up to the record to commit
+/// (shared with [`create_decided`]; the caller settles the change).
+async fn finish_create(
+    tx: &mut ChangeTx,
+    new: &NewGroup,
+    segment: &PathSegment,
+) -> Result<Settle<CreatedGroup>, ForgeError> {
+    let placement = tx.step(|c| place(c, segment, new.parent)).await?;
     if !tx.step(|c| member_candidate(c, new.owner)).await? {
         return Err(request_invalid("owner_inactive"));
     }
@@ -247,11 +256,285 @@ pub async fn create(
         parent_namespace_id: placement.parent,
         owner,
     };
-    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, group_id))
-        .await?
-        .require_recorded(details.action())?;
-    Ok(created)
+    Ok(Settle::Commit(
+        ChangeRecord::audit_only(&details, RESOURCE, group_id),
+        created,
+    ))
 }
+
+// ── M1 phase 8b MR7a: writes decided inside their transaction ──
+
+/// A group as a write transaction holds it: its id, its namespace and the
+/// caller's role on it (re-read after locking the membership rows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupAccess {
+    pub group: GroupId,
+    pub namespace: NamespaceId,
+    /// The caller's native role (`roles::MemberRoles::native`).
+    pub role: Option<Role>,
+}
+
+/// Where [`create_decided`] puts the group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupParent {
+    TopLevel,
+    /// Below this group (its namespace is looked up and locked).
+    Group(GroupId),
+}
+
+/// What [`create_decided`]'s `decide` sees: the creator's account and, for
+/// a subgroup, the parent group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupCreateFacts {
+    pub account: Account,
+    pub parent: Option<GroupAccess>,
+}
+
+/// The fields of a new group (the parent and the first Owner come apart).
+#[derive(Debug, Clone)]
+pub struct GroupFields {
+    pub segment: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+/// Lock the namespace of `group` (`FOR SHARE`, as `place` does) and return
+/// its id; `FG-REPO-0005 resource=group` when the group has none.
+async fn lock_group_namespace(
+    conn: &mut PgConnection,
+    group: GroupId,
+) -> Result<NamespaceId, ForgeError> {
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM forge.namespaces WHERE kind = 'group' AND owner_id = $1 FOR SHARE",
+    )
+    .bind(group.get())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| query_error("groups.parent_namespace", e))?;
+    id.map(NamespaceId::new).ok_or_else(|| not_found("group"))
+}
+
+/// [`create`] with the authorization decided **inside** the transaction:
+/// after `BEGIN`, the parent group's namespace is locked, the creator's
+/// role on it re-read under `FOR SHARE` on the membership rows, and the
+/// creator's account row locked; `decide` (forge-hosting:
+/// `Authorized::reconfirm`) sees those facts and its error rolls everything
+/// back (explicitly, as every exit that does not commit). The name and
+/// field rules run after `decide`. `owner` is the creator (the acting user) and becomes the first
+/// Owner. Errors as [`create`], plus whatever `decide` returns.
+pub async fn create_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    parent: GroupParent,
+    fields: &GroupFields,
+    owner: UserId,
+    decide: impl FnOnce(&GroupCreateFacts) -> Result<P, ForgeError>,
+) -> Result<(CreatedGroup, P), ForgeError> {
+    let mut new = NewGroup {
+        segment: fields.segment.clone(), // clone: NewGroup owns its fields
+        parent: None,
+        display_name: fields.display_name.clone(),
+        description: fields.description.clone(),
+        owner,
+    };
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let parent_access = match parent {
+            GroupParent::TopLevel => None,
+            GroupParent::Group(group) => {
+                let namespace = tx.step(|c| lock_group_namespace(c, group)).await?;
+                let roles = tx
+                    .step(|c| lock_roles(c, RoleAnchor::Group(group), owner))
+                    .await?;
+                new.parent = Some(namespace);
+                Some(GroupAccess {
+                    group,
+                    namespace,
+                    role: roles.native,
+                })
+            }
+        };
+        let account = tx.step(|c| lock_account(c, owner)).await?;
+        let decided = decide(&GroupCreateFacts {
+            account,
+            parent: parent_access,
+        })?;
+        // The name and field rules after the decision: a caller who may not
+        // create gets the denial, never a hint about the body.
+        let segment = parse_segment(&new)?;
+        validate(&new)?;
+        Ok(match finish_create(&mut tx, &new, &segment).await? {
+            Settle::Commit(record, created) => Settle::Commit(record, (created, decided)),
+            Settle::Discard(created) => Settle::Discard((created, decided)),
+        })
+    }
+    .await;
+    tx.settle("group.created", outcome).await
+}
+
+/// A change to a group's display name and / or description (`None` =
+/// unchanged).
+#[derive(Debug, Clone, Default)]
+pub struct GroupPatch {
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// What an update did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Updated {
+    /// Written, with one audit row naming these fields.
+    Changed(Vec<ChangedField>),
+    /// Every given value equals the stored one: nothing written.
+    Unchanged,
+}
+
+/// What [`update_decided`]'s `decide` sees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupUpdateFacts {
+    pub account: Account,
+    pub group: GroupAccess,
+}
+
+/// The patch's field rules (those of `validate`): `FG-REPO-0011` with
+/// `reason` (`empty_update` when it names no field).
+fn validate_patch(patch: &GroupPatch) -> Result<(), ForgeError> {
+    if patch.display_name.is_none() && patch.description.is_none() {
+        return Err(request_invalid("empty_update"));
+    }
+    check_fields(
+        patch.display_name.as_deref(),
+        patch.description.as_deref(),
+        request_invalid,
+    )
+}
+
+/// The display name / description rules of groups and projects (their
+/// CHECKs): `bad(reason)` with `len`.
+pub(crate) fn check_fields(
+    display_name: Option<&str>,
+    description: Option<&str>,
+    bad: fn(&'static str) -> ForgeError,
+) -> Result<(), ForgeError> {
+    let fields = [
+        (display_name, 1, 255, "display_name_length"),
+        (description, 0, 2000, "description_length"),
+    ];
+    for (value, min, max, reason) in fields {
+        let Some(value) = value else { continue };
+        let len = value.chars().count();
+        if len < min || len > max {
+            return Err(bad(reason).with_context("len", len));
+        }
+        // PostgreSQL text cannot hold NUL; refuse it here, not as a query error.
+        if value.contains('\0') {
+            return Err(bad("nul_character").with_context("len", len));
+        }
+    }
+    Ok(())
+}
+
+/// The fields of a patch whose value differs from the stored one.
+pub(crate) fn changed_fields(
+    patch_display: Option<&str>,
+    patch_description: Option<&str>,
+    stored_display: &str,
+    stored_description: &str,
+) -> Vec<ChangedField> {
+    let mut out = Vec::new();
+    if patch_display.is_some_and(|v| v != stored_display) {
+        out.push(ChangedField::DisplayName);
+    }
+    if patch_description.is_some_and(|v| v != stored_description) {
+        out.push(ChangedField::Description);
+    }
+    out
+}
+
+/// Change a group's display name and / or description, deciding inside the
+/// transaction: the group row is locked `FOR UPDATE` (as the member
+/// commands do), then the caller's (`viewer`) roles under `FOR SHARE` on
+/// the membership rows, then the account row; `decide` sees those facts.
+/// One `group.updated` audit row (audit-only in M1) naming the changed
+/// fields, or [`Updated::Unchanged`] when nothing differs (nothing
+/// written). Errors: `FG-REPO-0011` (a field, `empty_update`),
+/// `FG-REPO-0005 resource=group`, and whatever `decide` returns.
+pub async fn update_decided<P>(
+    db: &Db,
+    ctx: &ChangeContext,
+    group: GroupId,
+    viewer: UserId,
+    patch: &GroupPatch,
+    decide: impl FnOnce(&GroupUpdateFacts) -> Result<P, ForgeError>,
+) -> Result<(Updated, P), ForgeError> {
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let stored: Option<(String, String, i64)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT g.display_name, g.description, n.id FROM forge.groups g \
+                     JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
+                     WHERE g.id = $1 FOR UPDATE OF g",
+                )
+                .bind(group.get())
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error("groups.update.lock", e))
+            })
+            .await?;
+        let Some((display_name, description, namespace)) = stored else {
+            return Err(not_found("group"));
+        };
+        let roles = tx
+            .step(|c| lock_roles(c, RoleAnchor::Group(group), viewer))
+            .await?;
+        let account = tx.step(|c| lock_account(c, viewer)).await?;
+        let decided = decide(&GroupUpdateFacts {
+            account,
+            group: GroupAccess {
+                group,
+                namespace: NamespaceId::new(namespace),
+                role: roles.native,
+            },
+        })?;
+        // The field rules after the decision (as for the create).
+        validate_patch(patch)?;
+        let fields = changed_fields(
+            patch.display_name.as_deref(),
+            patch.description.as_deref(),
+            &display_name,
+            &description,
+        );
+        if fields.is_empty() {
+            return Ok(Settle::Discard((Updated::Unchanged, decided)));
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.groups SET display_name = coalesce($2, display_name), \
+                 description = coalesce($3, description), updated_at = now() WHERE id = $1",
+            )
+            .bind(group.get())
+            .bind(patch.display_name.as_deref())
+            .bind(patch.description.as_deref())
+            .execute(c)
+            .await
+            .map_err(|e| query_error("groups.update", e))
+        })
+        .await?;
+        let details = AuditDetails::GroupUpdated {
+            group_id: group,
+            fields: fields.clone(), // clone: the caller gets the list too
+        };
+        Ok(Settle::Commit(
+            ChangeRecord::audit_only(&details, RESOURCE, group.get()),
+            (Updated::Changed(fields), decided),
+        ))
+    }
+    .await;
+    tx.settle("group.updated", outcome).await
+}
+
+// ── end M1 phase 8b MR7a ──
 
 #[cfg(test)]
 mod tests;

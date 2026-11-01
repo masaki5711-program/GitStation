@@ -35,6 +35,9 @@
 //!   `ProjectAccessLoader` on [`Db`]: path (or project id) → target and the
 //!   viewer's authorization inputs in one statement (`FG-DB-0021`).
 
+// ── M1 phase 8b MR7a: authorization facts inside a write transaction ──
+pub mod access;
+// ── end M1 phase 8b MR7a ──
 #[cfg(test)]
 mod audited_doctor_tests;
 #[cfg(test)]

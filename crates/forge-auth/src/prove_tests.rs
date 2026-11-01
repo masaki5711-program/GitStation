@@ -351,3 +351,201 @@ fn unresolved_ctx_keeps_its_reason() {
         Resource::Unresolved(UnresolvedReason::TombstoneDeleted)
     );
 }
+
+// ── M1 phase 8b MR7a: group, personal namespace, parent and visibility
+// contexts; the re-decision inside a write transaction ──
+
+fn group_ctx(id: i64, role: Option<Role>) -> crate::GroupCtx {
+    crate::GroupCtx::new(crate::LoadedGroup {
+        id: GroupId::new(id),
+        role,
+    })
+}
+
+#[test]
+fn group_and_namespace_contexts_decide_on_their_own_row() {
+    let proof = prove(
+        &session(),
+        Action::GroupUpdate,
+        group_ctx(4, Some(Role::Owner)),
+    )
+    .expect("an Owner updates the group");
+    assert_eq!(proof.id(), &GroupId::new(4));
+    assert_eq!(proof.ctx().role(), Some(Role::Owner));
+    let err = prove(
+        &session(),
+        Action::GroupUpdate,
+        group_ctx(4, Some(Role::Maintainer)),
+    )
+    .expect_err("a Maintainer does not");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+
+    let own = crate::UserNamespaceCtx::new(crate::LoadedUserNamespace {
+        namespace: NamespaceId::new(7),
+        owner: ME,
+    });
+    assert_eq!(own.resource(), Resource::Namespace { owner: ME });
+    let proof = prove(&session(), Action::ProjectCreate, own).expect("own namespace");
+    assert_eq!(proof.id(), &NamespaceId::new(7));
+    let foreign = crate::UserNamespaceCtx::new(crate::LoadedUserNamespace {
+        namespace: NamespaceId::new(8),
+        owner: UserId::new(2),
+    });
+    let err = prove(&session(), Action::ProjectCreate, foreign).expect_err("foreign");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+}
+
+#[test]
+fn a_parent_context_is_the_namespace_id_and_the_parents_resource() {
+    let in_group = crate::ParentCtx::new(crate::LoadedParent::Group {
+        namespace: NamespaceId::new(5),
+        group: crate::LoadedGroup {
+            id: GroupId::new(3),
+            role: Some(Role::Maintainer),
+        },
+    });
+    assert_eq!(in_group.id(), NamespaceId::new(5));
+    assert_eq!(
+        in_group.resource(),
+        Resource::Group {
+            role: Some(Role::Maintainer)
+        }
+    );
+    assert!(prove(&session(), Action::ProjectCreate, in_group).is_ok());
+    let developer = crate::ParentCtx::new(crate::LoadedParent::Group {
+        namespace: NamespaceId::new(5),
+        group: crate::LoadedGroup {
+            id: GroupId::new(3),
+            role: Some(Role::Developer),
+        },
+    });
+    let err = prove(&session(), Action::ProjectCreate, developer).expect_err("developer");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    let personal = crate::ParentCtx::new(crate::LoadedParent::User(crate::LoadedUserNamespace {
+        namespace: NamespaceId::new(6),
+        owner: ME,
+    }));
+    assert_eq!(personal.id(), NamespaceId::new(6));
+    assert_eq!(personal.resource(), Resource::Namespace { owner: ME });
+}
+
+#[test]
+fn a_visibility_change_context_carries_the_target_visibility() {
+    let ctx = crate::VisibilityChangeCtx::new(
+        LoadedProject {
+            id: ProjectId::new(9),
+            visibility: Visibility::Private,
+            role: Some(Role::Owner),
+            pending_deletion: false,
+        },
+        Visibility::Internal,
+    );
+    assert_eq!(ctx.to(), Visibility::Internal);
+    assert_eq!(
+        ctx.resource(),
+        Resource::VisibilityChange {
+            project: private(Some(Role::Owner)),
+            to: Visibility::Internal,
+        }
+    );
+    let proof = prove(&session(), Action::ProjectVisibilityChange, ctx).expect("owner");
+    assert_eq!(proof.id(), &ProjectId::new(9));
+}
+
+#[test]
+fn reconfirm_decides_again_on_the_fresh_row_with_the_fresh_account() {
+    let active = crate::AccountFacts {
+        active: true,
+        is_admin: false,
+    };
+    let proof = prove(
+        &session(),
+        Action::ProjectUpdate,
+        project(2, Some(Role::Maintainer)),
+    )
+    .expect("maintainer");
+    // The role is still there: the same decision, a new proof.
+    let again = proof
+        .reconfirm(active, project(2, Some(Role::Maintainer)))
+        .expect("still a maintainer");
+    assert_eq!(again.action(), Action::ProjectUpdate);
+    assert_eq!(again.id(), &ProjectId::new(2));
+    // The role was removed in between: denied (the private project is now
+    // invisible to the caller).
+    let err = proof
+        .reconfirm(active, project(2, None))
+        .expect_err("no role any more");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    // Demoted: forbidden.
+    let err = proof
+        .reconfirm(active, project(2, Some(Role::Developer)))
+        .expect_err("demoted");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    // The account was disabled in between.
+    let disabled = crate::AccountFacts {
+        active: false,
+        is_admin: false,
+    };
+    let err = proof
+        .reconfirm(disabled, project(2, Some(Role::Maintainer)))
+        .expect_err("disabled");
+    assert_eq!(err.code(), ErrorCode::AccountDisabled);
+    // Another row than the one decided: a programming error, never a pass.
+    let err = proof
+        .reconfirm(active, project(3, Some(Role::Owner)))
+        .expect_err("another project");
+    assert_eq!(err.code(), ErrorCode::Internal);
+    assert!(
+        err.to_string().contains("reason=reconfirm_target_mismatch"),
+        "{err}"
+    );
+}
+
+#[test]
+fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let proof = prove(&admin, Action::GroupCreateTopLevel, InstanceCtx).expect("admin");
+    let demoted = crate::AccountFacts {
+        active: true,
+        is_admin: false,
+    };
+    let err = proof
+        .reconfirm(demoted, InstanceCtx)
+        .expect_err("no longer an administrator");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    // A token keeps its scopes: an admin flag alone grants nothing to an
+    // `api` token without the `admin` scope.
+    let token = Principal::authenticated(ME, true, true, Credential::Token(vec![Scope::Api]));
+    let proof = prove(
+        &token,
+        Action::SubgroupCreate,
+        group_ctx(1, Some(Role::Owner)),
+    )
+    .expect("owner token");
+    let still_admin = crate::AccountFacts {
+        active: true,
+        is_admin: true,
+    };
+    let err = proof
+        .reconfirm(still_admin, group_ctx(1, None))
+        .expect_err("the token carries no admin scope");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+}
+
+#[test]
+fn reconfirm_keeps_the_agent_flag() {
+    let agent = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]))
+        .as_agent(true);
+    let proof = prove(&agent, Action::ProjectUpdate, project(2, Some(Role::Owner)))
+        .expect("agents update projects");
+    let again = proof
+        .reconfirm(
+            crate::AccountFacts {
+                active: true,
+                is_admin: false,
+            },
+            project(2, Some(Role::Owner)),
+        )
+        .expect("still allowed");
+    assert!(again.principal().is_agent());
+}

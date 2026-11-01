@@ -338,6 +338,19 @@ async fn url_vectors_through_the_dispatcher() {
     let doc: Value = serde_json::from_str(VECTORS).expect("url-vectors.json");
     let script = Arc::new(script());
     let mut carried = 0;
+    let registry = crate::app::registry();
+    let fixed_paths: Vec<&str> = registry
+        .defs()
+        .iter()
+        .filter(|d| d.scope == crate::registry::RouteScope::Fixed && d.verb != Verb::Get)
+        .filter(|d| {
+            !registry
+                .defs()
+                .iter()
+                .any(|g| g.path == d.path && g.verb == Verb::Get)
+        })
+        .map(|d| d.path)
+        .collect();
     for (list, accepted) in [("accept", true), ("reject", false)] {
         for v in doc[list].as_array().expect(list) {
             let Some(uri) = uri_of(v) else {
@@ -368,6 +381,10 @@ async fn url_vectors_through_the_dispatcher() {
                     ErrorCode::SmartHttpServiceUnsupported.id(),
                     "{name}"
                 );
+            } else if fixed_paths.contains(&uri.path()) {
+                // A fixed API route without a GET (`POST /api/v1/projects`,
+                // M1 phase 8b MR7a) answers 405 before the dispatcher.
+                assert_eq!(answer.status, StatusCode::METHOD_NOT_ALLOWED, "{name}");
             } else if accepted && !unbuilt {
                 assert_eq!(answer.status, StatusCode::OK, "{name}");
                 assert_eq!(answer.bytes, SHELL_HTML.as_bytes(), "{name}");

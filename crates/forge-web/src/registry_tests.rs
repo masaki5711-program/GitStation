@@ -37,6 +37,7 @@ fn admitted() -> Admitted {
         canonical: None,
         tombstone: None,
         project: None,
+        group: None,
         repository: None,
     }
 }
@@ -516,6 +517,7 @@ impl BodyLoader<AppState, Change> for NoBodyLoad {
                 canonical: None,
                 tombstone: None,
                 project: None,
+                group: None,
             })
         })
     }

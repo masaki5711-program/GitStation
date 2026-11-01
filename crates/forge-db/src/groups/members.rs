@@ -184,7 +184,8 @@ pub async fn change_member(
         .ok_or_else(|| membership_conflict("not_member"))?;
     check_from(stored, from)?;
     if from == to {
-        // Dropping the transaction releases the lock; nothing was written.
+        // Nothing was written; release the lock now, not on drop.
+        tx.rollback("member.role_changed").await;
         return Ok(MemberChange::Unchanged);
     }
     if top_level && from == Role::Owner {

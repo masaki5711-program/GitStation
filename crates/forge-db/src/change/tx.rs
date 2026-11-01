@@ -147,26 +147,7 @@ impl ChangeTx {
             // Nothing of this change may stay. Dropping the transaction rolls
             // back too, so the change is still Deduped; a slow or failed
             // ROLLBACK points at a sick connection and is logged as such.
-            let failure = match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
-                Ok(Ok(())) => None,
-                Ok(Err(e)) => Some(query_error("change.rollback", e)),
-                Err(_) => Some(
-                    ForgeError::new(ErrorCode::DbQueryFailed)
-                        .with_context("query", "change.rollback")
-                        .with_context("reason", "rollback_timeout")
-                        .with_context("timeout_ms", ROLLBACK_TIMEOUT.as_millis()),
-                ),
-            };
-            if let Some(e) = failure {
-                tracing::warn!(
-                    target: "forge_db",
-                    request_id = %ctx.request_id,
-                    error_code = e.code().id(),
-                    action,
-                    error = %e,
-                    "rollback of a deduped change failed; the connection rolls back on release"
-                );
-            }
+            explicit_rollback(tx, &ctx, action).await;
             return Ok(Committed::Deduped);
         };
         match tokio::time::timeout(commit_timeout, tx.commit()).await {
@@ -177,6 +158,80 @@ impl ChangeTx {
                 .with_context("reason", "commit_outcome_unknown")
                 .with_context("timeout_ms", commit_timeout.as_millis())
                 .with_context("action", action)),
+        }
+    }
+}
+
+/// ROLLBACK now, bounded by [`ROLLBACK_TIMEOUT`]. Never left to `Drop`:
+/// sqlx 0.8 sends a dropped transaction's ROLLBACK from the task that
+/// returns the connection to the pool, so under load its row and advisory
+/// locks outlive the change (handoff D4: the seal job's `Busy`). A slow or
+/// failed ROLLBACK is logged (the connection still rolls back on release);
+/// the change's own outcome is unaffected.
+async fn explicit_rollback(tx: Transaction<'static, Postgres>, ctx: &ChangeContext, action: &str) {
+    let failure = match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(query_error("change.rollback", e)),
+        Err(_) => Some(
+            ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("query", "change.rollback")
+                .with_context("reason", "rollback_timeout")
+                .with_context("timeout_ms", ROLLBACK_TIMEOUT.as_millis()),
+        ),
+    };
+    if let Some(e) = failure {
+        tracing::warn!(
+            target: "forge_db",
+            request_id = %ctx.request_id,
+            error_code = e.code().id(),
+            action,
+            error = %e,
+            "rollback of a change failed; the connection rolls back on release"
+        );
+    }
+}
+
+/// How a change that ran its steps ends ([`ChangeTx::settle`]).
+pub(crate) enum Settle<T> {
+    /// Write the record and commit; the change was not deduplicated.
+    Commit(ChangeRecord, T),
+    /// Nothing to write (an unchanged update, an already-done state):
+    /// roll back explicitly.
+    Discard(T),
+}
+
+impl ChangeTx {
+    /// Roll the change back now (every exit that does not commit:
+    /// a denial, an error after `BEGIN`, an unchanged update), so its locks
+    /// are released before the caller answers. `action` names the change
+    /// in the log of a failed ROLLBACK.
+    pub(crate) async fn rollback(self, action: &str) {
+        explicit_rollback(self.tx, &self.ctx, action).await;
+    }
+
+    /// End a change whose steps returned `outcome`: commit a
+    /// [`Settle::Commit`] (its audit row must be recorded,
+    /// `require_recorded`), roll back explicitly on [`Settle::Discard`] and
+    /// on an error (which is returned unchanged).
+    pub(crate) async fn settle<T>(
+        self,
+        action: &'static str,
+        outcome: Result<Settle<T>, ForgeError>,
+    ) -> Result<T, ForgeError> {
+        match outcome {
+            Ok(Settle::Commit(record, value)) => {
+                let recorded = record.audit.action;
+                self.commit(record).await?.require_recorded(recorded)?;
+                Ok(value)
+            }
+            Ok(Settle::Discard(value)) => {
+                self.rollback(action).await;
+                Ok(value)
+            }
+            Err(e) => {
+                self.rollback(action).await;
+                Err(e)
+            }
         }
     }
 }

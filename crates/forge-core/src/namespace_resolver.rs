@@ -227,3 +227,25 @@ pub trait ProjectAccessLoader: Send + Sync {
         viewer: Option<UserId>,
     ) -> LookupFuture<'a, Option<ProjectRecord>>;
 }
+
+/// One group by id, as one row (M1 phase 8b MR7a): the viewer's role
+/// (decided by `authorize()`; groups are visible to every signed-in user)
+/// and what the group routes show. One statement, as for
+/// [`ProjectRecord`], so the id, the role and the details belong together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRecord {
+    pub id: GroupId,
+    /// The viewer's native effective role (direct or from an ancestor
+    /// group); `None` = no role or no viewer.
+    pub role: Option<Role>,
+    /// The group's `forge.namespaces` row.
+    pub namespace_id: NamespaceId,
+    /// The parent group (`None` at the top level).
+    pub parent_id: Option<GroupId>,
+    /// The group's current path.
+    pub path: NamespacePath,
+    pub display_name: String,
+    pub description: String,
+    /// `groups.created_at` in UTC, RFC 3339.
+    pub created_at: String,
+}

@@ -524,3 +524,35 @@ fn a_mislabelled_reserved_ref_is_still_rejected() {
     .expect_err("reserved");
     assert_eq!(err.code(), ErrorCode::ReservedRefNamespace);
 }
+
+/// M1 phase 8b MR7a: an agent's credential never changes visibility —
+/// an Owner's or an administrator's alike, with `reason=agent_token` —
+/// while the same token creates and updates (ADR-0017 amendment).
+#[test]
+fn an_agent_token_is_refused_the_visibility_change_only() {
+    let make_internal = Resource::VisibilityChange {
+        project: project(Some(Role::Owner)),
+        to: Visibility::Internal,
+    };
+    for admin in [false, true] {
+        let scopes = if admin {
+            vec![Scope::Api, Scope::Admin]
+        } else {
+            vec![Scope::Api]
+        };
+        let agent = Principal::authenticated(ME, admin, true, Credential::Token(scopes.clone()))
+            .as_agent(true);
+        let err = authorize(&agent, Action::ProjectVisibilityChange, &make_internal)
+            .expect_err("agents never change visibility");
+        assert_eq!(err.code(), ErrorCode::Forbidden);
+        assert!(err.to_string().contains("reason=agent_token"), "{err}");
+        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        assert!(authorize(&human, Action::ProjectVisibilityChange, &make_internal).is_ok());
+        assert!(authorize(
+            &agent,
+            Action::ProjectUpdate,
+            &Resource::Project(project(Some(Role::Owner)))
+        )
+        .is_ok());
+    }
+}

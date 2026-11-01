@@ -24,6 +24,38 @@
     "word": "fixed"
   },
   {
+    "action": "GroupCreateTopLevel",
+    "method": "POST",
+    "path": "/api/v1/groups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupRead",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/groups/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SubgroupCreate",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/subgroups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "PathResolve",
     "method": "GET",
     "path": "/api/v1/namespaces/resolve",
@@ -40,9 +72,33 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectCreate",
+    "method": "POST",
+    "path": "/api/v1/projects",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectVisibilityChange",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/visibility",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -344,18 +400,6 @@
     "word": "tree"
   },
   {
-    "action": "ProjectCreate",
-    "planned": true
-  },
-  {
-    "action": "ProjectUpdate",
-    "planned": true
-  },
-  {
-    "action": "ProjectVisibilityChange",
-    "planned": true
-  },
-  {
     "action": "ProjectTransfer",
     "planned": true
   },
@@ -373,22 +417,6 @@
   },
   {
     "action": "MemberManage",
-    "planned": true
-  },
-  {
-    "action": "GroupRead",
-    "planned": true
-  },
-  {
-    "action": "GroupCreateTopLevel",
-    "planned": true
-  },
-  {
-    "action": "SubgroupCreate",
-    "planned": true
-  },
-  {
-    "action": "GroupUpdate",
     "planned": true
   },
   {

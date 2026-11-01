@@ -827,3 +827,13 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - 記録はクライアントへの応答を閉じてから行う（`git push` は記録を待たない）。`source_ip` は M1 では記録しない
   （リバースプロキシの背後で信頼できる値がまだない。段階 10 以降）。`credential_id` は使われたトークンの ID、
   `user_agent` は 512 バイトまで（保存時にさらに 256 文字へ）。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: `project.visibility_changed` とプロジェクト・グループの更新）
+
+- **`project.visibility_changed`**（`EventType::ProjectVisibilityChanged`、分類 `maintainer`、§5）の書き手は
+  `forge_db::projects::change_visibility_decided`（`PUT /api/v1/projects/{id}/visibility`、Owner）。一つの `ChangeTx` で状態、監査の行
+  （`project`/`projects.id`、`project_id` あり）とイベントを書く。ペイロードは監査の details と同じ `{project_id, from, to}`。重複除去の
+  鍵なし（状態の変化ごとに新しい事実）。同じ可視性への変更は何も書かない。
+- **`project.updated` / `group.updated`** は M1 では監査のみ（段階 8b の計画の回答）。details は `{project_id, fields}` /
+  `{group_id, fields}` で、`fields` は変わった項目の名前（`display_name`、`description`）だけ — 値（自由入力の文字列）は残さない。
+  `project.updated` の監査の行は `project_id` を持つ（イベントの範囲の規則）。値が変わらない更新は何も書かない。

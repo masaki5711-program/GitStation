@@ -12,7 +12,9 @@ use forge_core::namespace_path::MAX_DEPTH;
 use forge_core::Role;
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::{read_query_error, Db};
+use sqlx::postgres::PgConnection;
+
+use crate::{query_error, read_query_error, Db};
 
 /// A user's roles on one group or project namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -151,6 +153,94 @@ pub async fn load_project_roles(
 ) -> Result<MemberRoles, ForgeError> {
     load(db, BY_PROJECT, project.get(), user, "project").await
 }
+
+// ── M1 phase 8b MR7a: the same roles, read inside a write transaction ──
+
+/// Locks (`FOR SHARE`) the viewer's ($2) direct memberships in the groups
+/// of the anchor's chain ($1, capped at $3), in group id order: a removal
+/// or role change of one of them (an `UPDATE` / `DELETE` of the row) waits
+/// until the write that read them commits, and one committed first is seen
+/// by the chain read that follows.
+macro_rules! lock_group_members_sql {
+    ($anchor:literal) => {
+        concat!(
+            "WITH RECURSIVE ",
+            chain_cte!($anchor),
+            " SELECT m.group_id FROM forge.group_members m \
+               WHERE m.user_id = $2 \
+                 AND m.group_id IN (SELECT c.owner_id FROM chain c WHERE c.kind = 'group') \
+               ORDER BY m.group_id FOR SHARE OF m"
+        )
+    };
+}
+
+const LOCK_BY_GROUP: &str = lock_group_members_sql!("kind = 'group' AND owner_id = $1");
+const LOCK_BY_NAMESPACE: &str = lock_group_members_sql!("id = $1");
+const LOCK_BY_PROJECT: &str = lock_group_members_sql!("kind = 'project' AND owner_id = $1");
+
+/// The viewer's direct membership of the project, locked `FOR SHARE`.
+const LOCK_PROJECT_MEMBER: &str = "SELECT role FROM forge.project_members \
+     WHERE project_id = $1 AND user_id = $2 FOR SHARE";
+
+/// What a role is read for inside a write transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RoleAnchor {
+    Group(GroupId),
+    Namespace(NamespaceId),
+    Project(ProjectId),
+}
+
+/// The roles of `user` on `anchor`, read on the write transaction's
+/// connection **after locking the membership rows they come from**
+/// (`FOR SHARE`, see [`lock_group_members_sql`]): the same chain and fold
+/// as [`load_group_roles`] / [`load_namespace_roles`] /
+/// [`load_project_roles`], so a write decides on the roles it holds until
+/// it commits (M1 phase 8b MR7a; no time-of-check / time-of-use gap). The
+/// caller locks the target row first and the user row after (the lock
+/// order of `projects::members`). A lock wait is bounded by the write
+/// pool's session `lock_timeout` (`pool.rs`): `FG-DB-0002
+/// reason=lock_timeout`. Errors as the read-pool loaders.
+pub(crate) async fn lock_roles(
+    conn: &mut PgConnection,
+    anchor: RoleAnchor,
+    user: UserId,
+) -> Result<MemberRoles, ForgeError> {
+    let (lock, read, id, resource) = match anchor {
+        RoleAnchor::Group(g) => (LOCK_BY_GROUP, BY_GROUP, g.get(), "group"),
+        RoleAnchor::Namespace(n) => (LOCK_BY_NAMESPACE, BY_NAMESPACE, n.get(), "namespace"),
+        RoleAnchor::Project(p) => (LOCK_BY_PROJECT, BY_PROJECT, p.get(), "project"),
+    };
+    sqlx::query_scalar::<_, i64>(lock)
+        .bind(id)
+        .bind(user.get())
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.lock", e))?;
+    if let RoleAnchor::Project(p) = anchor {
+        sqlx::query_scalar::<_, String>(LOCK_PROJECT_MEMBER)
+            .bind(p.get())
+            .bind(user.get())
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| query_error("roles.lock_project_member", e))?;
+    }
+    let rows: Vec<(i32, bool, Option<String>)> = sqlx::query_as(read)
+        .bind(id)
+        .bind(user.get())
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.load_locked", e))?;
+    if rows.is_empty() {
+        return Err(ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", resource)
+            .with_context("reason", "absent"));
+    }
+    fold_chain(rows, resource, id, Some(user))
+}
+
+// ── end M1 phase 8b MR7a ──
 
 /// `FG-DB-0018` with what the runbook needs to find the rows (`user` only
 /// for a signed-in viewer).

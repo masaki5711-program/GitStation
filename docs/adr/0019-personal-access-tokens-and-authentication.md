@@ -369,3 +369,10 @@ receive-pack（MR4）と一緒に書く。
 広告が 403 `FG-AUTH-0002`、本文は読まない）を `crates/forge-cli/tests/smart_http_e2e.rs` に書き、「見送り」の e2e はすべて
 済んだ。`write_repository` のトークンでの push（作成・fast-forward・保護 ref の拒否）も同じファイルにある。管理者の権限は
 `admin` スコープ付きのトークンでだけ効き、保護 ref の force push は管理者でも FG-GIT-0007（`force_push_to_protected_is_fg_git_0007_even_for_an_admin`）。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: トークンの `is_agent` が認可に効く）
+
+- 認証でトークンから作る `Principal` は `is_agent` を持つ（`Principal::authenticated(..).as_agent(identity.is_agent)`）。
+  これまで `is_agent` は `GET /api/v1/user` で見せるだけだった。拒否される操作は ADR-0017 の Amendment（MR7a）を参照。
+- 書き込みのトランザクションの中の再判定（`Authorized::reconfirm`）は、ユーザー・資格情報・スコープ・`is_agent` を引き継ぎ、
+  有効か・管理者かだけを users 行（`FOR SHARE`）から読み直す。
