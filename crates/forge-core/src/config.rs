@@ -16,6 +16,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 mod api;
 mod audit;
+mod auth;
 mod database;
 mod git_http;
 mod hosting;
@@ -28,6 +29,7 @@ mod web;
 pub use api::ApiConfig;
 pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
+pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
@@ -48,8 +50,7 @@ const NAMESPACES: &[&str] = &[
     "FORGE_AUDIT_",
     "FORGE_GIT_",
     "FORGE_HOSTING_",
-    // M2 MR3 (ADR-0021 §12): `web.*`; `auth.*` is reserved for the OIDC
-    // login (MR4), so a FORGE_AUTH_ variable fails until it has keys.
+    // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
 ];
@@ -139,6 +140,8 @@ pub struct Config {
     pub hosting: HostingConfig,
     /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
     pub web: WebConfig,
+    /// `auth.oidc.*` (the browser sign-in, M2 MR4).
+    pub auth: AuthConfig,
 }
 
 impl Config {
@@ -382,6 +385,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             text("web.base_url")?,
             password_path("web.session_key_file")?,
         )?,
+        auth: AuthConfig::load(get)?,
     }
     .validate_across()
 }

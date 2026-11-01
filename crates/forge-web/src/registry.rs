@@ -414,6 +414,17 @@ impl<R: ResourceCtx, B> Dispatched<R, B> {
         &self.request.parts.headers
     }
 
+    /// The TCP peer of the connection (`crate::server::PeerAddr`), set by
+    /// `server::serve` on every request; `None` only outside the server
+    /// (in-process tests that do not set it).
+    pub fn peer(&self) -> Option<std::net::IpAddr> {
+        self.request
+            .parts
+            .extensions
+            .get::<crate::server::PeerAddr>()
+            .map(|p| p.0)
+    }
+
     /// The raw query (without `?`).
     pub fn raw_query(&self) -> Option<&str> {
         self.request.parts.uri.query()
@@ -1317,6 +1328,17 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
 /// `word` and, for `info/refs`, `query_key`), then the planned actions as
 /// `{ "action": .., "planned": true }`.
 pub fn routes_json(defs: &[RouteDef], planned: &[Action]) -> String {
+    routes_json_with(defs, planned, &[])
+}
+
+/// [`routes_json`] plus the actions decided inside another route's handler
+/// (`{"action", "decided_in": <path>}`, M2 MR4: `SessionCreate` in the
+/// sign-in callback).
+pub fn routes_json_with(
+    defs: &[RouteDef],
+    planned: &[Action],
+    decided_in: &[(Action, &str)],
+) -> String {
     let mut items: Vec<&RouteDef> = defs.iter().collect();
     items.sort_by(|a, b| {
         (a.path, a.scope, a.verb, a.query_key).cmp(&(b.path, b.scope, b.verb, b.query_key))
@@ -1341,6 +1363,11 @@ pub fn routes_json(defs: &[RouteDef], planned: &[Action]) -> String {
             planned
                 .iter()
                 .map(|a| json!({ "action": a.name(), "planned": true })),
+        )
+        .chain(
+            decided_in
+                .iter()
+                .map(|(a, path)| json!({ "action": a.name(), "decided_in": path })),
         )
         .collect();
     pretty(&Value::Array(list))

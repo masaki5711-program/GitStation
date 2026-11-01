@@ -281,6 +281,13 @@ pub enum Resource {
         owner: UserId,
         scopes: Vec<Scope>,
     },
+    /// The admission of a person the IdP signed in (`SessionCreate`,
+    /// ADR-0021 §3): whether the ID token carries the access role, and the
+    /// account the identity is (or will be) linked to.
+    Admission {
+        access_role: bool,
+        account: AdmissionAccount,
+    },
     /// A path that resolved to nothing (`PathResolve`): `FG-REPO-0005` for
     /// every signed-in, active caller.
     Unresolved(UnresolvedReason),
@@ -290,6 +297,38 @@ pub enum Resource {
         via: ResolvedVia,
         view: NamespaceView,
     },
+}
+
+/// The account a signed-in identity belongs to, as the login's linking step
+/// found it (ADR-0021 §3, §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionAccount {
+    /// No user yet: the sign-in creates one.
+    New,
+    /// An active human.
+    Active,
+    /// A disabled user.
+    Disabled,
+    /// A bot or service account (never signs in to the web).
+    NotHuman,
+}
+
+impl AdmissionAccount {
+    pub const ALL: &'static [AdmissionAccount] = &[
+        AdmissionAccount::New,
+        AdmissionAccount::Active,
+        AdmissionAccount::Disabled,
+        AdmissionAccount::NotHuman,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+            Self::NotHuman => "not_human",
+        }
+    }
 }
 
 /// Why a path resolved to nothing a route can act on. All are answered

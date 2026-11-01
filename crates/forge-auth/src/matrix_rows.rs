@@ -5,7 +5,9 @@ use forge_errors::ErrorCode as E;
 
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Expect::Allow, Fixture as F, Row};
-use crate::model::{MembershipChange as M, RefKind, RefUpdate as U, Role as R};
+use crate::model::{
+    AdmissionAccount as AA, MembershipChange as M, RefKind, RefUpdate as U, Role as R,
+};
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -34,6 +36,13 @@ const fn r(kind: RefKind, update: U, protected: Option<R>) -> F {
 
 const fn pc(from: Option<R>, to: Option<R>) -> F {
     F::ProtectionChange { from, to }
+}
+
+const fn adm(access_role: bool, account: AA) -> F {
+    F::Admission {
+        access_role,
+        account,
+    }
 }
 
 #[rustfmt::skip]
@@ -646,6 +655,24 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::SessionRead, W::AgentTokenReadApi, F::Instance, deny(E::InsufficientScope)),
     row(A::SessionRead, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
     row(A::SessionRead, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
+    // --- WebLogin (`GET /-/auth/login`, `/-/auth/callback`, M2 MR4): public ---
+    row(A::WebLogin, W::Anonymous, F::Instance, Allow),
+    row(A::WebLogin, W::Disabled, F::Instance, Allow),
+    row(A::WebLogin, W::DevTokenReadRepository, F::Instance, Allow),
+    // --- SessionCreate (inside the callback, ADR-0021 §3): the admission facts only ---
+    row(A::SessionCreate, W::Anonymous, adm(true, AA::New), Allow),
+    row(A::SessionCreate, W::Anonymous, adm(true, AA::Active), Allow),
+    row(A::SessionCreate, W::Anonymous, adm(false, AA::New), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Anonymous, adm(false, AA::Active), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Anonymous, adm(true, AA::Disabled), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Anonymous, adm(false, AA::Disabled), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Anonymous, adm(true, AA::NotHuman), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Anonymous, adm(false, AA::NotHuman), deny(E::LoginNotPermitted)),
+    // whoever the principal is, only the facts count
+    row(A::SessionCreate, W::Admin, adm(false, AA::Active), deny(E::LoginNotPermitted)),
+    row(A::SessionCreate, W::Disabled, adm(true, AA::Active), Allow),
+    // on any other resource it is an ordinary action
+    row(A::SessionCreate, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
     // --- ProjectList / GroupList (`GET /api/v1/projects`, `/groups`, M1 phase 8b MR7b) ---
     // The list itself; each row is decided again with ProjectRead / GroupRead.
     row(A::ProjectList, W::NonMember, F::Instance, Allow),

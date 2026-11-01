@@ -257,7 +257,13 @@ fn basic_password(encoded: &str) -> Result<String, Refusal> {
 /// not UTF-8 is kept as an empty string (the authenticator refuses it as
 /// `session_malformed`).
 pub(crate) fn session_cookies(headers: &HeaderMap) -> Vec<String> {
-    let name = SESSION_COOKIE.as_bytes();
+    cookies_named(headers, SESSION_COOKIE)
+}
+
+/// The values of every cookie called `name`, in order (the sign-in's state
+/// cookie too, M2 MR4).
+pub(crate) fn cookies_named(headers: &HeaderMap, name: &str) -> Vec<String> {
+    let name = name.as_bytes();
     let mut found = Vec::new();
     for header in headers.get_all(COOKIE) {
         for pair in header.as_bytes().split(|b| *b == b';') {

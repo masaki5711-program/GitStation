@@ -141,13 +141,31 @@ fn check_oidc(oidc: &OidcSession) -> Result<(), ForgeError> {
 /// `NotHuman`); a lifetime outside 60 s ..= 24 h or idle above absolute is
 /// `FG-SYS-0001 reason=session_lifetime_out_of_range`.
 pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewSession) -> Result<Issued, ForgeError> {
+    issue_with_token(db, ctx, new, new_token()?).await
+}
+
+/// A fresh session token (the OS RNG); `FG-SYS-0001 reason=rng_unavailable`
+/// without one. The OIDC login takes it first, to seal the IdP's tokens
+/// with its public id as associated data (ADR-0021 §5), then issues it with
+/// [`issue_with_token`].
+pub fn new_token() -> Result<SessionToken, ForgeError> {
+    session_token::generate()
+        .map_err(|e| internal("rng_unavailable").with_context("source", format!("{e:?}")))
+}
+
+/// [`issue`] with a token the caller generated ([`new_token`]); everything
+/// else is the same.
+pub async fn issue_with_token(
+    db: &Db,
+    ctx: &ChangeContext,
+    new: &NewSession,
+    token: SessionToken,
+) -> Result<Issued, ForgeError> {
     let user = new.user;
     let (idle_secs, absolute_secs) = lifetime_secs(new)?;
     if let Some(oidc) = &new.oidc {
         check_oidc(oidc)?;
     }
-    let token = session_token::generate()
-        .map_err(|e| internal("rng_unavailable").with_context("source", format!("{e:?}")))?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let owner: Option<(String, String)> = tx
@@ -285,6 +303,54 @@ pub async fn revoke(
     }
     .await;
     tx.settle("session.revoked", outcome).await
+}
+
+/// Revoke the session a presented `__Host-gstn_session` value stands for,
+/// if it is a real one: a new sign-in ends the browser's previous session
+/// (`reason=logout`, ADR-0021 §3 — no fixation). The secret is compared in
+/// constant time, so only its holder can end a session this way; a value
+/// that is malformed, unknown, does not match, or names an already
+/// revoked session is `Ok(None)` and writes nothing. `Some(session_id)` was
+/// revoked (one `session.revoked` row). `FG-DB-0001` / `FG-DB-0002` when
+/// the database fails.
+pub async fn revoke_presented(
+    db: &Db,
+    ctx: &ChangeContext,
+    presented: &str,
+    reason: SessionRevokeReason,
+) -> Result<Option<i64>, ForgeError> {
+    let Ok(plain) = session_token::parse(presented) else {
+        return Ok(None);
+    };
+    let public_id = plain.public_id().as_str();
+    let row: Option<(i64, Vec<u8>, bool)> = db
+        .within("sessions.revoke_presented", async {
+            let mut conn = db
+                .write_pool()
+                .acquire()
+                .await
+                .map_err(|e| query_error("sessions.revoke_presented.acquire", e))?;
+            sqlx::query_as(
+                "SELECT id, secret_sha256, revoked_at IS NOT NULL FROM forge.web_sessions \
+                 WHERE public_id = $1",
+            )
+            .bind(public_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| query_error("sessions.revoke_presented.lookup", e))
+        })
+        .await?;
+    let Some((session_id, hash, revoked)) = row else {
+        std::hint::black_box(forge_core::token::verify(&auth::DUMMY_HASH, plain.secret()));
+        return Ok(None);
+    };
+    if !auth::matches_hash(session_id, &hash, plain.secret())? || revoked {
+        return Ok(None);
+    }
+    match revoke(db, ctx, session_id, reason).await? {
+        RevokeOutcome::Revoked => Ok(Some(session_id)),
+        RevokeOutcome::AlreadyEnded => Ok(None),
+    }
 }
 
 /// Revoke every active session of `user` with `reason`: one

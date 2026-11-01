@@ -4,6 +4,7 @@
 //! proof.
 
 pub mod assets;
+pub mod auth;
 pub mod git;
 pub mod git_push;
 pub mod groups;

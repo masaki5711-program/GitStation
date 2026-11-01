@@ -21,6 +21,9 @@ forge-git.workspace = true
 # M1 phase 8b MR7a: the group / project write commands (web → hosting →
 # auth / db, ADR-0001 amendment); forge-web names no forge-db item itself.
 forge-hosting.workspace = true
+# M2 MR4: the OIDC sign-in (web → oidc → auth / db, ADR-0021 §2).
+forge-oidc.workspace = true
+url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).
 base64.workspace = true
@@ -54,6 +57,8 @@ forge-web = { workspace = true, features = ["test-support"] }
 tracing-subscriber.workspace = true
 # D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
 forge-db = { workspace = true, features = ["test-support"] }
+# M2 MR4: the mock identity provider (tests/oidc_login.rs).
+forge-oidc = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true
 # M1 phase 9 MR4: the push record retries (paused time) and a scratch git home.
 tokio = { workspace = true, features = ["test-util"] }

@@ -82,6 +82,12 @@ pub struct AppState {
     /// §6). `forge serve` requires it; without it every such request is
     /// refused (`FG-AUTH-0016 origin_mismatch base_url=unset`).
     pub web_origin: Option<Arc<str>>,
+    /// The OIDC sign-in (M2 MR4, ADR-0021 §3; `forge serve` sets it when
+    /// `auth.oidc` is configured). Without it `/-/auth/login` and
+    /// `/-/auth/callback` answer `FG-AUTH-0018`.
+    pub oidc: Option<Arc<forge_oidc::Oidc>>,
+    /// The login start's rate limit per peer (`FG-WEB-0010`).
+    pub login_limiter: Arc<routes::auth::LoginLimiter>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -115,7 +121,16 @@ impl AppState {
             lists: None,
             sessions: None,
             web_origin: None,
+            oidc: None,
+            login_limiter: Arc::default(),
         }
+    }
+
+    /// The OIDC sign-in (M2 MR4).
+    #[must_use]
+    pub fn with_oidc(mut self, oidc: Arc<forge_oidc::Oidc>) -> Self {
+        self.oidc = Some(oidc);
+        self
     }
 
     /// The web session authenticator (M2 MR3).
@@ -175,6 +190,7 @@ impl std::fmt::Debug for AppState {
             .field("lists", &self.lists.is_some())
             .field("sessions", &self.sessions.is_some())
             .field("web_origin", &self.web_origin)
+            .field("oidc", &self.oidc.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -233,6 +249,12 @@ pub const PLANNED: &[Action] = &[
     Action::AuditRead,
     Action::Metrics,
 ];
+
+/// Actions decided inside another route's handler, never a route's own
+/// (M2 MR4): `SessionCreate` is decided in `GET /-/auth/callback`
+/// (ADR-0021 §3), with its own allow and deny rows.
+pub const DECIDED_IN_ROUTE: &[(Action, &str)] =
+    &[(Action::SessionCreate, routes::auth::CALLBACK_PATH)];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
 /// 系統"). `raw` and `archive` are `RepoRead` content routes (not routed
@@ -329,6 +351,21 @@ pub fn registry() -> Registry<AppState> {
             routes::session::read,
         )
         .responds::<routes::session::SessionBody>(Verb::Get, routes::session::PATH)
+        // M2 MR4: the OIDC sign-in (public; admission is SessionCreate inside).
+        .route(
+            Verb::Get,
+            routes::auth::LOGIN_PATH,
+            Action::WebLogin,
+            "Start the browser sign-in: 302 to the identity provider (ADR-0021)",
+            routes::auth::login,
+        )
+        .route(
+            Verb::Get,
+            routes::auth::CALLBACK_PATH,
+            Action::WebLogin,
+            "Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next",
+            routes::auth::callback,
+        )
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
     git_routes(shell_routes(member_routes(move_routes(hosting_routes(
         fixed,

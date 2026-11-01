@@ -137,7 +137,7 @@ fn serve_failed(operation: &'static str) -> ForgeError {
 /// counts as its /64 prefix (one subscriber routinely owns a whole /64, so
 /// per-address counting would give it 2^64 free identities). IPv4-mapped
 /// IPv6 addresses count as the IPv4 address.
-fn peer_key(ip: IpAddr) -> IpAddr {
+pub(crate) fn peer_key(ip: IpAddr) -> IpAddr {
     match ip.to_canonical() {
         IpAddr::V6(v6) => {
             let mut octets = v6.octets();
@@ -400,6 +400,12 @@ async fn send_busy(mut stream: TcpStream, request_id: &RequestId) {
     .await; // ignore: the refused client may be gone or slow; nothing more is owed to it
 }
 
+/// The TCP peer of the connection a request came on (a request extension
+/// [`serve`] sets; the login start's rate limit keys on it, ADR-0021 §3).
+/// Never logged: an address is personal data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PeerAddr(pub IpAddr);
+
 /// One accepted connection until it ends. Holds its global slot and its
 /// peer slot for as long as it lives.
 async fn run_connection(
@@ -421,7 +427,8 @@ async fn run_connection(
     let read_idle = limits.read_idle_timeout;
     let service = service_fn(move |req: Request<Incoming>| {
         let router = router.clone();
-        let (parts, body) = req.into_parts();
+        let (mut parts, body) = req.into_parts();
+        parts.extensions.insert(PeerAddr(peer));
         let req = Request::from_parts(
             parts,
             axum::body::Body::new(IdleBody::new(body, read_idle, peer)),

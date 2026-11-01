@@ -1,0 +1,131 @@
+{
+  "realm": "gitstation-dev",
+  "displayName": "GitStation dev (SYNTHETIC: fictional users, example.invalid, synthetic passwords and secret)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "editUsernameAllowed": false,
+  "attributes": {
+    "userProfileEnabled": "true"
+  },
+  "components": {
+    "org.keycloak.userprofile.UserProfileProvider": [
+      {
+        "providerId": "declarative-user-profile",
+        "subComponents": {},
+        "config": {
+          "kc.user.profile.config": [
+            "{\"unmanagedAttributePolicy\":\"ADMIN_VIEW\",\"attributes\":[{\"name\":\"username\",\"displayName\":\"${username}\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"validations\":{\"length\":{\"min\":3,\"max\":255}}},{\"name\":\"email\",\"displayName\":\"${email}\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"validations\":{\"email\":{}}},{\"name\":\"firstName\",\"displayName\":\"${firstName}\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"lastName\",\"displayName\":\"${lastName}\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\",\"user\"]}},{\"name\":\"employee_number\",\"displayName\":\"Employee number\",\"permissions\":{\"view\":[\"admin\",\"user\"],\"edit\":[\"admin\"]},\"validations\":{\"length\":{\"min\":1,\"max\":64}}}]}"
+          ]
+        }
+      }
+    ]
+  },
+  "roles": {
+    "client": {
+      "gitstation": [
+        { "name": "access", "description": "May sign in to GitStation" }
+      ]
+    }
+  },
+  "clients": [
+    {
+      "clientId": "gitstation",
+      "name": "GitStation (dev)",
+      "protocol": "openid-connect",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "synthetic-dev-client-secret-not-a-real-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "redirectUris": ["http://localhost:8080/-/auth/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8080/",
+        "backchannel.logout.url": "http://host.docker.internal:8080/-/auth/backchannel-logout",
+        "backchannel.logout.session.required": "true"
+      },
+      "defaultClientScopes": ["profile", "email", "roles"],
+      "protocolMappers": [
+        {
+          "name": "client roles in the ID token",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "config": {
+            "usermodel.clientRoleMapping.clientId": "gitstation",
+            "claim.name": "resource_access.${client_id}.roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        },
+        {
+          "name": "employee number",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "employee_number",
+            "claim.name": "employee_number",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.invalid",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Synthetic",
+      "attributes": { "employee_number": ["SYN0001"] },
+      "credentials": [{ "type": "password", "value": "synthetic-password", "temporary": false }],
+      "clientRoles": { "gitstation": ["access"] }
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@example.invalid",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Synthetic",
+      "attributes": { "employee_number": ["SYN0002"] },
+      "credentials": [{ "type": "password", "value": "synthetic-password", "temporary": false }],
+      "clientRoles": { "gitstation": ["access"] }
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@example.invalid",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Synthetic",
+      "attributes": { "employee_number": ["SYN0003"] },
+      "credentials": [{ "type": "password", "value": "synthetic-password", "temporary": false }],
+      "clientRoles": { "gitstation": [] }
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@example.invalid",
+      "emailVerified": true,
+      "firstName": "Admin",
+      "lastName": "Synthetic",
+      "attributes": { "employee_number": ["SYN0004"] },
+      "credentials": [{ "type": "password", "value": "synthetic-password", "temporary": false }],
+      "clientRoles": { "gitstation": ["access"] }
+    }
+  ]
+}

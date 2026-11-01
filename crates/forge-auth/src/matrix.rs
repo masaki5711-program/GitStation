@@ -8,7 +8,7 @@
 use forge_errors::ErrorCode;
 
 use crate::action::Action;
-use crate::model::{MembershipChange, RefKind, RefUpdate, Role};
+use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role};
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
@@ -204,6 +204,12 @@ pub(crate) enum Fixture {
     DeletedTombstone,
     /// A namespace of another kind than the route's scope (MR4).
     KindMismatch,
+    /// The sign-in's admission (M2 MR4, ADR-0021 §3): the ID token's access
+    /// role and the account the identity belongs to.
+    Admission {
+        access_role: bool,
+        account: AdmissionAccount,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,6 +534,13 @@ impl Fixture {
             Fixture::Absent => Resource::Unresolved(UnresolvedReason::Absent),
             Fixture::DeletedTombstone => Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
             Fixture::KindMismatch => Resource::Unresolved(UnresolvedReason::KindMismatch),
+            Fixture::Admission {
+                access_role,
+                account,
+            } => Resource::Admission {
+                access_role,
+                account,
+            },
         }
     }
 }

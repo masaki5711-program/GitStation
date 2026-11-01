@@ -27,9 +27,15 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
+    (
+        "forge-oidc",
+        &["forge-auth", "forge-db", "forge-core", "forge-errors"],
+    ),
     (
         "forge-web",
         &[
+            "forge-oidc",
             "forge-hosting",
             "forge-auth",
             "forge-git",
@@ -41,6 +47,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
         "forge-cli",
         &[
             "forge-web",
+            "forge-oidc",
             "forge-hosting",
             "forge-auth",
             "forge-git",

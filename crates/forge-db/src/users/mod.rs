@@ -156,7 +156,7 @@ fn request_invalid(reason: &'static str, len: usize) -> ForgeError {
 /// The field rules of forge.users (its CHECKs, migration 20261028100100),
 /// checked before anything is written: `FG-AUTH-0006` with `reason` and
 /// `len`, never the value.
-fn validate(new: &NewUser) -> Result<(), ForgeError> {
+pub(crate) fn validate(new: &NewUser) -> Result<(), ForgeError> {
     if new.kind == UserKind::Human && new.email.is_none() {
         return Err(request_invalid("email_missing", 0));
     }
@@ -213,7 +213,11 @@ pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Creat
 /// The writes of `create` (and of `bootstrap_admin`'s `Create`), inside the
 /// caller's change: the user and their personal namespace at `path` (a
 /// validated top-level segment). The caller commits with its audit row.
-async fn insert(tx: &mut ChangeTx, new: &NewUser, path: &str) -> Result<Created, ForgeError> {
+pub(crate) async fn insert(
+    tx: &mut ChangeTx,
+    new: &NewUser,
+    path: &str,
+) -> Result<Created, ForgeError> {
     // A released path stays unusable. Every writer of tombstones takes the
     // path lock first, so a tombstone committed by another transaction is
     // either visible to the check below or written after this one commits.

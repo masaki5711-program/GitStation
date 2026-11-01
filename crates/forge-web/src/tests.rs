@@ -432,14 +432,29 @@ fn every_action_is_routed_or_planned_but_not_both() {
         .map(|d| d.action)
         .collect();
     let planned: BTreeSet<Action> = crate::app::PLANNED.iter().copied().collect();
+    let inner: BTreeSet<Action> = crate::app::DECIDED_IN_ROUTE
+        .iter()
+        .map(|(a, _)| *a)
+        .collect();
     assert!(
         routed.is_disjoint(&planned),
         "{:?}",
         routed.intersection(&planned).collect::<Vec<_>>()
     );
+    assert!(routed.is_disjoint(&inner) && planned.is_disjoint(&inner));
+    // An action decided inside a route names a route that exists.
+    for (action, path) in crate::app::DECIDED_IN_ROUTE {
+        assert!(
+            crate::app::registry()
+                .defs()
+                .iter()
+                .any(|d| d.path == *path),
+            "{action:?} names {path}, which is not routed"
+        );
+    }
     for action in Action::ALL {
         assert!(
-            routed.contains(action) || planned.contains(action),
+            routed.contains(action) || planned.contains(action) || inner.contains(action),
             "{action:?} is neither routed nor planned"
         );
     }

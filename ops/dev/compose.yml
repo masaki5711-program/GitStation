@@ -19,5 +19,32 @@ services:
       retries: 30
     volumes:
       - forge-dev-pg:/var/lib/postgresql/data
+  # M2 MR4 (ADR-0021 §14): the dev identity provider, only with the profile:
+  #   docker compose -f ops/dev/compose.yml --profile sso up -d --wait
+  # Realm `gitstation-dev` (ops/dev/keycloak/realm-gitstation-dev.json): the
+  # SYNTHETIC users alice / bob / admin (role `access`) and carol (no role),
+  # employee numbers SYN0001..SYN0004, password `synthetic-password`. The
+  # GitStation side (auth.oidc.*):
+  #   issuer             = http://127.0.0.1:58080/realms/gitstation-dev
+  #   client_id          = gitstation
+  #   client_secret_file = <absolute path of a 0600 copy of ops/dev/keycloak/client-secret.dev>
+  #   web.base_url       = http://localhost:8080
+  # nextest never uses this (the mock provider of forge-oidc test-support).
+  keycloak:
+    profiles: ["sso"]
+    # Pin the digest too before the first use (ADR-0021 §14): the registry
+    # could not be reached from the session that wrote this (M2 MR4 handoff).
+    image: quay.io/keycloak/keycloak:26.4.2
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://127.0.0.1:58080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: synthetic-admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: synthetic-admin-password
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:58080:8080"
+    volumes:
+      - ./keycloak/realm-gitstation-dev.json:/opt/keycloak/data/import/realm-gitstation-dev.json:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 volumes:
   forge-dev-pg:
