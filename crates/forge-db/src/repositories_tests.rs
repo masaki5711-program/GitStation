@@ -113,8 +113,7 @@ async fn mark_ready_twice_publishes_one_repository_created() {
     .await
     .expect("audit");
     let pid = p.project_id.get();
-    let details =
-        serde_json::json!({"project_id": pid, "repository_id": repo.get(), "kind": "system"});
+    let details = serde_json::json!({"project_id": pid, "repository_id": repo.get()});
     assert_eq!(
         audit,
         vec![(
@@ -471,7 +470,7 @@ async fn two_concurrent_reprovisions_enqueue_once() {
 
 /// The row lock both commands take first (a fragment of `lock_repository`).
 const ROW_LOCK_WAIT: &str =
-    "SELECT project_id, kind, state FROM forge.repositories WHERE id = $1 FOR UPDATE";
+    "SELECT project_id, state FROM forge.repositories WHERE id = $1 FOR UPDATE";
 
 /// Wait (bounded) until `n` backends of this test's database wait on a lock
 /// in a statement containing `statement`.

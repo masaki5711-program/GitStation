@@ -190,7 +190,6 @@ async fn project_create_writes_namespace_project_repository_owner_job_and_one_au
         "namespace_id": created.namespace_id.get(),
         "parent_namespace_id": alice.namespace_id.get(),
         "repository_id": created.repository_id.get(),
-        "kind": "system",
         "visibility": "private",
         "owner_id": alice.user_id.get(),
     });
