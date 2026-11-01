@@ -322,8 +322,9 @@ pub(crate) struct TokenCredential(pub(crate) i64);
 
 /// The web session a request authenticated with (a request extension next
 /// to the `Principal`): ids, its expiries and its CSRF token — never the
-/// cookie or its secret.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// cookie or its secret. `Debug` hides the CSRF token (it is a bearer of
+/// the session's right to change state).
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionCredential {
     pub session_id: i64,
     pub public_id: String,
@@ -332,6 +333,18 @@ pub struct SessionCredential {
     /// RFC 3339, UTC.
     pub idle_expires_at: String,
     pub absolute_expires_at: String,
+}
+
+impl std::fmt::Debug for SessionCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionCredential")
+            .field("session_id", &self.session_id)
+            .field("public_id", &self.public_id)
+            .field("csrf_token", &"[redacted]")
+            .field("idle_expires_at", &self.idle_expires_at)
+            .field("absolute_expires_at", &self.absolute_expires_at)
+            .finish()
+    }
 }
 
 /// What the authenticator returned about the caller's account, next to the
@@ -731,6 +744,20 @@ mod tests {
             .expect("request");
         let res = router.oneshot(req).await.expect("infallible");
         assert_eq!(res.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn a_session_credential_never_prints_its_csrf_token() {
+        let credential = SessionCredential {
+            session_id: 7,
+            public_id: "00000000000000a1".to_owned(),
+            csrf_token: "c5rf".repeat(16),
+            idle_expires_at: "2026-11-01T16:00:00Z".to_owned(),
+            absolute_expires_at: "2026-11-02T00:00:00Z".to_owned(),
+        };
+        let text = format!("{credential:?}");
+        assert!(!text.contains("c5rf"), "{text}");
+        assert!(text.contains("[redacted]") && text.contains("00000000000000a1"));
     }
 
     #[test]

@@ -243,7 +243,8 @@ async fn disabling_a_user_revokes_their_sessions_in_the_same_change() {
     let first = issue_ok(&t, "req-dis-1", alice).await;
     let second = issue_ok(&t, "req-dis-2", alice).await;
     let bobs = issue_ok(&t, "req-dis-3", bob).await;
-    // An expired session stays as it is (it no longer authenticates).
+    // An expired session is revoked too (review: no unrevoked row lingers
+    // in the partial indexes).
     let mut su = t.superuser().await;
     let expired = issue_ok(&t, "req-dis-4", alice).await;
     su_change(
@@ -268,7 +269,7 @@ async fn disabling_a_user_revokes_their_sessions_in_the_same_change() {
     .fetch_one(&mut su)
     .await
     .expect("details");
-    assert_eq!(details["revoked_sessions"], 2);
+    assert_eq!(details["revoked_sessions"], 3);
     assert_eq!(
         count(
             &mut su,
@@ -297,7 +298,10 @@ async fn disabling_a_user_revokes_their_sessions_in_the_same_change() {
         reason_of(second.session_id).as_deref(),
         Some("user_disabled")
     );
-    assert_eq!(reason_of(expired.session_id), None);
+    assert_eq!(
+        reason_of(expired.session_id).as_deref(),
+        Some("user_disabled")
+    );
     assert_eq!(reason_of(bobs.session_id), None, "another user's session");
     for issued in [&first, &second] {
         let err = authenticate(&t.db, &rid("req-dis-6"), &issued.token.reveal(), IDLE)
@@ -624,6 +628,116 @@ async fn an_oidc_session_stores_its_issuer_sid_and_subject() {
         .await
         .expect_err("too long");
     assert_reason(&err, ErrorCode::Internal, "session_oidc_out_of_range");
+    // Revoking drops the sealed IdP tokens (review MEDIUM).
+    assert_eq!(
+        revoke(
+            &t.db,
+            &ctx("req-oidc-3"),
+            issued.session_id,
+            SessionRevokeReason::Logout
+        )
+        .await
+        .expect("revoke"),
+        RevokeOutcome::Revoked
+    );
+    let (refresh, id): (Option<Vec<u8>>, Option<Vec<u8>>) = sqlx::query_as(
+        "SELECT refresh_token_enc, id_token_enc FROM forge.web_sessions WHERE id = $1",
+    )
+    .bind(issued.session_id)
+    .fetch_one(&mut su)
+    .await
+    .expect("row");
+    assert_eq!((refresh, id), (None, None));
+    t.drop_now().await;
+}
+
+/// `revoke_all` (and the disable) drop the sealed IdP tokens of every
+/// session they revoke.
+#[tokio::test]
+async fn revoke_all_drops_the_sealed_idp_tokens() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let oidc = || OidcSession {
+        issuer: "https://sso.example.test/realms/iot".to_owned(),
+        subject: "synthetic-sub-2".to_owned(),
+        sid: None,
+        refresh_token_enc: Some(vec![9]),
+        id_token_enc: Some(vec![8]),
+    };
+    for req in ["req-drop-1", "req-drop-2"] {
+        let new = NewSession {
+            oidc: Some(oidc()),
+            ..new_session(alice)
+        };
+        issue(&t.db, &ctx(req), &new).await.expect("issue");
+    }
+    let revoked = revoke_all(&t.db, &ctx("req-drop-3"), alice, SessionRevokeReason::Admin)
+        .await
+        .expect("all");
+    assert_eq!(revoked, 2);
+    let mut su = t.superuser().await;
+    assert_eq!(
+        count(
+            &mut su,
+            "SELECT count(*) FROM forge.web_sessions \
+             WHERE refresh_token_enc IS NOT NULL OR id_token_enc IS NOT NULL"
+        )
+        .await,
+        0
+    );
+    t.drop_now().await;
+}
+
+/// A touch that races a revocation still open in another transaction waits
+/// for its row lock, then finds the row revoked and changes nothing; the
+/// request that read the session before the revocation completes (the
+/// accepted in-flight risk, ADR-0019), the next one is `session_revoked`.
+#[tokio::test]
+async fn a_touch_that_races_an_open_revoke_changes_nothing() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let issued = issue_ok(&t, "req-race-1", alice).await;
+    let mut su = t.superuser().await;
+    sqlx::query("UPDATE forge.web_sessions SET last_seen_at = now() - interval '5 minutes'")
+        .execute(&mut su)
+        .await
+        .expect("age");
+    let before: String = sqlx::query_scalar("SELECT last_seen_at::text FROM forge.web_sessions")
+        .fetch_one(&mut su)
+        .await
+        .expect("read");
+    let held = t
+        .hold_audited(
+            ("user", alice.get()),
+            &[format!(
+                "UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = 'logout' \
+                 WHERE id = {}",
+                issued.session_id
+            )],
+        )
+        .await;
+    let db = t.db.clone();
+    let cookie = issued.token.reveal();
+    let racing =
+        tokio::spawn(async move { authenticate(&db, &rid("req-race-2"), &cookie, IDLE).await });
+    t.until_waiting("SET last_seen_at = now()").await;
+    held.commit().await;
+    let identity = racing
+        .await
+        .expect("join")
+        .expect("read before the revocation");
+    assert_eq!(identity.session_id, issued.session_id);
+    let (after, reason): (String, Option<String>) =
+        sqlx::query_as("SELECT last_seen_at::text, revoked_reason FROM forge.web_sessions")
+            .fetch_one(&mut su)
+            .await
+            .expect("read");
+    assert_eq!(after, before, "the touch found the row revoked");
+    assert_eq!(reason.as_deref(), Some("logout"));
+    let err = authenticate(&t.db, &rid("req-race-3"), &issued.token.reveal(), IDLE)
+        .await
+        .expect_err("revoked");
+    assert_reason(&err, ErrorCode::Unauthenticated, "session_revoked");
     t.drop_now().await;
 }
 
@@ -822,5 +936,80 @@ async fn the_session_checks_refuse_what_the_contract_refuses() {
             .expect_err(constraint);
         assert!(chain(&err).contains(constraint), "{constraint}: {err}");
     }
+    t.drop_now().await;
+}
+
+/// Migration 20261103100100: a revocation is final for every role (the
+/// guard is enabled ALWAYS), and an IdP session id needs its issuer.
+#[tokio::test]
+async fn a_revoked_session_stays_revoked_with_its_reason() {
+    let t = FreshDb::migrated().await;
+    seed_user(&t).await;
+    commit(
+        &t,
+        &[
+            audit("user", 1, "succeeded"),
+            sql(&insert_session("00000000000000ee")),
+        ],
+    )
+    .await
+    .expect("seed");
+    commit(
+        &t,
+        &[
+            audit("user", 1, "succeeded"),
+            sql("UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = 'logout'"),
+        ],
+    )
+    .await
+    .expect("revoke");
+    for change in [
+        "UPDATE forge.web_sessions SET revoked_at = NULL, revoked_reason = NULL",
+        "UPDATE forge.web_sessions SET revoked_reason = 'admin'",
+        "UPDATE forge.web_sessions SET revoked_at = now() + interval '1 hour'",
+    ] {
+        let err = commit(&t, &[audit("user", 1, "succeeded"), sql(change)])
+            .await
+            .expect_err(change);
+        assert!(chain(&err).contains("stays revoked"), "{change}: {err}");
+    }
+    // Not even a superuser un-revokes it.
+    let mut su = t.superuser().await;
+    let err = sqlx::raw_sql(&format!(
+        "{}; UPDATE forge.web_sessions SET revoked_at = NULL, revoked_reason = NULL",
+        audit("user", 1, "succeeded")
+    ))
+    .execute(&mut su)
+    .await
+    .expect_err("superuser");
+    assert!(err.to_string().contains("stays revoked"), "{err}");
+    // The unaudited columns still change (a racing touch is refused by its
+    // own WHERE, not by the guard).
+    commit(
+        &t,
+        &[sql(
+            "UPDATE forge.web_sessions SET refresh_checked_at = now()",
+        )],
+    )
+    .await
+    .expect("unaudited column");
+    let err = commit(
+        &t,
+        &[
+            audit("user", 1, "succeeded"),
+            sql(
+                "INSERT INTO forge.web_sessions (public_id, secret_sha256, user_id, \
+                 idle_expires_at, absolute_expires_at, oidc_sid) VALUES ('00000000000000ef', \
+                 decode(repeat('ab', 32), 'hex'), 1, now() + interval '1 hour', \
+                 now() + interval '2 hours', 'synthetic-sid')",
+            ),
+        ],
+    )
+    .await
+    .expect_err("sid without issuer");
+    assert!(
+        chain(&err).contains("web_sessions_oidc_sid_needs_issuer"),
+        "{err}"
+    );
     t.drop_now().await;
 }

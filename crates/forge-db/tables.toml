@@ -31,6 +31,8 @@ guarded_functions = [
     "audited_change_present", "repositories_state_guard",
     # D5 MR2: deletes for the purge only.
     "purge_delete_guard",
+    # M2 MR3: a web session's revocation is final.
+    "web_sessions_revocation_guard",
 ]
 
 [tables.events]

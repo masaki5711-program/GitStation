@@ -30,12 +30,21 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.repositories_state_guard()",
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     "forge.purge_delete_guard()",
+    // ── M2 MR3: a session's revocation is final (20261103100100) ──
+    "forge.web_sessions_revocation_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
 const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    // ── M2 MR3: a session's revocation is final (20261103100100) ──
+    (
+        "web_sessions",
+        "web_sessions_revocation_final",
+        "CREATE TRIGGER web_sessions_revocation_final BEFORE UPDATE ON forge.web_sessions \
+         FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_revocation_guard()",
+    ),
     (
         "repositories",
         "repositories_state_forward",

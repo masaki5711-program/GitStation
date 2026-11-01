@@ -224,7 +224,9 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewSession) -> Result<Iss
     })
 }
 
-/// Revoke one session with `reason`: one `session.revoked` audit row.
+/// Revoke one session with `reason`: one `session.revoked` audit row. The
+/// sealed IdP tokens (`refresh_token_enc`, `id_token_enc`) are dropped with
+/// it: a revoked session never refreshes and never logs out at the IdP.
 /// Revoking a revoked session is `AlreadyEnded` and writes nothing (an
 /// expired one is still revoked: the reason is recorded). An unknown
 /// session is `FG-REPO-0005` (`resource=session`, `reason=absent`).
@@ -260,8 +262,8 @@ pub async fn revoke(
         }
         tx.step(|c| async move {
             sqlx::query(
-                "UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = $2 \
-                 WHERE id = $1",
+                "UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = $2, \
+                 refresh_token_enc = NULL, id_token_enc = NULL WHERE id = $1",
             )
             .bind(session_id)
             .bind(reason.as_str())
@@ -328,10 +330,11 @@ pub async fn revoke_all(
     tx.settle("session.revoked_all", outcome).await
 }
 
-/// Revoke the user's active sessions inside the caller's change (the
+/// Revoke the user's unrevoked sessions inside the caller's change (the
 /// caller writes the audit row: `revoke_all`, `users::disable`). Returns
-/// how many. Expired sessions are left as they are (they no longer
-/// authenticate).
+/// how many. Expired ones are revoked too, so no unrevoked row lingers in
+/// the partial indexes (`web_sessions_user_active`, the back-channel
+/// indexes) and the sealed IdP tokens of every one are dropped.
 pub(crate) async fn revoke_active(
     conn: &mut PgConnection,
     user: UserId,
@@ -339,9 +342,9 @@ pub(crate) async fn revoke_active(
     query: &'static str,
 ) -> Result<i64, ForgeError> {
     let ids: Vec<i64> = sqlx::query_scalar(
-        "UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = $2 \
-         WHERE user_id = $1 AND revoked_at IS NULL AND absolute_expires_at > now() \
-         RETURNING id",
+        "UPDATE forge.web_sessions SET revoked_at = now(), revoked_reason = $2, \
+         refresh_token_enc = NULL, id_token_enc = NULL \
+         WHERE user_id = $1 AND revoked_at IS NULL RETURNING id",
     )
     .bind(user.get())
     .bind(reason.as_str())
