@@ -488,7 +488,7 @@ fn parse_instance(after: &[&str]) -> Result<ParsedPath, ForgeError> {
             let Some(id) = rest.first() else {
                 return Err(rejected("instance", "missing_id"));
             };
-            if !is_positive_i64(id) {
+            if parse_positive_id(id).is_none() {
                 return Err(rejected("instance", "invalid_id"));
             }
         }
@@ -497,11 +497,14 @@ fn parse_instance(after: &[&str]) -> Result<ParsedPath, ForgeError> {
     Ok(ParsedPath::Instance { route, rest })
 }
 
-/// `1`..=`9223372036854775807`, ASCII digits, no leading zero.
-fn is_positive_i64(raw: &str) -> bool {
-    !raw.starts_with('0')
-        && raw.bytes().all(|b| b.is_ascii_digit())
-        && raw.parse::<i64>().is_ok_and(|n| n > 0)
+/// An id in a URL (the permalink's `/-/projects/{id}`, the API's
+/// `/api/v1/projects/{id}`): `1`..=`9223372036854775807`, ASCII digits, no
+/// leading zero, no sign, not percent-encoded; `None` for anything else.
+pub fn parse_positive_id(raw: &str) -> Option<i64> {
+    if raw.starts_with('0') || !raw.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<i64>().ok().filter(|n| *n > 0)
 }
 
 /// A raw request path made safe for one log field: the first

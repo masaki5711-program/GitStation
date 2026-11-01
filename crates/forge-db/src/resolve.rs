@@ -28,8 +28,8 @@
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, TombstoneId, UserId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    LookupPath, NamespaceKind, NamespacePath, ProjectAccess, Resolution, Resolved, ResolvedTarget,
-    Visibility,
+    LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord, RepositoryKind,
+    Resolution, Resolved, ResolvedTarget, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -83,20 +83,34 @@ pub(crate) const RESOLVE_SQL: &str = concat!(
 );
 
 /// `$1` the project id, `$2` the viewer (NULL = anonymous), `$3` the chain
-/// cap: the project's row and the viewer's role chain from its namespace,
-/// one row whether or not the project exists.
+/// cap: the project's row, its namespace and repository, and the viewer's
+/// role chain from its namespace — one row whether or not the project
+/// exists (M1 phase 8 MR5 added the details `GET /api/v1/projects/{id}`
+/// shows; the same statement, so the details cost nothing extra and cannot
+/// belong to another project). `rebuilt` / `reaches_top` / `truncated`
+/// confirm the stored `full_path` against the segments, as for a moved
+/// tombstone's target.
 pub(crate) const PROJECT_ACCESS_SQL: &str = concat!(
     "WITH RECURSIVE ",
     chain_cte!("kind = 'project' AND owner_id = $1"),
-    ", steps AS (SELECT ",
+    ", steps AS (SELECT c.segment, c.parent_id AS up, ",
     chain_role_columns!(),
     " FROM chain c), \
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
-         array_agg(role ORDER BY step) AS roles FROM steps) \
+         array_agg(role ORDER BY step) AS roles, \
+         string_agg(segment, '/' ORDER BY step DESC) AS rebuilt, \
+         coalesce(bool_or(truncated), false) AS truncated, \
+         coalesce(bool_or(up IS NULL), false) AS reaches_top FROM steps) \
      SELECT p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
-       a.steps, a.truncs, a.roles \
-     FROM agg a LEFT JOIN forge.projects p ON p.id = $1"
+       a.steps, a.truncs, a.roles, \
+       n.id AS namespace_id, n.full_path, \
+       (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
+       p.display_name, p.description, r.kind AS repository_kind, \
+       to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
+     FROM agg a LEFT JOIN forge.projects p ON p.id = $1 \
+     LEFT JOIN forge.namespaces n ON p.id IS NOT NULL AND n.kind = 'project' AND n.owner_id = $1 \
+     LEFT JOIN forge.repositories r ON r.project_id = p.id"
 );
 
 /// The one row of [`RESOLVE_SQL`].
@@ -140,6 +154,13 @@ struct ProjectAccessRow {
     project: ProjectFacts,
     #[sqlx(flatten)]
     chain: ChainRoles,
+    namespace_id: Option<i64>,
+    full_path: Option<String>,
+    confirmed: Option<bool>,
+    display_name: Option<String>,
+    description: Option<String>,
+    repository_kind: Option<String>,
+    created_at: Option<String>,
 }
 
 /// `FG-DB-0021` with its `reason`.
@@ -299,16 +320,10 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
                     .with_context("tombstone_id", tombstone_id));
             };
             let current = NamespacePath::parse(&rebuilt).map_err(|e| {
-                let rule = e
-                    .context()
-                    .iter()
-                    .find(|(k, _)| *k == "reason")
-                    .map(|(_, v)| bounded(v))
-                    .unwrap_or_default();
                 invalid("stored_path_invalid")
                     .with_context("namespace_id", target)
                     .with_context("tombstone_id", tombstone_id)
-                    .with_context("rule", rule)
+                    .with_context("rule", parse_rule(&e))
             })?;
             Ok(Resolution::Moved {
                 resolved,
@@ -349,16 +364,30 @@ pub async fn resolve(
 }
 
 /// A project's access facts for `viewer` (`None` = anonymous), `None` when
-/// the project does not exist: one [`PROJECT_ACCESS_SQL`] round trip on the
-/// read pool whether it exists or not. The role is the role loaders'
-/// `native` (`roles::load_project_roles`). Errors as [`resolve`];
-/// `FG-DB-0021 project_without_namespace` for a project row whose
-/// namespace is missing.
+/// the project does not exist: [`load_project`]'s facts (the same one
+/// statement).
 pub async fn project_access(
     db: &Db,
     project: ProjectId,
     viewer: Option<UserId>,
 ) -> Result<Option<ProjectAccess>, ForgeError> {
+    Ok(load_project(db, project, viewer).await?.map(|p| p.access))
+}
+
+/// One project for `viewer` (`None` = anonymous), `None` when the project
+/// does not exist: one [`PROJECT_ACCESS_SQL`] round trip on the read pool
+/// whether it exists or not. The role is the role loaders' `native`
+/// (`roles::load_project_roles`). Errors as [`resolve`]; `FG-DB-0021` for a
+/// projects row whose namespace or repository is missing
+/// (`project_without_namespace` / `project_without_repository`), a stored
+/// path that its segments do not confirm (`project_path_unconfirmed`) or
+/// that does not parse (`stored_path_invalid`), and an unknown visibility
+/// or repository kind.
+pub async fn load_project(
+    db: &Db,
+    project: ProjectId,
+    viewer: Option<UserId>,
+) -> Result<Option<ProjectRecord>, ForgeError> {
     let row: ProjectAccessRow = db
         .within("projects.access", async {
             sqlx::query_as(PROJECT_ACCESS_SQL)
@@ -370,14 +399,75 @@ pub async fn project_access(
                 .map_err(|e| read_query_error("projects.access", e))
         })
         .await?;
+    interpret_project(row, project, viewer)
+}
+
+/// Fold the one row of [`PROJECT_ACCESS_SQL`]. Pure (no statement).
+fn interpret_project(
+    row: ProjectAccessRow,
+    project: ProjectId,
+    viewer: Option<UserId>,
+) -> Result<Option<ProjectRecord>, ForgeError> {
+    let id = project.get();
     if row.project.project_id.is_none() {
         return Ok(None);
     }
+    let (Some(namespace_id), Some(full_path)) = (row.namespace_id, row.full_path) else {
+        return Err(invalid("project_without_namespace").with_context("project_id", id));
+    };
     if row.chain.steps.as_ref().is_none_or(Vec::is_empty) {
-        return Err(invalid("project_without_namespace").with_context("project_id", project.get()));
+        return Err(invalid("project_without_namespace").with_context("project_id", id));
     }
-    let roles = row.chain.fold("project", project.get(), viewer)?;
-    row.project.access(roles.native)
+    let roles = row.chain.fold("project", id, viewer)?;
+    let Some(access) = row.project.access(roles.native)? else {
+        return Ok(None);
+    };
+    if row.confirmed != Some(true) {
+        return Err(invalid("project_path_unconfirmed")
+            .with_context("project_id", id)
+            .with_context("namespace_id", namespace_id));
+    }
+    let path = NamespacePath::parse(&full_path).map_err(|e| {
+        invalid("stored_path_invalid")
+            .with_context("project_id", id)
+            .with_context("namespace_id", namespace_id)
+            .with_context("rule", parse_rule(&e))
+    })?;
+    let raw_kind = row
+        .repository_kind
+        .ok_or_else(|| invalid("project_without_repository").with_context("project_id", id))?;
+    let kind = RepositoryKind::parse(&raw_kind).ok_or_else(|| {
+        invalid("unknown_repository_kind")
+            .with_context("project_id", id)
+            .with_context("raw", bounded(&raw_kind))
+    })?;
+    // NOT NULL columns of the projects row the statement found.
+    let (Some(display_name), Some(description), Some(created_at)) =
+        (row.display_name, row.description, row.created_at)
+    else {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "project_row_incomplete")
+            .with_context("project_id", id));
+    };
+    Ok(Some(ProjectRecord {
+        id: project,
+        access,
+        namespace_id: NamespaceId::new(namespace_id),
+        path,
+        display_name,
+        description,
+        kind,
+        created_at,
+    }))
+}
+
+/// The `NamespacePath::parse` reason of `e`, bounded (logged as `rule`).
+fn parse_rule(e: &ForgeError) -> String {
+    e.context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| bounded(v))
+        .unwrap_or_default()
 }
 
 /// The dispatcher's resolver (`forge serve` injects the `Db`): exactly
@@ -392,15 +482,14 @@ impl forge_core::NamespaceResolver for Db {
     }
 }
 
-/// Project access by id (`GET /api/v1/projects/{id}`): exactly
-/// [`project_access`].
+/// Projects by id (`GET /api/v1/projects/{id}`): exactly [`load_project`].
 impl forge_core::ProjectAccessLoader for Db {
-    fn project_access<'a>(
+    fn load_project<'a>(
         &'a self,
         project: ProjectId,
         viewer: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>> {
-        Box::pin(project_access(self, project, viewer))
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
+        Box::pin(load_project(self, project, viewer))
     }
 }
 

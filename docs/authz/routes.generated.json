@@ -24,6 +24,14 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "Health",
     "method": "GET",
     "path": "/healthz",
@@ -253,10 +261,6 @@
   },
   {
     "action": "RepoPush",
-    "planned": true
-  },
-  {
-    "action": "ProjectRead",
     "planned": true
   },
   {

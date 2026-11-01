@@ -17,7 +17,9 @@ use std::pin::Pin;
 use forge_errors::ForgeError;
 
 use crate::namespace_path::{LookupPath, NamespacePath};
-use crate::{GroupId, NamespaceId, ProjectId, Role, TombstoneId, UserId, Visibility};
+use crate::{
+    GroupId, NamespaceId, ProjectId, RepositoryKind, Role, TombstoneId, UserId, Visibility,
+};
 
 /// The future these traits return (boxed: they are stored as trait objects).
 pub type LookupFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ForgeError>> + Send + 'a>>;
@@ -177,15 +179,38 @@ pub trait NamespaceResolver: Send + Sync {
     ) -> LookupFuture<'a, Resolution>;
 }
 
-/// Project access by id, for routes that address a project by id
+/// One project by id, as one row: the viewer's access facts (decided by
+/// `authorize()`) and what `GET /api/v1/projects/{id}` shows once it is
+/// allowed (M1 phase 8 MR5). Everything comes from the same statement, so
+/// the id, the facts and the details cannot belong to different projects;
+/// the caller reveals nothing of it before `authorize()` allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRecord {
+    pub id: ProjectId,
+    pub access: ProjectAccess,
+    /// The project's `forge.namespaces` row.
+    pub namespace_id: NamespaceId,
+    /// The project's current path (`forge.namespaces.full_path`, confirmed
+    /// against its segments).
+    pub path: NamespacePath,
+    pub display_name: String,
+    pub description: String,
+    /// The kind of the project's repository (ADR-0004).
+    pub kind: RepositoryKind,
+    /// `projects.created_at` in UTC, RFC 3339 (`2026-10-31T09:00:00Z`).
+    pub created_at: String,
+}
+
+/// Projects by id, for routes that address a project by id
 /// (`GET /api/v1/projects/{id}`, the permalink's API).
 pub trait ProjectAccessLoader: Send + Sync {
     /// `None` when the project does not exist. `viewer` as in
     /// [`NamespaceResolver::resolve`], with the same contract: the same
-    /// statements whether the project exists, is visible or not.
-    fn project_access<'a>(
+    /// statements whether the project exists, is visible or not (forge-db:
+    /// one statement). The caller bounds the call with its own timeout.
+    fn load_project<'a>(
         &'a self,
         project: ProjectId,
         viewer: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>>;
+    ) -> LookupFuture<'a, Option<ProjectRecord>>;
 }

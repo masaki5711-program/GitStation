@@ -110,6 +110,28 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::ProjectRead, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::ProjectRead, W::DevTokenApi, F::PrivateProject, Allow),
     row(A::ProjectRead, W::OwnerTokenReadApi, F::PrivateProject, Allow),
+    // GET|HEAD /api/v1/projects/{id} (M1 phase 8 MR5): every actor
+    row(A::ProjectRead, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    row(A::ProjectRead, W::DisabledAdmin, F::PrivateProject, deny(E::AccountDisabled)),
+    row(A::ProjectRead, W::Developer, F::PrivateProject, Allow),
+    row(A::ProjectRead, W::Maintainer, F::PrivateProject, Allow),
+    row(A::ProjectRead, W::Owner, F::PrivateProject, Allow),
+    row(A::ProjectRead, W::Admin, F::PrivateProject, Allow),
+    row(A::ProjectRead, W::Guest, F::InternalProject, Allow),
+    // an administrator's token without the admin scope has no admin rights
+    row(A::ProjectRead, W::AdminTokenApi, F::PrivateProject, deny(E::NotFound)),
+    row(A::ProjectRead, W::AdminTokenAdmin, F::PrivateProject, Allow),
+    row(A::ProjectRead, W::DevTokenWriteRepository, F::PrivateProject, deny(E::InsufficientScope)),
+    // pending deletion: FG-REPO-0006 to those who can see it, else the 404
+    row(A::ProjectRead, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::ProjectRead, W::Admin, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::ProjectRead, W::NonMember, F::DeletedProject, deny(E::NotFound)),
+    // no such id: the same 404 as an invisible project, for every actor that
+    // passes authentication (also an administrator and a wrong-scope token)
+    row(A::ProjectRead, W::Developer, F::Absent, deny(E::NotFound)),
+    row(A::ProjectRead, W::Admin, F::Absent, deny(E::NotFound)),
+    row(A::ProjectRead, W::DevTokenReadRepository, F::Absent, deny(E::NotFound)),
+    row(A::ProjectRead, W::DevTokenReadRepository, F::InternalProject, deny(E::InsufficientScope)),
     // --- ProjectCreate ---
     row(A::ProjectCreate, W::Maintainer, F::Group, Allow),
     row(A::ProjectCreate, W::Developer, F::Group, deny(E::Forbidden)),

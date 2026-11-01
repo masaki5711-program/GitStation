@@ -16,8 +16,8 @@ use axum::http::{HeaderMap, Request, StatusCode, Uri};
 use forge_auth::{Action, Credential, Principal, ProjectCtx, Scope};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    GroupId, LookupPath, NamespaceId, NamespacePath, ProjectAccess, ProjectId, Resolution,
-    Resolved, ResolvedTarget, Role, TombstoneId, UserId, Visibility,
+    GroupId, LookupPath, NamespaceId, NamespacePath, ProjectAccess, ProjectId, ProjectRecord,
+    Resolution, Resolved, ResolvedTarget, Role, TombstoneId, UserId, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use http_body_util::BodyExt;
@@ -75,11 +75,11 @@ impl forge_core::NamespaceResolver for Script {
 }
 
 impl forge_core::ProjectAccessLoader for Script {
-    fn project_access<'a>(
+    fn load_project<'a>(
         &'a self,
         _project: ProjectId,
         _viewer: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>> {
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
         Box::pin(async { Ok(None) })
     }
 }
@@ -800,7 +800,7 @@ async fn path_resolve_answers_visible_paths_and_the_current_path_of_moved_ones()
     assert_eq!(live.status, StatusCode::OK);
     assert_eq!(
         live.json(),
-        json!({ "namespace_id": 10, "kind": "project", "canonical_path": "acme/visible", "moved": false })
+        json!({ "namespace_id": 10, "kind": "project", "project_id": 1, "canonical_path": "acme/visible", "moved": false })
     );
     assert_eq!(
         live.headers.get("cache-control").expect("cc"),
@@ -813,15 +813,27 @@ async fn path_resolve_answers_visible_paths_and_the_current_path_of_moved_ones()
     .await;
     assert_eq!(
         moved.json(),
-        json!({ "namespace_id": 10, "kind": "project", "canonical_path": "acme/visible", "moved": true })
+        json!({ "namespace_id": 10, "kind": "project", "project_id": 1, "canonical_path": "acme/visible", "moved": true })
     );
     let group = send(
         product(&script),
         request("GET", &resolve_uri("acme"), Some(reporter())),
     )
     .await;
-    assert_eq!(group.json()["kind"], "group");
-    assert_eq!(script.calls(), 3);
+    assert_eq!(
+        group.json(),
+        json!({ "namespace_id": 30, "kind": "group", "group_id": 3, "canonical_path": "acme", "moved": false })
+    );
+    let user = send(
+        product(&script),
+        request("GET", &resolve_uri("alice"), Some(reporter())),
+    )
+    .await;
+    assert_eq!(
+        user.json(),
+        json!({ "namespace_id": 40, "kind": "user", "user_id": 4, "canonical_path": "alice", "moved": false })
+    );
+    assert_eq!(script.calls(), 4);
 }
 
 #[tokio::test]

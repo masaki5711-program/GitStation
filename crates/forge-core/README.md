@@ -75,9 +75,13 @@ outcome and whether or not the viewer may see the target (no timing oracle).
 target: ResolvedTarget }` with `ResolvedTarget::User(UserId)` / `Group { id,
 viewer_role }` / `Project { id, access: ProjectAccess { visibility, role,
 pending_deletion } }`; `owner() -> NamespaceOwner` (typed id), `kind()`.
-`NamespaceKind` (`user`, `group`, `project`). `ProjectAccessLoader::project_access(ProjectId,
-Option<UserId>) -> Option<ProjectAccess>` for routes that address a project by id
-(same contract). Boxed futures (`LookupFuture`); no forge-auth types (forge-web
+`NamespaceKind` (`user`, `group`, `project`). `ProjectAccessLoader::load_project(ProjectId,
+Option<UserId>) -> Option<ProjectRecord>` for routes that address a project by id
+(same contract; MR5): `ProjectRecord { id, access: ProjectAccess, namespace_id, path,
+display_name, description, kind: RepositoryKind, created_at }` — the access facts and
+what `GET /api/v1/projects/{id}` shows after `authorize()`, from one row.
+`web_path::parse_positive_id` — the URL id rule (permalink and API: plain positive
+decimal, no leading zero, fits `i64`). Boxed futures (`LookupFuture`); no forge-auth types (forge-web
 converts).
 `Role` (`Guest < … < Owner`; `ALL`, `as_str`, `parse`) and `Visibility` (`private`, `internal`), moved
 from forge-auth in step D2 (forge-auth re-exports them).

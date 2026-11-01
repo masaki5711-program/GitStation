@@ -47,7 +47,7 @@ pub struct AppState {
     /// (ADR-0015 steps 5–6). Required, like the authenticator.
     pub lookups: Lookups,
     /// Client-side bound of one lookup (`FG-WEB-0002`
-    /// `operation=namespace_resolve` when exceeded); `forge serve` derives it
+    /// `operation=namespace_resolve` / `project_load` when exceeded); `forge serve` derives it
     /// from the database timeouts.
     pub lookup_timeout: Duration,
 }
@@ -58,7 +58,8 @@ pub struct AppState {
 #[derive(Clone)]
 pub struct Lookups {
     pub namespaces: Arc<dyn NamespaceResolver>,
-    /// For `GET /api/v1/projects/{id}` (MR5).
+    /// For `GET|HEAD /api/v1/projects/{id}` (MR5): one `load_project` call
+    /// per request, bounded by `lookup_timeout`.
     pub projects: Arc<dyn ProjectAccessLoader>,
 }
 
@@ -140,7 +141,6 @@ impl Default for AppConfig {
 pub const PLANNED: &[Action] = &[
     Action::RepoRead,
     Action::RepoPush,
-    Action::ProjectRead,
     Action::ProjectCreate,
     Action::ProjectUpdate,
     Action::ProjectVisibilityChange,
@@ -206,6 +206,15 @@ pub fn registry() -> Registry<AppState> {
             "Resolve a namespace path for the caller (ADR-0015)",
             routes::namespaces::PathParam,
             routes::namespaces::resolve,
+        )
+        // HEAD is this route too (axum answers it without the body).
+        .route_with(
+            Verb::Get,
+            routes::projects::PATH,
+            Action::ProjectRead,
+            "Read one project by id (ADR-0015 MR5)",
+            routes::projects::ProjectById,
+            routes::projects::read,
         );
     shell_routes(fixed)
 }

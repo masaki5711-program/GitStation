@@ -31,7 +31,7 @@ use axum::http::{Request, StatusCode};
 use forge_auth::{Action, Credential, Principal, ProjectCtx};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::web_path::RouteWord;
-use forge_core::{LookupPath, ProjectAccess, ProjectId, RequestId, Resolution, UserId, Visibility};
+use forge_core::{LookupPath, ProjectId, ProjectRecord, RequestId, Resolution, UserId, Visibility};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::projects::{self, CreatedProject, NewProject};
 use forge_db::test_support::FreshDb;
@@ -61,12 +61,12 @@ impl forge_core::NamespaceResolver for Counting {
 }
 
 impl forge_core::ProjectAccessLoader for Counting {
-    fn project_access<'a>(
+    fn load_project<'a>(
         &'a self,
         project: ProjectId,
         viewer: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>> {
-        forge_core::ProjectAccessLoader::project_access(&self.db, project, viewer)
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
+        forge_core::ProjectAccessLoader::load_project(&self.db, project, viewer)
     }
 }
 

@@ -13,7 +13,7 @@ use tower::ServiceExt;
 
 use forge_auth::InstanceCtx;
 use forge_core::namespace_resolver::LookupFuture;
-use forge_core::{LookupPath, ProjectAccess, ProjectId, Resolution};
+use forge_core::{LookupPath, ProjectId, ProjectRecord, Resolution};
 
 use crate::app::{build, AppConfig, AppState, Lookups};
 use crate::context::REQUEST_ID_HEADER;
@@ -55,11 +55,11 @@ impl forge_core::NamespaceResolver for NoNamespaces {
 }
 
 impl forge_core::ProjectAccessLoader for NoNamespaces {
-    fn project_access<'a>(
+    fn load_project<'a>(
         &'a self,
         _project: ProjectId,
         _viewer: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>> {
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
         Box::pin(async { Ok(None) })
     }
 }

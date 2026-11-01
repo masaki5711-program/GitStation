@@ -33,8 +33,8 @@ use axum::http::header::{CACHE_CONTROL, LOCATION};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use forge_auth::{
-    prove, InstanceCtx, LoadedNamespace, LoadedProject, NamespaceView, Principal, ProjectCtx,
-    ProjectView, ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason,
+    prove, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, Principal, ProjectCtx,
+    ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason,
 };
 use forge_core::web_path::{parse_web_path, LogSafePath, ParsedPath};
 use forge_core::{
@@ -430,21 +430,21 @@ pub(crate) fn loaded_project(id: forge_core::ProjectId, access: ProjectAccess) -
 }
 
 /// forge-core's resolution → forge-auth's loaded namespace (`PathResolve`):
-/// `Live` → `ResolvedVia::Live`, `Moved` → `ResolvedVia::Moved`.
+/// `Live` → `ResolvedVia::Live`, `Moved` → `ResolvedVia::Moved`; the owner
+/// and its facts in one value (`LoadedTarget`).
 pub(crate) fn loaded_namespace(resolved: &Resolved, via: ResolvedVia) -> LoadedNamespace {
-    let view = match resolved.target {
-        ResolvedTarget::User(_) => NamespaceView::User,
-        ResolvedTarget::Group { viewer_role, .. } => NamespaceView::Group { role: viewer_role },
-        ResolvedTarget::Project { access, .. } => NamespaceView::Project(ProjectView {
-            visibility: access.visibility,
-            role: access.role,
-            pending_deletion: access.pending_deletion,
-        }),
+    let target = match resolved.target {
+        ResolvedTarget::User(id) => LoadedTarget::User(id),
+        ResolvedTarget::Group { id, viewer_role } => LoadedTarget::Group {
+            id,
+            role: viewer_role,
+        },
+        ResolvedTarget::Project { id, access } => LoadedTarget::Project(loaded_project(id, access)),
     };
     LoadedNamespace {
         namespace: resolved.namespace_id,
         via,
-        view,
+        target,
     }
 }
 

@@ -20,7 +20,7 @@ use base64::Engine;
 use forge_auth::{Action, Credential, InstanceCtx, Principal, Scope};
 use forge_core::authenticator::{AuthFuture, Authenticator, TokenIdentity};
 use forge_core::namespace_resolver::LookupFuture;
-use forge_core::{LookupPath, ProjectAccess, ProjectId, Resolution};
+use forge_core::{LookupPath, ProjectId, ProjectRecord, Resolution};
 use forge_core::{RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_web::registry::{Dispatched, Registry, Verb};
@@ -144,11 +144,11 @@ impl forge_core::NamespaceResolver for NoNamespaces {
 }
 
 impl forge_core::ProjectAccessLoader for NoNamespaces {
-    fn project_access<'a>(
+    fn load_project<'a>(
         &'a self,
         _: ProjectId,
         _: Option<UserId>,
-    ) -> LookupFuture<'a, Option<ProjectAccess>> {
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
         Box::pin(async { Ok(None) })
     }
 }
