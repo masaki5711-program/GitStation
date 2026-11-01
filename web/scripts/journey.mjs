@@ -262,6 +262,21 @@ async function main() {
     await page.getByRole('heading', { name: 'Page not found' }).waitFor();
     await check('08-not-found');
 
+    // 6b. A narrow phone in Indonesian (the longest strings): nothing overflows.
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.evaluate(() => window.localStorage.setItem('gitstation.lang', 'id'));
+    for (const [path, name] of [['/', '10-home-375-id'], ['/acme/forge-web', '11-project-375-id']]) {
+      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+      await page.getByRole('heading', { level: 1 }).waitFor();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
+      await check(name);
+    }
+    await page.evaluate(() => window.localStorage.removeItem('gitstation.lang'));
+    await page.setViewportSize({ width: 1100, height: 800 });
+
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.
     await page.goto(`${base}/`, { waitUntil: 'networkidle' });
     await page.getByRole('button', { name: /Taro Yamada/ }).click();

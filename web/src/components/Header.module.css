@@ -2,8 +2,9 @@
   display: flex;
   align-items: center;
   gap: var(--gs-space-4);
-  height: var(--gs-header-height);
-  padding: 0 var(--gs-space-4);
+  min-height: var(--gs-header-height);
+  flex-wrap: wrap;
+  padding: var(--gs-space-1) var(--gs-space-4);
   background: var(--gs-header-background);
   color: var(--gs-header-text);
 }
@@ -25,7 +26,8 @@
   flex: 1;
 }
 
-.language select {
+.select {
+  composes: interactive from './controls.module.css';
   min-height: 2.5rem;
   padding: 0 var(--gs-space-2);
   border: 1px solid var(--gs-header-text);
@@ -33,6 +35,14 @@
   background: var(--gs-header-background);
   color: var(--gs-header-text);
   font: inherit;
+}
+
+.language .select:hover:not(:disabled) {
+  background: var(--gs-header-hover);
+}
+
+.select:focus-visible {
+  outline: var(--gs-focus-ring-on-dark);
 }
 
 .srOnly {
@@ -52,4 +62,19 @@
 
 .skip:focus {
   position: static;
+  padding: var(--gs-space-1) var(--gs-space-2);
+  border-radius: var(--gs-radius-sm);
+  outline: var(--gs-focus-ring-on-dark);
+}
+
+.skip:hover {
+  background: var(--gs-header-hover);
+}
+
+.skip:active {
+  background: var(--gs-header-active);
+}
+
+.home:focus-visible {
+  outline: var(--gs-focus-ring-on-dark);
 }

@@ -3,20 +3,21 @@
 // form only spares the obvious round trips. A failure is shown as
 // user_message + request_id (ErrorNotice) and the form keeps what was typed.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 
-import { call } from '../api/client';
+import { ApiFailure, call } from '../api/client';
 import { useApi } from '../api/context';
 import { groupsQuery } from '../api/lists';
 import type { Kind, Visibility } from '../api/types';
 import { RadioField, SelectField, TextField } from '../components/Field';
 import { QueryError } from '../components/QueryError';
 import controls from '../components/controls.module.css';
-import { useSession } from '../session/session';
+import { SESSION_KEY, useSession } from '../session/session';
 import { Modal } from '../ui/Modal';
 import { isValidSegment, suggestSegment } from './paths';
+import styles from './CreateDialogs.module.css';
 
 export interface Parent {
   namespaceId: number;
@@ -51,20 +52,72 @@ function useNamePath() {
   };
 }
 
+
+/** Invalid submit: this summary takes the focus and is announced (WCAG 3.3.1,
+ * 4.1.3); the fields below carry aria-invalid and their own message. */
+function ErrorSummary({ errors, attempt }: { errors: string[]; attempt: number }) {
+  const { t } = useTranslation();
+  const ref = useRef<HTMLDivElement>(null);
+  const has = errors.length > 0;
+  useEffect(() => {
+    if (attempt > 0 && has) ref.current?.focus();
+  }, [attempt, has]);
+  if (attempt === 0 || !has) return null;
+  return (
+    <div ref={ref} tabIndex={-1} role="alert" className={styles.summary}>
+      <p className={styles.summaryTitle}>{t('form.errorSummary')}</p>
+      <ul>
+        {errors.map((e) => (
+          <li key={e}>{e}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Tell the dialog a save is under way (it then ignores Close and Esc). */
+function useReportBusy(pending: boolean, onBusy: (busy: boolean) => void) {
+  useEffect(() => {
+    onBusy(pending);
+    return () => {
+      onBusy(false);
+    };
+  }, [pending, onBusy]);
+}
+
+/** A 403 on a save is most often a stale CSRF token: read the session again. */
+function useRefreshSessionOn403() {
+  const queryClient = useQueryClient();
+  return (error: unknown) => {
+    if (error instanceof ApiFailure && error.failure.kind === 'api' && error.failure.status === 403) {
+      void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
+    }
+  };
+}
+
 export function CreateProjectDialog({
   open,
   onClose,
   parent,
 }: DialogProps & { parent?: Parent }) {
   const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
   return (
-    <Modal open={open} onClose={onClose} title={t('create.project.title')}>
-      <CreateProjectForm onClose={onClose} {...(parent ? { parent } : {})} />
+    <Modal open={open} onClose={onClose} title={t('create.project.title')} busy={busy}>
+      <CreateProjectForm onClose={onClose} onBusy={setBusy} {...(parent ? { parent } : {})} />
     </Modal>
   );
 }
 
-function CreateProjectForm({ onClose, parent }: { onClose: () => void; parent?: Parent }) {
+function CreateProjectForm({
+  onClose,
+  onBusy,
+  parent,
+}: {
+  onClose: () => void;
+  onBusy: (busy: boolean) => void;
+  parent?: Parent;
+}) {
   const { t } = useTranslation();
   const api = useApi();
   const session = useSession();
@@ -75,6 +128,8 @@ function CreateProjectForm({ onClose, parent }: { onClose: () => void; parent?: 
   const [visibility, setVisibility] = useState<Visibility>('private');
   const [kind, setKind] = useState<Kind>('system');
   const [submitted, setSubmitted] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const refreshSession = useRefreshSessionOn403();
 
   // The choices of parent: my own namespace, then the groups I belong to.
   const groups = useQuery({ ...groupsQuery(api, { membership: true }), enabled: !parent });
@@ -109,15 +164,20 @@ function CreateProjectForm({ onClose, parent }: { onClose: () => void; parent?: 
       onClose();
       void navigate(`/${project.path}`);
     },
+    onError: refreshSession,
   });
+  useReportBusy(create.isPending, onBusy);
 
   const nameError = submitted && f.displayName.trim() === '' ? t('form.nameRequired') : null;
   const pathError = submitted && !isValidSegment(f.path) ? t('form.pathInvalid') : null;
   const parentError = submitted && parentId === '' ? t('form.parentRequired') : null;
 
+  const errors = [parentError, nameError, pathError].filter((e): e is string => e !== null);
+
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     setSubmitted(true);
+    setAttempt((n) => n + 1);
     if (f.displayName.trim() === '' || !isValidSegment(f.path) || parentId === '') return;
     create.mutate({ namespace_id: Number(parentId) });
   };
@@ -126,6 +186,7 @@ function CreateProjectForm({ onClose, parent }: { onClose: () => void; parent?: 
 
   return (
     <form onSubmit={submit} noValidate>
+      <ErrorSummary errors={errors} attempt={attempt} />
       {parent ? (
         <p>
           {t('create.parent')}: <code>{parent.path}</code>
@@ -156,7 +217,7 @@ function CreateProjectForm({ onClose, parent }: { onClose: () => void; parent?: 
         onChange={f.setDisplayName}
         error={nameError}
         required
-        autoFocus
+        initialFocus
       />
       <TextField
         label={t('form.path')}
@@ -217,22 +278,26 @@ export function CreateGroupDialog({
   parent?: { groupId: number; path: string };
 }) {
   const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
   return (
     <Modal
       open={open}
       onClose={onClose}
       title={parent ? t('create.subgroup.title') : t('create.group.title')}
+      busy={busy}
     >
-      <CreateGroupForm onClose={onClose} {...(parent ? { parent } : {})} />
+      <CreateGroupForm onClose={onClose} onBusy={setBusy} {...(parent ? { parent } : {})} />
     </Modal>
   );
 }
 
 function CreateGroupForm({
   onClose,
+  onBusy,
   parent,
 }: {
   onClose: () => void;
+  onBusy: (busy: boolean) => void;
   parent?: { groupId: number; path: string };
 }) {
   const { t } = useTranslation();
@@ -241,6 +306,8 @@ function CreateGroupForm({
   const queryClient = useQueryClient();
   const f = useNamePath();
   const [submitted, setSubmitted] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const refreshSession = useRefreshSessionOn403();
 
   const create = useMutation({
     mutationFn: () => {
@@ -263,20 +330,26 @@ function CreateGroupForm({
       onClose();
       void navigate(`/${group.path}`);
     },
+    onError: refreshSession,
   });
+  useReportBusy(create.isPending, onBusy);
 
   const nameError = submitted && f.displayName.trim() === '' ? t('form.nameRequired') : null;
   const pathError = submitted && !isValidSegment(f.path) ? t('form.pathInvalid') : null;
 
+  const errors = [nameError, pathError].filter((e): e is string => e !== null);
+
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
     setSubmitted(true);
+    setAttempt((n) => n + 1);
     if (f.displayName.trim() === '' || !isValidSegment(f.path)) return;
     create.mutate();
   };
 
   return (
     <form onSubmit={submit} noValidate>
+      <ErrorSummary errors={errors} attempt={attempt} />
       {parent && (
         <p>
           {t('create.parent')}: <code>{parent.path}</code>
@@ -288,7 +361,7 @@ function CreateGroupForm({
         onChange={f.setDisplayName}
         error={nameError}
         required
-        autoFocus
+        initialFocus
       />
       <TextField
         label={t('form.path')}

@@ -35,6 +35,6 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid var(--gs-color-focus);
+  outline: var(--gs-focus-ring);
   outline-offset: 2px;
 }

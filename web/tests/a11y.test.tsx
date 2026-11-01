@@ -96,7 +96,7 @@ describe('axe', () => {
     fireEvent.click(
       Array.from(dialog.querySelectorAll('button')).find((b) => b.type === 'submit') as HTMLElement,
     );
-    await screen.findByText('名前を入力してください。');
+    await screen.findAllByText('名前を入力してください。');
     expect(await violations(container)).toEqual([]);
   });
 

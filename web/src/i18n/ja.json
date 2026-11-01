@@ -73,7 +73,8 @@
     "kind": "種類",
     "nameRequired": "名前を入力してください。",
     "pathInvalid": "パスは半角の小文字・数字・ハイフン・ピリオド・アンダースコアで、先頭と末尾は英数字にしてください。",
-    "parentRequired": "作る場所を選んでください。"
+    "parentRequired": "作る場所を選んでください。",
+    "errorSummary": "入力を確かめてください。"
   },
   "visibility": {
     "private": "非公開",
@@ -119,7 +120,8 @@
     "created": "作成日",
     "clone": "clone の URL",
     "copyClone": "URL をコピー",
-    "cloneHint": "ログインに使うのは、アクセストークンです。"
+    "cloneHint": "ログインに使うのは、アクセストークンです。",
+    "copyCommands": "コマンドをコピー"
   },
   "unavailable": {
     "title": "この画面はまだ使えません",
@@ -134,7 +136,8 @@
     "copyFailed": "コピーできませんでした。番号を選んでコピーしてください",
     "network": "サーバーにつながりませんでした。しばらくしてからもう一度お試しください。",
     "unexpected": "思いがけない応答がありました。しばらくしてからもう一度お試しください。",
-    "retry": "もう一度試す"
+    "retry": "もう一度試す",
+    "forbiddenTitle": "権限がありません"
   },
   "notFound": {
     "title": "ページが見つかりません",

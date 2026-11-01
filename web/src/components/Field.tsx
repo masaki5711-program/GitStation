@@ -11,7 +11,7 @@ export function TextField({
   help,
   required,
   multiline,
-  autoFocus,
+  initialFocus,
 }: {
   label: string;
   value: string;
@@ -20,7 +20,8 @@ export function TextField({
   help?: string;
   required?: boolean;
   multiline?: boolean;
-  autoFocus?: boolean;
+  /** Modal: this field gets the focus when the dialog opens. */
+  initialFocus?: boolean;
 }) {
   const id = useId();
   const helpId = `${id}-help`;
@@ -35,7 +36,7 @@ export function TextField({
     required: required === true,
     'aria-invalid': error ? true : undefined,
     'aria-describedby': describedBy,
-    autoFocus,
+    'data-initial-focus': initialFocus === true ? '' : undefined,
   };
   return (
     <div className={styles.field}>
@@ -139,23 +140,22 @@ export function RadioField<T extends string>({
       <legend className={styles.label}>{legend}</legend>
       {choices.map((c) => (
         <div key={c.value} className={styles.choice}>
-          <input
-            id={`${id}-${c.value}`}
-            type="radio"
-            name={name}
-            value={c.value}
-            checked={value === c.value}
-            aria-describedby={`${id}-${c.value}-help`}
-            onChange={() => {
-              onChange(c.value);
-            }}
-          />
-          <div>
-            <label htmlFor={`${id}-${c.value}`}>{c.label}</label>
-            <p id={`${id}-${c.value}-help`} className={styles.help}>
-              {c.help}
-            </p>
-          </div>
+          <label className={styles.choiceLabel}>
+            <input
+              type="radio"
+              name={name}
+              value={c.value}
+              checked={value === c.value}
+              aria-describedby={`${id}-${c.value}-help`}
+              onChange={() => {
+                onChange(c.value);
+              }}
+            />
+            <span>{c.label}</span>
+          </label>
+          <p id={`${id}-${c.value}-help`} className={styles.choiceHelp}>
+            {c.help}
+          </p>
         </div>
       ))}
     </fieldset>

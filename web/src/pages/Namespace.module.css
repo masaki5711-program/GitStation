@@ -110,7 +110,9 @@
 }
 
 .pre {
-  margin: 0;
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  margin: 0 0 var(--gs-space-3);
   padding: var(--gs-space-3);
   border-radius: var(--gs-radius-sm);
   background: var(--gs-color-background);

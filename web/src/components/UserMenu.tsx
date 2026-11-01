@@ -12,12 +12,16 @@ export function UserMenu({ session }: { session: Session }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
   const panelId = useId();
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        trigger.current?.focus();
+      }
     };
     const onPointer = (e: PointerEvent) => {
       if (root.current !== null && e.target instanceof Node && !root.current.contains(e.target)) {
@@ -34,9 +38,19 @@ export function UserMenu({ session }: { session: Session }) {
 
   const { user } = session;
   return (
-    <div className={styles.root} ref={root}>
+    <div
+      className={styles.root}
+      ref={root}
+      onBlur={(e) => {
+        // Focus moved to something outside the menu (a click that focuses
+        // nothing has no relatedTarget: the pointer rule above covers it).
+        const next = e.relatedTarget;
+        if (next instanceof Node && !e.currentTarget.contains(next)) setOpen(false);
+      }}
+    >
       <button
         type="button"
+        ref={trigger}
         className={styles.trigger}
         aria-expanded={open}
         aria-controls={panelId}

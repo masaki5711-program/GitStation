@@ -73,7 +73,8 @@
     "kind": "Jenis",
     "nameRequired": "Masukkan nama.",
     "pathInvalid": "Gunakan huruf kecil, angka, tanda hubung, titik, dan garis bawah, diawali dan diakhiri huruf atau angka.",
-    "parentRequired": "Pilih tempat membuatnya."
+    "parentRequired": "Pilih tempat membuatnya.",
+    "errorSummary": "Periksa kembali isian Anda."
   },
   "visibility": {
     "private": "Pribadi",
@@ -119,7 +120,8 @@
     "created": "Dibuat",
     "clone": "URL clone",
     "copyClone": "Salin URL",
-    "cloneHint": "Masuk ke Git dengan token akses."
+    "cloneHint": "Masuk ke Git dengan token akses.",
+    "copyCommands": "Salin perintah"
   },
   "unavailable": {
     "title": "Layar ini belum tersedia",
@@ -134,7 +136,8 @@
     "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin sendiri",
     "network": "Tidak dapat terhubung ke server. Coba lagi sebentar lagi.",
     "unexpected": "Server memberikan jawaban yang tidak terduga. Coba lagi sebentar lagi.",
-    "retry": "Coba lagi"
+    "retry": "Coba lagi",
+    "forbiddenTitle": "Anda tidak memiliki izin"
   },
   "notFound": {
     "title": "Halaman tidak ditemukan",

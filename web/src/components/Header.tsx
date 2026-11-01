@@ -39,6 +39,7 @@ export function Header() {
       <label className={styles.language}>
         <span className={styles.srOnly}>{t('header.language')}</span>
         <select
+          className={styles.select}
           value={current}
           onChange={(e) => {
             const value = e.target.value;

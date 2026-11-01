@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { call } from '../api/client';
+import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { groupsQuery, parentPath, projectsQuery } from '../api/lists';
 import { Breadcrumb } from '../components/Breadcrumb';
@@ -33,8 +34,8 @@ function Children({ path }: { path: string }) {
 
   return (
     <>
-      {loading && <p role="status">{t('common.loading')}</p>}
-      {groups.isError && (
+      {loading && <Loading />}
+      {groups.isError && !projects.isError && (
         <QueryError
           error={groups.error}
           onRetry={() => {
@@ -88,7 +89,7 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
   });
   useDocumentTitle(group.data?.display_name ?? path);
 
-  if (group.isPending) return <p role="status">{t('common.loading')}</p>;
+  if (group.isPending) return <Loading />;
   if (group.isError) {
     return (
       <QueryError

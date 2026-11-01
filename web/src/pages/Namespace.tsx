@@ -10,10 +10,10 @@
 // - 404 (unknown, or not visible: the API says the same for both) is the
 //   not-found screen.
 import { useQuery } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation } from 'react-router';
 
 import { ApiFailure, call } from '../api/client';
+import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { isViewWord, pathSegments } from '../features/paths';
 import { QueryError } from '../components/QueryError';
@@ -36,7 +36,6 @@ export function NamespaceRoute() {
 }
 
 function Resolved({ path, view }: { path: string; view: string[] | null }) {
-  const { t } = useTranslation();
   const api = useApi();
   const location = useLocation();
   const prefix = view === null;
@@ -53,7 +52,7 @@ function Resolved({ path, view }: { path: string; view: string[] | null }) {
     staleTime: 0,
   });
 
-  if (resolution.isPending) return <p role="status">{t('common.loading')}</p>;
+  if (resolution.isPending) return <Loading />;
   if (resolution.isError) {
     const e = resolution.error;
     if (e instanceof ApiFailure && e.failure.kind === 'api' && e.failure.status === 404) {

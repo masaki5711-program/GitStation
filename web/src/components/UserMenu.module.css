@@ -3,6 +3,7 @@
 }
 
 .trigger {
+  composes: interactive from './controls.module.css';
   display: inline-flex;
   align-items: center;
   gap: var(--gs-space-2);
@@ -14,6 +15,18 @@
   color: var(--gs-header-text);
   font: inherit;
   cursor: pointer;
+}
+
+.root .trigger:hover:not(:disabled) {
+  background: var(--gs-header-hover);
+}
+
+.root .trigger:active:not(:disabled) {
+  background: var(--gs-header-active);
+}
+
+.trigger:focus-visible {
+  outline: var(--gs-focus-ring-on-dark);
 }
 
 .caret {
@@ -35,6 +48,7 @@
   border-radius: var(--gs-radius-md);
   background: var(--gs-color-surface);
   color: var(--gs-color-text);
+  box-shadow: var(--gs-shadow-1);
 }
 
 .panel[hidden] {
@@ -48,6 +62,7 @@
 }
 
 .logout {
+  composes: interactive from './controls.module.css';
   width: 100%;
   min-height: 2.5rem;
   border: 1px solid var(--gs-brand-teal-strong);
@@ -55,5 +70,4 @@
   background: var(--gs-color-surface);
   color: var(--gs-color-link);
   font: inherit;
-  cursor: pointer;
 }

@@ -7,6 +7,7 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { call } from '../api/client';
+import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { Breadcrumb } from '../components/Breadcrumb';
 import controls from '../components/controls.module.css';
@@ -33,7 +34,7 @@ function RepositoryState({ id, name, cloneUrl }: { id: number; name: string; clo
       ),
   });
 
-  if (refs.isPending) return <p role="status">{t('common.loading')}</p>;
+  if (refs.isPending) return <Loading />;
   if (refs.isError) {
     return (
       <QueryError
@@ -45,14 +46,16 @@ function RepositoryState({ id, name, cloneUrl }: { id: number; name: string; clo
     );
   }
   const { default_branch: branch, refs: list } = refs.data;
+  const commands = t('project.emptyCommands', { url: cloneUrl, name });
   if (branch === null && list.length === 0) {
     return (
       <section className={styles.card} aria-labelledby="repo-empty">
         <h2 id="repo-empty">{t('project.emptyTitle')}</h2>
         <p>{t('project.emptyBody')}</p>
         <pre className={styles.pre}>
-          <code>{t('project.emptyCommands', { url: cloneUrl, name })}</code>
+          <code>{commands}</code>
         </pre>
+        <CopyButton text={commands} label={t('project.copyCommands')} />
       </section>
     );
   }
@@ -94,7 +97,7 @@ export function ProjectPage({ id }: { id: number }) {
     if (data !== undefined) rememberProject({ path: data.path, name: data.display_name });
   }, [data]);
 
-  if (project.isPending) return <p role="status">{t('common.loading')}</p>;
+  if (project.isPending) return <Loading />;
   if (project.isError) {
     return (
       <QueryError

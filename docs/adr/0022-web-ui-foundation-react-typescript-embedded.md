@@ -247,3 +247,8 @@ MR2（`feat/web-spa-foundation`）で実物を作って分かったこと。上�
   peer の解決で落ちる（arborist の不具合）ので、lockfile は npm 11.6 で作った。`npm ci --ignore-scripts` は npm 10 でも通る。
   ライセンスの許可リスト（§8）に、開発の道具だけが使う `MIT-0`・`BlueOak-1.0.0`・`Python-2.0`・`CC-BY-4.0`（caniuse-lite の
   データ、配布物に入らない）を理由つきで足した（`web/scripts/check-licenses.mjs`）。
+
+## Amendment（2026-11-01、M2 MR9）
+
+- テストの「MSW」は `web/tests/mock.ts`（`fetch` の経路表。本物の API クライアントを通す）に読み替えた。依存を増やさずに同じ層を確かめられるため。`axe-core`（MPL-2.0、dev のみ、`dist` に入らない）は `check-licenses.mjs` の許可リストに理由つきで足した。
+- 主ボタンの白文字は `--gs-color-action`（`#0f7a69`、5.4:1）。`--gs-brand-teal-strong` は大きい文字だけ。操作できる部品は `controls.module.css` の `.interactive`（hover・active・フォーカスの輪 `--gs-focus-ring`）を共有する。

@@ -73,7 +73,8 @@
     "kind": "Kind",
     "nameRequired": "Enter a name.",
     "pathInvalid": "Use lowercase letters, digits, hyphen, period and underscore, starting and ending with a letter or digit.",
-    "parentRequired": "Choose where to create it."
+    "parentRequired": "Choose where to create it.",
+    "errorSummary": "Please check your input."
   },
   "visibility": {
     "private": "Private",
@@ -119,7 +120,8 @@
     "created": "Created",
     "clone": "Clone URL",
     "copyClone": "Copy the URL",
-    "cloneHint": "Sign in to Git with an access token."
+    "cloneHint": "Sign in to Git with an access token.",
+    "copyCommands": "Copy the commands"
   },
   "unavailable": {
     "title": "This screen is not available yet",
@@ -134,7 +136,8 @@
     "copyFailed": "Could not copy. Select the ID and copy it yourself",
     "network": "Could not reach the server. Please try again in a moment.",
     "unexpected": "The server sent an unexpected answer. Please try again in a moment.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "forbiddenTitle": "You do not have permission"
   },
   "notFound": {
     "title": "Page not found",

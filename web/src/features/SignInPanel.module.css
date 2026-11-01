@@ -6,6 +6,7 @@
 }
 
 .primary {
+  composes: primary from '../components/controls.module.css';
   min-height: 3rem;
   padding: var(--gs-space-2) var(--gs-space-6);
   border: 1px solid var(--gs-brand-teal-strong);

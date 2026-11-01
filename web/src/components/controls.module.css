@@ -1,16 +1,45 @@
 /* Shared controls: buttons, form fields, badges. Tokens only. */
+/* One interactive class: every button-like control composes it, so hover,
+ * pressed and keyboard focus look the same everywhere (tokens only). */
+.interactive {
+  cursor: pointer;
+}
+
+.interactive:hover:not(:disabled) {
+  background: var(--gs-color-hover-surface);
+}
+
+.interactive:active:not(:disabled) {
+  background: var(--gs-color-active-surface);
+}
+
+.interactive:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}
+
+.interactive:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .button,
 .primary {
+  composes: interactive;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 2.5rem;
+  max-width: 100%;
   padding: var(--gs-space-2) var(--gs-space-4);
   border: 1px solid var(--gs-brand-teal-strong);
   border-radius: var(--gs-radius-sm);
   font: inherit;
-  cursor: pointer;
+  text-align: center;
   text-decoration: none;
+  /* Long translations (id) wrap instead of overflowing. */
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .button {
@@ -23,10 +52,12 @@
   color: var(--gs-color-white);
 }
 
-.button:disabled,
-.primary:disabled {
-  opacity: 0.6;
-  cursor: progress;
+.primary:hover:not(:disabled) {
+  background: var(--gs-color-action-hover);
+}
+
+.primary:active:not(:disabled) {
+  background: var(--gs-color-action-active);
 }
 
 .field {
@@ -50,6 +81,8 @@
 }
 
 .input {
+  composes: interactive;
+  cursor: text;
   min-height: 2.5rem;
   padding: var(--gs-space-2) var(--gs-space-3);
   border: 1px solid var(--gs-color-text-muted);
@@ -59,10 +92,27 @@
   background: var(--gs-color-surface);
 }
 
+.input:hover:not(:disabled) {
+  background: var(--gs-color-surface);
+  border-color: var(--gs-color-text);
+}
+
 .choice {
-  display: flex;
-  align-items: flex-start;
+  margin-bottom: var(--gs-space-2);
+}
+
+.choiceLabel {
+  display: inline-flex;
+  align-items: center;
   gap: var(--gs-space-2);
+  min-height: 2rem;
+  cursor: pointer;
+}
+
+.choiceHelp {
+  margin: 0 0 0 1.75rem;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
 }
 
 .fieldError {
@@ -79,5 +129,6 @@
   font-size: var(--gs-font-size-sm);
   color: var(--gs-color-text-muted);
   background: var(--gs-color-surface);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

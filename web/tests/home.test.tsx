@@ -172,9 +172,9 @@ describe('create a project', () => {
     const server = mockServer(routes());
     const dialog = await open(server);
     fireEvent.click(within(dialog).getByRole('button', { name: 'プロジェクトを作る' }));
-    expect(within(dialog).getByText('名前を入力してください。')).toBeTruthy();
-    expect(within(dialog).getByText('作る場所を選んでください。')).toBeTruthy();
-    expect(within(dialog).getByText(/先頭と末尾は英数字/)).toBeTruthy();
+    expect(within(dialog).getAllByText('名前を入力してください。')).toHaveLength(2);
+    expect(within(dialog).getAllByText('作る場所を選んでください。')).toHaveLength(2);
+    expect(within(dialog).getAllByText(/先頭と末尾は英数字/)).toHaveLength(2);
     expect(server.to('POST', '/api/v1/projects')).toHaveLength(0);
     // A Japanese name gives no ASCII suggestion: the person types the path.
     fireEvent.change(within(dialog).getByLabelText('名前'), { target: { value: '圧造ライン' } });

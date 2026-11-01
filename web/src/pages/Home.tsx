@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { useApi } from '../api/context';
+import { Loading } from '../components/Loading';
 import { groupsQuery, projectsQuery } from '../api/lists';
 import type { All } from '../api/pages';
 import controls from '../components/controls.module.css';
@@ -82,7 +83,7 @@ export function Home() {
       </div>
 
       <Block id="home-mine" title={t('home.mine')}>
-        {mine.isPending && <p role="status">{t('common.loading')}</p>}
+        {mine.isPending && <Loading />}
         {mine.isError && (
           <QueryError
             error={mine.error}
@@ -96,6 +97,15 @@ export function Home() {
             <div className={styles.empty}>
               <p>{t('home.mineEmpty')}</p>
               <p className={styles.hint}>{t('home.mineEmptyHint')}</p>
+              <button
+                type="button"
+                className={controls.primary}
+                onClick={() => {
+                  setDialog('project');
+                }}
+              >
+                {t('home.newProject')}
+              </button>
             </div>
           ) : (
             <>
@@ -123,7 +133,7 @@ export function Home() {
           ))}
       </Block>
 
-      {specs.isError && (
+      {!mine.isError && specs.isError && (
         <Block id="home-specs" title={t('home.specs')}>
           <QueryError
             error={specs.error}
@@ -140,7 +150,7 @@ export function Home() {
         </Block>
       )}
 
-      {groups.isError && (
+      {!mine.isError && !specs.isError && groups.isError && (
         <Block id="home-groups" title={t('home.groups')}>
           <QueryError
             error={groups.error}
