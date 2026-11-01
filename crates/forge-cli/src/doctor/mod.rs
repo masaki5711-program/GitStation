@@ -8,7 +8,7 @@
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
 //! administers forge (`users.administration`), repository provisioning and
 //! storage (`repositories.provisioning`, `repositories.storage`), storage
-//! root and the git binary. One line
+//! root, the git binary and the embedded web UI (`web.ui`). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool, except `audit.seal_verify`, which reads the sealed act-as columns
@@ -128,6 +128,7 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
             checks.push(skip(name, "configuration invalid"));
         }
         checks.push(git_check().await);
+        checks.push(web_ui_check());
         return checks;
     };
 
@@ -152,7 +153,25 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         Err(e) => fail("storage", e),
     });
     checks.push(git_check().await);
+    checks.push(web_ui_check());
     checks
+}
+
+/// `web.ui` (ADR-0022 §2): a binary built without `embed-ui` serves the
+/// placeholder shell — the API works, the browser UI does not. Not a
+/// failure (development and tests run so), but never silent.
+fn web_ui_check() -> Check {
+    match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => warn(
+            "web.ui",
+            "placeholder (built without the embed-ui feature: no web UI is served; \
+             release builds use --features embed-ui)",
+        ),
+        forge_web::UiStatus::Embedded { index_sha256 } => ok(
+            "web.ui",
+            &format!("embedded (index.html sha256 {index_sha256})"),
+        ),
+    }
 }
 
 async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> Vec<Check> {

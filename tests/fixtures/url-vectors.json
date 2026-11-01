@@ -627,6 +627,18 @@
           "9223372036854775807"
         ]
       }
+    },
+    {
+      "name": "ui asset",
+      "path": "/-/assets/index-v3ct0rAA.js",
+      "form": "both",
+      "expect": {
+        "kind": "instance",
+        "route": "assets",
+        "rest": [
+          "index-v3ct0rAA.js"
+        ]
+      }
     }
   ],
   "reject": [
@@ -1223,6 +1235,24 @@
       "path": "/-/static/app.js",
       "form": "both",
       "reason": "unknown_route"
+    },
+    {
+      "name": "assets without a file",
+      "path": "/-/assets",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "assets are flat (no sub-directory)",
+      "path": "/-/assets/brand/icon.svg",
+      "form": "both",
+      "reason": "path_rejected"
+    },
+    {
+      "name": "asset name with a dot-dot segment",
+      "path": "/-/assets/%2e%2e",
+      "form": "raw",
+      "reason": "path_rejected"
     },
     {
       "name": "separator with no word",

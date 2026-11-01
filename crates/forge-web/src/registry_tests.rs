@@ -395,6 +395,12 @@ fn every_reachable_scope_verb_word_has_a_route_def() {
             verb,
             ScopedRoute::Instance(InstanceRoute::ProjectPermalink),
         ));
+        // M2 MR2: the UI's files (WebShell, public).
+        want.insert((
+            RouteScope::Instance,
+            verb,
+            ScopedRoute::Instance(InstanceRoute::Assets),
+        ));
         for &w in PROJECT_SHELL_WORDS {
             want.insert((RouteScope::Project, verb, ScopedRoute::Word(w)));
         }

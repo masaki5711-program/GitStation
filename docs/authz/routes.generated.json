@@ -2,6 +2,22 @@
   {
     "action": "WebShell",
     "method": "GET",
+    "path": "/-/assets/{file}",
+    "public": true,
+    "scope": "instance",
+    "word": "assets"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/assets/{file}",
+    "public": true,
+    "scope": "instance",
+    "word": "assets"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
     "path": "/-/projects/{id}/{*rest}",
     "public": true,
     "scope": "instance",

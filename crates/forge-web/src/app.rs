@@ -27,6 +27,7 @@ use crate::context::{self, Ctx};
 use crate::error::ApiError;
 use crate::registry::{DispatchState, Registry, RouteScope, ScopedRoute, Verb};
 use crate::routes;
+use crate::security_headers::SecurityHeaders;
 
 /// Shared state of every handler.
 #[derive(Clone)]
@@ -166,6 +167,10 @@ pub struct AppConfig {
     pub body_limit_bytes: usize,
     /// Total time for a JSON body to arrive (`server.body_read_timeout_ms`).
     pub body_read_timeout: Duration,
+    /// `Strict-Transport-Security: max-age=…` on every non-git answer
+    /// (ADR-0022 §3, `web.hsts`); `None` (the default) sends none, since
+    /// TLS may end in front of forge.
+    pub hsts: Option<Duration>,
 }
 
 impl Default for AppConfig {
@@ -175,6 +180,7 @@ impl Default for AppConfig {
             git_rpc_timeout: Duration::from_secs(3600),
             body_limit_bytes: 1024 * 1024,
             body_read_timeout: Duration::from_secs(10),
+            hsts: None,
         }
     }
 }
@@ -619,11 +625,22 @@ fn git_routes(registry: Registry<AppState>) -> Registry<AppState> {
         )
 }
 
-/// The SPA shell (`WebShell`) for every page URL, `GET` and `HEAD`.
+/// The SPA shell (`WebShell`) for every page URL, `GET` and `HEAD`, and
+/// the UI's files under `/-/assets/{file}` (public too, ADR-0015 Amendment
+/// M2; unknown names are `FG-WEB-0001`).
 fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
     let shell = routes::shell::shell;
     for verb in [Verb::Get, Verb::Head] {
         registry = registry
+            .scoped(
+                RouteScope::Instance,
+                verb,
+                ScopedRoute::Instance(InstanceRoute::Assets),
+                None,
+                Action::WebShell,
+                "Web UI asset (embedded build; content-hashed, immutable)",
+                routes::assets::asset,
+            )
             .scoped(
                 RouteScope::Namespace,
                 verb,
@@ -693,6 +710,9 @@ pub(crate) fn build(
     config: AppConfig,
 ) -> Result<Router, ForgeError> {
     let authenticator = AuthenticatorExt(Arc::clone(&state.authenticator));
+    // The IdP origin for the shell's `form-action` arrives with `auth.oidc`
+    // (MR4, ADR-0021 §8); until then the shell allows `'self'` only.
+    let security = SecurityHeaders::new(config.hsts, None)?;
     Ok(registry
         .into_router()?
         .method_not_allowed_fallback(method_not_allowed)
@@ -713,6 +733,12 @@ pub(crate) fn build(
             request_timeout,
         ))
         .layer(middleware::from_fn(context::request_id))
+        // Outermost: every answer, the timeout's and the panic catcher's
+        // included, gets its class's headers (ADR-0022 §3).
+        .layer(middleware::from_fn_with_state(
+            security,
+            crate::security_headers::security_headers,
+        ))
         .with_state(state))
 }
 

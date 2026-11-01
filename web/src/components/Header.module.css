@@ -1,0 +1,32 @@
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--gs-space-4);
+  height: var(--gs-header-height);
+  padding: 0 var(--gs-space-4);
+  background: var(--gs-header-background);
+  color: var(--gs-header-text);
+}
+
+.home {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--gs-radius-sm);
+}
+
+/* The dark logo's navy rectangle is the header's navy: no box shows. */
+.logo {
+  display: block;
+  height: 2.5rem;
+  width: auto;
+}
+
+.skip {
+  position: absolute;
+  left: -10000px;
+  color: var(--gs-header-text);
+}
+
+.skip:focus {
+  position: static;
+}

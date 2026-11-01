@@ -169,12 +169,136 @@ jobs:
       # deny.toml: advisories, license allow-list, bans, sources. The action
       # runs in its own container; rust-version makes it honour the pinned
       # channel of rust-toolchain.toml instead of failing to find it.
+      # --all-features: the optional dependencies too (forge-web's embed-ui:
+      # rust-embed, M2 MR2), which the release binary ships.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+          arguments: --all-features
           rust-version: ${{ steps.toolchain.outputs.channel }}
       # cargo-audit reads .cargo/audit.toml (documented waivers).
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
       - run: cargo audit
+
+  # ADR-0022 §1 / §8: the web UI (web/). Dependencies only through the
+  # lockfile with install scripts disabled; the generated API types must
+  # match docs/api/openapi.json; dist is uploaded for the smoke test and the
+  # release build. This job runs nothing outside `npm ci --ignore-scripts`
+  # (the browser is installed in web-smoke, which only reads the artifact).
+  # The web, web-smoke and release jobs pin every action to a commit SHA
+  # (the tag in the comment).
+  web:
+    name: web (lint, typecheck, test, build, audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+      - name: licences (allow-list)
+        run: npm run licenses
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: i18n (id missing keys -> job summary; not a failure)
+        run: npm run i18n:report
+      - name: generated API types up to date (docs/api/openapi.json)
+        run: |
+          npm run gen:api
+          git diff --exit-code -- src/api/schema.gen.ts || {
+            echo "::error::web/src/api/schema.gen.ts is stale: run 'npm run gen:api' in web/ and commit it"
+            exit 1
+          }
+      # Also refuses an index.html with inline <script> / <style> (compress.mjs).
+      - run: npm run build
+      - name: record what was built (ADR-0022 §8)
+        run: |
+          {
+            echo "### web/dist"
+            echo
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- package-lock.json sha256: \`$(sha256sum package-lock.json | cut -d' ' -f1)\`"
+            echo "- index.html sha256: \`$(sha256sum dist/index.html | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  # The built UI in Chromium under the shell CSP (ADR-0022 §3 / §3a):
+  # no CSP violation, console error or page error. Playwright is a pinned
+  # devDependency (lockfile); the browser download happens here only, on the
+  # artifact the web job uploaded, never in the job that produces it.
+  web-smoke:
+    name: web smoke (Chromium, CSP)
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-dist
+          path: web/dist
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run smoke
+
+  # The release binary embeds the UI built above (forge-web feature
+  # embed-ui; cargo never runs npm and fails without web/dist).
+  release:
+    name: release build (embed-ui)
+    needs: web
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-dist
+          path: web/dist
+      - name: read toolchain channel
+        id: toolchain
+        run: echo "channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-11-01
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy -p forge-web -p forge-cli --all-targets --features forge-web/embed-ui,forge-cli/embed-ui -- -D warnings
+      # The embedded-asset tests (src/web_ui_tests.rs `embedded`) need no database.
+      - uses: taiki-e/install-action@328a871ad8f62ecac78390391f463ccabc974b72 # v2.69.9
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run -p forge-web --lib --features embed-ui
+      - run: cargo build --release -p forge-cli --features embed-ui
+      - name: the binary reports the embedded UI (forge doctor web.ui)
+        run: |
+          ./target/release/forge doctor --json > doctor.json || true
+          python3 - <<'PY'
+          import json
+          checks = {c["name"]: c for c in json.load(open("doctor.json"))["checks"]}
+          ui = checks["web.ui"]
+          assert ui["status"] == "ok" and ui["detail"].startswith("embedded"), ui
+          print(ui["detail"])
+          PY

@@ -1,0 +1,40 @@
+/* Base styles. Values come from tokens.css only (ADR-0022 §4). */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  /* No layout shift when a modal <dialog> stops the page scrolling (§3a). */
+  scrollbar-gutter: stable;
+}
+
+html:has(dialog[open]) {
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  font-family: var(--gs-font-body);
+  font-size: var(--gs-font-size-md);
+  line-height: var(--gs-line-height);
+  color: var(--gs-color-text);
+  background: var(--gs-color-background);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--gs-font-mono);
+}
+
+a {
+  color: var(--gs-color-link);
+}
+
+:focus-visible {
+  outline: 2px solid var(--gs-color-focus);
+  outline-offset: 2px;
+}

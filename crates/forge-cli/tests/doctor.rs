@@ -555,6 +555,30 @@ fn doctor_reports_each_check_and_exits_1_on_failure() {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
     assert!(text.contains("FG-SYS-0002"), "{text}");
+    // ADR-0022 §2: the UI the binary serves is reported, never silent.
+    let ui = match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => "warn  web.ui         placeholder".to_owned(),
+        forge_web::UiStatus::Embedded { index_sha256 } => {
+            format!("ok    web.ui         embedded (index.html sha256 {index_sha256})")
+        }
+    };
+    assert!(text.contains(&ui), "missing {ui:?} in:\n{text}");
+}
+
+#[test]
+fn doctor_reports_the_web_ui_in_json_even_without_a_configuration() {
+    let out = forge(&["doctor", "--json"], &[("FORGE_DATABASE_URLL", "x")]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    let checks = v["checks"].as_array().expect("checks");
+    let ui = checks
+        .iter()
+        .find(|c| c["name"] == "web.ui")
+        .expect("a web.ui check");
+    let expected = match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => "warn",
+        forge_web::UiStatus::Embedded { .. } => "ok",
+    };
+    assert_eq!(ui["status"], expected, "{ui}");
 }
 
 #[test]

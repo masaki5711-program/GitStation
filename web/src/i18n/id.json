@@ -1,0 +1,34 @@
+{
+  "app": {
+    "name": "GitStation",
+    "skipToContent": "Lewati ke konten",
+    "logoAlt": "Beranda GitStation"
+  },
+  "home": {
+    "title": "Proyek",
+    "loading": "Memuat…",
+    "empty": "Belum ada proyek yang dapat Anda lihat.",
+    "notLoggedIn": "Anda belum masuk.",
+    "notLoggedInHint": "Masuk dari browser akan segera tersedia.",
+    "more": "Masih ada proyek lainnya.",
+    "visibility": {
+      "private": "Privat",
+      "internal": "Internal"
+    }
+  },
+  "error": {
+    "title": "Terjadi kesalahan",
+    "requestId": "ID permintaan",
+    "copy": "Salin ID permintaan",
+    "copied": "Tersalin",
+    "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin secara manual",
+    "network": "Tidak dapat terhubung ke server. Silakan coba lagi nanti.",
+    "unexpected": "Server memberikan jawaban yang tidak terduga. Silakan coba lagi nanti.",
+    "retry": "Coba lagi"
+  },
+  "notFound": {
+    "title": "Halaman tidak ditemukan",
+    "body": "Periksa apakah URL sudah benar.",
+    "home": "Kembali ke beranda"
+  }
+}

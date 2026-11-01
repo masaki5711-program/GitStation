@@ -34,11 +34,19 @@ serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
+# M2 MR2 (ADR-0022 §2): the built UI (web/dist) inside the binary, and the
+# SHA-256 of its index.html for `forge doctor`. Only with `embed-ui`.
+rust-embed = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [features]
 # `app::with_registry` for the integration tests' own guarded routes
 # (dev-dependency only; the product routes come from `app::registry()`).
 test-support = []
+# Embed web/dist (built by `npm run build` in web/, never by cargo). The
+# build fails when web/dist is missing or malformed (build.rs). Without it
+# the shell is the placeholder and `forge doctor` warns `web.ui=placeholder`.
+embed-ui = ["dep:rust-embed", "dep:sha2"]
 
 [dev-dependencies]
 forge-web = { workspace = true, features = ["test-support"] }
@@ -50,6 +58,8 @@ http-body-util.workspace = true
 # M1 phase 9 MR4: the push record retries (paused time) and a scratch git home.
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+# M2 MR2: the shell bytes compared by hash (src/web_ui_tests.rs).
+sha2.workspace = true
 uuid.workspace = true
 
 [lints]

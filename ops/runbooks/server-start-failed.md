@@ -44,6 +44,20 @@ GitStation の Web・API・Git（HTTP）がすべて使えない（SEV1）。
 - `forge serve` が起動し、`curl -fsS http://<bind>/healthz` が `{"status":"ok"}` を返す
 - 対象のエラーコードが新たに出ない
 
+## UI が仮の殻のとき（起動はしたが画面が出ない、ADR-0022 §2）
+
+`forge serve` は動き、API と Git は使えるが、ブラウザでは空のページ（タイトルだけ）が出る場合。
+
+1. `forge doctor` の `web.ui` を見る（読み取りのみ）。
+   - `warn  web.ui  placeholder …`: `embed-ui` なしで作ったバイナリ（開発用のビルド）が配布されている。
+   - `ok  web.ui  embedded (index.html sha256 <12 桁>)`: UI は埋め込まれている。12 桁を CI の web のジョブのサマリー
+     （`index.html sha256`）と比べ、配布物の取り違えでないか確かめる。
+2. 埋め込まれているのに画面が壊れる場合: ブラウザの開発者ツールのコンソールで CSP の違反（`Content Security Policy`）と、
+   `/-/assets/…` の 404（FG-WEB-0001、ログの `rule=unknown_asset`）を確かめる。殻と資産が別のビルドのもの（古い殻のキャッシュ、
+   リバースプロキシのキャッシュ）だと 404 になる。殻は `Cache-Control: no-cache` で返している。
+3. 対処: CI の release のジョブ（`cargo build --release -p forge-cli --features embed-ui`）で作ったバイナリに入れ替える。
+   `[MUTATING — needs approval]` ロールバック: 入れ替える前のバイナリに戻して再起動する。
+
 ## Escalate
 
 - ポートを使っているプロセスが不明な場合は、ホストの管理者と確認する（想定外のプロセスはセキュリティの事象として扱う）。

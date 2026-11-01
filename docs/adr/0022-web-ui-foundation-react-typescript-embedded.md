@@ -216,3 +216,34 @@ Radix の一部の部品は、実行時に `<style>` の要素を差し込む。
 
 - 新しいコードはない（`/-/assets` の不明な名前は既存の FG-WEB-0001）。
 - `forge doctor` の `web.ui`（`placeholder` は warn）を足す。Runbook は `server-start-failed` に「UI が仮の殻のとき」の確認を足す（MR2）。
+
+## Amendment（2026-11-01、M2 MR2: 実装で決めたこと）
+
+MR2（`feat/web-spa-foundation`）で実物を作って分かったこと。上の本文は変えず、ここが優先する。
+
+- **リンクの色**: `--gs-brand-teal-strong`（`#128F7C`）は白地で約 4.0:1 で、本文の AA（4.5:1）に足りない。
+  白地の本文のリンクには新しいトークン `--gs-color-link`（`#0F7A69`、白で約 5.2:1）を使い、`teal-strong` は大きい文字
+  （3:1）と面だけにする。`web/src/styles/tokens.json` の `textPairs` / `largeTextPairs` と vitest が比を確かめる。
+- **ヘッダーのロゴ**: ヘッダーの背景はネイビーなので、`docs/brand/README.md`（暗い背景に light 版を置かない）に従い
+  **dark 版**（`gitstation-v1-logo-dark.svg`、背景の矩形がヘッダーと同じネイビー）を使う。§4 の「ロゴは light 版」は、
+  明るい背景（文書・印刷・ログインの明るい画面）のこととする。
+- **ブランドの資産の写し**: ビルドの時に写すのではなく、`web/src/assets/brand/` に写しをコミットし、vitest が `docs/brand/` と
+  SHA-256 を比べる（ビルドが `docs/` に依存しない）。
+- **殻の CSP の `form-action` の IdP のオリジン**と **HSTS**: `forge_web::SecurityHeaders::new(hsts, form_action)` が受け取り、
+  検証する（オリジンでない値は FG-SYS-0002）。設定のキー（`web.hsts`、`auth.oidc`）は `web.*` / `auth.*` の名前空間を作る
+  MR3 / MR4 でつなぐ。それまでは `form-action 'self'` だけで、HSTS は出さない（`AppConfig::hsts` は既定 `None`）。
+- **応答の種類の決め方**: 殻と資産はハンドラーが印（`ResponseClass`）を付け、ほかは生のパスで決める。印のない応答
+  （資産のパスの FG-WEB-0001 など）は厳しい「その他」（`default-src 'none'`）になり、資産の 1 年のキャッシュは付かない。
+- **Radix は MR2 では入れない**（`web/src/ui/README.md` の許可リストは空）。`no-restricted-imports` の規則と、vitest の
+  「`<style>` が増えない」検査、Chromium での CSP の違反の検査（`npm run smoke`）は先に入れた。部品の見本の画面は、最初の
+  Radix の部品を足す MR で作る。
+- **Playwright の検査**は、`web/dist` を forge-web と同じ形（どのパスも同じ殻、`/-/assets/{file}`、殻の CSP は
+  `security_headers.rs` の定数を読む）で返す Node の代役のサーバーで行う（`forge serve` は DB が要るため）。
+  `npm run smoke -- --url <forge serve>` で本物にも当てられる。playwright は lockfile の devDependency（版を固定）で、
+  ブラウザは CI の別のジョブ（`web-smoke`、dist の成果物を受け取る）でだけ取る。dist を作るジョブは `npm ci --ignore-scripts` だけ。
+- **ビルドの検査**: `index.html` にインラインの `<script>`・`<style>`・`style=`・`on*=`・`javascript:` があればビルドを失敗させる
+  （`web/scripts/inline-check.mjs`）。
+- **npm の依存**: vitest は 4 系（3 系は `tinypool` の critical の勧告がある）。npm 10.9 は vitest 4 の optional な
+  peer の解決で落ちる（arborist の不具合）ので、lockfile は npm 11.6 で作った。`npm ci --ignore-scripts` は npm 10 でも通る。
+  ライセンスの許可リスト（§8）に、開発の道具だけが使う `MIT-0`・`BlueOak-1.0.0`・`Python-2.0`・`CC-BY-4.0`（caniuse-lite の
+  データ、配布物に入らない）を理由つきで足した（`web/scripts/check-licenses.mjs`）。

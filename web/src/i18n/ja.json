@@ -1,0 +1,34 @@
+{
+  "app": {
+    "name": "GitStation",
+    "skipToContent": "本文へ移動",
+    "logoAlt": "GitStation のホーム"
+  },
+  "home": {
+    "title": "プロジェクト",
+    "loading": "読み込んでいます…",
+    "empty": "見られるプロジェクトはまだありません。",
+    "notLoggedIn": "ログインしていません。",
+    "notLoggedInHint": "ブラウザからのログインは準備中です。",
+    "more": "ほかにもプロジェクトがあります。",
+    "visibility": {
+      "private": "非公開",
+      "internal": "社内に公開"
+    }
+  },
+  "error": {
+    "title": "うまくいきませんでした",
+    "requestId": "問い合わせ番号",
+    "copy": "問い合わせ番号をコピー",
+    "copied": "コピーしました",
+    "copyFailed": "コピーできませんでした。番号を選んでコピーしてください",
+    "network": "サーバーにつながりませんでした。しばらくしてからもう一度お試しください。",
+    "unexpected": "思いがけない応答がありました。しばらくしてからもう一度お試しください。",
+    "retry": "もう一度試す"
+  },
+  "notFound": {
+    "title": "ページが見つかりません",
+    "body": "URL が正しいか確かめてください。",
+    "home": "ホームへ戻る"
+  }
+}
