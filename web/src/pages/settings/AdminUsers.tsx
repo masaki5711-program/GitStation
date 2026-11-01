@@ -118,7 +118,7 @@ export function AdminUsers() {
                       {u.display_name} <code>{u.username}</code>
                       {u.is_admin && <span className={controls.badge}>{t('admin.isAdmin')}</span>}
                     </th>
-                    <td>{u.kind}</td>
+                    <td>{u.kind === 'human' ? t('admin.kindHuman') : u.kind === 'bot' ? t('admin.kindBot') : u.kind === 'service_account' ? t('admin.kindService') : u.kind}</td>
                     <td>{u.state === 'active' ? t('admin.active') : t('admin.disabled')}</td>
                     <td>{formatDate(u.created_at, i18n.language)}</td>
                     <td>
@@ -126,7 +126,7 @@ export function AdminUsers() {
                         {u.state === 'active' && (
                           <button
                             type="button"
-                            className={styles.danger}
+                            className={styles.dangerQuiet}
                             aria-label={t('admin.disableOf', { name: u.display_name })}
                             onClick={() => {
                               act.reset();
@@ -138,7 +138,7 @@ export function AdminUsers() {
                         )}
                         <button
                           type="button"
-                          className={styles.danger}
+                          className={styles.dangerQuiet}
                           aria-label={t('admin.endSessionsOf', { name: u.display_name })}
                           onClick={() => {
                             act.reset();

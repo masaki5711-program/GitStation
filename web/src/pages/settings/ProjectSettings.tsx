@@ -159,14 +159,14 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
       ),
   });
   const [pattern, setPattern] = useState('');
-  const [role, setRole] = useState<string>('maintainer');
+  const [role, setRole] = useState<RoleKey>('maintainer');
   const [attempt, setAttempt] = useState(0);
   const create = useMutation({
     mutationFn: () =>
       call(() =>
         api.POST('/api/v1/projects/{id}/protected-refs', {
           params: { path: { id: projectId } },
-          body: { pattern: pattern.trim(), push_min_role: asRole(role) },
+          body: { pattern: pattern.trim(), push_min_role: role },
         }),
       ),
     onSuccess: async () => {
@@ -176,11 +176,11 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
     onError: refresh,
   });
   const change = useMutation({
-    mutationFn: (v: { id: number; role: string }) =>
+    mutationFn: (v: { id: number; role: RoleKey }) =>
       call(() =>
         api.PATCH('/api/v1/projects/{id}/protected-refs/{rule_id}', {
           params: { path: { id: projectId, rule_id: v.id } },
-          body: { push_min_role: asRole(v.role) },
+          body: { push_min_role: v.role },
         }),
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: key }),
@@ -201,7 +201,7 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
     },
     onError: refresh,
   });
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [drafts, setDrafts] = useState<Record<number, RoleKey>>({});
 
   const problem = patternProblem(pattern);
   const problemText =
@@ -250,7 +250,8 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
               </thead>
               <tbody>
                 {rules.data.rules.map((r) => {
-                  const draft = drafts[r.id] ?? r.push_min_role;
+                  const current = parseRole(r.push_min_role);
+                  const draft = drafts[r.id] ?? current;
                   return (
                     <tr key={r.id}>
                       <th scope="row">
@@ -260,11 +261,17 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
                         <select
                           className={controls.input}
                           aria-label={t('settings.refs.minRoleOf', { pattern: r.pattern })}
-                          value={draft}
+                          value={draft ?? ''}
                           onChange={(e) => {
-                            setDrafts({ ...drafts, [r.id]: e.target.value });
+                            const next = parseRole(e.target.value);
+                            if (next !== undefined) setDrafts({ ...drafts, [r.id]: next });
                           }}
                         >
+                          {current === undefined && (
+                            <option value="" disabled>
+                              {r.push_min_role}
+                            </option>
+                          )}
                           {PUSH_ROLES.map((x) => (
                             <option key={x} value={x}>
                               {roleLabel(t, x) ?? x}
@@ -278,8 +285,10 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
                           <button
                             type="button"
                             className={controls.button}
-                            disabled={draft === r.push_min_role}
+                            aria-label={t('settings.refs.changeOf', { pattern: r.pattern })}
+                            aria-disabled={draft === undefined || draft === r.push_min_role || change.isPending ? 'true' : undefined}
                             onClick={() => {
+                              if (draft === undefined || draft === r.push_min_role || change.isPending) return;
                               change.mutate({ id: r.id, role: draft });
                             }}
                           >
@@ -287,7 +296,8 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
                           </button>
                           <button
                             type="button"
-                            className={styles.danger}
+                            className={styles.dangerQuiet}
+                            aria-label={t('settings.refs.removeOf', { pattern: r.pattern })}
                             onClick={() => {
                               remove.reset();
                               confirm.ask({ id: r.id, pattern: r.pattern });
@@ -316,7 +326,14 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
           help={t('settings.refs.patternHelp')}
           required
         />
-        <SelectField label={t('settings.refs.minRole')} value={role} onChange={setRole}>
+        <SelectField
+          label={t('settings.refs.minRole')}
+          value={role}
+          onChange={(v) => {
+            const next = parseRole(v);
+            if (next !== undefined) setRole(next);
+          }}
+        >
           {PUSH_ROLES.map((x) => (
             <option key={x} value={x}>
               {roleLabel(t, x) ?? x}
@@ -350,8 +367,9 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
 
 type RoleKey = (typeof PUSH_ROLES)[number];
 
-function asRole(value: string): RoleKey {
-  return PUSH_ROLES.find((r) => r === value) ?? 'maintainer';
+/** The role a `<select>` value names, or `undefined` (the caller changes nothing). */
+function parseRole(value: string): RoleKey | undefined {
+  return PUSH_ROLES.find((r) => r === value);
 }
 
 function DeleteProject({ project }: { project: Project }) {

@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router';
 
 import { call, callNoContent } from '../../api/client';
 import { useApi } from '../../api/context';
@@ -36,6 +37,9 @@ export function Tokens() {
   });
   // The one place the secret exists.
   const [secret, setSecret] = useState<Created | null>(null);
+  const leave = useLeaveGuard(secret !== null, () => {
+    setSecret(null);
+  });
   return (
     <>
       {secret !== null && (
@@ -61,10 +65,62 @@ export function Tokens() {
         {tokens.isSuccess && <TokenTable tokens={tokens.data.items} />}
       </Section>
       <Section id="tokens-new-title" title={t('tokens.create')}>
-        <CreateToken onCreated={setSecret} />
+        {secret === null ? (
+          <CreateToken onCreated={setSecret} />
+        ) : (
+          <p className={styles.hint}>{t('tokens.finishFirst')}</p>
+        )}
       </Section>
+      <ConfirmDialog
+        open={leave.target !== null}
+        title={t('tokens.leaveTitle')}
+        message={<p>{t('tokens.leaveBody')}</p>}
+        confirmLabel={t('tokens.leaveConfirm')}
+        busy={false}
+        error={null}
+        onConfirm={leave.proceed}
+        onCancel={leave.stay}
+      />
     </>
   );
+}
+
+/** While the secret is on the screen, a click on an in-app link asks first
+ * (the secret would be lost for good). The app uses a plain BrowserRouter, so
+ * a router blocker is not available; links are intercepted instead. Reload and
+ * close are covered by `beforeunload` in the panel. */
+function useLeaveGuard(active: boolean, onLeave: () => void) {
+  const navigate = useNavigate();
+  const [href, setHref] = useState<string | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = e.target instanceof Element ? e.target.closest('a[href]') : null;
+      const target = anchor?.getAttribute('href') ?? null;
+      if (target === null || !target.startsWith('/') || target.startsWith('//')) return;
+      if (anchor?.closest('dialog') != null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHref(target);
+    };
+    document.addEventListener('click', onClick, true);
+    return () => {
+      document.removeEventListener('click', onClick, true);
+    };
+  }, [active]);
+  return {
+    target: href,
+    stay: () => {
+      setHref(null);
+    },
+    proceed: () => {
+      const to = href;
+      setHref(null);
+      onLeave();
+      if (to !== null) void navigate(to);
+    },
+  };
 }
 
 function SecretPanel({ created, onDone }: { created: Created; onDone: () => void }) {
@@ -88,21 +144,22 @@ function SecretPanel({ created, onDone }: { created: Created; onDone: () => void
     <section
       ref={ref}
       tabIndex={-1}
-      role="alert"
       className={styles.secret}
       aria-labelledby="secret-title"
       data-testid="token-secret"
     >
-      <h2 id="secret-title" className={styles.sectionTitle}>
+      <h2 id="secret-title" className={styles.secretTitle}>
         {t('tokens.secretTitle', { name: created.name })}
       </h2>
+      <p role="status" className={styles.srOnly}>
+        {t('tokens.createdStatus')}
+      </p>
       <p>
         <strong>{t('tokens.secretWarning')}</strong>
       </p>
       <code className={styles.secretValue} data-testid="token-value">
         {created.token}
       </code>
-      <CopyButton text={created.token} label={t('tokens.copy')} />
       <p>
         {t('tokens.expiresOn', { date: formatDateTime(created.expires_at, i18n.language) })}
       </p>
@@ -110,9 +167,12 @@ function SecretPanel({ created, onDone }: { created: Created; onDone: () => void
       <pre className={styles.pre}>
         <code>{login}</code>
       </pre>
-      <button type="button" className={controls.primary} onClick={onDone}>
-        {t('tokens.stored')}
-      </button>
+      <div className={styles.row}>
+        <CopyButton text={created.token} label={t('tokens.copy')} />
+        <button type="button" className={controls.primary} onClick={onDone}>
+          {t('tokens.stored')}
+        </button>
+      </div>
     </section>
   );
 }
@@ -157,7 +217,7 @@ function TokenTable({ tokens }: { tokens: Token[] }) {
             {tokens.map((k) => {
               const state = stateOf(k);
               return (
-                <tr key={k.id}>
+                <tr key={k.id} className={state === 'active' ? undefined : styles.rowMuted}>
                   <th scope="row">{k.name}</th>
                   <td>{k.scopes.join(', ')}</td>
                   <td>{formatDateTime(k.expires_at, i18n.language)}</td>
@@ -167,17 +227,27 @@ function TokenTable({ tokens }: { tokens: Token[] }) {
                       : formatDateTime(k.last_used_at, i18n.language)}
                   </td>
                   <td>
-                    {state === 'revoked'
-                      ? t('tokens.revoked')
-                      : state === 'expired'
-                        ? t('tokens.expired')
-                        : t('tokens.active')}
+                    <span
+                      className={`${styles.chip} ${
+                        state === 'active'
+                          ? styles.chipActive
+                          : state === 'expired'
+                            ? styles.chipExpired
+                            : styles.chipRevoked
+                      }`}
+                    >
+                      {state === 'revoked'
+                        ? t('tokens.revoked')
+                        : state === 'expired'
+                          ? t('tokens.expired')
+                          : t('tokens.active')}
+                    </span>
                   </td>
                   <td>
                     {state === 'active' && (
                       <button
                         type="button"
-                        className={styles.danger}
+                        className={styles.dangerQuiet}
                         aria-label={t('tokens.revokeOf', { name: k.name })}
                         onClick={() => {
                           revoke.reset();
@@ -250,6 +320,8 @@ function CreateToken({ onCreated }: { onCreated: (c: Created) => void }) {
       setAgent(false);
       setAttempt(0);
       onCreated(created);
+      // The answer holds the secret: do not keep it in the mutation either.
+      queryClient.getMutationCache().clear();
       await queryClient.invalidateQueries({ queryKey: KEY });
     },
     onError: refresh,

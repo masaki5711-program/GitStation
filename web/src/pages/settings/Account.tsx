@@ -33,7 +33,6 @@ export function Account({ path }: { path: string }) {
     wanted === 'sessions' || wanted === 'trash' || (wanted === 'admin' && session.user.is_admin)
       ? wanted
       : 'tokens';
-  useDocumentTitle(t('account.title'));
   const base = `/${path}/-/settings`;
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tokens', label: t('tokens.title') },
@@ -41,6 +40,8 @@ export function Account({ path }: { path: string }) {
     { id: 'trash', label: t('trash.title') },
     ...(session.user.is_admin ? [{ id: 'admin' as const, label: t('admin.title') }] : []),
   ];
+  const current = tabs.find((x) => x.id === tab);
+  useDocumentTitle(current === undefined ? t('account.title') : `${current.label} · ${t('account.title')}`);
   return (
     <>
       <h1 className={styles.title}>{t('account.title')}</h1>
@@ -139,7 +140,7 @@ function Sessions() {
                     <td>
                       <button
                         type="button"
-                        className={styles.danger}
+                        className={styles.dangerQuiet}
                         aria-label={t('sessions.revokeOf', {
                           date: formatDateTime(s.created_at, i18n.language),
                         })}

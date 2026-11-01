@@ -309,7 +309,10 @@
     "none": "Tidak ada pengguna yang cocok.",
     "sessionsDone": "{{sessions}} sesi {{name}} diakhiri.",
     "title": "Administrasi",
-    "user": "Pengguna"
+    "user": "Pengguna",
+    "kindHuman": "Orang",
+    "kindBot": "Bot",
+    "kindService": "Akun layanan"
   },
   "members": {
     "add": "Tambah anggota",
@@ -334,7 +337,11 @@
     "searchLength": "Masukkan 2 sampai 64 karakter.",
     "since": "Anggota sejak",
     "title": "Anggota",
-    "user": "Pengguna"
+    "user": "Pengguna",
+    "changeOf": "Ubah peran {{name}}",
+    "removeOf": "Hapus {{name}}",
+    "changed": "Peran {{name}} diubah.",
+    "found": "{{count}} pengguna ditemukan."
   },
   "sessions": {
     "current": "Sesi ini",
@@ -388,7 +395,9 @@
       "removeBody": "{{pattern}} tidak lagi dilindungi.",
       "removeTitle": "Cabut perlindungan ini?",
       "title": "Ref yang dilindungi",
-      "updated": "Diperbarui"
+      "updated": "Diperbarui",
+      "changeOf": "Ubah peran untuk {{pattern}}",
+      "removeOf": "Cabut perlindungan {{pattern}}"
     },
     "save": "Simpan",
     "saved": "Tersimpan.",
@@ -429,7 +438,12 @@
     "secretWarning": "Token hanya ditampilkan sekali ini. Salin sekarang dan simpan dengan aman; token tidak dapat ditampilkan lagi.",
     "state": "Status",
     "stored": "Sudah saya simpan",
-    "title": "Token akses"
+    "title": "Token akses",
+    "finishFirst": "Selesaikan token yang ditampilkan di atas sebelum membuat yang lain.",
+    "leaveTitle": "Pergi tanpa menyimpan token?",
+    "leaveBody": "Token hanya ditampilkan sekali. Jika pergi sekarang, token hilang permanen dan Anda harus membuat yang baru.",
+    "leaveConfirm": "Pergi dan buang token",
+    "createdStatus": "Token dibuat."
   },
   "trash": {
     "dateUnknown": "Menunggu penghapusan",

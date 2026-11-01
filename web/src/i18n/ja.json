@@ -309,7 +309,10 @@
     "none": "該当する利用者はいません。",
     "sessionsDone": "{{name}} のセッション {{sessions}} 件を終わらせました。",
     "title": "管理",
-    "user": "利用者"
+    "user": "利用者",
+    "kindHuman": "人",
+    "kindBot": "ボット",
+    "kindService": "サービスアカウント"
   },
   "members": {
     "add": "メンバーを追加",
@@ -334,7 +337,11 @@
     "searchLength": "2〜64 文字で入力してください。",
     "since": "追加日",
     "title": "メンバー",
-    "user": "利用者"
+    "user": "利用者",
+    "changeOf": "{{name}} の役割を変える",
+    "removeOf": "{{name}} を外す",
+    "changed": "{{name}} の役割を変えました。",
+    "found": "{{count}} 人見つかりました。"
   },
   "sessions": {
     "current": "このセッション",
@@ -388,7 +395,9 @@
       "removeBody": "{{pattern}} は保護されなくなります。",
       "removeTitle": "この保護をやめますか",
       "title": "保護する ref",
-      "updated": "更新"
+      "updated": "更新",
+      "changeOf": "{{pattern}} の役割を変更",
+      "removeOf": "{{pattern}} の保護をやめる"
     },
     "save": "保存",
     "saved": "保存しました。",
@@ -429,7 +438,12 @@
     "secretWarning": "トークンが表示されるのはこの 1 回だけです。いまコピーして安全に保管してください。もう一度は表示できません。",
     "state": "状態",
     "stored": "保管しました",
-    "title": "アクセストークン"
+    "title": "アクセストークン",
+    "finishFirst": "別のトークンを作る前に、上に表示したトークンの扱いを済ませてください。",
+    "leaveTitle": "トークンを保管せずに移動しますか",
+    "leaveBody": "トークンが表示されるのは 1 回だけです。いま移動すると完全に失われ、新しく作り直すことになります。",
+    "leaveConfirm": "トークンを捨てて移動",
+    "createdStatus": "トークンを作りました。"
   },
   "trash": {
     "dateUnknown": "削除待ち",

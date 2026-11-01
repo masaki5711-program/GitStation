@@ -309,7 +309,10 @@
     "none": "No users match.",
     "sessionsDone": "Ended {{sessions}} session(s) of {{name}}.",
     "title": "Administration",
-    "user": "User"
+    "user": "User",
+    "kindHuman": "Person",
+    "kindBot": "Bot",
+    "kindService": "Service account"
   },
   "members": {
     "add": "Add a member",
@@ -334,7 +337,11 @@
     "searchLength": "Enter 2 to 64 characters.",
     "since": "Member since",
     "title": "Members",
-    "user": "User"
+    "user": "User",
+    "changeOf": "Change role of {{name}}",
+    "removeOf": "Remove {{name}}",
+    "changed": "The role of {{name}} was changed.",
+    "found": "{{count}} user(s) found."
   },
   "sessions": {
     "current": "This session",
@@ -388,7 +395,9 @@
       "removeBody": "{{pattern}} will no longer be protected.",
       "removeTitle": "Remove this protection?",
       "title": "Protected refs",
-      "updated": "Updated"
+      "updated": "Updated",
+      "changeOf": "Change the role for {{pattern}}",
+      "removeOf": "Remove protection of {{pattern}}"
     },
     "save": "Save",
     "saved": "Saved.",
@@ -429,7 +438,12 @@
     "secretWarning": "This is the only time the token is shown. Copy it now and keep it safe; it cannot be shown again.",
     "state": "State",
     "stored": "I have stored it",
-    "title": "Access tokens"
+    "title": "Access tokens",
+    "finishFirst": "Finish with the token shown above before creating another.",
+    "leaveTitle": "Leave without storing the token?",
+    "leaveBody": "The token is shown only once. If you leave now it is lost for good and you must create a new one.",
+    "leaveConfirm": "Leave and lose the token",
+    "createdStatus": "Token created."
   },
   "trash": {
     "dateUnknown": "Waiting for deletion",

@@ -3,7 +3,7 @@
 // lists direct members only). Refusals ("would leave no Owner", "the member
 // list changed") are shown with their reason + request id.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type SyntheticEvent } from 'react';
+import { useRef, useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { call, callNoContent, type ApiClient } from '../../api/client';
@@ -25,8 +25,10 @@ export type Scope = { kind: 'project' | 'group'; id: number };
 
 export const ROLES: readonly RoleName[] = ['guest', 'reporter', 'developer', 'maintainer', 'owner'];
 
-function asRole(value: string): RoleName {
-  return ROLES.find((r) => r === value) ?? 'reporter';
+/** The role a `<select>` value names, or `undefined` for a value that is not
+ * one (it cannot happen with our options; the caller then changes nothing). */
+function parseRole(value: string): RoleName | undefined {
+  return ROLES.find((r) => r === value);
 }
 
 /** At most this many pages of 100 members are read. */
@@ -144,15 +146,19 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();
   const key = ['members', scope.kind, scope.id];
-  const [drafts, setDrafts] = useState<Record<number, string>>({});
+  const [drafts, setDrafts] = useState<Record<number, RoleName>>({});
+  const [changed, setChanged] = useState<string | null>(null);
   const confirm = useConfirm<Member>();
   const change = useMutation({
-    mutationFn: (v: { id: number; role: string }) => changeMember(api, scope, v.id, asRole(v.role)),
+    mutationFn: (v: { id: number; role: RoleName; name: string }) =>
+      changeMember(api, scope, v.id, v.role),
     onSuccess: async (_m, v) => {
       setDrafts((d) => Object.fromEntries(Object.entries(d).filter(([k]) => Number(k) !== v.id)));
+      setChanged(v.name);
       await queryClient.invalidateQueries({ queryKey: key });
     },
     onError: (e) => {
+      setChanged(null);
       refresh(e);
     },
   });
@@ -180,7 +186,8 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
           </thead>
           <tbody>
             {members.map((m) => {
-              const draft = drafts[m.user_id] ?? m.role;
+              const current = parseRole(m.role);
+              const draft = drafts[m.user_id] ?? current;
               return (
                 <tr key={m.user_id}>
                   <th scope="row">
@@ -191,11 +198,18 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
                     <select
                       className={controls.input}
                       aria-label={t('members.roleOf', { name: m.display_name })}
-                      value={draft}
+                      value={draft ?? ''}
                       onChange={(e) => {
-                        setDrafts({ ...drafts, [m.user_id]: e.target.value });
+                        const role = parseRole(e.target.value);
+                        if (role !== undefined) setDrafts({ ...drafts, [m.user_id]: role });
+                        setChanged(null);
                       }}
                     >
+                      {current === undefined && (
+                        <option value="" disabled>
+                          {m.role}
+                        </option>
+                      )}
                       {ROLES.map((r) => (
                         <option key={r} value={r}>
                           {roleLabel(t, r) ?? r}
@@ -209,16 +223,19 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
                       <button
                         type="button"
                         className={controls.button}
-                        disabled={draft === m.role}
+                        aria-label={t('members.changeOf', { name: m.display_name })}
+                        aria-disabled={draft === undefined || draft === m.role || change.isPending ? 'true' : undefined}
                         onClick={() => {
-                          change.mutate({ id: m.user_id, role: draft });
+                          if (draft === undefined || draft === m.role || change.isPending) return;
+                          change.mutate({ id: m.user_id, role: draft, name: m.display_name });
                         }}
                       >
                         {t('members.change')}
                       </button>
                       <button
                         type="button"
-                        className={styles.danger}
+                        className={styles.dangerQuiet}
+                        aria-label={t('members.removeOf', { name: m.display_name })}
                         onClick={() => {
                           remove.reset();
                           confirm.ask(m);
@@ -235,6 +252,9 @@ function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
         </table>
       </div>
       {change.isError && <Denied error={change.error} />}
+      <p role="status" className={styles.muted}>
+        {changed === null ? '' : t('members.changed', { name: changed })}
+      </p>
       <ConfirmDialog
         open={confirm.target !== null}
         title={t('members.removeTitle')}
@@ -258,7 +278,8 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
   const refresh = useRefreshSessionOn403();
   const [text, setText] = useState('');
   const [term, setTerm] = useState('');
-  const [role, setRole] = useState<string>('reporter');
+  const [role, setRole] = useState<RoleName>('reporter');
+  const form = useRef<HTMLFormElement>(null);
   const [attempt, setAttempt] = useState(0);
   const [added, setAdded] = useState<string | null>(null);
 
@@ -271,10 +292,13 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
       call(() => api.GET('/api/v1/users', { signal, params: { query: { search: term } } })),
   });
   const add = useMutation({
-    mutationFn: (v: { id: number; name: string }) => addMember(api, scope, v.id, asRole(role)),
+    mutationFn: (v: { id: number; name: string }) => addMember(api, scope, v.id, role),
     onSuccess: async (_m, v) => {
       setAdded(v.name);
       await queryClient.invalidateQueries({ queryKey: ['members', scope.kind, scope.id] });
+      // The button that was pressed stays (now "already a member"); the next
+      // thing to do is another search.
+      form.current?.querySelector('input')?.focus();
     },
     onError: refresh,
   });
@@ -288,7 +312,7 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
   const present = new Set(members.map((m) => m.user_id));
   return (
     <>
-      <form onSubmit={search} noValidate className={styles.narrow}>
+      <form ref={form} onSubmit={search} noValidate className={styles.narrow}>
         <ErrorSummary errors={termError === null ? [] : [termError]} attempt={attempt} />
         <TextField
           label={t('members.search')}
@@ -298,7 +322,14 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
           help={t('members.searchHelp')}
           required
         />
-        <SelectField label={t('members.role')} value={role} onChange={setRole}>
+        <SelectField
+          label={t('members.role')}
+          value={role}
+          onChange={(v) => {
+            const r = parseRole(v);
+            if (r !== undefined) setRole(r);
+          }}
+        >
           {ROLES.map((r) => (
             <option key={r} value={r}>
               {roleLabel(t, r) ?? r}
@@ -309,43 +340,48 @@ function AddMember({ scope, members }: { scope: Scope; members: Member[] }) {
           {t('members.searchButton')}
         </button>
       </form>
-      <div aria-live="polite">
+      <div>
         {results.isPending && term !== '' && <Loading />}
         {results.isError && <QueryError error={results.error} />}
-        {results.isSuccess &&
-          (results.data.items.length === 0 ? (
-            <p>{t('members.noMatch')}</p>
-          ) : (
-            <ul className={styles.results} aria-label={t('members.results')}>
-              {results.data.items.map((u) => (
-                <li key={u.id}>
-                  <span>
-                    {u.display_name} <code>{u.username}</code>
-                  </span>
-                  {present.has(u.id) ? (
-                    <span className={styles.muted}>{t('members.already')}</span>
-                  ) : (
-                    <button
-                      type="button"
-                      className={controls.button}
-                      aria-label={t('members.addOne', { name: u.display_name })}
-                      aria-disabled={add.isPending ? 'true' : undefined}
-                      onClick={() => {
-                        if (!add.isPending) add.mutate({ id: u.id, name: u.display_name });
-                      }}
-                    >
-                      {t('members.addButton')}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          ))}
+        {results.isSuccess && (
+          <>
+            <p role="status" className={styles.muted}>
+              {added === null
+                ? results.data.items.length === 0
+                  ? t('members.noMatch')
+                  : t('members.found', { count: results.data.items.length })
+                : t('members.added', { name: added })}
+            </p>
+            {results.data.items.length > 0 && (
+              <ul className={styles.results} aria-label={t('members.results')}>
+                {results.data.items.map((u) => (
+                  <li key={u.id}>
+                    <span>
+                      {u.display_name} <code>{u.username}</code>
+                    </span>
+                    {present.has(u.id) ? (
+                      <span className={styles.muted}>{t('members.already')}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className={controls.button}
+                        aria-label={t('members.addOne', { name: u.display_name })}
+                        aria-disabled={add.isPending ? 'true' : undefined}
+                        onClick={() => {
+                          if (!add.isPending) add.mutate({ id: u.id, name: u.display_name });
+                        }}
+                      >
+                        {t('members.addButton')}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </div>
       {add.isError && <Denied error={add.error} />}
-      <p role="status" className={styles.muted}>
-        {added === null ? '' : t('members.added', { name: added })}
-      </p>
     </>
   );
 }

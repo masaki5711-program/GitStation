@@ -115,12 +115,12 @@ describe('project settings', () => {
     expect(post?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
 
     // Removing asks first; Cancel sends nothing.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove protection' })[0] as HTMLElement);
+    fireEvent.click(screen.getAllByRole('button', { name: /^Remove protection of/ })[0] as HTMLElement);
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByText('Remove this protection?')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(server.to('DELETE', '/api/v1/projects/7/protected-refs/1')).toHaveLength(0);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remove protection' })[0] as HTMLElement);
+    fireEvent.click(screen.getAllByRole('button', { name: /^Remove protection of/ })[0] as HTMLElement);
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove protection' }));
     await waitFor(() => {
       expect(server.to('DELETE', '/api/v1/projects/7/protected-refs/1')).toHaveLength(1);
@@ -245,17 +245,17 @@ describe('members', () => {
     const select = await screen.findByLabelText('Role of HANAKO');
     fireEvent.change(select, { target: { value: 'maintainer' } });
     const row = select.closest('tr') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: 'Change role' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Change role of HANAKO' }));
     await waitFor(() => {
       expect(server.to('PATCH', '/api/v1/projects/7/members/9')[0]?.body).toEqual({ role: 'maintainer' });
     });
 
     // Remove: asks, Cancel sends nothing, Confirm sends.
     const row2 = (await screen.findByLabelText('Role of HANAKO')).closest('tr') as HTMLElement;
-    fireEvent.click(within(row2).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(row2).getByRole('button', { name: 'Remove HANAKO' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
     expect(server.to('DELETE', '/api/v1/projects/7/members/9')).toHaveLength(0);
-    fireEvent.click(within(row2).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(row2).getByRole('button', { name: 'Remove HANAKO' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
     await waitFor(() => {
       expect(server.to('DELETE', '/api/v1/projects/7/members/9')).toHaveLength(1);
@@ -275,7 +275,7 @@ describe('members', () => {
     });
     await renderApp({ fetch: server.fetch, path: `${BASE}/members`, lang: 'en' });
     const row = (await screen.findByLabelText('Role of TARO')).closest('tr') as HTMLElement;
-    fireEvent.click(within(row).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Remove TARO' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
     const dialog = screen.getByRole('dialog');
     expect(await within(dialog).findByText(/does not fit the current members/)).toBeTruthy();
@@ -357,8 +357,15 @@ describe('access tokens', () => {
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ci' } });
     click('Create token');
     await screen.findByTestId('token-secret');
-    // Another tab of the account, then back.
+    // Another tab of the account asks first; staying keeps the secret.
     fireEvent.click(screen.getByRole('link', { name: 'My sessions' }));
+    const leave = screen.getByRole('dialog');
+    expect(within(leave).getByText('Leave without storing the token?')).toBeTruthy();
+    fireEvent.click(within(leave).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByTestId('token-secret')).toBeTruthy();
+    fireEvent.click(screen.getByRole('link', { name: 'My sessions' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Leave and lose the token' }));
+    await screen.findByRole('heading', { name: 'My sessions' });
     expect(screen.queryByTestId('token-secret')).toBeNull();
     expect(document.body.textContent).not.toContain('SYNTHETICSECRET');
     fireEvent.click(screen.getByRole('link', { name: 'Access tokens' }));
@@ -580,5 +587,111 @@ describe('who may see what', () => {
     await renderApp({ fetch: server.fetch, path: '/', lang: 'en' });
     const link = await screen.findByRole('link', { name: 'Account settings', hidden: true });
     expect(link.getAttribute('href')).toBe('/taro/-/settings');
+  });
+});
+
+describe('review fixes (MR11)', () => {
+  it('focus lands on the section heading after a confirmed token revoke (the dialog has closed)', async () => {
+    const items = [
+      { id: 4, public_id: 'zz', name: 'deploy', scopes: ['api'], created_at: '2026-10-01T00:00:00Z', expires_at: '2099-01-01T00:00:00Z', revoked_at: null, last_used_at: null },
+    ];
+    const server = mockServer(
+      user({
+        'GET /api/v1/user/tokens': () => json(200, { items }),
+        'DELETE /api/v1/user/tokens/4': () => {
+          items.length = 0;
+          return new Response(null, { status: 204 });
+        },
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings', lang: 'en' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke deploy' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke' }));
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('tokens-title');
+    });
+    expect(document.querySelector('dialog[open]')).toBeNull();
+  });
+
+  it('focus lands on the members heading after removing a member', async () => {
+    let members = [
+      { user_id: 5, username: 'taro', display_name: 'TARO', role: 'owner', active: true, created_at: '2026-10-01T00:00:00Z' },
+      { user_id: 9, username: 'hanako', display_name: 'HANAKO', role: 'developer', active: true, created_at: '2026-10-01T00:00:00Z' },
+    ];
+    const server = mockServer({
+      ...project(),
+      'GET /api/v1/projects/7/members': () => json(200, { members, next_after: null }),
+      'DELETE /api/v1/projects/7/members/9': () => {
+        members = members.slice(0, 1);
+        return new Response(null, { status: 204 });
+      },
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/members`, lang: 'en' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove HANAKO' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => {
+      expect(document.activeElement?.id).toBe('members-list-title');
+    });
+  });
+
+  it('no form while the secret is shown, and the secret panel is not an alert', async () => {
+    const server = mockServer(
+      user({
+        'GET /api/v1/user/tokens': () => json(200, { items: [] }),
+        'POST /api/v1/user/tokens': () =>
+          json(201, { id: 1, public_id: 'abcd', name: 'ci', scopes: ['read_repository'], expires_at: '2027-01-30T00:00:00Z', is_agent: false, token: 'fgp_abcd_X' }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings', lang: 'en' });
+    await screen.findByText('You have no tokens.');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'ci' } });
+    click('Create token');
+    const panel = await screen.findByTestId('token-secret');
+    expect(panel.getAttribute('role')).toBeNull();
+    expect(within(panel).getAllByRole('status').map((x) => x.textContent)).toContain('Token created.');
+    expect(screen.queryByRole('button', { name: 'Create token' })).toBeNull();
+    expect(screen.getByText(/Finish with the token shown above/)).toBeTruthy();
+  });
+
+  it('a session is ended by its 16-hex public id in the URL', async () => {
+    const id = 'fedcba9876543210';
+    const server = mockServer(
+      user({
+        'GET /api/v1/user/sessions': () =>
+          json(200, {
+            items: [{ public_id: id, created_at: '2026-10-31T00:00:00Z', last_seen_at: '2026-10-31T01:00:00Z', idle_expires_at: '2026-11-01T05:00:00Z', absolute_expires_at: '2026-11-02T00:00:00Z', oidc: true, current: false }],
+            truncated: false,
+          }),
+        [`DELETE /api/v1/user/sessions/${id}`]: () => new Response(null, { status: 204 }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: '/taro/-/settings?tab=sessions', lang: 'en' });
+    fireEvent.click(await screen.findByRole('button', { name: /^End session started/ }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'End session' }));
+    await waitFor(() => {
+      expect(server.calls.some((c) => c.method === 'DELETE')).toBe(true);
+    });
+    const del = server.calls.find((c) => c.method === 'DELETE');
+    expect(del?.path).toMatch(/^\/api\/v1\/user\/sessions\/[0-9a-f]{16}$/);
+  });
+
+  it('after adding a member the search field has the focus and the change is announced', async () => {
+    const server = mockServer({
+      ...project(),
+      'GET /api/v1/projects/7/members': () =>
+        json(200, { members: [{ user_id: 5, username: 'taro', display_name: 'TARO', role: 'owner', active: true, created_at: '2026-10-01T00:00:00Z' }], next_after: null }),
+      'GET /api/v1/users': () => json(200, { items: [{ id: 9, username: 'hanako', display_name: 'HANAKO' }] }),
+      'POST /api/v1/projects/7/members': () =>
+        json(201, { user_id: 9, username: 'hanako', display_name: 'HANAKO', role: 'reporter', active: true, created_at: '2026-10-01T00:00:00Z' }),
+    });
+    await renderApp({ fetch: server.fetch, path: `${BASE}/members`, lang: 'en' });
+    fireEvent.change(await screen.findByLabelText('Find a user'), { target: { value: 'ha' } });
+    click('Search');
+    expect(await screen.findByText('1 user(s) found.')).toBeTruthy();
+    click('Add HANAKO');
+    expect(await screen.findByText('HANAKO was added.')).toBeTruthy();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText('Find a user'));
+    });
   });
 });
