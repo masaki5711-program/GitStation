@@ -44,9 +44,9 @@ optimises for diagnosing failures from artifacts alone (logs with
 4. **Authorization has one decision point:** `forge_auth::authorize()`; every
    HTTP route and git operation is a row (allow AND deny) in the permission
    matrix. (Documented exceptions, ADR-0019 §8: the operator CLI's token
-   commands and its move / rename commands — `forge admin project|group move`,
-   `forge admin user rename` — which run as `system` and cannot be reached
-   from HTTP.)
+   commands, its move / rename commands — `forge admin project|group move`,
+   `forge admin user rename` — and `forge admin user link-identity`, which
+   run as `system` and cannot be reached from HTTP.)
 5. **Git is executed, not reimplemented** (argument vector, validated path,
    `--` before user input, timeout).
 6. **Migrations are append-only.** Never edit an applied migration.
