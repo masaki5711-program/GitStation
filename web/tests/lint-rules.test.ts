@@ -5,7 +5,11 @@
 import { join } from 'node:path';
 
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The first lint starts the TypeScript project service cold (several
+// seconds on a loaded machine), which overran vitest's 5 s default.
+vi.setConfig({ testTimeout: 30_000 });
 
 const eslint = new ESLint({
   cwd: join(import.meta.dirname, '..'),
