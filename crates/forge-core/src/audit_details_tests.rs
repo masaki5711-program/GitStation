@@ -39,6 +39,7 @@ fn audit_details_have_no_pii_fields() {
     let disabled = AuditDetails::UserDisabled {
         kind: UserKind::ServiceAccount,
         revoked_tokens: 3,
+        revoked_sessions: 2,
         forced: true,
         ownerless_groups: 2,
         ownerless_projects: 1,
@@ -63,6 +64,7 @@ fn audit_details_have_no_pii_fields() {
         json!({
             "kind": "service_account",
             "revoked_tokens": 3,
+            "revoked_sessions": 2,
             "forced": true,
             "ownerless_groups": 2,
             "ownerless_projects": 1,
@@ -667,4 +669,63 @@ fn purge_details_are_ids_and_counts_and_an_admin_event() {
             assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
         }
     }
+}
+
+/// M2 MR3 (ADR-0021 §5): sessions are audited on the user, never published,
+/// and their details carry ids, the public id and the reason only.
+#[test]
+fn session_details_are_audit_only_ids_and_reasons() {
+    use crate::audit_details::SessionRevokeReason;
+    let created = AuditDetails::SessionCreated {
+        session_id: 7,
+        user: crate::ids::UserId::new(3),
+        public_id: "00000000000000a1".to_owned(),
+    };
+    let revoked = AuditDetails::SessionRevoked {
+        session_id: 7,
+        user: crate::ids::UserId::new(3),
+        public_id: "00000000000000a1".to_owned(),
+        reason: SessionRevokeReason::Logout,
+    };
+    let all = AuditDetails::SessionsRevoked {
+        user: crate::ids::UserId::new(3),
+        reason: SessionRevokeReason::Admin,
+        revoked_sessions: 2,
+    };
+    assert_eq!(created.action(), "session.created");
+    assert_eq!(revoked.action(), "session.revoked");
+    assert_eq!(all.action(), "session.revoked_all");
+    for d in [&created, &revoked, &all] {
+        assert_eq!(d.event_type(), None, "{}", d.action());
+    }
+    assert_eq!(
+        created.to_value(),
+        json!({"session_id": 7, "user_id": 3, "public_id": "00000000000000a1"})
+    );
+    assert_eq!(
+        revoked.to_value(),
+        json!({"session_id": 7, "user_id": 3, "public_id": "00000000000000a1", "reason": "logout"})
+    );
+    assert_eq!(
+        all.to_value(),
+        json!({"user_id": 3, "reason": "admin", "revoked_sessions": 2})
+    );
+    let names: Vec<&str> = SessionRevokeReason::ALL
+        .iter()
+        .map(|r| r.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "logout",
+            "backchannel",
+            "user_disabled",
+            "admin",
+            "idp_revoked"
+        ]
+    );
+    for r in SessionRevokeReason::ALL {
+        assert_eq!(SessionRevokeReason::parse(r.as_str()), Some(*r));
+    }
+    assert_eq!(SessionRevokeReason::parse("revoked"), None);
 }

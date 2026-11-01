@@ -24,13 +24,15 @@ pub mod repository;
 pub mod request_id;
 pub mod role;
 pub mod scope;
+pub mod session_token;
 pub mod telemetry;
 pub mod token;
 pub mod user_kind;
+pub mod web_keys;
 pub mod web_path;
 
-pub use audit_details::{AuditDetails, ChangedField};
-pub use authenticator::{Authenticator, TokenIdentity};
+pub use audit_details::{AuditDetails, ChangedField, SessionRevokeReason};
+pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
@@ -80,8 +82,12 @@ mod role_tests;
 #[cfg(test)]
 mod scope_tests;
 #[cfg(test)]
+mod session_token_tests;
+#[cfg(test)]
 mod token_tests;
 #[cfg(test)]
 mod user_kind_tests;
+#[cfg(test)]
+mod web_keys_tests;
 #[cfg(test)]
 mod web_path_tests;

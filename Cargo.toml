@@ -67,6 +67,11 @@ aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "al
 # Apache-2.0. Only the derive and the model are used (no web framework glue).
 utoipa = { version = "5", default-features = false, features = ["macros"] }
 # ── end M1 phase 8b MR6 ──
+# ── M2 MR3: web sessions (ADR-0021 §7) ──
+# HKDF-SHA256: one key per purpose from web.session_key_file. RustCrypto,
+# MIT OR Apache-2.0; 0.12 is built on the hmac 0.12 / digest 0.10 above.
+hkdf = "0.12"
+# ── end M2 MR3 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

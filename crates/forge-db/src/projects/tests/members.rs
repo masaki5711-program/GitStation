@@ -538,6 +538,7 @@ async fn disabling_the_last_project_owner_is_refused_and_force_records_it() {
         json!({
             "kind": "human",
             "revoked_tokens": 0,
+            "revoked_sessions": 0,
             "forced": true,
             "ownerless_groups": 0,
             "ownerless_projects": 1,

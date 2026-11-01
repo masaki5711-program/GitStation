@@ -942,3 +942,20 @@ fn agent_token_cannot_delete_transfer_or_release() {
         }
     }
 }
+
+/// M2 MR3 (ADR-0021 §17): a token never reads a session, whatever its
+/// scopes (administrator included); the reason says why.
+#[test]
+fn a_session_only_action_refuses_every_token_with_session_required() {
+    assert!(Action::SessionRead.is_session_only());
+    assert!(Action::ALL
+        .iter()
+        .filter(|a| a.is_session_only())
+        .all(|a| a.required_scope().is_none() && !a.is_public()));
+    let all = vec![Scope::ReadApi, Scope::Api, Scope::Admin];
+    let token = Principal::authenticated(ME, true, true, Credential::Token(all));
+    let err = authorize(&token, Action::SessionRead, &Resource::Instance).expect_err("token");
+    assert_eq!(err.code(), ErrorCode::InsufficientScope);
+    assert!(err.to_string().contains("reason=session_required"), "{err}");
+    assert!(authorize(&session(), Action::SessionRead, &Resource::Instance).is_ok());
+}

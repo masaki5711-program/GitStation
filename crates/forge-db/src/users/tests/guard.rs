@@ -240,6 +240,7 @@ async fn a_forced_disable_passes_the_guard_and_records_what_it_left() {
         json!({
             "kind": "human",
             "revoked_tokens": 1,
+            "revoked_sessions": 0,
             "forced": true,
             "ownerless_groups": 2,
             "ownerless_projects": 0,
@@ -280,6 +281,7 @@ async fn a_forced_disable_the_guard_would_allow_is_a_plain_disable() {
         json!({
             "kind": "human",
             "revoked_tokens": 0,
+            "revoked_sessions": 0,
             "forced": true,
             "ownerless_groups": 0,
             "ownerless_projects": 0,

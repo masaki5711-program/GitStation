@@ -718,6 +718,67 @@
         ],
         "type": "string"
       },
+      "SessionBody": {
+        "additionalProperties": false,
+        "description": "The caller's web session.",
+        "properties": {
+          "absolute_expires_at": {
+            "description": "When the session ends at the latest (RFC 3339, UTC).",
+            "type": "string"
+          },
+          "csrf_token": {
+            "description": "Send as `X-GitStation-CSRF` on every state-changing request (64\nlowercase hex; derived from the cookie, the same for the session's\nlifetime).",
+            "type": "string"
+          },
+          "idle_expires_at": {
+            "description": "When the session ends without activity (RFC 3339, UTC).",
+            "type": "string"
+          },
+          "public_id": {
+            "description": "The session's public id (never the secret).",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "user",
+          "csrf_token",
+          "public_id",
+          "idle_expires_at",
+          "absolute_expires_at"
+        ],
+        "type": "object"
+      },
+      "SessionUser": {
+        "additionalProperties": false,
+        "description": "The signed-in user, as the session shows it.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "description": "The account's administrator flag (a session carries administrator\nrights when it is set).",
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "is_admin"
+        ],
+        "type": "object"
+      },
       "SetVisibility": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/visibility`.",
@@ -2247,6 +2308,35 @@
         "summary": "Set a project's visibility (Owner)",
         "x-forge-action": "ProjectVisibilityChange",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "get_api_v1_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own web session and its CSRF token (sessions only, ADR-0021)",
+        "x-forge-action": "SessionRead"
       }
     },
     "/api/v1/user": {

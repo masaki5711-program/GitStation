@@ -15,6 +15,13 @@
 //! `api.cursor_keys_file` — required: `serve` does not start without them
 //! (`FG-SYS-0002`).
 //!
+//! Web sessions (M2 MR3, ADR-0021 §5–§6): `web.base_url` is required (the
+//! origin of the CSRF check), `web.session_key_file` is read before the
+//! server binds when it is set (a broken file stops the start,
+//! `FG-SYS-0002`), and the database is the session authenticator
+//! (`forge_db::sessions::SessionStore`, `web.session_idle_secs`), behind
+//! the same permits as the token lookups.
+//!
 //! Smart HTTP (M1 phase 9 MR3): `storage.root` is required; git runs from
 //! `PATH` with HOME pinned to the storage root (as the worker does), its
 //! stream pools and timeouts from `git.http.*`, the version checked
@@ -25,7 +32,7 @@ use std::time::Duration;
 
 use forge_core::config::{Config, DatabaseConfig, GitHttpConfig};
 use forge_core::readiness::ReadinessProbe;
-use forge_core::Authenticator;
+use forge_core::{Authenticator, SessionAuthenticator};
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
 use forge_git::{Git, GitConfig, StorageRoot};
@@ -46,6 +53,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
     // MR7b): read once, before anything binds — missing or invalid is
     // FG-SYS-0002 config_key=api.cursor_keys_file (runbook config-invalid).
     let cursor_keys = Arc::new(cfg.api.require_cursor_keys()?);
+    // M2 MR3: the origin every state-changing browser request must name,
+    // and the session keys (used by the login, MR4) checked now, before
+    // anything binds.
+    let web_origin = cfg.web.require_base_url()?.origin().to_owned();
+    if let Some(keys) = cfg.web.session_keys()? {
+        tracing::info!(kids = ?keys.kids(), "forge.serve.session_keys_loaded");
+    }
     block_on(async {
         let smart_http = smart_http(storage, &cfg.git_http);
         forge_git::version::detect(&smart_http.git).await?;
@@ -55,7 +69,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // the database (forge-web reads both through forge-core traits).
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
-        let state = app_state(&db, database)
+        let state = app_state(&db, database, cfg.web.session_idle)
+            .with_web_origin(&web_origin)
             // D5 MR3: the deletion grace period (`hosting.deletion_grace_days`).
             .with_hosting(
                 forge_hosting::Hosting::new(db.clone()) // clone: the pool handle is shared
@@ -125,15 +140,17 @@ fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
     SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits))
 }
 
-/// The server's state: the database as readiness probe and as token
-/// authenticator, bounded to [`auth_permits`] concurrent lookups.
-fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
+/// The server's state: the database as readiness probe and as token and
+/// session authenticator, together bounded to [`auth_permits`] concurrent
+/// lookups; `session_idle` is `web.session_idle_secs`.
+fn app_state(db: &Db, database: &DatabaseConfig, session_idle: Duration) -> AppState {
     // clone: the pool handle is shared (Arc inside)
     let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone());
-    let authenticator: Arc<dyn Authenticator> = Arc::new(BoundedAuthenticator::new(
-        Arc::new(db.clone()),
-        auth_permits(database),
-    ));
+    let bounded = BoundedAuthenticator::new(Arc::new(db.clone()), auth_permits(database));
+    let sessions: Arc<dyn SessionAuthenticator> = Arc::new(bounded.sessions(Arc::new(
+        forge_db::sessions::SessionStore::new(db.clone(), session_idle),
+    )));
+    let authenticator: Arc<dyn Authenticator> = Arc::new(bounded);
     let lookups = Lookups {
         namespaces: Arc::new(db.clone()),
         projects: Arc::new(db.clone()),
@@ -144,6 +161,7 @@ fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
         authenticator,
         lookups,
     )
+    .with_sessions(sessions)
     .with_probe_timeout(probe_timeout_for(database))
     .with_lookup_timeout(lookup_timeout_for(database))
     // The group / project writes (M1 phase 8b MR7a).
@@ -348,7 +366,7 @@ mod tests {
             &Env::from_pairs([("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "4000")]),
         )
         .expect("config");
-        let state = app_state(&t.db, &cfg.database);
+        let state = app_state(&t.db, &cfg.database, cfg.web.session_idle);
         let identity = state
             .authenticator
             .authenticate(&rid("req-serve-auth"), &issued.token.reveal())
@@ -366,6 +384,15 @@ mod tests {
         assert_eq!(err.code(), ErrorCode::Unauthenticated);
         let probes: Vec<&str> = state.probes.iter().map(|p| p.name()).collect();
         assert_eq!(probes, ["database"]);
+        // M2 MR3: the session store is wired the same way.
+        let session = forge_db::test_support::issue_session(&t.db, alice).await;
+        let sessions = state.sessions.as_ref().expect("sessions are wired");
+        let identity = sessions
+            .authenticate_session(&rid("req-serve-session"), &session.token.reveal())
+            .await
+            .expect("the issued session authenticates");
+        assert_eq!(identity.user_id, alice);
+        assert_eq!(identity.session_id, session.session_id);
         t.drop_now().await;
     }
 }

@@ -192,6 +192,39 @@ unaudited_columns = ["updated_at"]
 txn_audited_columns = []
 # ── end D4 ──
 
+# ── M2 MR3: web sessions and IdP identities (ADR-0021 §4–§5, ADR-0018) ──
+[tables.web_sessions]
+guarded = false
+kind = "audited"
+# Not secret_sha256, refresh_token_enc, id_token_enc or oidc_sub (ADR-0021 §5:
+# the read pool never sees session hashes, the IdP's tokens or its subject).
+ro_columns = [
+    "id", "public_id", "user_id", "created_at", "last_seen_at", "idle_expires_at",
+    "absolute_expires_at", "revoked_at", "revoked_reason", "oidc_issuer", "oidc_sid",
+    "refresh_checked_at", "access_role_seen_at",
+]
+# session.created / session.revoked (and user.disabled) are audited on the user.
+audit_resource = "user"
+audit_id_column = "user_id"
+# Activity (at most once a minute) and the refresh check (ADR-0021 §7).
+unaudited_columns = [
+    "last_seen_at", "idle_expires_at", "refresh_token_enc", "id_token_enc",
+    "refresh_checked_at", "access_role_seen_at",
+]
+txn_audited_columns = []
+
+[tables.user_identities]
+guarded = false
+kind = "audited"
+# Not subject (the IdP's identifier of the person; no read path needs it).
+ro_columns = ["id", "user_id", "issuer", "linked_at", "last_login_at"]
+# user.identity_linked (MR4) is audited on the user.
+audit_resource = "user"
+audit_id_column = "user_id"
+unaudited_columns = ["last_login_at"]
+txn_audited_columns = []
+# ── end M2 MR3 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

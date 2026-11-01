@@ -625,6 +625,27 @@ pub fn assert_reason(err: &ForgeError, code: ErrorCode, reason: &str) {
     );
 }
 
+/// M2 MR3: a web session for `user` as the OIDC login (MR4) will issue it,
+/// without an IdP (`oidc = None`), with the default lifetimes (4 h idle,
+/// 12 h absolute). `issued.token.reveal()` is what the browser holds: the
+/// `__Host-gstn_session` cookie value. Tests only (feature `test-support`).
+pub async fn issue_session(db: &Db, user: forge_core::UserId) -> crate::sessions::Issued {
+    use std::time::Duration;
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::System,
+        forge_core::RequestId::parse("req-test-session").expect("request id"),
+    );
+    let new = crate::sessions::NewSession {
+        user,
+        idle: Duration::from_secs(4 * 3600),
+        absolute: Duration::from_secs(12 * 3600),
+        oidc: None,
+    };
+    crate::sessions::issue(db, &ctx, &new)
+        .await
+        .expect("issue a test session")
+}
+
 /// The whole error chain as the log would show it.
 pub fn chain(err: &ForgeError) -> String {
     let mut text = err.to_string();

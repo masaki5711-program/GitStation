@@ -95,6 +95,9 @@
    ```
 
    出力が `user <username>: disabled` なら完了。有効なトークンはすべて同じ変更で失効する（`revoked_reason = 'user_disabled'`）。
+   Web のセッション（`forge.web_sessions`）も同じ変更で失効し（`revoked_reason = 'user_disabled'`、M2 MR3）、次の要求は FG-AUTH-0004 になる。
+   数は `user.disabled` の監査の行の `details.revoked_sessions` に出る。Keycloak の側でも無効にするときは、GitStation の無効化を先に行う
+   （Keycloak だけを無効にしても、ログイン済みのセッションは最大 5 分と次の操作まで残る。ADR-0021 §7）。
 
 ### B. 緊急の無効化（資格情報の漏えい）— ガードを越える
 
@@ -141,6 +144,8 @@ Owner の移譲を待てないときだけ使う。
 
 - `forge doctor` の `users.administration` が `ok`（有効な人間の管理者がいて、どの最上位のグループにも Owner がいる）。
 - 無効化した利用者のトークン: `forge admin token list --user <username>` で、すべてに `revoked_at` がある。
+- 無効化した利用者の Web のセッション: 読み取りの接続で
+  `SELECT count(*) FROM forge.web_sessions WHERE user_id = <id> AND revoked_at IS NULL AND absolute_expires_at > now()` が 0。
 - 監査の記録に、実行した手順ごとに 1 行ある（`user.disabled`、`user.admin_bootstrapped`）。
 
 ## Escalate

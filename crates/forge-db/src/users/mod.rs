@@ -267,11 +267,14 @@ async fn insert(tx: &mut ChangeTx, new: &NewUser, path: &str) -> Result<Created,
 }
 
 /// `active` becomes `disabled` with one audit row `user.disabled`
-/// (`AuditDetails::UserDisabled`, with `revoked_tokens` and the guard's
+/// (`AuditDetails::UserDisabled`, with `revoked_tokens`, `revoked_sessions`
+/// and the guard's
 /// `forced` / `ownerless_groups` / `ownerless_projects` /
 /// `left_without_admin`); the user's active
 /// tokens are revoked in the same change (`revoked_reason = 'user_disabled'`,
-/// one `token.revoked` event each, ADR-0019). Disabling a disabled user is
+/// one `token.revoked` event each, ADR-0019), and so are the user's active
+/// web sessions (`revoked_reason = 'user_disabled'`, no event, ADR-0019
+/// Amendment M2). Disabling a disabled user is
 /// `AlreadyDisabled` and writes nothing. An unknown user is `FG-REPO-0005`
 /// (`resource=user`, `reason=absent`).
 ///
@@ -360,9 +363,24 @@ pub async fn disable_with(
                 .map_err(|e| query_error("users.disable.revoke_tokens", e))
             })
             .await?;
+        // ADR-0019 Amendment M2: the user's web sessions end in the same
+        // change (`revoked_reason = 'user_disabled'`); `sessions::issue`
+        // locks the user row too, so none is issued in between. Counted in
+        // the one audit row; no per-session row, no event (ADR-0021 §5).
+        let revoked_sessions = tx
+            .step(|c| {
+                crate::sessions::revoke_active(
+                    c,
+                    user,
+                    forge_core::SessionRevokeReason::UserDisabled,
+                    "users.disable.revoke_sessions",
+                )
+            })
+            .await?;
         let details = AuditDetails::UserDisabled {
             kind,
             revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
+            revoked_sessions,
             forced,
             ownerless_groups: leaves.ownerless_count(),
             ownerless_projects: leaves.ownerless_project_count(),

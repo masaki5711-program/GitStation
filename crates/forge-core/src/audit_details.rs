@@ -45,6 +45,9 @@ pub enum AuditDetails {
         kind: UserKind,
         /// Active tokens revoked in the same change (D3, ADR-0019).
         revoked_tokens: i64,
+        /// Active web sessions revoked in the same change
+        /// (`revoked_reason = 'user_disabled'`, M2 MR3, ADR-0019 Amendment M2).
+        revoked_sessions: i64,
         /// The operator passed the administration guard (`--force`,
         /// ADR-0019 §10), whether or not it would have refused.
         forced: bool,
@@ -279,6 +282,73 @@ pub enum AuditDetails {
         storage_removed: bool,
     },
     // ── end D5 MR4 ──
+    // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
+    /// `session.created`: a web session was issued (the OIDC login, MR4).
+    /// Ids and the public id only; never the secret, its hash or the IdP's
+    /// subject.
+    SessionCreated {
+        session_id: i64,
+        user: UserId,
+        public_id: String,
+    },
+    /// `session.revoked`: one session ended before its expiry.
+    SessionRevoked {
+        session_id: i64,
+        user: UserId,
+        public_id: String,
+        reason: SessionRevokeReason,
+    },
+    /// `session.revoked_all`: every active session of the user ended at
+    /// once (an administrator, MR6); `revoked_sessions` = how many.
+    SessionsRevoked {
+        user: UserId,
+        reason: SessionRevokeReason,
+        revoked_sessions: i64,
+    },
+    // ── end M2 MR3 ──
+}
+
+/// Why a web session ended early (`web_sessions.revoked_reason`, its CHECK,
+/// ADR-0021 §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRevokeReason {
+    /// The user signed out (or signed in again: the old session ends).
+    Logout,
+    /// Keycloak's back-channel logout (ADR-0021 §8).
+    Backchannel,
+    /// The user was disabled in GitStation (ADR-0019 Amendment M2).
+    UserDisabled,
+    /// An administrator ended it (MR6).
+    Admin,
+    /// The refresh check found the IdP session gone or the role removed
+    /// (ADR-0021 §7).
+    IdpRevoked,
+}
+
+impl SessionRevokeReason {
+    pub const ALL: &'static [SessionRevokeReason] = &[
+        Self::Logout,
+        Self::Backchannel,
+        Self::UserDisabled,
+        Self::Admin,
+        Self::IdpRevoked,
+    ];
+
+    /// The stored value (and the log / audit `reason`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Logout => "logout",
+            Self::Backchannel => "backchannel",
+            Self::UserDisabled => "user_disabled",
+            Self::Admin => "admin",
+            Self::IdpRevoked => "idp_revoked",
+        }
+    }
+
+    /// A stored value back; `None` for anything else.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|r| r.as_str() == text)
+    }
 }
 
 impl AuditDetails {
@@ -317,6 +387,9 @@ impl AuditDetails {
             Self::ProjectRestored { .. } => "project.restored",
             Self::RepositoryPurgeStarted { .. } => "repository.purge_started",
             Self::ProjectPurged { .. } => "project.purged",
+            Self::SessionCreated { .. } => "session.created",
+            Self::SessionRevoked { .. } => "session.revoked",
+            Self::SessionsRevoked { .. } => "session.revoked_all",
         }
     }
 
@@ -362,13 +435,20 @@ impl AuditDetails {
             // D5 MR4: the start is audit-only; the end is the one event.
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
+            // ADR-0021 §5: sessions are audit rows, never domain events.
+            Self::SessionCreated { .. }
+            | Self::SessionRevoked { .. }
+            | Self::SessionsRevoked { .. } => None,
         }
     }
 
     /// The JSON stored in `audit_log.details`:
     /// UserCreated `{"kind","namespace_id","is_admin"}`,
-    /// UserDisabled `{"kind","revoked_tokens","forced","ownerless_groups","ownerless_projects",
-    /// "left_without_admin"}`,
+    /// UserDisabled `{"kind","revoked_tokens","revoked_sessions","forced","ownerless_groups",
+    /// "ownerless_projects","left_without_admin"}`,
+    /// SessionCreated `{"session_id","user_id","public_id"}`,
+    /// SessionRevoked `{"session_id","user_id","public_id","reason"}`,
+    /// SessionsRevoked `{"user_id","reason","revoked_sessions"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
@@ -415,6 +495,7 @@ impl AuditDetails {
             Self::UserDisabled {
                 kind,
                 revoked_tokens,
+                revoked_sessions,
                 forced,
                 ownerless_groups,
                 ownerless_projects,
@@ -422,6 +503,7 @@ impl AuditDetails {
             } => serde_json::json!({
                 "kind": kind.as_str(),
                 "revoked_tokens": revoked_tokens,
+                "revoked_sessions": revoked_sessions,
                 "forced": forced,
                 "ownerless_groups": ownerless_groups,
                 "ownerless_projects": ownerless_projects,
@@ -654,6 +736,35 @@ impl AuditDetails {
                 "namespace_id": namespace_id.map(NamespaceId::get),
                 "reclaim": reclaim,
             }),
+            Self::SessionCreated {
+                session_id,
+                user,
+                public_id,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "user_id": user.get(),
+                "public_id": public_id,
+            }),
+            Self::SessionRevoked {
+                session_id,
+                user,
+                public_id,
+                reason,
+            } => serde_json::json!({
+                "session_id": session_id,
+                "user_id": user.get(),
+                "public_id": public_id,
+                "reason": reason.as_str(),
+            }),
+            Self::SessionsRevoked {
+                user,
+                reason,
+                revoked_sessions,
+            } => serde_json::json!({
+                "user_id": user.get(),
+                "reason": reason.as_str(),
+                "revoked_sessions": revoked_sessions,
+            }),
         }
     }
 
@@ -714,7 +825,10 @@ impl AuditDetails {
             | Self::ProjectDeleted { .. }
             | Self::ProjectRestored { .. }
             | Self::RepositoryPurgeStarted { .. }
-            | Self::ProjectPurged { .. } => self.to_value(),
+            | Self::ProjectPurged { .. }
+            | Self::SessionCreated { .. }
+            | Self::SessionRevoked { .. }
+            | Self::SessionsRevoked { .. } => self.to_value(),
         }
     }
 }

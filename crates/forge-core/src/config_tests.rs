@@ -1056,3 +1056,135 @@ fn hosting_purge_interval_has_a_default_env_and_a_range() {
         );
     }
 }
+
+/// `web.base_url` (M2 MR3, ADR-0021 §12): https, or http on loopback; no
+/// path, query or user info; the origin as a browser sends it. Optional at
+/// load (`forge serve` requires it).
+#[test]
+fn the_web_base_url_is_an_origin_and_is_validated() {
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.web.base_url().is_none());
+    assert_invalid(
+        &none.web.require_base_url().expect_err("required"),
+        "web.base_url",
+        "missing",
+    );
+    for (value, origin) in [
+        ("https://git.example.test", "https://git.example.test"),
+        ("https://git.example.test/", "https://git.example.test"),
+        ("https://GIT.example.test:443/", "https://git.example.test"),
+        (
+            "https://git.example.test:8443",
+            "https://git.example.test:8443",
+        ),
+        ("http://localhost:8080", "http://localhost:8080"),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080"),
+    ] {
+        let cfg = load(None, &env(&[("FORGE_WEB_BASE_URL", value)])).expect(value);
+        assert_eq!(
+            cfg.web.require_base_url().expect("set").origin(),
+            origin,
+            "{value}"
+        );
+    }
+    for (value, reason) in [
+        ("not a url", "invalid"),
+        ("http://git.example.test", "insecure_http"),
+        ("ftp://git.example.test", "scheme"),
+        ("https://git.example.test/gitstation", "has_path"),
+        ("https://git.example.test/?a=1", "has_query"),
+        ("https://git.example.test/#x", "has_query"),
+        ("https://user@git.example.test", "has_user_info"),
+    ] {
+        let err = load(None, &env(&[("FORGE_WEB_BASE_URL", value)])).expect_err(value);
+        assert_invalid(&err, "web.base_url", reason);
+    }
+    let toml = file("[web]\nbase_url = \"https://git.example.test\"\n");
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file.web.base_url().is_some());
+}
+
+/// `web.session_idle_secs` / `web.session_absolute_secs`: 4 h and 12 h by
+/// default, at least 60 s, idle within absolute, absolute at most 24 h.
+#[test]
+fn web_session_lifetimes_have_defaults_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.web.session_idle, Duration::from_secs(4 * 3600));
+    assert_eq!(cfg.web.session_absolute, Duration::from_secs(12 * 3600));
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_WEB_SESSION_IDLE_SECS", "600"),
+            ("FORGE_WEB_SESSION_ABSOLUTE_SECS", "86400"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(cfg.web.session_idle, Duration::from_secs(600));
+    assert_eq!(cfg.web.session_absolute, Duration::from_secs(86_400));
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_WEB_SESSION_IDLE_SECS", "59")],
+            "web.session_idle_secs",
+            "below_min",
+        ),
+        (
+            vec![("FORGE_WEB_SESSION_ABSOLUTE_SECS", "86401")],
+            "web.session_absolute_secs",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_WEB_SESSION_IDLE_SECS", "7200"),
+                ("FORGE_WEB_SESSION_ABSOLUTE_SECS", "3600"),
+            ],
+            "web.session_idle_secs",
+            "above_absolute",
+        ),
+        (
+            vec![("FORGE_WEB_SESSION_IDLE_SECS", "4h")],
+            "web.session_idle_secs",
+            "invalid",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}
+
+/// `web.session_key_file` is checked at load (absolute path) and read on
+/// use (secret file rules, the `<kid> <hex>` format); `FORGE_WEB_` and
+/// `FORGE_AUTH_` are configuration namespaces (a typo fails).
+#[test]
+fn the_web_session_key_file_is_checked_at_load_and_read_on_use() {
+    let keys = file(&format!("2 {}\n", "22".repeat(32)));
+    let path = keys.path().to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_WEB_SESSION_KEY_FILE", path.as_str())])).expect("loads");
+    assert!(cfg.web.has_session_keys());
+    let read = cfg.web.session_keys().expect("read").expect("configured");
+    assert_eq!(read.kids(), vec![2]);
+    assert!(!format!("{cfg:?} {read:?}").contains("2222"));
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.web.session_keys().expect("unset").is_none());
+    let err = load(
+        None,
+        &env(&[("FORGE_WEB_SESSION_KEY_FILE", "relative/keys")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "web.session_key_file", "not_absolute");
+    let broken = file("1 abcd\n");
+    let broken_path = broken.path().to_string_lossy().into_owned();
+    let cfg = load(
+        None,
+        &env(&[("FORGE_WEB_SESSION_KEY_FILE", broken_path.as_str())]),
+    )
+    .expect("checked on use");
+    assert_invalid(
+        &cfg.web.session_keys().expect_err("invalid key"),
+        "web.session_key_file",
+        "invalid_key",
+    );
+    for typo in ["FORGE_WEB_BASEURL", "FORGE_AUTH_OIDC_ISSUER"] {
+        let err = load(None, &env(&[(typo, "x")])).expect_err(typo);
+        assert_invalid(&err, typo, "unknown_env");
+    }
+}

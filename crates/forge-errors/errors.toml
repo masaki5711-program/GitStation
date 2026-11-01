@@ -440,9 +440,9 @@ severity = "info"
 user_message_ja = "ログインが必要です。"
 user_message_en = "You need to sign in."
 user_message_id = "Anda perlu masuk terlebih dahulu."
-cause = "The request carried no valid credentials; forge has no anonymous access."
-diagnosis = "The log event carries `action`. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper."
-fix = "Sign in, or configure the git credential helper with a personal access token."
+cause = "The request carried no valid credentials; forge has no anonymous access. Credentials are `Authorization: Bearer <token>`, `Authorization: Basic` whose password is the token (git Smart HTTP and the raw / archive routes only), or the web session cookie `__Host-gstn_session` (the API and raw / archive; ignored on git routes; M2 MR3, ADR-0021)."
+diagnosis = "The log event carries `action`, or (`forge.auth.token_rejected` / `forge.auth.session_rejected`) `reason` and `scheme` (`bearer`, `basic`, `session`) and, when known, `public_id`. Token reasons: malformed, unknown, mismatch, revoked, expired; header reasons: malformed_header, unsupported_scheme, ambiguous (two Authorization headers, two session cookies, or a session cookie together with an Authorization header on the API or raw / archive — neither is tried), basic_not_allowed (Basic on /api/v1: the API takes Bearer only, so a browser never remembers a token as a Basic password; ADR-0019 Amendment M2). Session reasons: session_malformed, session_unknown, session_mismatch, session_revoked (with `revoked_reason`: logout, backchannel, user_disabled, admin, idp_revoked), session_expired (idle or absolute lifetime, web.session_idle_secs / web.session_absolute_secs); the response then clears the cookie. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper. /api/v1 401s challenge with Bearer only; raw / archive drop the Basic challenge for browser requests (Sec-Fetch-Mode / Sec-Fetch-Dest or the session cookie)."
+fix = "Sign in again (an expired or revoked session), or configure the git credential helper with a personal access token. Send API tokens as `Authorization: Bearer`, not Basic. Send either a token or the session cookie, never both."
 test = "anonymous_is_unauthenticated"
 
 [[error]]
@@ -454,8 +454,8 @@ user_message_ja = "このアクセストークンには、この操作の権限�
 user_message_en = "This access token does not have the scope for this operation."
 user_message_id = "Token akses ini tidak memiliki cakupan (scope) untuk operasi ini."
 cause = "The caller authenticated with a token whose scopes do not include the scope the action requires. Scopes only narrow a role; they never widen it."
-diagnosis = "The log event carries `action`, `required_scope` and `token_scopes`."
-fix = "Create a token with the required scope (for example write_repository for push)."
+diagnosis = "The log event carries `action`, `required_scope` and `token_scopes`, or `reason=session_required` for an action only a web session may perform (`GET /api/v1/session`, ADR-0021 §17), whatever the token's scopes."
+fix = "Create a token with the required scope (for example write_repository for push). For session_required, use the browser session; a token cannot do it."
 test = "token_scope_narrows_role"
 
 [[error]]
@@ -480,7 +480,7 @@ user_message_ja = "このアカウントは無効化されています。管理�
 user_message_en = "This account is disabled. Contact the administrator."
 user_message_id = "Akun ini dinonaktifkan. Hubungi administrator."
 cause = "The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins)."
-diagnosis = "The log event carries `action`, or for a personal access token `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate refuses a disabled owner's token itself, ADR-0019). The audit log records who disabled the account, or the lockout."
+diagnosis = "The log event carries `action`, or for a personal access token or a web session `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate and sessions::authenticate refuse a disabled owner's credential themselves, ADR-0019; a disable also revokes the user's sessions, `user.disabled` details `revoked_sessions`, ADR-0019 Amendment M2). The audit log records who disabled the account, or the lockout."
 fix = "An administrator re-enables the account if it should be active."
 test = "disabled_account_is_denied"
 
@@ -563,6 +563,19 @@ diagnosis = "The doctor line carries `reason` (no_admin when there is no active 
 fix = "Follow runbook user-offboarding: as an approved step, run `forge admin bootstrap-admin --user <username>` (or `--create`) to restore an administrator. Top-level groups without an Owner cannot be fixed yet (no member-change command or route exists in D3): record the listed group_ids in the incident record; the finding stays (warn) until a member-change route lands and an active user is made their Owner. Re-run forge doctor after each step."
 runbook = "user-offboarding"
 test = "administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group"
+
+[[error]]
+code = "FG-AUTH-0016"
+name = "CsrfRejected"
+http_status = 403
+severity = "info"
+user_message_ja = "この操作は受け付けられませんでした。ページを再読み込みしてから、もう一度実行してください。"
+user_message_en = "This action was not accepted. Reload the page and try again."
+user_message_id = "Tindakan ini tidak diterima. Muat ulang halaman lalu coba lagi."
+cause = "A state-changing request (not GET, HEAD or OPTIONS) failed the cross-site request checks (ADR-0021 §6, M2 MR3). Two checks run independently: (1) any request that carries fetch metadata (Sec-Fetch-Site / -Mode / -Dest) or an Origin header — whatever its credentials, Bearer and anonymous included — must have `Sec-Fetch-Site: same-origin` when present and an `Origin` exactly equal to the origin of web.base_url; (2) a request authenticated by anything but `Authorization: Bearer` on the API or raw / archive (in practice the session cookie `__Host-gstn_session`) must also send `Origin` and the header `X-GitStation-CSRF` with the session's CSRF token (HMAC-SHA256 of the cookie's secret; `GET /api/v1/session` returns it). git Smart HTTP gets check (1) only (git sends neither header)."
+diagnosis = "The log event `forge.auth.csrf_rejected` carries `reason`: token_missing (no X-GitStation-CSRF header), token_mismatch (not this session's token — another session's, an old page's after a new sign-in, or a forged one), origin_missing (a session request without Origin), origin_mismatch (Origin is another origin: another subdomain, http vs https, another port; with `expected_origin`; `base_url=unset` when web.base_url is not configured), fetch_site (Sec-Fetch-Site was same-site, cross-site or none). It also carries `method`, `path` (log-safe) and, for a session, `public_id`. Header values are never logged except the expected origin. A burst of origin_mismatch from one client usually means a page of another site posting to GitStation (an attack or a misconfigured integration); a single token_mismatch after a new sign-in is a stale tab."
+fix = "For a person: reload the page (it fetches the current CSRF token) and repeat the action. For an integration or script: authenticate with `Authorization: Bearer <token>` and do not send browser headers (Origin / Sec-Fetch-*) from another origin. If every browser request fails with origin_mismatch, check that web.base_url is exactly the URL people open (scheme, host and port)."
+test = "csrf_rejections_name_their_reason"
 
 [[error]]
 code = "FG-GIT-0007"

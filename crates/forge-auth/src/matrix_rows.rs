@@ -634,6 +634,18 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::UserSelfRead, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
     row(A::UserSelfRead, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
     row(A::UserSelfRead, W::DevTokenWriteRepository, F::Instance, deny(E::InsufficientScope)),
+    // --- SessionRead (`GET /api/v1/session`, M2 MR3, ADR-0021 §17): sessions only ---
+    row(A::SessionRead, W::Developer, F::Instance, Allow),
+    row(A::SessionRead, W::Admin, F::Instance, Allow),
+    row(A::SessionRead, W::NonMember, F::Instance, Allow),
+    row(A::SessionRead, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::SessionRead, W::Disabled, F::Instance, deny(E::AccountDisabled)),
+    row(A::SessionRead, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::SessionRead, W::OwnerTokenReadApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionRead, W::DevTokenApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionRead, W::AgentTokenReadApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionRead, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionRead, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
     // --- ProjectList / GroupList (`GET /api/v1/projects`, `/groups`, M1 phase 8b MR7b) ---
     // The list itself; each row is decided again with ProjectRead / GroupRead.
     row(A::ProjectList, W::NonMember, F::Instance, Allow),

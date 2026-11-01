@@ -167,4 +167,12 @@ pub const KEYS: &[Key] = &[
         "hosting.purge_interval_secs",
         "FORGE_HOSTING_PURGE_INTERVAL_SECS",
     ),
+    // M2 MR3: web sessions (ADR-0021 §5, §7, §12).
+    text("web.base_url", "FORGE_WEB_BASE_URL"),
+    text("web.session_key_file", "FORGE_WEB_SESSION_KEY_FILE"),
+    number("web.session_idle_secs", "FORGE_WEB_SESSION_IDLE_SECS"),
+    number(
+        "web.session_absolute_secs",
+        "FORGE_WEB_SESSION_ABSOLUTE_SECS",
+    ),
 ];

@@ -730,6 +730,8 @@ dependencies = [
  "base64 0.22.1",
  "forge-errors",
  "getrandom 0.2.17",
+ "hkdf",
+ "hmac",
  "percent-encoding",
  "proptest",
  "serde",

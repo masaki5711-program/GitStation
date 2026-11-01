@@ -434,8 +434,63 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.project_members", operational()),
         ("forge.protected_refs", operational()),
         // ── end D4 ──
+        // ── M2 MR3: web sessions and IdP identities: no DELETE, UPDATE of
+        // the listed columns only, the read pool without hashes, ciphertexts
+        // or the IdP's subject (ADR-0021 §4–§5) ──
+        (
+            "forge.web_sessions",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", WEB_SESSIONS_APP_UPDATE),
+                columns("forge_ro", "SELECT", WEB_SESSIONS_RO),
+            ]
+            .concat(),
+        ),
+        (
+            "forge.user_identities",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", &["last_login_at"]),
+                columns("forge_ro", "SELECT", USER_IDENTITIES_RO),
+            ]
+            .concat(),
+        ),
+        // ── end M2 MR3 ──
     ]
 }
+
+/// The columns forge_app may update on forge.web_sessions.
+const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
+    "last_seen_at",
+    "idle_expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "refresh_token_enc",
+    "id_token_enc",
+    "refresh_checked_at",
+    "access_role_seen_at",
+];
+
+/// The read pool's columns of web_sessions (tables.toml `ro_columns`): not
+/// secret_sha256, refresh_token_enc, id_token_enc or oidc_sub.
+const WEB_SESSIONS_RO: &[&str] = &[
+    "id",
+    "public_id",
+    "user_id",
+    "created_at",
+    "last_seen_at",
+    "idle_expires_at",
+    "absolute_expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "oidc_issuer",
+    "oidc_sid",
+    "refresh_checked_at",
+    "access_role_seen_at",
+];
+
+/// The read pool's columns of user_identities: not subject.
+const USER_IDENTITIES_RO: &[&str] = &["id", "user_id", "issuer", "linked_at", "last_login_at"];
 
 /// The read pool's columns of repositories (tables.toml `ro_columns`): not
 /// provision_token.
@@ -527,6 +582,10 @@ const LATER_TABLES: &[&str] = &[
     "project_members",
     "protected_refs",
     // ── end D4 ──
+    // ── M2 MR3: web sessions (migration 20261103100000) ──
+    "web_sessions",
+    "user_identities",
+    // ── end M2 MR3 ──
 ];
 
 /// Every table the first migration creates.

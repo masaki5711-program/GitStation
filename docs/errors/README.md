@@ -36,7 +36,7 @@
 | [FG-REPO-0020](FG-REPO-0020.md) | 500 | alert | The purge (step D5 MR4, ADR-0015 Amendment D5: the `purge` task of `forge worker` every `hosting.purge_interval_secs`, or `forge admin project purge --now`) could not finish one project whose grace period is over |
 | [FG-REPO-0021](FG-REPO-0021.md) | 500 | warn | `forge admin project purge --now` (step D5 MR4) ran one batch and at least one project failed |
 | [FG-REPO-0022](FG-REPO-0022.md) | 503 | warn | A namespace move, rename or tombstone release through the API (forge_hosting::Hosting::move_project, move_group, rename_user, release_tombstone; step D5 MR5) lost a retryable conflict on every attempt: its transaction was rolled back with FG-DB-0002 `retryable=true` (`deadlock` — two moves whose subtrees and targets cross each other; `subtree_unstable` — namespaces kept being created below the moving subtree while it was being locked; `tombstone_changed` — the tombstone's target was purged meanwhile; `serialization`) and was run again from the start, decided again each time, up to 3 attempts in all (forge_hosting::MOVE_ATTEMPTS) |
-| [FG-AUTH-0001](FG-AUTH-0001.md) | 401 | info | The request carried no valid credentials; forge has no anonymous access. |
+| [FG-AUTH-0001](FG-AUTH-0001.md) | 401 | info | The request carried no valid credentials; forge has no anonymous access |
 | [FG-AUTH-0002](FG-AUTH-0002.md) | 403 | info | The caller authenticated with a token whose scopes do not include the scope the action requires |
 | [FG-AUTH-0003](FG-AUTH-0003.md) | 403 | info | The caller can see the resource but their role is below what the action requires (or the action needs an administrator). |
 | [FG-AUTH-0004](FG-AUTH-0004.md) | 403 | info | The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins). |
@@ -46,6 +46,7 @@
 | [FG-AUTH-0008](FG-AUTH-0008.md) | 400 | info | A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner, a bot owner, a disabled owner, or the owner already holds 50 active tokens. |
 | [FG-AUTH-0009](FG-AUTH-0009.md) | 409 | info | An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2) |
 | [FG-AUTH-0010](FG-AUTH-0010.md) | 500 | warn | forge doctor (check users.administration) found forge without an active human administrator, a top-level group without a direct active Owner, or a project (not pending deletion) without any active Owner, direct or inherited (forge_db::projects::ownerless, D4 MR4) |
+| [FG-AUTH-0016](FG-AUTH-0016.md) | 403 | info | A state-changing request (not GET, HEAD or OPTIONS) failed the cross-site request checks (ADR-0021 §6, M2 MR3) |
 | [FG-GIT-0007](FG-GIT-0007.md) | 403 | info | A push would rewrite (non-fast-forward) a protected ref |
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |

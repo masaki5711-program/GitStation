@@ -14,6 +14,7 @@ pub mod namespaces;
 pub mod project_writes;
 pub mod projects;
 pub mod protected_refs;
+pub mod session;
 pub mod shell;
 pub mod users;
 mod write;

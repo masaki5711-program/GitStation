@@ -7,7 +7,9 @@
 //! names a route the server no longer has.
 //!
 //! Every route is already callable through `gstn api` (C-6); `Command` means a
-//! dedicated command exists, `Planned` names the series that adds it.
+//! dedicated command exists, `Planned` names the series that adds it, and
+//! `BrowserOnly` marks a route only a web session can use (gstn holds a
+//! token, so it has no command for it; M2 MR3).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Coverage {
@@ -15,10 +17,18 @@ pub enum Coverage {
     Command(&'static str),
     /// Only via `gstn api` for now; the dedicated command arrives in the series.
     Planned(&'static str),
+    /// A browser-session-only route (`authorize()` refuses every token):
+    /// gstn never covers it; the text says why.
+    BrowserOnly(&'static str),
 }
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
+    (
+        "GET",
+        "/api/v1/session",
+        Coverage::BrowserOnly("the web session and its CSRF token; tokens are refused (ADR-0021)"),
+    ),
     ("GET", "/api/v1/groups", Coverage::Command("group list")),
     ("POST", "/api/v1/groups", Coverage::Command("group create")),
     (

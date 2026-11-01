@@ -82,6 +82,9 @@ pub mod roles;
 // ── D3: personal access tokens ──
 pub mod tokens;
 // ── end D3 ──
+// ── M2 MR3: web sessions (ADR-0021 §5) ──
+pub mod sessions;
+// ── end M2 MR3 ──
 // ── D4: projects, repositories, project members, protected refs ──
 pub mod projects;
 #[cfg(test)]
