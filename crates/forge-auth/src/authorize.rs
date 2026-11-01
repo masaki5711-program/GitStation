@@ -9,7 +9,9 @@
 //!    a path that resolved to nothing (`Unresolved`, any non-public action)
 //!    → `FG-REPO-0005`; project visibility (also behind a resolved path) →
 //!    `FG-REPO-0005` (404, no existence leak) and pending deletion →
-//!    `FG-REPO-0006` (restore excepted); a transfer target or a moved
+//!    `FG-REPO-0006` (restore excepted: it is decided on the Owner role, and a
+//!    caller who can see the project but may not restore it also gets
+//!    `FG-REPO-0006`); a transfer target or a moved
 //!    tombstone's target the caller cannot see → `FG-REPO-0005`;
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
 //! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
@@ -341,7 +343,16 @@ pub fn authorize(
         // Deleting and restoring a project is a person's decision (D5).
         (Action::ProjectDelete | Action::ProjectRestore, Resource::Project(p)) => {
             people_only()?;
-            need(Role::Owner, p.role)
+            // A caller who can see a project pending deletion but may not
+            // restore it gets what every other route gives there, 410
+            // (FG-REPO-0006), not a 403 that only restore would answer.
+            need(Role::Owner, p.role).map_err(|e| {
+                if action == Action::ProjectRestore && p.pending_deletion {
+                    deny(ErrorCode::PendingDeletion)
+                } else {
+                    e
+                }
+            })
         }
 
         (

@@ -128,6 +128,14 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectDelete",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MemberList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/members",
@@ -187,6 +195,14 @@
     "action": "ProtectedRefManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRestore",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/restore",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -497,14 +513,6 @@
   },
   {
     "action": "ProjectTransfer",
-    "planned": true
-  },
-  {
-    "action": "ProjectDelete",
-    "planned": true
-  },
-  {
-    "action": "ProjectRestore",
     "planned": true
   },
   {

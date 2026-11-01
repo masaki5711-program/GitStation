@@ -49,6 +49,8 @@
        `invalid_key`（`line` の行が `<kid> <64 桁の 16 進数>` でない）、`duplicate`（同じ kid が 2 行）、`unreadable`、`not_absolute`、
        `insecure_permissions`。行の中身はログに出ない。新しい鍵は `openssl rand -hex 32` で作り、`1 <hex>` の 1 行を 0600 のファイルに書く
        （入れ替えは ADR-0013 の Amendment MR6 の手順）
+     - `config_key=hosting.deletion_grace_days`（D5 MR3。削除したプロジェクトを復元できる日数）: `below_min`（0。1 日以上）、`above_max`（366 以上。365 日まで）、
+       `invalid`（整数でない）。未設定なら 7 日。`FORGE_HOSTING_DELETION_GRACE_DAYS` か設定ファイルの `[hosting] deletion_grace_days`
 
    環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定の全体は `forge doctor` で検証できる（読み取りのみ。`config` の行に `config_key` と `reason` が出る。`--config` も同じように指定する）。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。

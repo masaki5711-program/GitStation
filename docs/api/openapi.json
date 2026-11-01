@@ -142,6 +142,31 @@
         ],
         "type": "object"
       },
+      "DeletionBody": {
+        "additionalProperties": false,
+        "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
+        "properties": {
+          "deleted_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purge_after": {
+            "description": "UTC, RFC 3339: the project is restorable until then (and until its\npurge has started).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "deleted_at",
+          "purge_after"
+        ],
+        "type": "object"
+      },
       "Error": {
         "additionalProperties": false,
         "properties": {
@@ -1269,6 +1294,45 @@
       }
     },
     "/api/v1/projects/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a project: it stays restorable for the grace period (Owner)",
+        "x-forge-action": "ProjectDelete"
+      },
       "get": {
         "operationId": "get_api_v1_projects_id",
         "parameters": [
@@ -1769,6 +1833,47 @@
         "summary": "Change a rule's minimum push role (Maintainer; never above the caller's role)",
         "x-forge-action": "ProtectedRefManage",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/restore": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_restore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Restore a project pending deletion (Owner)",
+        "x-forge-action": "ProjectRestore"
       }
     },
     "/api/v1/projects/{id}/visibility": {

@@ -337,8 +337,14 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::ProjectDelete, W::AgentAdminTokenAdmin, F::PrivateProject, deny(E::Forbidden)),
     row(A::ProjectRestore, W::Owner, F::DeletedProject, Allow),
     row(A::ProjectRestore, W::Admin, F::DeletedProject, Allow),
-    row(A::ProjectRestore, W::Maintainer, F::DeletedProject, deny(E::Forbidden)),
+    // A caller who can see the project but is not an Owner gets the 410 every
+    // other route answers on a project pending deletion (not a restore-only 403).
+    row(A::ProjectRestore, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
     row(A::ProjectRestore, W::NonMember, F::DeletedProject, deny(E::NotFound)),
+    row(A::ProjectRestore, W::NonMember, F::InternalDeletedProject, deny(E::PendingDeletion)),
+    // an administrator whose token lacks the admin scope is a plain user: private -> 404
+    row(A::ProjectRestore, W::AdminTokenApi, F::DeletedProject, deny(E::NotFound)),
+    row(A::ProjectRestore, W::AdminTokenApi, F::InternalDeletedProject, deny(E::PendingDeletion)),
     row(A::ProjectRestore, W::OwnerTokenReadApi, F::DeletedProject, deny(E::InsufficientScope)),
     // agents never delete or restore (D5)
     row(A::ProjectRestore, W::AgentOwnerTokenApi, F::DeletedProject, deny(E::Forbidden)),

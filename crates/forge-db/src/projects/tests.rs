@@ -14,6 +14,7 @@ use crate::resolve::project_access;
 use crate::test_support::*;
 use crate::users::{self, NewUser};
 
+mod delete;
 mod member_writes;
 mod members;
 mod race;

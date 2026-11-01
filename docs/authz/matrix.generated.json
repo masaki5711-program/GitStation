@@ -8,7 +8,7 @@
   { "action": "ProjectVisibilityChange", "allow": 4, "deny": 20, "public": false, "git_operation": false },
   { "action": "ProjectTransfer", "allow": 7, "deny": 24, "public": false, "git_operation": false },
   { "action": "ProjectDelete", "allow": 2, "deny": 7, "public": false, "git_operation": false },
-  { "action": "ProjectRestore", "allow": 2, "deny": 5, "public": false, "git_operation": false },
+  { "action": "ProjectRestore", "allow": 2, "deny": 8, "public": false, "git_operation": false },
   { "action": "ProtectedRefManage", "allow": 8, "deny": 22, "public": false, "git_operation": false },
   { "action": "MemberManage", "allow": 19, "deny": 44, "public": false, "git_operation": false },
   { "action": "MemberList", "allow": 9, "deny": 9, "public": false, "git_operation": false },

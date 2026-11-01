@@ -185,8 +185,6 @@ impl Default for AppConfig {
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
     Action::ProjectTransfer,
-    Action::ProjectDelete,
-    Action::ProjectRestore,
     // D5 (ADR-0015): routed in MR5 `feat/web-api-namespace-moves`.
     Action::GroupTransfer,
     Action::UserRename,
@@ -491,6 +489,24 @@ fn hosting_routes(registry: Registry<AppState>) -> Registry<AppState> {
             pw::set_visibility,
         )
         .responds::<routes::projects::ProjectBody>(Verb::Put, pw::VISIBILITY)
+        .route_with(
+            Verb::Delete,
+            routes::projects::PATH,
+            Action::ProjectDelete,
+            "Delete a project: it stays restorable for the grace period (Owner)",
+            routes::projects::ProjectById,
+            pw::delete,
+        )
+        .responds::<pw::DeletionBody>(Verb::Delete, routes::projects::PATH)
+        .route_with(
+            Verb::Post,
+            pw::RESTORE,
+            Action::ProjectRestore,
+            "Restore a project pending deletion (Owner)",
+            pw::ProjectToRestore,
+            pw::restore,
+        )
+        .responds::<routes::projects::ProjectBody>(Verb::Post, pw::RESTORE)
 }
 
 /// Smart HTTP (M1 phase 9): fetch (MR3) — the advertisement (`GET`, and

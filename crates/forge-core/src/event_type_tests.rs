@@ -57,6 +57,15 @@ fn token_events_are_admin_class() {
     );
 }
 
+/// ADR-0016 §10 Amendment D5: deletion and restore are integration events
+/// (an integration must learn that a project went away or came back).
+#[test]
+fn project_deleted_and_restored_are_integration_class() {
+    for t in [EventType::ProjectDeleted, EventType::ProjectRestored] {
+        assert_eq!(t.visibility_class(), VisibilityClass::Integration, "{t:?}");
+    }
+}
+
 #[test]
 fn all_lists_every_event_type_once() {
     let names: Vec<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
@@ -74,7 +83,9 @@ fn all_lists_every_event_type_once() {
             "protected_ref.updated",
             "protected_ref.deleted",
             "repository.pushed",
-            "project.visibility_changed"
+            "project.visibility_changed",
+            "project.deleted",
+            "project.restored"
         ]
     );
 }

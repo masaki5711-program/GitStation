@@ -230,6 +230,26 @@ pub enum AuditDetails {
         reclaim: bool,
     },
     // ── end D5 MR2 ──
+    // ── D5 MR3: deletion and restore ──
+    /// `project.deleted`: also the payload of the event (integration class).
+    /// `deleted_at` / `purge_after` are UTC RFC 3339; `deleted_by` is the
+    /// deleting user (`None`: the operator CLI deletes as `system`).
+    ProjectDeleted {
+        project_id: ProjectId,
+        deleted_at: String,
+        purge_after: String,
+        deleted_by: Option<UserId>,
+    },
+    /// `project.restored`: also the payload of the event (integration
+    /// class). `deleted_at` / `purge_after` are the cleared deletion's;
+    /// `deleted_by` the user who had deleted it.
+    ProjectRestored {
+        project_id: ProjectId,
+        deleted_at: String,
+        purge_after: String,
+        deleted_by: Option<UserId>,
+    },
+    // ── end D5 MR3 ──
 }
 
 impl AuditDetails {
@@ -264,6 +284,8 @@ impl AuditDetails {
             Self::GroupMoved { .. } => "group.moved",
             Self::UserRenamed { .. } => "user.renamed",
             Self::TombstoneReleased { .. } => "namespace_tombstone.released",
+            Self::ProjectDeleted { .. } => "project.deleted",
+            Self::ProjectRestored { .. } => "project.restored",
         }
     }
 
@@ -304,6 +326,8 @@ impl AuditDetails {
             | Self::GroupMoved { .. }
             | Self::UserRenamed { .. }
             | Self::TombstoneReleased { .. } => None,
+            Self::ProjectDeleted { .. } => Some(EventType::ProjectDeleted),
+            Self::ProjectRestored { .. } => Some(EventType::ProjectRestored),
         }
     }
 
@@ -332,6 +356,8 @@ impl AuditDetails {
     /// ProjectUpdated `{"project_id","fields"}`, GroupUpdated
     /// `{"group_id","fields"}` (field names only),
     /// ProjectVisibilityChanged `{"project_id","from","to"}`,
+    /// ProjectDeleted / ProjectRestored
+    /// `{"project_id","deleted_at","purge_after","deleted_by"}`,
     /// ProjectMoved `{"project_id"}` + [`MoveSummary`]'s fields,
     /// ProjectMovedWithAncestor `{"project_id","namespace_id","moved_namespace_id"}`,
     /// GroupMoved `{"group_id"}` + the summary, UserRenamed `{"user_id"}` +
@@ -526,6 +552,23 @@ impl AuditDetails {
                 "namespace_id": namespace_id.get(),
                 "moved_namespace_id": moved_namespace_id.get(),
             }),
+            Self::ProjectDeleted {
+                project_id,
+                deleted_at,
+                purge_after,
+                deleted_by,
+            }
+            | Self::ProjectRestored {
+                project_id,
+                deleted_at,
+                purge_after,
+                deleted_by,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "deleted_at": deleted_at,
+                "purge_after": purge_after,
+                "deleted_by": deleted_by.map(UserId::get),
+            }),
             Self::GroupMoved { group_id, summary } => with_id("group_id", group_id.get(), summary),
             Self::UserRenamed { user_id, summary } => with_id("user_id", user_id.get(), summary),
             Self::TombstoneReleased {
@@ -584,7 +627,9 @@ impl AuditDetails {
             | Self::ProjectMovedWithAncestor { .. }
             | Self::GroupMoved { .. }
             | Self::UserRenamed { .. }
-            | Self::TombstoneReleased { .. } => self.to_value(),
+            | Self::TombstoneReleased { .. }
+            | Self::ProjectDeleted { .. }
+            | Self::ProjectRestored { .. } => self.to_value(),
         }
     }
 }

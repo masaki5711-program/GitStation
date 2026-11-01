@@ -18,6 +18,7 @@ mod api;
 mod audit;
 mod database;
 mod git_http;
+mod hosting;
 mod keys;
 mod secret;
 mod server_limits;
@@ -28,6 +29,7 @@ pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
+pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
@@ -43,6 +45,7 @@ const NAMESPACES: &[&str] = &[
     "FORGE_API_",
     "FORGE_AUDIT_",
     "FORGE_GIT_",
+    "FORGE_HOSTING_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -126,6 +129,8 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
+    /// `hosting.*` (the deletion grace period, D5 MR3).
+    pub hosting: HostingConfig,
 }
 
 impl Config {
@@ -363,6 +368,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
+        hosting: HostingConfig::load(get)?,
     }
     .validate_across()
 }

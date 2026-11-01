@@ -462,3 +462,160 @@ async fn a_member_promoted_while_their_removal_waits_is_decided_on_the_new_role(
     );
     t.drop_now().await;
 }
+
+/// D5 MR3: the deleter loses the Owner role while the delete waits on the
+/// membership row; the command decides again on the committed removal and
+/// refuses: nothing is deleted, no audit row, no event.
+#[tokio::test]
+async fn an_owner_removed_while_a_delete_waits_denies_it() {
+    let t = FreshDb::migrated().await;
+    let hosting = Hosting::new(t.db.clone());
+    let alice = user(&t, "alice", false).await;
+    let bob = user(&t, "bob", false).await;
+    let acme = group(&t, "acme", alice.user_id).await;
+    let web = project(&t, "web", acme, alice.user_id).await;
+    forge_db::projects::add_member(
+        &t.db,
+        &system("req-bob"),
+        web.project_id,
+        bob.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("bob owns web");
+    let as_bob = session(bob.user_id, false);
+    let proof = lifecycle_proof(
+        &hosting,
+        &as_bob,
+        forge_auth::Action::ProjectDelete,
+        web.project_id,
+    )
+    .await
+    .expect("allowed before the race");
+    let removal = t
+        .hold_audited(
+            ("project", web.project_id.get()),
+            &[format!(
+                "DELETE FROM forge.project_members WHERE project_id = {} AND user_id = {}",
+                web.project_id.get(),
+                bob.user_id.get()
+            )],
+        )
+        .await;
+    let req = request("req-race");
+    let deleting = hosting.delete_project(&req, &proof);
+    let committing = async {
+        t.until_waiting(PROJECT_MEMBER_LOCK).await;
+        removal.commit().await;
+    };
+    let (deleted, ()) = tokio::join!(deleting, committing);
+    // bob holds no role on the private project any more: invisible to him.
+    let err = deleted.expect_err("the Owner role is gone");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.projects WHERE deleted_at IS NOT NULL"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.audit_log WHERE action = 'project.deleted'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.events WHERE event_type = 'project.deleted'"
+        )
+        .await,
+        0
+    );
+    t.drop_now().await;
+}
+
+/// The same for a restore: an Owner demoted while the restore waits.
+#[tokio::test]
+async fn an_owner_demoted_while_a_restore_waits_denies_it() {
+    let t = FreshDb::migrated().await;
+    let hosting = Hosting::new(t.db.clone());
+    let alice = user(&t, "alice", false).await;
+    let bob = user(&t, "bob", false).await;
+    let acme = group(&t, "acme", alice.user_id).await;
+    let web = project(&t, "web", acme, alice.user_id).await;
+    forge_db::projects::add_member(
+        &t.db,
+        &system("req-bob"),
+        web.project_id,
+        bob.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("bob owns web");
+    let as_alice = session(alice.user_id, false);
+    let delete = lifecycle_proof(
+        &hosting,
+        &as_alice,
+        forge_auth::Action::ProjectDelete,
+        web.project_id,
+    )
+    .await
+    .expect("alice may delete");
+    hosting
+        .delete_project(&request("req-delete"), &delete)
+        .await
+        .expect("delete");
+    let as_bob = session(bob.user_id, false);
+    let proof = lifecycle_proof(
+        &hosting,
+        &as_bob,
+        forge_auth::Action::ProjectRestore,
+        web.project_id,
+    )
+    .await
+    .expect("allowed before the race");
+    let demotion = t
+        .hold_audited(
+            ("project", web.project_id.get()),
+            &[format!(
+                "UPDATE forge.project_members SET role = 'developer' \
+                 WHERE project_id = {} AND user_id = {}",
+                web.project_id.get(),
+                bob.user_id.get()
+            )],
+        )
+        .await;
+    let req = request("req-race");
+    let restoring = hosting.restore_project(&req, &proof);
+    let committing = async {
+        t.until_waiting(PROJECT_MEMBER_LOCK).await;
+        demotion.commit().await;
+    };
+    let (restored, ()) = tokio::join!(restoring, committing);
+    let err = restored.expect_err("bob is a Developer now");
+    // A Developer sees the pending project: 410, like every other route.
+    assert_eq!(err.code(), ErrorCode::PendingDeletion);
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.projects WHERE deleted_at IS NOT NULL"
+        )
+        .await,
+        1,
+        "still pending deletion"
+    );
+    assert_eq!(
+        count(
+            &t,
+            "SELECT count(*) AS n FROM forge.events WHERE event_type = 'project.restored'"
+        )
+        .await,
+        0
+    );
+    t.drop_now().await;
+}

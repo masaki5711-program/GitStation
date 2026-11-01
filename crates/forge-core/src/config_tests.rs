@@ -987,3 +987,40 @@ fn api_list_limits_and_cursor_age_have_defaults_env_and_rules() {
         assert!(text.contains(key) && text.contains(reason), "{key}: {text}");
     }
 }
+
+/// `hosting.deletion_grace_days` (D5 MR3): default 7 days, env, and the
+/// 1..=365 range (FG-SYS-0002 naming the key).
+#[test]
+fn hosting_deletion_grace_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.hosting.deletion_grace, Duration::from_secs(7 * 86_400));
+    assert_eq!(
+        cfg.hosting.deletion_grace,
+        HostingConfig::DEFAULT_DELETION_GRACE
+    );
+    let cfg = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", "1")])).expect("min");
+    assert_eq!(cfg.hosting.deletion_grace, Duration::from_secs(86_400));
+    let cfg = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", "365")])).expect("max");
+    assert_eq!(
+        cfg.hosting.deletion_grace,
+        Duration::from_secs(365 * 86_400)
+    );
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("366", "above_max"),
+        ("-1", "invalid"),
+        ("a week", "invalid"),
+    ] {
+        let err =
+            load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("hosting.deletion_grace_days") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+    // A typo under the new namespace fails like every other one.
+    let err = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}

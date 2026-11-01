@@ -848,3 +848,9 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   （`audit_scope_mismatch`）。**イベントの範囲の規則はイベントごとに確かめる**: イベントの `project_id` は、その変更のどれかの監査の行の
   `project_id` と等しい（`event_scope_mismatch`）。大きさの検査（8 KiB）も行ごと。
 - `project.moved`、`group.moved`、`user.renamed`、`namespace_tombstone.released` は MR2 では監査のみ。
+
+### D5 MR3: `project.deleted` / `project.restored`
+
+`EventType::ProjectDeleted` / `ProjectRestored`（integration クラス、§10 の Amendment D5 の表どおり）。ペイロードは監査の details と同じ
+`{project_id, deleted_at, purge_after, deleted_by}`（`deleted_by` は operator CLI の削除では null。restore では取り消す削除の値）。
+`dedup_key` の形は ADR-0015 の D5 MR3 の節。

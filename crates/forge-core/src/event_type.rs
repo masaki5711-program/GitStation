@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -67,11 +67,20 @@ pub enum EventType {
     /// `project.visibility_changed` (M1 phase 8b MR7a; maintainer class,
     /// ADR-0016 §5): written by `projects::change_visibility`.
     ProjectVisibilityChanged,
+    /// `project.deleted` (D5 MR3; integration class, ADR-0016 §10
+    /// Amendment D5): the project entered its grace period. Deduplicated by
+    /// `project_deleted:<project_id>:<deleted_at epoch>`.
+    ProjectDeleted,
+    /// `project.restored` (D5 MR3; integration class): a project pending
+    /// deletion came back. Deduplicated by
+    /// `project_restored:<project_id>:<deleted_at epoch>` of the deletion
+    /// it undoes.
+    ProjectRestored,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 12] = [
+    pub const ALL: [EventType; 14] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -84,6 +93,8 @@ impl EventType {
         EventType::ProtectedRefDeleted,
         EventType::RepositoryPushed,
         EventType::ProjectVisibilityChanged,
+        EventType::ProjectDeleted,
+        EventType::ProjectRestored,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -101,6 +112,8 @@ impl EventType {
             EventType::ProtectedRefDeleted => "protected_ref.deleted",
             EventType::RepositoryPushed => "repository.pushed",
             EventType::ProjectVisibilityChanged => "project.visibility_changed",
+            EventType::ProjectDeleted => "project.deleted",
+            EventType::ProjectRestored => "project.restored",
         }
     }
 
@@ -114,7 +127,9 @@ impl EventType {
         match self {
             EventType::ProjectCreated
             | EventType::RepositoryCreated
-            | EventType::RepositoryPushed => VisibilityClass::Integration,
+            | EventType::RepositoryPushed
+            | EventType::ProjectDeleted
+            | EventType::ProjectRestored => VisibilityClass::Integration,
             EventType::TokenCreated | EventType::TokenRevoked => VisibilityClass::Admin,
             EventType::MemberAdded
             | EventType::MemberRoleChanged
