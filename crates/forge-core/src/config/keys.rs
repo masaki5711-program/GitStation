@@ -67,6 +67,10 @@ pub const KEYS: &[Key] = &[
         "server.read_idle_timeout_ms",
         "FORGE_SERVER_READ_IDLE_TIMEOUT_MS",
     ),
+    number(
+        "server.body_read_timeout_ms",
+        "FORGE_SERVER_BODY_READ_TIMEOUT_MS",
+    ),
     text("storage.root", "FORGE_STORAGE_ROOT"),
     text("database.url", "FORGE_DATABASE_URL"),
     text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),

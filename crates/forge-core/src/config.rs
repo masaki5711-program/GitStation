@@ -380,6 +380,7 @@ fn server_limits<'a>(
             ms(d.write_idle_timeout),
         )?,
         read_idle_timeout: millis(get, "server.read_idle_timeout_ms", ms(d.read_idle_timeout))?,
+        body_read_timeout: millis(get, "server.body_read_timeout_ms", ms(d.body_read_timeout))?,
     }
     .validate()
 }

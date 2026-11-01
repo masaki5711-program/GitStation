@@ -884,6 +884,20 @@ fn server_limits_have_defaults_file_env_and_rules() {
             "zero",
         ),
         (
+            vec![("FORGE_SERVER_BODY_READ_TIMEOUT_MS", "0")],
+            "server.body_read_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "1000"),
+                ("FORGE_SERVER_BODY_READ_TIMEOUT_MS", "5000"),
+                ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),
+            ],
+            "server.body_read_timeout_ms",
+            "above_keep_alive_max",
+        ),
+        (
             vec![
                 ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "5000"),
                 ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),

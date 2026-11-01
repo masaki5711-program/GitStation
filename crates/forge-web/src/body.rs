@@ -13,8 +13,10 @@
 //!    `FG-WEB-0009 declared=false` (the cap is the route's, at most
 //!    [`MAX_JSON_BODY_BYTES`], and never above the server's
 //!    `body_limit_bytes`);
-//! 3. a body that stops arriving: the server's read-idle timeout
-//!    (`FG-WEB-0002 operation=request_read`);
+//! 3. a body that stops arriving (the server's read-idle timeout,
+//!    `FG-WEB-0002 operation=request_read kind=idle`), takes longer than
+//!    `server.body_read_timeout_ms` in total (`kind=total`), or whose
+//!    client goes away or breaks the protocol (`kind=aborted`);
 //! 4. JSON that does not parse into the route's type, which refuses
 //!    unknown fields (`#[serde(deny_unknown_fields)]`, checked for every
 //!    body route by the registry tests through the OpenAPI schema):
@@ -37,6 +39,15 @@ pub trait RequestBody: DeserializeOwned + utoipa::ToSchema + Send + Sync + 'stat
 
 impl<T: DeserializeOwned + utoipa::ToSchema + Send + Sync + 'static> RequestBody for T {}
 
+/// The total time a JSON body may take to arrive
+/// (`AppConfig::body_read_timeout`), a request extension set by
+/// `app::build`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BodyReadTimeout(pub(crate) std::time::Duration);
+
+/// Used when the extension is absent (a route built outside `app::build`).
+const DEFAULT_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The server-wide body limit (`AppConfig::body_limit_bytes`), a request
 /// extension set by `app::build`: no route reads more, whatever its cap.
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +63,30 @@ pub(crate) fn param_invalid(param: &'static str, rule: &'static str) -> ForgeErr
     request_invalid("param_invalid")
         .with_context("param", param)
         .with_context("rule", rule)
+}
+
+/// A body stream error: the server's read-idle timeout (`kind=idle`, logged
+/// once more with the peer by the connection loop), or the client went away
+/// or broke the protocol while sending (`kind=aborted`; the error is in
+/// `source`).
+fn read_failed(e: axum::Error, bytes_in: usize) -> ForgeError {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+    let mut idle = false;
+    while let Some(c) = cause {
+        if matches!(
+            c.downcast_ref::<crate::server::ReadError>(),
+            Some(crate::server::ReadError::Idle)
+        ) {
+            idle = true;
+            break;
+        }
+        cause = c.source();
+    }
+    ForgeError::new(ErrorCode::RequestTimeout)
+        .with_context("operation", "request_read")
+        .with_context("kind", if idle { "idle" } else { "aborted" })
+        .with_context("bytes_in", bytes_in)
+        .with_source(e)
 }
 
 /// Read and parse the body of a JSON route (see the module docs).
@@ -82,19 +117,31 @@ pub(crate) async fn read_json<B: DeserializeOwned>(
             return Err(too_large(true));
         }
     }
+    let total = parts
+        .extensions
+        .get::<BodyReadTimeout>()
+        .map_or(DEFAULT_BODY_READ_TIMEOUT, |t| t.0);
     let mut bytes = Vec::new();
-    let mut stream = body.into_data_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            ForgeError::new(ErrorCode::RequestTimeout)
-                .with_context("operation", "request_read")
-                .with_context("bytes_in", bytes.len())
-                .with_source(e)
-        })?;
-        if bytes.len().saturating_add(chunk.len()) > cap {
-            return Err(too_large(false));
+    let read = async {
+        let mut stream = body.into_data_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| read_failed(e, bytes.len()))?;
+            if bytes.len().saturating_add(chunk.len()) > cap {
+                return Err(too_large(false));
+            }
+            bytes.extend_from_slice(&chunk);
         }
-        bytes.extend_from_slice(&chunk);
+        Ok(())
+    };
+    match tokio::time::timeout(total, read).await {
+        Ok(read) => read?,
+        Err(_) => {
+            return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                .with_context("operation", "request_read")
+                .with_context("kind", "total")
+                .with_context("timeout_ms", total.as_millis())
+                .with_context("bytes_in", bytes.len()));
+        }
     }
     parse(&bytes)
 }
@@ -130,7 +177,7 @@ fn check_content_type(parts: &Parts) -> Result<(), ForgeError> {
     if media.eq_ignore_ascii_case("application/json") && params_ok {
         Ok(())
     } else {
-        Err(refused(text))
+        Err(refused(media))
     }
 }
 

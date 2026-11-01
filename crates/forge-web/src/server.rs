@@ -614,7 +614,7 @@ impl IdleBody {
 }
 
 #[derive(Debug)]
-enum ReadError {
+pub(crate) enum ReadError {
     Idle,
     Hyper(hyper::Error),
 }

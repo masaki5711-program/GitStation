@@ -278,7 +278,10 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
   after the running request), response-write idle timeout, request-body
   read-idle timeout (`server.read_idle_timeout_ms`, armed only while a
   handler waits on the body; at least `git.http.idle_timeout_ms`, checked at
-  load). The peer is the socket address (IPv6 counted by /64): no trusted-proxy setting exists, so behind a reverse proxy
+  load) and, for JSON bodies of API write routes, a total deadline
+  (`server.body_read_timeout_ms`, default 10 s, at most `keep_alive_max_ms`:
+  `FG-WEB-0002 operation=request_read kind=total`; a body stream error that is
+  not the idle timeout is `kind=aborted`). The peer is the socket address (IPv6 counted by /64): no trusted-proxy setting exists, so behind a reverse proxy
   `server.max_connections_per_peer` caps the proxy as a whole. Still open: a
   body-limit (413) test — `DefaultBodyLimit` has no consumer yet (every body
   reader sets its own cap; the first extractor route in phase 8b needs it).

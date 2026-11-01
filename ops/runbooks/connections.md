@@ -27,7 +27,9 @@
 | 1 つの接続のリクエスト数（`server.keep_alive_max_requests`） | 1000 | 最後の応答に `Connection: close` |
 | 応答の書き込みが進まない時間（`server.write_idle_timeout_ms`） | 60 秒 | 接続を閉じる、`FG-WEB-0002 operation=response_write kind=idle` |
 | リクエスト本文が届かない時間（`server.read_idle_timeout_ms`、`git.http.idle_timeout_ms` 以上） | 60 秒 | 本文の読み込みが失敗、`FG-WEB-0002 operation=request_read kind=idle` |
+| API の JSON リクエスト本文が全部届くまでの時間（`server.body_read_timeout_ms`、`keep_alive_max_ms` 以下） | 10 秒 | 本文の読み込みが失敗、`FG-WEB-0002 operation=request_read kind=total`（少しずつ送り続ける相手も切る） |
 
+- 本文の読み込みで相手が切断した・HTTP の形式が壊れた場合は `FG-WEB-0002 operation=request_read kind=aborted`（`source` に原因）。何も読み込まれていない。
 - 書き込みの無通信は「ソケットの送信が詰まっている（相手が読まない）時間」で、1 バイトでも進めば数え直す。流れ続けている
   git のストリームは対象にならない（git 側の無通信は別で、`git.http.idle_timeout_ms`、runbook smart-http）。
 - 本文の無通信は、ハンドラが本文を待っている間だけ数える（git fetch が応答を作っている間などは対象外）。短くしすぎると遅い push を切るので、`git.http.idle_timeout_ms` を下回る値は起動時に拒否される（FG-SYS-0002 `below_git_idle_timeout`）。

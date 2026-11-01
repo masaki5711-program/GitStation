@@ -370,3 +370,66 @@ async fn a_body_that_breaks_off_is_a_read_failure() {
     assert_eq!(err.code(), ErrorCode::RequestTimeout);
     assert!(err.to_string().contains("operation=request_read"), "{err}");
 }
+
+fn parts_with_total(content_type: &str, total: std::time::Duration) -> axum::http::request::Parts {
+    let mut parts = parts_with(content_type);
+    parts.extensions.insert(super::BodyReadTimeout(total));
+    parts
+}
+
+/// A body that keeps trickling (never idle, never ending) is cut by the
+/// total deadline: `FG-WEB-0002 operation=request_read kind=total`.
+#[tokio::test]
+async fn a_trickling_json_body_is_cut_by_the_total_deadline() {
+    let parts = parts_with_total("application/json", std::time::Duration::from_millis(150));
+    let trickle = futures_util::stream::unfold(0u8, |n| async move {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        Some((Ok::<_, std::io::Error>(Bytes::from_static(b" ")), n))
+    });
+    let started = std::time::Instant::now();
+    let err = super::read_json::<Change>(&parts, Body::from_stream(trickle), CAP)
+        .await
+        .expect_err("cut");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(err.code(), ErrorCode::RequestTimeout);
+    let text = err.to_string();
+    assert!(text.contains("operation=request_read"), "{text}");
+    assert!(text.contains("kind=total"), "{text}");
+    assert!(text.contains("timeout_ms=150"), "{text}");
+}
+
+/// A body stream that fails (client abort, protocol error) is `kind=aborted`,
+/// not `idle`; the idle timeout's own error stays `kind=idle`.
+#[tokio::test]
+async fn a_failed_body_stream_is_classified_aborted_or_idle() {
+    let parts = parts_with("application/json");
+    let aborted = futures_util::stream::iter(vec![
+        Ok(Bytes::from_static(b"{\"name\":")),
+        Err(std::io::Error::other("connection reset")),
+    ]);
+    let err = super::read_json::<Change>(&parts, Body::from_stream(aborted), CAP)
+        .await
+        .expect_err("aborted");
+    assert_eq!(err.code(), ErrorCode::RequestTimeout);
+    let text = err.to_string();
+    assert!(text.contains("kind=aborted"), "{text}");
+    assert!(text.contains("bytes_in=8"), "{text}");
+
+    let idle = futures_util::stream::iter(vec![Err::<Bytes, _>(crate::server::ReadError::Idle)]);
+    let err = super::read_json::<Change>(&parts, Body::from_stream(idle), CAP)
+        .await
+        .expect_err("idle");
+    assert!(err.to_string().contains("kind=idle"), "{err}");
+}
+
+/// Only the media type is logged, never parameters or a longer header.
+#[tokio::test]
+async fn a_refused_content_type_logs_only_the_media_type() {
+    let parts = parts_with("text/plain; boundary=secret-value");
+    let err = super::read_json::<Change>(&parts, Body::empty(), CAP)
+        .await
+        .expect_err("refused");
+    let text = err.to_string();
+    assert!(text.contains("text/plain"), "{text}");
+    assert!(!text.contains("secret-value"), "{text}");
+}

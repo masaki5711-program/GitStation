@@ -140,6 +140,8 @@ pub struct AppConfig {
     /// Request body limit for extractors and the registry's JSON bodies (a
     /// route's own cap is at most 64 KiB; raw git streams set their own).
     pub body_limit_bytes: usize,
+    /// Total time for a JSON body to arrive (`server.body_read_timeout_ms`).
+    pub body_read_timeout: Duration,
 }
 
 impl Default for AppConfig {
@@ -148,6 +150,7 @@ impl Default for AppConfig {
             request_timeout: Duration::from_secs(30),
             git_rpc_timeout: Duration::from_secs(3600),
             body_limit_bytes: 1024 * 1024,
+            body_read_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -392,6 +395,9 @@ pub(crate) fn build(
         .layer(DefaultBodyLimit::max(config.body_limit_bytes))
         .layer(axum::Extension(crate::body::BodyLimit(
             config.body_limit_bytes,
+        )))
+        .layer(axum::Extension(crate::body::BodyReadTimeout(
+            config.body_read_timeout,
         )))
         .layer(axum::Extension(authenticator))
         .layer(middleware::from_fn(catch_panic))

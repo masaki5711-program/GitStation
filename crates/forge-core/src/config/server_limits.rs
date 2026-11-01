@@ -38,6 +38,12 @@ pub struct ServerLimitsConfig {
     /// when the whole configuration is loaded). A request whose handler is
     /// busy elsewhere is not affected.
     pub read_idle_timeout: Duration,
+    /// `server.body_read_timeout_ms`: the whole JSON body of an API write
+    /// route must arrive within this time, however steadily it trickles
+    /// (default 10 s, at most `keep_alive_max_ms`). The idle timeout above
+    /// only catches a body that stops; this catches one that never ends.
+    /// Smart HTTP bodies have their own (`git.http.body_timeout_ms`).
+    pub body_read_timeout: Duration,
 }
 
 impl ServerLimitsConfig {
@@ -50,6 +56,7 @@ impl ServerLimitsConfig {
         keep_alive_max_requests: 1000,
         write_idle_timeout: Duration::from_secs(60),
         read_idle_timeout: Duration::from_secs(60),
+        body_read_timeout: Duration::from_secs(10),
     };
 
     /// Cross-key rules (each key is already positive).
@@ -63,6 +70,12 @@ impl ServerLimitsConfig {
         if self.header_read_timeout > self.keep_alive_max {
             return Err(super::invalid(
                 "server.header_read_timeout_ms",
+                "above_keep_alive_max",
+            ));
+        }
+        if self.body_read_timeout > self.keep_alive_max {
+            return Err(super::invalid(
+                "server.body_read_timeout_ms",
                 "above_keep_alive_max",
             ));
         }
