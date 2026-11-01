@@ -20,6 +20,7 @@ Claude Code はそこで起動します。
 | `crates/forge-web` | HTTP 層（ルートの登録の仕組み、問い合わせ番号、エラーの表示、`forge serve`） |
 | `crates/forge-git` | git の実行（唯一のラッパー）、バージョンの確認、リポジトリの保存先 |
 | `crates/forge-cli` | `forge` コマンド（`explain`、`errors list`。M1 以降 `serve`、`doctor`、`diag`） |
+| `crates/forge-client` | クライアント `gstn`（REST API v1 のクライアントと CLI。利用者向けの手引きは README にある。サーバーのクレートには依存しない、ADR-0020） |
 | `docs/errors/` | エラーカタログ（**自動生成**。手で編集しない） |
 | `docs/adr/` | 設計判断の記録 |
 | `docs/brand/` | ロゴとアイコン（UI ではこのファイルを使う） |

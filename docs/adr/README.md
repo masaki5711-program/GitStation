@@ -23,3 +23,4 @@
 | [0017](0017-local-ai-autofix-loop.md) | ローカル LLM による MR の自動修正ループと、kanflow からの承認・マージ | accepted | 2026-10-28 |
 | [0018](0018-db-roles-append-only-and-audit-sealing.md) | DB のロール、追記のみの強制、監査ログの封印 | accepted | 2026-10-27 |
 | [0019](0019-personal-access-tokens-and-authentication.md) | 個人用アクセストークンと認証、無効化のガード | accepted | 2026-10-29 |
+| [0020](0020-gstn-client-crate-and-credential-storage.md) | クライアント `gstn` のクレートの置き方と、トークンの保管 | accepted | 2026-11-01 |

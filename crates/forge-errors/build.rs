@@ -34,8 +34,8 @@ struct Entry {
     retired: bool,
 }
 
-const AREAS: [&str; 9] = [
-    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS",
+const AREAS: [&str; 10] = [
+    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI",
 ];
 
 fn main() {
