@@ -335,6 +335,19 @@ pub struct TreeEntry {
     pub size: Option<u64>,
 }
 
+impl TreeEntry {
+    /// A blob's size; `FG-GIT-0003 reason=blob_size_missing` when git
+    /// printed none for a blob (never for a real blob: `ls-tree --long`
+    /// always prints it).
+    pub fn blob_size(&self) -> Result<u64, ForgeError> {
+        self.size.ok_or_else(|| {
+            ForgeError::new(ErrorCode::GitProcessFailed)
+                .with_context("reason", "blob_size_missing")
+                .with_context("oid", &self.oid)
+        })
+    }
+}
+
 /// A tree listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tree {
@@ -674,7 +687,10 @@ impl Browser {
         let mut fields = text.split_whitespace();
         match (fields.next(), fields.next()) {
             (Some(found), Some("commit")) if found == id => Ok(id.to_owned()),
-            (Some(_), Some("missing")) | (None, _) => Err(not_resolved("ref_not_found")),
+            (Some(_), Some("missing")) => Err(not_resolved("ref_not_found")),
+            (None, _) => Err(ForgeError::new(ErrorCode::GitProcessFailed)
+                .with_context("reason", "batch_check_empty")
+                .with_context("repo_id", repo.get())),
             _ => Err(not_resolved("not_a_commit")),
         }
     }
@@ -808,7 +824,7 @@ impl Browser {
     ) -> Result<Option<TreeEntry>, ForgeError> {
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
-        let (out, _) = self
+        let (out, cut) = self
             .git
             .command("ls-tree")
             .arg("-z")
@@ -820,8 +836,17 @@ impl Browser {
             .timeout(deadline.left()?)
             .output_truncated(64 * 1024)
             .await?;
-        Ok(parse_tree(&out.stdout, usize::MAX)
-            .0
+        if cut {
+            // One literal path names one entry: more output than that is
+            // not git's answer to this question.
+            return Err(ForgeError::new(ErrorCode::GitProcessFailed)
+                .with_context("reason", "ls_tree_truncated")
+                .with_context("repo_id", repo.get()));
+        }
+        let parsed = parse_tree(&out.stdout, usize::MAX);
+        log_skipped(repo, &parsed);
+        Ok(parsed
+            .entries
             .into_iter()
             .find(|e| e.name == path.as_str())
             .map(|mut e| {
@@ -859,7 +884,11 @@ impl Browser {
             .timeout(deadline.left()?)
             .output_truncated(TREE_OUTPUT_BYTES)
             .await?;
-        let (entries, truncated) = parse_tree(&out.stdout, self.limits.max_tree_entries);
+        let parsed = parse_tree(&out.stdout, self.limits.max_tree_entries);
+        log_skipped(repo, &parsed);
+        let ParsedTree {
+            entries, truncated, ..
+        } = parsed;
         let oid = if path.is_root() {
             self.tree_of(repo, commit, deadline).await?
         } else {
@@ -939,7 +968,7 @@ impl Browser {
     ) -> Result<Blob, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let entry = self.blob_entry(repo, commit, path, deadline).await?;
-        let size = entry.size.unwrap_or(0);
+        let size = entry.blob_size()?;
         let dir = self.storage.existing(repo)?;
         let _slot = self.claim(repo)?;
         let (out, truncated) = self
@@ -970,7 +999,7 @@ impl Browser {
     ) -> Result<RawBlob, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let entry = self.blob_entry(repo, commit, path, deadline).await?;
-        let size = entry.size.unwrap_or(0);
+        let size = entry.blob_size()?;
         let dir = self.storage.existing(repo)?;
         let cmd = self
             .git
@@ -1011,7 +1040,9 @@ impl Browser {
     }
 
     /// `git archive` of `commit` as a stream, every file below `prefix/`
-    /// (`prefix`: a forge-made name, `[a-z0-9._-]`, not starting with `-`).
+    /// (`prefix`: a forge-made name, `[a-z0-9._-]`, not starting with `-`;
+    /// forge-web builds it from the project's path segment, which
+    /// `PathSegment::parse` keeps lower-case, plus `-` and hex digits).
     pub async fn archive(
         &self,
         repo: RepoId,
@@ -1109,21 +1140,51 @@ fn parse_refs(out: &[u8], cut: bool, max: usize) -> (RefList, usize) {
     (list, skipped)
 }
 
-/// `ls-tree -z --long` records → entries (at most `max`) and whether more
-/// followed. A record cut by the output cap is dropped.
-fn parse_tree(out: &[u8], max: usize) -> (Vec<TreeEntry>, bool) {
-    let mut entries = Vec::new();
-    let mut truncated = false;
+/// What [`parse_tree`] read.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedTree {
+    entries: Vec<TreeEntry>,
+    /// More entries followed (`max`), or the output was cut.
+    truncated: bool,
+    /// Records that could not be read (no tab, too few fields, an unknown
+    /// type) — git's output is not what forge expects.
+    malformed: usize,
+    /// Entries whose name is not UTF-8: left out (they could not be asked
+    /// for again through the API).
+    not_utf8: usize,
+}
+
+/// Records [`parse_tree`] left out, said once per call (warn, with the
+/// repository): never silently dropped.
+fn log_skipped(repo: RepoId, parsed: &ParsedTree) {
+    if parsed.malformed > 0 || parsed.not_utf8 > 0 {
+        tracing::warn!(
+            target: "forge_git::browse",
+            repo_id = repo.get(),
+            error_code = ErrorCode::GitProcessFailed.id(),
+            malformed = parsed.malformed,
+            not_utf8 = parsed.not_utf8,
+            "forge.git.browse.tree_entries_skipped"
+        );
+    }
+}
+
+/// `ls-tree -z --long` records → entries (at most `max`), whether more
+/// followed, and how many records were left out. A record cut by the
+/// output cap is dropped (and marks the listing truncated).
+fn parse_tree(out: &[u8], max: usize) -> ParsedTree {
+    let mut parsed = ParsedTree::default();
     let complete = out.ends_with(b"\0") || out.is_empty();
     let mut records: Vec<&[u8]> = out.split(|b| *b == 0).collect();
     // The split leaves an empty tail after the final NUL, or a partial
     // record when the output was cut.
     records.pop();
     if !complete {
-        truncated = true;
+        parsed.truncated = true;
     }
     for record in records {
         let Some(tab) = record.iter().position(|b| *b == b'\t') else {
+            parsed.malformed += 1;
             continue;
         };
         let (head, name) = (
@@ -1135,6 +1196,7 @@ fn parse_tree(out: &[u8], max: usize) -> (Vec<TreeEntry>, bool) {
         let (Some(mode), Some(kind), Some(oid), Some(size)) =
             (fields.next(), fields.next(), fields.next(), fields.next())
         else {
+            parsed.malformed += 1;
             continue;
         };
         let kind = match (kind, mode) {
@@ -1142,21 +1204,28 @@ fn parse_tree(out: &[u8], max: usize) -> (Vec<TreeEntry>, bool) {
             ("blob", "120000") => EntryKind::Symlink,
             ("blob", _) => EntryKind::Blob,
             ("commit", _) => EntryKind::Submodule,
-            _ => continue,
+            _ => {
+                parsed.malformed += 1;
+                continue;
+            }
         };
-        if entries.len() >= max {
-            truncated = true;
+        let Ok(name) = std::str::from_utf8(name) else {
+            parsed.not_utf8 += 1;
+            continue;
+        };
+        if parsed.entries.len() >= max {
+            parsed.truncated = true;
             break;
         }
-        entries.push(TreeEntry {
-            name: String::from_utf8_lossy(name).into_owned(),
+        parsed.entries.push(TreeEntry {
+            name: name.to_owned(),
             kind,
             mode: mode.to_owned(),
             oid: oid.to_owned(),
             size: size.parse().ok(),
         });
     }
-    (entries, truncated)
+    parsed
 }
 
 #[cfg(test)]

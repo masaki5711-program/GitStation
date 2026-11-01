@@ -283,6 +283,50 @@ async fn output_over_cap_stops_a_producer_that_keeps_writing() {
     );
 }
 
+/// M2 MR7: `output_truncated` stops a producer at the cap without an
+/// error (the `stopped_early` branch: git killed, reaped, `truncated`);
+/// output under the cap is whole and not truncated. (`reap_failed` needs
+/// a child SIGKILL cannot end; it is not reproducible in a test.)
+#[tokio::test]
+async fn output_truncated_stops_at_the_cap_and_is_not_an_error() {
+    let (_h, g) = git();
+    let dir = tempfile::tempdir().expect("repo");
+    repo_with_commit(&g, dir.path()).await;
+    let input = "refs/heads/main\n".repeat(20_000).into_bytes(); // ~1 MB of output
+    let started = std::time::Instant::now();
+    let (out, truncated) = g
+        .command("cat-file")
+        .repo(dir.path().join(".git"))
+        .arg("--batch-check")
+        .stdin(input)
+        .timeout(Duration::from_secs(60))
+        .output_truncated(100)
+        .await
+        .expect("truncated, not an error");
+    assert!(truncated);
+    assert_eq!(out.stdout.len(), 100);
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "stopped promptly"
+    );
+    let (out, truncated) = g
+        .command("version")
+        .output_truncated(4096)
+        .await
+        .expect("small");
+    assert!(!truncated);
+    assert!(out.stdout_str().starts_with("git version"));
+    // The cap never exceeds `max_output_bytes`.
+    let (_h2, small) = git_with(|c| c.max_output_bytes = 4);
+    let (out, truncated) = small
+        .command("version")
+        .output_truncated(4096)
+        .await
+        .expect("capped by the config");
+    assert!(truncated);
+    assert_eq!(out.stdout.len(), 4);
+}
+
 #[test]
 fn git_protocol_accepts_only_protocol_pairs() {
     let (_h, g) = git();

@@ -1,7 +1,7 @@
 [
   { "action": "RepoRead", "allow": 9, "deny": 15, "public": false, "git_operation": true },
   { "action": "RepoPush", "allow": 19, "deny": 38, "public": false, "git_operation": true },
-  { "action": "RepoBrowse", "allow": 11, "deny": 17, "public": false, "git_operation": false },
+  { "action": "RepoBrowse", "allow": 13, "deny": 19, "public": false, "git_operation": false },
   { "action": "ProjectRead", "allow": 10, "deny": 15, "public": false, "git_operation": false },
   { "action": "ProjectList", "allow": 6, "deny": 5, "public": false, "git_operation": false },
   { "action": "ProjectCreate", "allow": 9, "deny": 17, "public": false, "git_operation": false },

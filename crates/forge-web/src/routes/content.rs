@@ -180,7 +180,7 @@ async fn raw_inner(
             .raw_entry(repository.id, &commit, &path)
             .await
             .map_err(|e| ids(e).with_context("commit", &commit))?;
-        let size = entry.size.unwrap_or(0);
+        let size = entry.blob_size().map_err(ids)?;
         if size > browse.limits().raw_inline_max_bytes {
             return Ok(content_response(
                 OCTET,

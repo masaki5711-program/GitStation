@@ -773,3 +773,119 @@ fn ref_lines_that_cannot_be_named_are_skipped_and_counted() {
     assert_eq!(skipped, 2);
     assert_eq!(list.default_branch.as_deref(), Some("main"));
 }
+
+/// Review (MR7, HIGH): malformed `ls-tree` records and names that are not
+/// UTF-8 are counted, never silently dropped.
+#[test]
+fn malformed_and_non_utf8_tree_records_are_counted() {
+    let c = "b".repeat(40);
+    let mut out = Vec::new();
+    out.extend_from_slice(format!("100644 blob {c}      7\tok.txt\0").as_bytes());
+    out.extend_from_slice(b"no tab at all\0");
+    out.extend_from_slice(b"100644 blob\tshort\0");
+    out.extend_from_slice(format!("100644 alien {c}      7\tweird\0").as_bytes());
+    out.extend_from_slice(format!("100644 blob {c}      7\t").as_bytes());
+    out.extend_from_slice(b"bad\xff\0");
+    let parsed = parse_tree(&out, usize::MAX);
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].name, "ok.txt");
+    assert_eq!(parsed.malformed, 3);
+    assert_eq!(parsed.not_utf8, 1);
+    assert!(!parsed.truncated);
+}
+
+#[tokio::test]
+async fn a_tree_entry_named_in_bytes_that_are_not_utf8_is_left_out() {
+    let f = fixture().await;
+    let readme = blob(&f.path, b"x\n");
+    let mut input = format!("100644 blob {readme}\tREADME.md\n").into_bytes();
+    input.extend_from_slice(format!("100644 blob {readme}\tbad").as_bytes());
+    input.extend_from_slice(b"\xff\n");
+    let tree = plumb(&f.path, &["mktree"], Some(&input));
+    let c = commit(&f.path, &tree, None);
+    let b = f.browser(BrowseLimits::default());
+    let t = b.tree(f.id, &c, &RepoPath::root()).await.expect("tree");
+    let names: Vec<&str> = t.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["README.md"]);
+}
+
+#[test]
+fn a_blob_entry_without_a_size_is_git_process_failed() {
+    let e = TreeEntry {
+        name: "x".to_owned(),
+        kind: EntryKind::Blob,
+        mode: "100644".to_owned(),
+        oid: "c".repeat(40),
+        size: None,
+    };
+    let err = e.blob_size().expect_err("no size");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed);
+    assert_eq!(reason(&err), "blob_size_missing");
+}
+
+/// A fake git that answers one subcommand shape itself and runs the real
+/// one for everything else (synthetic).
+#[cfg(unix)]
+fn wrapping_git(dir: &Path, condition: &str, answer: &str) -> PathBuf {
+    fake_git(
+        dir,
+        &format!("if {condition}; then\n{answer}\nexit 0\nfi\nexec git \"$@\""),
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn git_answers_forge_cannot_trust_are_git_process_failed() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    let tmp = tempfile::tempdir().expect("tmp");
+    let path = RepoPath::parse("README.md").unwrap();
+
+    // cat-file blob prints fewer bytes than ls-tree said.
+    let bin = wrapping_git(
+        tmp.path(),
+        "[ \"$1\" = cat-file ] && [ \"$2\" = blob ]",
+        "printf 'xx'",
+    );
+    let b = f.browser_with_bin(&bin, BrowseLimits::default());
+    let e = b
+        .raw(f.id, &h.c2, &path, "user:1")
+        .await
+        .expect_err("mismatch");
+    assert_eq!(e.code(), ErrorCode::GitProcessFailed);
+    assert_eq!(reason(&e), "blob_size_mismatch");
+
+    // The root tree id is not an id.
+    let bin = wrapping_git(
+        tmp.path(),
+        "[ \"$1\" = cat-file ] && [ \"$2\" = '--batch-check=%(objectname)' ]",
+        "cat > /dev/null; echo garbage",
+    );
+    let b = f.browser_with_bin(&bin, BrowseLimits::default());
+    let e = b
+        .tree(f.id, &h.c2, &RepoPath::root())
+        .await
+        .expect_err("tree id");
+    assert_eq!(reason(&e), "tree_of_commit_unreadable");
+
+    // The id check prints nothing.
+    let bin = wrapping_git(
+        tmp.path(),
+        "[ \"$1\" = cat-file ] && [ \"$2\" = '--batch-check=%(objectname) %(objecttype)' ]",
+        "cat > /dev/null",
+    );
+    let b = f.browser_with_bin(&bin, BrowseLimits::default());
+    let e = b.resolve_ref(f.id, &h.c2).await.expect_err("empty");
+    assert_eq!(e.code(), ErrorCode::GitProcessFailed);
+    assert_eq!(reason(&e), "batch_check_empty");
+
+    // One literal path answered with more than 64 KiB.
+    let bin = wrapping_git(
+        tmp.path(),
+        "[ \"$1\" = ls-tree ] && [ \"$4\" = --full-tree ]",
+        "head -c 70000 /dev/zero",
+    );
+    let b = f.browser_with_bin(&bin, BrowseLimits::default());
+    let e = b.blob(f.id, &h.c2, &path).await.expect_err("cut");
+    assert_eq!(reason(&e), "ls_tree_truncated");
+}

@@ -527,24 +527,33 @@ async fn the_browse_api_needs_read_api_and_a_reader() {
             Some(ErrorCode::Unauthenticated),
         ),
     ];
-    for (facts, principal, status, code) in cases {
-        let a = send(
-            router(&r, facts, BrowseLimits::default()),
-            "GET",
-            &format!("{API}/refs"),
-            principal,
-        )
-        .await;
-        if let Some(code) = code {
-            assert_eq!(a.code(), code.id(), "{:?}", a.json());
-            assert_eq!(a.status.as_u16(), code.http_status(), "{code:?}");
-        } else {
-            assert_eq!(a.status, status, "{:?}", a.json());
+    // Every one of the four routes decides the same way (review MR7).
+    let routes = [
+        "refs".to_owned(),
+        "resolve?spec=main/README.md".to_owned(),
+        "tree?ref=main".to_owned(),
+        "blob?ref=main&path=README.md".to_owned(),
+    ];
+    for route in &routes {
+        for (facts, principal, status, code) in &cases {
+            let a = send(
+                router(&r, *facts, BrowseLimits::default()),
+                "GET",
+                &format!("{API}/{route}"),
+                principal.clone(), // clone: each route sends its own
+            )
+            .await;
+            if let Some(code) = code {
+                assert_eq!(a.code(), code.id(), "{route}: {:?}", a.json());
+                assert_eq!(a.status.as_u16(), code.http_status(), "{route} {code:?}");
+            } else {
+                assert_eq!(a.status, *status, "{route}: {:?}", a.json());
+            }
         }
+        // Another project id: the same 404 as an invisible one.
+        let a = get(&r, &format!("/api/v1/projects/8/repository/{route}")).await;
+        assert_eq!(a.code(), ErrorCode::NotFound.id(), "{route}");
+        let a = get(&r, &format!("/api/v1/projects/07/repository/{route}")).await;
+        assert_eq!(a.code(), ErrorCode::RequestInvalid.id(), "{route}");
     }
-    // Another project id: the same 404 as an invisible one.
-    let a = get(&r, "/api/v1/projects/8/repository/refs").await;
-    assert_eq!(a.code(), ErrorCode::NotFound.id());
-    let a = get(&r, "/api/v1/projects/07/repository/refs").await;
-    assert_eq!(a.code(), ErrorCode::RequestInvalid.id());
 }

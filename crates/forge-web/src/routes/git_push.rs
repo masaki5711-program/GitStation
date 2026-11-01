@@ -669,6 +669,11 @@ impl Receiver {
             }
         };
         drop(stdout);
+        // receive-pack closed its output: the refs are updated (or not).
+        // Drop the browse ref cache before the final answer reaches the
+        // client, so a browse request right after the push sees them;
+        // `_refs_changed` stays the backstop for every other way out.
+        self.smart.browse.invalidate(self.repository.id);
         let rewriter = std::mem::replace(
             &mut self.rewriter,
             ReportRewriter::new(false, BTreeSet::new(), RewriteTexts::default()),

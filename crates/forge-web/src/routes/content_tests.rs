@@ -311,3 +311,80 @@ async fn content_routes_need_read_repository_and_a_reader() {
     .await;
     assert_eq!(a.code(), ErrorCode::RepositoryNotReady.id());
 }
+
+/// Review (MR7): raw and archive decide the same way for GET and HEAD
+/// (HEAD carries no body: compared by status).
+#[tokio::test]
+async fn raw_and_archive_allow_and_deny_over_get_and_head() {
+    use forge_auth::Principal;
+    use forge_core::{Role, Visibility};
+    let r = repo().await;
+    let guest = Facts {
+        role: Some(Role::Guest),
+        ..Facts::default()
+    };
+    let deleted = Facts {
+        deleted: true,
+        ..Facts::default()
+    };
+    let internal = Facts {
+        role: None,
+        visibility: Visibility::Internal,
+        ..Facts::default()
+    };
+    let cases: Vec<(Facts, Option<Principal>, ErrorCode)> = vec![
+        (Facts::default(), None, ErrorCode::Unauthenticated),
+        (internal, None, ErrorCode::Unauthenticated),
+        (guest, Some(session()), ErrorCode::Forbidden),
+        (deleted, Some(session()), ErrorCode::PendingDeletion),
+        (
+            Facts {
+                role: None,
+                ..Facts::default()
+            },
+            Some(session()),
+            ErrorCode::NotFound,
+        ),
+        (
+            Facts::default(),
+            Some(token(&[Scope::ReadApi])),
+            ErrorCode::InsufficientScope,
+        ),
+    ];
+    for path in [
+        "/acme/app/-/raw/main/README.md",
+        "/acme/app/-/archive/main.zip",
+    ] {
+        for method in ["GET", "HEAD"] {
+            for (facts, principal, code) in &cases {
+                let a = send(
+                    router(&r, *facts, BrowseLimits::default()),
+                    method,
+                    path,
+                    principal.clone(), // clone: each method sends its own
+                )
+                .await;
+                assert_eq!(
+                    a.status.as_u16(),
+                    code.http_status(),
+                    "{method} {path} {code:?}"
+                );
+                if method == "GET" {
+                    assert_eq!(a.code(), code.id(), "{method} {path}");
+                }
+            }
+            // Allowed: a reader of the private project, every signed-in
+            // user of an internal one.
+            for facts in [Facts::default(), internal] {
+                let a = send(
+                    router(&r, facts, BrowseLimits::default()),
+                    method,
+                    path,
+                    Some(session()),
+                )
+                .await;
+                assert_eq!(a.status, StatusCode::OK, "{method} {path}");
+            }
+        }
+    }
+}
