@@ -9,6 +9,7 @@ pub mod groups;
 pub mod health;
 pub mod lists;
 pub mod members;
+pub mod moves;
 pub mod namespaces;
 pub mod project_writes;
 pub mod projects;

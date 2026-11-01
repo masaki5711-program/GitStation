@@ -88,9 +88,25 @@
     "word": "fixed"
   },
   {
+    "action": "GroupTransfer",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/transfer",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "PathResolve",
     "method": "GET",
     "path": "/api/v1/namespaces/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NamespaceTombstoneRelease",
+    "method": "POST",
+    "path": "/api/v1/namespaces/tombstones/release",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -208,6 +224,14 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectTransfer",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/transfer",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectVisibilityChange",
     "method": "PUT",
     "path": "/api/v1/projects/{id}/visibility",
@@ -219,6 +243,14 @@
     "action": "UserSelfRead",
     "method": "GET",
     "path": "/api/v1/user",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserRename",
+    "method": "POST",
+    "path": "/api/v1/users/{id}/rename",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -510,22 +542,6 @@
     "public": true,
     "scope": "project",
     "word": "tree"
-  },
-  {
-    "action": "ProjectTransfer",
-    "planned": true
-  },
-  {
-    "action": "GroupTransfer",
-    "planned": true
-  },
-  {
-    "action": "UserRename",
-    "planned": true
-  },
-  {
-    "action": "NamespaceTombstoneRelease",
-    "planned": true
   },
   {
     "action": "TokenCreate",

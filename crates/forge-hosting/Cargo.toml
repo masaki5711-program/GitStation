@@ -16,6 +16,7 @@ forge-auth.workspace = true
 forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }

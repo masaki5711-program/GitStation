@@ -76,6 +76,20 @@ fn project_purged_is_admin_class() {
     );
 }
 
+/// D5 MR5: a project's own move is an integration event (step D5 plan
+/// answer "other project.* integration"); a group move and a user rename
+/// name no project, so they are instance-wide admin events (ADR-0016 §5).
+#[test]
+fn move_events_are_integration_for_projects_and_admin_otherwise() {
+    assert_eq!(
+        EventType::ProjectMoved.visibility_class(),
+        VisibilityClass::Integration
+    );
+    for t in [EventType::GroupMoved, EventType::UserRenamed] {
+        assert_eq!(t.visibility_class(), VisibilityClass::Admin, "{t:?}");
+    }
+}
+
 #[test]
 fn all_lists_every_event_type_once() {
     let names: Vec<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
@@ -96,7 +110,10 @@ fn all_lists_every_event_type_once() {
             "project.visibility_changed",
             "project.deleted",
             "project.restored",
-            "project.purged"
+            "project.purged",
+            "project.moved",
+            "group.moved",
+            "user.renamed"
         ]
     );
 }

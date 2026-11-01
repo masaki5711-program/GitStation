@@ -21,6 +21,11 @@ pub enum Coverage {
 /// role change, a project's visibility), with namespace move / transfer.
 const HOSTING_MORE: &str = "feat/client-gstn-hosting-more";
 
+/// The namespace moves of step D5 MR5 (project / group transfer and rename,
+/// user rename, tombstone release): `gstn repo rename|transfer` and the
+/// group / namespace commands arrive with the hosting-more series.
+const NAMESPACE_MOVES: &str = HOSTING_MORE;
+
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
     ("GET", "/api/v1/groups", Coverage::Command("group list")),
@@ -61,9 +66,19 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::Command("group create"),
     ),
     (
+        "POST",
+        "/api/v1/groups/{id}/transfer",
+        Coverage::Planned(NAMESPACE_MOVES),
+    ),
+    (
         "GET",
         "/api/v1/namespaces/resolve",
         Coverage::Command("namespace resolve"),
+    ),
+    (
+        "POST",
+        "/api/v1/namespaces/tombstones/release",
+        Coverage::Planned(NAMESPACE_MOVES),
     ),
     ("GET", "/api/v1/projects", Coverage::Command("project list")),
     (
@@ -90,6 +105,11 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "POST",
         "/api/v1/projects/{id}/restore",
         Coverage::Command("project restore"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/transfer",
+        Coverage::Planned(NAMESPACE_MOVES),
     ),
     (
         "GET",
@@ -135,6 +155,11 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "PUT",
         "/api/v1/projects/{id}/visibility",
         Coverage::Planned(HOSTING_MORE),
+    ),
+    (
+        "POST",
+        "/api/v1/users/{id}/rename",
+        Coverage::Planned(NAMESPACE_MOVES),
     ),
 ];
 

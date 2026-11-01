@@ -120,6 +120,90 @@ async fn read(conn: &mut PgConnection, id: TombstoneId) -> Result<Option<Row>, F
     .map_err(|e| query_error("tombstones.release.read", e))
 }
 
+// ── D5 MR5: the route's loader (read pool, no locks) ──
+
+/// `viewer`'s role on `namespace` for a release decision, on the read
+/// pool (as [`role_on`]: Owner on their own personal namespace, else the
+/// native role); `None` when the namespace is gone.
+async fn role_now(
+    db: &Db,
+    namespace: i64,
+    viewer: UserId,
+) -> Result<Option<Option<Role>>, ForgeError> {
+    let row: Option<(String, i64)> = db
+        .within("tombstones.load.namespace", async {
+            sqlx::query_as("SELECT kind, owner_id FROM forge.namespaces WHERE id = $1")
+                .bind(namespace)
+                .fetch_optional(db.pool().executor())
+                .await
+                .map_err(|e| crate::read_query_error("tombstones.load.namespace", e))
+        })
+        .await?;
+    let Some((kind, owner)) = row else {
+        return Ok(None);
+    };
+    if kind == "user" {
+        return Ok(Some((owner == viewer.get()).then_some(Role::Owner)));
+    }
+    let roles = crate::roles::load_namespace_roles(db, NamespaceId::new(namespace), viewer).await?;
+    Ok(Some(roles.native))
+}
+
+/// A tombstone row as the loader reads it: id, kind, namespace_id,
+/// parent_namespace_id, owner_at_write.
+type LoadRow = (i64, String, Option<i64>, Option<i64>, Option<i64>);
+
+/// The tombstone at exactly `path` (ADR-0015: exact matches only) and what
+/// [`release_decided`]'s `decide` will see for `viewer`, read without locks
+/// for the route's loader (`POST /api/v1/namespaces/tombstones/release`,
+/// D5 MR5): the registry decides on it first, the release decides again on
+/// what it locks. `None` when no tombstone has that path.
+pub async fn load_by_path(
+    db: &Db,
+    path: &str,
+    viewer: UserId,
+) -> Result<Option<(TombstoneId, TombstoneAccess)>, ForgeError> {
+    let row: Option<LoadRow> = db
+        .within("tombstones.load", async {
+            sqlx::query_as(
+                "SELECT id, kind, namespace_id, parent_namespace_id, owner_at_write                  FROM forge.namespace_tombstones WHERE old_path = $1",
+            )
+            .bind(path)
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| crate::read_query_error("tombstones.load", e))
+        })
+        .await?;
+    let Some((id, kind, namespace, parent, recorded)) = row else {
+        return Ok(None);
+    };
+    if kind == "moved" {
+        if let Some(ns) = namespace {
+            if let Some(role) = role_now(db, ns, viewer).await? {
+                return Ok(Some((
+                    TombstoneId::new(id),
+                    TombstoneAccess::Moved {
+                        target: NamespaceId::new(ns),
+                        target_role: role,
+                    },
+                )));
+            }
+        }
+    }
+    let caller_parent_role = match parent {
+        Some(p) => role_now(db, p, viewer).await?.flatten(),
+        None => None,
+    };
+    Ok(Some((
+        TombstoneId::new(id),
+        TombstoneAccess::Deleted {
+            recorded_owner: recorded.map(UserId::new),
+            caller_parent_role,
+            has_parent: parent.is_some(),
+        },
+    )))
+}
+
 /// Release `tombstone` for `viewer`, deciding inside the transaction
 /// (module docs; `decide` — forge-hosting: `Resource::Tombstone` — sees the
 /// kind and the caller's roles before anything is written). Deletes the

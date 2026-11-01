@@ -325,6 +325,16 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::ProjectTransfer, W::AgentAdminTokenAdmin, F::Transfer { target: Some(R::Owner) }, deny(E::Forbidden)),
     row(A::ProjectTransfer, W::AgentOwnerTokenApi, F::TransferHiddenTarget, deny(E::NotFound)),
     row(A::ProjectTransfer, W::AgentTokenReadApi, F::Transfer { target: Some(R::Owner) }, deny(E::InsufficientScope)),
+    // a rename (the current parent, D5 MR5): Owner of the project is enough —
+    // an Owner who is only a Developer of the group renames it (the move to
+    // a group where they are a Developer is the Transfer{Developer} row above)
+    row(A::ProjectTransfer, W::Owner, F::TransferRename, Allow),
+    row(A::ProjectTransfer, W::Admin, F::TransferRename, Allow),
+    row(A::ProjectTransfer, W::Maintainer, F::TransferRename, deny(E::Forbidden)),
+    row(A::ProjectTransfer, W::NonMember, F::TransferRename, deny(E::NotFound)),
+    row(A::ProjectTransfer, W::AdminTokenApi, F::TransferRename, deny(E::NotFound)),
+    row(A::ProjectTransfer, W::OwnerTokenReadApi, F::TransferRename, deny(E::InsufficientScope)),
+    row(A::ProjectTransfer, W::AgentOwnerTokenApi, F::TransferRename, deny(E::Forbidden)),
     // --- ProjectDelete / ProjectRestore ---
     row(A::ProjectDelete, W::Owner, F::PrivateProject, Allow),
     row(A::ProjectDelete, W::Admin, F::PrivateProject, Allow),
@@ -371,6 +381,20 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::GroupTransfer, W::OwnerTokenReadApi, F::GroupTransfer { target: Some(R::Owner) }, deny(E::InsufficientScope)),
     row(A::GroupTransfer, W::AgentOwnerTokenApi, F::GroupTransfer { target: Some(R::Owner) }, deny(E::Forbidden)),
     row(A::GroupTransfer, W::AgentAdminTokenAdmin, F::GroupTransferToTopLevel, deny(E::Forbidden)),
+    // a rename below the same group (D5 MR5): Owner of the group is enough —
+    // a subgroup's Owner needs no role on the parent
+    row(A::GroupTransfer, W::Owner, F::GroupTransferRename, Allow),
+    row(A::GroupTransfer, W::Admin, F::GroupTransferRename, Allow),
+    row(A::GroupTransfer, W::Maintainer, F::GroupTransferRename, deny(E::Forbidden)),
+    row(A::GroupTransfer, W::NonMember, F::GroupTransferRename, deny(E::Forbidden)),
+    row(A::GroupTransfer, W::AgentOwnerTokenApi, F::GroupTransferRename, deny(E::Forbidden)),
+    row(A::GroupTransfer, W::OwnerTokenReadApi, F::GroupTransferRename, deny(E::InsufficientScope)),
+    // renaming a top-level group stays an administrator's (like its creation)
+    row(A::GroupTransfer, W::Owner, F::GroupTransferRenameTopLevel, deny(E::Forbidden)),
+    row(A::GroupTransfer, W::AdminTokenApi, F::GroupTransferRenameTopLevel, deny(E::Forbidden)),
+    row(A::GroupTransfer, W::Admin, F::GroupTransferRenameTopLevel, Allow),
+    row(A::GroupTransfer, W::AdminTokenAdmin, F::GroupTransferRenameTopLevel, Allow),
+    row(A::GroupTransfer, W::AgentAdminTokenAdmin, F::GroupTransferRenameTopLevel, deny(E::Forbidden)),
     // --- UserRename (administrators only, the user themself included; D5) ---
     row(A::UserRename, W::Admin, F::UserRenameOther, Allow),
     row(A::UserRename, W::Admin, F::UserRenameSelf, Allow),

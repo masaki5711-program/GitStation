@@ -347,6 +347,11 @@ pub enum LoadedTransferTarget {
     User(LoadedUserNamespace),
     TopLevel,
     NotVisible,
+    /// The parent the resource has now (`None` = the top level): a rename,
+    /// decided by `authorize()` (`TransferTarget::CurrentParent`).
+    CurrentParent {
+        namespace: Option<NamespaceId>,
+    },
 }
 
 impl LoadedTransferTarget {
@@ -363,6 +368,9 @@ impl LoadedTransferTarget {
                 role: None,
                 visible: false,
             },
+            LoadedTransferTarget::CurrentParent { namespace } => TransferTarget::CurrentParent {
+                top_level: namespace.is_none(),
+            },
         }
     }
 
@@ -372,6 +380,7 @@ impl LoadedTransferTarget {
         match *self {
             LoadedTransferTarget::Group { namespace, .. } => Some(namespace),
             LoadedTransferTarget::User(ns) => Some(ns.namespace),
+            LoadedTransferTarget::CurrentParent { namespace } => namespace,
             LoadedTransferTarget::TopLevel | LoadedTransferTarget::NotVisible => None,
         }
     }

@@ -403,6 +403,62 @@
         ],
         "type": "object"
       },
+      "MoveBody": {
+        "additionalProperties": false,
+        "description": "A move as it was written.",
+        "properties": {
+          "id": {
+            "description": "The moved project, group or user.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`project`, `group` or `user`.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "description": "The moved namespace.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "old_path": {
+            "description": "The path before the move.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The path now.",
+            "type": "string"
+          },
+          "projects": {
+            "description": "Projects whose path changed.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "description": "Tombstones of this very subtree released by `reclaim`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "tombstones": {
+            "description": "The `moved` tombstones written: one per namespace of the subtree, at\nits old path. Each keeps that path blocked until released; a clone\nor fetch through it is redirected (`302`) to the new path for\ncallers who may read the project, a push through it is refused.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -543,6 +599,60 @@
         ],
         "type": "object"
       },
+      "ReleaseTombstone": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/namespaces/tombstones/release`.",
+        "properties": {
+          "path": {
+            "description": "The tombstoned path, exactly (`group/sub/project`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "ReleasedBody": {
+        "additionalProperties": false,
+        "description": "A released tombstone.",
+        "properties": {
+          "kind": {
+            "description": "`moved` or `deleted`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The path that can be used again.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RenameUser": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/users/{id}/rename`.",
+        "properties": {
+          "reclaim": {
+            "description": "Take back an old username of this very user.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "username": {
+            "description": "The new username, which is also the personal namespace's path\n(ADR-0015 rules; not a reserved word).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "type": "object"
+      },
       "Resolution": {
         "additionalProperties": false,
         "description": "Which namespace a path names. Exactly one of `project_id`, `group_id`,\n`user_id` is present, by `kind`.",
@@ -619,6 +729,73 @@
         "required": [
           "visibility"
         ],
+        "type": "object"
+      },
+      "TransferGroup": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/groups/{id}/transfer`.",
+        "properties": {
+          "namespace_id": {
+            "description": "The new parent group's `namespace_id`. Omitted: the current parent\n(a rename; a top-level group stays at the top level).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The new last segment. Omitted: the current one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reclaim": {
+            "description": "As for a project: take back an old path of this group's subtree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "top_level": {
+            "description": "`true`: move to the top level (administrators only); not together\nwith `namespace_id`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TransferProject": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/projects/{id}/transfer`.",
+        "properties": {
+          "namespace_id": {
+            "description": "The new parent: a group or a personal namespace (`namespace_id` of\n`GET /api/v1/groups/{id}`, of a user, or of the resolver). Omitted:\nthe current parent (a rename).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The new last segment (ADR-0015 rules). Omitted: the current one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reclaim": {
+            "description": "Take back an old path of this very project (A → B → A): release, in\nthe same change, the `moved` tombstone there that names it. Default\n`false` (a tombstone always blocks until released).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "UpdateGroup": {
@@ -1175,6 +1352,58 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/groups/{id}/transfer": {
+      "post": {
+        "operationId": "post_api_v1_groups_id_transfer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
+        "x-forge-action": "GroupTransfer",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/api/v1/namespaces/resolve": {
       "get": {
         "operationId": "get_api_v1_namespaces_resolve",
@@ -1202,6 +1431,46 @@
         },
         "summary": "Resolve a namespace path for the caller (ADR-0015)",
         "x-forge-action": "PathResolve"
+      }
+    },
+    "/api/v1/namespaces/tombstones/release": {
+      "post": {
+        "operationId": "post_api_v1_namespaces_tombstones_release",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTombstone"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasedBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Release a namespace tombstone so its path can be used again (the target's Owner, or an administrator)",
+        "x-forge-action": "NamespaceTombstoneRelease",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/projects": {
@@ -1876,6 +2145,58 @@
         "x-forge-action": "ProjectRestore"
       }
     },
+    "/api/v1/projects/{id}/transfer": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_transfer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Move or rename a project (Owner; Maintainer on the target group, or the personal namespace's user)",
+        "x-forge-action": "ProjectTransfer",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/api/v1/projects/{id}/visibility": {
       "put": {
         "operationId": "put_api_v1_projects_id_visibility",
@@ -1955,6 +2276,58 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/users/{id}/rename": {
+      "post": {
+        "operationId": "post_api_v1_users_id_rename",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Rename a user and their personal namespace (administrators)",
+        "x-forge-action": "UserRename",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/healthz": {

@@ -82,6 +82,25 @@ impl MoveSummary {
     }
 }
 
+impl MoveSummary {
+    /// The event payload's part (D5 MR5): `{"namespace_id","from_parent_id",
+    /// "to_parent_id","renamed","nodes","projects","reclaimed_tombstones"}`
+    /// — ids and counts, without the role changes (those stay in the audit
+    /// details: an integration reading a project's feed learns nothing about
+    /// other users' access).
+    pub(crate) fn event_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "namespace_id": self.namespace_id.get(),
+            "from_parent_id": self.from_parent.map(NamespaceId::get),
+            "to_parent_id": self.to_parent.map(NamespaceId::get),
+            "renamed": self.renamed,
+            "nodes": self.nodes,
+            "projects": self.projects,
+            "reclaimed_tombstones": self.reclaimed_tombstones,
+        })
+    }
+}
+
 /// The kind of a namespace tombstone (ADR-0015).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TombstoneKind {

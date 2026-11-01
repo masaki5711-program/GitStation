@@ -2,7 +2,8 @@
 //! `UserRename`): the username and the personal namespace's path change
 //! together (`namespaces::move_subtree` on the user's namespace and the
 //! projects in it), with one `user.renamed` audit row and one
-//! `project.moved` row per project (audit-only).
+//! `project.moved` row per project, and (D5 MR5) one `user.renamed` event
+//! (admin class, instance-wide, dedup `user_renamed:<user_id>:<µs epoch>`).
 
 use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, UserKind};
@@ -13,6 +14,10 @@ use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeTx, Settle};
 use crate::namespaces::{lock_subtree, lock_target, move_subtree, MoveOptions, MoveOutcome};
 use crate::{query_error, Db};
+
+/// The prefix of the `user.renamed` event's dedup key,
+/// `user_renamed:<user_id>:<µs epoch>` (D5 MR5).
+pub const RENAMED_DEDUP_PREFIX: &str = "user_renamed";
 
 /// What [`rename_decided`]'s `decide` sees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,7 +104,15 @@ pub async fn rename_decided<P>(
             user_id: user,
             summary: moved.outcome.summary.clone(), // clone: the outcome keeps it too
         };
-        let record = moved.record(&details, RESOURCE, user.get());
+        let record = moved
+            .evented_record(
+                &mut tx,
+                &details,
+                RESOURCE,
+                user.get(),
+                RENAMED_DEDUP_PREFIX,
+            )
+            .await?;
         Ok(Settle::Commit(record, (moved.outcome, decided)))
     }
     .await;

@@ -184,11 +184,6 @@ impl Default for AppConfig {
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
-    Action::ProjectTransfer,
-    // D5 (ADR-0015): routed in MR5 `feat/web-api-namespace-moves`.
-    Action::GroupTransfer,
-    Action::UserRename,
-    Action::NamespaceTombstoneRelease,
     Action::TokenCreate,
     Action::TokenList,
     Action::TokenRevoke,
@@ -285,7 +280,9 @@ pub fn registry() -> Registry<AppState> {
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    git_routes(shell_routes(member_routes(hosting_routes(fixed))))
+    git_routes(shell_routes(member_routes(move_routes(hosting_routes(
+        fixed,
+    )))))
 }
 
 /// Members and protected refs (M1 phase 8b MR8): the lists decided on the
@@ -507,6 +504,55 @@ fn hosting_routes(registry: Registry<AppState>) -> Registry<AppState> {
             pw::restore,
         )
         .responds::<routes::projects::ProjectBody>(Verb::Post, pw::RESTORE)
+}
+
+/// Namespace moves (step D5 MR5, ADR-0015 Amendment D5): a project's or a
+/// group's move or rename, a user's rename and a tombstone's release, each
+/// proved on what its loader read and decided again inside its transaction
+/// (forge-hosting); agents are denied all of them.
+fn move_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::moves as mv;
+    registry
+        .route_with_body(
+            Verb::Post,
+            mv::PROJECT_TRANSFER,
+            Action::ProjectTransfer,
+            "Move or rename a project (Owner; Maintainer on the target group, or the personal namespace's user)",
+            mv::MAX_BODY,
+            mv::ProjectToMove,
+            mv::transfer_project,
+        )
+        .responds::<mv::MoveBody>(Verb::Post, mv::PROJECT_TRANSFER)
+        .route_with_body(
+            Verb::Post,
+            mv::GROUP_TRANSFER,
+            Action::GroupTransfer,
+            "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
+            mv::MAX_BODY,
+            mv::GroupToMove,
+            mv::transfer_group,
+        )
+        .responds::<mv::MoveBody>(Verb::Post, mv::GROUP_TRANSFER)
+        .route_with_body(
+            Verb::Post,
+            mv::USER_RENAME,
+            Action::UserRename,
+            "Rename a user and their personal namespace (administrators)",
+            mv::MAX_BODY,
+            mv::UserToRename,
+            mv::rename_user,
+        )
+        .responds::<mv::MoveBody>(Verb::Post, mv::USER_RENAME)
+        .route_with_body(
+            Verb::Post,
+            mv::TOMBSTONE_RELEASE,
+            Action::NamespaceTombstoneRelease,
+            "Release a namespace tombstone so its path can be used again (the target's Owner, or an administrator)",
+            mv::MAX_BODY,
+            mv::TombstoneAtPath,
+            mv::release_tombstone,
+        )
+        .responds::<mv::ReleasedBody>(Verb::Post, mv::TOMBSTONE_RELEASE)
 }
 
 /// Smart HTTP (M1 phase 9): fetch (MR3) — the advertisement (`GET`, and

@@ -349,14 +349,14 @@ impl AuditDetails {
             Self::RepositoryPushed { .. } => Some(EventType::RepositoryPushed),
             Self::ProjectUpdated { .. } | Self::GroupUpdated { .. } => None,
             Self::ProjectVisibilityChanged { .. } => Some(EventType::ProjectVisibilityChanged),
-            // D5 MR2: audit-only. A group move can touch 1000 projects, more
-            // than the 100 events one change may carry; the move events
-            // come with their aggregate shape (D5 plan, MR5).
-            Self::ProjectMoved { .. }
-            | Self::ProjectMovedWithAncestor { .. }
-            | Self::GroupMoved { .. }
-            | Self::UserRenamed { .. }
-            | Self::TombstoneReleased { .. } => None,
+            // D5 MR5: one event per move, for the moved resource. A group
+            // move can touch 1000 projects, more than the 100 events one
+            // change may carry, so the per-project rows of a moved ancestor
+            // stay audit-only; tombstone releases are audit-only too.
+            Self::ProjectMoved { .. } => Some(EventType::ProjectMoved),
+            Self::GroupMoved { .. } => Some(EventType::GroupMoved),
+            Self::UserRenamed { .. } => Some(EventType::UserRenamed),
+            Self::ProjectMovedWithAncestor { .. } | Self::TombstoneReleased { .. } => None,
             Self::ProjectDeleted { .. } => Some(EventType::ProjectDeleted),
             Self::ProjectRestored { .. } => Some(EventType::ProjectRestored),
             // D5 MR4: the start is audit-only; the end is the one event.
@@ -659,7 +659,11 @@ impl AuditDetails {
 
     /// The payload of the event these details publish: the same JSON as
     /// [`Self::to_value`], except `repository.pushed`, whose payload is
-    /// built within the larger [`EVENT_BUDGET`].
+    /// built within the larger [`EVENT_BUDGET`], and the move events
+    /// (`project.moved`, `group.moved`, `user.renamed`, D5 MR5), whose
+    /// payload is the summary without the role changes
+    /// ([`MoveSummary::event_value`]: who gained or lost an inherited role
+    /// stays in the audit log).
     pub fn event_payload(&self) -> serde_json::Value {
         match self {
             Self::RepositoryPushed {
@@ -674,6 +678,16 @@ impl AuditDetails {
                 *replayed_from,
                 EVENT_BUDGET,
             ),
+            Self::ProjectMoved {
+                project_id,
+                summary,
+            } => with_id_value("project_id", project_id.get(), summary.event_value()),
+            Self::GroupMoved { group_id, summary } => {
+                with_id_value("group_id", group_id.get(), summary.event_value())
+            }
+            Self::UserRenamed { user_id, summary } => {
+                with_id_value("user_id", user_id.get(), summary.event_value())
+            }
             Self::UserCreated { .. }
             | Self::UserDisabled { .. }
             | Self::AdminBootstrapped { .. }
@@ -695,10 +709,7 @@ impl AuditDetails {
             | Self::ProjectUpdated { .. }
             | Self::ProjectVisibilityChanged { .. }
             | Self::GroupUpdated { .. }
-            | Self::ProjectMoved { .. }
             | Self::ProjectMovedWithAncestor { .. }
-            | Self::GroupMoved { .. }
-            | Self::UserRenamed { .. }
             | Self::TombstoneReleased { .. }
             | Self::ProjectDeleted { .. }
             | Self::ProjectRestored { .. }
@@ -710,7 +721,11 @@ impl AuditDetails {
 
 /// `{<key>: id}` merged with the move summary's fields.
 fn with_id(key: &str, id: i64, summary: &MoveSummary) -> serde_json::Value {
-    let mut value = summary.to_value();
+    with_id_value(key, id, summary.to_value())
+}
+
+/// `{<key>: id}` merged with `value`'s fields.
+fn with_id_value(key: &str, id: i64, mut value: serde_json::Value) -> serde_json::Value {
     if let serde_json::Value::Object(map) = &mut value {
         map.insert(key.to_owned(), id.into());
     }

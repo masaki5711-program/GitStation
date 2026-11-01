@@ -270,7 +270,10 @@ pub fn authorize(
                         Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_namespace"))
                     }
                 }
-                TransferTarget::TopLevel => {
+                // A rename: Owner on the project is all it takes (a project
+                // is never at the top level; that shape is refused).
+                TransferTarget::CurrentParent { top_level: false } => Ok(()),
+                TransferTarget::TopLevel | TransferTarget::CurrentParent { top_level: true } => {
                     Err(deny(ErrorCode::Forbidden).with_context("reason", "project_to_top_level"))
                 }
             }
@@ -291,7 +294,13 @@ pub fn authorize(
             need(Role::Owner, *source_role)?;
             match *target {
                 TransferTarget::Group { role, .. } => need(Role::Owner, role),
-                TransferTarget::TopLevel => admin_only(),
+                // A rename below the same group: Owner of the group is
+                // enough (a subgroup's Owner needs no role on the parent);
+                // at the top level it is an administrator's.
+                TransferTarget::CurrentParent { top_level: false } => Ok(()),
+                TransferTarget::TopLevel | TransferTarget::CurrentParent { top_level: true } => {
+                    admin_only()
+                }
                 TransferTarget::PersonalNamespace { .. } => Err(deny(ErrorCode::Forbidden)
                     .with_context("reason", "group_to_personal_namespace")),
             }

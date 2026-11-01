@@ -360,8 +360,9 @@ impl NamespaceView {
 }
 
 /// Where a project or group moves to (ADR-0015 "移管は両側で判定する").
-/// Built by the lookup layer for the caller; a rename names the current
-/// parent.
+/// Built by the lookup layer for the caller; a rename (the parent stays
+/// the same) is [`TransferTarget::CurrentParent`], decided here (D5 MR5
+/// review).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferTarget {
     /// A group, with the caller's effective role on it. `visible` is false
@@ -373,6 +374,12 @@ pub enum TransferTarget {
     /// No parent: the top level. Never for a project; a group only by an
     /// administrator.
     TopLevel,
+    /// The parent the resource already has: a rename (ADR-0015 "名前だけの
+    /// 変更は、移動先 = 今の親として扱う"). Decided on the caller's role on
+    /// the resource alone — nobody gains a role, so the parent's role is
+    /// not needed — except at the top level (`top_level`: a top-level
+    /// group's rename), which stays an administrator's, like its creation.
+    CurrentParent { top_level: bool },
 }
 
 /// A tombstone about to be released (ADR-0015 "解放"), with the facts the

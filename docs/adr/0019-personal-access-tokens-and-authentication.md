@@ -385,3 +385,24 @@ receive-pack（MR4）と一緒に書く。
 - メンバーと保護 ref の一覧・変更のルートは `read_api` / `api` のスコープ（`write_repository` だけのトークンは FG-AUTH-0002）。
 - 最後の Owner の計算（`removes_last_owner`）はプロジェクトと最上位のグループだけ。サブグループは最上位の Owner を必ず継承する
   （無効化のガード FG-AUTH-0009 が最上位の唯一の有効な Owner を守る）ので対象外。ADR-0015 の Amendment（MR8）を参照。
+
+## Amendment（2026-11-01、手順 D5 MR5: §8 の例外を運用の移動・名前の変更のコマンドへ広げる）
+
+§8 の「権限の単一判定点（CLAUDE.md §3.4）の明示的な例外」は、トークンの CLI に加えて、次の運用のコマンドにも適用する
+（D5 MR5 のレビューの指摘。設計は ADR-0015 の「D5 MR5」）。
+
+- 対象: `forge admin project move`、`forge admin group move`、`forge admin user rename`（`forge-cli/src/admin_namespace.rs`）。
+  先例として `forge admin user disable`、`bootstrap-admin`、`repo reprovision`、`project purge --now` も同じ扱い（どれも
+  `authorize()` を通らず、actor `system`、監査の `actor_label = forge-cli:<OS のアカウント>`）。
+- **`authorize()` を通らない理由**: 呼び出し元はホストの操作者で、HTTP / git の主体（`Principal`）がない。判定するロールを持つ
+  利用者がいない。本番では承認済みの Runbook の手順（`namespace-redirects`）としてだけ実行する（CLAUDE.md §3.7）。
+- **HTTP から到達できない理由**: 入口は `forge-hosting` の `Hosting::operator_move_project` / `operator_move_group` /
+  `operator_rename_user` だけで、どれも `ChangeContext` の actor が `system` でなければ `FG-SYS-0001 reason=operator_not_system`
+  で断る。forge-web の書き込みは必ず `Actor::User`（forge-hosting `change_context`）で、`system` の文脈を作る経路を持たない。
+  forge-db の側でも、`RateLimit::Exempt` は actor が `system` でなければ `rate_limit_exempt_not_system` で断る（二重の守り）。
+  forge-db の `*_decided` を判定なしの閉包で呼べるのは forge-hosting だけ（テスト `decided_callers`）。
+- **回数の制限の外**: これらのコマンドは名前空間ごと 24 時間 10 回の制限（FG-REPO-0018）の対象外（手順 D5 の計画の答え:
+  運用の CLI だけが除外）。それ以外の規則（部分木の上限、深さ、パスの長さ、循環、移動先の種類、衝突、Owner がいなくならないこと）、
+  墓標、監査の行、移動のイベントは API と同じ。
+- **この例外は CLI の経路だけ**（§8 と同じ）: HTTP の移動・名前の変更は `ProjectTransfer` / `GroupTransfer` / `UserRename` の
+  `authorize()` と権限の表の行で判定する。
