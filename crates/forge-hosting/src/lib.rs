@@ -18,8 +18,17 @@
 //!
 //! A proof for another action than the command's is a programming error
 //! (`FG-SYS-0001 reason=proof_action_mismatch`), never a pass.
+//!
+//! D5 MR5 adds the namespace moves (`moves`: project and group transfers
+//! and renames, user renames, tombstone releases).
 
 use std::time::Duration;
+
+mod moves;
+mod operator;
+
+pub use forge_db::namespaces::MoveOutcome;
+pub use moves::{MoveRequest, Released, MOVE_ATTEMPTS};
 
 use forge_auth::{
     AccountFacts, Action, Authorized, Credential, GroupCtx, GroupMemberCtx, InstanceCtx,

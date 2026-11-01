@@ -10,6 +10,9 @@ use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
+// ── D5 MR5 ──
+mod admin_namespace;
+// ── end D5 MR5 ──
 // ── D5 MR4 ──
 mod admin_project;
 // ── end D5 MR4 ──
@@ -73,9 +76,10 @@ enum Command {
         command: DbCommand,
     },
     /// Operator commands. `token issue` / `token revoke`, `user disable`,
-    /// `bootstrap-admin`, `repo reprovision`, `repo record-push` and
-    /// `project purge --now` change data (in production: approved runbook
-    /// steps); the others only read.
+    /// `bootstrap-admin`, `repo reprovision`, `repo record-push`,
+    /// `project purge --now`, `project move`, `group move` and `user rename`
+    /// change data (in production: approved runbook steps); the others only
+    /// read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -133,7 +137,40 @@ enum AdminCommand {
         command: ProjectCommand,
     },
     // ── end D5 MR4 ──
+    // ── D5 MR5 ──
+    /// Groups (step D5).
+    Group {
+        #[command(subcommand)]
+        command: GroupCommand,
+    },
+    // ── end D5 MR5 ──
 }
+
+// ── D5 MR5 ──
+#[derive(Subcommand)]
+enum GroupCommand {
+    /// Move or rename a group and its subtree (runbook namespace-redirects;
+    /// exempt from the API's 10 moves per 24 hours). The old paths keep
+    /// `moved` tombstones.
+    #[command(group(clap::ArgGroup::new("target").required(true).args(["namespace", "top_level"])))]
+    Move {
+        /// The group id.
+        group_id: i64,
+        /// The new parent group's namespace id.
+        #[arg(long)]
+        namespace: Option<i64>,
+        /// Move to (or stay at) the top level.
+        #[arg(long)]
+        top_level: bool,
+        /// The new last path segment (the current one for a pure move).
+        #[arg(long)]
+        path: String,
+        /// Take back an old path of this subtree (release its `moved` tombstones).
+        #[arg(long)]
+        reclaim: bool,
+    },
+}
+// ── end D5 MR5 ──
 
 // ── D5 MR4 ──
 #[derive(Subcommand)]
@@ -150,6 +187,25 @@ enum ProjectCommand {
         #[arg(long)]
         now: bool,
     },
+    // ── D5 MR5 ──
+    /// Move or rename a project (runbook namespace-redirects; exempt from
+    /// the API's 10 moves per 24 hours). The old path keeps a `moved`
+    /// tombstone.
+    Move {
+        /// The project id.
+        project_id: i64,
+        /// The new parent's namespace id (a group or a personal namespace;
+        /// the current one for a rename).
+        #[arg(long)]
+        namespace: i64,
+        /// The new last path segment (the current one for a pure move).
+        #[arg(long)]
+        path: String,
+        /// Take back an old path of this project (release its `moved` tombstone).
+        #[arg(long)]
+        reclaim: bool,
+    },
+    // ── end D5 MR5 ──
 }
 // ── end D5 MR4 ──
 
@@ -190,6 +246,19 @@ enum UserCommand {
         #[arg(long)]
         force: bool,
     },
+    // ── D5 MR5 ──
+    /// Rename a user: the username and the personal namespace's path
+    /// (runbook namespace-redirects; exempt from the rate limit).
+    Rename {
+        /// The current username.
+        username: String,
+        /// The new username.
+        new_username: String,
+        /// Take back an old username of this user (release its `moved` tombstone).
+        #[arg(long)]
+        reclaim: bool,
+    },
+    // ── end D5 MR5 ──
 }
 
 #[derive(Subcommand)]
@@ -265,14 +334,17 @@ fn main() -> ExitCode {
                     command: TokenCommand::Issue { .. } | TokenCommand::Revoke { .. },
                 }
                 | AdminCommand::User {
-                    command: UserCommand::Disable { .. },
+                    command: UserCommand::Disable { .. } | UserCommand::Rename { .. },
+                }
+                | AdminCommand::Group {
+                    command: GroupCommand::Move { .. },
                 }
                 | AdminCommand::BootstrapAdmin { .. }
                 | AdminCommand::Repo {
                     command: RepoCommand::Reprovision { .. } | RepoCommand::RecordPush { .. },
                 }
                 | AdminCommand::Project {
-                    command: ProjectCommand::Purge { now: true, .. },
+                    command: ProjectCommand::Purge { now: true, .. } | ProjectCommand::Move { .. },
                 },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
@@ -410,6 +482,73 @@ fn main() -> ExitCode {
                     command: ProjectCommand::Purge { now, .. },
                 },
         } => config().and_then(|cfg| admin_project::purge(&cfg, &request_id, now)),
+        Command::Admin {
+            command:
+                AdminCommand::Project {
+                    command:
+                        ProjectCommand::Move {
+                            project_id,
+                            namespace,
+                            path,
+                            reclaim,
+                        },
+                },
+        } => config().and_then(|cfg| {
+            admin_namespace::move_project(
+                &cfg.database,
+                &request_id,
+                project_id,
+                &admin_namespace::MoveArgs {
+                    namespace: Some(namespace),
+                    path,
+                    reclaim,
+                },
+            )
+        }),
+        Command::Admin {
+            command:
+                AdminCommand::Group {
+                    command:
+                        GroupCommand::Move {
+                            group_id,
+                            namespace,
+                            top_level: _,
+                            path,
+                            reclaim,
+                        },
+                },
+        } => config().and_then(|cfg| {
+            // clap requires exactly one of --namespace / --top-level.
+            admin_namespace::move_group(
+                &cfg.database,
+                &request_id,
+                group_id,
+                &admin_namespace::MoveArgs {
+                    namespace,
+                    path,
+                    reclaim,
+                },
+            )
+        }),
+        Command::Admin {
+            command:
+                AdminCommand::User {
+                    command:
+                        UserCommand::Rename {
+                            username,
+                            new_username,
+                            reclaim,
+                        },
+                },
+        } => config().and_then(|cfg| {
+            admin_namespace::rename_user(
+                &cfg.database,
+                &request_id,
+                &username,
+                &new_username,
+                reclaim,
+            )
+        }),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or_else(|| cfg.server.bind.clone()); // clone: cfg is passed whole below
             serve::serve(&bind, &cfg)
@@ -560,6 +699,90 @@ mod tests {
             parse(&["admin", "project", "purge", "--dry-run", "--now"]).is_err(),
             "not both"
         );
+    }
+
+    #[test]
+    fn moves_take_ids_a_target_and_a_path() {
+        let cli = parse(&[
+            "admin",
+            "project",
+            "move",
+            "7",
+            "--namespace",
+            "3",
+            "--path",
+            "web",
+        ])
+        .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Project {
+                    command: ProjectCommand::Move { project_id: 7, namespace: 3, ref path, reclaim: false }
+                }
+            } if path == "web"
+        ));
+        assert!(
+            parse(&["admin", "project", "move", "7", "--path", "web"]).is_err(),
+            "a target"
+        );
+        assert!(
+            parse(&["admin", "project", "move", "7", "--namespace", "3"]).is_err(),
+            "a path"
+        );
+        let cli = parse(&[
+            "admin",
+            "group",
+            "move",
+            "4",
+            "--top-level",
+            "--path",
+            "acme",
+            "--reclaim",
+        ])
+        .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Group {
+                    command: GroupCommand::Move {
+                        group_id: 4,
+                        namespace: None,
+                        top_level: true,
+                        reclaim: true,
+                        ..
+                    }
+                }
+            }
+        ));
+        assert!(
+            parse(&["admin", "group", "move", "4", "--path", "acme"]).is_err(),
+            "--namespace or --top-level"
+        );
+        assert!(
+            parse(&[
+                "admin",
+                "group",
+                "move",
+                "4",
+                "--top-level",
+                "--namespace",
+                "2",
+                "--path",
+                "a",
+            ])
+            .is_err(),
+            "not both"
+        );
+        let cli = parse(&["admin", "user", "rename", "bob", "robert"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::User {
+                    command: UserCommand::Rename { ref username, ref new_username, reclaim: false }
+                }
+            } if username == "bob" && new_username == "robert"
+        ));
     }
 
     #[test]

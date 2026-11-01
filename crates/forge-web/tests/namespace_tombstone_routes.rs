@@ -15,8 +15,11 @@
 //!   see it, the absent 404 to anyone else;
 //! - one resolver call per request, whatever the outcome.
 //!
+//! Rows through the move API (D5 MR5) are in `namespace_move_routes.rs`:
+//! create at a moved path → 409, A → B → A → 409 (and with `reclaim`), the
+//! release, `302` for a reader and `404` for a stranger and a push.
 //! Rows still to come, with the routes they need: create after delete → 409
-//! and A → B → A → 409 (the namespace write endpoints, phase 8b / D5);
+//! (the purge, D5 MR4, writes that tombstone; no route deletes a namespace);
 //! `info/refs?service=git-receive-pack` on a tombstone → 404 and
 //! `?service=git-upload-pack` → 302 (Smart HTTP, phase 9). D5 has no move
 //! or delete command yet, so moves and tombstones are written as forge_app

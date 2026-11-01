@@ -467,12 +467,14 @@ fn update_details_name_fields_only_and_the_visibility_change_is_a_maintainer_eve
 }
 
 /// D5 MR2: the move details are ids, counts and grouped role changes —
-/// never a path or a name — and audit-only.
+/// never a path or a name. D5 MR5: the moved resource's own row publishes
+/// its move event (role changes left out of the payload); a moved
+/// ancestor's per-project rows and tombstone releases stay audit-only.
 #[test]
 fn move_details_carry_ids_counts_and_grouped_role_changes_only() {
     use crate::ids::{GroupId, ProjectId, TombstoneId};
     use crate::move_details::SHOWN_ROLE_CHANGES;
-    use crate::{MoveSummary, RoleChange, TombstoneKind};
+    use crate::{EventType, MoveSummary, RoleChange, TombstoneKind};
     let summary = |changes: usize| MoveSummary {
         namespace_id: NamespaceId::new(4),
         from_parent: Some(NamespaceId::new(2)),
@@ -533,10 +535,39 @@ fn move_details_carry_ids_counts_and_grouped_role_changes_only() {
     assert_eq!(with.action(), "project.moved");
     assert_eq!(moved.action(), "group.moved");
     assert_eq!(released.action(), "namespace_tombstone.released");
-    for details in [moved, with, released, project] {
-        assert_eq!(details.event_type(), None, "audit-only in MR2");
+    assert_eq!(
+        with.event_type(),
+        None,
+        "a moved ancestor's per-project row"
+    );
+    assert_eq!(released.event_type(), None, "audit-only");
+    assert_eq!(project.event_type(), Some(EventType::ProjectMoved));
+    assert_eq!(moved.event_type(), Some(EventType::GroupMoved));
+    let renamed = AuditDetails::UserRenamed {
+        user_id: UserId::new(1),
+        summary: summary(2),
+    };
+    assert_eq!(renamed.event_type(), Some(EventType::UserRenamed));
+    assert_eq!(
+        moved.event_payload(),
+        json!({
+            "group_id": 9, "namespace_id": 4, "from_parent_id": 2, "to_parent_id": null,
+            "renamed": true, "nodes": 3, "projects": 1, "reclaimed_tombstones": 0,
+        }),
+        "no role changes in the event"
+    );
+    for details in [&moved, &project, &renamed] {
+        assert_eq!(
+            details.event_type().map(EventType::as_str),
+            Some(details.action())
+        );
+        let payload = details.event_payload();
+        assert!(payload.get("role_changes").is_none(), "{details:?}");
+    }
+    for details in [moved, with, released, project, renamed] {
         let mut found = Vec::new();
         keys(&details.to_value(), &mut found);
+        keys(&details.event_payload(), &mut found);
         for pii in PII_KEYS.iter().chain(&["path", "full_path", "segment"]) {
             assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
         }

@@ -1,7 +1,8 @@
 //! Moving or renaming a group, decided inside its transaction (D5 MR2,
 //! ADR-0015 Amendment D5): `namespaces::move_subtree` on the group's
 //! namespace and every descendant, one `group.moved` audit row and one
-//! `project.moved` row per project below it (audit-only in MR2).
+//! `project.moved` row per project below it; (D5 MR5) one `group.moved` event
+//! (admin class, instance-wide, dedup `group_moved:<group_id>:<µs epoch>`).
 
 use forge_core::ids::{GroupId, NamespaceId, UserId};
 use forge_core::AuditDetails;
@@ -15,6 +16,10 @@ use crate::namespaces::{
 };
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
+
+/// The prefix of the `group.moved` event's dedup key,
+/// `group_moved:<group_id>:<µs epoch>` (D5 MR5).
+pub const MOVED_DEDUP_PREFIX: &str = "group_moved";
 
 /// What [`move_decided`]'s `decide` sees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +95,9 @@ pub async fn move_decided<P>(
             group_id: group,
             summary: moved.outcome.summary.clone(), // clone: the outcome keeps it too
         };
-        let record = moved.record(&details, RESOURCE, group.get());
+        let record = moved
+            .evented_record(&mut tx, &details, RESOURCE, group.get(), MOVED_DEDUP_PREFIX)
+            .await?;
         Ok(Settle::Commit(record, (moved.outcome, decided)))
     }
     .await;

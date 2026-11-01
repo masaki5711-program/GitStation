@@ -416,6 +416,20 @@ fix = "Follow the runbook repository-purge for each failed project, then run `fo
 runbook = "repository-purge"
 test = "now_fails_when_a_project_could_not_be_purged"
 
+[[error]]
+code = "FG-REPO-0022"
+name = "NamespaceMoveContended"
+http_status = 503
+severity = "warn"
+user_message_ja = "ほかの変更と重なったため、移動または名前の変更を完了できませんでした。少し待ってから再度お試しください。"
+user_message_en = "The move or rename collided with other changes and could not finish. Wait a moment and try again."
+user_message_id = "Pemindahan atau penggantian nama bertabrakan dengan perubahan lain dan tidak dapat diselesaikan. Tunggu sebentar lalu coba lagi."
+cause = "A namespace move, rename or tombstone release through the API (forge_hosting::Hosting::move_project, move_group, rename_user, release_tombstone; step D5 MR5) lost a retryable conflict on every attempt: its transaction was rolled back with FG-DB-0002 `retryable=true` (`deadlock` — two moves whose subtrees and targets cross each other; `subtree_unstable` — namespaces kept being created below the moving subtree while it was being locked; `tombstone_changed` — the tombstone's target was purged meanwhile; `serialization`) and was run again from the start, decided again each time, up to 3 attempts in all (forge_hosting::MOVE_ATTEMPTS). Nothing was written by any attempt. Not a bug by itself: it means heavy concurrent changes on the same part of the namespace tree."
+diagnosis = "The log event carries `command` (project_move, group_move, user_rename, tombstone_release), `attempts` and `last_reason` (the FG-DB-0002 reason of the last conflict); the source is that FG-DB-0002. Look for other moves, creates or purges in the same subtree at that time (forge.audit_log by occurred_at: project.moved, group.moved, user.renamed, project.created, group.created, project.purged) and in pg_locks / pg_stat_activity for long transactions."
+fix = "Retry the request (the client may retry it as is: nothing was written). If it keeps failing, find the competing writer (a script moving many namespaces at once, a purge of the subtree) and let it finish first; move large groups in parts."
+runbook = "namespace-redirects"
+test = "a_move_that_keeps_losing_conflicts_is_namespace_move_contended"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -83,11 +83,25 @@ pub enum EventType {
     /// Reporter could be authorized for it. Deduplicated by
     /// `project_purged:<project_id>` (ids are never reused).
     ProjectPurged,
+    /// `project.moved` (D5 MR5; integration class, step D5 plan answer
+    /// "other project.* integration"): the project itself was moved or
+    /// renamed. A project inside a moved group or a renamed user's
+    /// namespace gets no event of its own (one change carries at most 100
+    /// events, a move up to 1000 projects); `group.moved` / `user.renamed`
+    /// name that move. Deduplicated by `project_moved:<project_id>:<µs epoch>`.
+    ProjectMoved,
+    /// `group.moved` (D5 MR5; admin class: an instance-wide event — it names
+    /// no project, so no project role can authorize a reader, ADR-0016 §5).
+    /// Deduplicated by `group_moved:<group_id>:<µs epoch>`.
+    GroupMoved,
+    /// `user.renamed` (D5 MR5; admin class, instance-wide). Deduplicated by
+    /// `user_renamed:<user_id>:<µs epoch>`.
+    UserRenamed,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 15] = [
+    pub const ALL: [EventType; 18] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -103,6 +117,9 @@ impl EventType {
         EventType::ProjectDeleted,
         EventType::ProjectRestored,
         EventType::ProjectPurged,
+        EventType::ProjectMoved,
+        EventType::GroupMoved,
+        EventType::UserRenamed,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -123,6 +140,9 @@ impl EventType {
             EventType::ProjectDeleted => "project.deleted",
             EventType::ProjectRestored => "project.restored",
             EventType::ProjectPurged => "project.purged",
+            EventType::ProjectMoved => "project.moved",
+            EventType::GroupMoved => "group.moved",
+            EventType::UserRenamed => "user.renamed",
         }
     }
 
@@ -138,10 +158,13 @@ impl EventType {
             | EventType::RepositoryCreated
             | EventType::RepositoryPushed
             | EventType::ProjectDeleted
-            | EventType::ProjectRestored => VisibilityClass::Integration,
-            EventType::TokenCreated | EventType::TokenRevoked | EventType::ProjectPurged => {
-                VisibilityClass::Admin
-            }
+            | EventType::ProjectRestored
+            | EventType::ProjectMoved => VisibilityClass::Integration,
+            EventType::TokenCreated
+            | EventType::TokenRevoked
+            | EventType::ProjectPurged
+            | EventType::GroupMoved
+            | EventType::UserRenamed => VisibilityClass::Admin,
             EventType::MemberAdded
             | EventType::MemberRoleChanged
             | EventType::MemberRemoved

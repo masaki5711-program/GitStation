@@ -862,3 +862,25 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 ペイロードは監査の details と同じ `{project_id, repository_id, namespace_id, deleted_at, purge_after, deleted_by, tombstone_id,
 redirects_ended, members_removed, protected_refs_removed, storage_removed}`（id・数・時刻だけ、パスや名前は入れない）。
 `dedup_key` = `project_purged:<project_id>`（プロジェクトの id は再利用されない）。開始の `repository.purge_started` は監査のみ。
+
+### D5 MR5: `project.moved` / `group.moved` / `user.renamed`
+
+MR2 で監査のみにした移動に、**移動したリソースごとに 1 件** のイベントを付けた（MR2 の「形は MR5 で決める」を閉じる）。
+
+| 種類 | クラス | `project_id` | 書き手 |
+|---|---|---|---|
+| `project.moved` | integration（計画の答え「他の `project.*` は integration」） | そのプロジェクト | `projects::move_decided` |
+| `group.moved` | admin（インスタンス全体のイベント。プロジェクトを指さないので Reporter を `authorize()` で決められない、§5） | なし | `groups::move_decided` |
+| `user.renamed` | admin（同上） | なし | `users::rename_decided` |
+
+- **祖先の移動で動いたプロジェクトにはイベントを出さない**（監査の行はプロジェクトごとに残る）。1 つの変更のイベントは最大 100 件、
+  グループの移動は最大 1000 のプロジェクトに及ぶため。連携はプロジェクトを id で識別し（§5）、パスは表示用のスナップショット
+  なので、今のパスは API で読み直す。`namespace_tombstone.released` は監査のみのまま。
+- **ペイロード**は監査の details から継承のロールの変化を除いたもの: `{<project_id|group_id|user_id>, namespace_id,
+  from_parent_id, to_parent_id, renamed, nodes, projects, reclaimed_tombstones}`（`AuditDetails::event_payload`、
+  `MoveSummary::event_value`）。誰が継承のロールを得た・失ったかは監査ログにだけ残す（他の利用者の権限を連携に出さない）。
+  パスや名前は入れない。
+- **`dedup_key`** は `project_moved:<project_id>:<µs epoch>` / `group_moved:<group_id>:<µs epoch>` /
+  `user_renamed:<user_id>:<µs epoch>`。epoch はリソースの行をロックした後に同じ変更の中で読む `clock_timestamp()` の
+  マイクロ秒（MR3 と同じ精度）。同じリソースの移動は行のロックで直列になるので 2 つの移動が同じ鍵になることはなく、同じ変更の
+  繰り返しだけが `Deduped` になる。

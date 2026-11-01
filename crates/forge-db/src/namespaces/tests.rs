@@ -221,14 +221,46 @@ async fn a_project_move_writes_one_audit_row_and_a_tombstone_at_the_old_path() {
     assert_eq!(stones[0]["kind"], "moved");
     assert_eq!(stones[0]["namespace_id"], web.namespace_id.get());
     assert_eq!(stones[0]["cause_type"], "project");
+    // D5 MR5: one project.moved event (integration), the project's id, no
+    // role changes in the payload, a dedup key with the µs epoch.
+    let events = t
+        .json_rows(
+            "SELECT event_type, project_id, aggregate_type, aggregate_id, payload, dedup_key \
+             FROM forge.events WHERE event_type <> 'project.created'",
+        )
+        .await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["event_type"], "project.moved");
+    assert_eq!(events[0]["project_id"], web.project_id.get());
+    assert_eq!(events[0]["aggregate_type"], "project");
+    assert_eq!(events[0]["payload"]["project_id"], web.project_id.get());
+    assert_eq!(
+        events[0]["payload"]["to_parent_id"],
+        beta.namespace_id.get()
+    );
+    assert!(events[0]["payload"].get("role_changes").is_none());
+    let key = events[0]["dedup_key"].as_str().expect("dedup key");
+    assert!(
+        key.starts_with(&format!("project_moved:{}:", web.project_id.get())),
+        "{key}"
+    );
+    // A second move of the same project a moment later: another key.
+    move_project(
+        &t,
+        web.project_id,
+        alice.user_id,
+        to(Some(beta.namespace_id), "site2"),
+        MoveOptions::default(),
+    )
+    .await
+    .expect("move again");
     assert_eq!(
         count(
             &mut su,
-            "SELECT count(*) FROM forge.events WHERE event_type <> 'project.created'"
+            "SELECT count(DISTINCT dedup_key) FROM forge.events WHERE event_type = 'project.moved'"
         )
         .await,
-        0,
-        "audit-only"
+        2
     );
     assert_tree_consistent(&mut su).await;
     t.drop_now().await;
@@ -290,6 +322,22 @@ async fn a_group_move_rewrites_its_subtree_and_audits_every_project() {
         projects[0]["details"]["moved_namespace_id"],
         platform.namespace_id.get()
     );
+    // D5 MR5: one instance-wide group.moved event; the projects of the
+    // subtree get none (more than 100 events per change otherwise).
+    let events = t
+        .json_rows(
+            "SELECT event_type, project_id, aggregate_id, payload, dedup_key FROM forge.events \
+             WHERE event_type <> 'project.created'",
+        )
+        .await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["event_type"], "group.moved");
+    assert_eq!(events[0]["project_id"], serde_json::Value::Null);
+    assert_eq!(events[0]["aggregate_id"], platform.group_id.get());
+    assert_eq!(events[0]["payload"]["projects"], 2);
+    assert!(events[0]["dedup_key"]
+        .as_str()
+        .is_some_and(|k| k.starts_with(&format!("group_moved:{}:", platform.group_id.get()))));
     t.drop_now().await;
 }
 

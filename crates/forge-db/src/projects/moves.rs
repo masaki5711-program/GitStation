@@ -1,6 +1,7 @@
 //! Moving or renaming a project, decided inside its transaction (D5 MR2,
 //! ADR-0015 Amendment D5): `namespaces::move_subtree` on the project's
-//! namespace, one `project.moved` audit row (audit-only in MR2).
+//! namespace, one `project.moved` audit row and (D5 MR5) one `project.moved`
+//! event (integration class, dedup `project_moved:<project_id>:<µs epoch>`).
 
 use forge_core::ids::{NamespaceId, ProjectId, UserId};
 use forge_core::AuditDetails;
@@ -14,6 +15,10 @@ use crate::namespaces::{
     lock_subtree, lock_target, move_subtree, Destination, MoveOptions, MoveOutcome, TargetAccess,
 };
 use crate::{query_error, Db};
+
+/// The prefix of the `project.moved` event's dedup key,
+/// `project_moved:<project_id>:<µs epoch>` (D5 MR5).
+pub const MOVED_DEDUP_PREFIX: &str = "project_moved";
 
 /// What [`move_decided`]'s `decide` sees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +39,8 @@ pub struct ProjectMoveFacts {
 /// the project and the account row; `decide` (forge-hosting:
 /// `Authorized::reconfirm` with `Resource::Transfer`) sees those facts
 /// before anything is written. One `project.moved` audit row on the
-/// project (`AuditDetails::ProjectMoved`) and one `moved` tombstone at the
+/// project (`AuditDetails::ProjectMoved`) with its `project.moved` event,
+/// and one `moved` tombstone at the
 /// old path. Every exit that does not commit rolls back explicitly.
 ///
 /// Errors: `FG-REPO-0005` (project or parent absent), `FG-REPO-0015`,
@@ -80,7 +86,15 @@ pub async fn move_decided<P>(
             project_id: project,
             summary: moved.outcome.summary.clone(), // clone: the outcome keeps it too
         };
-        let record = moved.record(&details, RESOURCE, project.get());
+        let record = moved
+            .evented_record(
+                &mut tx,
+                &details,
+                RESOURCE,
+                project.get(),
+                MOVED_DEDUP_PREFIX,
+            )
+            .await?;
         Ok(Settle::Commit(record, (moved.outcome, decided)))
     }
     .await;

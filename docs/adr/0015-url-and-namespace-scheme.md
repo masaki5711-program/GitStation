@@ -996,3 +996,43 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   FG-REPO-0021 PurgeBatchIncomplete（warn）で終了コードだけを 0 以外にする（alert は各プロジェクトの FG-REPO-0020 だけ）。
 - **見送り（MR4 の外）**: `forge doctor` の「`purging` のまま古い」検査（今は毎回のログの FG-REPO-0020 で分かる）、
   `purge_after` の部分索引（M1 の件数では `LIMIT` 付きの全件走査で足りる）。
+
+### D5 MR5: 移動・名前の変更・墓標の解放の API（`feat/web-api-namespace-moves`）
+
+- **ルート**（`app::PLANNED` から外した。どれも本文は厳格な JSON、上限 4 KiB）:
+  - `POST /api/v1/projects/{id}/transfer`（`ProjectTransfer`）本文 `{namespace_id?, path?, reclaim?}`
+  - `POST /api/v1/groups/{id}/transfer`（`GroupTransfer`）本文 `{namespace_id?, top_level?, path?, reclaim?}`
+  - `POST /api/v1/users/{id}/rename`（`UserRename`、管理者だけ）本文 `{username, reclaim?}`
+  - `POST /api/v1/namespaces/tombstones/release`（`NamespaceTombstoneRelease`）本文 `{path}`（墓標は **パスで** 指す。
+    `FG-REPO-0009 reason=tombstoned` を受けた利用者が知っているのはパスだけなので）
+- **移動と名前の変更は 1 つのルート**。`namespace_id` を省くと今の親（名前の変更）、`path` を省くと今の名前。グループを
+  トップレベルへ移すのは `"top_level": true` だけ（項目の書き忘れでトップレベルへ移ることはない。`namespace_id` と同時は
+  FG-WEB-0006）。変化のない要求は FG-REPO-0015 `same_location`。
+- **名前の変更の判定**（ADR の「名前だけの変更は、移動先 = 今の親として扱う（role: 自分の実効ロール）」の実装）: 移動先が今の親の
+  グループのとき、移動先のロールではなく **移動するリソースでの呼び出し元のロール** で判定する（ローダーと、トランザクションの
+  中の再判定の両方。forge-hosting `moves::target_of`）。プロジェクトの Owner は親のグループで Developer でも名前を変えられ、
+  サブグループの Owner は親に役割がなくても名前を変えられる。今の親が個人の名前空間なら `PersonalNamespace`（その本人か管理者）、
+  トップレベルのグループの名前の変更は `TopLevel`（管理者だけ。作成と同じ）。
+- **ローダー**: プロジェクト（`GET` と同じ 1 回の読み取り、削除待ちも読む → 410 / 404 は `authorize()` が決める）、今の親
+  （リソースのパスの親を resolver で 1 回）、移動先（`Hosting::parent`。無い・プロジェクトの名前空間・見えないは同じ
+  `NotVisible` = FG-REPO-0005 `target_not_visible`）。ユーザーの名前の変更は id だけで判定する（管理者以外にユーザーの有無を
+  知らせない。無いユーザーは管理者に FG-REPO-0005 `resource=user`）。
+- **墓標の解放のローダー**: forge-db `tombstones::load_by_path`（読み取りのプール、ロックなし）。`moved` の墓標の行き先は、
+  **行き先に役割を持つ人と管理者にだけ見える** とした（`target_visible = target_role.is_some() || 管理者の権限`。ローダーは
+  `Principal::admin_rights`、トランザクションの中は再読した `is_admin` と `admin` スコープ）。役割のない人は、internal の
+  プロジェクトやグループでも 403 ではなく 404（解放はどのみちできない。知ってよい以上を答えない側に倒した）。
+- **再試行**: 移動・解放のトランザクションが FG-DB-0002 `retryable=true`（`deadlock`、`subtree_unstable`、`tombstone_changed`、
+  `serialization`）で巻き戻ったら、最初から判定し直して最大 3 回まで実行する（`forge_hosting::MOVE_ATTEMPTS`）。それでも
+  だめなら新しい **FG-REPO-0022 NamespaceMoveContended**（503、warn、runbook `namespace-redirects`）。何も書かれていない。
+- **答え**: `200` で `{id, kind, namespace_id, old_path, path, tombstones, projects, reclaimed_tombstones}`（`tombstones` は書いた
+  `moved` の墓標の数 = 部分木の節の数。古いパスは解放まで塞がれ、読める人の clone / fetch は 302 で新しいパスへ、push は 404）。
+  解放は `200 {path, kind}`。失敗は既存のコード（FG-REPO-0009 409、FG-REPO-0015 409 `no_active_owner` など、FG-REPO-0018 429、
+  FG-AUTH-0003 403、FG-REPO-0005 404）。**`Retry-After` は付けない**（計画にない。最も古い移動の時刻を答えると移動の履歴が分かる）。
+- **運用の CLI**: `forge admin project move <id> --namespace <ns> --path <seg> [--reclaim]`、`forge admin group move <id>
+  (--namespace <ns> | --top-level) --path <seg> [--reclaim]`、`forge admin user rename <username> <new> [--reclaim]`。
+  actor `system`、`RateLimit::Exempt`（計画の答え: 運用の CLI だけが回数の制限の外）、`authorize()` の外（ADR-0019 §8 の
+  運用のコマンドと同じ扱い）。`*_decided` を呼べるのは forge-hosting だけなので（テスト `decided_callers`）、
+  `Hosting::operator_*` を通す。ロールを読む呼び出し元はいないので、ユーザー id 0（存在しない）でロックする。
+- 権限の表の行（純粋な `authorize()`）は MR1 のまま。ルートごとの行（Owner / Maintainer / 管理者 / 読み取りのトークン /
+  `admin` のない管理者のトークン / エージェント / 他人 / 削除待ち / 不正な id）は `forge-web/tests/namespace_move_routes.rs`、
+  Owner の降格と移動の競合は `forge-hosting/tests/moves.rs`。

@@ -25,6 +25,7 @@
 //! rewrites the subtree and one `moved` tombstone per node keeps its old
 //! path (ADR-0015: per node, exact match only).
 
+use forge_core::dedup_key::{DedupKey, DedupPart};
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, UserId};
 use forge_core::namespace_path::{MAX_DEPTH, MAX_FULL_PATH_LEN};
 use forge_core::TombstoneKind;
@@ -33,7 +34,9 @@ use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
 use super::{lock_paths, path_taken, retry_conflict};
-use crate::change::{Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome};
+use crate::change::{
+    Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome,
+};
 use crate::query_error;
 use crate::roles::{lock_roles, RoleAnchor};
 
@@ -170,6 +173,54 @@ pub(crate) struct Moved {
 }
 
 impl Moved {
+    /// The change's record with the move's one event (D5 MR5): `details`
+    /// on the cause's resource, the affected rows, and the event of
+    /// `details` (`project.moved` with the project's id; `group.moved` /
+    /// `user.renamed` instance-wide) deduplicated by
+    /// `<prefix>:<resource id>:<µs epoch>` — the epoch of
+    /// `clock_timestamp()` read inside this change, after the resource row
+    /// was locked, so two moves of one resource (serialized by that lock)
+    /// never share a key and a repeat of one change is `Deduped`.
+    pub(crate) async fn evented_record(
+        &self,
+        tx: &mut ChangeTx,
+        details: &AuditDetails,
+        resource_type: &'static str,
+        resource_id: i64,
+        dedup_prefix: &'static str,
+    ) -> Result<ChangeRecord, ForgeError> {
+        let event_type = details.event_type().ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "audit_only_event")
+                .with_context("action", details.action())
+        })?;
+        let epoch: i64 = tx
+            .step(|c| async move {
+                sqlx::query_scalar(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000000)::bigint",
+                )
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error("namespaces.move.epoch", e))
+            })
+            .await?;
+        let mut record = self.record(details, resource_type, resource_id);
+        let project_id = (resource_type == "project").then(|| ProjectId::new(resource_id));
+        record.events.push(DomainEvent {
+            event_type,
+            schema_version: 1,
+            aggregate_type: resource_type,
+            aggregate_id: resource_id,
+            project_id,
+            payload: details.event_payload(),
+            dedup_key: Some(DedupKey::new(
+                dedup_prefix,
+                &[DedupPart::Id(resource_id), DedupPart::Id(epoch)],
+            )?),
+        });
+        Ok(record)
+    }
+
     /// The change's record: `details` on the cause's resource, then the
     /// affected rows.
     pub(crate) fn record(
