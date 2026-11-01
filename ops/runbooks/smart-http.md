@@ -2,9 +2,11 @@
 
 対象のコード: FG-GIT-0002（`kind=idle` / `kind=total` のストリーム、`operation=want_check`）、FG-GIT-0004（`reason=streams` /
 `reason=principal_streams`）、FG-GIT-0013、FG-GIT-0014（`reason=want_unreachable` ほか）、FG-GIT-0015、FG-GIT-0001（`reason=hooks_dir`）、
-FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body`）。
+FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body` / `protection_load`）、push の拒否（FG-GIT-0005 / 0007 / 0008 /
+0009 / 0010 / 0011、M1 phase 9 MR4）。
 仕組みは ADR-0007（M1 phase 9 の追記）と ADR-0015（MR3 の追記）、実装は `crates/forge-git`（`stream.rs`、`smart_http.rs`、
-`upload_request.rs`、`want_check.rs`）と `crates/forge-web`（`routes/git.rs`、`git_stream.rs`）。
+`upload_request.rs`、`want_check.rs`、push は `receive_request.rs`、`receive_report.rs`、`push_check.rs`）と
+`crates/forge-web`（`routes/git.rs`、`routes/git_push.rs`、`git_stream.rs`）。push の判定の流れは ADR-0008（MR4 の追記、案 B）。
 
 ## Trigger
 
@@ -31,7 +33,12 @@ FG-WEB-0007、FG-REPO-0016、FG-WEB-0002（`operation=git_request_body`）。
 | 本文を同時に読む数（`max_streams` / `max_streams_per_principal` と同じ） | 16 / 1 人 4 | `FG-GIT-0004 reason=body_reads`（10 秒待つ）/ `principal_body_reads`（すぐ） |
 | `want` の到達性の確認（`git.http.want_check_timeout_ms`） | 30 秒 | `FG-GIT-0002 operation=want_check`（504） |
 | コミット以外の `want` の数（`git.http.max_object_wants`） | 10 000 | `FG-GIT-0014 reason=too_many_wants` |
-| push の大きさ（`receive.maxInputSize`） | MR4 で設定（2 GiB 予定） | git の index-pack が止め、`unpack` の失敗が push の結果に出る |
+| push のパックの大きさ（`git.http.push_max_bytes` → `receive.maxInputSize`） | 2 GiB | git の index-pack が止め、`unpack` の失敗が push の結果に出る |
+| push の本文（生と展開後、`push_max_bytes` + 1 MiB） | 2 GiB + 1 MiB | `FG-GIT-0013 limit=push_body`（413、git を止め ref は変わらない） |
+| push のコマンド部（ref の更新の一覧） | 1000 件、1 MiB | `FG-GIT-0014 reason=too_many_commands` / `FG-GIT-0013 limit=command_section` |
+| 拒否した push の本文の読み捨て | 64 MiB | それを超えると接続を閉じる（拒否のログの `drain_error`） |
+| push の後の種類とコミットの読み取り | 各 10 秒 | 数えた分で記録（`total_commits_partial`） |
+| push の記録（`record_push`） | 30 秒以内に 3 回 | `FG-GIT-0012`（runbook push-record-failed） |
 
 git の stderr は先頭 64 KiB だけ残す（ログの `stderr` はさらにその先頭の数行、`stderr_truncated` で切ったことが分かる）。
 upload-pack と receive-pack には `keepAlive=5` を付けているので、git が数えている最中でも 5 秒ごとに keep-alive が流れ、
@@ -65,6 +72,18 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
 6e. `FG-WEB-0007`（400）: `info/refs` に `service` がない・重複・未知。dumb HTTP のクライアントかスキャナ。git ≥ 2.0 を使うよう伝える。
 6f. 名前を変えたプロジェクトの古い URL: ログの `namespace.redirected`（`outcome=redirect` は 302、`outcome=served` は古いパスへの
    upload-pack の POST をその場で処理した）。同じ古いパスが続けば、所有者に remote の更新（`git remote set-url origin <今の URL>`）を促す。
+6g. push の拒否（利用者には `! [remote rejected] <ref> (<FG コード> <文言>)` と `remote: <FG コード> <文言> (request_id: …)`）:
+   ログの 1 行に `refs`（push の ref の数）、`denied_refs`、`denied_codes`、`first_denied_kind` がある。forge が git を起動する前に
+   push **全体** を拒否したので、どの ref も変わっていない（拒否されなかった ref には `atomic push failure` と出る）。
+   - FG-GIT-0008: 保護 ref の最低ロールに足りない。保護の設定（`protected_refs`）と利用者のロールを確かめる。
+   - FG-GIT-0007: 保護 ref の force push、または既存の保護タグの付け替え。`reason=git_denied_non_fast_forward` は git 自身の拒否
+     （`receive.denyNonFastForwards`）で、この場合は同じ push の他の ref が反映されていることがある（`forge.git.served` の
+     `applied`）。保護ブランチを含む push では、保護されていないブランチの force push も git が拒否する（既知の制限。別の push に分ける）。
+   - FG-GIT-0009 / 0010 / 0011 / 0005: 保護 ref の削除 / `refs/heads/`・`refs/tags/` 以外 / 40・64 桁の 16 進の名前 / 不正な名前。
+   - `FG-WEB-0002 operation=protection_load`: 規則の読み込みが時間内に終わらない（データベース。runbook db-unavailable）。
+6h. push は成功したのに記録がない: 同じ `request_id` の `forge.git.push_recorded`（記録済み、`deduped`）または FG-GIT-0012
+   （runbook push-record-failed）を探す。`FG-GIT-0003 reason=report_unreadable` なら forge は git の答えを読めず記録していない:
+   `git --git-dir=<path> for-each-ref` の値と push のコマンドを比べ、反映された ref を確かめる（読み取りのみ）。
 7. `FG-GIT-0001 reason=hooks_dir`: `ls -lad <git の HOME>/empty-hooks` と `ls -la <git の HOME>/empty-hooks` で権限・中身・
    所有者を見る（消さない）。`detail=insecure_permissions` はグループかほかの利用者が書ける状態。
 7a. エラーに `reap_failed` が付いている: 強制終了した git を回収できなかった。`pgrep -af "git.*<path>"` で残っている git と

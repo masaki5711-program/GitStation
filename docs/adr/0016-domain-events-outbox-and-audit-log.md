@@ -811,3 +811,19 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   記録が書けなければ `FG-GIT-0012` PushRecordFailed（alert、Runbook `push-record-failed`、`PushRecord::failed`）。
 - 矛盾した記録（更新が 0 件か 1000 件超、同じ ref が 2 回、旧 = 新、種類と 0 の側の不一致、コミット付きの削除など）は
   `FG-DB-0010 reason=invalid_push_record`（`rule`）で、何も書かない。
+
+## Amendment（2026-11-01、M1 段階 9 MR4: `repository.pushed` の書き手が動き始めた）
+
+- Smart HTTP の push（`POST {path}.git/git-receive-pack`、ADR-0008 の M1 段階 9 MR4 の Amendment）が `record_push` を呼ぶ。
+  git の終了後、report-status で `ok` になった ref だけを、種類（旧・新が 0 か、タグ、`rev-list` による祖先の判定）と
+  新しいコミット（作成は push 前のどの ref からも届かないもの、更新は `<new> ^<old>`。ref ごとに 20 件まで、すべて数える）付きで
+  記録する。数えるのは push 全体で 10 秒まで。超えたら件数は数えた分（下限）で、ref ごとの `total_commits_partial`（ログの行
+  `forge.git.push_applied` でも同じ名前、`true` のときだけ書く。MR2 の行も読める）を立て、ペイロードの `commits_truncated` は
+  件数にかかわらず `true` になる（黙って少なく見せない）。
+- 順序: **先に** `forge.git.push_applied`（再投入の入力）をログに出し、それから `record_push` を 30 秒以内に 3 回まで
+  （1 秒、2 秒の間を空けて）試す。`Deduped` は成功。FG-DB-0010（記録が不正）はやり直さない。すべて失敗したら
+  `PushRecord::failed` の FG-GIT-0012（`attempts`、`cause_code`、同じ request_id）。種類や一覧の読み取りに失敗したら
+  `force` / コミットなし（`total_commits_partial`）として記録し、その失敗もログに出す。
+- 記録はクライアントへの応答を閉じてから行う（`git push` は記録を待たない）。`source_ip` は M1 では記録しない
+  （リバースプロキシの背後で信頼できる値がまだない。段階 10 以降）。`credential_id` は使われたトークンの ID、
+  `user_agent` は 512 バイトまで（保存時にさらに 256 文字へ）。

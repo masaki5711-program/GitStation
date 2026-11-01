@@ -10,8 +10,10 @@
 //! constructor, so a struct literal outside this crate does not compile:
 //!
 //! ```compile_fail
-//! use forge_auth::{Action, Authorized, InstanceCtx};
-//! let forged = Authorized::<InstanceCtx> { action: Action::Metrics, id: (), ctx: InstanceCtx };
+//! use forge_auth::{Action, Authorized, InstanceCtx, Principal};
+//! let forged = Authorized::<InstanceCtx> {
+//!     action: Action::Metrics, id: (), ctx: InstanceCtx, principal: Principal::anonymous(),
+//! };
 //! ```
 //!
 //! nor can it be defaulted:
@@ -122,6 +124,10 @@ pub struct Authorized<R: ResourceCtx> {
     action: Action,
     id: R::Id,
     ctx: R,
+    /// Who was decided on: decisions made later on this proof (the refs of
+    /// a push, `authorize_ref_updates`) use this principal, never one the
+    /// caller passes, so a proof cannot be paired with another caller.
+    principal: Principal,
 }
 
 impl<R: ResourceCtx> Authorized<R> {
@@ -138,6 +144,11 @@ impl<R: ResourceCtx> Authorized<R> {
     /// The context that was decided.
     pub fn ctx(&self) -> &R {
         &self.ctx
+    }
+
+    /// The principal the decision was made for.
+    pub(crate) fn principal(&self) -> &Principal {
+        &self.principal
     }
 }
 
@@ -168,6 +179,7 @@ pub fn prove<R: ResourceCtx>(
         action,
         id: ctx.id(),
         ctx,
+        principal: principal.clone(), // clone: the proof keeps who it was decided for
     })
 }
 

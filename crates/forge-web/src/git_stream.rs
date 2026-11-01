@@ -114,6 +114,150 @@ pub(crate) async fn read_request_body(
     Ok(out)
 }
 
+/// A push body read chunk by chunk (M1 phase 9 MR4): decoded (gzip through
+/// forge-git's capped decoder), at most `cap` bytes raw **and** decoded
+/// (`FG-GIT-0013 limit=push_body`), with an idle timeout between chunks
+/// and one deadline (`FG-WEB-0002 operation=git_request_body`); a client
+/// that goes away is `FG-GIT-0015 phase=request_body`.
+pub(crate) struct PushBody {
+    chunks: axum::body::BodyDataStream,
+    decoder: Option<GzipDecoder>,
+    cap: u64,
+    raw: u64,
+    decoded: u64,
+    idle: Duration,
+    deadline: Instant,
+    total: Duration,
+    ended: bool,
+}
+
+impl PushBody {
+    pub(crate) fn new(body: Body, gzip: bool, cap: u64, idle: Duration, total: Duration) -> Self {
+        let decoder_cap = usize::try_from(cap).unwrap_or(usize::MAX);
+        Self {
+            chunks: body.into_data_stream(),
+            decoder: gzip.then(|| GzipDecoder::new(decoder_cap)),
+            cap,
+            raw: 0,
+            decoded: 0,
+            idle,
+            deadline: Instant::now() + total,
+            total,
+            ended: false,
+        }
+    }
+
+    /// Bytes received so far (raw).
+    pub(crate) fn raw_bytes(&self) -> u64 {
+        self.raw
+    }
+
+    /// A shorter deadline from now on (the command section has its own,
+    /// `body_timeout`; the pack the request's).
+    pub(crate) fn set_deadline(&mut self, total: Duration, from: Instant) {
+        self.deadline = from + total;
+        self.total = total;
+    }
+
+    /// The next decoded bytes (possibly empty while gzip buffers), `None`
+    /// at the end of the body.
+    pub(crate) async fn next(&mut self) -> Result<Option<Vec<u8>>, ForgeError> {
+        if self.ended {
+            return Ok(None);
+        }
+        let now = Instant::now();
+        let left = self.deadline.saturating_duration_since(now);
+        let (wait, kind) = if left < self.idle {
+            (left, "total")
+        } else {
+            (self.idle, "idle")
+        };
+        let next = match tokio::time::timeout(wait, self.chunks.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                return Err(ForgeError::new(ErrorCode::RequestTimeout)
+                    .with_context("operation", "git_request_body")
+                    .with_context("kind", kind)
+                    .with_context(
+                        "timeout_ms",
+                        if kind == "total" {
+                            self.total
+                        } else {
+                            self.idle
+                        }
+                        .as_millis(),
+                    )
+                    .with_context("bytes_in", self.raw));
+            }
+        };
+        let chunk = match next {
+            None => {
+                self.ended = true;
+                return match self.decoder.take() {
+                    Some(d) => {
+                        let rest = d.finish()?;
+                        self.count_decoded(rest.len())?;
+                        Ok(Some(rest))
+                    }
+                    None => Ok(None),
+                };
+            }
+            Some(Ok(chunk)) => chunk,
+            Some(Err(e)) => {
+                return Err(ForgeError::new(ErrorCode::GitClientDisconnected)
+                    .with_context("reason", "client_disconnected")
+                    .with_context("phase", "request_body")
+                    .with_context("bytes_in", self.raw)
+                    .with_source(e));
+            }
+        };
+        self.raw = self
+            .raw
+            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if self.raw > self.cap {
+            return Err(self.too_large());
+        }
+        let out = match self.decoder.as_mut() {
+            Some(d) => d.push(&chunk)?,
+            None => chunk.to_vec(),
+        };
+        self.count_decoded(out.len())?;
+        Ok(Some(out))
+    }
+
+    fn count_decoded(&mut self, n: usize) -> Result<(), ForgeError> {
+        self.decoded = self
+            .decoded
+            .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        if self.decoded > self.cap {
+            return Err(self.too_large());
+        }
+        Ok(())
+    }
+
+    fn too_large(&self) -> ForgeError {
+        ForgeError::new(ErrorCode::GitRequestTooLarge)
+            .with_context("limit", "push_body")
+            .with_context("max_bytes", self.cap)
+            .with_context("service", "git-receive-pack")
+    }
+
+    /// Read and drop the rest of the body, at most `max` more bytes within
+    /// the current deadline (so a refused client still gets its answer).
+    /// `Err` says why it stopped early (the caller logs it with the refusal).
+    pub(crate) async fn drain(&mut self, max: u64) -> Result<u64, ForgeError> {
+        let start = self.raw;
+        while let Some(_chunk) = self.next().await? {
+            if self.raw - start > max {
+                return Err(ForgeError::new(ErrorCode::GitRequestTooLarge)
+                    .with_context("limit", "refused_push_drain")
+                    .with_context("max_bytes", max));
+            }
+        }
+        Ok(self.raw - start)
+    }
+}
+
 /// The request-body read slots (see the module docs).
 #[derive(Debug, Clone)]
 pub(crate) struct BodySlots {

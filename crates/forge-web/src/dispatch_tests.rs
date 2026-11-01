@@ -353,11 +353,10 @@ async fn url_vectors_through_the_dispatcher() {
             let unbuilt = accepted
                 && ["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""));
             if git {
-                // A routed git URL needs credentials (receive-pack, not
-                // routed until MR4, is FG-WEB-0001; a GET on a POST
-                // endpoint has no route either).
+                // A routed git URL needs credentials (a GET on a POST
+                // endpoint has no route).
                 let route = v["expect"]["route"].as_str().unwrap_or("");
-                if route == "info_refs_upload_pack" {
+                if route == "info_refs_upload_pack" || route == "info_refs_receive_pack" {
                     assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{name}");
                 } else {
                     assert_eq!(answer.status, StatusCode::NOT_FOUND, "{name}: {route}");
@@ -424,9 +423,6 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
         "/-",
         "/acme/x.git/objects/info/packs",
         "/acme/x.git/HEAD",
-        // receive-pack is routed in M1 phase 9 MR4.
-        "/acme/x.git/info/refs?service=git-receive-pack",
-        "/acme/x.git/git-receive-pack",
     ] {
         for method in ["GET", "HEAD", "POST"] {
             let answer = send(product(&script), request(method, path, None)).await;
@@ -440,6 +436,15 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
                 );
             }
         }
+    }
+    // receive-pack is routed since M1 phase 9 MR4: credentials first,
+    // nothing looked up without them.
+    for (method, path) in [
+        ("GET", "/acme/x.git/info/refs?service=git-receive-pack"),
+        ("POST", "/acme/x.git/git-receive-pack"),
+    ] {
+        let answer = send(product(&script), request(method, path, None)).await;
+        assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{method} {path}");
     }
     // A page word with a verb it has no route for: not the shell either.
     let post = send(
@@ -1059,7 +1064,9 @@ async fn a_redirect_is_logged_as_namespace_redirected() {
 /// MR4 must e, M1 phase 9 MR3 (replaces the phase 8 tripwire that failed
 /// when forge-web first depended on forge-git): forge-web runs git only
 /// through forge-git's Smart HTTP API (`Git::upload_pack`,
-/// `Git::check_wants`, the stream types) and only in `routes/git.rs` /
+/// `Git::check_wants`, the stream types; M1 phase 9 MR4 adds the push
+/// API: `receive_request`, `receive_report`, `Git::fast_forwards`,
+/// `Git::new_commits`) and only in `routes/git.rs`, `routes/git_push.rs` /
 /// `git_stream.rs` — never the generic command builder, whose
 /// options would be the place a user value could become an option. The git
 /// routes carry no `TailSegments` (the git shape has no tail; their handlers
@@ -1089,7 +1096,7 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         ["arg", "_owned"].concat(),
         ["config", "_override"].concat(),
     ];
-    let git_users = ["routes/git.rs", "git_stream.rs"];
+    let git_users = ["routes/git.rs", "routes/git_push.rs", "git_stream.rs"];
     let mut used_in = Vec::new();
     for file in &files {
         let rel = file
@@ -1111,7 +1118,7 @@ fn forge_web_runs_git_only_through_smart_http_api() {
                 "{rel} uses forge-git: only {git_users:?} may (ADR-0015 ref とパスの境目)"
             );
         }
-        if rel == "routes/git.rs" {
+        if rel == "routes/git.rs" || rel == "routes/git_push.rs" {
             assert!(!text.contains(".tail()"), "git routes take no tail");
         }
     }

@@ -35,6 +35,11 @@ pub(crate) enum Actor {
     DevTokenReadRepository,
     /// Developer with a `write_repository` token.
     DevTokenWriteRepository,
+    /// Developer with a `write_repository` token issued with `is_agent`
+    /// (ADR-0017 §4.0). The flag is not an authorization input yet (W1):
+    /// the agent rules deny only the merge family, so a push is decided
+    /// exactly like the human token's (rows pin it).
+    AgentTokenWriteRepository,
     /// Developer with an `api` token.
     DevTokenApi,
     /// Owner with a `read_api` token.
@@ -147,7 +152,9 @@ impl Actor {
             Actor::DisabledAdmin => session(true, false),
             Actor::Admin => session(true, true),
             Actor::DevTokenReadRepository => token(false, &[Scope::ReadRepository]),
-            Actor::DevTokenWriteRepository => token(false, &[Scope::WriteRepository]),
+            Actor::DevTokenWriteRepository | Actor::AgentTokenWriteRepository => {
+                token(false, &[Scope::WriteRepository])
+            }
             Actor::DevTokenApi => token(false, &[Scope::Api]),
             Actor::OwnerTokenReadApi => token(false, &[Scope::ReadApi]),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
@@ -169,6 +176,7 @@ impl Actor {
             Actor::Developer
             | Actor::DevTokenReadRepository
             | Actor::DevTokenWriteRepository
+            | Actor::AgentTokenWriteRepository
             | Actor::DevTokenApi => Some(Role::Developer),
             Actor::Maintainer => Some(Role::Maintainer),
             Actor::Owner | Actor::OwnerTokenReadApi => Some(Role::Owner),

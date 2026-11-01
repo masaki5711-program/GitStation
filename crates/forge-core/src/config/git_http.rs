@@ -35,6 +35,11 @@ pub struct GitHttpConfig {
     /// `git.http.max_streams_per_principal`: per user (default 4, at most
     /// `max_streams`); also per-user concurrent request-body reads.
     pub max_streams_per_principal: u32,
+    /// `git.http.push_max_bytes`: one push's pack (git's
+    /// `receive.maxInputSize`, enforced by index-pack) and, with the
+    /// command list, the request body forge forwards (default 2 GiB; a
+    /// `u32`, so at most 4 GiB − 1).
+    pub push_max_bytes: u32,
 }
 
 /// The largest `git.http.fetch_request_max_bytes` (1 GiB).
@@ -52,6 +57,7 @@ impl GitHttpConfig {
         want_check_timeout: Duration::from_secs(30),
         max_streams: 16,
         max_streams_per_principal: 4,
+        push_max_bytes: 2 * 1024 * 1024 * 1024,
     };
 
     /// Cross-key rules (each key is already positive).

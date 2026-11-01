@@ -22,6 +22,15 @@ lands (M1 phase 5).
   (`Dispatched<R>`, built only there), so handlers are unreachable outside
   the registry; `registry_tests::a_proof_for_another_action_is_refused` pins
   the rejection (M1 phase 8 MR4).
+- `authorize_ref_updates(&Principal, &Authorized<ProjectCtx>, &[RefUpdateCtx])
+  -> Result<Vec<Result<(), ForgeError>>, ForgeError>` (M1 phase 9 MR4) —
+  every ref of a push through `authorize()` (one result per update, in
+  order), on the proof of the project-level `RepoPush` decision (another
+  action's proof is `FG-SYS-0001 reason=proof_action_mismatch`); no rule of
+  its own. `RefUpdateCtx::new(RefName, RefUpdate, &ProtectionRules)` takes
+  the protection from the push's one snapshot (`RefProtection::effective`
+  over every matching rule), so a caller cannot build one by hand. Handlers
+  call this, never `authorize()` directly.
 - `ResourceCtx { type Id; fn resource(&self) -> Resource; fn id(&self) -> Self::Id }`
   — **sealed** (only this crate implements it), so `id()` and `resource()`
   always read the same value. Contexts have private fields and one

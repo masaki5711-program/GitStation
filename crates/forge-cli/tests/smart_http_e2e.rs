@@ -17,18 +17,38 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use forge_core::{RequestId, Scope, Visibility};
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{
+    PushRecord, PushRecorded, PushRecorder, Pusher, RefPattern, RequestId, Role, Scope, Visibility,
+};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::projects::{self, CreatedProject, NewProject};
 use forge_db::test_support::FreshDb;
 use forge_db::tokens::{self, NewToken};
 use forge_db::users::{self, NewUser};
-use forge_db::{repositories, Db};
+use forge_db::{protected_refs, repositories, Db};
 use forge_errors::ErrorCode;
 use forge_git::{Git, GitConfig, GitStream, StorageRoot};
 use forge_web::{
     AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lookups, ServerLimits, SmartHttp,
 };
+
+/// The database is "down" once the refs are updated: every record fails
+/// (`FG-DB-0001`), as the push path would see it.
+struct DownRecorder;
+
+impl PushRecorder for DownRecorder {
+    fn record_push<'a>(
+        &'a self,
+        _: &'a Pusher,
+        _: &'a PushRecord,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async {
+            Err(forge_errors::ForgeError::new(ErrorCode::DbUnavailable)
+                .with_context("reason", "synthetic_outage"))
+        })
+    }
+}
 
 fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(
@@ -46,6 +66,9 @@ struct Options {
     /// buffers).
     big: bool,
     limits: GitHttpLimits,
+    /// Record pushes with a recorder that always fails (the database is
+    /// "down" after the ref update; MR4).
+    failing_recorder: bool,
 }
 
 impl Default for Options {
@@ -55,6 +78,7 @@ impl Default for Options {
             acquire_timeout: Duration::from_secs(10),
             big: false,
             limits: GitHttpLimits::default(),
+            failing_recorder: false,
         }
     }
 }
@@ -71,6 +95,11 @@ struct Server {
     alice: String,
     alice_api: String,
     bob: String,
+    /// Push tokens (`write_repository`): alice (Owner), carol (Developer
+    /// member), dave (administrator, not a member; token with `admin`).
+    alice_write: String,
+    carol_write: String,
+    dave_admin: String,
     web: CreatedProject,
     tip: String,
     secret_commit: String,
@@ -160,7 +189,7 @@ fn server(opts: Options) -> Server {
     cfg.max_streams_per_principal = opts.max_streams.min(4);
     cfg.acquire_timeout = opts.acquire_timeout;
     let git = Git::new(cfg);
-    let (t, alice, alice_api, bob, web, bare) = rt.block_on(async {
+    let (t, alice, alice_api, bob, web, bare, pushers) = rt.block_on(async {
         let t = FreshDb::migrated().await;
         let new_user = |name: &'static str| {
             let db = t.db.clone(); // clone: pool handle
@@ -176,6 +205,17 @@ fn server(opts: Options) -> Server {
         };
         let alice = new_user("alice").await;
         let bob = new_user("bob").await;
+        let carol = new_user("carol").await;
+        let dave = users::create(
+            &t.db,
+            &ctx("req-user-dave"),
+            &NewUser {
+                is_admin: true,
+                ..NewUser::human("dave", "dave", "dave@example.test")
+            },
+        )
+        .await
+        .expect("admin");
         let project = |segment: &'static str| {
             let db = t.db.clone(); // clone: pool handle
             async move {
@@ -217,8 +257,45 @@ fn server(opts: Options) -> Server {
         .await;
         let alice_api = token(&t.db, alice.user_id, "alice-api", vec![Scope::Api]).await;
         let bob_tok = token(&t.db, bob.user_id, "bob-read", vec![Scope::ReadRepository]).await;
-        (t, alice_tok, alice_api, bob_tok, web, bare)
+        // Push fixtures (MR4): carol is a Developer of alice/web; main and
+        // tags v* need a Maintainer.
+        projects::add_member(
+            &t.db,
+            &ctx("req-member-carol"),
+            web.project_id,
+            carol.user_id,
+            Role::Developer,
+        )
+        .await
+        .expect("member");
+        for (i, pattern) in ["refs/heads/main", "refs/tags/v*"].into_iter().enumerate() {
+            protected_refs::create(
+                &t.db,
+                &ctx(&format!("req-rule-{i}")),
+                web.project_id,
+                &RefPattern::parse(pattern).expect("pattern"),
+                Role::Maintainer,
+            )
+            .await
+            .expect("rule");
+        }
+        let write = |user, name: &'static str, scopes: Vec<Scope>| {
+            let db = t.db.clone(); // clone: pool handle
+            async move { token(&db, user, name, scopes).await }
+        };
+        let pushers = (
+            write(alice.user_id, "alice-write", vec![Scope::WriteRepository]).await,
+            write(carol.user_id, "carol-write", vec![Scope::WriteRepository]).await,
+            write(
+                dave.user_id,
+                "dave-admin",
+                vec![Scope::WriteRepository, Scope::Admin],
+            )
+            .await,
+        );
+        (t, alice_tok, alice_api, bob_tok, web, bare, pushers)
     });
+    let (alice_write, carol_write, dave_admin) = pushers;
     // Content, pushed straight into the bare repository (not through forge).
     let work = home.path().join("seed");
     ok(
@@ -278,14 +355,24 @@ fn server(opts: Options) -> Server {
             Arc::new(BoundedAuthenticator::new(Arc::new(db.clone()), 2)),
             Lookups {
                 namespaces: Arc::new(db.clone()),
-                projects: Arc::new(db),
+                projects: Arc::new(db.clone()), // clone: also the push services below
             },
         )
-        .with_smart_http(SmartHttp::new(
-            git.clone(), // clone: shared pools with the test
-            StorageRoot::open(storage.path()).expect("root"),
-            opts.limits,
-        ));
+        .with_smart_http(
+            SmartHttp::new(
+                git.clone(), // clone: shared pools with the test
+                StorageRoot::open(storage.path()).expect("root"),
+                opts.limits,
+            )
+            .with_push(
+                Arc::new(db.clone()),
+                if opts.failing_recorder {
+                    Arc::new(DownRecorder) as Arc<dyn PushRecorder>
+                } else {
+                    Arc::new(db.clone())
+                },
+            ),
+        );
         let router = forge_web::app(state, AppConfig::default()).expect("router");
         let listener = forge_web::server::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
@@ -312,6 +399,9 @@ fn server(opts: Options) -> Server {
         alice,
         alice_api,
         bob,
+        alice_write,
+        carol_write,
+        dave_admin,
         web,
         tip,
         secret_commit,
@@ -1086,4 +1176,508 @@ fn a_sparse_oid_filter_clone_is_refused() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+// ── M1 phase 9 MR4: push (ADR-0008 option B) ─────────────────────────
+
+impl Server {
+    /// A fresh clone of `alice/web` (alice's read token) to push from.
+    fn work(&self) -> PathBuf {
+        let (out, dest) = self.clone_into(Some(&self.alice), "alice/web.git", &[]);
+        ok(&out, "clone");
+        dest
+    }
+
+    /// git in `dir` (no credentials needed: local operations).
+    fn local(&self, dir: &Path, args: &[&str]) -> String {
+        ok(
+            &self
+                .git(None)
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git"),
+            &format!("{args:?}"),
+        )
+    }
+
+    /// `git push <url of alice/web> <refspecs>` with `token`.
+    fn push(&self, token: &str, dir: &Path, refspecs: &[&str]) -> Output {
+        self.push_to(token, dir, "alice/web.git", refspecs)
+    }
+
+    fn push_to(&self, token: &str, dir: &Path, path: &str, refspecs: &[&str]) -> Output {
+        self.git(Some(token))
+            .arg("-C")
+            .arg(dir)
+            .arg("push")
+            .arg(self.url(path))
+            .args(refspecs)
+            .output()
+            .expect("git push")
+    }
+
+    /// The bare repository's refs: `name → object id`.
+    fn refs(&self) -> std::collections::BTreeMap<String, String> {
+        let out = local_git(self.home.path())
+            .arg("--git-dir")
+            .arg(&self.bare)
+            .args(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .output()
+            .expect("for-each-ref");
+        ok(&out, "for-each-ref")
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .map(|(r, o)| (r.to_owned(), o.to_owned()))
+            .collect()
+    }
+
+    /// A new commit on the clone's current branch; its id.
+    fn commit(&self, dir: &Path, file: &str, content: &[u8]) -> String {
+        std::fs::write(dir.join(file), content).expect("write");
+        self.local(dir, &["add", file]);
+        self.local(dir, &["commit", "-q", "-m", file]);
+        self.local(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// `repository.pushed` audit rows and events (as JSON rows).
+    fn pushed_rows(&self) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+        let t = self.t.as_ref().expect("db");
+        self.rt.block_on(async {
+            (
+                t.json_rows(
+                    "SELECT request_id, details FROM forge.audit_log \
+                     WHERE action = 'repository.pushed' ORDER BY id",
+                )
+                .await,
+                t.json_rows(
+                    "SELECT payload FROM forge.events \
+                     WHERE event_type = 'repository.pushed' ORDER BY id",
+                )
+                .await,
+            )
+        })
+    }
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn refused(out: &Output, code: ErrorCode) -> String {
+    let text = stderr(out);
+    assert!(!out.status.success(), "the push must fail: {text}");
+    assert!(text.contains(code.id()), "{}: {text}", code.id());
+    text
+}
+
+#[test]
+fn git_push_with_a_read_repository_token_is_refused() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.commit(&work, "new.txt", b"synthetic\n");
+    let before = s.refs();
+    let out = s.push(&s.alice, &work, &["HEAD:refs/heads/feature"]);
+    let text = stderr(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("403"), "{text}");
+    // An `api` token is refused the same way, before any body is read.
+    let out = s.push(&s.alice_api, &work, &["HEAD:refs/heads/feature"]);
+    assert!(!out.status.success(), "{}", stderr(&out));
+    // The advertisement itself answers 403 (FG-AUTH-0002).
+    let answer = s.http(
+        "GET",
+        "/alice/web.git/info/refs?service=git-receive-pack",
+        Some(&s.alice),
+        &[],
+        b"",
+    );
+    assert_eq!(answer.status, 403);
+    assert_eq!(answer.code(), ErrorCode::InsufficientScope.id());
+    assert_eq!(s.refs(), before);
+    assert!(s.pushed_rows().0.is_empty());
+}
+
+#[test]
+fn push_creates_a_branch_and_a_tag_and_records_it_once() {
+    let s = server(Options::default());
+    let work = s.work();
+    let first = s.commit(&work, "a.txt", b"synthetic a\n");
+    let second = s.commit(&work, "b.txt", b"synthetic b\n");
+    s.local(&work, &["tag", "release-1"]);
+    let out = s.push(
+        &s.alice_write,
+        &work,
+        &["HEAD:refs/heads/feature", "refs/tags/release-1"],
+    );
+    ok(&out, "push");
+    let refs = s.refs();
+    assert_eq!(refs.get("refs/heads/feature"), Some(&second));
+    assert_eq!(refs.get("refs/tags/release-1"), Some(&second));
+    // A fast-forward of main by its Owner (Maintainer protection).
+    let out = s.push(&s.alice_write, &work, &["HEAD:main"]);
+    ok(&out, "fast-forward main");
+    assert_eq!(s.refs().get("refs/heads/main"), Some(&second));
+
+    // Recorded asynchronously, after the answer: wait for both pushes.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let (audits, events) = loop {
+        let (audits, events) = s.pushed_rows();
+        if audits.len() >= 2 && events.len() >= 2 || Instant::now() > deadline {
+            break (audits, events);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(audits.len(), 2, "{audits:?}");
+    assert_eq!(events.len(), 2, "{events:?}");
+    let created = &events[0]["payload"];
+    assert_eq!(created["total_refs"], 2);
+    assert_eq!(created["created"], 2);
+    let feature = created["refs"]
+        .as_array()
+        .expect("refs")
+        .iter()
+        .find(|r| r["ref"] == "refs/heads/feature")
+        .expect("feature listed");
+    assert_eq!(feature["kind"], "create");
+    // The commits the branch brings (newest first), not the history main had.
+    assert_eq!(feature["commits"], serde_json::json!([second, first]));
+    assert_eq!(feature["total_commits"], 2);
+    let ff = &events[1]["payload"]["refs"][0];
+    assert_eq!(ff["ref"], "refs/heads/main");
+    assert_eq!(ff["kind"], "fast_forward");
+    assert_eq!(ff["old"], s.tip);
+    assert_eq!(ff["total_commits"], 2);
+    assert_eq!(audits[0]["details"]["created"], 2);
+}
+
+#[test]
+fn a_developer_below_the_protection_level_gets_fg_git_0008() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.commit(&work, "c.txt", b"synthetic c\n");
+    let before = s.refs();
+    let out = s.push(&s.carol_write, &work, &["HEAD:main"]);
+    let text = refused(&out, ErrorCode::ProtectedRefPushNotAllowed);
+    assert!(text.contains("request_id"), "{text}");
+    assert_eq!(s.refs(), before);
+    // An unprotected branch is fine for the Developer.
+    ok(
+        &s.push(&s.carol_write, &work, &["HEAD:refs/heads/carol"]),
+        "push",
+    );
+}
+
+/// A force push to a protected branch is FG-GIT-0007 for an administrator
+/// too: decided by forge when the new commit is already in the repository
+/// (a rewind), by git (`receive.denyNonFastForwards`, rewritten to
+/// FG-GIT-0007) when it arrives in the pack.
+#[test]
+fn force_push_to_protected_is_fg_git_0007_even_for_an_admin() {
+    let s = server(Options::default());
+    let work = s.work();
+    let before = s.refs();
+    // Rewind main to its parent (the commit exists in the repository).
+    let out = s.push(&s.dave_admin, &work, &["+HEAD~1:main"]);
+    refused(&out, ErrorCode::ProtectedRefForcePush);
+    assert_eq!(s.refs(), before);
+    // A rewritten commit that only the pack brings.
+    s.local(&work, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    let out = s.push(&s.dave_admin, &work, &["+HEAD:main"]);
+    let text = refused(&out, ErrorCode::ProtectedRefForcePush);
+    assert_eq!(s.refs(), before, "{text}");
+    // The administrator passes the minimum role for a fast-forward.
+    let fresh = s.work();
+    let tip = s.commit(&fresh, "d.txt", b"synthetic d\n");
+    ok(
+        &s.push(&s.dave_admin, &fresh, &["HEAD:main"]),
+        "admin fast-forward",
+    );
+    assert_eq!(s.refs().get("refs/heads/main"), Some(&tip));
+}
+
+#[test]
+fn deleting_a_protected_branch_is_fg_git_0009() {
+    let s = server(Options::default());
+    let work = s.work();
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &[":main"]);
+    refused(&out, ErrorCode::ProtectedRefDeletion);
+    assert_eq!(s.refs(), before);
+}
+
+#[test]
+fn a_reserved_ref_is_fg_git_0010() {
+    let s = server(Options::default());
+    let work = s.work();
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/replace/x"]);
+    refused(&out, ErrorCode::ReservedRefNamespace);
+    let hex = "abcdef0123456789abcdef0123456789abcdef01";
+    let out = s.push(&s.alice_write, &work, &[&format!("HEAD:refs/heads/{hex}")]);
+    refused(&out, ErrorCode::AmbiguousRefName);
+    assert_eq!(s.refs(), before);
+}
+
+/// One refused ref refuses the whole push: the allowed branch is not
+/// created either, and git was not run.
+#[test]
+fn a_mixed_push_is_refused_as_a_whole() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.commit(&work, "e.txt", b"synthetic e\n");
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/ok", ":main"]);
+    let text = refused(&out, ErrorCode::ProtectedRefDeletion);
+    assert!(text.contains("atomic push failure"), "{text}");
+    assert_eq!(s.refs(), before);
+    assert!(s.pushed_rows().0.is_empty());
+}
+
+#[test]
+fn moving_a_protected_tag_is_fg_git_0007() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.local(&work, &["tag", "v1"]);
+    ok(
+        &s.push(&s.alice_write, &work, &["refs/tags/v1"]),
+        "create v1",
+    );
+    s.commit(&work, "f.txt", b"synthetic f\n");
+    s.local(&work, &["tag", "-f", "v1"]);
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["+refs/tags/v1"]);
+    refused(&out, ErrorCode::ProtectedRefForcePush);
+    assert_eq!(s.refs(), before);
+}
+
+#[test]
+fn push_to_tombstone_is_404() {
+    let s = server(Options::default());
+    rename_web(&s);
+    let (out, work) = s.clone_into(Some(&s.alice), "alice/site.git", &[]);
+    ok(&out, "clone the new path");
+    s.commit(&work, "g.txt", b"synthetic g\n");
+    let before = s.refs();
+    let out = s.push_to(
+        &s.alice_write,
+        &work,
+        "alice/web.git",
+        &["HEAD:refs/heads/x"],
+    );
+    let text = stderr(&out);
+    assert!(!out.status.success(), "{text}");
+    // git reports the 404 of the advertisement as a missing repository.
+    assert!(text.contains("not found"), "{text}");
+    for (method, path) in [
+        ("GET", "/alice/web.git/info/refs?service=git-receive-pack"),
+        ("POST", "/alice/web.git/git-receive-pack"),
+    ] {
+        let answer = s.http(method, path, Some(&s.alice_write), &[], b"0000");
+        assert_eq!(answer.status, 404, "{method} {path}");
+        assert_eq!(answer.code(), ErrorCode::NotFound.id());
+    }
+    assert_eq!(s.refs(), before);
+    // The current path takes the push.
+    ok(
+        &s.push_to(
+            &s.alice_write,
+            &work,
+            "alice/site.git",
+            &["HEAD:refs/heads/x"],
+        ),
+        "push to the current path",
+    );
+}
+
+/// Over `git.http.push_max_bytes` (index-pack's `receive.maxInputSize`):
+/// refused, no ref changed. The pack is larger than git's `postBuffer`,
+/// so git first sends its probe (`0000`), which forge answers without git.
+#[test]
+fn an_over_cap_push_is_refused_with_no_ref_changed() {
+    let s = server(Options {
+        limits: GitHttpLimits {
+            push_max_bytes: std::num::NonZeroU64::new(256 * 1024).expect("non-zero"),
+            ..GitHttpLimits::default()
+        },
+        ..Options::default()
+    });
+    let work = s.work();
+    s.commit(&work, "big.bin", &noise(2 * 1024 * 1024));
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/heads/big"]);
+    let text = stderr(&out);
+    assert!(!out.status.success(), "{text}");
+    assert_eq!(s.refs(), before, "{text}");
+    // A small push still works.
+    let small = s.work();
+    s.commit(&small, "small.txt", b"synthetic\n");
+    ok(
+        &s.push(&s.alice_write, &small, &["HEAD:refs/heads/small"]),
+        "small push",
+    );
+}
+
+/// `receive.fsckObjects`: a commit with a malformed author line is refused
+/// by git, and no ref changes.
+#[test]
+fn a_corrupt_object_is_refused_by_fsck() {
+    let s = server(Options::default());
+    let work = s.work();
+    let tree = s.local(&work, &["rev-parse", "HEAD^{tree}"]);
+    let body = format!(
+        "tree {tree}\nparent {}\nauthor no email 1700000000 +0000\ncommitter forge-test <forge-test@example.invalid> 1700000000 +0000\n\nsynthetic\n",
+        s.tip
+    );
+    let path = work.join("bad-commit");
+    std::fs::write(&path, body).expect("write");
+    let path_arg = path.to_string_lossy().into_owned();
+    let bad = s.local(
+        &work,
+        &[
+            "hash-object",
+            "-t",
+            "commit",
+            "--literally",
+            "-w",
+            &path_arg,
+        ],
+    );
+    s.local(&work, &["update-ref", "refs/heads/bad", &bad]);
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["refs/heads/bad"]);
+    let text = stderr(&out);
+    assert!(!out.status.success(), "{text}");
+    assert_eq!(s.refs(), before, "{text}");
+    // git's `unpack <error>` text is replaced by forge's code and the
+    // request id (git's own words go to the log only).
+    assert!(text.contains("FG-GIT-0014"), "{text}");
+    assert!(text.contains("request_id"), "{text}");
+    assert!(
+        !text.contains(&s.storage.path().to_string_lossy().into_owned()),
+        "{text}"
+    );
+}
+
+/// A push that updates a protected branch and another ref: git refuses the
+/// rewrite of the protected branch (the new commit only arrives in the
+/// pack), and forge made the push atomic, so the other ref is not created
+/// either (the review's MEDIUM: no partly applied push).
+#[test]
+fn a_rewrite_git_refuses_takes_the_whole_push_with_it() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.local(&work, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    let before = s.refs();
+    let out = s.push(
+        &s.alice_write,
+        &work,
+        &["+HEAD:main", "HEAD:refs/heads/side"],
+    );
+    let text = refused(&out, ErrorCode::ProtectedRefForcePush);
+    assert!(text.contains("atomic"), "{text}");
+    assert_eq!(s.refs(), before, "{text}");
+}
+
+/// The database is down once git updated the refs: the push succeeds for
+/// the client, `forge.git.push_applied` (with the full list) is logged
+/// first, then FG-GIT-0012 after the retries — the replay input and the
+/// alert, under the same request id.
+#[test]
+fn a_push_the_database_cannot_record_logs_fg_git_0012_with_its_list() {
+    let logs = LogSink::install();
+    let s = server(Options {
+        failing_recorder: true,
+        ..Options::default()
+    });
+    let work = s.work();
+    let tip = s.commit(&work, "h.txt", b"synthetic h\n");
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/down"]),
+        "push",
+    );
+    assert_eq!(s.refs().get("refs/heads/down"), Some(&tip));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let failed = loop {
+        let events = logs.events();
+        if let Some(i) = events
+            .iter()
+            .position(|e| e["error_code"] == ErrorCode::PushRecordFailed.id())
+        {
+            break (events, i);
+        }
+        assert!(Instant::now() < deadline, "no FG-GIT-0012: {events:?}");
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let (events, at) = failed;
+    let alert = &events[at];
+    let request_id = alert["request_id"].as_str().expect("request id").to_owned();
+    let context = alert["context"].as_str().unwrap_or_default();
+    assert!(context.contains("attempts=3"), "{context}");
+    assert!(context.contains("cause_code=FG-DB-0001"), "{context}");
+    let lines: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            e["event"] == "forge.git.push_applied" && e["request_id"] == request_id.as_str()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    // The minimal line as soon as git exited, then the final one; both
+    // before the alert.
+    assert_eq!(lines.len(), 2, "{events:?}");
+    assert_eq!(events[lines[0]]["stage"], "minimal");
+    assert_eq!(events[lines[1]]["stage"], "final");
+    let applied = lines[1];
+    assert!(applied < at, "push_applied is logged before the alert");
+    let minimal = forge_core::PushApplied::from_log_line(&events[lines[0]].to_string())
+        .expect("readable")
+        .expect("a push line");
+    assert_eq!(minimal.updates[0].new, tip);
+    let line = events[applied].to_string();
+    let parsed = forge_core::PushApplied::from_log_line(&line)
+        .expect("readable")
+        .expect("a push line");
+    assert_eq!(parsed.updates.len(), 1);
+    assert_eq!(parsed.updates[0].name, "refs/heads/down");
+    assert_eq!(parsed.updates[0].new, tip);
+    assert_eq!(parsed.updates[0].commits, [tip]);
+    assert!(s.pushed_rows().0.is_empty());
+}
+
+/// Captured JSON log lines of the whole process (nextest runs each test in
+/// its own process; the server's tasks run on other threads).
+#[derive(Clone, Default)]
+struct LogSink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log lock").extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogSink {
+    fn install() -> Self {
+        let sink = Self::default();
+        let writer = sink.clone(); // clone: the subscriber writes, the test reads
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .flatten_event(true)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).expect("one subscriber per process");
+        sink
+    }
+
+    fn events(&self) -> Vec<serde_json::Value> {
+        String::from_utf8_lossy(&self.0.lock().expect("log lock"))
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect()
+    }
 }

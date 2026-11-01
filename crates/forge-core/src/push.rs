@@ -123,6 +123,10 @@ pub struct PushedRef {
     pub commits: Vec<ObjectId>,
     /// All new commits of this update (`commits` may list fewer).
     pub total_commits: u64,
+    /// `total_commits` is a lower bound: counting them stopped at its time
+    /// limit (MR4: a bounded `rev-list`, 10 s per push). The JSON then
+    /// states `commits_truncated` whatever the counts say.
+    pub total_commits_partial: bool,
 }
 
 /// One applied push: the repository and every ref git updated.
@@ -189,7 +193,9 @@ impl PushRecord {
             if !kind_ok {
                 return Err(invalid("kind_mismatch").with_context("kind", u.kind.as_str()));
             }
-            if u.kind == PushUpdateKind::Delete && (u.total_commits != 0 || !u.commits.is_empty()) {
+            if u.kind == PushUpdateKind::Delete
+                && (u.total_commits != 0 || !u.commits.is_empty() || u.total_commits_partial)
+            {
                 return Err(invalid("delete_with_commits"));
             }
             if u.commits.len() > MAX_LISTED_COMMITS {
@@ -250,7 +256,7 @@ fn ref_entry(u: &PushedRef, listed: usize) -> serde_json::Value {
         "kind": u.kind.as_str(),
         "total_commits": u.total_commits,
         "commits": u.commits.iter().take(listed).map(ObjectId::as_str).collect::<Vec<_>>(),
-        "commits_truncated": (listed as u64) < u.total_commits,
+        "commits_truncated": (listed as u64) < u.total_commits || u.total_commits_partial,
     })
 }
 
@@ -331,7 +337,8 @@ pub fn push_json(
         "forced": count(PushUpdateKind::Force),
         "deleted": count(PushUpdateKind::Delete),
         "total_commits": total_commits,
-        "commits_truncated": listed_commits < total_commits,
+        "commits_truncated": listed_commits < total_commits
+            || updates.iter().any(|u| u.total_commits_partial),
         "replayed_from": replayed_from.map(|r| serde_json::json!({
             "user_id": r.pusher.get(),
             "credential_id": r.credential_id,

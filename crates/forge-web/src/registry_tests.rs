@@ -371,8 +371,8 @@ fn every_public_word_of_the_product_is_webshell_only() {
 
 /// ADR-0015 dispatcher test 1: every reachable `(scope, verb, word)` of the
 /// ADR's route table has a RouteDef, GET and HEAD alike, and nothing else
-/// is routed yet (`raw` / `archive` and receive-pack wait for their phase;
-/// upload-pack is routed since M1 phase 9 MR3).
+/// is routed yet (`raw` / `archive` wait for their phase; upload-pack is
+/// routed since M1 phase 9 MR3, receive-pack since MR4).
 #[test]
 fn every_reachable_scope_verb_word_has_a_route_def() {
     let mut want: BTreeSet<(RouteScope, Verb, ScopedRoute)> = BTreeSet::new();
@@ -381,6 +381,9 @@ fn every_reachable_scope_verb_word_has_a_route_def() {
         (Verb::Get, GitRoute::InfoRefsUploadPack),
         (Verb::Head, GitRoute::InfoRefsUploadPack),
         (Verb::Post, GitRoute::UploadPack),
+        (Verb::Get, GitRoute::InfoRefsReceivePack),
+        (Verb::Head, GitRoute::InfoRefsReceivePack),
+        (Verb::Post, GitRoute::ReceivePack),
     ] {
         want.insert((RouteScope::ProjectGit, verb, ScopedRoute::Git(git)));
     }

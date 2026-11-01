@@ -43,6 +43,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         forge_git::version::detect(&smart_http.git).await?;
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // Pushes load their protection snapshot from, and are recorded in,
+        // the database (forge-web reads both through forge-core traits).
+        let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
+        let push_tasks = smart_http.push_tasks();
         let state = app_state(&db, database).with_smart_http(smart_http);
         let router = forge_web::app(state, app_config_for(database, &cfg.git_http))?;
         let listener = forge_web::server::bind(bind).await?;
@@ -52,18 +56,35 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             db_target = %db.target(),
             "forge.serve.listening"
         );
-        forge_web::server::serve(
+        let served = forge_web::server::serve(
             listener,
             router,
             ServerLimits::default(),
             forge_web::server::shutdown_signal(),
         )
-        .await?;
+        .await;
+        // A receive-pack whose body was complete runs on in its own task
+        // (and records the push afterwards): let it finish before the
+        // runtime and the database pool go away.
+        if !push_tasks.wait_idle(PUSH_SHUTDOWN_WAIT).await {
+            forge_core::telemetry::log_failure(
+                &forge_errors::ForgeError::new(forge_errors::ErrorCode::ServeFailed)
+                    .with_context("operation", "push_tasks_pending")
+                    .with_context("running", push_tasks.running())
+                    .with_context("wait_ms", PUSH_SHUTDOWN_WAIT.as_millis()),
+                &forge_core::RequestId::generate(),
+            );
+        }
         db.close().await;
+        served?;
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })
 }
+
+/// How long a shutdown waits for running pushes (their git, then their
+/// record: 30 s of retries at most).
+const PUSH_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
 
 /// git for the Smart HTTP routes: `git` from `PATH`, HOME = the storage
 /// root (only forge writes it; no user or shared config applies), stream

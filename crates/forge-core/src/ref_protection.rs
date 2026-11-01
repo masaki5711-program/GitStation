@@ -18,15 +18,35 @@ pub struct ProtectionRule {
     pub push_min_role: Role,
 }
 
-/// Every rule of one project, in rule id order.
+/// Every rule of one project, in rule id order, and the project they were
+/// loaded for (`None` for rules built without one: a push refuses them,
+/// `forge_auth::authorize_ref_updates`).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProtectionRules {
+    project: Option<ProjectId>,
     rules: Vec<ProtectionRule>,
 }
 
 impl ProtectionRules {
+    /// Rules not tied to a project (tests, matching only).
     pub fn new(rules: Vec<ProtectionRule>) -> Self {
-        Self { rules }
+        Self {
+            project: None,
+            rules,
+        }
+    }
+
+    /// The rules of `project` (what a `ProtectionLoader` returns).
+    pub fn for_project(project: ProjectId, rules: Vec<ProtectionRule>) -> Self {
+        Self {
+            project: Some(project),
+            rules,
+        }
+    }
+
+    /// The project the rules were loaded for.
+    pub fn project(&self) -> Option<ProjectId> {
+        self.project
     }
 
     /// The minimum push roles of **every** rule whose pattern matches

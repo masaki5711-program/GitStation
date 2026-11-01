@@ -20,7 +20,7 @@ A Smart HTTP request body went over a forge limit: the decompressed size of a gz
 
 ## 調べ方 (diagnosis)
 
-The log event carries `limit` (which limit: `gzip_decompressed`, `request_body` — the raw body of an upload-pack request over `git.http.fetch_request_max_bytes`), `max_bytes` and the route context (`service`). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit.
+The log event carries `limit` (which limit: `gzip_decompressed`, `request_body` — the raw body of an upload-pack request over `git.http.fetch_request_max_bytes`, `command_section` — a push's command list over 1 MiB, `push_body` — a push body, raw or decompressed, over `git.http.push_max_bytes` + 1 MiB; git's own `receive.maxInputSize` refuses an oversized pack in-band as `unpack` error), `max_bytes` and the route context (`service`). `limit=refused_push_drain` appears only as `drain_error` on a refused push (forge stopped reading the body of a push it had refused after 64 MiB). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit.
 
 ## 対処 (fix)
 

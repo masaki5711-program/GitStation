@@ -368,6 +368,22 @@ impl<R: ResourceCtx> Dispatched<R> {
     pub fn into_body(self) -> Body {
         self.request.body
     }
+
+    /// The id of the personal access token the request authenticated with
+    /// (`None` for a session).
+    pub fn credential_id(&self) -> Option<i64> {
+        self.request
+            .parts
+            .extensions
+            .get::<crate::auth::TokenCredential>()
+            .map(|t| t.0)
+    }
+
+    /// The proof, the principal and the body (receive-pack decides every
+    /// ref on the project proof after it read the command list).
+    pub fn into_proof_and_body(self) -> (Authorized<R>, Principal, Body) {
+        (self.proof, self.request.principal, self.request.body)
+    }
 }
 
 /// The only constructor of [`Dispatched`]: the proof must be for the

@@ -183,6 +183,19 @@ impl Git {
     }
 }
 
+impl GitCommand {
+    /// `-c receive.denyNonFastForwards=true` (M1 phase 9 MR4, ADR-0008
+    /// option B): forge adds it to a push that touches a protected branch,
+    /// whose new commits usually arrive in the pack, so only git can tell a
+    /// fast-forward from a force push. git then refuses every
+    /// non-fast-forward update of that push (`ng <ref> non-fast-forward`,
+    /// which forge rewrites to `FG-GIT-0007` for the protected refs).
+    #[must_use]
+    pub fn deny_non_fast_forwards(self) -> Self {
+        self.config_override("receive.denyNonFastForwards", "true")
+    }
+}
+
 fn finish_command(
     cmd: GitCommand,
     repo: &Path,

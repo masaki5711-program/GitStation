@@ -14,6 +14,10 @@
 //! - [`upload_request`] reads an upload-pack request (command, wants) and
 //!   [`Git::check_wants`] checks every want is reachable from a ref before
 //!   upload-pack starts (ADR-0007 option (a)).
+//! - [`receive_request`] reads a receive-pack request's command section,
+//!   [`receive_report`] reads / rewrites receive-pack's report and builds
+//!   forge's in-band refusal, [`Git::fast_forwards`] / [`Git::new_commits`]
+//!   classify a push's updates and list their commits (M1 phase 9 MR4).
 
 mod command;
 mod config;
@@ -21,6 +25,9 @@ pub mod gzip;
 pub mod pkt_line;
 mod process;
 mod process_tree;
+mod push_check;
+pub mod receive_report;
+pub mod receive_request;
 mod redact;
 mod revision;
 pub mod smart_http;
@@ -31,6 +38,7 @@ pub mod version;
 mod want_check;
 
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
+pub use push_check::{Ancestry, CommitList, CommitQuery};
 pub use revision::Revision;
 pub use storage::{Provisioned, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};

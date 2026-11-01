@@ -169,6 +169,11 @@ pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
     }
 }
 
+/// The id of the personal access token a request authenticated with (a
+/// request extension next to the `Principal`; never the secret).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TokenCredential(pub(crate) i64);
+
 /// Turn the request's credentials into a `Principal` extension (none
 /// without an `Authorization` header); a rejection is the finished
 /// response. The fixed routes' middleware and the dispatcher's step 4 (a
@@ -234,6 +239,9 @@ pub(crate) async fn authenticate_request(req: &mut Request) -> Result<(), Box<Re
                 true,
                 Credential::Token(identity.scopes),
             ));
+            // Which token: the push record names it (`Pusher::credential_id`).
+            req.extensions_mut()
+                .insert(TokenCredential(identity.token_id));
             // The credential has done its job: no handler can echo or log it.
             req.headers_mut().remove(AUTHORIZATION);
             Ok(())

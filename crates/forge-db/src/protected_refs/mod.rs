@@ -337,7 +337,8 @@ pub async fn rules_for(db: &Db, project: ProjectId) -> Result<ProtectionRules, F
                 .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    Ok(ProtectionRules::new(
+    Ok(ProtectionRules::for_project(
+        project,
         parse_rows(project, rows)?
             .into_iter()
             .map(|rule| ProtectionRule {
