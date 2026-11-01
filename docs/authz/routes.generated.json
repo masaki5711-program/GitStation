@@ -64,200 +64,228 @@
     "word": "home"
   },
   {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/blame/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "blame"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/blame/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "blame"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/blob/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "blob"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/blob/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "blob"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/branches/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "branches"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/branches/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "branches"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/commit/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "commit"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/commit/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "commit"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/commits/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "commits"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/commits/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "commits"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/compare/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "compare"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/compare/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "compare"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/members/{*rest}",
-    "public": true,
-    "scope": "group",
-    "word": "members"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/members/{*rest}",
-    "public": true,
-    "scope": "group",
-    "word": "members"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/members/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "members"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/members/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "members"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/settings/{*rest}",
-    "public": true,
-    "scope": "group",
-    "word": "settings"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/settings/{*rest}",
-    "public": true,
-    "scope": "group",
-    "word": "settings"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/settings/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "settings"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/settings/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "settings"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/tags/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "tags"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/tags/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "tags"
-  },
-  {
-    "action": "WebShell",
-    "method": "GET",
-    "path": "/{namespace}/-/tree/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "tree"
-  },
-  {
-    "action": "WebShell",
-    "method": "HEAD",
-    "path": "/{namespace}/-/tree/{*rest}",
-    "public": true,
-    "scope": "project",
-    "word": "tree"
+    "action": "RepoRead",
+    "method": "POST",
+    "path": "/{namespace}.git/git-upload-pack",
+    "public": false,
+    "scope": "project_git",
+    "word": "upload_pack"
   },
   {
     "action": "RepoRead",
-    "planned": true
+    "method": "GET",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-upload-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_upload_pack"
+  },
+  {
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-upload-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_upload_pack"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/blame/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blame"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/blame/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blame"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/blob/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blob"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/blob/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blob"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/branches/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "branches"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/branches/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "branches"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/commit/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commit"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/commit/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commit"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/commits/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commits"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/commits/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commits"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/compare/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "compare"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/compare/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "compare"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/tags/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tags"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/tags/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tags"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/tree/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tree"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/tree/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tree"
   },
   {
     "action": "RepoPush",

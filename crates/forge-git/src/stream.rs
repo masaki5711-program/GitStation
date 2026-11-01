@@ -322,6 +322,24 @@ impl GitStream {
         }
     }
 
+    /// forge has read what it needs (e.g. the want check found every id):
+    /// kill the process tree and wait until it is reaped. `Ok` once reaped;
+    /// FG-GIT-0003 `reason=stopped_early` with `reap_failed` when the reap
+    /// could not be confirmed (git may still hold locks). Nothing is
+    /// logged here.
+    pub(crate) async fn stop_early(mut self) -> Result<StreamStats, ForgeError> {
+        drop(self.stdin.take());
+        drop(self.stdout.take());
+        let ending = self.ending(true).await?;
+        match ending.reaped {
+            Ok(()) => Ok(self.activity.stats()),
+            Err(failure) => Err(failure.attach(
+                self.fail(ErrorCode::GitProcessFailed)
+                    .with_context("reason", "stopped_early"),
+            )),
+        }
+    }
+
     async fn ending(&mut self, cancel: bool) -> Result<Ending, ForgeError> {
         let cancel_tx = self.cancel.take();
         if cancel {

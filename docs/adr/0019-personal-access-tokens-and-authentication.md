@@ -354,3 +354,11 @@ D4 MR2 の Amendment が D4 MR4 に送った決定（計画 D4 の回答 2）。
 - （D4 のレビュー）グループとプロジェクトの `change_member` / `remove_member` は、呼び出し側が `authorize()` で見た直接のロールを `from` として受け取り、
   ロックの下で読み直した値と違えば FG-REPO-0010 `role_changed`（`expected`、`actual`）で何も書かない。認可と変更の間の昇格（例: Owner への昇格の後に、
   Maintainer が認可済みの降格を書く）を防ぐ。
+
+## Amendment（2026-11-01、M1 phase 9 MR3: 実際の git による確認）
+
+「見送り」の e2e のうち 2 つを `crates/forge-cli/tests/smart_http_e2e.rs` に書いた: `git_clone_with_a_token_in_basic_auth_succeeds`
+（credential helper がトークンを Basic のパスワードとして渡す）と `git_without_credentials_gets_www_authenticate_basic`（401 に
+`WWW-Authenticate: Basic realm="GitStation"`、ないパスでも同じ応答）。`api` スコープだけのトークンは `read_repository` がないので
+clone できない（403 `FG-AUTH-0002`、`an_api_scope_token_is_refused`）。`git_push_with_a_read_repository_token_is_refused` は
+receive-pack（MR4）と一緒に書く。

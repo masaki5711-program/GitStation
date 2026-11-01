@@ -99,4 +99,25 @@ pub const KEYS: &[Key] = &[
     ),
     // C8: the HMAC keys of the audit seal (ADR-0018 §4).
     text("audit.seal_keys_file", "FORGE_AUDIT_SEAL_KEYS_FILE"),
+    // M1 phase 9 MR3: Smart HTTP limits (ADR-0007 amendment).
+    number(
+        "git.http.fetch_request_max_bytes",
+        "FORGE_GIT_HTTP_FETCH_REQUEST_MAX_BYTES",
+    ),
+    number("git.http.idle_timeout_ms", "FORGE_GIT_HTTP_IDLE_TIMEOUT_MS"),
+    number("git.http.timeout_ms", "FORGE_GIT_HTTP_TIMEOUT_MS"),
+    number("git.http.body_timeout_ms", "FORGE_GIT_HTTP_BODY_TIMEOUT_MS"),
+    number(
+        "git.http.max_object_wants",
+        "FORGE_GIT_HTTP_MAX_OBJECT_WANTS",
+    ),
+    number(
+        "git.http.want_check_timeout_ms",
+        "FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS",
+    ),
+    number("git.http.max_streams", "FORGE_GIT_HTTP_MAX_STREAMS"),
+    number(
+        "git.http.max_streams_per_principal",
+        "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
+    ),
 ];

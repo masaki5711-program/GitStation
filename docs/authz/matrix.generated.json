@@ -1,5 +1,5 @@
 [
-  { "action": "RepoRead", "allow": 7, "deny": 12, "public": false, "git_operation": true },
+  { "action": "RepoRead", "allow": 9, "deny": 15, "public": false, "git_operation": true },
   { "action": "RepoPush", "allow": 12, "deny": 25, "public": false, "git_operation": true },
   { "action": "ProjectRead", "allow": 10, "deny": 15, "public": false, "git_operation": false },
   { "action": "ProjectCreate", "allow": 4, "deny": 3, "public": false, "git_operation": false },

@@ -53,7 +53,8 @@ use forge_auth::{
 };
 use forge_core::web_path::{GitRoute, InstanceRoute, RouteWord};
 use forge_core::{
-    NamespacePath, NamespaceResolver, ProjectRecord, TailSegments, TombstoneId, UserId,
+    NamespacePath, NamespaceResolver, ProjectRecord, ProjectRepository, TailSegments, TombstoneId,
+    UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Map, Value};
@@ -297,6 +298,7 @@ struct Admitted {
     canonical: Option<NamespacePath>,
     tombstone: Option<TombstoneId>,
     project: Option<ProjectRecord>,
+    repository: Option<ProjectRepository>,
 }
 
 impl<R: ResourceCtx> Dispatched<R> {
@@ -354,6 +356,13 @@ impl<R: ResourceCtx> Dispatched<R> {
     /// `authorize()`; `None` for every other route. Its `id` is the proof's.
     pub fn project(&self) -> Option<&ProjectRecord> {
         self.request.project.as_ref()
+    }
+
+    /// The project's repository (storage id and state) the resolver read
+    /// with the path (scoped project routes; Smart HTTP), revealed only
+    /// after `authorize()`; `None` for every other route.
+    pub fn repository(&self) -> Option<ProjectRepository> {
+        self.request.repository
     }
 
     pub fn into_body(self) -> Body {
@@ -830,6 +839,7 @@ where
         canonical,
         tombstone,
         project,
+        repository: None,
     };
     let handled = match admit(action, proof, admitted) {
         Ok(dispatched) => endpoint.call(state, dispatched),
@@ -862,6 +872,7 @@ pub(crate) fn deny_unresolved(
 /// `proof.action() == def.action`; the context type is fixed by `R`. No
 /// other module calls this (registered handlers get a `Dispatched` only
 /// through the dispatcher).
+#[allow(clippy::too_many_arguments)] // everything a handler may read, in one place
 pub(crate) fn admit_scoped<R: ResourceCtx>(
     def: &RouteDef,
     proof: Authorized<R>,
@@ -870,6 +881,7 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
     req: Request,
     tail: TailSegments,
     canonical: Option<NamespacePath>,
+    repository: Option<ProjectRepository>,
 ) -> Result<Dispatched<R>, ForgeError> {
     let (parts, body) = req.into_parts();
     admit(
@@ -884,6 +896,7 @@ pub(crate) fn admit_scoped<R: ResourceCtx>(
             canonical,
             tombstone: None,
             project: None,
+            repository,
         },
     )
 }

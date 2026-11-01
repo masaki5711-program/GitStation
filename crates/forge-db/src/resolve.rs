@@ -28,8 +28,8 @@
 use forge_core::ids::{GroupId, NamespaceId, ProjectId, TombstoneId, UserId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord, RepositoryKind,
-    Resolution, Resolved, ResolvedTarget, Visibility,
+    LookupPath, NamespaceKind, NamespacePath, ProjectAccess, ProjectRecord, ProjectRepository,
+    RepoId, RepositoryKind, RepositoryState, Resolution, Resolved, ResolvedTarget, Visibility,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -50,8 +50,10 @@ use crate::{read_query_error, Db};
 ///   at a top-level namespace.
 /// - The result confirms the rebuilt path by an exact match on the live
 ///   paths with the target's id (`confirmed`), and joins the target's row
-///   and, for a project, its `projects` row (`LEFT JOIN`s: absent stays one
-///   row of NULLs).
+///   and, for a project, its `projects` row and its repository (id and
+///   state, M1 phase 9 MR3: Smart HTTP needs them after `authorize()`)
+///   (`LEFT JOIN`s: absent stays one row of NULLs; `repositories` is unique
+///   by `project_id`, so the join never adds a row).
 pub(crate) const RESOLVE_SQL: &str = concat!(
     "WITH RECURSIVE \
        live AS (SELECT id FROM forge.namespaces WHERE full_path = $1), \
@@ -72,6 +74,7 @@ pub(crate) const RESOLVE_SQL: &str = concat!(
      SELECT l.id AS live_id, tb.id AS tombstone_id, tb.kind AS tombstone_kind, \
        n.id AS target_id, n.kind AS target_kind, n.owner_id AS target_owner, \
        p.id AS project_id, p.visibility, p.deleted_at IS NOT NULL AS pending_deletion, \
+       r.id AS repository_id, r.state AS repository_state, \
        a.steps, a.truncs, a.roles, a.rebuilt, \
        (NOT a.truncated AND a.reaches_top AND EXISTS (SELECT 1 FROM forge.namespaces x \
          WHERE x.full_path = a.rebuilt AND x.id = n.id)) AS confirmed \
@@ -79,7 +82,8 @@ pub(crate) const RESOLVE_SQL: &str = concat!(
      LEFT JOIN live l ON true \
      LEFT JOIN tomb tb ON true \
      LEFT JOIN forge.namespaces n ON n.id = (SELECT id FROM target) \
-     LEFT JOIN forge.projects p ON n.kind = 'project' AND p.id = n.owner_id"
+     LEFT JOIN forge.projects p ON n.kind = 'project' AND p.id = n.owner_id \
+     LEFT JOIN forge.repositories r ON r.project_id = p.id"
 );
 
 /// `$1` the project id, `$2` the viewer (NULL = anonymous), `$3` the chain
@@ -124,6 +128,8 @@ struct ResolveRow {
     target_owner: Option<i64>,
     #[sqlx(flatten)]
     project: ProjectFacts,
+    repository_id: Option<i64>,
+    repository_state: Option<String>,
     #[sqlx(flatten)]
     chain: ChainRoles,
     rebuilt: Option<String>,
@@ -225,11 +231,46 @@ impl ProjectFacts {
 
 /// The resolved target of `row` (its namespace, kind, owner, project facts
 /// and the viewer's role).
+/// A project's repository columns of [`RESOLVE_SQL`] (NULL when the
+/// target is not a project).
+struct RepositoryColumns {
+    id: Option<i64>,
+    state: Option<String>,
+}
+
+impl RepositoryColumns {
+    /// The repository of project `project_id`: `FG-DB-0021`
+    /// `project_without_repository` / `unknown_repository_state` when the
+    /// row is missing or unreadable. Raised before `authorize()` (so an
+    /// outsider sees a 500 there, not the absent 404): accepted, because
+    /// `projects::create` inserts the project, its namespace and its
+    /// repository in one transaction and nothing deletes a repository row
+    /// alone — a missing row is damaged data for every caller (runbook
+    /// namespace-data; MR3 review).
+    fn read(self, project_id: i64) -> Result<ProjectRepository, ForgeError> {
+        let (Some(id), Some(raw)) = (self.id, self.state) else {
+            return Err(
+                invalid("project_without_repository").with_context("project_id", project_id)
+            );
+        };
+        let state = RepositoryState::parse(&raw).ok_or_else(|| {
+            invalid("unknown_repository_state")
+                .with_context("project_id", project_id)
+                .with_context("raw", bounded(&raw))
+        })?;
+        Ok(ProjectRepository {
+            id: RepoId::new(id),
+            state,
+        })
+    }
+}
+
 fn resolved(
     namespace_id: i64,
     kind: Option<String>,
     owner: Option<i64>,
     project: ProjectFacts,
+    repository: RepositoryColumns,
     chain: ChainRoles,
     viewer: Option<UserId>,
 ) -> Result<Resolved, ForgeError> {
@@ -261,6 +302,7 @@ fn resolved(
             ResolvedTarget::Project {
                 id: ProjectId::new(owner),
                 access,
+                repository: repository.read(owner)?,
             }
         }
     };
@@ -285,6 +327,10 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
             row.target_kind,
             row.target_owner,
             row.project,
+            RepositoryColumns {
+                id: row.repository_id,
+                state: row.repository_state,
+            },
             row.chain,
             viewer,
         )?;
@@ -311,6 +357,10 @@ fn interpret(row: ResolveRow, viewer: Option<UserId>) -> Result<Resolution, Forg
                 row.target_kind,
                 row.target_owner,
                 row.project,
+                RepositoryColumns {
+                    id: row.repository_id,
+                    state: row.repository_state,
+                },
                 row.chain,
                 viewer,
             )?;

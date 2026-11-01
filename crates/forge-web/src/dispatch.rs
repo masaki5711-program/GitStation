@@ -6,8 +6,9 @@
 //! 1. `parse_web_path(raw path, raw query)` — string only (`FG-WEB-0001`).
 //! 2. The vocabulary: some `scoped()` route has `(verb, route)`; otherwise
 //!    `FG-WEB-0001` (`/api/…`, dumb HTTP, unrouted words — never the shell).
-//! 3. `service` (git): checked by the parser, part of the route; the git
-//!    subcommand comes from the matched route (phase 9).
+//! 3. `service` (git): checked by the parser (`FG-WEB-0007` unless exactly
+//!    one known `service`), part of the route; the git subcommand comes
+//!    from the matched route's handler (`routes::git`, M1 phase 9).
 //! 4. Authentication by word: a public word (every route with it is
 //!    `WebShell`) answers the shell here without credentials or the
 //!    database; any other word needs an authenticated, active principal
@@ -24,7 +25,8 @@
 //!    log `reason` differs (MR4 must f).
 //! 7. A `moved` tombstone redirects (`302`, `Cache-Control: no-store`) only
 //!    after `authorize()` allowed and only for a safe verb that is not a
-//!    push, logged as `namespace.redirected` at warn; otherwise the proof is
+//!    push, logged as `namespace.redirected` at warn (the upload-pack POST
+//!    is served in place instead, M1 phase 9 MR3); otherwise the proof is
 //!    admitted (`proof.action() == def.action`) and the handler runs.
 
 use axum::body::Body;
@@ -36,7 +38,7 @@ use forge_auth::{
     prove, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, Principal, ProjectCtx,
     ResolvedCtx, ResolvedVia, UnresolvedCtx, UnresolvedReason,
 };
-use forge_core::web_path::{parse_web_path, LogSafePath, ParsedPath};
+use forge_core::web_path::{parse_web_path, GitRoute, LogSafePath, ParsedPath};
 use forge_core::{
     LookupPath, NamespacePath, ProjectAccess, Resolution, Resolved, ResolvedTarget, TailSegments,
     TombstoneId, UserId,
@@ -181,7 +183,12 @@ pub(crate) async fn dispatch<S: DispatchState>(
             );
         }
     };
-    let ResolvedTarget::Project { id, access } = found.resolved.target else {
+    let ResolvedTarget::Project {
+        id,
+        access,
+        repository,
+    } = found.resolved.target
+    else {
         return fail(
             &ctx,
             ForgeError::new(ErrorCode::Internal)
@@ -203,7 +210,12 @@ pub(crate) async fn dispatch<S: DispatchState>(
         }
     };
     if let Some(tombstone) = found.moved {
-        return redirect_or_refuse(&ctx, &fail, verb, route, &found, tombstone, &tail);
+        if !served_through_tombstone(route) {
+            return redirect_or_refuse(&ctx, &fail, verb, route, &found, tombstone, &tail);
+        }
+        // Allowed, read-only, on the live project: served in place (see
+        // `served_through_tombstone`), and logged like a redirect.
+        log_redirected(&ctx, &found, tombstone, route, "served");
     }
     let dispatched = match admit_scoped(
         &entry.def,
@@ -213,6 +225,7 @@ pub(crate) async fn dispatch<S: DispatchState>(
         req,
         tail,
         Some(found.canonical),
+        Some(repository),
     ) {
         Ok(dispatched) => dispatched,
         Err(e) => return fail(&ctx, e.with_context("route", route.name())),
@@ -290,6 +303,7 @@ async fn serve_public<S: DispatchState>(
         req,
         tail,
         None,
+        None,
     ) {
         Ok(dispatched) => head_without_body(verb, endpoint.call(state, dispatched).await),
         Err(e) => ctx.fail(e).into_response(),
@@ -346,19 +360,47 @@ fn redirect_or_refuse(
                 .with_context("route", route.name()),
         );
     };
+    log_redirected(ctx, found, tombstone, route, "redirect");
+    let mut res = StatusCode::FOUND.into_response();
+    res.headers_mut().insert(LOCATION, value);
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
+}
+
+/// `namespace.redirected` (warn): a request reached a project through a
+/// `moved` tombstone; `outcome` = `redirect` (a `302`) or `served` (the
+/// upload-pack POST, answered in place).
+fn log_redirected(
+    ctx: &Ctx,
+    found: &Found,
+    tombstone: TombstoneId,
+    route: ScopedRoute,
+    outcome: &'static str,
+) {
     tracing::warn!(
         target: "forge_web::dispatch",
         request_id = %ctx.request_id,
         namespace_id = found.resolved.namespace_id.get(),
         tombstone_id = tombstone.get(),
         route = route.name(),
+        outcome,
         "namespace.redirected"
     );
-    let mut res = StatusCode::FOUND.into_response();
-    res.headers_mut().insert(LOCATION, value);
-    res.headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    res
+}
+
+/// The upload-pack POST through a `moved` tombstone is served in place
+/// (M1 phase 9 MR3, ADR-0015 amendment), after `authorize(RepoRead)`
+/// allowed on the live project, like the advertisement's `302`. git
+/// (≤ 2.45) moves its base URL to a redirect's target only when the
+/// redirect answers its first, unauthenticated request; with a credential
+/// helper the `302` answers the retry after the `401`, git keeps the old
+/// base URL and POSTs there. Refusing the POST would break every clone of
+/// a renamed project for those clients. Read-only, the same decision as at
+/// the new path; receive-pack is still never redirected nor served
+/// (`tombstone_push`).
+fn served_through_tombstone(route: ScopedRoute) -> bool {
+    matches!(route, ScopedRoute::Git(GitRoute::UploadPack))
 }
 
 /// `/{current}` + the route's suffix, every tail segment percent-encoded.
@@ -439,7 +481,9 @@ pub(crate) fn loaded_namespace(resolved: &Resolved, via: ResolvedVia) -> LoadedN
             id,
             role: viewer_role,
         },
-        ResolvedTarget::Project { id, access } => LoadedTarget::Project(loaded_project(id, access)),
+        ResolvedTarget::Project { id, access, .. } => {
+            LoadedTarget::Project(loaded_project(id, access))
+        }
     };
     LoadedNamespace {
         namespace: resolved.namespace_id,

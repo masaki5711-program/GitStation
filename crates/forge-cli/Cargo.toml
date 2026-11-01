@@ -24,6 +24,8 @@ tracing.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }
+# tests/smart_http_e2e.rs: gzip request bodies.
+flate2.workspace = true
 tempfile.workspace = true
 # The worker loop tests: paused time and captured JSON logs.
 tokio = { workspace = true, features = ["test-util"] }

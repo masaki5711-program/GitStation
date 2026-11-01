@@ -16,12 +16,14 @@ use forge_errors::{ErrorCode, ForgeError};
 
 mod audit;
 mod database;
+mod git_http;
 mod keys;
 mod secret;
 mod tls;
 
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
+pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
 pub use tls::TlsMode;
@@ -34,6 +36,7 @@ const NAMESPACES: &[&str] = &[
     "FORGE_STORAGE_",
     "FORGE_DATABASE_",
     "FORGE_AUDIT_",
+    "FORGE_GIT_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -113,6 +116,8 @@ pub struct Config {
     pub storage: StorageConfig,
     pub database: DatabaseConfig,
     pub audit: AuditConfig,
+    /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
+    pub git_http: GitHttpConfig,
 }
 
 impl Config {
@@ -178,26 +183,46 @@ fn read_file(path: &Path) -> Result<BTreeMap<&'static str, String>, ForgeError> 
         let Some(body) = body.as_table() else {
             return Err(invalid(section, "unknown_key"));
         };
-        for (name, value) in body {
-            let full = format!("{section}.{name}");
-            let Some(k) = KEYS.iter().find(|k| k.key == full) else {
-                return Err(invalid(&full, "unknown_key"));
-            };
-            let text = match value {
-                toml::Value::String(s) => s.as_str().into(),
-                toml::Value::Integer(i) if k.kind == Kind::Number => i.to_string(),
-                toml::Value::Boolean(b) if k.kind == Kind::Bool => b.to_string(),
-                toml::Value::Integer(_)
-                | toml::Value::Float(_)
-                | toml::Value::Boolean(_)
-                | toml::Value::Datetime(_)
-                | toml::Value::Array(_)
-                | toml::Value::Table(_) => return Err(invalid(k.key, "invalid")),
-            };
-            values.insert(k.key, text);
-        }
+        flatten(section, body, &mut values)?;
     }
     Ok(values)
+}
+
+/// `[section] key = value` and `[section.sub] key = value` (`git.http.*`)
+/// into `section[.sub].key → text`. A table is accepted only where some key
+/// continues below it.
+fn flatten(
+    prefix: &str,
+    body: &toml::Table,
+    values: &mut BTreeMap<&'static str, String>,
+) -> Result<(), ForgeError> {
+    for (name, value) in body {
+        let full = format!("{prefix}.{name}");
+        if let toml::Value::Table(sub) = value {
+            let below = format!("{full}.");
+            if !KEYS.iter().any(|k| k.key.starts_with(&below)) {
+                return Err(invalid(&full, "unknown_key"));
+            }
+            flatten(&full, sub, values)?;
+            continue;
+        }
+        let Some(k) = KEYS.iter().find(|k| k.key == full) else {
+            return Err(invalid(&full, "unknown_key"));
+        };
+        let text = match value {
+            toml::Value::String(s) => s.as_str().into(),
+            toml::Value::Integer(i) if k.kind == Kind::Number => i.to_string(),
+            toml::Value::Boolean(b) if k.kind == Kind::Bool => b.to_string(),
+            toml::Value::Integer(_)
+            | toml::Value::Float(_)
+            | toml::Value::Boolean(_)
+            | toml::Value::Datetime(_)
+            | toml::Value::Array(_)
+            | toml::Value::Table(_) => return Err(invalid(k.key, "invalid")),
+        };
+        values.insert(k.key, text);
+    }
+    Ok(())
 }
 
 /// 1-based line and column of a byte offset.
@@ -295,7 +320,37 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
             )?,
         },
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
+        git_http: git_http(get)?,
     })
+}
+
+/// `git.http.*`, defaults from [`GitHttpConfig::DEFAULT`].
+fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpConfig, ForgeError> {
+    let d = GitHttpConfig::DEFAULT;
+    let ms = |t: Duration| u32::try_from(t.as_millis()).unwrap_or(u32::MAX);
+    GitHttpConfig {
+        fetch_request_max_bytes: positive(
+            get,
+            "git.http.fetch_request_max_bytes",
+            d.fetch_request_max_bytes,
+        )?,
+        idle_timeout: millis(get, "git.http.idle_timeout_ms", ms(d.idle_timeout))?,
+        timeout: millis(get, "git.http.timeout_ms", ms(d.timeout))?,
+        body_timeout: millis(get, "git.http.body_timeout_ms", ms(d.body_timeout))?,
+        max_object_wants: positive(get, "git.http.max_object_wants", d.max_object_wants)?,
+        want_check_timeout: millis(
+            get,
+            "git.http.want_check_timeout_ms",
+            ms(d.want_check_timeout),
+        )?,
+        max_streams: positive(get, "git.http.max_streams", d.max_streams)?,
+        max_streams_per_principal: positive(
+            get,
+            "git.http.max_streams_per_principal",
+            d.max_streams_per_principal,
+        )?,
+    }
+    .validate()
 }
 
 /// `host:port` with a non-empty host and a numeric port (`[::1]:8080` too).

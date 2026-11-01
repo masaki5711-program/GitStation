@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature. git itself never saw the bytes.
+A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature or an object the request wants (an object no ref reaches: removed by a force push or a deleted branch). git itself never saw the bytes. The want refusals reach the client in-band (HTTP 200 with an `ERR` packet), so git prints `remote error:` with this message and the request id.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`: `pkt_line` (with `detail`: `length_reserved` for 0001-0003 where not allowed, `length_too_large` over 65520, `non_hex`, `truncated`, `bad_sideband`), `gzip` (the gzip body is corrupt, truncated, or has data after its end), `content_type` (wrong or missing request Content-Type for the service), `too_many_commands` (a push with more ref updates than the limit), `report_status_required` (a push client without the report-status capability), `push_cert` (signed pushes are refused). Clients are normally real git; frequent occurrences from one address point at a scanner or a broken proxy that alters bodies.
+The log event carries `reason`: `pkt_line` (with `detail`: `length_reserved` for 0001-0003 where not allowed, `length_too_large` over 65520, `non_hex`, `truncated`, `bad_sideband`), `gzip` (the gzip body is corrupt, truncated, or has data after its end), `content_type` (wrong or missing request Content-Type for the service), `content_encoding` (a request Content-Encoding other than gzip or identity), `want_invalid` (an upload-pack `want` line that is not `want <40 or 64 lower-case hex>`), `command_unsupported` (a protocol v2 command other than `ls-refs` / `fetch`, with `command`), `filter_unsupported` (a `filter` naming `sparse`, e.g. `sparse:oid=<blob>`, which would read a blob by id), `too_many_wants` (more non-commit wants than `git.http.max_object_wants`, with `objects`, `max_object_wants`), `want_unreachable` (an upload-pack request wants an object that no ref reaches — ADR-0007 option (a): forge checks every `want` before upload-pack starts and answers with an in-band `ERR` packet; `wants`, `unreachable`, `commits`, `objects` count them, `first_unreachable` is the first such id, `walked` the objects the walk read, `check_ms` the cost of the check), `too_many_commands` (a push with more ref updates than the limit), `report_status_required` (a push client without the report-status capability), `push_cert` (signed pushes are refused). Clients are normally real git; frequent occurrences from one address point at a scanner or a broken proxy that alters bodies.
 
 ## 対処 (fix)
 

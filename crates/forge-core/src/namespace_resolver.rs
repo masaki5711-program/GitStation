@@ -18,7 +18,8 @@ use forge_errors::ForgeError;
 
 use crate::namespace_path::{LookupPath, NamespacePath};
 use crate::{
-    GroupId, NamespaceId, ProjectId, RepositoryKind, Role, TombstoneId, UserId, Visibility,
+    GroupId, NamespaceId, ProjectId, RepoId, RepositoryKind, RepositoryState, Role, TombstoneId,
+    UserId, Visibility,
 };
 
 /// The future these traits return (boxed: they are stored as trait objects).
@@ -90,6 +91,16 @@ pub struct ProjectAccess {
     pub pending_deletion: bool,
 }
 
+/// A project's repository as the resolver read it (M1 phase 9 MR3): the
+/// storage id (ADR-0009) and whether the bare directory exists yet. Read by
+/// the same statement as the access facts; a Smart HTTP route uses it only
+/// after `authorize()` allowed (`FG-REPO-0016` while `provisioning`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectRepository {
+    pub id: RepoId,
+    pub state: RepositoryState,
+}
+
 /// A live namespace with everything authorization needs about it for the
 /// viewer of the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,10 +113,12 @@ pub enum ResolvedTarget {
         id: GroupId,
         viewer_role: Option<Role>,
     },
-    /// A project and the viewer's access facts.
+    /// A project, the viewer's access facts and its repository (one
+    /// statement; the repository is not an authorization input).
     Project {
         id: ProjectId,
         access: ProjectAccess,
+        repository: ProjectRepository,
     },
 }
 

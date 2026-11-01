@@ -11,28 +11,40 @@
 //! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7),
 //! and as the dispatcher's lookups (`forge_db::resolve`: path → namespace
 //! and project by id, ADR-0015 MR3 / MR4).
+//!
+//! Smart HTTP (M1 phase 9 MR3): `storage.root` is required; git runs from
+//! `PATH` with HOME pinned to the storage root (as the worker does), its
+//! stream pools and timeouts from `git.http.*`, the version checked
+//! (≥ 2.38, `FG-GIT-0001`) before the server binds.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::DatabaseConfig;
+use forge_core::config::{Config, DatabaseConfig, GitHttpConfig};
 use forge_core::readiness::ReadinessProbe;
 use forge_core::Authenticator;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
-use forge_web::{AppConfig, AppState, BoundedAuthenticator, Lookups, ServerLimits};
+use forge_git::{Git, GitConfig, StorageRoot};
+use forge_web::{
+    AppConfig, AppState, BoundedAuthenticator, GitHttpLimits, Lookups, ServerLimits, SmartHttp,
+};
 
 use crate::runtime::block_on;
 
-pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError> {
+pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
+    let database = &cfg.database;
     // The server process must not hold the migration or maintenance
     // credentials (ADR-0018): their password files belong to other configs.
     database.reject_privileged_logins()?;
+    let storage = StorageRoot::open(cfg.storage_root()?)?;
     block_on(async {
+        let smart_http = smart_http(storage, &cfg.git_http);
+        forge_git::version::detect(&smart_http.git).await?;
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
-        let state = app_state(&db, database);
-        let router = forge_web::app(state, app_config_for(database))?;
+        let state = app_state(&db, database).with_smart_http(smart_http);
+        let router = forge_web::app(state, app_config_for(database, &cfg.git_http))?;
         let listener = forge_web::server::bind(bind).await?;
         tracing::info!(
             bind,
@@ -51,6 +63,20 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })
+}
+
+/// git for the Smart HTTP routes: `git` from `PATH`, HOME = the storage
+/// root (only forge writes it; no user or shared config applies), stream
+/// pools and timeouts from `git.http.*`.
+fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
+    let mut git = GitConfig::new("git", storage.path());
+    // u32 → usize: lossless on the supported (32/64-bit) targets.
+    git.max_streams = usize::try_from(limits.max_streams).unwrap_or(usize::MAX);
+    git.max_streams_per_principal =
+        usize::try_from(limits.max_streams_per_principal).unwrap_or(usize::MAX);
+    git.stream_idle_timeout = limits.idle_timeout;
+    git.stream_timeout_total = limits.timeout;
+    SmartHttp::new(Git::new(git), storage, GitHttpLimits::from_config(limits))
 }
 
 /// The server's state: the database as readiness probe and as token
@@ -109,10 +135,13 @@ fn request_timeout_for(database: &DatabaseConfig) -> Duration {
         .max(AppConfig::default().request_timeout)
 }
 
-/// The application config `forge serve` runs with.
-fn app_config_for(database: &DatabaseConfig) -> AppConfig {
+/// The application config `forge serve` runs with. git POSTs get
+/// `git.http.timeout_ms` instead of the request timeout (they read the
+/// whole request first, under their own idle and size limits).
+fn app_config_for(database: &DatabaseConfig, git_http: &GitHttpConfig) -> AppConfig {
     AppConfig {
         request_timeout: request_timeout_for(database),
+        git_rpc_timeout: git_http.timeout,
         ..AppConfig::default()
     }
 }
@@ -185,7 +214,7 @@ mod tests {
         for pairs in configs {
             let cfg = load(None, &Env::from_pairs(pairs.clone())).expect("config");
             let db = &cfg.database;
-            let request = app_config_for(db).request_timeout;
+            let request = app_config_for(db, &cfg.git_http).request_timeout;
             let needed = auth_timeout_for(db) + lookup_timeout_for(db);
             assert!(request > needed, "{pairs:?}: {request:?} <= {needed:?}");
             assert!(

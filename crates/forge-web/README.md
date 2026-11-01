@@ -2,8 +2,9 @@
 
 **Responsibility**: the HTTP layer — the route registry (ADR-0010,
 ADR-0015), the one dispatcher for namespace URLs, request ids, token
-authentication (ADR-0019 §7), the single error renderer, timeouts, and
-serving. **Handlers never decide**: the registry calls
+authentication (ADR-0019 §7), the single error renderer, timeouts, Smart
+HTTP fetch (M1 phase 9 MR3; git only through forge-git's Smart HTTP API),
+and serving. **Handlers never decide**: the registry calls
 `forge_auth::prove(principal, def.action, ctx)` and hands the handler the
 admitted proof.
 
@@ -19,8 +20,10 @@ admitted proof.
   (ADR-0015 MR4 musts a–c). It exposes `proof()` (action, target id,
   context), `ctx()`, `principal()`, `method()`, `headers()`, `raw_query()`,
   `tail()` (the validated segments after a route word), `canonical_path()`,
-  `via_tombstone()` and `project()` (the `ProjectRecord` a project was loaded
-  from; revealed only after `authorize()`), `into_body()`.
+  `via_tombstone()`, `project()` (the `ProjectRecord` a project was loaded
+  from) and `repository()` (the project's `ProjectRepository { id, state }`
+  the resolver read with the path, scoped project routes; MR3) — all
+  revealed only after `authorize()` — and `into_body()`.
 - `registry::Registry::route(Verb, path, Action, summary, handler)` — a fixed
   path deciding on the instance (`InstanceCtx`); `route_with(.., loader,
   handler)` — a fixed path deciding on what a `Loader` loads (one lookup;
@@ -54,8 +57,11 @@ admitted proof.
   (only the log `reason` differs); (7) a `moved` path redirects (`302`,
   `Cache-Control: no-store`, `Location` built from validated segments, query
   dropped) only after `authorize()` allowed and only for a safe verb that is
-  not a push (`namespace.redirected`, warn); otherwise the admitted proof
-  reaches the handler. The resolver call is bounded by
+  not a push (`namespace.redirected`, warn, `outcome=redirect`); the
+  upload-pack POST through a `moved` path is served in place after
+  `authorize()` allowed (`outcome=served`: git keeps POSTing to the old
+  path when the `302` answered its retry after a `401`; ADR-0015
+  amendment MR3); otherwise the admitted proof reaches the handler. The resolver call is bounded by
   `AppState::lookup_timeout` (`FG-WEB-0002 operation=namespace_resolve`).
 - Routes (MR4): `GET /api/v1/namespaces/resolve?path=` (`PathResolve`:
   `{ namespace_id, kind, canonical_path, moved }` plus, since MR5, the
@@ -81,6 +87,36 @@ admitted proof.
   display_name, description, visibility, kind, created_at, role }` (`kind`
   = repository kind, `role` = the caller's effective role or `null`);
   `Cache-Control: private, no-store`, `Vary: Authorization, Cookie`.
+- Routes (M1 phase 9 MR3, `src/routes/git.rs`, `src/git_stream.rs`; all
+  `RepoRead`, `RouteScope::ProjectGit`): `GET|HEAD
+  {path}.git/info/refs?service=git-upload-pack` (HEAD: headers only, no
+  git) and `POST {path}.git/git-upload-pack`. A `service` other than
+  exactly one known value is `FG-WEB-0007` (400, from the parser, before
+  authentication). After `authorize()`: a repository still `provisioning`
+  is `FG-REPO-0016` (503); the POST checks `Content-Type`
+  (`application/x-git-upload-pack-request`) and `Content-Encoding`
+  (gzip / identity; `FG-GIT-0014`), takes a body-read slot (`BodySlots`,
+  sized like git's stream pools: `FG-GIT-0004 reason=body_reads` /
+  `principal_body_reads`), reads the whole body within `body_timeout` (≤
+  `fetch_request_max_bytes` raw and decompressed → `FG-GIT-0013`; idle /
+  total → `FG-WEB-0002 operation=git_request_body`; a vanished client →
+  `FG-GIT-0015 phase=request_body`), parses it
+  (`forge_git::upload_request`; `sparse` filters refused), and runs `Git::check_wants` — every want
+  reachable from a ref (ADR-0007 option (a)) — before upload-pack; an
+  unreachable want is answered in-band (200, one `ERR` packet with the
+  user message and the request id; `FG-GIT-0014 reason=want_unreachable`
+  logged once). Responses: `Cache-Control: private, no-store`, `Vary:
+  Authorization`; git's stdout streams through `GitResponse` (success
+  logged as `forge.git.served` with bytes, `wants`, `check_ms`; a git
+  failure is logged and the body is cut; a dropped body kills git with
+  `abort_client_disconnected()` and logs `FG-GIT-0015`). Stream key
+  `user:<id>`. The git POSTs are exempt from the request timeout:
+  `AppConfig::git_rpc_timeout` (`git.http.timeout_ms`, 1 h) bounds them
+  instead.
+- `AppState::with_smart_http(SmartHttp::new(git, storage,
+  GitHttpLimits))` — `forge serve` always sets it (storage root required,
+  git HOME = storage root, pools and timeouts from `git.http.*`); without it
+  a git route is `FG-SYS-0001 reason=smart_http_unconfigured`.
 - `AppState::new(version, probes, authenticator, Lookups { namespaces,
   projects })` — the authenticator (`forge_core::Authenticator`) and the
   lookups (`forge_core::NamespaceResolver`, `ProjectAccessLoader` —
@@ -152,7 +188,9 @@ Waiting for a permit is bounded by the request timeout (`FG-WEB-0002`).
 Per-client (IP) rate limiting is **open** (ADR-0019 MR3 amendment).
 
 **Error codes owned**: FG-WEB-0001 RouteNotFound, FG-WEB-0002 RequestTimeout,
-FG-WEB-0003 MethodNotAllowed, FG-WEB-0004 RouteRegistryInvalid, FG-SYS-0004
+FG-WEB-0003 MethodNotAllowed, FG-WEB-0004 RouteRegistryInvalid, FG-WEB-0007
+SmartHttpServiceUnsupported (raised by forge-core's parser), FG-REPO-0016
+RepositoryNotReady (Smart HTTP), FG-SYS-0004
 ServerBindFailed, FG-SYS-0005 ServeFailed, FG-SYS-0006 SignalHandlerUnavailable,
 FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 
@@ -179,8 +217,12 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
   timeout, and a 503 answer when full (before Smart HTTP, phase 9).
 - Log-capture tests asserting `error_code` + `request_id` on failures and the
   access log; a connection-cap test; a body-limit (413) test.
-- Per-route timeouts and an idle timeout for git streams (Smart HTTP, phase 9);
-  the request timeout covers time-to-response only.
+- Done in M1 phase 9 MR3: git POSTs have their own timeout and the
+  request body / git stream their idle timeouts. Still open: the token
+  authentication of a git POST waits for its permit under the 1 h git
+  timeout, not the request timeout (a permit flood can hold a git POST
+  longer); `check_ms` as a metric; hiding `object-info` from the v2
+  advertisement (forge refuses the command).
 - JSON / path / query rejections wrapped into `ApiError` before the first
   route that takes a body (phase 8).
 - `gen-authz --check` in CI and self-heal (needs cargo in the gate runner).
@@ -199,5 +241,9 @@ a scripted resolver that counts calls and the shared
 `tests/fixtures/url-vectors.json`; `src/routes/projects_tests.rs` a
 scripted project loader that counts calls; `tests/member_roles.rs`,
 `tests/namespace_tombstone_routes.rs` and `tests/project_read.rs` need the
-development database). The real-`git` token tests are named in
-ADR-0019 "見送り" and land with Smart HTTP (phase 9).
+development database). The real-`git` tests are
+`crates/forge-cli/tests/smart_http_e2e.rs` (M1 phase 9 MR3; real `git`,
+the development database). `dispatch_tests::forge_web_runs_git_only_through_smart_http_api`
+fails if forge-web builds git commands itself, if a file other than
+`routes/git.rs` / `git_stream.rs` uses forge-git, or if a git route reads a
+tail.

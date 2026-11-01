@@ -18,6 +18,11 @@
     - `reason=stored_path_invalid`（`project_id` 付き）: プロジェクトの `full_path` が `NamespacePath::parse` を通らない（`rule` に理由）
     - `reason=project_without_repository`: `forge.projects` の行に `forge.repositories` の行がない（1 対 1 対 1 の片側が消えている）
     - `reason=unknown_repository_kind`: `forge.repositories.kind` が CHECK の外の値（`raw` に保存値）
+  - パスの解決（Smart HTTP、M1 phase 9 MR3 からリポジトリの ID と状態も同じ文で読む）でも出るもの:
+    - `reason=project_without_repository`: 上と同じ（プロジェクトのパスへの clone / fetch が 500 になる）。認可の前に出るので、
+      プロジェクトが見えない人にも 404 ではなく 500 になる。`projects::create` はプロジェクト・名前空間・リポジトリを 1 つの
+      トランザクションで書き、リポジトリの行だけを消す処理はないので、この理由が出るのはデータが壊れたときだけである（受け入れた残り）
+    - `reason=unknown_repository_state`: `forge.repositories.state` が CHECK の外の値（`raw` に保存値）
 - ロールの連鎖が壊れている場合（ループ、不明なロール）は、同じ読み込みでも FG-DB-0018（Runbook `membership-data`）になる。
 
 ## Impact

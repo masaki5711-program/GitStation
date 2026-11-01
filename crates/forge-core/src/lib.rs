@@ -34,7 +34,7 @@ pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, Tombstone
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
     NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
-    ProjectRecord, Resolution, Resolved, ResolvedTarget,
+    ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
 };
 pub use push::{
     ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedRef, Pusher,
