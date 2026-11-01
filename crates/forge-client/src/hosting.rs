@@ -23,7 +23,7 @@ use serde_json::{json, Map, Value};
 /// `--all` without `--limit` asks for the largest page, to need fewer calls.
 const ALL_PAGE_SIZE: u32 = 100;
 
-fn client(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<ApiClient> {
+pub(crate) fn client(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<ApiClient> {
     let cfg = config_for(cli, env)?;
     let (token, _source) = require_token(&cfg, env, io)?;
     ApiClient::new(&cfg, Some(token))
@@ -40,7 +40,7 @@ fn confirm(yes: bool, what: &str) -> Result<()> {
     }
 }
 
-fn call(
+pub(crate) fn call(
     c: &ApiClient,
     method: Method,
     path: &str,
@@ -82,7 +82,7 @@ fn fetch_list(
 
 /// A field as one line of text: strings and numbers as they are, `null` as
 /// `-`. Server text is sanitized (it reaches a terminal).
-fn text(v: &Value, key: &str) -> String {
+pub(crate) fn text(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::String(s)) => sanitize(s),
         Some(Value::Null) | None => "-".to_string(),
@@ -104,7 +104,13 @@ fn detail(v: &Value, keys: &[&str]) -> String {
         .join("\n")
 }
 
-fn list_human(body: &Value, items_key: &str, next_key: &str, flag: &str, keys: &[&str]) -> String {
+pub(crate) fn list_human(
+    body: &Value,
+    items_key: &str,
+    next_key: &str,
+    flag: &str,
+    keys: &[&str],
+) -> String {
     let mut lines: Vec<String> = body
         .get(items_key)
         .and_then(Value::as_array)

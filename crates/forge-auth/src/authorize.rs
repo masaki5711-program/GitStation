@@ -174,7 +174,7 @@ pub fn authorize(
         // Returned above for every non-public action; kept for exhaustiveness.
         (_, Resource::Unresolved(reason)) => unresolved(*reason),
 
-        (Action::RepoRead | Action::ProjectRead, Resource::Project(p)) => {
+        (Action::RepoRead | Action::RepoBrowse | Action::ProjectRead, Resource::Project(p)) => {
             need(Role::Reporter, read_role(p))
         }
 
@@ -476,6 +476,7 @@ pub fn authorize(
         (
             Action::RepoRead
             | Action::RepoPush
+            | Action::RepoBrowse
             | Action::ProjectRead
             | Action::ProjectList
             | Action::ProjectCreate

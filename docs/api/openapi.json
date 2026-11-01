@@ -20,6 +20,65 @@
         ],
         "type": "object"
       },
+      "BlobBody": {
+        "additionalProperties": false,
+        "description": "One file's head.",
+        "properties": {
+          "binary": {
+            "description": "NUL bytes or not UTF-8: no `content` (download it through the raw\nroute).",
+            "type": "boolean"
+          },
+          "content": {
+            "description": "The text, at most 1 MiB; `null` when `binary`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "size": {
+            "description": "The whole file's size in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "The file is longer than `content`.",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "`blob` or `symlink` (the content is the link's target).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "name",
+          "type",
+          "mode",
+          "oid",
+          "size",
+          "binary",
+          "content",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "ChangeMember": {
         "additionalProperties": false,
         "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
@@ -164,6 +223,48 @@
           "id",
           "deleted_at",
           "purge_after"
+        ],
+        "type": "object"
+      },
+      "EntryBody": {
+        "additionalProperties": false,
+        "description": "One tree entry.",
+        "properties": {
+          "mode": {
+            "description": "The octal mode as git prints it (`100644`, `040000`, …).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The entry's full path in the tree.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Bytes; `null` for a tree or a submodule.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "`tree`, `blob`, `symlink` or `submodule`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "type",
+          "mode",
+          "oid",
+          "size"
         ],
         "type": "object"
       },
@@ -599,6 +700,73 @@
         ],
         "type": "object"
       },
+      "RefBody": {
+        "additionalProperties": false,
+        "description": "One branch or tag.",
+        "properties": {
+          "commit": {
+            "description": "The commit it peels to; `null` for a tag of a tree or a blob.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "description": "`refs/heads/…` or `refs/tags/…`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The short name (`main`, `v1.0`).",
+            "type": "string"
+          },
+          "target": {
+            "description": "The object the ref names (an annotated tag: the tag object).",
+            "type": "string"
+          },
+          "type": {
+            "description": "`branch` or `tag`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "full_name",
+          "type",
+          "commit",
+          "target"
+        ],
+        "type": "object"
+      },
+      "RefsBody": {
+        "additionalProperties": false,
+        "description": "A repository's branches and tags.",
+        "properties": {
+          "default_branch": {
+            "description": "The branch HEAD names; `null` for an empty repository.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refs": {
+            "description": "In ref name order.",
+            "items": {
+              "$ref": "#/components/schemas/RefBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More refs than the server lists (5 000): the list stops there.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "default_branch",
+          "refs",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "ReleaseTombstone": {
         "additionalProperties": false,
         "description": "`POST /api/v1/namespaces/tombstones/release`.",
@@ -704,6 +872,56 @@
           "kind",
           "canonical_path",
           "moved"
+        ],
+        "type": "object"
+      },
+      "ResolveBody": {
+        "additionalProperties": false,
+        "description": "A spec split into a revision and a path.",
+        "properties": {
+          "path": {
+            "description": "The rest of the spec: a path in the tree (`\"\"` for the root).",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "ref",
+          "path"
+        ],
+        "type": "object"
+      },
+      "RevBody": {
+        "additionalProperties": false,
+        "description": "A resolved revision.",
+        "properties": {
+          "commit": {
+            "description": "The commit id.",
+            "type": "string"
+          },
+          "full_name": {
+            "description": "`refs/heads/…` / `refs/tags/…`; `null` for a commit id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The short ref name, or the commit id.",
+            "type": "string"
+          },
+          "type": {
+            "description": "`branch`, `tag` or `commit` (a full commit id was given).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "full_name",
+          "commit"
         ],
         "type": "object"
       },
@@ -857,6 +1075,42 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "TreeBody": {
+        "additionalProperties": false,
+        "description": "One tree level.",
+        "properties": {
+          "entries": {
+            "description": "In git's order (byte order of the names).",
+            "items": {
+              "$ref": "#/components/schemas/EntryBody"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "description": "The tree's id.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The tree's path (`\"\"` for the root).",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "truncated": {
+            "description": "More entries than the server lists (5 000).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "entries",
+          "truncated"
+        ],
         "type": "object"
       },
       "UpdateGroup": {
@@ -2163,6 +2417,224 @@
         "summary": "Change a rule's minimum push role (Maintainer; never above the caller's role)",
         "x-forge-action": "ProtectedRefManage",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/repository/blob": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_blob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The path in the tree (default: the root); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One file's head as text (at most 1 MiB), or binary without content",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "branch | tag (default: both)",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a repository's branches and tags (Reporter; internal: every signed-in user)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/resolve": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. <ref>/<path> as in a page URL (e.g. feature/x/src/lib.rs): full commit id first, then the longest branch, then the longest tag",
+            "in": "query",
+            "name": "spec",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Split <ref>/<path> into a revision and a path (commit id, longest branch, longest tag)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/tree": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_tree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The path in the tree (default: the root); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TreeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One tree level of a revision (capped; truncated past the cap)",
+        "x-forge-action": "RepoBrowse"
       }
     },
     "/api/v1/projects/{id}/restore": {

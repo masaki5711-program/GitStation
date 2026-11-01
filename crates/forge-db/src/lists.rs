@@ -79,6 +79,7 @@ pub(crate) const PROJECT_PAGE_SQL: &str = concat!(
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
        p.display_name, p.description, r.kind AS repository_kind, \
+       r.id AS repository_id, r.state AS repository_state, \
        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM page pg JOIN forge.projects p ON p.id = pg.id \
      LEFT JOIN agg a ON a.anchor = p.id \

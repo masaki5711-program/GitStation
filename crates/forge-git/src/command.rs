@@ -361,7 +361,30 @@ impl GitCommand {
     /// Non-zero exit → `FG-GIT-0003`, timeout → `FG-GIT-0002` (child killed and
     /// reaped), stdout over the cap → `FG-GIT-0006`, no free slot → `FG-GIT-0004`,
     /// binary not runnable → `FG-GIT-0001`.
-    pub async fn output(mut self) -> Result<GitOutput, ForgeError> {
+    pub async fn output(self) -> Result<GitOutput, ForgeError> {
+        let cap = self.git.config().max_output_bytes;
+        self.capture(cap, false).await.map(|(out, _)| out)
+    }
+
+    /// Run and keep at most `cap` bytes of stdout (never more than
+    /// `max_output_bytes`). More output is not an error: git is killed and
+    /// reaped as soon as the cap is passed, and the result says
+    /// `truncated = true` (the browse limits, M2 MR7). A killed git that
+    /// cannot be confirmed reaped is FG-GIT-0003 `reason=stopped_early`
+    /// with `reap_failed`.
+    pub(crate) async fn output_truncated(
+        self,
+        cap: usize,
+    ) -> Result<(GitOutput, bool), ForgeError> {
+        let cap = cap.min(self.git.config().max_output_bytes);
+        self.capture(cap, true).await
+    }
+
+    async fn capture(
+        mut self,
+        max_out: usize,
+        truncate: bool,
+    ) -> Result<(GitOutput, bool), ForgeError> {
         if self.option_like_value {
             // A forge bug, never user input (user input cannot reach arg_owned).
             return Err(self
@@ -400,7 +423,6 @@ impl GitCommand {
         let hold = self.hold_stdin;
         #[cfg(not(test))]
         let hold = false;
-        let max_out = config.max_output_bytes;
 
         let write = async move {
             let Some(mut pipe) = stdin_pipe else {
@@ -448,6 +470,21 @@ impl GitCommand {
                 ));
             }
         };
+        if overflow && truncate {
+            // Enough read: git was killed at the cap; confirm it is gone.
+            return match reap(&mut child).await {
+                Ok(()) => Ok((
+                    GitOutput {
+                        stdout: stdout_bytes,
+                    },
+                    true,
+                )),
+                Err(failure) => Err(failure.attach(
+                    self.fail(ErrorCode::GitProcessFailed)
+                        .with_context("reason", "stopped_early"),
+                )),
+            };
+        }
         if overflow {
             let reaped = reap(&mut child).await;
             return Err(with_reap(
@@ -491,9 +528,12 @@ impl GitCommand {
             // git succeeded but did not receive all input: not a success.
             return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
         }
-        Ok(GitOutput {
-            stdout: stdout_bytes,
-        })
+        Ok((
+            GitOutput {
+                stdout: stdout_bytes,
+            },
+            false,
+        ))
     }
 }
 

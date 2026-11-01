@@ -199,6 +199,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::ProtectedRef { command } => hosting::protected_ref(cli, command, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),
+        Command::Browse { command } => crate::browse::browse(cli, command, env, io),
         Command::Api(a) => api(cli, a, env, io),
     }
 }

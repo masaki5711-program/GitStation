@@ -73,15 +73,15 @@ impl forge_core::ProjectAccessLoader for Counting {
     }
 }
 
-/// `raw` on projects (the product routes it with RepoRead in a later phase):
-/// echoes the proof's project.
+/// `raw` on projects, in place of the product's (`routes::content`, M2
+/// MR7, tested with real git there): echoes the proof's project.
 async fn content(_: AppState, request: Dispatched<ProjectCtx>) -> axum::Json<Value> {
     axum::Json(json!({ "project": request.proof().id().get() }))
 }
 
 fn app(resolver: &Arc<Counting>) -> axum::Router {
     let raw = ScopedRoute::Word(RouteWord::Raw);
-    let registry = forge_web::route_registry()
+    let registry = forge_web::app::registry_without_content_routes()
         .scoped(
             RouteScope::Project,
             Verb::Get,

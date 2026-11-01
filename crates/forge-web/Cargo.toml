@@ -61,6 +61,8 @@ tempfile.workspace = true
 # M2 MR2: the shell bytes compared by hash (src/web_ui_tests.rs).
 sha2.workspace = true
 uuid.workspace = true
+# M2 MR7: reading the tar.gz archive in routes/content_tests.rs.
+flate2.workspace = true
 
 [lints]
 workspace = true

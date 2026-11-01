@@ -57,6 +57,10 @@ pub(crate) enum Actor {
     DevTokenApi,
     /// Owner with a `read_api` token.
     OwnerTokenReadApi,
+    /// A user without a role, with a `read_api` token (M2 MR7).
+    NonMemberTokenReadApi,
+    /// Guest with a `read_api` token (M2 MR7).
+    GuestTokenReadApi,
     /// Administrator with an `api` token (no `admin` scope).
     AdminTokenApi,
     /// Administrator with an `api` + `admin` token.
@@ -249,7 +253,9 @@ impl Actor {
             Actor::AgentTokenApi | Actor::AgentOwnerTokenApi => {
                 token(false, &[Scope::Api]).as_agent(true)
             }
-            Actor::OwnerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::OwnerTokenReadApi | Actor::NonMemberTokenReadApi | Actor::GuestTokenReadApi => {
+                token(false, &[Scope::ReadApi])
+            }
             Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]).as_agent(true),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
@@ -268,7 +274,7 @@ impl Actor {
     /// The actor's effective role on the row's project or group.
     pub(crate) fn role(self) -> Option<Role> {
         match self {
-            Actor::Guest => Some(Role::Guest),
+            Actor::Guest | Actor::GuestTokenReadApi => Some(Role::Guest),
             Actor::Reporter => Some(Role::Reporter),
             Actor::Developer
             | Actor::DevTokenReadRepository
@@ -287,6 +293,7 @@ impl Actor {
             | Actor::Disabled
             | Actor::DisabledAdmin
             | Actor::NonMember
+            | Actor::NonMemberTokenReadApi
             | Actor::Admin
             | Actor::AdminTokenApi
             | Actor::AdminTokenAdmin

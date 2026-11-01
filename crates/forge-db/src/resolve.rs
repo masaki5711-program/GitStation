@@ -111,6 +111,7 @@ pub(crate) const PROJECT_ACCESS_SQL: &str = concat!(
        n.id AS namespace_id, n.full_path, \
        (NOT a.truncated AND a.reaches_top AND a.rebuilt = n.full_path) AS confirmed, \
        p.display_name, p.description, r.kind AS repository_kind, \
+       r.id AS repository_id, r.state AS repository_state, \
        to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at \
      FROM agg a LEFT JOIN forge.projects p ON p.id = $1 \
      LEFT JOIN forge.namespaces n ON p.id IS NOT NULL AND n.kind = 'project' AND n.owner_id = $1 \
@@ -167,6 +168,8 @@ pub(crate) struct ProjectAccessRow {
     display_name: Option<String>,
     description: Option<String>,
     repository_kind: Option<String>,
+    repository_id: Option<i64>,
+    repository_state: Option<String>,
     created_at: Option<String>,
 }
 
@@ -512,6 +515,11 @@ pub(crate) fn interpret_project(
             .with_context("reason", "project_row_incomplete")
             .with_context("project_id", id));
     };
+    let repository = RepositoryColumns {
+        id: row.repository_id,
+        state: row.repository_state,
+    }
+    .read(id)?;
     Ok(Some(ProjectRecord {
         id: project,
         access,
@@ -521,6 +529,7 @@ pub(crate) fn interpret_project(
         description,
         kind,
         created_at,
+        repository,
     }))
 }
 

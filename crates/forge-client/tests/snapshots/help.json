@@ -1918,6 +1918,366 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "branch | tag (default: both).",
+          "kind": "option",
+          "name": "--type",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse refs --project 7 --json",
+        "gstn browse refs --project 7 --type tag"
+      ],
+      "name": "browse refs",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refs": {
+            "items": {
+              "properties": {
+                "commit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "full_name": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "branch",
+                    "tag"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "full_name",
+                "type",
+                "commit",
+                "target"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "default_branch",
+          "refs",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/refs"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a project's branches and tags (with the commit each peels to) and the default branch."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The part of a page URL after /-/tree/ or /-/blob/, e.g. feature/x/src/lib.rs.",
+          "kind": "positional",
+          "name": "spec",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse resolve --project 7 feature/x/src/lib.rs --json"
+      ],
+      "name": "browse resolve",
+      "output": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "full_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "branch",
+                  "tag",
+                  "commit"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref",
+          "path"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/resolve"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Split <ref>/<path> into a revision and a path (full commit id first, then the longest branch, then the longest tag)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (refs/heads/... / refs/tags/... or a short name).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The directory (default: the root).",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse tree --project 7 --ref main --path src --json"
+      ],
+      "name": "browse tree",
+      "output": {
+        "properties": {
+          "entries": {
+            "items": {
+              "properties": {
+                "mode": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "oid": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "tree",
+                    "blob",
+                    "symlink",
+                    "submodule"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type",
+                "mode",
+                "oid",
+                "size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "entries",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/tree"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List one directory of a revision (capped by the server; truncated past the cap)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file's path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse file --project 7 --ref main --path README.md",
+        "gstn browse file --project 7 --ref v1.0 --path src/lib.rs --json"
+      ],
+      "name": "browse file",
+      "output": {
+        "properties": {
+          "binary": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "blob",
+              "symlink"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "name",
+          "type",
+          "mode",
+          "oid",
+          "size",
+          "binary",
+          "content",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/blob"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one file of a revision: its text (at most 1 MiB; truncated past it), or that it is binary."
+    },
+    {
+      "args": [
+        {
           "description": "The user id.",
           "kind": "positional",
           "name": "id",

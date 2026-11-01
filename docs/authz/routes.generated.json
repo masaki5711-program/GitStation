@@ -232,6 +232,38 @@
     "word": "fixed"
   },
   {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/blob",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/tree",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRestore",
     "method": "POST",
     "path": "/api/v1/projects/{id}/restore",
@@ -376,6 +408,22 @@
     "word": "info_refs_upload_pack"
   },
   {
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/{namespace}/-/archive/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "archive"
+  },
+  {
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}/-/archive/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "archive"
+  },
+  {
     "action": "WebShell",
     "method": "GET",
     "path": "/{namespace}/-/blame/{*rest}",
@@ -502,6 +550,22 @@
     "public": true,
     "scope": "project",
     "word": "members"
+  },
+  {
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/{namespace}/-/raw/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "raw"
+  },
+  {
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}/-/raw/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "raw"
   },
   {
     "action": "WebShell",

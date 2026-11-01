@@ -170,9 +170,10 @@ fn script() -> Script {
 
 // ── routers ──────────────────────────────────────────────────────────────
 
-/// The project content route these tests add (the product routes none
-/// yet): echoes what the handler may read — the proof's id, the tail and
-/// the canonical path.
+/// The project content route these tests mount instead of the product's
+/// (`routes::content`, tested with real git in `routes/content_tests.rs`):
+/// echoes what the handler may read — the proof's id, the tail and the
+/// canonical path.
 async fn content(_: AppState, request: Dispatched<ProjectCtx>) -> axum::Json<Value> {
     axum::Json(json!({
         "action": request.proof().action().name(),
@@ -191,8 +192,8 @@ fn state_with(script: &Arc<Script>) -> AppState {
         .with_lookup_timeout(Duration::from_millis(100))
 }
 
-/// The product registry plus `raw` (GET / HEAD / POST, `RepoRead`) on
-/// projects.
+/// The product registry without its content routes, plus an echoing
+/// `raw` (GET / HEAD / POST, `RepoRead`) on projects.
 fn with_content(registry: Registry<AppState>) -> Registry<AppState> {
     let raw = ScopedRoute::Word(RouteWord::Raw);
     registry
@@ -234,7 +235,7 @@ fn product(script: &Arc<Script>) -> axum::Router {
 }
 
 fn content_app(script: &Arc<Script>) -> axum::Router {
-    router(with_content(crate::app::registry()), script)
+    router(with_content(crate::app::registry_without_content()), script)
 }
 
 fn reporter() -> Principal {
@@ -363,12 +364,15 @@ async fn url_vectors_through_the_dispatcher() {
             let answer = send(product(&script), request("GET", &uri.to_string(), None)).await;
             let name = &v["name"];
             let git = accepted && v["expect"]["kind"] == "git";
-            // `raw` / `archive` are not routed yet; the vector's asset name
-            // is no build's file: both answer FG-WEB-0001 (never the shell).
-            let unbuilt = accepted
-                && (["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""))
-                    || v["expect"]["route"] == "assets");
-            if git {
+            // The vector's asset name is no build's file: FG-WEB-0001
+            // (never the shell).
+            let unbuilt = accepted && v["expect"]["route"] == "assets";
+            // `raw` / `archive` are routed (M2 MR7): credentials first.
+            let content = accepted
+                && ["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""));
+            if content {
+                assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{name}");
+            } else if git {
                 // A routed git URL needs credentials (a GET on a POST
                 // endpoint has no route).
                 let route = v["expect"]["route"].as_str().unwrap_or("");
@@ -437,8 +441,6 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
         "/api",
         "/acme/x/-/pulls",
         "/acme/x/-/Blob/main",
-        "/acme/x/-/raw/main/f",
-        "/acme/x/-/archive/main.zip",
         "/-/unknown",
         "/-",
         "/acme/x.git/objects/info/packs",
@@ -462,9 +464,18 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
     for (method, path) in [
         ("GET", "/acme/x.git/info/refs?service=git-receive-pack"),
         ("POST", "/acme/x.git/git-receive-pack"),
+        // raw / archive are routed since M2 MR7 (GET / HEAD).
+        ("GET", "/acme/x/-/raw/main/f"),
+        ("HEAD", "/acme/x/-/raw/main/f"),
+        ("GET", "/acme/x/-/archive/main.zip"),
+        ("HEAD", "/acme/x/-/archive/main.zip"),
     ] {
         let answer = send(product(&script), request(method, path, None)).await;
         assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{method} {path}");
+    }
+    for path in ["/acme/x/-/raw/main/f", "/acme/x/-/archive/main.zip"] {
+        let answer = send(product(&script), request("POST", path, None)).await;
+        assert_eq!(answer.code(), ErrorCode::RouteNotFound.id(), "POST {path}");
     }
     // A page word with a verb it has no route for: not the shell either.
     let post = send(
@@ -1090,8 +1101,9 @@ async fn a_redirect_is_logged_as_namespace_redirected() {
 /// through forge-git's Smart HTTP API (`Git::upload_pack`,
 /// `Git::check_wants`, the stream types; M1 phase 9 MR4 adds the push
 /// API: `receive_request`, `receive_report`, `Git::fast_forwards`,
-/// `Git::new_commits`) and only in `routes/git.rs`, `routes/git_push.rs` /
-/// `git_stream.rs` — never the generic command builder, whose
+/// `Git::new_commits`; M2 MR7 the browse API, `forge_git::browse`) and
+/// only in `routes/git.rs`, `routes/git_push.rs`, `git_stream.rs`,
+/// `routes/browse.rs` / `routes/content.rs` — never the generic command builder, whose
 /// options would be the place a user value could become an option. The git
 /// routes carry no `TailSegments` (the git shape has no tail; their handlers
 /// never read `tail()`), and a tail segment may still start with `-`
@@ -1120,7 +1132,13 @@ fn forge_web_runs_git_only_through_smart_http_api() {
         ["arg", "_owned"].concat(),
         ["config", "_override"].concat(),
     ];
-    let git_users = ["routes/git.rs", "routes/git_push.rs", "git_stream.rs"];
+    let git_users = [
+        "routes/browse.rs",
+        "routes/content.rs",
+        "routes/git.rs",
+        "routes/git_push.rs",
+        "git_stream.rs",
+    ];
     let mut used_in = Vec::new();
     for file in &files {
         let rel = file

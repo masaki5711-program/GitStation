@@ -235,8 +235,8 @@ pub const PLANNED: &[Action] = &[
 ];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
-/// 系統"). `raw` and `archive` are `RepoRead` content routes (not routed
-/// yet: the dispatcher answers `FG-WEB-0001` for them).
+/// 系統"). `raw` and `archive` are `RepoRead` content routes
+/// (`routes::content`, M2 MR7).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -253,9 +253,9 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
 /// The words whose page is the SPA shell on a group.
 pub const GROUP_SHELL_WORDS: &[RouteWord] = &[RouteWord::Settings, RouteWord::Members];
 
-/// Every route of the product. The `gen-authz` binary and the tests read the
-/// same list.
-pub fn registry() -> Registry<AppState> {
+/// Every route of the product but the content routes raw / archive (the
+/// dispatcher's tests mount their own echoing content route there).
+pub(crate) fn registry_without_content() -> Registry<AppState> {
     let fixed = Registry::new()
         .route(
             Verb::Get,
@@ -330,9 +330,99 @@ pub fn registry() -> Registry<AppState> {
         )
         .responds::<routes::session::SessionBody>(Verb::Get, routes::session::PATH)
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    git_routes(shell_routes(member_routes(move_routes(hosting_routes(
-        fixed,
+    browse_routes(git_routes(shell_routes(member_routes(move_routes(
+        hosting_routes(fixed),
     )))))
+}
+
+/// Every route of the product. The `gen-authz` binary and the tests read the
+/// same list.
+pub fn registry() -> Registry<AppState> {
+    content_routes(registry_without_content())
+}
+
+/// The product's routes without raw / archive, for integration tests that
+/// mount an echoing content route there (`tests/namespace_tombstone_routes.rs`).
+/// Not compiled into the server.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn registry_without_content_routes() -> Registry<AppState> {
+    registry_without_content()
+}
+
+/// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015
+/// Amendment M2): git only through forge-git's browse API, after
+/// `authorize()`.
+fn browse_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::browse as b;
+    registry
+        .route_with(
+            Verb::Get,
+            b::REFS,
+            Action::RepoBrowse,
+            "List a repository's branches and tags (Reporter; internal: every signed-in user)",
+            b::REFS_OF,
+            b::refs,
+        )
+        .responds::<b::RefsBody>(Verb::Get, b::REFS)
+        .queries(Verb::Get, b::REFS, b::REFS_QUERY)
+        .route_with(
+            Verb::Get,
+            b::RESOLVE,
+            Action::RepoBrowse,
+            "Split <ref>/<path> into a revision and a path (commit id, longest branch, longest tag)",
+            b::RESOLVE_OF,
+            b::resolve,
+        )
+        .responds::<b::ResolveBody>(Verb::Get, b::RESOLVE)
+        .queries(Verb::Get, b::RESOLVE, b::RESOLVE_QUERY)
+        .route_with(
+            Verb::Get,
+            b::TREE,
+            Action::RepoBrowse,
+            "One tree level of a revision (capped; truncated past the cap)",
+            b::TREE_OF,
+            b::tree,
+        )
+        .responds::<b::TreeBody>(Verb::Get, b::TREE)
+        .queries(Verb::Get, b::TREE, b::TREE_QUERY)
+        .route_with(
+            Verb::Get,
+            b::BLOB,
+            Action::RepoBrowse,
+            "One file's head as text (at most 1 MiB), or binary without content",
+            b::BLOB_OF,
+            b::blob,
+        )
+        .responds::<b::BlobBody>(Verb::Get, b::BLOB)
+        .queries(Verb::Get, b::BLOB, b::TREE_QUERY)
+}
+
+/// The content routes raw / archive (`RepoRead`, `read_repository`; M2
+/// MR7, ADR-0015 "応答の安全"), `GET` and `HEAD`.
+fn content_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
+    for verb in [Verb::Get, Verb::Head] {
+        registry = registry
+            .scoped(
+                RouteScope::Project,
+                verb,
+                ScopedRoute::Word(RouteWord::Raw),
+                None,
+                Action::RepoRead,
+                "A file as it is (typed by content; SVG / HTML / PDF only as downloads)",
+                routes::content::raw,
+            )
+            .scoped(
+                RouteScope::Project,
+                verb,
+                ScopedRoute::Word(RouteWord::Archive),
+                None,
+                Action::RepoRead,
+                "An archive of a revision (zip or tar.gz, streamed)",
+                routes::content::archive,
+            );
+    }
+    registry
 }
 
 /// Members and protected refs (M1 phase 8b MR8): the lists decided on the

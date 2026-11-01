@@ -318,3 +318,22 @@ async fn a_failed_reconciliation_logs_every_command_with_fg_git_0012() {
 fn uuid_like() -> uuid::Uuid {
     uuid::Uuid::from_u128(0x5eed_0000_0000_0000_0000_0000_0000_0009)
 }
+
+/// M2 MR7: however the push task ends, the repository's cached browse ref
+/// list is dropped (the next browse request reads the refs again).
+#[tokio::test]
+async fn a_finished_push_task_drops_the_browse_ref_cache() {
+    use crate::routes::browse::tests::{plumb, repo, REPO};
+    let r = repo().await;
+    let browse = forge_git::browse::Browser::new(
+        r.git.clone(),     // clone: a shared handle
+        r.storage.clone(), // clone: a path
+        forge_git::browse::BrowseLimits::default(),
+    );
+    let id = RepoId::new(REPO);
+    assert_eq!(browse.refs(id).await.expect("refs").refs.len(), 3);
+    plumb(&r.path, &["update-ref", "-d", "refs/tags/v1"], None);
+    assert_eq!(browse.refs(id).await.expect("cached").refs.len(), 3);
+    drop(RefsChanged(browse.clone(), id)); // clone: the test keeps its handle
+    assert_eq!(browse.refs(id).await.expect("fresh").refs.len(), 2);
+}
