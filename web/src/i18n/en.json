@@ -21,6 +21,7 @@
     "requestId": "Request ID",
     "copy": "Copy the request ID",
     "copied": "Copied",
+    "copyFailed": "Could not copy. Select the ID and copy it yourself",
     "network": "Could not reach the server. Please try again in a moment.",
     "unexpected": "The server sent an unexpected answer. Please try again in a moment.",
     "retry": "Try again"

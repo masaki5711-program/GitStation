@@ -21,6 +21,7 @@
     "requestId": "ID permintaan",
     "copy": "Salin ID permintaan",
     "copied": "Tersalin",
+    "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin secara manual",
     "network": "Tidak dapat terhubung ke server. Silakan coba lagi nanti.",
     "unexpected": "Server memberikan jawaban yang tidak terduga. Silakan coba lagi nanti.",
     "retry": "Coba lagi"

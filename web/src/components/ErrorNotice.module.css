@@ -54,3 +54,13 @@
   color: var(--gs-color-danger-text);
   cursor: pointer;
 }
+
+/* Announced to screen readers, not shown. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

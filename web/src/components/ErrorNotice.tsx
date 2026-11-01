@@ -27,7 +27,7 @@ function requestIdOf(failure: Failure): string | null {
 
 export function ErrorNotice({ failure, onRetry }: ErrorNoticeProps) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const message =
     failure.kind === 'api'
       ? failure.userMessage
@@ -36,17 +36,25 @@ export function ErrorNotice({ failure, onRetry }: ErrorNoticeProps) {
         : t('error.unexpected');
   const requestId = requestIdOf(failure);
 
-  const copy = (id: string) => {
-    navigator.clipboard.writeText(id).then(
+  // The clipboard can be missing (plain http is not a secure context) or
+  // refuse (permissions): say so; the id stays on screen, selectable.
+  const copyId = (id: string) => {
+    const clipboard = (navigator as Partial<Navigator>).clipboard;
+    if (clipboard === undefined) {
+      setCopy('failed');
+      return;
+    }
+    clipboard.writeText(id).then(
       () => {
-        setCopied(true);
+        setCopy('copied');
       },
       () => {
-        // Clipboard refused (permissions): the id stays selectable on screen.
-        setCopied(false);
+        setCopy('failed');
       },
     );
   };
+  const copyLabel =
+    copy === 'copied' ? t('error.copied') : copy === 'failed' ? t('error.copyFailed') : t('error.copy');
 
   return (
     <section className={styles.notice} role="alert" aria-labelledby="error-notice-title">
@@ -64,11 +72,14 @@ export function ErrorNotice({ failure, onRetry }: ErrorNoticeProps) {
             type="button"
             className={styles.button}
             onClick={() => {
-              copy(requestId);
+              copyId(requestId);
             }}
           >
-            {copied ? t('error.copied') : t('error.copy')}
+            {copyLabel}
           </button>
+          <span className={styles.srOnly} aria-live="polite">
+            {copy === 'idle' ? null : copyLabel}
+          </span>
         </p>
       )}
       {onRetry && (

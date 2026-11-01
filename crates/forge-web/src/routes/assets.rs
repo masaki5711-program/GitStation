@@ -78,7 +78,7 @@ struct Accepts {
 
 /// RFC 9110 §12.5.3, as far as two codings need: a coding is acceptable
 /// when listed (or `*` is) with a `q` above 0; an explicit entry wins over
-/// `*`. Unparsable `q` values count as 0 (never guess a coding).
+/// `*`. A `q` outside the qvalue grammar counts as 0 (never guess a coding).
 fn accepts(headers: &HeaderMap) -> Accepts {
     let mut br: Option<bool> = None;
     let mut gzip: Option<bool> = None;
@@ -94,7 +94,7 @@ fn accepts(headers: &HeaderMap) -> Accepts {
             for param in parts {
                 if let Some((k, v)) = param.split_once('=') {
                     if k.trim().eq_ignore_ascii_case("q") {
-                        ok = v.trim().parse::<f32>().is_ok_and(|q| q > 0.0);
+                        ok = qvalue_above_zero(v.trim());
                     }
                 }
             }
@@ -109,6 +109,24 @@ fn accepts(headers: &HeaderMap) -> Accepts {
     Accepts {
         br: br.or(any).unwrap_or(false),
         gzip: gzip.or(any).unwrap_or(false),
+    }
+}
+
+/// RFC 9110 §12.4.2 `qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )`,
+/// and above zero. Anything else (`inf`, `NaN`, `1.5`, `0.0001`, `-1`, `.5`)
+/// is not a qvalue: unacceptable.
+fn qvalue_above_zero(q: &str) -> bool {
+    let (int, frac) = match q.split_once('.') {
+        Some((int, frac)) => (int, frac),
+        None => (q, ""),
+    };
+    if frac.len() > 3 || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    match int {
+        "1" => frac.bytes().all(|b| b == b'0'),
+        "0" => frac.bytes().any(|b| b != b'0'),
+        _ => false,
     }
 }
 
@@ -178,5 +196,19 @@ mod tests {
                 gzip: true
             }
         );
+    }
+
+    #[test]
+    fn only_the_qvalue_grammar_is_a_q() {
+        for q in ["1", "1.", "1.0", "1.000", "0.5", "0.001", "0.999", "0.1"] {
+            assert!(qvalue_above_zero(q), "{q}");
+        }
+        for q in [
+            "0", "0.", "0.000", "1.5", "1.001", "0.0001", "2", "-1", ".5", "inf", "NaN", "+1",
+            "1e0", "", " 1", "0.5x",
+        ] {
+            assert!(!qvalue_above_zero(q), "{q:?}");
+        }
+        assert_eq!(of(&["br;q=inf, gzip;q=NaN"]), Accepts::default());
     }
 }

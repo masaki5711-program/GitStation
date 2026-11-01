@@ -239,7 +239,10 @@ MR2（`feat/web-spa-foundation`）で実物を作って分かったこと。上�
   Radix の部品を足す MR で作る。
 - **Playwright の検査**は、`web/dist` を forge-web と同じ形（どのパスも同じ殻、`/-/assets/{file}`、殻の CSP は
   `security_headers.rs` の定数を読む）で返す Node の代役のサーバーで行う（`forge serve` は DB が要るため）。
-  `npm run smoke -- --url <forge serve>` で本物にも当てられる。
+  `npm run smoke -- --url <forge serve>` で本物にも当てられる。playwright は lockfile の devDependency（版を固定）で、
+  ブラウザは CI の別のジョブ（`web-smoke`、dist の成果物を受け取る）でだけ取る。dist を作るジョブは `npm ci --ignore-scripts` だけ。
+- **ビルドの検査**: `index.html` にインラインの `<script>`・`<style>`・`style=`・`on*=`・`javascript:` があればビルドを失敗させる
+  （`web/scripts/inline-check.mjs`）。
 - **npm の依存**: vitest は 4 系（3 系は `tinypool` の critical の勧告がある）。npm 10.9 は vitest 4 の optional な
   peer の解決で落ちる（arborist の不具合）ので、lockfile は npm 11.6 で作った。`npm ci --ignore-scripts` は npm 10 でも通る。
   ライセンスの許可リスト（§8）に、開発の道具だけが使う `MIT-0`・`BlueOak-1.0.0`・`Python-2.0`・`CC-BY-4.0`（caniuse-lite の

@@ -9,17 +9,39 @@ import type { paths } from './schema.gen';
 export type Failure =
   | { kind: 'api'; status: number; userMessage: string; requestId: string }
   | { kind: 'unauthenticated'; status: 401; requestId: string | null }
-  | { kind: 'unexpected'; status: number; requestId: string | null }
+  /** An answer outside the error contract, or a failure in the client
+   * itself (`status` null: no answer to speak of). */
+  | { kind: 'unexpected'; status: number | null; requestId: string | null }
   | { kind: 'network' };
 
 export class ApiFailure extends Error {
   readonly failure: Failure;
 
-  constructor(failure: Failure) {
-    super(failure.kind);
+  /** `cause`: the original error (kept for the console, never shown). */
+  constructor(failure: Failure, cause?: unknown) {
+    super(failure.kind, cause === undefined ? undefined : { cause });
     this.name = 'ApiFailure';
     this.failure = failure;
   }
+}
+
+/** A failure of the client code itself (not the network, not the server):
+ * logged once here, with the original error, and shown as `unexpected`. */
+export function unexpectedFailure(cause: unknown, where: string): ApiFailure {
+  console.error(`gitstation: unexpected failure in ${where}`, cause);
+  return new ApiFailure({ kind: 'unexpected', status: null, requestId: null }, cause);
+}
+
+/** Any error a query can end with, as what the UI shows. Non-`ApiFailure`
+ * errors are logged once (by `unexpectedFailure`) by the caller. */
+export function failureOf(error: unknown): Failure {
+  return error instanceof ApiFailure
+    ? error.failure
+    : { kind: 'unexpected', status: null, requestId: null };
+}
+
+function isAbort(e: unknown): boolean {
+  return e instanceof DOMException && e.name === 'AbortError';
 }
 
 export type ApiClient = Client<paths>;
@@ -77,7 +99,12 @@ export function toFailure(response: Response, body: unknown): Failure {
 }
 
 /** Run one openapi-fetch call; a failed answer or a network error throws an
- * [`ApiFailure`] (TanStack Query shows it through ErrorNotice). */
+ * [`ApiFailure`] (TanStack Query shows it through ErrorNotice).
+ *
+ * - an abort (the query was cancelled) is rethrown as it is: not a failure;
+ * - `TypeError` is what `fetch` throws when no answer arrived: `network`;
+ * - anything else (a body that is not JSON, a bug) is `unexpected`, logged
+ *   once with the original error. */
 export async function call<T>(
   run: () => Promise<{ data?: T; error?: unknown; response: Response }>,
 ): Promise<T> {
@@ -85,8 +112,15 @@ export async function call<T>(
   try {
     result = await run();
   } catch (e) {
-    if (e instanceof ApiFailure) throw e;
-    throw new ApiFailure({ kind: 'network' });
+    if (e instanceof ApiFailure || isAbort(e)) throw e;
+    if (e instanceof TypeError) throw new ApiFailure({ kind: 'network' }, e);
+    throw unexpectedFailure(e, 'an API call');
+  }
+  if (result.response.ok && result.data === undefined) {
+    throw unexpectedFailure(
+      new Error(`a ${result.response.status} answer without a body`),
+      'an API call',
+    );
   }
   if (!result.response.ok || result.data === undefined) {
     throw new ApiFailure(toFailure(result.response, result.error));

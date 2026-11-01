@@ -9,34 +9,21 @@
 // The stand-in serves web/dist the way forge-web does (the same bytes for
 // every page path, /-/assets/{file}) with the shell CSP read from
 // crates/forge-web/src/security_headers.rs, so the policy has one source.
-// Playwright is not a dependency of web/: it is resolved from the global
-// install (NODE_PATH / `npm root -g`) and skipped with a message when absent.
-import { execSync } from 'node:child_process';
+// Playwright is a pinned devDependency (in the lockfile); the browser comes
+// from `npx playwright install chromium` (never an install script).
+//
+// Before the browser runs, dist/index.html is checked for inline <script>
+// and <style> (the shell CSP allows neither).
 import { readFileSync, existsSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
+
+import { chromium } from 'playwright';
+
+import { inlineProblems } from './inline-check.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 const dist = join(root, 'dist');
-
-function loadPlaywright() {
-  const require = createRequire(import.meta.url);
-  const candidates = [process.env.PLAYWRIGHT_MODULE, 'playwright'];
-  try {
-    candidates.push(join(execSync('npm root -g').toString().trim(), 'playwright'));
-  } catch {
-    // no global npm root: only the local candidates
-  }
-  for (const c of candidates.filter(Boolean)) {
-    try {
-      return require(c);
-    } catch {
-      // try the next candidate
-    }
-  }
-  return null;
-}
 
 function shellCsp() {
   const src = readFileSync(join(root, '../crates/forge-web/src/security_headers.rs'), 'utf8');
@@ -95,11 +82,6 @@ function standIn(csp) {
 }
 
 async function main() {
-  const playwright = loadPlaywright();
-  if (playwright === null) {
-    console.log('smoke: playwright is not installed; skipped');
-    return;
-  }
   const urlArg = process.argv.indexOf('--url');
   let base = urlArg > 0 ? process.argv[urlArg + 1] : undefined;
   let server = null;
@@ -108,12 +90,17 @@ async function main() {
       console.error('smoke: web/dist is missing (npm run build first)');
       process.exit(1);
     }
+    const inline = inlineProblems(readFileSync(join(dist, 'index.html'), 'utf8'));
+    if (inline.length > 0) {
+      for (const p of inline) console.error(`smoke: dist/index.html: ${p}`);
+      process.exit(1);
+    }
     server = standIn(shellCsp());
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   }
 
-  const browser = await playwright.chromium.launch();
+  const browser = await chromium.launch();
   const problems = [];
   try {
     const page = await browser.newPage();

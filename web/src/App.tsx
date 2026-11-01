@@ -15,7 +15,9 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
   if (failureCount >= 2) return false;
   if (!(error instanceof ApiFailure)) return false;
   const f = error.failure;
-  return f.kind === 'network' || (f.kind !== 'unauthenticated' && f.status >= 500);
+  if (f.kind === 'network') return true;
+  // A 5xx may pass; a client-side unexpected (status null) will not.
+  return f.kind !== 'unauthenticated' && f.status !== null && f.status >= 500;
 }
 
 export function createQueryClient(): QueryClient {

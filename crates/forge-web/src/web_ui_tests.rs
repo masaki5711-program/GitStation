@@ -214,10 +214,10 @@ async fn an_unknown_asset_is_fg_web_0001_with_the_strict_policy_never_the_shell(
         }
         assert_ne!(a.bytes, crate::ui::shell_html(), "{uri}");
         assert_eq!(a.header("content-security-policy"), Some(NONE_CSP), "{uri}");
-        assert_ne!(
+        assert_eq!(
             a.header("cache-control"),
-            Some(crate::routes::assets::CACHE_IMMUTABLE),
-            "{uri}: an error is never cached for a year"
+            Some("no-store"),
+            "{uri}: an error is never cached (least of all for a year)"
         );
         assert_common(&a, uri);
     }
@@ -378,6 +378,7 @@ async fn health_and_other_answers_get_the_strict_policy() {
     for uri in ["/healthz", "/-/unknown", "/acme/x/-/nothing"] {
         let a = get(uri).await;
         assert_eq!(a.header("content-security-policy"), Some(NONE_CSP), "{uri}");
+        assert_eq!(a.header("cache-control"), Some("no-store"), "{uri}");
         assert_common(&a, uri);
     }
 }

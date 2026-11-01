@@ -8,6 +8,8 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
+import { inlineProblems } from './inline-check.mjs';
+
 const ALLOWED = new Set(['js', 'css', 'woff2', 'svg', 'png', 'ico', 'json', 'txt']);
 const COMPRESSIBLE = new Set(['js', 'css', 'svg', 'json', 'txt']);
 
@@ -56,6 +58,10 @@ for (const name of readdirSync(dir)) {
 
 if (!readdirSync(dir).includes('index.html')) {
   problems.push('index.html: missing');
+} else {
+  for (const p of inlineProblems(readFileSync(join(dir, 'index.html'), 'utf8'))) {
+    problems.push(`index.html: ${p} (the shell CSP allows none)`);
+  }
 }
 if (problems.length > 0) {
   for (const p of problems) console.error(`dist: ${p}`);

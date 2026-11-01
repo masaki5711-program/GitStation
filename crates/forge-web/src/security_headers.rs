@@ -11,7 +11,7 @@
 //! | API `/api/…` | `default-src 'none'; frame-ancestors 'none'` | `Cache-Control: private, no-store`, `Vary: Authorization, Cookie` unless the route set them |
 //! | raw / archive | `sandbox; default-src 'none'` | `Cross-Origin-Resource-Policy: same-origin` |
 //! | login `/-/auth/…` | as the API | `Cache-Control: no-store` |
-//! | other (health, every error not from a marked handler) | as the API | — |
+//! | other (health, redirects, every error not from a marked handler) | as the API | `Cache-Control: no-store` unless the route set one |
 //! | Smart HTTP | none (git clients read no CSP; unchanged) | none |
 //!
 //! Every class but Smart HTTP also gets `X-Content-Type-Options: nosniff`,
@@ -195,7 +195,14 @@ fn apply(config: &SecurityHeaders, class: ResponseClass, headers: &mut HeaderMap
         ResponseClass::Auth => {
             headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
         }
-        ResponseClass::Shell | ResponseClass::Other | ResponseClass::Git => {}
+        ResponseClass::Other => {
+            // Errors, health answers, redirects: never kept by a cache
+            // (a route's own Cache-Control stays).
+            if !headers.contains_key(CACHE_CONTROL) {
+                headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            }
+        }
+        ResponseClass::Shell | ResponseClass::Git => {}
     }
 }
 

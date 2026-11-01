@@ -41,6 +41,7 @@
     "globals": "16.5.0",
     "jsdom": "26.1.0",
     "openapi-typescript": "7.13.0",
+    "playwright": "1.63.0",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.2",
     "vite": "7.3.7",

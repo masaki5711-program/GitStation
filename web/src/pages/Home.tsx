@@ -1,9 +1,10 @@
 // The placeholder home (M2 MR2): the first page of `GET /api/v1/projects`,
 // or "not signed in" on a 401 (browser login arrives with MR4).
 import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ApiFailure, call } from '../api/client';
+import { ApiFailure, call, failureOf } from '../api/client';
 import { useApi } from '../api/context';
 import { ErrorNotice } from '../components/ErrorNotice';
 import styles from './Home.module.css';
@@ -15,6 +16,14 @@ export function Home() {
     queryKey: ['projects', 'first-page'],
     queryFn: ({ signal }) => call(() => api.GET('/api/v1/projects', { signal })),
   });
+  // `call()` only throws ApiFailure (or an abort); anything else is a bug in
+  // this page's code: logged once per error, shown as unexpected.
+  const error = projects.error;
+  useEffect(() => {
+    if (error !== null && !(error instanceof ApiFailure)) {
+      console.error('gitstation: unexpected failure in the home page query', error);
+    }
+  }, [error]);
 
   return (
     <section aria-labelledby="home-title">
@@ -31,9 +40,7 @@ export function Home() {
           </div>
         ) : (
           <ErrorNotice
-            failure={
-              projects.error instanceof ApiFailure ? projects.error.failure : { kind: 'network' }
-            }
+            failure={failureOf(projects.error)}
             onRetry={() => {
               void projects.refetch();
             }}
