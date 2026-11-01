@@ -113,6 +113,10 @@ async fn run(cmd: GitCommand, input: Vec<u8>) -> (Vec<u8>, Result<crate::StreamS
     (out, stream.finish().await)
 }
 
+fn nz(n: u64) -> std::num::NonZeroU64 {
+    std::num::NonZeroU64::new(n).expect("non-zero")
+}
+
 fn strings(argv: &[std::ffi::OsString]) -> Vec<String> {
     argv.iter()
         .map(|a| a.to_string_lossy().into_owned())
@@ -165,7 +169,7 @@ async fn receive_pack_argv_is_the_fixed_set() {
     let hooks = format!("core.hooksPath={}", f.hooks());
     let cmd = f
         .git
-        .receive_pack(&f.root, id, Phase::Rpc, None, 2 * 1024 * 1024 * 1024)
+        .receive_pack(&f.root, id, Phase::Rpc, None, nz(2 * 1024 * 1024 * 1024))
         .expect("cmd");
     assert_eq!(
         strings(&cmd.argv()),
@@ -327,7 +331,7 @@ async fn receive_pack_advertisement_keeps_the_prefix_for_a_v2_client() {
     let header = Some("version=2");
     let cmd = f
         .git
-        .receive_pack(&f.root, id, Phase::Advertise, header, 1 << 20)
+        .receive_pack(&f.root, id, Phase::Advertise, header, nz(1 << 20))
         .expect("cmd");
     let (out, res) = run(cmd, Vec::new()).await;
     res.expect("exit 0");
@@ -366,7 +370,7 @@ async fn empty_hooks_dir_is_created_and_must_stay_empty() {
     std::fs::write(dir.join("pre-receive"), "#!/bin/sh\nexit 0\n").expect("plant a hook");
     let err = f
         .git
-        .receive_pack(&f.root, id, Phase::Rpc, None, 1 << 20)
+        .receive_pack(&f.root, id, Phase::Rpc, None, nz(1 << 20))
         .expect_err("a hook in the empty dir");
     assert_eq!(err.code(), ErrorCode::GitUnavailable);
     let text = err.to_string();
@@ -381,6 +385,36 @@ async fn empty_hooks_dir_is_created_and_must_stay_empty() {
         .upload_pack(&f.root, id, Phase::Rpc, None)
         .expect_err("a file");
     assert!(err.to_string().contains("detail=not_a_directory"), "{err}");
+}
+
+/// The hooks dir is created private and refused when group / others could
+/// plant a hook in it.
+#[cfg(unix)]
+#[tokio::test]
+async fn empty_hooks_dir_must_not_be_writable_by_others() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let f = fixture().await;
+    let (id, _) = f.repo(12).await;
+    let dir = f.git.config().empty_hooks_dir();
+    f.git
+        .upload_pack(&f.root, id, Phase::Rpc, None)
+        .expect("created");
+    let mode = std::fs::metadata(&dir).expect("meta").permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "created private: {mode:o}");
+    for bad in [0o777, 0o720, 0o702] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(bad)).expect("chmod");
+        let err = f
+            .git
+            .upload_pack(&f.root, id, Phase::Rpc, None)
+            .expect_err("writable by others");
+        assert_eq!(err.code(), ErrorCode::GitUnavailable);
+        let text = err.to_string();
+        assert!(text.contains("detail=insecure_permissions"), "{text}");
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    f.git
+        .upload_pack(&f.root, id, Phase::Rpc, None)
+        .expect("0755 is fine: only forge writes");
 }
 
 #[tokio::test]
@@ -540,7 +574,7 @@ async fn receive_pack_applies_a_push_and_enforces_max_input_size() {
     let (small_id, small_path) = f.repo(10).await;
     let cmd = f
         .git
-        .receive_pack(&f.root, small_id, Phase::Rpc, None, 1024)
+        .receive_pack(&f.root, small_id, Phase::Rpc, None, nz(1024))
         .expect("cmd");
     let (out, _) = run(cmd, body.clone()).await;
     let text = report(&out);
@@ -560,7 +594,7 @@ async fn receive_pack_applies_a_push_and_enforces_max_input_size() {
     let (id, path) = f.repo(11).await;
     let cmd = f
         .git
-        .receive_pack(&f.root, id, Phase::Rpc, None, 10 << 20)
+        .receive_pack(&f.root, id, Phase::Rpc, None, nz(10 << 20))
         .expect("cmd");
     let (out, res) = run(cmd, body).await;
     res.expect("exit 0");

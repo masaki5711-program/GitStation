@@ -99,7 +99,8 @@ URL は DB で `RepoId` に解決してからパスを作り、URL の文字列�
   phase 9 ではフックを使わない（保護された ref の検査は forge が git を起動する前に行う。ADR-0008 の追記、pre-receive は
   phase 10 = M3）。リポジトリの中の `hooks/` や大域の設定のフックが、誰も確かめていない方針として動くことを防ぐ。
 - このディレクトリは forge のもので、起動のたびに「本物のディレクトリで（リンクではない）、空である」ことを確かめる。
-  無ければ作る。中に何かあれば、どこの何かが分からないフックを動かさないよう git を起動せず `FG-GIT-0001 reason=hooks_dir`
+  無ければ権限 0700 で作る。グループやほかの利用者が書ける（`mode & 022`）なら、フックを置かれうるので
+  `FG-GIT-0001 reason=hooks_dir detail=insecure_permissions` にする。中に何かあれば、どこの何かが分からないフックを動かさないよう git を起動せず `FG-GIT-0001 reason=hooks_dir`
   （alert、Runbook `smart-http`）にする。
 - 保存先のリポジトリの `core.hooksPath`（`init_bare` の引数）は今までどおりで、phase 10 で forge のフックのディレクトリに
   切り替える。コマンド行の `-c` はリポジトリの設定より優先される。

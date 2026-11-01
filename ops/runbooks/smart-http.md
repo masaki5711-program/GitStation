@@ -46,7 +46,10 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
 5. `FG-GIT-0015`: `reason=dropped` は要求が途中で取り消された（たいていクライアントの切断）。同じ `duration_ms` で
    多数並んでいれば、プロキシの時間切れ（`proxy_read_timeout` など）と一致するかを見る。
 6. `FG-GIT-0013` / `FG-GIT-0014`: 1 つのアドレスから続いていればスキャナや壊れたプロキシ。`reason` と `detail` を見る。
-7. `FG-GIT-0001 reason=hooks_dir`: `ls -la <git の HOME>/empty-hooks` で中身と所有者を見る（消さない）。
+7. `FG-GIT-0001 reason=hooks_dir`: `ls -lad <git の HOME>/empty-hooks` と `ls -la <git の HOME>/empty-hooks` で権限・中身・
+   所有者を見る（消さない）。`detail=insecure_permissions` はグループかほかの利用者が書ける状態。
+7a. エラーに `reap_failed` が付いている: 強制終了した git を回収できなかった。`pgrep -af "git.*<path>"` で残っている git と
+   helper を探す。残っていればロックを持っているので、下の `.lock` の手順の前に終わるのを待つ（終わらなければ Escalate）。
 8. 古い `.lock` ファイル（push が強制終了された、またはサーバーが落ちた）:
    - `forge admin repo-path <repo_id>` でパスを出し、`find <path> -name '*.lock' -mmin +10 -ls` で 10 分より古いものを探す。
    - そのリポジトリで動いている git がないことを確かめる: `pgrep -af "git.*<path>"`（何か出たら終わるまで待つ）。
@@ -61,7 +64,7 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
 3. 古い `.lock`（動いている git がないことを確かめたあと）: そのファイルだけを削除する。
    `[MUTATING — needs approval]` ロールバック: 削除の前に `cp -p <file> <退避先>` で退避しておく。ref の値は `.lock` ではなく
    本体の ref に入っているので、`.lock` を消しても ref は変わらない。
-4. `hooks_dir`: 中身を退避先へ移し、ディレクトリを空にする。誰が置いたかが分かるまでインシデントとして扱う。
+4. `hooks_dir`: 中身を退避先へ移し、ディレクトリを空にする（`insecure_permissions` なら `chmod 700` にする）。誰が置いたかが分かるまでインシデントとして扱う。
    `[MUTATING — needs approval]` ロールバック: 退避先から戻す（ただし戻すと Smart HTTP は止まったままになる）。
 
 ## Verify
@@ -71,6 +74,9 @@ upload-pack と receive-pack には `keepAlive=5` を付けているので、git
 - `hooks_dir`: `FG-GIT-0001 reason=hooks_dir` が出なくなる
 
 ## Escalate
+
+- 強制終了・失敗のあとの helper は止める作りになっている（無通信・全体の時間切れ・切断に加え、git 自身が 0 以外や
+  シグナルで終わったときもグループごと止める）。正常終了（0）のあとに残った helper だけは止めない。
 
 - 強制終了のあと git の helper（`pack-objects`、`index-pack`）が残っていた場合（`pgrep -af pack-objects`）は、プロセスグループの
   強制終了が効いていない。`forge-git` の不具合として起票する（`grandchildren_die_with_the_process_group` の想定外）。

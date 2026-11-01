@@ -20,7 +20,7 @@ A git subprocess exceeded its total timeout, or a streaming one (Smart HTTP) mov
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand` and `kind`: `total` (with `timeout_ms`) or `idle` (streams, with `idle_timeout_ms`, `bytes_in`, `bytes_out`, `duration_ms`). `idle` with small byte counts means a stalled client or a proxy buffering the body; `total` for one repository points at its size or storage latency, across repositories at host load. See runbook smart-http for streams.
+The log event carries `subcommand` and `kind`: `total` (with `timeout_ms`) or `idle` (streams, with `idle_timeout_ms`, `bytes_in`, `bytes_out`, `duration_ms`). `idle` with small byte counts means a stalled client or a proxy buffering the body; `total` for one repository points at its size or storage latency, across repositories at host load. `reap_failed` (`kill_failed`, `wait_failed`, `wait_timeout`, with `reap_error`) on this or any FG-GIT code means forge could not confirm the killed git was reaped: it may still be running and holding repository locks (`pgrep -af git`). See runbook smart-http for streams.
 
 ## 対処 (fix)
 

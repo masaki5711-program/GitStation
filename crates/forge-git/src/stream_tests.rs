@@ -422,3 +422,88 @@ async fn stdin_bytes_are_refused_on_a_stream() {
         .expect_err("stdin bytes are for output()");
     assert_eq!(err.code(), ErrorCode::Internal);
 }
+
+/// A leader that fails on its own (non-zero exit, or killed by a signal)
+/// must not leave its helpers running: the group is killed while the leader
+/// is still a zombie.
+#[cfg(unix)]
+#[tokio::test]
+async fn helpers_die_when_the_leader_fails_on_its_own() {
+    for (ending, want) in [
+        ("exit 3", "exit_code=3"),
+        ("kill -KILL $$", "exit_code=signal"),
+    ] {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let pids = tmp.path().join("pids");
+        let script = fake_git(
+            tmp.path(),
+            &format!(
+                "sleep 300 &\necho $$ $! > '{}'\nsleep 0.3\n{ending}",
+                pids.display()
+            ),
+        );
+        let (_h, g) = git_with(|c| c.bin = script);
+        let stream = g
+            .command("upload-pack")
+            .idle_timeout(Duration::from_secs(30))
+            .spawn_stream("user:1")
+            .await
+            .expect("spawn");
+        let found = read_pids(&pids).await;
+        let err = stream.finish().await.expect_err("failed");
+        assert_eq!(err.code(), ErrorCode::GitProcessFailed, "{ending}");
+        assert!(err.to_string().contains(want), "{ending}: {err}");
+        assert!(wait_gone(found[1]).await, "{ending}: the helper was killed");
+    }
+}
+
+/// A runtime shut down under a running stream drops the supervisor task; the
+/// process tree must not outlive it.
+#[cfg(unix)]
+#[test]
+fn runtime_shutdown_kills_the_process_tree() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let pids = tmp.path().join("pids");
+    let script = fake_git(
+        tmp.path(),
+        &format!("sleep 300 &\necho $$ $! > '{}'\nwait", pids.display()),
+    );
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let (home, found, stream) = rt.block_on(async {
+        let (home, g) = git_with(|c| c.bin = script);
+        let stream = g
+            .command("upload-pack")
+            .spawn_stream("user:1")
+            .await
+            .expect("spawn");
+        let found = read_pids(&pids).await;
+        (home, found, stream)
+    });
+    rt.shutdown_timeout(Duration::from_secs(5));
+    std::mem::forget(stream); // only the runtime shutdown may kill it
+    let check = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    for pid in found {
+        assert!(
+            check.block_on(wait_gone(pid)),
+            "{pid} survived the shutdown"
+        );
+    }
+    drop(home);
+}
+
+#[tokio::test]
+async fn reap_of_an_exited_child_is_ok_and_failures_go_into_the_error() {
+    let mut child = tokio::process::Command::new("true").spawn().expect("true");
+    let _ = child.wait().await;
+    assert!(crate::process::reap(&mut child).await.is_ok());
+    let err =
+        crate::process::with_reap(forge_errors::ForgeError::new(ErrorCode::GitTimeout), Ok(()));
+    assert!(!err.to_string().contains("reap_failed"));
+}

@@ -233,6 +233,8 @@ struct Ending {
     end: End,
     stderr: Vec<u8>,
     stderr_truncated: bool,
+    /// A failure to confirm git was reaped after a kill (attached to the error).
+    reaped: Result<(), crate::process::ReapFailure>,
 }
 
 impl GitStream {
@@ -272,8 +274,13 @@ impl GitStream {
     pub async fn finish(mut self) -> Result<StreamStats, ForgeError> {
         drop(self.stdin.take());
         drop(self.stdout.take());
-        let ending = self.ending(false).await?;
-        match ending.end {
+        let Ending {
+            end,
+            stderr,
+            stderr_truncated,
+            reaped,
+        } = self.ending(false).await?;
+        let r = match end {
             End::Exited(status) if status.success() => Ok(self.activity.stats()),
             End::Exited(status) => Err(self
                 .fail(ErrorCode::GitProcessFailed)
@@ -283,8 +290,8 @@ impl GitStream {
                         .code()
                         .map_or_else(|| "signal".to_string(), |c| c.to_string()),
                 )
-                .with_context("stderr", stderr_head(&ending.stderr))
-                .with_context("stderr_truncated", ending.stderr_truncated)),
+                .with_context("stderr", stderr_head(&stderr))
+                .with_context("stderr_truncated", stderr_truncated)),
             End::WaitFailed(e) => Err(self.fail(ErrorCode::GitProcessFailed).with_source(e)),
             End::Idle => Err(self
                 .fail(ErrorCode::GitTimeout)
@@ -296,7 +303,8 @@ impl GitStream {
                 .with_context("timeout_ms", self.total.as_millis())),
             // Only `abort` cancels while the result is awaited.
             End::Cancelled => Err(self.fail(ErrorCode::GitClientDisconnected)),
-        }
+        };
+        r.map_err(|e| crate::process::with_reap(e, reaped))
     }
 
     /// The client went away: kill the process tree, wait for it to be
@@ -305,9 +313,11 @@ impl GitStream {
         drop(self.stdin.take());
         drop(self.stdout.take());
         match self.ending(true).await {
-            Ok(_) => self
-                .fail(ErrorCode::GitClientDisconnected)
-                .with_context("reason", "client_disconnected"),
+            Ok(ending) => crate::process::with_reap(
+                self.fail(ErrorCode::GitClientDisconnected)
+                    .with_context("reason", "client_disconnected"),
+                ending.reaped,
+            ),
             Err(e) => e,
         }
     }
@@ -396,18 +406,22 @@ impl GitCommand {
         let tree = match ProcessTree::attach(&child) {
             Ok(tree) => tree,
             Err(e) => {
-                crate::process::reap(&mut child).await;
-                return Err(self
-                    .fail(ErrorCode::GitUnavailable)
-                    .with_context("reason", "process_tree_failed")
-                    .with_source(e));
+                let reaped = crate::process::reap(&mut child).await;
+                return Err(crate::process::with_reap(
+                    self.fail(ErrorCode::GitUnavailable)
+                        .with_context("reason", "process_tree_failed")
+                        .with_source(e),
+                    reaped,
+                ));
             }
         };
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-            crate::process::reap(&mut child).await;
-            return Err(self
-                .fail(ErrorCode::Internal)
-                .with_context("reason", "stream_pipes_missing"));
+            let reaped = crate::process::reap(&mut child).await;
+            return Err(crate::process::with_reap(
+                self.fail(ErrorCode::Internal)
+                    .with_context("reason", "stream_pipes_missing"),
+                reaped,
+            ));
         };
         let stderr = child.stderr.take();
 
@@ -476,33 +490,56 @@ impl Supervisor {
         ended: watch::Sender<bool>,
     ) {
         let mut stderr = StderrTail::default();
-        let end = loop {
+        let mut leader = LeaderWatch::new();
+        let stop = loop {
             let wake = (self.activity.last() + self.idle).min(self.deadline);
             tokio::select! {
-                status = self.child.wait() => break match status {
-                    Ok(status) => End::Exited(status),
-                    Err(e) => End::WaitFailed(e),
-                },
+                exit = leader.exited(&mut self.child, &self.tree) => break Stop::Leader(exit),
                 () = stderr.read(&mut self.stderr), if self.stderr.is_some() => {}
                 () = tokio::time::sleep_until(wake) => {
                     let now = Instant::now();
                     if now >= self.deadline {
-                        break End::Total;
+                        break Stop::Kill(End::Total);
                     }
                     if now.saturating_duration_since(self.activity.last()) >= self.idle {
-                        break End::Idle;
+                        break Stop::Kill(End::Idle);
                     }
                 }
-                _ = &mut cancel => break End::Cancelled,
+                _ = &mut cancel => break Stop::Kill(End::Cancelled),
             }
         };
-        if matches!(end, End::Exited(_) | End::WaitFailed(_)) {
-            self.tree.release();
-        } else {
-            // Group first, while the leader is unreaped (its id cannot be reused).
-            self.tree.kill();
-            crate::process::reap(&mut self.child).await;
-        }
+        let (end, reaped) = match stop {
+            Stop::Leader(LeaderExit::Status(status)) => {
+                // Already reaped by `wait` (Windows, or the Unix fallback).
+                self.tree.release();
+                (end_of(status), Ok(()))
+            }
+            Stop::Leader(LeaderExit::Zombie { success }) => {
+                if success {
+                    self.tree.release();
+                } else {
+                    // The leader is a zombie: its id is still taken, so the
+                    // group kill cannot hit another process. Helpers it left
+                    // behind would otherwise keep running and holding locks.
+                    self.tree.kill();
+                }
+                match tokio::time::timeout(LEADER_REAP_TIMEOUT, self.child.wait()).await {
+                    Ok(status) => (end_of(status), Ok(())),
+                    Err(_) => {
+                        let reaped = crate::process::reap(&mut self.child).await;
+                        (
+                            End::WaitFailed(io::Error::other("zombie leader not reaped")),
+                            reaped,
+                        )
+                    }
+                }
+            }
+            Stop::Kill(end) => {
+                // Group first, while the leader is unreaped (its id cannot be reused).
+                self.tree.kill();
+                (end, crate::process::reap(&mut self.child).await)
+            }
+        };
         let _ = tokio::time::timeout(STDERR_DRAIN_AFTER_EXIT, async {
             while self.stderr.is_some() {
                 stderr.read(&mut self.stderr).await;
@@ -515,24 +552,103 @@ impl Supervisor {
             end,
             stderr: stderr.buf,
             stderr_truncated: stderr.truncated,
+            reaped,
         };
-        if result.send(ending).is_err() && cancelled {
+        if let Err(unsent) = result.send(ending) {
+            if !cancelled {
+                return; // the stream ended by itself; the caller just stopped waiting
+            }
+            let send_failed_reap = unsent.reaped;
             // Nobody awaits the result: the stream was dropped (the request
             // future was cancelled — usually the client went away). This is
             // the only place that knows, so it logs.
             let stats = self.activity.stats();
-            let err = ForgeError::new(ErrorCode::GitClientDisconnected)
-                .with_context("subcommand", self.subcommand)
-                .with_context("reason", "dropped")
-                .with_context("bytes_in", stats.bytes_in)
-                .with_context("bytes_out", stats.bytes_out)
-                .with_context("duration_ms", stats.duration.as_millis());
+            let err = crate::process::with_reap(
+                ForgeError::new(ErrorCode::GitClientDisconnected)
+                    .with_context("subcommand", self.subcommand)
+                    .with_context("reason", "dropped")
+                    .with_context("bytes_in", stats.bytes_in)
+                    .with_context("bytes_out", stats.bytes_out)
+                    .with_context("duration_ms", stats.duration.as_millis()),
+                send_failed_reap,
+            );
             tracing::info!(
                 target: "forge_git::stream",
                 error_code = err.code().id(),
                 error = %err,
                 "git.stream.aborted"
             );
+        }
+    }
+}
+
+/// Why the supervisor loop stopped.
+enum Stop {
+    Leader(LeaderExit),
+    Kill(End),
+}
+
+/// How the leader was seen to exit.
+enum LeaderExit {
+    /// Exited, not yet reaped (Unix, `waitid(WNOWAIT)`).
+    #[cfg_attr(windows, expect(dead_code, reason = "Windows waits with a plain wait"))]
+    Zombie { success: bool },
+    /// Exited and reaped by `wait`.
+    Status(io::Result<std::process::ExitStatus>),
+}
+
+fn end_of(status: io::Result<std::process::ExitStatus>) -> End {
+    match status {
+        Ok(status) => End::Exited(status),
+        Err(e) => End::WaitFailed(e),
+    }
+}
+
+/// Bounds the wait for a leader already seen as a zombie.
+const LEADER_REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Notices the leader's exit without reaping it (Unix: SIGCHLD or a 100 ms
+/// tick, then `waitid(WNOWAIT)`); Windows waits normally.
+struct LeaderWatch {
+    #[cfg(unix)]
+    sigchld: Option<tokio::signal::unix::Signal>,
+}
+
+impl LeaderWatch {
+    fn new() -> Self {
+        Self {
+            // Without the signal stream the 100 ms tick still notices the exit.
+            #[cfg(unix)]
+            sigchld: tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()).ok(),
+        }
+    }
+
+    /// Cancel-safe: holds no state across awaits.
+    async fn exited(&mut self, child: &mut Child, tree: &ProcessTree) -> LeaderExit {
+        #[cfg(unix)]
+        loop {
+            match tree.peek_leader() {
+                Ok(Some(success)) => return LeaderExit::Zombie { success },
+                Ok(None) => {}
+                // No pid to watch or waitid refused: fall back to a plain
+                // wait (the failure-path group kill is then skipped).
+                Err(_) => return LeaderExit::Status(child.wait().await),
+            }
+            let tick = tokio::time::sleep(Duration::from_millis(100));
+            match self.sigchld.as_mut() {
+                Some(sig) => {
+                    tokio::select! {
+                        _ = sig.recv() => {}
+                        () = tick => {}
+                    }
+                }
+                None => tick.await,
+            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = tree;
+            LeaderExit::Status(child.wait().await)
         }
     }
 }

@@ -7,12 +7,18 @@
 //! - Unix (the server): the child starts its own process group
 //!   (`process_group(0)`), and the whole group gets `SIGKILL`. The group is
 //!   killed while the leader is still unreaped, so its id cannot have been
-//!   reused by another process.
+//!   reused by another process. When the leader exits by itself, its exit is
+//!   first observed with `waitid(WNOWAIT)` (it stays a zombie, its id stays
+//!   taken); on a failure (non-zero or a signal) the group is killed then,
+//!   so helpers left behind (`pack-objects`, `index-pack`) do not keep
+//!   running and holding repository locks. Only then is the leader reaped.
 //! - Windows (development machines only): the child is put into a Job Object
 //!   with kill-on-close right after spawn; closing the job kills every
 //!   process in it. git starts helpers only after reading the request, so
 //!   the window between spawn and assignment does not matter in practice.
 //! - Other platforms are refused at compile time.
+//! - Dropping a `ProcessTree` that was neither killed nor released (the
+//!   supervisor task was dropped, e.g. at runtime shutdown) kills the tree.
 
 #[cfg(not(any(unix, windows)))]
 compile_error!(
@@ -27,6 +33,9 @@ use std::io;
 pub(crate) struct ProcessTree {
     #[cfg(unix)]
     pgid: Option<rustix::process::Pid>,
+    /// The leader's pid (equal to the group id), for `waitid`.
+    #[cfg(unix)]
+    leader: Option<rustix::process::Pid>,
     #[cfg(windows)]
     job: Option<win32job::Job>,
 }
@@ -53,7 +62,7 @@ impl ProcessTree {
                 .id()
                 .and_then(|id| i32::try_from(id).ok())
                 .and_then(rustix::process::Pid::from_raw);
-            Ok(Self { pgid })
+            Ok(Self { pgid, leader: pgid })
         }
         #[cfg(windows)]
         {
@@ -92,9 +101,27 @@ impl ProcessTree {
         }
     }
 
-    /// The leader exited by itself. Unix: nothing to do (killing the group
-    /// after the leader is reaped could hit a reused id). Windows: closing
-    /// the job ends any helper left behind.
+    /// Whether the leader has exited, without reaping it (`waitid` with
+    /// `WNOWAIT | WNOHANG`): `Some(true)` exit 0, `Some(false)` non-zero or a
+    /// signal, `None` still running.
+    #[cfg(unix)]
+    pub(crate) fn peek_leader(&self) -> io::Result<Option<bool>> {
+        use rustix::process::{waitid, WaitId, WaitIdOptions};
+        let Some(pid) = self.leader else {
+            return Err(io::Error::other("no leader pid"));
+        };
+        let opts = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        match waitid(WaitId::Pid(pid), opts) {
+            Ok(Some(status)) => Ok(Some(status.exited() && status.exit_status() == Some(0))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(io::Error::from(e)),
+        }
+    }
+
+    /// The leader exited with status 0 and the tree is no longer ours to
+    /// kill. Unix: nothing to do (a successful git has waited for its
+    /// helpers; the group id must not be used after the leader is reaped).
+    /// Windows: closing the job ends any helper left behind.
     pub(crate) fn release(&mut self) {
         #[cfg(unix)]
         {
@@ -104,5 +131,12 @@ impl ProcessTree {
         {
             drop(self.job.take());
         }
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        // No-op after `kill` / `release`.
+        self.kill();
     }
 }

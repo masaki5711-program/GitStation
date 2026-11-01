@@ -13,6 +13,7 @@
 //! (ADR-0009). The only request value that reaches git is the `Git-Protocol`
 //! header, sanitised into `GIT_PROTOCOL` ([`GitCommand::git_protocol`]).
 
+use std::num::NonZeroU64;
 use std::path::Path;
 
 use forge_core::RepoId;
@@ -145,13 +146,15 @@ impl Git {
 
     /// `git receive-pack` for repository `id`. `max_input_size`: the push
     /// size limit in bytes (`receive.maxInputSize`, enforced by index-pack).
+    /// Non-zero by type: git reads `0` as "unlimited", which would silently
+    /// switch the cap off.
     pub fn receive_pack(
         &self,
         storage: &StorageRoot,
         id: RepoId,
         phase: Phase,
         git_protocol: Option<&str>,
-        max_input_size: u64,
+        max_input_size: NonZeroU64,
     ) -> Result<GitCommand, ForgeError> {
         let repo = storage.existing(id)?;
         let mut cmd = self.command(Service::ReceivePack.subcommand());
@@ -200,22 +203,57 @@ fn hooks_dir_error(reason: &'static str, dir: &Path) -> ForgeError {
         .with_context("path", dir.display())
 }
 
+/// A real directory (no symlink), not writable by group or others (Unix),
+/// and empty. Created with mode 0700 when missing.
 fn ensure_empty_dir(dir: &Path) -> Result<(), ForgeError> {
-    match std::fs::symlink_metadata(dir) {
-        Ok(meta) if meta.is_dir() => {}
+    let meta = match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => meta,
         Ok(_) => return Err(hooks_dir_error("not_a_directory", dir)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(dir)
+            create_private_dir(dir)
                 .map_err(|e| hooks_dir_error("create_failed", dir).with_source(e))?;
+            std::fs::symlink_metadata(dir)
+                .map_err(|e| hooks_dir_error("unreadable", dir).with_source(e))?
         }
         Err(e) => return Err(hooks_dir_error("unreadable", dir).with_source(e)),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = meta.permissions().mode();
+        if mode & 0o022 != 0 {
+            return Err(hooks_dir_error("insecure_permissions", dir)
+                .with_context("mode", format!("{:o}", mode & 0o7777)));
+        }
     }
+    #[cfg(not(unix))]
+    let _ = meta;
     let mut entries =
         std::fs::read_dir(dir).map_err(|e| hooks_dir_error("unreadable", dir).with_source(e))?;
     match entries.next() {
         None => Ok(()),
         Some(Ok(_)) => Err(hooks_dir_error("not_empty", dir)),
         Some(Err(e)) => Err(hooks_dir_error("unreadable", dir).with_source(e)),
+    }
+}
+
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    if let Some(parent) = dir.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let mut b = std::fs::DirBuilder::new();
+        b.mode(0o700);
+        b
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
+    match builder.create(dir) {
+        // A concurrent first use created it; the checks that follow apply.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
     }
 }
 

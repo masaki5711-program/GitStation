@@ -52,12 +52,17 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
     `process_group(0)` + `killpg`, sent before the leader is reaped) / Job Object with
     kill-on-close (Windows, `win32job`; other platforms do not compile). Slot and claim are
     released only after git is reaped. `.stdin(bytes)` on a stream is refused (FG-SYS-0001).
+    A leader that fails on its own (non-zero, signal) gets its group killed while it is
+    still a zombie (`waitid(WNOWAIT)` + SIGCHLD / 100 ms tick), then reaped. Dropping the
+    supervisor (runtime shutdown) kills the tree (`Drop for ProcessTree`). A killed git that
+    cannot be confirmed reaped adds `reap_failed` / `reap_error` to the returned error
+    (captured runs too).
 - **Smart HTTP** (`smart_http`): `Git::upload_pack(&StorageRoot, RepoId, Phase, git_protocol)` /
-  `Git::receive_pack(&StorageRoot, RepoId, Phase, git_protocol, max_input_size)` →
+  `Git::receive_pack(&StorageRoot, RepoId, Phase, git_protocol, max_input_size: NonZeroU64)` (git reads 0 as unlimited) →
   `GitCommand` (path only from `StorageRoot::existing`). Fixed `-c` sets
   `UPLOAD_PACK_CONFIG` / `RECEIVE_PACK_CONFIG` + `receive.maxInputSize` +
-  `core.hooksPath=<home>/empty-hooks` (checked to be an empty real directory on every
-  call, created if missing; otherwise FG-GIT-0001 `reason=hooks_dir`); `--stateless-rpc`,
+  `core.hooksPath=<home>/empty-hooks` (checked to be an empty real directory, not group- or
+  world-writable, on every call; created 0700 if missing; otherwise FG-GIT-0001 `reason=hooks_dir`); `--stateless-rpc`,
   `--advertise-refs` for `Phase::Advertise`, upload-pack `--strict`, `-- <path>`.
   `advertisement_prefix(Service, ProtocolVersion)` (`# service=…` + flush, none for
   upload-pack v2); `ProtocolVersion::from_git_protocol(header)` uses the sanitised value only;
@@ -142,9 +147,11 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
   helper started before that would escape; git starts helpers only after
   reading the request). The Windows path is compile- and clippy-checked
   (`--target x86_64-pc-windows-msvc`) but its tests have not run on Windows yet.
-- On Unix a helper still running after the leader exited by itself is not
-  killed (the group id could be reused once the leader is reaped).
-- File size: `command.rs` ~490 lines and `stream.rs` ~570 (target 400) — split
+- On Unix a helper still running after the leader exited **successfully** is
+  not killed. After a failed exit (non-zero / signal) the group is killed
+  while the leader is still a zombie (`waitid(WNOWAIT)`); this needs
+  `waitid` (Linux, macOS — not OpenBSD).
+- File size: `command.rs` ~490 lines and `stream.rs` ~680 (target 400) — split
   the env/argv builder and the supervisor out when MR3/MR4 touch them.
 - `Revision::object_id` accepts 40 or 64 hex digits regardless of the
   repository's object format; callers that compare against an approved SHA

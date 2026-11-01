@@ -32,7 +32,7 @@ pub use crate::config::GitConfig;
 
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::process::{ignore_broken_pipe, read_capped, reap};
+use crate::process::{ignore_broken_pipe, read_capped, reap, with_reap};
 use crate::redact::stderr_head;
 pub use crate::revision::Revision;
 use tokio::io::AsyncWriteExt;
@@ -422,8 +422,8 @@ impl GitCommand {
         };
 
         let Ok((write_res, out_res, err_res)) = tokio::time::timeout_at(deadline, io).await else {
-            reap(&mut child).await;
-            return Err(self.timed_out());
+            let reaped = reap(&mut child).await;
+            return Err(with_reap(self.timed_out(), reaped));
         };
         let (stderr_bytes, _) = err_res.unwrap_or_default();
         let stderr_head = stderr_head(&stderr_bytes);
@@ -431,15 +431,20 @@ impl GitCommand {
         let (stdout_bytes, overflow) = match out_res {
             Ok(r) => r,
             Err(e) => {
-                reap(&mut child).await;
-                return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
+                let reaped = reap(&mut child).await;
+                return Err(with_reap(
+                    self.fail(ErrorCode::GitProcessFailed).with_source(e),
+                    reaped,
+                ));
             }
         };
         if overflow {
-            reap(&mut child).await;
-            return Err(self
-                .fail(ErrorCode::GitOutputTooLarge)
-                .with_context("max_output_bytes", max_out));
+            let reaped = reap(&mut child).await;
+            return Err(with_reap(
+                self.fail(ErrorCode::GitOutputTooLarge)
+                    .with_context("max_output_bytes", max_out),
+                reaped,
+            ));
         }
 
         let status = match tokio::time::timeout_at(deadline, child.wait()).await {
@@ -451,8 +456,8 @@ impl GitCommand {
                     .with_source(e))
             }
             Err(_) => {
-                reap(&mut child).await;
-                return Err(self.timed_out());
+                let reaped = reap(&mut child).await;
+                return Err(with_reap(self.timed_out(), reaped));
             }
         };
         let exit_code = status

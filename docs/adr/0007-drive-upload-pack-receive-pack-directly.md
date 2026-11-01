@@ -73,6 +73,18 @@ fetch / clone は `Git-Protocol` ヘッダを `GIT_PROTOCOL` として渡し pro
   「want は広告したものに限らない」）。v0 は参照されていないコミットを `not our ref` で拒む（ただし参照されていない blob は
   送る）。テスト `v2_fetch_serves_unreferenced_objects_despite_allow_any_sha1_false` がこの振る舞いを固定している。
   強制 push で消したはずの内容（誤って push した秘密など）を、ID を知っている読み取り権限の利用者が取り出せることになる。
-  **MR3 で決める**: (a) forge が v2 / v0 の要求の `want` を読み、ref から辿れることを git で確かめてから git に渡す、
+  候補は (a) forge が v2 / v0 の要求の `want` を読み、ref から辿れることを git で確かめてから git に渡す、
   (b) upload-pack を v0 に限る（blob の穴は残る）、(c) 読み取り権限があれば見えてよいとして受け入れ、強制 push のあとは
-  `git gc --prune` と秘密の失効で対処する。推奨は (a)（確認の費用は MR3 で測る）。
+  `git gc --prune` と秘密の失効で対処する、の三つだった。
+  **決定（2026-11-01、ユーザーの「推奨で進める」による）: (a) を採る。** forge は upload-pack の要求（v0 / v2）の `want` を
+  すべて読み、どれも ref から辿れることを git で確かめてから upload-pack を起動する。辿れないものが一つでもあれば git を
+  起動せずに拒む。実装と確認の費用の測定は MR3（`feat/web-smart-http-fetch`）で行い、それまで Smart HTTP の fetch は公開しない。
+- **レビューを受けて加えた（同日、MR1 の追加のコミット）**:
+  - 親（git）が自分で失敗して終わったとき（0 以外の終了、またはシグナル）も、helper（`pack-objects`、`index-pack`）を残さない。
+    Unix では親の終了を `waitid(WNOWAIT)` で見る（回収しないのでゾンビのまま番号が取られている）。失敗ならその時点で
+    グループ全体に `SIGKILL` を送り、それから回収する。正常終了（0）のときは git が helper を待ち終えているので何もしない。
+  - 強制終了した git を回収できたか確かめる。回収できなかったとき（kill の失敗、待機の失敗、5 秒以内に回収できない）は、
+    返すエラーに `reap_failed` と `reap_error` を付け、境界で `request_id` とともに一度だけ記録される。git がまだ動いて
+    ロックを持っているかもしれないことを示す。
+  - 監視のタスクが途中で捨てられたとき（ランタイムの停止など）も、プロセスの木を止める（`ProcessTree` の `Drop`）。
+  - `receive.maxInputSize` は 0 を「無制限」と読むので、上限は型で 0 を許さない（`NonZeroU64`）。
