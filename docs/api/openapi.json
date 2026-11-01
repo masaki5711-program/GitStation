@@ -1,6 +1,51 @@
 {
   "components": {
     "schemas": {
+      "AddMember": {
+        "additionalProperties": false,
+        "description": "`POST …/members`: make a user a direct member.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleName"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "type": "object"
+      },
+      "ChangeMember": {
+        "additionalProperties": false,
+        "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleName"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "ChangeProtectedRef": {
+        "additionalProperties": false,
+        "description": "`PATCH …/protected-refs/{rule_id}` (the pattern is fixed: delete the\nrule and create another).",
+        "properties": {
+          "push_min_role": {
+            "$ref": "#/components/schemas/RoleName"
+          }
+        },
+        "required": [
+          "push_min_role"
+        ],
+        "type": "object"
+      },
       "CreateGroup": {
         "additionalProperties": false,
         "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
@@ -75,6 +120,25 @@
           "namespace_id",
           "path",
           "display_name"
+        ],
+        "type": "object"
+      },
+      "CreateProtectedRef": {
+        "additionalProperties": false,
+        "description": "`POST …/protected-refs`.",
+        "properties": {
+          "pattern": {
+            "description": "`refs/heads/…` or `refs/tags/…`, ≤ 255 bytes, at most one `*` and\nonly in the last part (ADR-0008); unique in the project ignoring case.",
+            "type": "string"
+          },
+          "push_min_role": {
+            "$ref": "#/components/schemas/RoleName",
+            "description": "`developer`, `maintainer` or `owner`."
+          }
+        },
+        "required": [
+          "pattern",
+          "push_min_role"
         ],
         "type": "object"
       },
@@ -250,6 +314,70 @@
         ],
         "type": "object"
       },
+      "MemberBody": {
+        "additionalProperties": false,
+        "description": "One direct member as the API shows it.",
+        "properties": {
+          "active": {
+            "description": "`false` while the account is disabled (it holds no role meanwhile).",
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "When the membership was created (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "description": "The direct role (`guest` … `owner`); inherited roles are not listed.",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "display_name",
+          "role",
+          "active",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "MemberPage": {
+        "additionalProperties": false,
+        "description": "One page of direct members, in user id order.",
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MemberBody"
+            },
+            "type": "array"
+          },
+          "next_after": {
+            "description": "Pass as `after` for the next page; `null` on the last page.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "members",
+          "next_after"
+        ],
+        "type": "object"
+      },
       "ProjectBody": {
         "additionalProperties": false,
         "description": "A project as the API shows it.",
@@ -341,6 +469,55 @@
         ],
         "type": "object"
       },
+      "ProtectedRefBody": {
+        "additionalProperties": false,
+        "description": "One protected ref rule as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "push_min_role": {
+            "description": "The minimum role that may push (create / fast-forward) a matching\nref; force-push and deletion are refused for everyone.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ProtectedRefRules": {
+        "additionalProperties": false,
+        "description": "Every rule of a project, in id order.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProtectedRefBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
       "Resolution": {
         "additionalProperties": false,
         "description": "Which namespace a path names. Exactly one of `project_id`, `group_id`,\n`user_id` is present, by `kind`.",
@@ -394,6 +571,17 @@
           "moved"
         ],
         "type": "object"
+      },
+      "RoleName": {
+        "description": "A role in a request.",
+        "enum": [
+          "guest",
+          "reporter",
+          "developer",
+          "maintainer",
+          "owner"
+        ],
+        "type": "string"
       },
       "SetVisibility": {
         "additionalProperties": false,
@@ -693,6 +881,223 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/groups/{id}/members": {
+      "get": {
+        "operationId": "get_api_v1_groups_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Members per page, 1..=100 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after (a user id): members with a larger user id",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a group's direct members (every signed-in user)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_groups_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a direct group member (Maintainer; at most the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/groups/{id}/members/{user_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_groups_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a direct group member (Maintainer; a top-level group keeps an Owner)",
+        "x-forge-action": "MemberManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_groups_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a direct group member's role (Maintainer; never above the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
     "/api/v1/groups/{id}/subgroups": {
       "post": {
         "operationId": "post_api_v1_groups_id_subgroups",
@@ -952,6 +1357,418 @@
         "summary": "Change a project's display name / description (Maintainer)",
         "x-forge-action": "ProjectUpdate",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/members": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Members per page, 1..=100 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after (a user id): members with a larger user id",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's direct members (Reporter; internal: every signed-in user)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a direct project member (Maintainer; at most the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/members/{user_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a direct project member (Maintainer; never the last Owner)",
+        "x-forge-action": "MemberManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a direct project member's role (Maintainer; never above the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/protected-refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_protected_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefRules"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's protected ref rules (Reporter; internal: every signed-in user)",
+        "x-forge-action": "ProtectedRefList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_protected_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProtectedRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a protected ref rule (Maintainer; at most the caller's role)",
+        "x-forge-action": "ProtectedRefManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/protected-refs/{rule_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_protected_refs_rule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a protected ref rule (Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_protected_refs_rule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeProtectedRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a rule's minimum push role (Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/projects/{id}/visibility": {

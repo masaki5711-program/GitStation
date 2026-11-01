@@ -63,7 +63,7 @@ impl Principal {
     /// The same caller, with a credential issued for an AI agent
     /// (`tokens.is_agent`, ADR-0017 §4.0). Agents are denied the actions
     /// ADR-0017 keeps for people (`ProjectVisibilityChange` since M1 phase
-    /// 8b MR7a; `ProtectedRefManage` and `MemberManage` join in MR8).
+    /// 8b MR7a; `ProtectedRefManage` and `MemberManage` since MR8).
     #[must_use]
     pub fn as_agent(mut self, agent: bool) -> Self {
         self.agent = agent;
@@ -185,8 +185,9 @@ pub enum MembershipScope {
 
 /// What is done to one membership.
 ///
-/// `from` is the member's current **effective** role, loaded from the
-/// database — never taken from the request. `Add` is only for a user who is
+/// `from` is the member's current **direct** role in the project or group
+/// (the membership the change acts on), loaded from the database inside the
+/// write transaction — never taken from the request (M1 phase 8b MR8). `Add` is only for a user who is
 /// not a member yet (an existing member is a `Change`, never an upsert).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MembershipChange {
@@ -196,6 +197,13 @@ pub enum MembershipChange {
     Change { from: Role, to: Role },
     /// Remove a member whose current role is `from`.
     Remove { from: Role },
+    /// Change (`to`) or remove (`to: None`) a user who is **not** a direct
+    /// member (M1 phase 8b MR8): decided like the least change that names
+    /// `to` (the caller needs Maintainer, and `to` must be at or below the
+    /// caller's role), so only a caller who may manage members learns that
+    /// the user is not one — the command then answers `FG-REPO-0010
+    /// not_member`.
+    Missing { to: Option<Role> },
 }
 
 /// What the action acts on.

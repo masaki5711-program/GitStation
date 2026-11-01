@@ -93,6 +93,9 @@ pub mod resolve;
 // ── M1 phase 8b MR7b: list page scans ──
 pub mod lists;
 // ── end M1 phase 8b MR7b ──
+// ── M1 phase 8b MR8: direct member lists ──
+pub mod members;
+// ── end M1 phase 8b MR8 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

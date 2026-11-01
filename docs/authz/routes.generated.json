@@ -48,6 +48,38 @@
     "word": "fixed"
   },
   {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "PATCH",
+    "path": "/api/v1/groups/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "SubgroupCreate",
     "method": "POST",
     "path": "/api/v1/groups/{id}/subgroups",
@@ -91,6 +123,70 @@
     "action": "ProjectUpdate",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/protected-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/protected-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -409,14 +505,6 @@
   },
   {
     "action": "ProjectRestore",
-    "planned": true
-  },
-  {
-    "action": "ProtectedRefManage",
-    "planned": true
-  },
-  {
-    "action": "MemberManage",
     "planned": true
   },
   {

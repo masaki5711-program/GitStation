@@ -305,9 +305,9 @@ severity = "info"
 user_message_ja = "保護ブランチの規則が正しくありません。refs/heads/ か refs/tags/ で始まる 255 バイトまでのパターンで、* は最後の部分に 1 つだけ使えます。"
 user_message_en = "The protected branch rule is not valid. Use a pattern of up to 255 bytes that starts with refs/heads/ or refs/tags/, with at most one '*' in its last part."
 user_message_id = "Aturan branch terlindungi tidak valid. Gunakan pola hingga 255 byte yang diawali refs/heads/ atau refs/tags/, dengan paling banyak satu '*' di bagian terakhirnya."
-cause = "A protected ref rule (forge.protected_refs, ADR-0008) broke a rule before anything was written. The pattern (forge_core RefPattern::parse) is longer than 255 bytes, does not start with refs/heads/ or refs/tags/, has more than one '*' or a '*' outside its last path component, or, with the '*' read as an ordinary character, breaks git's check-ref-format rules (the rules of RefName, including forge's no-leading-'-' rule). Protected ref changes (forge_db::protected_refs, step D4 MR5) also refuse a pattern that equals an existing rule of the project ignoring case, a 101st rule of one project, and a minimum push role of Guest or Reporter (they cannot push anyway, so such a rule would protect nothing)."
-diagnosis = "The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), duplicate_pattern (another rule of the project has the same pattern ignoring case; the database backstop is the unique index protected_refs_project_pattern on lower(pattern), ASCII case only) or too_many_rules (the project already has 100 rules, with `rules`; this cap is enforced by the application only, the database has no limit), or push_min_role (the rule names Guest or Reporter). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database."
-fix = "Correct the pattern named by `reason`: start it with refs/heads/ or refs/tags/, keep it within 255 bytes, use at most one '*' and only in the last part (refs/heads/release/*), or change the existing rule instead of adding a duplicate; remove unused rules before adding more than 100; use Developer, Maintainer or Owner as the minimum push role."
+cause = "A protected ref rule (forge.protected_refs, ADR-0008) broke a rule before anything was written. The pattern (forge_core RefPattern::parse) is longer than 255 bytes, does not start with refs/heads/ or refs/tags/, has more than one '*' or a '*' outside its last path component, or, with the '*' read as an ordinary character, breaks git's check-ref-format rules (the rules of RefName, including forge's no-leading-'-' rule). Protected ref changes (forge_db::protected_refs, step D4 MR5) also refuse a 101st rule of one project, and a minimum push role of Guest or Reporter (they cannot push anyway, so such a rule would protect nothing)."
+diagnosis = "The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), too_many_rules (the project already has 100 rules, with `rules`; this cap is enforced by the application only, the database has no limit), or push_min_role (the rule names Guest or Reporter). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database."
+fix = "Correct the pattern named by `reason`: start it with refs/heads/ or refs/tags/, keep it within 255 bytes, use at most one '*' and only in the last part (refs/heads/release/*), remove unused rules before adding more than 100; use Developer, Maintainer or Owner as the minimum push role."
 test = "a_protected_ref_pattern_breaking_the_rules_is_rejected"
 
 [[error]]
@@ -335,6 +335,19 @@ cause = "A Smart HTTP request (clone / fetch, M1 phase 9) reached a project whos
 diagnosis = "The log event carries `repo_id`, `project_id`, `state` and `route`. A new project is normally ready within seconds. If the same repository keeps answering this, its provisioning is stuck: `forge doctor` reports it as FG-REPO-0012 (runbook repository-provisioning)."
 fix = "Wait a few seconds and retry. If it persists, follow FG-REPO-0012's runbook repository-provisioning (make sure a `forge worker` runs, read why the job died)."
 test = "a_provisioning_repository_is_repository_not_ready"
+
+[[error]]
+code = "FG-REPO-0017"
+name = "ProtectedRefPatternTaken"
+http_status = 409
+severity = "info"
+user_message_ja = "同じパターンの保護ブランチの規則がすでにあります。既存の規則を変更してください。"
+user_message_en = "A protected branch rule with this pattern already exists. Change the existing rule instead."
+user_message_id = "Aturan branch terlindungi dengan pola ini sudah ada. Ubah aturan yang sudah ada."
+cause = "A protected ref rule was to be added (forge_db::protected_refs::create / create_decided; `POST /api/v1/projects/{id}/protected-refs`, M1 phase 8b MR8) with a pattern that equals an existing rule of the same project ignoring case (RefPattern::key, non-ASCII case included; the database backstop is the unique index protected_refs_project_pattern on lower(pattern), which folds ASCII letters only). The check runs under the project row lock, so two concurrent adds of equal patterns never both commit. Nothing was written. Until MR8 this was FG-REPO-0013 `duplicate_pattern` (400); it is a conflict with the stored rules, not a malformed request, so clients (gstn) can tell the two apart."
+diagnosis = "The log event carries `reason=duplicate_pattern` (the application check) or `reason=unique_index` (the database backstop) and `project_id`; the pattern itself is not logged. List the project's rules with `GET /api/v1/projects/{id}/protected-refs` (or a privileged query on forge.protected_refs by project_id) and compare ignoring case."
+fix = "Change the minimum push role of the existing rule (`PATCH /api/v1/projects/{id}/protected-refs/{rule_id}`) instead of adding a second one, or delete it first."
+test = "a_duplicate_protected_ref_pattern_is_pattern_taken"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
@@ -373,8 +386,8 @@ user_message_ja = "この操作を行う権限がありません。"
 user_message_en = "You do not have permission to do this."
 user_message_id = "Anda tidak memiliki izin untuk melakukan ini."
 cause = "The caller can see the resource but their role is below what the action requires (or the action needs an administrator)."
-diagnosis = "The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope."
-fix = "Grant the user the required role on the project or group, if appropriate."
+diagnosis = "The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`, `agent_token`: a credential issued for an AI agent on an action kept for people — ProjectVisibilityChange, MemberManage, ProtectedRefManage, ADR-0017 amendments MR7a / MR8, whatever the role). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope."
+fix = "Grant the user the required role on the project or group, if appropriate. For `agent_token`, a person does the change with their own session or a token issued without is_agent."
 test = "denied_matrix_rows_all_deny"
 
 [[error]]

@@ -56,7 +56,7 @@ pub enum VisibilityOutcome {
 }
 
 /// The project row as locked.
-struct Locked {
+pub(crate) struct Locked {
     visibility: Visibility,
     pending_deletion: bool,
     display_name: String,
@@ -67,7 +67,7 @@ struct Locked {
 /// when it does not exist; a project without its namespace is
 /// `FG-SYS-0001 project_without_namespace` (as `members::lock_project`), an
 /// unknown stored visibility `FG-DB-0021 unknown_visibility`.
-async fn lock(tx: &mut ChangeTx, project: ProjectId) -> Result<Locked, ForgeError> {
+pub(crate) async fn lock(tx: &mut ChangeTx, project: ProjectId) -> Result<Locked, ForgeError> {
     let row: Option<(String, bool, String, String, bool)> = tx
         .step(|c| async move {
             sqlx::query_as(
@@ -105,7 +105,7 @@ async fn lock(tx: &mut ChangeTx, project: ProjectId) -> Result<Locked, ForgeErro
 
 /// The facts `decide` sees: the locked row, then the roles (membership
 /// rows `FOR SHARE`), then the account row.
-async fn facts(
+pub(crate) async fn facts(
     tx: &mut ChangeTx,
     project: ProjectId,
     viewer: UserId,

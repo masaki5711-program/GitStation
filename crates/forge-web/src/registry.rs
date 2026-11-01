@@ -272,6 +272,9 @@ pub struct RouteDef {
     /// The success response body and its status, when documented
     /// ([`Registry::responds`]: `200`; [`Registry::responds_created`]: `201`).
     pub response: Option<(SchemaDoc, u16)>,
+    /// The route answers `204 No Content` on success ([`Registry::responds_no_content`],
+    /// a delete, M1 phase 8b MR8).
+    pub no_content: bool,
     /// The documented query parameters ([`Registry::queries`]).
     pub query: &'static [QueryParam],
 }
@@ -895,6 +898,24 @@ impl<S: DispatchState> Registry<S> {
         self
     }
 
+    /// Document the `204 No Content` success of the fixed route `verb path`
+    /// (a delete, M1 phase 8b MR8). An unknown route is a startup error.
+    #[must_use]
+    pub fn responds_no_content(mut self, verb: Verb, path: &'static str) -> Self {
+        match self
+            .defs
+            .iter_mut()
+            .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
+        {
+            Some(def) => def.no_content = true,
+            None => self.problems.push(format!(
+                "responds_no_content: no route {} {path}",
+                verb.as_str()
+            )),
+        }
+        self
+    }
+
     /// Document the optional query parameters of the fixed route `verb
     /// path` in `openapi.json` (the handler parses them). An unknown route
     /// is a startup error (`FG-WEB-0004`).
@@ -952,6 +973,7 @@ impl<S: DispatchState> Registry<S> {
             summary,
             request,
             response: None,
+            no_content: false,
             query: &[],
         });
         true
@@ -1053,6 +1075,7 @@ impl<S: DispatchState> Registry<S> {
             summary,
             request: None,
             response: None,
+            no_content: false,
             query: &[],
         };
         self.defs.push(def.clone());
@@ -1384,6 +1407,9 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
                     "content": { "application/json": { "schema": { "$ref": reference } } }
                 }),
             );
+        }
+        if d.no_content {
+            responses.insert("204".into(), json!({ "description": "No Content" }));
         }
         responses.insert(
             "default".into(),

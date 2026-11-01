@@ -213,3 +213,17 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - 残る漏れ: ページの件数から「この区間に見えない行がある」ことは分かる（L1 で受け入れた。SQL の上位集合 L2 への切り替えは M2 で
   1 走査あたり ~10k を超えたときに、この ADR の Amendment で決める）。
 - OpenAPI: `ProjectPage` / `GroupPage` / `ListedGroup` の schema と、`Registry::queries` で `limit` / `cursor` の query の parameter を載せた。
+
+## Amendment（2026-11-01、M1 phase 8b MR8: メンバーと保護 ref のルート）
+
+- 新しい Action: `MemberList`（プロジェクトは `ProjectRead` と同じ判定、グループはサインインした全員）と `ProtectedRefList`
+  （`ProjectRead` と同じ）。どちらも `read_api`。`MemberManage` / `ProtectedRefManage` をルートに載せ、`app::PLANNED` から外した。
+- 新しい文脈: `ProjectMemberCtx` / `GroupMemberCtx`（id はプロジェクトかグループとメンバーの組）、`RefProtectionCtx`（id は
+  プロジェクトと規則の組）。`MembershipChange::from` はメンバーの**直接の**役割（変更の対象の行）で、データベースから読む。
+- `MembershipChange::Missing { to }`: 直接のメンバーでない利用者の変更・削除。`to`（削除では Guest）を与える最小の変更として判定し
+  （Maintainer が必要）、メンバーを管理できる人だけが「メンバーでない」（FG-REPO-0010 `not_member`）を知る。
+- `removes_last_owner` は書き込みのトランザクションの中で計算する（レジストリの判定では常に `false`）。最後の Owner の削除・降格は
+  `authorize()` が FG-AUTH-0003 `last_owner`（403）で拒否し、forge-db の FG-REPO-0010 `last_owner` は予備の守り。
+- 権限の表: 自分の昇格（Developer が自分を Owner に、Maintainer が自分を Owner に）、最後の Owner の削除と降格、Maintainer の
+  エージェント、Guest のメンバー一覧、保護より低い Developer、`read_api` / `api` / `write_repository` のトークン、無効な
+  アカウント、削除待ちのプロジェクトの許可と拒否の行を足した。

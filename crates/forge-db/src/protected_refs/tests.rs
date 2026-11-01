@@ -234,7 +234,7 @@ async fn levels_for_returns_every_matching_rule_case_insensitively() {
 }
 
 #[tokio::test]
-async fn duplicate_pattern_ignoring_case_is_rejected() {
+async fn a_duplicate_protected_ref_pattern_is_pattern_taken() {
     let t = FreshDb::migrated().await;
     let projects = project_of_alice(&t, &["web", "api"]).await;
     let (p, other) = (projects[0].project_id, projects[1].project_id);
@@ -252,12 +252,13 @@ async fn duplicate_pattern_ignoring_case_is_rejected() {
         let err = create(&t.db, &ctx(&request), p, &pattern(second), Role::Owner)
             .await
             .expect_err(second);
+        // A conflict with the stored rules, not a malformed request (MR8).
         assert_reason(
             &err,
-            ErrorCode::ProtectedRefRuleInvalid,
+            ErrorCode::ProtectedRefPatternTaken,
             "duplicate_pattern",
         );
-        assert_eq!(err.code().http_status(), 400);
+        assert_eq!(err.code().http_status(), 409);
         assert!(
             !err.to_string().contains(second),
             "the pattern is not logged"
@@ -423,7 +424,7 @@ async fn two_concurrent_duplicate_creates_make_one_rule() {
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert_reason(
         &refused[0],
-        ErrorCode::ProtectedRefRuleInvalid,
+        ErrorCode::ProtectedRefPatternTaken,
         "duplicate_pattern",
     );
     assert_eq!(rule_count(&t, p).await, 1);
@@ -636,7 +637,7 @@ async fn rules_for_matches_levels_for() {
             };
             match create(&t.db, &ctx(&format!("req-prop-{n}-{k}")), p, &parsed, *role).await {
                 Ok(_) => {}
-                Err(e) if e.code() == ErrorCode::ProtectedRefRuleInvalid => {} // duplicate
+                Err(e) if e.code() == ErrorCode::ProtectedRefPatternTaken => {} // duplicate
                 Err(e) => panic!("{raw}: {e}"),
             }
         }
@@ -660,6 +661,203 @@ async fn rules_for_matches_levels_for() {
     assert!(
         protected > 0 && protected < compared,
         "{protected}/{compared}"
+    );
+    t.drop_now().await;
+}
+
+// ── M1 phase 8b MR8: the commands decided inside their transaction ──
+
+fn deny() -> ForgeError {
+    ForgeError::new(ErrorCode::Forbidden).with_context("reason", "test_denied")
+}
+
+async fn alice(t: &FreshDb) -> forge_core::UserId {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM forge.users WHERE username = 'alice'")
+        .fetch_one(&mut t.superuser().await)
+        .await
+        .map(forge_core::UserId::new)
+        .expect("alice")
+}
+
+#[tokio::test]
+async fn decided_protection_commands_hand_the_locked_rule_to_decide() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let viewer = alice(&t).await;
+    let main = pattern("refs/heads/main");
+    let (rule, seen) = create_decided(
+        &t.db,
+        &ctx("req-create"),
+        p,
+        viewer,
+        &main,
+        Role::Maintainer,
+        |f: &ProtectionFacts| Ok(*f),
+    )
+    .await
+    .expect("create");
+    assert_eq!(seen.rule, RuleState::New);
+    assert_eq!(seen.project.project, p);
+    assert_eq!(seen.project.access.role, Some(Role::Owner));
+    // The duplicate is a 409 after the decision.
+    let err = create_decided(
+        &t.db,
+        &ctx("req-dup"),
+        p,
+        viewer,
+        &pattern("refs/heads/MAIN"),
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("taken");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefPatternTaken,
+        "duplicate_pattern",
+    );
+    assert_eq!(
+        rule_state(&t.db, p, rule).await.expect("state"),
+        RuleState::Level(Role::Maintainer)
+    );
+    let (changed, seen) = change_decided(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        rule,
+        viewer,
+        Role::Owner,
+        |f| Ok(*f),
+    )
+    .await
+    .expect("change");
+    assert_eq!(seen.rule, RuleState::Level(Role::Maintainer));
+    assert_eq!(
+        changed,
+        RuleChange::Changed {
+            from: Role::Maintainer
+        }
+    );
+    let (same, ()) = change_decided(
+        &t.db,
+        &ctx("req-same"),
+        p,
+        rule,
+        viewer,
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect("unchanged");
+    assert_eq!(same, RuleChange::Unchanged);
+    let err = delete_decided(&t.db, &ctx("req-denied"), p, rule, viewer, |_| {
+        Err::<(), _>(deny())
+    })
+    .await
+    .expect_err("denied");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    let listed = list(&t.db, p).await.expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (
+            listed[0].id,
+            listed[0].push_min_role,
+            listed[0].pattern.as_str()
+        ),
+        (rule, Role::Owner, "refs/heads/main")
+    );
+    assert!(listed[0].created_at.ends_with('Z'));
+    delete_decided(&t.db, &ctx("req-delete"), p, rule, viewer, |f| {
+        assert_eq!(f.rule, RuleState::Level(Role::Owner));
+        Ok(())
+    })
+    .await
+    .expect("delete");
+    // An absent rule: decided first (as from = to = None), then 404.
+    for err in [
+        change_decided(
+            &t.db,
+            &ctx("req-gone-1"),
+            p,
+            rule,
+            viewer,
+            Role::Owner,
+            |f| {
+                assert_eq!(f.rule, RuleState::Absent);
+                Ok(())
+            },
+        )
+        .await
+        .map(drop)
+        .expect_err("gone"),
+        delete_decided(&t.db, &ctx("req-gone-2"), p, rule, viewer, |_| Ok(()))
+            .await
+            .expect_err("gone"),
+    ] {
+        assert_eq!(err.code(), ErrorCode::NotFound);
+    }
+    assert_eq!(
+        rule_state(&t.db, p, rule).await.expect("state"),
+        RuleState::Absent
+    );
+    for request in ["req-create", "req-change", "req-delete"] {
+        assert_eq!(audit_rows(&t, request).await.len(), 1, "{request}");
+        assert_eq!(events_of(&t, request).await.len(), 1, "{request}");
+    }
+    for request in [
+        "req-dup",
+        "req-same",
+        "req-denied",
+        "req-gone-1",
+        "req-gone-2",
+    ] {
+        assert!(audit_rows(&t, request).await.is_empty(), "{request}");
+    }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_is_decided_as_owner_level_and_can_be_deleted() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let viewer = alice(&t).await;
+    let bad = create_ok(&t, p, "refs/heads/main", Role::Maintainer).await;
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.protected_refs DISABLE TRIGGER USER; \
+         UPDATE forge.protected_refs SET pattern = 'refs/heads/*/*' WHERE id = {}; \
+         ALTER TABLE forge.protected_refs ENABLE TRIGGER USER",
+        bad.get()
+    ))
+    .await;
+    assert_eq!(
+        rule_state(&t.db, p, bad).await.expect("state"),
+        RuleState::Unreadable
+    );
+    assert_eq!(
+        list(&t.db, p).await.expect_err("unreadable").code(),
+        ErrorCode::ProtectedRefDataInvalid
+    );
+    let err = change_decided(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        bad,
+        viewer,
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("unreadable");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefDataInvalid);
+    delete_decided(&t.db, &ctx("req-delete"), p, bad, viewer, |f| {
+        assert_eq!(f.rule, RuleState::Unreadable);
+        Ok(())
+    })
+    .await
+    .expect("deleted");
+    assert_eq!(
+        events_of(&t, "req-delete").await[0].4["stored_invalid"],
+        true
     );
     t.drop_now().await;
 }

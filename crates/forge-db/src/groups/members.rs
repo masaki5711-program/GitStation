@@ -29,7 +29,10 @@ pub enum MemberChange {
 /// no parent). `FG-REPO-0005` (`resource=group`) when it does not exist; a
 /// group without its namespace is a broken invariant (`FG-SYS-0001`
 /// `group_without_namespace`), not a 404.
-async fn lock_group(conn: &mut PgConnection, group: GroupId) -> Result<bool, ForgeError> {
+pub(super) async fn lock_group(
+    conn: &mut PgConnection,
+    group: GroupId,
+) -> Result<bool, ForgeError> {
     // (has a namespace, the namespace is top-level)
     let row: Option<(bool, bool)> = sqlx::query_as(
         "SELECT n.id IS NOT NULL, n.parent_id IS NULL FROM forge.groups g \
@@ -51,19 +54,49 @@ async fn lock_group(conn: &mut PgConnection, group: GroupId) -> Result<bool, For
 
 /// The user's direct role in the group, `None` = not a member. A stored
 /// role outside the five is `FG-DB-0018` `unknown_role`.
-async fn direct_role(
+pub(super) async fn direct_role(
     conn: &mut PgConnection,
     group: GroupId,
     user: UserId,
 ) -> Result<Option<Role>, ForgeError> {
-    let role: Option<String> = sqlx::query_scalar(
+    role_of(
+        conn,
         "SELECT role FROM forge.group_members WHERE group_id = $1 AND user_id = $2",
+        group,
+        user,
     )
-    .bind(group.get())
-    .bind(user.get())
-    .fetch_optional(conn)
     .await
-    .map_err(|e| query_error("groups.member_role", e))?;
+}
+
+/// [`direct_role`] with the membership row locked `FOR UPDATE` (M1 phase
+/// 8b MR8): the decided member commands act on the role they read, so a
+/// write to that row from anywhere waits for them or is seen by them.
+pub(super) async fn direct_role_for_update(
+    conn: &mut PgConnection,
+    group: GroupId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    role_of(
+        conn,
+        "SELECT role FROM forge.group_members WHERE group_id = $1 AND user_id = $2 FOR UPDATE",
+        group,
+        user,
+    )
+    .await
+}
+
+async fn role_of(
+    conn: &mut PgConnection,
+    sql: &'static str,
+    group: GroupId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    let role: Option<String> = sqlx::query_scalar(sql)
+        .bind(group.get())
+        .bind(user.get())
+        .fetch_optional(conn)
+        .await
+        .map_err(|e| query_error("groups.member_role", e))?;
     role.map(|raw| {
         Role::parse(&raw).ok_or_else(|| {
             // The role loader's code and context (FG-DB-0018, runbook
@@ -93,6 +126,19 @@ async fn keep_an_owner(
     group: GroupId,
     leaving: UserId,
 ) -> Result<(), ForgeError> {
+    if !owners_remain(conn, group, leaving).await? {
+        return Err(membership_conflict("last_owner").with_context("group_id", group.get()));
+    }
+    Ok(())
+}
+
+/// Whether another direct active Owner stays once `leaving` stops being
+/// one (their user rows locked `FOR SHARE`, as [`keep_an_owner`]).
+pub(super) async fn owners_remain(
+    conn: &mut PgConnection,
+    group: GroupId,
+    leaving: UserId,
+) -> Result<bool, ForgeError> {
     let others: Vec<i64> = sqlx::query_scalar(
         "SELECT u.id FROM forge.group_members m JOIN forge.users u ON u.id = m.user_id \
          WHERE m.group_id = $1 AND m.role = 'owner' AND u.state = 'active' AND m.user_id <> $2 \
@@ -103,10 +149,7 @@ async fn keep_an_owner(
     .fetch_all(conn)
     .await
     .map_err(|e| query_error("groups.owner_count", e))?;
-    if others.is_empty() {
-        return Err(membership_conflict("last_owner").with_context("group_id", group.get()));
-    }
-    Ok(())
+    Ok(!others.is_empty())
 }
 
 /// The precondition of `change_member` / `remove_member`: the member's

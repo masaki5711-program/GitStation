@@ -3,10 +3,12 @@
 #![allow(dead_code, clippy::expect_used, clippy::panic)]
 
 use forge_auth::{
-    prove, Action, Authorized, Credential, GroupCtx, LoadedGroup, LoadedParent, LoadedProject,
-    LoadedUserNamespace, ParentCtx, Principal, ProjectCtx, ResourceCtx, VisibilityChangeCtx,
+    prove, Action, Authorized, Credential, GroupCtx, GroupMemberCtx, LoadedGroup, LoadedMembership,
+    LoadedParent, LoadedProject, LoadedProtection, LoadedUserNamespace, MembershipChange,
+    ParentCtx, Principal, ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResourceCtx,
+    VisibilityChangeCtx,
 };
-use forge_core::{GroupId, ProjectId, RequestId, UserId, Visibility};
+use forge_core::{GroupId, ProjectId, ProtectedRefId, RequestId, Role, UserId, Visibility};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::groups::{self, CreatedGroup, NewGroup};
 use forge_db::projects::{self, CreatedProject, NewProject};
@@ -192,4 +194,107 @@ pub async fn count(t: &FreshDb, sql: &str) -> i64 {
         .and_then(|r| r.get("n"))
         .and_then(serde_json::Value::as_i64)
         .expect("a count named n")
+}
+
+/// The member routes' proof (M1 phase 8b MR8), built as their loaders
+/// build it: the member's direct role read now, `change` derived from it.
+pub async fn project_member_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    project: ProjectId,
+    member: UserId,
+    change: impl FnOnce(Option<Role>) -> MembershipChange,
+) -> Result<Authorized<ProjectMemberCtx>, forge_errors::ForgeError> {
+    let loaded = project_ctx(hosting, who, project).await;
+    let role = hosting
+        .project_member_role(project, member)
+        .await
+        .expect("member role");
+    prove(
+        who,
+        Action::MemberManage,
+        ProjectMemberCtx::new(
+            loaded,
+            LoadedMembership {
+                member,
+                change: change(role),
+                removes_last_owner: false,
+            },
+        ),
+    )
+}
+
+pub async fn group_member_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    group: GroupId,
+    member: UserId,
+    change: impl FnOnce(Option<Role>) -> MembershipChange,
+) -> Result<Authorized<GroupMemberCtx>, forge_errors::ForgeError> {
+    let record = hosting
+        .group(group, who.user())
+        .await
+        .expect("load")
+        .expect("group exists");
+    let role = hosting
+        .group_member_role(group, member)
+        .await
+        .expect("member role");
+    prove(
+        who,
+        Action::MemberManage,
+        GroupMemberCtx::new(
+            LoadedGroup {
+                id: record.id,
+                role: record.role,
+            },
+            LoadedMembership {
+                member,
+                change: change(role),
+                removes_last_owner: false,
+            },
+        ),
+    )
+}
+
+/// The protected-ref routes' proof: `rule` (None = a create) with the
+/// level stored now and the requested one.
+pub async fn protection_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    project: ProjectId,
+    rule: Option<ProtectedRefId>,
+    to: Option<Role>,
+) -> Result<Authorized<RefProtectionCtx>, forge_errors::ForgeError> {
+    let loaded = project_ctx(hosting, who, project).await;
+    let from = match rule {
+        None => None,
+        Some(rule) => forge_hosting::protection_level(
+            hosting
+                .protected_ref_state(project, rule)
+                .await
+                .expect("rule state"),
+        ),
+    };
+    prove(
+        who,
+        Action::ProtectedRefManage,
+        RefProtectionCtx::new(loaded, LoadedProtection { rule, from, to }),
+    )
+}
+
+/// `Change { from, to }` for a member, `Missing` for a non-member.
+pub fn change_to(to: Role) -> impl FnOnce(Option<Role>) -> MembershipChange {
+    move |from| match from {
+        Some(from) => MembershipChange::Change { from, to },
+        None => MembershipChange::Missing { to: Some(to) },
+    }
+}
+
+/// `Remove { from }` for a member, `Missing` for a non-member.
+pub fn removal(from: Option<Role>) -> MembershipChange {
+    match from {
+        Some(from) => MembershipChange::Remove { from },
+        None => MembershipChange::Missing { to: None },
+    }
 }

@@ -143,3 +143,15 @@ Smart HTTP の push（`POST {path}.git/git-receive-pack`）は、Decision の (c
   - 権限表: `write_repository` / `api` / `read_repository` のトークンと保護 ref、エージェントのトークン（`is_agent`。ADR-0017 の
     エージェントの制限はマージの系統だけなので、push は人間のトークンと同じ判定。`is_agent` はまだ認可の入力ではない、W1）、
     保護タグの作成と force の行を足した。
+
+## Amendment（2026-11-01、M1 段階 8b MR8: 規則の API と重複のコード）
+
+- 規則の一覧・作成・変更・削除を `GET|POST /api/v1/projects/{id}/protected-refs`、`PATCH|DELETE …/{rule_id}` で公開した
+  （`ProtectedRefList` / `ProtectedRefManage`）。変更の `from`（いまの最小 push 役割）はルートの読み込みと、書き込みの
+  トランザクションの中で規則の行を `FOR UPDATE` で読み直した値で判定する（依頼の値は使わない）。読めない行は Owner の水準として
+  判定し、Owner か管理者だけが消せる（runbook `protected-ref-data` の手当て）。
+- 同じパターン（`RefPattern::key()`）の規則の追加は FG-REPO-0013 `duplicate_pattern`（400）から **FG-REPO-0017
+  ProtectedRefPatternTaken（409）** に変えた（データベースの一意インデックスでの検出は `reason=unique_index`）。依頼の形の誤りではなく
+  既存の規則との衝突なので、クライアント（gstn）が区別できるようにする。
+- 規則の削除と push の判定が同時に起きる場合は扱わない: push は git を動かす前に読んだ 1 つのスナップショットで全 ref を判定する
+  （この ADR の方針どおり、スナップショットの後に確定した削除はその push に効かない）。

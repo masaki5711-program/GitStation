@@ -20,8 +20,8 @@ The caller can see the resource but their role is below what the action requires
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope.
+The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`, `agent_token`: a credential issued for an AI agent on an action kept for people — ProjectVisibilityChange, MemberManage, ProtectedRefManage, ADR-0017 amendments MR7a / MR8, whatever the role). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope.
 
 ## 対処 (fix)
 
-Grant the user the required role on the project or group, if appropriate.
+Grant the user the required role on the project or group, if appropriate. For `agent_token`, a person does the change with their own session or a token issued without is_agent.

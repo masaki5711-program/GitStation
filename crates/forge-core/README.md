@@ -116,7 +116,8 @@ empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; `len`;
 the name is not logged). FG-REPO-0008 NamespacePathReserved (`reason=reserved`).
 FG-REPO-0013 ProtectedRefRuleInvalid (`RefPattern::parse`: `too_long`, `prefix`,
 `wildcard`, `check_ref_format` with `rule`; `len`; the pattern is not logged —
-`duplicate_pattern` / `too_many_rules` are raised by forge-db from step D4 MR5).
+`too_many_rules` is raised by forge-db from step D4 MR5; a duplicate is FG-REPO-0017 since
+M1 phase 8b MR8).
 Raises FG-DB-0010 ChangeRejected `reason=invalid_dedup_key` (owned by forge-db).
 Raises FG-WEB-0001 RouteNotFound (owned by forge-web) from `parse_web_path`,
 `LookupPath::fold` and `TailSegments::decode` (`reason` path_rejected / unknown_route /
