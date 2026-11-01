@@ -863,3 +863,37 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   持ち（メンバーの変更は FG-REPO-0010 `last_owner`、無効化は FG-AUTH-0009 `last_owner` で守る）、その Owner はすべてのサブグループに
   継承されるので、サブグループが有効な Owner を失うことはない。権限の表の `SubgroupLastDirectOwner` の行がこれを固定する（Owner と
   管理者は許可、Maintainer は自分より上の役割として拒否、エージェントは拒否）。
+
+## Amendment（2026-11-01、手順 D5 MR1: 移管の移動先と墓標の解放の判定）
+
+- `Resource::Transfer` を ADR の形に変える: `Transfer { source: ProjectView, target: TransferTarget }`（これまでの
+  `target_role: Option<Role>` では、移動先がトップレベルか個人の名前空間かを表せず、管理者がプロジェクトをトップレベルへ移せた）。
+  `TransferTarget { Group { role, visible }, PersonalNamespace { owner }, TopLevel }` を forge-auth に置く。
+- 新しい Action `GroupTransfer`、`UserRename`、`NamespaceTombstoneRelease`（スコープは `api`）と Resource `GroupTransfer { source_role, target }`、
+  `UserRename { target_user }`、`Tombstone(TombstoneRelease)` を足す。ルートは D5 MR5 で作るので、それまで `app::PLANNED` に入れる。
+- 判定の規則（`authorize()`、権限の表に許可と拒否の行がある）:
+  - `ProjectTransfer`: 移動元で Owner、かつ移動先のグループで Maintainer 以上。個人の名前空間へは本人か管理者だけ（他人のものは
+    `FG-AUTH-0003 reason=foreign_namespace`）。`TopLevel` は管理者を含めて常に `FG-AUTH-0003 reason=project_to_top_level`。
+  - `GroupTransfer`: 移動元と移動先の両方で Owner。`TopLevel` は管理者だけ。`PersonalNamespace` は管理者を含めて常に拒否
+    （`reason=group_to_personal_namespace`）。
+  - `UserRename`: 管理者だけ（本人も拒否）。
+  - `NamespaceTombstoneRelease`: `moved` は行き先の今の Owner か管理者。削除の墓標は、記録した Owner が親の名前空間で今も Owner のとき
+    だけ（それ以外は管理者。親がなければ管理者だけ）。
+- **見えない移動先は同じ 404**: 移動先のグループが見えないとき、**および存在しないとき**、読み込みは `visible: false`
+  （`LoadedTransferTarget::NotVisible`）で答え、`FG-REPO-0005 reason=target_not_visible` にする。**管理者も同じ**（管理者には
+  すべてのグループが見えるので、管理者の `visible: false` は「ない」の意味であり、親のない移動として通してはいけない）。順序は
+  移動元の可視性 → 移動先の可視性 → スコープ → エージェント → 役割。
+- **ADR の形からの変更（2 点）**:
+  - `TombstoneRelease::Moved` に `target_visible: bool` を足す。見えない行き先への `moved` の墓標の解放は、墓標がないのと同じ
+    `FG-REPO-0005 reason=tombstone_not_visible`（403 にすると private のプロジェクトの古いパスの存在が分かる）。管理者も同じ。
+  - 削除の墓標で、管理者でない呼び出し元が親の名前空間に役割を持たないとき、**および親がない（トップレベルの）墓標のとき**は
+    `FG-REPO-0005 reason=tombstone_not_visible`（ない墓標と同じ 404。削除したトップレベルのパスを探れないようにする）。この判定は
+    スコープとエージェントの検査より前に行うので、エージェントも人と同じ 404 を受け取る。役割はあるが記録した Owner でない、
+    または Owner でないときは `FG-AUTH-0003 reason=not_recorded_owner`。
+  - 無効にされた記録した Owner には専用の規則を置かない。呼び出し元が有効かの検査（`FG-AUTH-0004`）で先に拒否され、その墓標を
+    解放できるのは管理者だけになる（管理者は削除の墓標の判定の先頭で許可される）。
+- 封印された文脈: `TransferCtx`（id = `(ProjectId, Option<NamespaceId>)`、移動先の親の名前空間。`None` はトップレベル）、
+  `GroupTransferCtx`（id = `(GroupId, Option<NamespaceId>)`）、`UserRenameCtx`（id = `UserId`）、`TombstoneCtx`（`LoadedTombstone`、
+  id = `TombstoneId`）。証明は移動元と移動先を一緒に束ねるので、ある移動先への証明で別の場所へは移せない。
+- エージェントの資格情報は D5 のすべての操作（`ProjectTransfer`、`GroupTransfer`、`UserRename`、`NamespaceTombstoneRelease`、
+  `ProjectDelete`、`ProjectRestore`）を拒否される（ADR-0017 の Amendment D5）。

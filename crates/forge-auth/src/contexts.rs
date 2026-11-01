@@ -3,7 +3,10 @@
 //! the parent a project is created under ([`ParentCtx`]) and a visibility
 //! change ([`VisibilityChangeCtx`]); MR8 adds one membership change of a
 //! project ([`ProjectMemberCtx`]) or a group ([`GroupMemberCtx`]) and one
-//! protection rule change ([`RefProtectionCtx`]). Sealed like every [`ResourceCtx`]:
+//! protection rule change ([`RefProtectionCtx`]); D5 adds a project move
+//! ([`TransferCtx`]), a group move ([`GroupTransferCtx`]), a user rename
+//! ([`UserRenameCtx`]) and a tombstone release ([`TombstoneCtx`]). Sealed
+//! like every [`ResourceCtx`]:
 //! private fields, one constructor taking one loaded row, so the id a proof
 //! carries and the facts it was decided on cannot come from different rows.
 //!
@@ -13,9 +16,12 @@
 //! let mixed = GroupCtx { group: LoadedGroup { id: GroupId::new(1), role: None } };
 //! ```
 
-use forge_core::{GroupId, NamespaceId, ProjectId, ProtectedRefId, UserId};
+use forge_core::{GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId};
 
-use crate::model::{MembershipChange, MembershipScope, ProjectView, Resource, Role, Visibility};
+use crate::model::{
+    MembershipChange, MembershipScope, ProjectView, Resource, Role, TombstoneRelease,
+    TransferTarget, Visibility,
+};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
 /// One group as loaded for the caller (one row: id and role together).
@@ -325,5 +331,178 @@ impl ResourceCtx for RefProtectionCtx {
     }
     fn id(&self) -> (ProjectId, Option<ProtectedRefId>) {
         (self.project.id, self.protection.rule)
+    }
+}
+
+/// Where a move goes, as loaded for the caller (D5): a group with the
+/// caller's role on it, a personal namespace with its user, the top level,
+/// or a target the caller cannot see — which the loader also answers for a
+/// target that does not exist, so both are the same `FG-REPO-0005`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadedTransferTarget {
+    Group {
+        namespace: NamespaceId,
+        group: LoadedGroup,
+    },
+    User(LoadedUserNamespace),
+    TopLevel,
+    NotVisible,
+}
+
+impl LoadedTransferTarget {
+    /// The target `authorize()` decides on.
+    pub fn target(&self) -> TransferTarget {
+        match *self {
+            LoadedTransferTarget::Group { group, .. } => TransferTarget::Group {
+                role: group.role,
+                visible: true,
+            },
+            LoadedTransferTarget::User(ns) => TransferTarget::PersonalNamespace { owner: ns.owner },
+            LoadedTransferTarget::TopLevel => TransferTarget::TopLevel,
+            LoadedTransferTarget::NotVisible => TransferTarget::Group {
+                role: None,
+                visible: false,
+            },
+        }
+    }
+
+    /// The target parent's namespace (`None` = the top level; a target
+    /// the caller cannot see never reaches a proof).
+    pub fn namespace(&self) -> Option<NamespaceId> {
+        match *self {
+            LoadedTransferTarget::Group { namespace, .. } => Some(namespace),
+            LoadedTransferTarget::User(ns) => Some(ns.namespace),
+            LoadedTransferTarget::TopLevel | LoadedTransferTarget::NotVisible => None,
+        }
+    }
+}
+
+/// A project moving (or being renamed) to `target` (`ProjectTransfer`).
+/// The id is the project and the target parent together, so a proof for
+/// one destination cannot move the project elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferCtx {
+    project: LoadedProject,
+    target: LoadedTransferTarget,
+}
+
+impl TransferCtx {
+    pub fn new(project: LoadedProject, target: LoadedTransferTarget) -> Self {
+        Self { project, target }
+    }
+
+    pub fn target(&self) -> LoadedTransferTarget {
+        self.target
+    }
+}
+
+impl sealed::Sealed for TransferCtx {}
+
+impl ResourceCtx for TransferCtx {
+    type Id = (ProjectId, Option<NamespaceId>);
+    fn resource(&self) -> Resource {
+        Resource::Transfer {
+            source: project_view(&self.project),
+            target: self.target.target(),
+        }
+    }
+    fn id(&self) -> (ProjectId, Option<NamespaceId>) {
+        (self.project.id, self.target.namespace())
+    }
+}
+
+/// A group moving (or being renamed) to `target` (`GroupTransfer`); the id
+/// is the group and the target parent together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupTransferCtx {
+    group: LoadedGroup,
+    target: LoadedTransferTarget,
+}
+
+impl GroupTransferCtx {
+    pub fn new(group: LoadedGroup, target: LoadedTransferTarget) -> Self {
+        Self { group, target }
+    }
+
+    pub fn target(&self) -> LoadedTransferTarget {
+        self.target
+    }
+}
+
+impl sealed::Sealed for GroupTransferCtx {}
+
+impl ResourceCtx for GroupTransferCtx {
+    type Id = (GroupId, Option<NamespaceId>);
+    fn resource(&self) -> Resource {
+        Resource::GroupTransfer {
+            source_role: self.group.role,
+            target: self.target.target(),
+        }
+    }
+    fn id(&self) -> (GroupId, Option<NamespaceId>) {
+        (self.group.id, self.target.namespace())
+    }
+}
+
+/// The user whose username and personal namespace path change
+/// (`UserRename`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserRenameCtx {
+    target_user: UserId,
+}
+
+impl UserRenameCtx {
+    pub fn new(target_user: UserId) -> Self {
+        Self { target_user }
+    }
+}
+
+impl sealed::Sealed for UserRenameCtx {}
+
+impl ResourceCtx for UserRenameCtx {
+    type Id = UserId;
+    fn resource(&self) -> Resource {
+        Resource::UserRename {
+            target_user: self.target_user,
+        }
+    }
+    fn id(&self) -> UserId {
+        self.target_user
+    }
+}
+
+/// One tombstone as loaded for the caller (one row: its id and the facts
+/// its release is decided on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadedTombstone {
+    pub id: TombstoneId,
+    pub release: TombstoneRelease,
+}
+
+/// A tombstone about to be released (`NamespaceTombstoneRelease`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneCtx {
+    tombstone: LoadedTombstone,
+}
+
+impl TombstoneCtx {
+    pub fn new(tombstone: LoadedTombstone) -> Self {
+        Self { tombstone }
+    }
+
+    pub fn release(&self) -> TombstoneRelease {
+        self.tombstone.release
+    }
+}
+
+impl sealed::Sealed for TombstoneCtx {}
+
+impl ResourceCtx for TombstoneCtx {
+    type Id = TombstoneId;
+    fn resource(&self) -> Resource {
+        Resource::Tombstone(self.tombstone.release)
+    }
+    fn id(&self) -> TombstoneId {
+        self.tombstone.id
     }
 }

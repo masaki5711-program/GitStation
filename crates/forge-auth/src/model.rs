@@ -230,12 +230,27 @@ pub enum Resource {
         update: RefUpdate,
         protection: Option<RefProtection>,
     },
-    /// Moving a project: the caller's role on the source project and on the
-    /// target group.
+    /// Moving or renaming a project (`ProjectTransfer`, ADR-0015): the
+    /// project as seen by the caller and where it goes. A rename is a move
+    /// to the current parent.
     Transfer {
         source: ProjectView,
-        target_role: Option<Role>,
+        target: TransferTarget,
     },
+    /// Moving or renaming a group (`GroupTransfer`, ADR-0015): the caller's
+    /// effective role on the group and where it goes.
+    GroupTransfer {
+        source_role: Option<Role>,
+        target: TransferTarget,
+    },
+    /// Changing a user's username and personal namespace path
+    /// (`UserRename`, ADR-0015).
+    UserRename {
+        target_user: UserId,
+    },
+    /// Releasing a namespace tombstone (`NamespaceTombstoneRelease`,
+    /// ADR-0015).
+    Tombstone(TombstoneRelease),
     /// Changing one membership. `removes_last_owner` is computed by the
     /// lookup layer: the change would leave the project or group without an
     /// Owner.
@@ -342,4 +357,43 @@ impl NamespaceView {
             NamespaceView::Project(_) => "project",
         }
     }
+}
+
+/// Where a project or group moves to (ADR-0015 "移管は両側で判定する").
+/// Built by the lookup layer for the caller; a rename names the current
+/// parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferTarget {
+    /// A group, with the caller's effective role on it. `visible` is false
+    /// when the caller cannot see the target — and for a target that does
+    /// not exist, so both get the same `FG-REPO-0005`.
+    Group { role: Option<Role>, visible: bool },
+    /// A user's personal namespace.
+    PersonalNamespace { owner: UserId },
+    /// No parent: the top level. Never for a project; a group only by an
+    /// administrator.
+    TopLevel,
+}
+
+/// A tombstone about to be released (ADR-0015 "解放"), with the facts the
+/// decision needs as loaded for the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TombstoneRelease {
+    /// A `moved` tombstone whose target still exists: its **current**
+    /// Owner (or an administrator) releases it. `target_visible` is false
+    /// when the caller cannot see the target (the same 404 as no
+    /// tombstone).
+    Moved {
+        target_owner_role: Option<Role>,
+        target_visible: bool,
+    },
+    /// A `deleted` tombstone (or a `moved` one whose target is gone): the
+    /// recorded owner (`owner_at_write`) releases it only while active and
+    /// still Owner of the parent namespace (`caller_parent_role`);
+    /// otherwise, and always without a parent, administrators only.
+    Deleted {
+        recorded_owner: Option<UserId>,
+        caller_parent_role: Option<Role>,
+        has_parent: bool,
+    },
 }

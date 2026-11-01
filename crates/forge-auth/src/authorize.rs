@@ -9,13 +9,16 @@
 //!    a path that resolved to nothing (`Unresolved`, any non-public action)
 //!    → `FG-REPO-0005`; project visibility (also behind a resolved path) →
 //!    `FG-REPO-0005` (404, no existence leak) and pending deletion →
-//!    `FG-REPO-0006` (restore excepted);
+//!    `FG-REPO-0006` (restore excepted); a transfer target or a moved
+//!    tombstone's target the caller cannot see → `FG-REPO-0005`;
 //! 4. token scope → `FG-AUTH-0002` (scopes only narrow a role);
 //! 5. role / ownership → `FG-AUTH-0003` (administrator rights pass; a token
 //!    carries administrator rights only with the `admin` scope); an agent's
 //!    credential on an action kept for people → `FG-AUTH-0003
 //!    reason=agent_token` (`ProjectVisibilityChange`, `MemberManage`,
-//!    `ProtectedRefManage`);
+//!    `ProtectedRefManage`, and every D5 action: `ProjectTransfer`,
+//!    `GroupTransfer`, `UserRename`, `NamespaceTombstoneRelease`,
+//!    `ProjectDelete`, `ProjectRestore`);
 //! 6. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, and `FG-GIT-0008` below the minimum push role
@@ -26,7 +29,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::model::{
     Credential, MembershipChange, MembershipScope, NamespaceView, Principal, ProjectView, RefKind,
-    RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
+    RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -91,6 +95,14 @@ pub fn authorize(
             return Err(deny(ErrorCode::PendingDeletion));
         }
     }
+    // The other side of a move, or a moved tombstone's target, the caller
+    // cannot see (or that does not exist): the same 404 (ADR-0015).
+    // Administrators too: the loader shows them every target, so for them
+    // `visible: false` means "absent" — never a pass to a missing parent.
+    // Before the scope and agent checks, so every caller gets the same 404.
+    if let Some(reason) = hidden_target(resource, admin) {
+        return Err(deny(ErrorCode::NotFound).with_context("reason", reason));
+    }
 
     check_scope()?;
 
@@ -116,6 +128,16 @@ pub fn authorize(
             Ok(())
         } else {
             Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_token"))
+        }
+    };
+    // Actions kept for people (ADR-0017 amendments MR7a, MR8, D5): an
+    // agent's credential is refused whatever its role, administrators
+    // included. Checked after visibility and scope, before roles.
+    let people_only = || -> Result<(), ForgeError> {
+        if principal.is_agent() {
+            Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"))
+        } else {
+            Ok(())
         }
     };
     // A resource of the wrong shape for the action is a programming error in
@@ -199,9 +221,7 @@ pub fn authorize(
             // decision (ADR-0017 amendment, M1 phase 8b MR7a): an agent's
             // credential is refused whatever its role, administrators
             // included.
-            if principal.is_agent() {
-                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
-            }
+            people_only()?;
             need(Role::Owner, project.role)
         }
 
@@ -217,9 +237,7 @@ pub fn authorize(
             // Lifting a protection lets the next push through: a person's
             // decision (ADR-0017 amendment, M1 phase 8b MR8), whatever the
             // agent's role.
-            if principal.is_agent() {
-                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
-            }
+            people_only()?;
             need(Role::Maintainer, project.role)?;
             // Nobody changes a protection above their own role: a Maintainer
             // cannot lift (or set) an Owner-level protection.
@@ -234,18 +252,95 @@ pub fn authorize(
             }
         }
 
-        (
-            Action::ProjectTransfer,
-            Resource::Transfer {
-                source,
-                target_role,
-            },
-        ) => {
+        // A project moves (or is renamed) with Owner on it and the right to
+        // create in the target: Maintainer on a group, or the personal
+        // namespace's own user. Never to the top level — a project lives
+        // under a namespace (ADR-0015), administrators included.
+        (Action::ProjectTransfer, Resource::Transfer { source, target }) => {
+            people_only()?;
             need(Role::Owner, source.role)?;
-            need(Role::Maintainer, *target_role)
+            match *target {
+                TransferTarget::Group { role, .. } => need(Role::Maintainer, role),
+                TransferTarget::PersonalNamespace { owner } => {
+                    if admin || owner == user {
+                        Ok(())
+                    } else {
+                        Err(deny(ErrorCode::Forbidden).with_context("reason", "foreign_namespace"))
+                    }
+                }
+                TransferTarget::TopLevel => {
+                    Err(deny(ErrorCode::Forbidden).with_context("reason", "project_to_top_level"))
+                }
+            }
         }
 
+        // A group moves (or is renamed) with Owner on both sides: every
+        // member of the target inherits a role in it. To the top level only
+        // by an administrator (no detour around `GroupCreateTopLevel`);
+        // never into a personal namespace.
+        (
+            Action::GroupTransfer,
+            Resource::GroupTransfer {
+                source_role,
+                target,
+            },
+        ) => {
+            people_only()?;
+            need(Role::Owner, *source_role)?;
+            match *target {
+                TransferTarget::Group { role, .. } => need(Role::Owner, role),
+                TransferTarget::TopLevel => admin_only(),
+                TransferTarget::PersonalNamespace { .. } => Err(deny(ErrorCode::Forbidden)
+                    .with_context("reason", "group_to_personal_namespace")),
+            }
+        }
+
+        // Usernames and personal namespace paths: administrators only
+        // (ADR-0015; the user themself included).
+        (Action::UserRename, Resource::UserRename { .. }) => {
+            people_only()?;
+            admin_only()
+        }
+
+        (Action::NamespaceTombstoneRelease, Resource::Tombstone(release)) => {
+            people_only()?;
+            match *release {
+                // The target's current Owner takes its old path back.
+                TombstoneRelease::Moved {
+                    target_owner_role, ..
+                } => need(Role::Owner, target_owner_role),
+                TombstoneRelease::Deleted {
+                    recorded_owner,
+                    caller_parent_role,
+                    has_parent,
+                } => {
+                    // A non-administrator without a role in the parent
+                    // (always so without a parent) got the 404 above.
+                    if admin {
+                        return Ok(());
+                    }
+                    // The recorded owner, still Owner of the parent (an
+                    // inactive one was refused above with FG-AUTH-0004).
+                    if has_parent
+                        && recorded_owner == Some(user)
+                        && caller_parent_role.is_some_and(|r| r >= Role::Owner)
+                    {
+                        Ok(())
+                    } else {
+                        Err(deny(ErrorCode::Forbidden)
+                            .with_context("reason", "not_recorded_owner")
+                            .with_context(
+                                "actual_role",
+                                caller_parent_role.map_or("none", Role::as_str),
+                            ))
+                    }
+                }
+            }
+        }
+
+        // Deleting and restoring a project is a person's decision (D5).
         (Action::ProjectDelete | Action::ProjectRestore, Resource::Project(p)) => {
+            people_only()?;
             need(Role::Owner, p.role)
         }
 
@@ -260,9 +355,7 @@ pub fn authorize(
             // Who holds a role is a person's decision (ADR-0017 amendment,
             // M1 phase 8b MR8): an agent could otherwise raise itself or
             // another agent's account.
-            if principal.is_agent() {
-                return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
-            }
+            people_only()?;
             let caller = match scope {
                 MembershipScope::Project(p) => p.role,
                 MembershipScope::Group { role } => *role,
@@ -363,6 +456,9 @@ pub fn authorize(
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate
+            | Action::GroupTransfer
+            | Action::NamespaceTombstoneRelease
+            | Action::UserRename
             | Action::TokenCreate
             | Action::TokenList
             | Action::TokenRevoke
@@ -378,6 +474,9 @@ pub fn authorize(
             | Resource::Project(_)
             | Resource::Ref { .. }
             | Resource::Transfer { .. }
+            | Resource::GroupTransfer { .. }
+            | Resource::UserRename { .. }
+            | Resource::Tombstone(_)
             | Resource::Membership { .. }
             | Resource::RefProtectionChange { .. }
             | Resource::VisibilityChange { .. }
@@ -420,7 +519,52 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Group { .. }
         | Resource::Namespace { .. }
         | Resource::Token { .. }
-        | Resource::TokenRequest { .. } => None,
+        | Resource::TokenRequest { .. }
+        | Resource::GroupTransfer { .. }
+        | Resource::UserRename { .. }
+        | Resource::Tombstone(_) => None,
+    }
+}
+
+/// The log `reason` when the far side of a resource is hidden from the
+/// caller: a transfer's target group, or a moved tombstone's target.
+fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
+    if let Resource::Transfer { target, .. } | Resource::GroupTransfer { target, .. } = resource {
+        if matches!(target, TransferTarget::Group { visible: false, .. }) {
+            return Some("target_not_visible");
+        }
+    }
+    match resource {
+        Resource::Tombstone(TombstoneRelease::Moved {
+            target_visible: false,
+            ..
+        }) => Some("tombstone_not_visible"),
+        // A deleted tombstone is seen through the parent: no role there (or
+        // no parent at all) is the same 404 as no tombstone, for every
+        // non-administrator (no probing of deleted paths).
+        Resource::Tombstone(TombstoneRelease::Deleted {
+            caller_parent_role,
+            has_parent,
+            ..
+        }) if !admin && (!has_parent || caller_parent_role.is_none()) => {
+            Some("tombstone_not_visible")
+        }
+        Resource::Tombstone(TombstoneRelease::Moved { .. } | TombstoneRelease::Deleted { .. })
+        | Resource::Instance
+        | Resource::Group { .. }
+        | Resource::Namespace { .. }
+        | Resource::Project(_)
+        | Resource::Ref { .. }
+        | Resource::Transfer { .. }
+        | Resource::GroupTransfer { .. }
+        | Resource::UserRename { .. }
+        | Resource::Membership { .. }
+        | Resource::RefProtectionChange { .. }
+        | Resource::VisibilityChange { .. }
+        | Resource::Token { .. }
+        | Resource::TokenRequest { .. }
+        | Resource::Unresolved(_)
+        | Resource::Resolved { .. } => None,
     }
 }
 

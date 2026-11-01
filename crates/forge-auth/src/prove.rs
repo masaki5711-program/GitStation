@@ -97,8 +97,9 @@ use crate::model::{
 };
 
 pub use crate::contexts::{
-    GroupCtx, GroupMemberCtx, LoadedGroup, LoadedMembership, LoadedParent, LoadedProtection,
-    LoadedUserNamespace, ParentCtx, ProjectMemberCtx, RefProtectionCtx, UserNamespaceCtx,
+    GroupCtx, GroupMemberCtx, GroupTransferCtx, LoadedGroup, LoadedMembership, LoadedParent,
+    LoadedProtection, LoadedTombstone, LoadedTransferTarget, LoadedUserNamespace, ParentCtx,
+    ProjectMemberCtx, RefProtectionCtx, TombstoneCtx, TransferCtx, UserNamespaceCtx, UserRenameCtx,
     VisibilityChangeCtx,
 };
 

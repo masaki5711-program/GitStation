@@ -24,13 +24,15 @@ pub use action::Action;
 pub use authorize::authorize;
 pub use model::{
     Credential, MembershipChange, MembershipScope, NamespaceView, Principal, ProjectView, RefKind,
-    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
+    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 pub use prove::{
-    prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, InstanceCtx, LoadedGroup,
-    LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection, LoadedTarget,
-    LoadedUserNamespace, ParentCtx, ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
-    ResourceCtx, UnresolvedCtx, UserNamespaceCtx, VisibilityChangeCtx,
+    prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,
+    LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection,
+    LoadedTarget, LoadedTombstone, LoadedTransferTarget, LoadedUserNamespace, ParentCtx,
+    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, TombstoneCtx,
+    TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 
