@@ -13,7 +13,7 @@ use crate::model::{MembershipChange, RefKind, RefUpdate, Role};
 #[cfg(test)]
 use crate::model::{
     Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection, ResolvedVia,
-    Resource, Scope, UnresolvedReason, Visibility,
+    Resource, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 #[cfg(test)]
 use forge_core::UserId;
@@ -82,10 +82,52 @@ pub(crate) enum Fixture {
     Group,
     OwnNamespace,
     ForeignNamespace,
-    /// Transfer to a group where the caller has `target`.
+    /// Moving a private project the caller has the actor's role on to a
+    /// visible group where the caller has `target`.
     Transfer {
         target: Option<Role>,
     },
+    /// Moving a private project to a group the caller cannot see (or that
+    /// does not exist) (D5).
+    TransferHiddenTarget,
+    /// Moving a private project into the caller's own personal namespace.
+    TransferToOwnNamespace,
+    /// Moving a private project into another user's personal namespace.
+    TransferToForeignNamespace,
+    /// Moving a private project to the top level (never allowed).
+    TransferToTopLevel,
+    /// Moving a private project pending deletion to a group the caller
+    /// owns.
+    TransferDeletedSource,
+    /// Moving a group the caller has the actor's role on to a visible group
+    /// where the caller has `target` (D5).
+    GroupTransfer {
+        target: Option<Role>,
+    },
+    /// Moving a group to a group the caller cannot see.
+    GroupTransferHiddenTarget,
+    /// Moving a group to the top level.
+    GroupTransferToTopLevel,
+    /// Moving a group into the caller's own personal namespace (never).
+    GroupTransferToNamespace,
+    /// Renaming another user (D5).
+    UserRenameOther,
+    /// Renaming oneself.
+    UserRenameSelf,
+    /// Releasing a `moved` tombstone; the caller's role on its target is
+    /// the actor's; `visible` = the caller can see the target (D5).
+    ReleaseMoved {
+        visible: bool,
+    },
+    /// Releasing a `deleted` tombstone with a parent; the caller's role on
+    /// the parent is the actor's; `recorded` = the caller is the recorded
+    /// owner (`owner_at_write`).
+    ReleaseDeleted {
+        recorded: bool,
+    },
+    /// Releasing a `deleted` tombstone without a parent (a top-level group
+    /// or a user) whose recorded owner is the caller.
+    ReleaseTopLevel,
     ProjectMember(MembershipChange),
     InternalProjectMember(MembershipChange),
     DeletedProjectMember(MembershipChange),
@@ -264,6 +306,15 @@ impl Fixture {
             removes_last_owner: false,
         };
         let resolved = |via, view| Resource::Resolved { via, view };
+        let transfer = |source, target| Resource::Transfer { source, target };
+        let group_transfer = |target| Resource::GroupTransfer {
+            source_role: role,
+            target,
+        };
+        let hidden = TransferTarget::Group {
+            role: None,
+            visible: false,
+        };
         let branch_ff = |project| Resource::Ref {
             project,
             name: ref_name(RefKind::Branch),
@@ -289,10 +340,55 @@ impl Fixture {
             Fixture::Group => Resource::Group { role },
             Fixture::OwnNamespace => Resource::Namespace { owner: ME },
             Fixture::ForeignNamespace => Resource::Namespace { owner: OTHER },
-            Fixture::Transfer { target } => Resource::Transfer {
-                source: private,
-                target_role: target,
-            },
+            Fixture::Transfer { target } => transfer(
+                private,
+                TransferTarget::Group {
+                    role: target,
+                    visible: true,
+                },
+            ),
+            Fixture::TransferHiddenTarget => transfer(private, hidden),
+            Fixture::TransferToOwnNamespace => {
+                transfer(private, TransferTarget::PersonalNamespace { owner: ME })
+            }
+            Fixture::TransferToForeignNamespace => {
+                transfer(private, TransferTarget::PersonalNamespace { owner: OTHER })
+            }
+            Fixture::TransferToTopLevel => transfer(private, TransferTarget::TopLevel),
+            Fixture::TransferDeletedSource => transfer(
+                deleted,
+                TransferTarget::Group {
+                    role: Some(Role::Owner),
+                    visible: true,
+                },
+            ),
+            Fixture::GroupTransfer { target } => group_transfer(TransferTarget::Group {
+                role: target,
+                visible: true,
+            }),
+            Fixture::GroupTransferHiddenTarget => group_transfer(hidden),
+            Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
+            Fixture::GroupTransferToNamespace => {
+                group_transfer(TransferTarget::PersonalNamespace { owner: ME })
+            }
+            Fixture::UserRenameOther => Resource::UserRename { target_user: OTHER },
+            Fixture::UserRenameSelf => Resource::UserRename { target_user: ME },
+            Fixture::ReleaseMoved { visible } => Resource::Tombstone(TombstoneRelease::Moved {
+                target_owner_role: role,
+                target_visible: visible,
+            }),
+            Fixture::ReleaseDeleted { recorded } => {
+                Resource::Tombstone(TombstoneRelease::Deleted {
+                    recorded_owner: Some(if recorded { ME } else { OTHER }),
+                    caller_parent_role: role,
+                    has_parent: true,
+                })
+            }
+            Fixture::ReleaseTopLevel => Resource::Tombstone(TombstoneRelease::Deleted {
+                recorded_owner: Some(ME),
+                caller_parent_role: None,
+                has_parent: false,
+            }),
             Fixture::ProjectMember(change) => member(MembershipScope::Project(private), change),
             Fixture::InternalProjectMember(change) => {
                 member(MembershipScope::Project(internal), change)

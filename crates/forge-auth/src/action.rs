@@ -43,6 +43,7 @@ actions! {
     ProjectUpdate,
     /// Private ⇄ internal: Owner only (exposes a project to every signed-in user).
     ProjectVisibilityChange,
+    /// Move or rename a project (`Resource::Transfer`, ADR-0015).
     ProjectTransfer,
     ProjectDelete,
     ProjectRestore,
@@ -64,12 +65,19 @@ actions! {
     GroupCreateTopLevel,
     SubgroupCreate,
     GroupUpdate,
+    /// Move or rename a group (`Resource::GroupTransfer`, ADR-0015, D5).
+    GroupTransfer,
+    /// Release a namespace tombstone (`Resource::Tombstone`, ADR-0015, D5).
+    NamespaceTombstoneRelease,
     // --- REST API: tokens and users ---
     TokenCreate,
     TokenList,
     TokenRevoke,
     UserCreate,
     UserDisable,
+    /// Change a user's username and personal namespace path
+    /// (`Resource::UserRename`, ADR-0015, D5): administrators only.
+    UserRename,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -129,6 +137,9 @@ impl Action {
             | Action::GroupCreateTopLevel
             | Action::SubgroupCreate
             | Action::GroupUpdate
+            | Action::GroupTransfer
+            | Action::NamespaceTombstoneRelease
+            | Action::UserRename
             | Action::TokenCreate
             | Action::TokenRevoke
             | Action::UserCreate

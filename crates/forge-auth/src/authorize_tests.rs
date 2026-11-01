@@ -5,7 +5,8 @@ use forge_errors::ErrorCode;
 use crate::matrix::{summary, Actor, Expect, Fixture, ME, ROWS};
 use crate::{
     authorize, Action, Credential, MembershipChange, MembershipScope, Principal, ProjectView,
-    RefKind, RefProtection, RefUpdate, Resource, Role, Scope, Visibility,
+    RefKind, RefProtection, RefUpdate, Resource, Role, Scope, TombstoneRelease, TransferTarget,
+    Visibility,
 };
 
 fn decide(action: Action, actor: Actor, fixture: Fixture) -> Expect {
@@ -134,7 +135,10 @@ fn invisible_private_project_is_not_found() {
             Action::ProjectTransfer,
             Resource::Transfer {
                 source: invisible,
-                target_role: Some(Role::Owner),
+                target: TransferTarget::Group {
+                    role: Some(Role::Owner),
+                    visible: true,
+                },
             },
         ),
         (
@@ -669,4 +673,262 @@ fn self_elevation_is_denied() {
     )
     .expect_err("missing to owner");
     assert!(err.to_string().contains("reason=above_own_role"), "{err}");
+}
+
+fn admin_session() -> Principal {
+    Principal::authenticated(ME, true, true, Credential::Session)
+}
+
+fn admin_token() -> Principal {
+    Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(vec![Scope::Api, Scope::Admin]),
+    )
+}
+
+fn reason_of(err: &forge_errors::ForgeError) -> String {
+    err.to_string()
+}
+
+/// D5 (ADR-0015): a project lives under a namespace. Moving one to the top
+/// level is refused for its Owner and for administrators (session or
+/// `admin` token) alike, while the same administrator may move it into
+/// any group or personal namespace.
+#[test]
+fn project_transfer_to_top_level_is_denied_for_admins() {
+    let to = |target| Resource::Transfer {
+        source: project(Some(Role::Owner)),
+        target,
+    };
+    for caller in [session(), admin_session(), admin_token()] {
+        let err = authorize(
+            &caller,
+            Action::ProjectTransfer,
+            &to(TransferTarget::TopLevel),
+        )
+        .expect_err("never to the top level");
+        assert_eq!(err.code(), ErrorCode::Forbidden);
+        assert!(
+            reason_of(&err).contains("reason=project_to_top_level"),
+            "{err}"
+        );
+    }
+    for target in [
+        TransferTarget::Group {
+            role: None,
+            visible: true,
+        },
+        TransferTarget::PersonalNamespace {
+            owner: crate::matrix::OTHER,
+        },
+    ] {
+        assert!(authorize(&admin_session(), Action::ProjectTransfer, &to(target)).is_ok());
+    }
+    // A target that cannot be seen (or does not exist) is the same 404 for
+    // everyone, administrators included — never a move to "no parent".
+    let hidden = to(TransferTarget::Group {
+        role: None,
+        visible: false,
+    });
+    for caller in [session(), admin_session()] {
+        let err = authorize(&caller, Action::ProjectTransfer, &hidden).expect_err("hidden");
+        assert_eq!(err.code(), ErrorCode::NotFound);
+        assert!(
+            reason_of(&err).contains("reason=target_not_visible"),
+            "{err}"
+        );
+    }
+}
+
+/// D5 (ADR-0015): a group moves only with Owner on the group and Owner on
+/// the target (every member of the target inherits a role in it); to the
+/// top level only by an administrator, never into a personal namespace.
+#[test]
+fn group_transfer_needs_owner_on_both_sides() {
+    let group = |source: Role, target: Option<Role>| Resource::GroupTransfer {
+        source_role: Some(source),
+        target: TransferTarget::Group {
+            role: target,
+            visible: true,
+        },
+    };
+    assert!(authorize(
+        &session(),
+        Action::GroupTransfer,
+        &group(Role::Owner, Some(Role::Owner))
+    )
+    .is_ok());
+    for (source, target) in [
+        (Role::Maintainer, Some(Role::Owner)),
+        (Role::Owner, Some(Role::Maintainer)),
+        (Role::Owner, None),
+    ] {
+        let err = authorize(&session(), Action::GroupTransfer, &group(source, target))
+            .expect_err("owner on both sides");
+        assert_eq!(err.code(), ErrorCode::Forbidden, "{source:?} {target:?}");
+        assert!(reason_of(&err).contains("required_role=owner"), "{err}");
+    }
+    let top = Resource::GroupTransfer {
+        source_role: Some(Role::Owner),
+        target: TransferTarget::TopLevel,
+    };
+    let err = authorize(&session(), Action::GroupTransfer, &top).expect_err("owner");
+    assert!(reason_of(&err).contains("required_role=admin"), "{err}");
+    assert!(authorize(&admin_session(), Action::GroupTransfer, &top).is_ok());
+    let personal = Resource::GroupTransfer {
+        source_role: Some(Role::Owner),
+        target: TransferTarget::PersonalNamespace { owner: ME },
+    };
+    for caller in [session(), admin_session()] {
+        let err = authorize(&caller, Action::GroupTransfer, &personal).expect_err("never");
+        assert!(
+            reason_of(&err).contains("reason=group_to_personal_namespace"),
+            "{err}"
+        );
+    }
+}
+
+/// D5 (ADR-0015): a deleted tombstone is released by its recorded owner
+/// only while that user is still Owner of the parent. A former owner —
+/// demoted (403) or no longer a member (the same 404 as no tombstone) —
+/// cannot; a disabled recorded owner is refused as disabled
+/// (FG-AUTH-0004); without a parent, administrators only.
+#[test]
+fn former_owner_cannot_release_deleted_tombstone() {
+    let deleted = |parent_role: Option<Role>| {
+        Resource::Tombstone(TombstoneRelease::Deleted {
+            recorded_owner: Some(ME),
+            caller_parent_role: parent_role,
+            has_parent: true,
+        })
+    };
+    let release = Action::NamespaceTombstoneRelease;
+    assert!(authorize(&session(), release, &deleted(Some(Role::Owner))).is_ok());
+    let err = authorize(&session(), release, &deleted(Some(Role::Maintainer)))
+        .expect_err("demoted former owner");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(
+        reason_of(&err).contains("reason=not_recorded_owner"),
+        "{err}"
+    );
+    let err = authorize(&session(), release, &deleted(None)).expect_err("left the parent");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    let disabled = Principal::authenticated(ME, false, false, Credential::Session);
+    let err = authorize(&disabled, release, &deleted(Some(Role::Owner))).expect_err("disabled");
+    assert_eq!(err.code(), ErrorCode::AccountDisabled);
+    // Another Owner of the parent is not the recorded owner.
+    let foreign = Resource::Tombstone(TombstoneRelease::Deleted {
+        recorded_owner: Some(crate::matrix::OTHER),
+        caller_parent_role: Some(Role::Owner),
+        has_parent: true,
+    });
+    assert_eq!(
+        authorize(&session(), release, &foreign)
+            .expect_err("not recorded")
+            .code(),
+        ErrorCode::Forbidden
+    );
+    assert!(authorize(&admin_session(), release, &foreign).is_ok());
+    let top = Resource::Tombstone(TombstoneRelease::Deleted {
+        recorded_owner: Some(ME),
+        caller_parent_role: None,
+        has_parent: false,
+    });
+    let err = authorize(&session(), release, &top).expect_err("no parent: admins only");
+    assert!(
+        reason_of(&err).contains("reason=top_level_tombstone"),
+        "{err}"
+    );
+    assert!(authorize(&admin_session(), release, &top).is_ok());
+    // A moved tombstone: its target's current Owner takes it back.
+    let moved = |role| {
+        Resource::Tombstone(TombstoneRelease::Moved {
+            target_owner_role: role,
+            target_visible: true,
+        })
+    };
+    assert!(authorize(&session(), release, &moved(Some(Role::Owner))).is_ok());
+    assert_eq!(
+        authorize(&session(), release, &moved(Some(Role::Maintainer)))
+            .expect_err("maintainer")
+            .code(),
+        ErrorCode::Forbidden
+    );
+}
+
+/// D5: an agent's credential never deletes, restores, moves, renames or
+/// releases — an Owner's or an administrator's alike, with
+/// `reason=agent_token` — while the same caller without `is_agent` may.
+#[test]
+fn agent_token_cannot_delete_transfer_or_release() {
+    let owned = project(Some(Role::Owner));
+    let cases = [
+        (Action::ProjectDelete, Resource::Project(owned)),
+        (
+            Action::ProjectRestore,
+            Resource::Project(ProjectView {
+                pending_deletion: true,
+                ..owned
+            }),
+        ),
+        (
+            Action::ProjectTransfer,
+            Resource::Transfer {
+                source: owned,
+                target: TransferTarget::Group {
+                    role: Some(Role::Owner),
+                    visible: true,
+                },
+            },
+        ),
+        (
+            Action::GroupTransfer,
+            Resource::GroupTransfer {
+                source_role: Some(Role::Owner),
+                target: TransferTarget::Group {
+                    role: Some(Role::Owner),
+                    visible: true,
+                },
+            },
+        ),
+        (
+            Action::NamespaceTombstoneRelease,
+            Resource::Tombstone(TombstoneRelease::Moved {
+                target_owner_role: Some(Role::Owner),
+                target_visible: true,
+            }),
+        ),
+        (
+            Action::NamespaceTombstoneRelease,
+            Resource::Tombstone(TombstoneRelease::Deleted {
+                recorded_owner: Some(ME),
+                caller_parent_role: Some(Role::Owner),
+                has_parent: true,
+            }),
+        ),
+    ];
+    let rename = (
+        Action::UserRename,
+        Resource::UserRename {
+            target_user: crate::matrix::OTHER,
+        },
+    );
+    for admin in [false, true] {
+        let scopes = if admin {
+            vec![Scope::Api, Scope::Admin]
+        } else {
+            vec![Scope::Api]
+        };
+        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        let agent = human.clone().as_agent(true);
+        let all = cases.iter().chain(admin.then_some(&rename));
+        for (action, resource) in all {
+            let err = authorize(&agent, *action, resource).expect_err("agents never");
+            assert_eq!(err.code(), ErrorCode::Forbidden, "{action:?}");
+            assert!(reason_of(&err).contains("reason=agent_token"), "{err}");
+            assert!(authorize(&human, *action, resource).is_ok(), "{action:?}");
+        }
+    }
 }

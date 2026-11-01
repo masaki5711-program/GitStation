@@ -549,3 +549,82 @@ fn reconfirm_keeps_the_agent_flag() {
         .expect("still allowed");
     assert!(again.principal().is_agent());
 }
+
+/// D5: a move's proof binds the source and the target parent together,
+/// and a hidden target never yields one; the rename and tombstone
+/// contexts carry their own row's id.
+#[test]
+fn d5_contexts_bind_source_and_target() {
+    let owned = LoadedProject {
+        id: ProjectId::new(9),
+        visibility: Visibility::Private,
+        role: Some(Role::Owner),
+        pending_deletion: false,
+    };
+    let group = crate::LoadedTransferTarget::Group {
+        namespace: NamespaceId::new(5),
+        group: crate::LoadedGroup {
+            id: GroupId::new(3),
+            role: Some(Role::Maintainer),
+        },
+    };
+    let proof = prove(
+        &session(),
+        Action::ProjectTransfer,
+        crate::TransferCtx::new(owned, group),
+    )
+    .expect("owner to a group they maintain");
+    assert_eq!(proof.id(), &(ProjectId::new(9), Some(NamespaceId::new(5))));
+    let hidden = crate::LoadedTransferTarget::NotVisible;
+    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let err = prove(
+        &admin,
+        Action::ProjectTransfer,
+        crate::TransferCtx::new(owned, hidden),
+    )
+    .expect_err("hidden target");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    let err = prove(
+        &admin,
+        Action::GroupTransfer,
+        crate::GroupTransferCtx::new(
+            crate::LoadedGroup {
+                id: GroupId::new(4),
+                role: Some(Role::Owner),
+            },
+            hidden,
+        ),
+    )
+    .expect_err("hidden target");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    let top = prove(
+        &admin,
+        Action::GroupTransfer,
+        crate::GroupTransferCtx::new(
+            crate::LoadedGroup {
+                id: GroupId::new(4),
+                role: None,
+            },
+            crate::LoadedTransferTarget::TopLevel,
+        ),
+    )
+    .expect("admin to the top level");
+    assert_eq!(top.id(), &(GroupId::new(4), None));
+    let rename = prove(
+        &admin,
+        Action::UserRename,
+        crate::UserRenameCtx::new(UserId::new(2)),
+    )
+    .expect("admin renames");
+    assert_eq!(rename.id(), &UserId::new(2));
+    let tombstone = crate::TombstoneCtx::new(crate::LoadedTombstone {
+        id: forge_core::TombstoneId::new(6),
+        release: crate::TombstoneRelease::Moved {
+            target_owner_role: Some(Role::Owner),
+            target_visible: true,
+        },
+    });
+    let proof = prove(&session(), Action::NamespaceTombstoneRelease, tombstone)
+        .expect("the target's owner");
+    assert_eq!(proof.id(), &forge_core::TombstoneId::new(6));
+}
