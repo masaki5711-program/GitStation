@@ -9,6 +9,7 @@
 
 use forge_core::config::DatabaseConfig;
 use forge_core::RequestId;
+use forge_db::identities::OperatorLink;
 use forge_db::users::{self, Bootstrap, DisableOutcome, Guard, NewUser};
 use forge_db::Db;
 use forge_errors::ForgeError;
@@ -163,6 +164,50 @@ pub(crate) async fn bootstrap_with(
     );
     let how = if created { "created" } else { "promoted" };
     Ok(format!("user {}: administrator ({how})\n", args.username))
+}
+
+/// `forge admin user link-identity --user --issuer --subject`.
+pub fn link_identity(
+    cfg: &DatabaseConfig,
+    request_id: &RequestId,
+    username: &str,
+    issuer: &str,
+    subject: &str,
+) -> Result<String, ForgeError> {
+    with_db(cfg, async |db| {
+        link_identity_with(db, request_id, username, issuer, subject).await
+    })
+}
+
+pub(crate) async fn link_identity_with(
+    db: &Db,
+    request_id: &RequestId,
+    username: &str,
+    issuer: &str,
+    subject: &str,
+) -> Result<String, ForgeError> {
+    let user = users::id_by_username(db, username).await?;
+    let outcome =
+        forge_oidc::operator_link_identity(db, &context(request_id), user, issuer, subject).await?;
+    let state = match outcome {
+        OperatorLink::Linked => "linked",
+        OperatorLink::AlreadyLinked => "already_linked",
+    };
+    tracing::info!(
+        target: "forge_cli",
+        event = "forge.admin.user.identity_linked",
+        request_id = %request_id,
+        user_id = user.get(),
+        issuer,
+        outcome = state,
+        "identity linked by the operator"
+    );
+    Ok(match outcome {
+        OperatorLink::Linked => format!("user {username}: identity of {issuer} linked\n"),
+        OperatorLink::AlreadyLinked => {
+            format!("user {username}: identity of {issuer} already linked (nothing changed)\n")
+        }
+    })
 }
 
 #[cfg(test)]

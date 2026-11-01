@@ -497,3 +497,22 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 12 | LOW（セキュリティのレビュー） | §6 の 2「Bearer 以外はすべて CSRF のトークンの対象」を文字どおりに当てると、git の Smart HTTP の POST（`git-receive-pack`・`git-upload-pack`、Basic で認証）が通らない。git はトークンを持たない | **git の Smart HTTP は §6 の 1（fetch metadata / `Origin` の検査）だけを掛け、2（トークン）は掛けない**。安全な理由: (a) ブラウザが別のサイトから送る POST には `Origin`（と fetch metadata）が必ず付き、1 で `origin_mismatch` / `fetch_site` になる。(b) git の POST の本文は `Content-Type: application/x-git-receive-pack-request`（`…-upload-pack-request`）で、CORS の「単純な要求」に当たらないので、別のサイトのページはプリフライトなしに送れず、GitStation はプリフライトに許可を返さない。フォームの送信（単純な要求）では git の pkt-line の本文を正しく作れない。(c) Smart HTTP は Cookie を見ない（§10）ので、ブラウザが自動で付ける資格情報は覚えた Basic だけで、それも (a)(b) で止まる。raw・archive の Basic の状態を変える要求は `token_missing`（そういうルートは今ない）。実装は forge-web `auth.rs`・`csrf.rs` |
 | 13 | MEDIUM（DB のレビュー） | 失効したセッションに暗号化した IdP のトークンが残る。期限切れの行が部分インデックスに残る | 失効（`revoke`・`revoke_all`・無効化）で `refresh_token_enc`・`id_token_enc` を NULL にする。無効化と一括の失効は期限切れの行も失効させる。期限から 30 日の掃除のジョブは後の MR（MR3 の引き継ぎ §5） |
 | 14 | LOW（DB のレビュー） | `oidc_sid` だけがある行、失効の取り消し | マイグレーション `20261103100100`（追記）: `CHECK (oidc_sid IS NULL OR oidc_issuer IS NOT NULL)`、失効は最終（`revoked_at`・`revoked_reason` は一度決まったら変わらない。トリガーのガード、XF001 → FG-DB-0009） |
+
+### 実装で決めた点（2026-11-01、M2 MR4 `feat/auth-oidc-login` の実装）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 15 | MEDIUM | §4 の順のままだと、ロールのない人の結び付けの衝突が FG-AUTH-0014（warn）になり、拒否のはずの人が警告を出す | **入場の判定（`SessionCreate`、`Resource::Admission`）を結び付けの衝突の確認より先に行う**。社員番号の利用者の状態で判定し、新規は `New`。forge-db `identities::login_decided` |
+| 16 | LOW | §4 の 4 では、社員番号が一致した相手がボット・サービスアカウントのとき `privileged_account` | 15 の順のため、ボット・サービスアカウントは入場で FG-AUTH-0013 `not_human`。管理者は今のまま FG-AUTH-0014 `privileged_account` |
+| 17 | LOW | `auto_link=false` で社員番号が既存の利用者のときが未定義（MR1 の引き継ぎの LOW） | FG-AUTH-0014 `auto_link_disabled` |
+| 18 | LOW | FG-AUTH-0014 / 0015 の `reason` の不足 | 0014 に `employee_number_taken`・`claim_invalid`（ログイン）、`subject_linked`・`already_linked`（CLI）。0015 に `body`・`request`・`issuer_mismatch` |
+| 19 | LOW | 監査の actor が未定義 | 結び付け・作成は `Anonymous`、前のセッションの失効と新しいセッションは `User(結んだ利用者)` |
+| 20 | LOW | `link-identity` で既に他の利用者に結んだ ID | 結び直しはしない（`forge_app` に DELETE がない）。FG-AUTH-0014 `subject_linked` |
+| 21 | LOW | `auth.oidc.issuer` の https の信頼の起点 | https の issuer は `auth.oidc.ca_file` が必須（公開 CA は使わない）。http はループバックだけ（開発） |
+| 22 | LOW | `SessionCreate` はルートの外（コールバックの変更の中）で判定する | `app::PLANNED` ではなく新しい `app::DECIDED_IN_ROUTE` と `routes.generated.json` の `decided_in`。エージェントモデルの `authz-coverage` のゲートが `decided_in` を知る必要がある（別のリポジトリの後の作業） |
+| 23 | LOW | ログインの開始の制限の値 | 固定（ピアごと、IPv6 は /64、20 回 / 60 秒、`Retry-After`）。設定にしない |
+| 24 | LOW | `forge doctor` の `auth.oidc` が DB に依存すると、DB の障害で IdP の確認ができない | `forge_oidc::check_provider`（DB もセッションの鍵も使わない）。時計のずれは discovery の応答の `Date` から、60 秒超で warn |
+| 25 | MEDIUM（レビュー） | トークンのエンドポイントがクライアント自体を断る（`invalid_client`・`unauthorized_client`・`invalid_request`）と、誰もログインできないのに info の FG-AUTH-0011 になる | **FG-AUTH-0015 `call=token reason=client_rejected`（alert）**。FG-SYS-0002 ではなく 0015 にした理由: 起動時の設定の検査ではなく実行中の IdP との呼び出しの失敗で、利用者への文言（今はログインできない）と Runbook `keycloak-unreachable` の手順（IdP 側のクライアントの設定を合わせる）が合う。`invalid_grant` などは今のまま 0011 `code_rejected` |
+| 26 | MEDIUM（レビュー） | JWKS のキャッシュがロックを持ったまま取得を待ち（最長 5 秒）、失敗は 60 秒の制限に数えない | 状態のロックは読み書きの間だけ。取得は 1 本ずつ（single flight）で、待っていた呼び出しは前の取得の結果を使う。**失敗も含めすべての試行が 60 秒の制限に入る**（最初の取得も）。60 秒以内に失敗していて使える鍵がなければ FG-AUTH-0015 `call=jwks reason=backoff`（呼び出しなし）。復旧からログインが戻るまで最長 60 秒 |
+| 27 | MEDIUM（レビュー） | コールバックに回数の制限がない。満杯の制限の表が全員を断る。毒された表が黙って断る | コールバックもピアごとに 20 回 / 60 秒（開始とは別に数える、`route=callback`）。満杯のときは最も古いピアを追い出す。毒された表は FG-SYS-0001 `reason=login_limiter_poisoned` を 1 回ログに出して断る |
+| 28 | LOW（レビュー） | 時計が 1970 年より前だと 0 秒として扱い、期限の検査が通る | FG-SYS-0001 `reason=clock_before_epoch` |

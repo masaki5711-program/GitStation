@@ -85,6 +85,9 @@ pub mod tokens;
 // ── M2 MR3: web sessions (ADR-0021 §5) ──
 pub mod sessions;
 // ── end M2 MR3 ──
+// ── M2 MR4: OIDC identities (ADR-0021 §4) ──
+pub mod identities;
+// ── end M2 MR4 ──
 // ── D4: projects, repositories, project members, protected refs ──
 pub mod projects;
 #[cfg(test)]

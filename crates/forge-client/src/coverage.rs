@@ -188,6 +188,9 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
 pub fn non_api_coverage(path: &str) -> &'static str {
     if path == "/healthz" || path == "/readyz" {
         "api (gstn api GET /healthz)"
+    } else if path.starts_with("/-/auth/") {
+        // M2 MR4: the browser sign-in (OIDC redirects and cookies).
+        "browser only (OIDC sign-in; gstn uses a personal access token, ADR-0021)"
     } else if path.contains(".git/") {
         "git (auth git-credential makes plain git clone/push work)"
     } else {

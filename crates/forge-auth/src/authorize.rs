@@ -2,7 +2,10 @@
 //! ADR-0010). Pure: no I/O, no clock, no globals.
 //!
 //! Order of checks:
-//! 1. public actions are allowed;
+//! 1. public actions are allowed; the sign-in's admission (`SessionCreate`
+//!    on `Resource::Admission`, M2 MR4, ADR-0021 §3) is decided on its
+//!    facts alone → `FG-AUTH-0013` (`no_access_role`, `user_disabled`,
+//!    `not_human`);
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
 //!    then session-only actions (`SessionRead`): a token → `FG-AUTH-0002
 //!    reason=session_required` (M2 MR3, ADR-0021 §17);
@@ -32,9 +35,9 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
 use crate::model::{
-    Credential, MembershipChange, MembershipScope, NamespaceView, Principal, ProjectView, RefKind,
-    RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
-    UnresolvedReason, Visibility,
+    AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
+    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease,
+    TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -48,6 +51,19 @@ pub fn authorize(
 
     if action.is_public() {
         return Ok(());
+    }
+    // The sign-in's admission (ADR-0021 §3): decided on the facts alone —
+    // there is no principal yet (the callback passes the anonymous one).
+    if let (
+        true,
+        Resource::Admission {
+            access_role,
+            account,
+        },
+    ) = (action.is_admission(), resource)
+    {
+        return admission(*access_role, *account)
+            .map_err(|reason| deny(ErrorCode::LoginNotPermitted).with_context("reason", reason));
     }
     let Some(user) = principal.user() else {
         return Err(deny(ErrorCode::Unauthenticated));
@@ -165,7 +181,7 @@ pub fn authorize(
 
     match (action, resource) {
         // Public actions returned above; kept for exhaustiveness.
-        (Action::Health | Action::WebShell, _) => Ok(()),
+        (Action::Health | Action::WebShell | Action::WebLogin, _) => Ok(()),
 
         // Visibility (can see, not a read role: a Guest on a private project
         // resolves it) and pending deletion were decided above; groups and
@@ -505,6 +521,7 @@ pub fn authorize(
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::SessionRead
+            | Action::SessionCreate
             | Action::PathResolve
             | Action::Metrics,
             Resource::Instance
@@ -521,8 +538,20 @@ pub fn authorize(
             | Resource::VisibilityChange { .. }
             | Resource::Token { .. }
             | Resource::TokenRequest { .. }
+            | Resource::Admission { .. }
             | Resource::Resolved { .. },
         ) => wrong_resource(),
+    }
+}
+
+/// `SessionCreate` (ADR-0021 §3, §17): the access role, and a new or active
+/// human account. The denial's log `reason` otherwise.
+fn admission(access_role: bool, account: AdmissionAccount) -> Result<(), &'static str> {
+    match account {
+        AdmissionAccount::Disabled => Err("user_disabled"),
+        AdmissionAccount::NotHuman => Err("not_human"),
+        AdmissionAccount::New | AdmissionAccount::Active if !access_role => Err("no_access_role"),
+        AdmissionAccount::New | AdmissionAccount::Active => Ok(()),
     }
 }
 
@@ -559,6 +588,7 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Namespace { .. }
         | Resource::Token { .. }
         | Resource::TokenRequest { .. }
+        | Resource::Admission { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
         | Resource::Tombstone(_) => None,
@@ -602,6 +632,7 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::VisibilityChange { .. }
         | Resource::Token { .. }
         | Resource::TokenRequest { .. }
+        | Resource::Admission { .. }
         | Resource::Unresolved(_)
         | Resource::Resolved { .. } => None,
     }

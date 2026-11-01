@@ -71,3 +71,36 @@ fn only_forge_hosting_calls_the_decided_commands() {
         "callers outside forge-hosting: {offenders:?}"
     );
 }
+
+/// M2 MR4 (ADR-0021 §4): `forge_db::identities::login_decided` takes the
+/// sign-in's admission as a closure; only forge-oidc calls it (with
+/// `authorize(SessionCreate)`).
+#[test]
+fn only_forge_oidc_calls_the_login_decision() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let needle = format!("{}{}{}", "login", "_decided", "(");
+    let mut offenders = Vec::new();
+    for entry in std::fs::read_dir(&crates).expect("crates/") {
+        let dir = entry.expect("entry").path();
+        let name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
+        if name == "forge-db" || name == "forge-oidc" {
+            continue;
+        }
+        let mut files = Vec::new();
+        rust_files(&dir, &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("read");
+            if text.contains(needle.as_str()) {
+                offenders.push(file.display().to_string());
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "callers outside forge-oidc: {offenders:?}"
+    );
+}

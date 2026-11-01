@@ -31,7 +31,7 @@ pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
 
-pub use audit_details::{AuditDetails, ChangedField, SessionRevokeReason};
+pub use audit_details::{AuditDetails, ChangedField, IdentityLinkVia, SessionRevokeReason};
 pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};

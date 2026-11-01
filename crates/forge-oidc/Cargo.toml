@@ -1,0 +1,45 @@
+[package]
+name = "forge-oidc"
+description = "The OIDC sign-in (Keycloak): discovery, JWKS, PKCE, the login state, ID token verification, linking and session issue (ADR-0021)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
+# The in-process mock identity provider (feature `test-support` only).
+axum = { workspace = true, optional = true }
+
+[features]
+# `forge_oidc::test_support`: the mock OP (axum on 127.0.0.1:0) and the
+# synthetic signing keys, for this crate's and forge-web's tests
+# (dev-dependency only; CI checks `forge` does not build with it).
+test-support = ["dep:axum", "tokio/net"]
+
+[dev-dependencies]
+forge-oidc = { workspace = true, features = ["test-support"] }
+forge-db = { workspace = true, features = ["test-support"] }
+proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -163,3 +163,63 @@ async fn bootstrap_admin_create_makes_a_new_human_admin() {
     );
     t.drop_now().await;
 }
+
+/// `link-identity` (M2 MR4): links once, then reports it as already
+/// linked; the log names the user id and the issuer, never the subject;
+/// an identity of another user is FG-AUTH-0014, an unknown user
+/// `NotFound`.
+#[tokio::test]
+async fn user_link_identity_links_once_and_logs_no_subject() {
+    let t = FreshDb::migrated().await;
+    user(&t, "alice", UserKind::Human, true).await;
+    let issuer = "https://sso.example.invalid/realms/gitstation-dev";
+    let logs = Captured::default();
+    let guard = logs.install();
+    let out = link_identity_with(
+        &t.db,
+        &rid("req-cli-l1"),
+        "alice",
+        issuer,
+        "sub-synthetic-1",
+    )
+    .await
+    .expect("linked");
+    drop(guard);
+    assert_eq!(out, format!("user alice: identity of {issuer} linked\n"));
+    let events = logs.events();
+    let linked: Vec<_> = events
+        .iter()
+        .filter(|e| e["fields"]["event"] == "forge.admin.user.identity_linked")
+        .collect();
+    assert_eq!(linked.len(), 1, "{events:?}");
+    assert_eq!(linked[0]["fields"]["outcome"], "linked");
+    assert_eq!(linked[0]["fields"]["issuer"], issuer);
+    let all = serde_json::to_string(&events).expect("json");
+    assert!(
+        !all.contains("sub-synthetic-1"),
+        "no subject in the log: {all}"
+    );
+
+    let again = link_identity_with(
+        &t.db,
+        &rid("req-cli-l2"),
+        "alice",
+        issuer,
+        "sub-synthetic-1",
+    )
+    .await
+    .expect("already linked");
+    assert!(again.contains("already linked"), "{again}");
+
+    user(&t, "bob", UserKind::Human, false).await;
+    let err = link_identity_with(&t.db, &rid("req-cli-l3"), "bob", issuer, "sub-synthetic-1")
+        .await
+        .expect_err("the identity is alice's");
+    assert_eq!(err.code(), ErrorCode::IdentityLinkConflict, "{err}");
+
+    let err = link_identity_with(&t.db, &rid("req-cli-l4"), "nobody-here", issuer, "sub-x")
+        .await
+        .expect_err("unknown user");
+    assert_eq!(err.code(), ErrorCode::NotFound, "{err}");
+    t.drop_now().await;
+}

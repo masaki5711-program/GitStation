@@ -306,6 +306,38 @@ pub enum AuditDetails {
         revoked_sessions: i64,
     },
     // ── end M2 MR3 ──
+    // ── M2 MR4: the OIDC sign-in (ADR-0021 §4), audit-only, on the user ──
+    /// `user.created` by a first sign-in (a human, never an
+    /// administrator): `{"kind":"human","namespace_id","is_admin":false,"via":"oidc"}`.
+    UserCreatedOnLogin { namespace_id: NamespaceId },
+    /// `user.identity_linked`: an IdP identity was linked to the user. The
+    /// issuer and how; never the IdP's subject.
+    UserIdentityLinked {
+        issuer: String,
+        via: IdentityLinkVia,
+    },
+    // ── end M2 MR4 ──
+}
+
+/// How an identity came to be linked (`user.identity_linked`'s `via`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityLinkVia {
+    /// The employee number and the verified e-mail matched (ADR-0021 §4 2).
+    EmployeeNumber,
+    /// The user was created by this sign-in (§4 3).
+    FirstLogin,
+    /// `forge admin user link-identity` (§4 2a).
+    Operator,
+}
+
+impl IdentityLinkVia {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EmployeeNumber => "employee_number",
+            Self::FirstLogin => "first_login",
+            Self::Operator => "operator",
+        }
+    }
 }
 
 /// Why a web session ended early (`web_sessions.revoked_reason`, its CHECK,
@@ -390,6 +422,8 @@ impl AuditDetails {
             Self::SessionCreated { .. } => "session.created",
             Self::SessionRevoked { .. } => "session.revoked",
             Self::SessionsRevoked { .. } => "session.revoked_all",
+            Self::UserCreatedOnLogin { .. } => "user.created",
+            Self::UserIdentityLinked { .. } => "user.identity_linked",
         }
     }
 
@@ -438,7 +472,9 @@ impl AuditDetails {
             // ADR-0021 §5: sessions are audit rows, never domain events.
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
-            | Self::SessionsRevoked { .. } => None,
+            | Self::SessionsRevoked { .. }
+            | Self::UserCreatedOnLogin { .. }
+            | Self::UserIdentityLinked { .. } => None,
         }
     }
 
@@ -765,6 +801,16 @@ impl AuditDetails {
                 "reason": reason.as_str(),
                 "revoked_sessions": revoked_sessions,
             }),
+            Self::UserCreatedOnLogin { namespace_id } => serde_json::json!({
+                "kind": UserKind::Human.as_str(),
+                "namespace_id": namespace_id.get(),
+                "is_admin": false,
+                "via": "oidc",
+            }),
+            Self::UserIdentityLinked { issuer, via } => serde_json::json!({
+                "issuer": issuer,
+                "via": via.as_str(),
+            }),
         }
     }
 
@@ -828,7 +874,9 @@ impl AuditDetails {
             | Self::ProjectPurged { .. }
             | Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
-            | Self::SessionsRevoked { .. } => self.to_value(),
+            | Self::SessionsRevoked { .. }
+            | Self::UserCreatedOnLogin { .. }
+            | Self::UserIdentityLinked { .. } => self.to_value(),
         }
     }
 }

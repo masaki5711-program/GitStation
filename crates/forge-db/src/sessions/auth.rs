@@ -136,7 +136,11 @@ pub async fn authenticate(
 
 /// Constant-time comparison with the stored hash; a hash that is not 32
 /// bytes is `FG-DB-0019 reason=bad_hash` (the CHECK was bypassed).
-fn matches_hash(session_id: i64, stored: &[u8], secret: &TokenSecret) -> Result<bool, ForgeError> {
+pub(super) fn matches_hash(
+    session_id: i64,
+    stored: &[u8],
+    secret: &TokenSecret,
+) -> Result<bool, ForgeError> {
     let stored: [u8; 32] = stored.try_into().map_err(|_| {
         ForgeError::new(ErrorCode::CredentialDataInvalid)
             .with_context("reason", "bad_hash")

@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 publish = false
 
@@ -16,6 +16,7 @@ forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
 forge-db = { path = "crates/forge-db" }
 forge-hosting = { path = "crates/forge-hosting" }
+forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
 url = "2"
@@ -75,6 +76,23 @@ rust-embed = { version = "8.12", default-features = false, features = ["debug-em
 # MIT OR Apache-2.0; 0.12 is built on the hmac 0.12 / digest 0.10 above.
 hkdf = "0.12"
 # ── end M2 MR3 ──
+# ── M2 MR4: the OIDC sign-in (ADR-0021 §2, §15) ──
+# The HTTP client to the identity provider: rustls with ring and only the
+# roots of auth.oidc.ca_file (no public roots, no system proxy). Same 0.12
+# as forge-client. MIT OR Apache-2.0.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots"] }
+# JWS parsing and claim validation; the signature check is forge-oidc's own
+# ring CryptoProvider (no rust_crypto: it pulls `rsa`, RUSTSEC-2023-0071).
+# Pinned: re-check §15 (cargo deny) before raising it. MIT.
+jsonwebtoken = { version = "=11.1.0", default-features = false }
+# RS256 / ES256 verification (already in the lock through rustls). ISC-style.
+ring = "0.17"
+getrandom = "0.2"
+subtle = "2"
+# `forge doctor auth.oidc`: the provider's HTTP Date for the clock skew
+# (already in the lock through hyper). MIT OR Apache-2.0.
+httpdate = "1"
+# ── end M2 MR4 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

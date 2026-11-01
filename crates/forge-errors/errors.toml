@@ -578,6 +578,74 @@ runbook = "user-offboarding"
 test = "administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group"
 
 [[error]]
+code = "FG-AUTH-0011"
+name = "LoginStateInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "ログインを完了できませんでした。もう一度ログインしてください。"
+user_message_en = "The sign-in could not be completed. Sign in again."
+user_message_id = "Proses masuk tidak dapat diselesaikan. Silakan masuk lagi."
+cause = "The browser came back to `GET /-/auth/callback` (ADR-0021 §3) without a usable login state: the state cookie `__Host-gstn_oidc` was missing, could not be opened (another key, tampered, truncated), was older than 10 minutes, or its `state` did not equal the query's; or the identity provider answered with `error=` instead of a code; or the token endpoint refused the code (`invalid_grant`: the code was already used — a replayed callback — or expired, or the PKCE verifier did not match). The state cookie is single-use: every callback answer clears it. Nothing was written."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason`: state_cookie_missing, state_cookie_invalid (with `detail` = truncated|version|kid|tag|json), state_expired, state_mismatch, query_missing (no `code` / `state`), idp_error (with `idp_error`, the OAuth error code only — never `error_description`), code_rejected (the token endpoint refused the code, usually `oauth_error=invalid_grant`, with `status`; a refusal of the client itself is FG-AUTH-0015 client_rejected). A burst of state_mismatch / state_cookie_missing from one client is a login-CSRF attempt or a browser that blocks cookies; one code_rejected after a double click is a replayed callback."
+fix = "For a person: start the sign-in again (`/-/auth/login`) and allow cookies for GitStation. If every sign-in fails with state_cookie_invalid, `web.session_key_file` changed between login and callback or differs between processes: use the same key file everywhere. idp_error=access_denied means the person cancelled at the identity provider."
+test = "login_state_failures_are_login_state_invalid"
+
+[[error]]
+code = "FG-AUTH-0012"
+name = "IdTokenInvalid"
+http_status = 401
+severity = "warn"
+user_message_ja = "ログインを完了できませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The sign-in could not be completed. Contact the administrator with the request ID."
+user_message_id = "Proses masuk tidak dapat diselesaikan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The ID token the identity provider returned at the callback failed verification (ADR-0021 §9): its signature, its algorithm (only `auth.oidc.signing_algs`, RS256 by default, ES256 optional; never `none`, HS* or PS*), its key (`kid` required; the JWKS key must pair kty and alg: RS256 = RSA 2048..8192 bit, ES256 = EC P-256 with 32-byte x / y on the curve), `iss` (equal to the discovery issuer and `auth.oidc.issuer`), `aud` (must contain the client id; with several audiences `azp` must be the client id), `exp` / `iat` / `nbf` (60 s clock skew), `nonce` (the login's) or `sub` (1..255 characters). Nothing was written; the person is not signed in."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason`: malformed, alg_not_allowed (with `alg`), kid_missing, unknown_kid (also after the JWKS refetch, or within 60 s of the last refetch), key_invalid (with `detail`: base64, rsa_modulus_size, rsa_exponent, ec_coordinate_length, ec_point, crv, kty, use), key_alg_mismatch (with `alg`, `kty`), signature, issuer, audience, azp, expired, not_yet_valid (iat or nbf in the future beyond the skew), nonce, subject, missing_claim (with `claim`). The token itself is never logged. `signature` / `unknown_kid` right after a key rotation at the identity provider are expected for at most 60 s; constant ones point at a wrong `auth.oidc.issuer`, a wrong realm key or a man in the middle."
+fix = "Follow runbook oidc-login: compare `auth.oidc.issuer` with the discovery document, check the realm's signing keys and algorithm (RS256), the client id and the server clock (`forge doctor` reports the clock skew to the identity provider). For key_alg_mismatch / key_invalid, fix the realm's key configuration."
+runbook = "oidc-login"
+test = "id_token_failures_are_id_token_invalid"
+
+[[error]]
+code = "FG-AUTH-0013"
+name = "LoginNotPermitted"
+http_status = 403
+severity = "info"
+user_message_ja = "このアカウントでは GitStation にログインできません。必要なら管理者に連絡してください。"
+user_message_en = "This account cannot sign in to GitStation. Contact the administrator if you need access."
+user_message_id = "Akun ini tidak dapat masuk ke GitStation. Hubungi administrator jika Anda memerlukan akses."
+cause = "The identity provider signed the person in, but `authorize()` refused the admission (`SessionCreate` on `Resource::Admission`, ADR-0021 §3): the ID token has no access client role (`resource_access.<client_id>.roles` does not contain `auth.oidc.access_role`), or the GitStation account it belongs to is disabled, or it is a bot or service account (those never sign in to the web). No session was issued and no user or identity link was written."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason` (no_access_role, user_disabled, not_human), `action=SessionCreate` and, when the account is known, `user`. A person without the role is the expected case for someone outside the GitStation user group."
+fix = "Grant the person the access role of the GitStation client in Keycloak (or the group that carries it) if they should use GitStation. A disabled account stays disabled until an administrator re-enables it (approved step, runbook user-offboarding). Bots and service accounts use tokens, not the web."
+test = "admission_denials_are_login_not_permitted"
+
+[[error]]
+code = "FG-AUTH-0014"
+name = "IdentityLinkConflict"
+http_status = 409
+severity = "warn"
+user_message_ja = "このアカウントを GitStation の利用者に結び付けられませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "This account could not be linked to a GitStation user. Contact the administrator with the request ID."
+user_message_id = "Akun ini tidak dapat ditautkan ke pengguna GitStation. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "At the first sign-in of an identity (issuer + subject not linked yet), GitStation neither linked it to an existing user nor created one (ADR-0021 §4): an e-mail address alone never links; an employee number links only together with a verified matching e-mail, only to a human non-administrator not yet linked to this issuer, and only with `auth.oidc.auto_link = true`; a new user needs the employee number claim, a verified e-mail and a free username and e-mail. Nothing was written. Also `forge admin user link-identity` when the identity or the user is already linked."
+diagnosis = "The log event `forge.auth.login_failed` (or the CLI's error) carries `reason` only — never the claims: employee_number_missing (the ID token has no `auth.oidc.employee_number_claim`), email_missing, email_unverified (`email_verified` is not true), email_mismatch (the employee number matched a user whose e-mail differs), privileged_account (the employee number belongs to an administrator: linked only by the operator), employee_number_linked (that user is linked to another subject of this issuer), auto_link_disabled (`auth.oidc.auto_link = false` and the employee number belongs to an existing user), username_unavailable (`preferred_username` missing, invalid, reserved, taken or tombstoned), email_taken (another user has the e-mail), employee_number_taken (a concurrent sign-in created a user with it first: retry), claim_invalid (with `detail`: a claim breaks a forge.users rule, e.g. an e-mail above 320 characters); CLI: subject_linked (the identity belongs to another user), already_linked (the user has an identity of this issuer)."
+fix = "Follow runbook oidc-identity-link: find the person by employee number and e-mail in the identity provider and in GitStation, decide whom the identity belongs to, and link it as an approved step with `forge admin user link-identity --user <username> --issuer <issuer> --subject <sub>`; or fix the claim mappers (employee_number, email_verified) in the realm."
+runbook = "oidc-identity-link"
+test = "identity_link_conflicts_name_their_reason"
+
+[[error]]
+code = "FG-AUTH-0015"
+name = "IdentityProviderUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "認証サーバーに接続できないため、今はログインできません。ログイン済みの方はそのまま使えます。しばらくしてからもう一度お試しください。"
+user_message_en = "Sign-in is unavailable because the identity provider cannot be reached. Signed-in users are not affected. Try again later."
+user_message_id = "Proses masuk tidak tersedia karena penyedia identitas tidak dapat dihubungi. Pengguna yang sudah masuk tidak terpengaruh. Coba lagi nanti."
+cause = "A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin; or the token endpoint refused the client itself (OAuth `invalid_client`, `unauthorized_client`, `invalid_request`: a wrong client secret, a disabled or misconfigured client), so no sign-in can succeed until an operator acts. Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider)."
+diagnosis = "The log event carries `call` (discovery, jwks, token) and `reason`: connect_timeout, timeout, connect, tls, status (with `status`), redirect, body_too_large, body (the body broke off), request (any other transport failure), invalid_json (with `detail`), endpoint_origin (with `endpoint`), issuer_mismatch (the discovery document's issuer is not `auth.oidc.issuer`), client_rejected (call=token, with `status` and `oauth_error`: check `auth.oidc.client_id`, the client secret file and the client in Keycloak), backoff (call=jwks: a JWKS fetch failed less than 60 s ago, so no new call was made; the first failure is logged with its own reason). The response body is never logged (it may hold tokens). `forge doctor` checks auth.oidc (discovery, JWKS, the clock skew) from the server."
+fix = "Follow runbook keycloak-unreachable: check that Keycloak is up and reachable from the GitStation host (`forge doctor`, then curl the issuer's `/.well-known/openid-configuration` with the configured CA), the CA file and the network path (forge never uses an environment proxy). Nothing to repair in GitStation; sign-ins resume once the identity provider answers."
+runbook = "keycloak-unreachable"
+test = "idp_timeout_is_identity_provider_unavailable"
+
+[[error]]
 code = "FG-AUTH-0016"
 name = "CsrfRejected"
 http_status = 403
@@ -589,6 +657,19 @@ cause = "A state-changing request (not GET, HEAD or OPTIONS) failed the cross-si
 diagnosis = "The log event `forge.auth.csrf_rejected` carries `reason`: token_missing (no X-GitStation-CSRF header), token_mismatch (not this session's token — another session's, an old page's after a new sign-in, or a forged one), origin_missing (a session request without Origin), origin_mismatch (Origin is another origin: another subdomain, http vs https, another port; with `expected_origin`; `base_url=unset` when web.base_url is not configured), fetch_site (Sec-Fetch-Site was same-site, cross-site or none). It also carries `method`, `path` (log-safe) and, for a session, `public_id`. Header values are never logged except the expected origin. A burst of origin_mismatch from one client usually means a page of another site posting to GitStation (an attack or a misconfigured integration); a single token_mismatch after a new sign-in is a stale tab."
 fix = "For a person: reload the page (it fetches the current CSRF token) and repeat the action. For an integration or script: authenticate with `Authorization: Bearer <token>` and do not send browser headers (Origin / Sec-Fetch-*) from another origin. If every browser request fails with origin_mismatch, check that web.base_url is exactly the URL people open (scheme, host and port)."
 test = "csrf_rejections_name_their_reason"
+
+[[error]]
+code = "FG-AUTH-0018"
+name = "LoginNotConfigured"
+http_status = 503
+severity = "info"
+user_message_ja = "このサーバーではブラウザのログインが設定されていません。gstn と個人アクセストークンを使ってください。"
+user_message_en = "Browser sign-in is not configured on this server. Use gstn and a personal access token."
+user_message_id = "Proses masuk melalui browser belum dikonfigurasi di server ini. Gunakan gstn dan token akses pribadi."
+cause = "`GET /-/auth/login` or `/-/auth/callback` was requested while `auth.oidc` is not configured (ADR-0021 §12). A server without browser sign-in is a valid configuration (git, gstn and the token API work), so this is not FG-SYS-0002; `forge doctor` warns `auth.oidc not configured`."
+diagnosis = "The log event carries `route`. If browser sign-in was expected, the server's configuration has no `[auth.oidc]` (or FORGE_AUTH_OIDC_*) values."
+fix = "Configure `auth.oidc.issuer`, `auth.oidc.client_id`, `auth.oidc.client_secret_file` (and `auth.oidc.ca_file` for an https issuer) together with `web.session_key_file`, then restart (runbook oidc-login). Until then use gstn with a personal access token."
+test = "login_without_oidc_is_login_not_configured"
 
 [[error]]
 code = "FG-GIT-0007"
@@ -820,6 +901,19 @@ cause = "A request body exceeded the route's limit (at most 64 KiB for an API ro
 diagnosis = "The log event carries `limit_bytes`, `route`, `action` and `declared` (`true` when `Content-Length` already exceeded the limit, `false` when the body grew past it while streaming). The body is never logged."
 fix = "Send a smaller body (split the change into several requests). The per-route limits are part of the API description (`x-forge-max-body-bytes` in `Git/docs/api/openapi.json`)."
 test = "oversized_request_body_is_request_too_large"
+
+[[error]]
+code = "FG-WEB-0010"
+name = "RateLimited"
+http_status = 429
+severity = "info"
+user_message_ja = "短い間に要求が多すぎます。少し待ってからもう一度お試しください。"
+user_message_en = "Too many requests in a short time. Wait a moment and try again."
+user_message_id = "Terlalu banyak permintaan dalam waktu singkat. Tunggu sebentar lalu coba lagi."
+cause = "A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts per peer per minute (an IPv6 peer counts as its /64), so nobody can flood the identity provider through GitStation. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`."
+diagnosis = "The log event carries `route`, `limit` and `window_s` (never the address, which is personal data). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019."
+fix = "Wait `Retry-After` seconds. If a proxy in front of GitStation makes every user one peer, record it in the incident record and decide the client-address source (ADR-0019 open question) before raising the limit."
+test = "login_start_is_rate_limited_per_peer"
 
 [[error]]
 code = "FG-WEB-0007"

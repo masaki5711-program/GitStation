@@ -23,9 +23,9 @@ mod ref_updates;
 pub use action::Action;
 pub use authorize::authorize;
 pub use model::{
-    Credential, MembershipChange, MembershipScope, NamespaceView, Principal, ProjectView, RefKind,
-    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
-    UnresolvedReason, Visibility,
+    AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
+    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,

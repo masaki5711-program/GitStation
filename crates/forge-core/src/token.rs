@@ -177,8 +177,8 @@ fn from_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
         return None;
     }
     let mut out = [0u8; N];
-    for (slot, pair) in out.iter_mut().zip(s.as_bytes().chunks_exact(2)) {
-        let [hi, lo] = pair else { return None };
+    let (pairs, _) = s.as_bytes().as_chunks::<2>();
+    for (slot, [hi, lo]) in out.iter_mut().zip(pairs) {
         *slot = (nibble(*hi)? << 4) | nibble(*lo)?;
     }
     Some(out)

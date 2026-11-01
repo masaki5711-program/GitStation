@@ -175,4 +175,19 @@ pub const KEYS: &[Key] = &[
         "web.session_absolute_secs",
         "FORGE_WEB_SESSION_ABSOLUTE_SECS",
     ),
+    // M2 MR4: the OIDC sign-in (ADR-0021 §12).
+    text("auth.oidc.issuer", "FORGE_AUTH_OIDC_ISSUER"),
+    text("auth.oidc.client_id", "FORGE_AUTH_OIDC_CLIENT_ID"),
+    text(
+        "auth.oidc.client_secret_file",
+        "FORGE_AUTH_OIDC_CLIENT_SECRET_FILE",
+    ),
+    text("auth.oidc.ca_file", "FORGE_AUTH_OIDC_CA_FILE"),
+    text(
+        "auth.oidc.employee_number_claim",
+        "FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM",
+    ),
+    text("auth.oidc.access_role", "FORGE_AUTH_OIDC_ACCESS_ROLE"),
+    text("auth.oidc.signing_algs", "FORGE_AUTH_OIDC_SIGNING_ALGS"),
+    boolean("auth.oidc.auto_link", "FORGE_AUTH_OIDC_AUTO_LINK"),
 ];

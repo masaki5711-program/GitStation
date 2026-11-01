@@ -959,3 +959,41 @@ fn a_session_only_action_refuses_every_token_with_session_required() {
     assert!(err.to_string().contains("reason=session_required"), "{err}");
     assert!(authorize(&session(), Action::SessionRead, &Resource::Instance).is_ok());
 }
+
+/// M2 MR4 (ADR-0021 §3): the admission of a sign-in is `FG-AUTH-0013`
+/// with the reason in the log context; a disabled or non-human account is
+/// named before a missing role.
+#[test]
+fn admission_denials_are_login_not_permitted() {
+    use crate::AdmissionAccount as A;
+    let decide = |access_role, account| {
+        authorize(
+            &Principal::anonymous(),
+            Action::SessionCreate,
+            &Resource::Admission {
+                access_role,
+                account,
+            },
+        )
+    };
+    for (role, account, reason) in [
+        (false, A::New, "no_access_role"),
+        (false, A::Active, "no_access_role"),
+        (true, A::Disabled, "user_disabled"),
+        (false, A::Disabled, "user_disabled"),
+        (true, A::NotHuman, "not_human"),
+        (false, A::NotHuman, "not_human"),
+    ] {
+        let err = decide(role, account).expect_err(reason);
+        assert_eq!(err.code(), ErrorCode::LoginNotPermitted, "{account:?}");
+        let text = err.to_string();
+        assert!(text.contains(&format!("reason={reason}")), "{text}");
+        assert!(text.contains("action=SessionCreate"), "{text}");
+    }
+    assert!(decide(true, A::New).is_ok());
+    assert!(decide(true, A::Active).is_ok());
+    assert!(Action::SessionCreate.is_admission() && !Action::SessionCreate.is_public());
+    assert!(Action::WebLogin.is_public());
+    let names: Vec<&str> = A::ALL.iter().map(|a| a.as_str()).collect();
+    assert_eq!(names, ["new", "active", "disabled", "not_human"]);
+}

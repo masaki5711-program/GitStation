@@ -1183,8 +1183,100 @@ fn the_web_session_key_file_is_checked_at_load_and_read_on_use() {
         "web.session_key_file",
         "invalid_key",
     );
-    for typo in ["FORGE_WEB_BASEURL", "FORGE_AUTH_OIDC_ISSUER"] {
+    for typo in ["FORGE_WEB_BASEURL", "FORGE_AUTH_OIDC_ISSUR"] {
         let err = load(None, &env(&[(typo, "x")])).expect_err(typo);
         assert_invalid(&err, typo, "unknown_env");
     }
+}
+
+/// `auth.oidc.*` (M2 MR4, ADR-0021 §12): all or nothing, the issuer's
+/// scheme rules, the CA file for https, the algorithm allow-list, the
+/// defaults; the client secret never shows in `Debug`.
+#[test]
+fn auth_oidc_is_all_or_nothing_and_validated() {
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.auth.oidc.is_none());
+    let secret = file("synthetic-client-secret\n");
+    let secret_path = secret.path().to_string_lossy().into_owned();
+    let ca = file("-----BEGIN CERTIFICATE-----\n");
+    let ca_path = ca.path().to_string_lossy().into_owned();
+    let base = [
+        (
+            "FORGE_AUTH_OIDC_ISSUER",
+            "http://127.0.0.1:58080/realms/gitstation-dev",
+        ),
+        ("FORGE_AUTH_OIDC_CLIENT_ID", "gitstation"),
+        ("FORGE_AUTH_OIDC_CLIENT_SECRET_FILE", secret_path.as_str()),
+    ];
+    let cfg = load(None, &env(&base)).expect("loads");
+    let oidc = cfg.auth.oidc.as_ref().expect("configured");
+    assert_eq!(oidc.client_secret.expose(), "synthetic-client-secret");
+    assert_eq!(oidc.employee_number_claim, "employee_number");
+    assert_eq!(oidc.access_role, "access");
+    assert_eq!(oidc.signing_algs, vec![OidcSigningAlg::Rs256]);
+    assert!(oidc.auto_link);
+    assert!(!format!("{cfg:?}").contains("synthetic-client-secret"));
+
+    // Partial: the required keys are named.
+    let err =
+        load(None, &env(&[("FORGE_AUTH_OIDC_CLIENT_ID", "gitstation")])).expect_err("partial");
+    assert_invalid(&err, "auth.oidc.issuer", "missing");
+    let err = load(None, &env(&base[..2])).expect_err("no secret");
+    assert_invalid(&err, "auth.oidc.client_secret_file", "missing");
+
+    let with = |extra: &[(&'static str, &str)]| {
+        let mut pairs: Vec<(&str, &str)> = base.to_vec();
+        pairs.extend_from_slice(extra);
+        load(None, &env(&pairs))
+    };
+    for (issuer, reason) in [
+        ("http://keycloak.example.invalid/realms/x", "insecure_http"),
+        ("ftp://127.0.0.1/realms/x", "scheme"),
+        (
+            "https://u:p@keycloak.example.invalid/realms/x",
+            "has_user_info",
+        ),
+        ("https://keycloak.example.invalid/realms/x?a=b", "has_query"),
+        ("not a url", "invalid"),
+    ] {
+        let err = with(&[("FORGE_AUTH_OIDC_ISSUER", issuer)]).expect_err(issuer);
+        assert_invalid(&err, "auth.oidc.issuer", reason);
+    }
+    let https = (
+        "FORGE_AUTH_OIDC_ISSUER",
+        "https://keycloak.example.invalid/realms/x",
+    );
+    assert_invalid(
+        &with(&[https]).expect_err("https needs a CA"),
+        "auth.oidc.ca_file",
+        "ca_required",
+    );
+    let ok = with(&[https, ("FORGE_AUTH_OIDC_CA_FILE", ca_path.as_str())]).expect("https + ca");
+    assert!(ok.auth.oidc.expect("configured").ca_file.is_some());
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_CA_FILE", ca_path.as_str())]).expect_err("http + ca"),
+        "auth.oidc.ca_file",
+        "ca_not_allowed",
+    );
+    for algs in ["none", "HS256", "PS256", "RS256,EdDSA"] {
+        let err = with(&[("FORGE_AUTH_OIDC_SIGNING_ALGS", algs)]).expect_err(algs);
+        assert_invalid(&err, "auth.oidc.signing_algs", "alg_not_allowed");
+    }
+    let both = with(&[("FORGE_AUTH_OIDC_SIGNING_ALGS", "ES256, RS256")]).expect("both");
+    assert_eq!(
+        both.auth.oidc.expect("configured").signing_algs,
+        vec![OidcSigningAlg::Es256, OidcSigningAlg::Rs256]
+    );
+    let off = with(&[("FORGE_AUTH_OIDC_AUTO_LINK", "false")]).expect("auto_link");
+    assert!(!off.auth.oidc.expect("configured").auto_link);
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_AUTO_LINK", "yes")]).expect_err("bool"),
+        "auth.oidc.auto_link",
+        "invalid",
+    );
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM", "a b")]).expect_err("claim"),
+        "auth.oidc.employee_number_claim",
+        "invalid",
+    );
 }

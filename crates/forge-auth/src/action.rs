@@ -94,6 +94,15 @@ actions! {
     /// token is `FG-AUTH-0002 reason=session_required` (a token has no
     /// session to read, and must never learn a CSRF token).
     SessionRead,
+    /// `GET /-/auth/login`, `GET /-/auth/callback`: start and finish the
+    /// OIDC sign-in (M2 MR4, ADR-0021 §3). Public: the caller has no
+    /// session yet; what the callback admits is decided by `SessionCreate`.
+    WebLogin,
+    /// Inside `GET /-/auth/callback`: may the person the IdP signed in get
+    /// a session (`Resource::Admission`, ADR-0021 §3, §17)? Decided for the
+    /// anonymous principal on the admission facts only — the IdP's access
+    /// role and the account the identity belongs to (or `New`).
+    SessionCreate,
     // --- web (ADR-0015) ---
     /// `GET /api/v1/namespaces/resolve?path=`: which namespace a path names,
     /// decided by whether the caller can see it (`Resource::Unresolved` /
@@ -110,7 +119,15 @@ actions! {
 impl Action {
     /// Reachable without credentials.
     pub fn is_public(self) -> bool {
-        matches!(self, Action::Health | Action::WebShell)
+        matches!(self, Action::Health | Action::WebShell | Action::WebLogin)
+    }
+
+    /// Decided on `Resource::Admission` alone, whoever the principal is
+    /// (the sign-in has no principal yet, ADR-0021 §3). With any other
+    /// resource it is decided like every other action (an anonymous
+    /// caller is `FG-AUTH-0001`).
+    pub fn is_admission(self) -> bool {
+        matches!(self, Action::SessionCreate)
     }
 
     /// Only a web session may perform it (ADR-0021 §17): a personal access
@@ -132,7 +149,12 @@ impl Action {
         match self {
             // Public, or session only (`is_session_only`: no token reaches
             // the scope check).
-            Action::Health | Action::WebShell | Action::SessionRead => None,
+            // The sign-in: public, or decided on the admission facts.
+            Action::Health
+            | Action::WebShell
+            | Action::SessionRead
+            | Action::WebLogin
+            | Action::SessionCreate => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead

@@ -54,7 +54,7 @@ pub fn generated_documents(version: &str) -> Vec<(&'static str, String)> {
     vec![
         (
             ROUTES_MANIFEST,
-            registry::routes_json(registry.defs(), app::PLANNED),
+            registry::routes_json_with(registry.defs(), app::PLANNED, app::DECIDED_IN_ROUTE),
         ),
         (MATRIX_MANIFEST, forge_auth::matrix::summary_json()),
         (

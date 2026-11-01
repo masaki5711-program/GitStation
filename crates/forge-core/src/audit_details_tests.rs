@@ -729,3 +729,45 @@ fn session_details_are_audit_only_ids_and_reasons() {
     }
     assert_eq!(SessionRevokeReason::parse("revoked"), None);
 }
+
+/// M2 MR4: the sign-in's audit rows carry the issuer and how, never the
+/// subject or a claim (ADR-0021 §4).
+#[test]
+fn login_details_are_audit_only_and_carry_no_claims() {
+    use crate::audit_details::IdentityLinkVia;
+    let created = AuditDetails::UserCreatedOnLogin {
+        namespace_id: NamespaceId::new(9),
+    };
+    let linked = AuditDetails::UserIdentityLinked {
+        issuer: "http://127.0.0.1:58080/realms/gitstation-dev".to_owned(),
+        via: IdentityLinkVia::EmployeeNumber,
+    };
+    assert_eq!(created.action(), "user.created");
+    assert_eq!(linked.action(), "user.identity_linked");
+    assert_eq!(
+        created.to_value(),
+        json!({"kind": "human", "namespace_id": 9, "is_admin": false, "via": "oidc"})
+    );
+    assert_eq!(
+        linked.to_value(),
+        json!({"issuer": "http://127.0.0.1:58080/realms/gitstation-dev", "via": "employee_number"})
+    );
+    for d in [&created, &linked] {
+        assert_eq!(d.event_type(), None);
+        let mut found = Vec::new();
+        keys(&d.to_value(), &mut found);
+        for k in &found {
+            assert!(!PII_KEYS.contains(&k.as_str()), "{k}");
+            assert!(!["sub", "subject"].contains(&k.as_str()), "{k}");
+        }
+    }
+    let names: Vec<&str> = [
+        IdentityLinkVia::EmployeeNumber,
+        IdentityLinkVia::FirstLogin,
+        IdentityLinkVia::Operator,
+    ]
+    .iter()
+    .map(|v| v.as_str())
+    .collect();
+    assert_eq!(names, ["employee_number", "first_login", "operator"]);
+}

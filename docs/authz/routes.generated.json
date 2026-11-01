@@ -16,6 +16,22 @@
     "word": "assets"
   },
   {
+    "action": "WebLogin",
+    "method": "GET",
+    "path": "/-/auth/callback",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebLogin",
+    "method": "GET",
+    "path": "/-/auth/login",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "WebShell",
     "method": "GET",
     "path": "/-/projects/{id}/{*rest}",
@@ -658,5 +674,9 @@
   {
     "action": "Metrics",
     "planned": true
+  },
+  {
+    "action": "SessionCreate",
+    "decided_in": "/-/auth/callback"
   }
 ]

@@ -1218,6 +1218,46 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/-/auth/callback": {
+      "get": {
+        "operationId": "get_auth_callback",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next",
+        "x-forge-action": "WebLogin"
+      }
+    },
+    "/-/auth/login": {
+      "get": {
+        "operationId": "get_auth_login",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Start the browser sign-in: 302 to the identity provider (ADR-0021)",
+        "x-forge-action": "WebLogin"
+      }
+    },
     "/api/v1/groups": {
       "get": {
         "operationId": "get_api_v1_groups",
