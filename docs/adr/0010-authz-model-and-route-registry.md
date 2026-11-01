@@ -227,3 +227,8 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
 - 権限の表: 自分の昇格（Developer が自分を Owner に、Maintainer が自分を Owner に）、最後の Owner の削除と降格、Maintainer の
   エージェント、Guest のメンバー一覧、保護より低い Developer、`read_api` / `api` / `write_repository` のトークン、無効な
   アカウント、削除待ちのプロジェクトの許可と拒否の行を足した。
+
+## Amendment（2026-11-01、ADR-0023）
+
+Context の「リポジトリは種類（`spec` / `system`）を持ち」は、ADR-0023 で置き換えた。リポジトリに種類の区別はない（`repositories.kind` の列は残るが使わない）。
+プロジェクトが 1 つの主リポジトリを持つ構造は変わらない。

@@ -1192,3 +1192,9 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   戻す操作は古い URL と墓標に影響し、元に戻すのに人の判断が要るため（計画 D5 の回答「agents denied every D5 action incl. restore」）。
 - 判定の順は MR8 と同じ（可視性 → スコープ → エージェント → 役割）。見えない対象には 404、スコープ不足には FG-AUTH-0002 が先に返る。
 - 権限の表に、Owner と管理者のエージェントのトークンの拒否の行がある。
+
+## Amendment（2026-11-01、ADR-0023）
+
+本文の「仕様のプロジェクト」「`spec` リポジトリ」「固定した仕様のプロジェクト」は、リポジトリの種類ではなく、対象ブランチの `.forge/repo.yml` の
+`specs:` で版を固定して参照されている、ふつうのリポジトリのことと読む。リポジトリに種類 `spec` / `system` はない。`RequirementRead` と spec-lane の読み取りの範囲
+（参照されたリポジトリだけ、読み取り専用）の規則は変わらない。

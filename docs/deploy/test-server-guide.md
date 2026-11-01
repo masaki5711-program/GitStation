@@ -18,7 +18,7 @@
 | GitStation | Rust 製の 2 プロセス構成（`forge serve` と `forge worker`）＋ PostgreSQL 16。ブラウザの画面（SPA）は `embed-ui` で `forge` に埋め込める。**TLS は持たない**（リバースプロキシの仕事）。 |
 | Kanflow | Next.js 16 / Prisma 7 / MySQL 8.4。本番は Windows 11 の常駐サービス構成。ワーカー（翻訳・AI 監視）は別プロセス。Collabora と Ollama は任意。 |
 | **連携の現状** | **GitStation↔Kanflow の機械的な連携（Webhook、イベント履歴 API、`GitStationSource`）は、どちらのリポジトリにもまだ無い**（§5.1）。明日つなげるのは「同じ利用者が Claude Code から `gstn`（GitStation）と Kanflow MCP の両方を使う」形と、ブランチ名の PBI 番号の規約まで。 |
-| 画面 | GitStation の UI は M2 の範囲がそろった（MR9〜MR12）: ログイン、ホーム、グループ・プロジェクトの一覧と作成、リポジトリ閲覧（木・ファイル・コミット・差分・比較・blame）、設定・メンバー・トークン・セッション・管理、文書ポータル（`kind=spec` の読み取り専用）。**画面を使うには Keycloak でのログインが要る**。Keycloak が無ければ `gstn` と API で操作する。 |
+| 画面 | GitStation の UI は M2 の範囲がそろった（MR9〜MR12）: ログイン、ホーム、グループ・プロジェクトの一覧と作成、リポジトリ閲覧（木・ファイル・コミット・差分・比較・blame）、設定・メンバー・トークン・セッション・管理、文書ポータル（`kind=spec` の読み取り専用。**2026-11-01 の決定で取り下げが決まっている。このビルドには含まれるが、機能として試験・案内しない。ADR-0023**）。**画面を使うには Keycloak でのログインが要る**。Keycloak が無ければ `gstn` と API で操作する。 |
 | ブラウザのログイン | OIDC（Keycloak）だけ。**Keycloak 無しだと画面から入れない**（`gstn` とトークンは使える）。Keycloak は IoT プラットフォーム側が用意する想定（§3.9）。 |
 | 実機の検証 | GitHub の CI は一度も動いていない。Keycloak の E2E、Kanflow の実 MySQL のテストと E2E も**未実行**（§7）。つまり**初めての実機**であり、手順どおりに進まない箇所が出る前提で、§8 の runbook を手元に置く。 |
 
@@ -97,6 +97,7 @@ flowchart LR
 
 - GitStation の `main` はこのブランチの祖先（`8fea414`）で古い。**ブランチ `claude/brave-cray-w62c35` の先端を使う**。
   M2 の MR1〜MR12（認証・セッション・閲覧 API・画面・文書ポータル）はすべて**含まれる**(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
+  **ただし 2026-11-01 の決定（ADR-0023）で、文書ポータル（MR12）とリポジトリの種類 `spec` / `system`（`kind`）は取り下げが決まった。明日のデプロイの `f95e2e8` にはまだ含まれるが、コードの削除は後続の MR で行う。試験ではこの 2 つを確かめなくてよい。**
 - 取得元: 両リポジトリとも `origin` は GitHub の私設リポジトリ（`git remote -v`）。**テストサーバーから GitHub に届くか、社内ミラーが要るかは「未確認」**。届かないなら、PC で `git bundle` を作って持ち込む（提案）。
 - 作業の前にコミットを固定する: `git checkout --detach <上の SHA>`（提案。再現性のため）。
 
@@ -409,12 +410,12 @@ gstn auth git-credential --install                     # 素の git が自動で
 gstn api GET /api/v1/user                              # 自分の情報（personal namespace の id など）
 gstn group create --path <GROUP_PATH> --display-name "<NAME>"
 gstn namespace resolve <GROUP_PATH>                    # namespace の id を引く
-gstn project create --namespace-id <NAMESPACE_ID> --path <PROJECT_PATH> --display-name "<NAME>" --kind system
+gstn project create --namespace-id <NAMESPACE_ID> --path <PROJECT_PATH> --display-name "<NAME>"
 gstn project list
 gstn project view <PROJECT_ID>                         # リポジトリが ready になるまで待つ (worker が作る)
 ```
 
-- 項目の根拠: `gstn project create` の引数は `crates/forge-client/src/cli.rs`（`--namespace-id`、`--path`、`--display-name`、`--kind spec|system`、`--visibility private|internal`）。
+- 項目の根拠: `gstn project create` の引数は `crates/forge-client/src/cli.rs`（`--namespace-id`、`--path`、`--display-name`、`--kind spec|system`、`--visibility private|internal`）。`--kind` は省略でき、省略時はサーバーの既定（`system`）になる。**`kind` は 2026-11-01 に取り下げが決まった（ADR-0023）ので、指定しない。**
 - プロジェクトを作ると `repository.provision` のジョブが入り、**`forge worker` がベアリポジトリを作る**（`forge.repo.provisioned` ログ）(出典: `ops/runbooks/repository-provisioning.md`)。`provisioning` のまま 10 分を超えると `forge doctor` が `FG-REPO-0012`（alert）。
 
 ```bash
@@ -467,7 +468,7 @@ GitStation は次の形を求める（出典: `docs/adr/0021-oidc-keycloak-login
 - 入場の条件: ID トークンに `access` ロールがあること。無い・利用者が無効だと `FG-AUTH-0013`。社員番号が既存の利用者と衝突すると `FG-AUTH-0014`（`auto_link=false` のときなど）(出典: `docs/handoff/2026-11-01-m2-mr4.md` §2〜§3、`ops/runbooks/oidc-login.md`)。
 - Keycloak に届かなくても、ログイン済みのセッション・git・トークンの API・`gstn` は動き続ける。`/readyz` は Keycloak を見ない（ADR-0021 §10）。
 - 確認: `forge doctor` の `auth.oidc`（discovery・JWKS・時計のずれ・issuer の一致）。ブラウザで `https://<TEST_SERVER_HOST>/-/auth/login` → Keycloak → `/-/auth/callback` → 戻る。
-- ログイン後はホームが開く。ホーム → プロジェクト → ファイル・コミット、設定 → トークン、仕様書のプロジェクトは「文書ポータル」へ進める（§6 のチェックリストで確かめる）。
+- ログイン後はホームが開く。ホーム → プロジェクト → ファイル・コミット、設定 → トークン（~~仕様書のプロジェクトの「文書ポータル」~~ は 2026-11-01 に取り下げが決まったので、確かめない）。
 - `auth.oidc` を設定しなければ `/-/auth/login` は `FG-AUTH-0018`（503）を返す。`gstn` とトークンだけで試験するなら、この節は飛ばしてよい。
 
 ---
@@ -761,10 +762,10 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 |---|---|---|
 | MR5（ログアウト、バックチャネルのログアウト、5 分ごとのリフレッシュの確認、FG-AUTH-0017） | **統合済み**（`8649cc6`）。レビュー（security / rust / database / authz-matrix）の HIGH 1 件を修正し再レビューで承認。本物の Keycloak での E2E は未実行 | `docs/handoff/2026-11-01-m2-mr5.md`、`docs/adr/0021-oidc-keycloak-login-and-web-sessions.md` |
 | MR6（トークン・セッション・利用者検索・管理者の一覧と無効化の API、`gstn token`/`user`、期限切れセッションの削除） | **統合済み**（`2d72558`）。レビューの HIGH 1 件（他人のトークンの失効）を修正し再レビューで承認。管理者が他人のトークンを失効する API は見送り | `docs/handoff/2026-11-01-m2-mr6.md`、`docs/api/openapi.json` |
-| UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **統合済み**。各 MR で TypeScript / a11y / design（MR10 は security も）のレビューの HIGH を直し再レビューで承認。web の単体テスト 404 件、Playwright の通し（43 画面、axe 違反 0）は**スタンドインのサーバー相手**。実 `forge serve` と本物の Keycloak での通し、Firefox・Safari は未確認。文書ポータルの使いやすさの確かめ（人の作業）は未実施 | `docs/handoff/2026-11-01-m2-mr9.md`〜`-mr12.md` |
+| UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **統合済み**。各 MR で TypeScript / a11y / design（MR10 は security も）のレビューの HIGH を直し再レビューで承認。web の単体テスト 404 件、Playwright の通し（43 画面、axe 違反 0）は**スタンドインのサーバー相手**。実 `forge serve` と本物の Keycloak での通し、Firefox・Safari は未確認。文書ポータルの使いやすさの確かめ（人の作業）は未実施（**文書ポータルは 2026-11-01 に取り下げ。この確かめは不要**） | `docs/handoff/2026-11-01-m2-mr9.md`〜`-mr12.md` |
 | トークンの画面での発行 | 画面あり（MR11、ブラウザのセッションが要る）。CLI は `forge admin token issue` | §3.6 |
 | 閲覧の API | commits / commit / compare / blame / refs / resolve / tree / blob / raw / archive は**統合済み** | `docs/handoff/…-mr7.md`、`…-mr8.md` |
-| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ、文書ポータルのアップロード・承認・編集 | M3 以降（未実装）。文書ポータルは M2 の読み取り専用版だけ | `README.md` ロードマップ |
+| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ、リポジトリをまたぐ連携（仕様の参照・ずれの通知・Kanflow への複数登録） | M3 以降（未実装）。~~文書ポータルのアップロード・承認・編集~~ は文書ポータルごと取り下げ（2026-11-01、ADR-0023。M2 の読み取り専用版は `f95e2e8` に含まれるが削除予定） | `README.md` ロードマップ |
 | Kanflow 連携 | §5.1 のとおり未実装 | 計画 02 §13 |
 | GitHub Actions の CI | **一度も動いていない**。main か PR で 1 回動かすのが MR2 の CI 追加の前提 | `docs/plan/10-m2-plan.md` §8、`docs/ci.md` |
 | Keycloak の E2E（本物の Keycloak と通す）、realm JSON の実機での取り込み | **未実行**（realm の JSON は構文確認のみ） | `docs/handoff/2026-11-01-m2-mr4.md` §6 |

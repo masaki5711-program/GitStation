@@ -260,3 +260,9 @@ MR2（`feat/web-spa-foundation`）で実物を作って分かったこと。上�
 - **チャンク**: Markdown の部品（約 177 kB、gzip 50 kB）は `React.lazy` で別のファイルにした。最初に読む JS は 448 kB（gzip 143 kB）。
 - **推移的な依存の版**: 2 週間の規則（§8）に合わせ、公開から 2 週間たっていない版が選ばれた 5 つを `package.json` の `overrides` で古い版に固定した（`hast-util-to-jsx-runtime` 2.3.6、`mdast-util-to-markdown` 2.1.2、`mdast-util-find-and-replace` 3.0.2、`unist-util-visit` 5.1.0、`unist-util-visit-parents` 6.0.2）。いずれも react-markdown / remark-gfm の範囲（`^`）の中。上げるときは overrides を消して 2 週間後に。
 - **画面の語の扱い**: SVG・HTML・XML・PDF のファイルは、画面では「描かない」という注意を出し、テキストのものは中身を文字として（`<pre>` の中で）見せる。描画・実行はしない（ADR-0015 の「表示せず、ダウンロードだけ」の「表示」を、描画の意味に読んだ）。
+
+## Amendment（2026-11-01、ADR-0023: 文書ポータルをやめる）
+
+- 「文書ポータル、ログイン、エラーの画面は M2 で id まで埋める」から文書ポータルを外す（ログインとエラーの画面は変わらない）。
+- 計画 08 の言い換えの表を辞書の `plain.*` として持つこと、文書ポータルの画面に Git の言葉が出ないことの禁止語の検査（MR12）は、取り下げた。
+  GitStation の画面は Git の言葉を使う。後続のコードの MR で `plain.*` と検査を取り除く。

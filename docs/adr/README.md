@@ -7,7 +7,7 @@
 | [0001](0001-process-model-events-and-crate-layout.md) | プロセス構成、ドメインイベント、クレートの依存の向き | accepted | 2026-10-26 |
 | [0002](0002-postgresql-in-development.md) | 開発環境も PostgreSQL にする（SQLite は使わない） | accepted | 2026-10-26 |
 | [0003](0003-llm-verification-as-advisory-checks.md) | ローカル LLM による検証は Checks API の「助言」チェックとして出す | accepted | 2026-10-26 |
-| [0004](0004-repository-kinds-and-spec-driven-development.md) | リポジトリの種類（spec / system）と仕様駆動開発 | accepted | 2026-10-26 |
+| [0004](0004-repository-kinds-and-spec-driven-development.md) | リポジトリの種類（spec / system）と仕様駆動開発 | accepted（種類の部分は 0023 が置き換え） | 2026-10-26 |
 | [0005](0005-kanflow-integration-event-feed-and-act-as.md) | kanflow 連携 — 汎用の作業項目プロバイダ、イベントの履歴 API、代理実行 | accepted | 2026-10-26 |
 | [0006](0006-merge-safety-and-pipeline-diagnosis.md) | main を壊さない仕組みと、機械が読めるパイプラインの診断 | accepted | 2026-10-26 |
 | [0007](0007-drive-upload-pack-receive-pack-directly.md) | Smart HTTP は upload-pack / receive-pack を直接起動する | accepted | 2026-10-26 |
@@ -26,3 +26,4 @@
 | [0020](0020-gstn-client-crate-and-credential-storage.md) | クライアント `gstn` のクレートの置き方と、トークンの保管 | accepted | 2026-11-01 |
 | [0021](0021-oidc-keycloak-login-and-web-sessions.md) | OIDC（Keycloak）のログインと Web のセッション | accepted | 2026-11-01 |
 | [0022](0022-web-ui-foundation-react-typescript-embedded.md) | Web の画面の土台（React + TypeScript、埋め込みの配信） | accepted | 2026-11-01 |
+| [0023](0023-drop-repository-kinds-and-document-portal.md) | リポジトリの種類（spec / system）と文書ポータルをやめる | accepted | 2026-11-01 |

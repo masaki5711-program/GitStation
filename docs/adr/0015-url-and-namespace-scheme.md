@@ -1169,3 +1169,10 @@ MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare
   別の絞り込みのカーソルはタグで落ちる（`rule=tag`）。値の誤りは FG-WEB-0006 `rule=invalid_value`、グループの `kind` / `state` は
   `unknown_parameter`。
 
+
+## Amendment（2026-11-01、ADR-0023: 種類と文書ポータルをやめる）
+
+- 「リポジトリの種類（ADR-0004）」の節（`spec` / `system` はバッジで示し、一覧は `?kind=spec` で絞る）は、置き換えた。リポジトリに種類はなく、バッジも絞り込みもない。
+- `project_view` の `kind`（リポジトリの種類）、`POST /api/v1/projects` の `kind`、`GET /api/v1/projects?kind=` は、後続のコードの MR で取り除く。
+  カーソルの purpose の `kind=…` も同様。名前空間の `kind`（`user` / `group` / `project`）と墓標の `kind` は別のもので、変わらない。
+- 「文書ポータル（§3.7、M7）は別の画面の系統である」は取り下げた。画面の系統は 1 つ。`/docs/…`（M7）の予約は、ポータルのためのものなので使わない（予約語は残してよい）。
