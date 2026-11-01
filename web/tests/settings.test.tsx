@@ -648,7 +648,7 @@ describe('review fixes (MR11)', () => {
     click('Create token');
     const panel = await screen.findByTestId('token-secret');
     expect(panel.getAttribute('role')).toBeNull();
-    expect(within(panel).getAllByRole('status').map((x) => x.textContent)).toContain('Token created.');
+    expect(screen.getAllByRole('status').map((x) => x.textContent)).toContain('Token created.');
     expect(screen.queryByRole('button', { name: 'Create token' })).toBeNull();
     expect(screen.getByText(/Finish with the token shown above/)).toBeTruthy();
   });

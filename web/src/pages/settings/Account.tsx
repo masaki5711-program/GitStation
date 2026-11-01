@@ -18,7 +18,7 @@ import { formatDateTime } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { SESSION_KEY, useSession } from '../../session/session';
 import { AdminUsers } from './AdminUsers';
-import { ConfirmDialog, Denied, Section, focusHeading, useConfirm, useRefreshSessionOn403 } from './common';
+import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 import { Tokens } from './Tokens';
 
@@ -72,6 +72,7 @@ type SessionItem = components['schemas']['SessionItem'];
 
 function Sessions() {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();
@@ -182,6 +183,7 @@ function Sessions() {
  * waiting and that the date is not known here. */
 function Trash() {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();

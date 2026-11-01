@@ -9,6 +9,8 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
   const { t } = useTranslation();
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const copy = () => {
+    // Empty first: the same message twice in a row is not announced again.
+    setState('idle');
     const clipboard = (navigator as Partial<Navigator>).clipboard;
     if (clipboard === undefined) {
       setState('failed');

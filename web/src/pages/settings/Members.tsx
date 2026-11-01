@@ -16,7 +16,7 @@ import controls from '../../components/controls.module.css';
 import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDate, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import { ConfirmDialog, Denied, Section, focusHeading, useConfirm, useRefreshSessionOn403 } from './common';
+import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 
 type Member = components['schemas']['MemberBody'];
@@ -142,6 +142,7 @@ export function MembersScreen({ scope }: { scope: Scope }) {
 
 function MemberTable({ scope, members }: { scope: Scope; members: Member[] }) {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();

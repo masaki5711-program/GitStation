@@ -13,7 +13,7 @@ import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { formatDate } from '../../features/labels';
-import { ConfirmDialog, Denied, Section, focusHeading, useConfirm, useRefreshSessionOn403 } from './common';
+import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import styles from './Settings.module.css';
 
 type AdminUser = components['schemas']['AdminUser'];
@@ -21,6 +21,7 @@ type Action = { user: AdminUser; what: 'disable' | 'sessions' };
 
 export function AdminUsers() {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();

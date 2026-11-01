@@ -3,7 +3,7 @@
 // failure of a request as the one-line reason + request id (ErrorNotice via
 // QueryError), and the stale-CSRF refresh on a 403.
 import { useQueryClient } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ApiFailure } from '../../api/client';
@@ -34,15 +34,19 @@ export function Denied({ error }: { error: unknown }) {
 export function Section({
   id,
   title,
+  danger = false,
   children,
 }: {
   id: string;
   title: string;
+  /** The heading of a danger zone is in the danger text colour. */
+  danger?: boolean;
   children: ReactNode;
 }) {
   return (
     <section className={styles.section} aria-labelledby={id}>
-      <h2 id={id} className={styles.sectionTitle} tabIndex={-1}>
+      <h2 id={id} className={danger ? `${styles.sectionTitle} ${styles.dangerTitle}` : styles.sectionTitle}
+        tabIndex={-1}>
         {title}
       </h2>
       {children}
@@ -52,18 +56,32 @@ export function Section({
 
 /** Focus a heading once no modal dialog is open any more: a confirmation
  * closes in an effect after the request succeeded, and focus moved while the
- * dialog is still modal is lost (the page behind is inert). */
-export function focusHeading(id: string) {
-  let tries = 0;
-  const attempt = () => {
-    tries += 1;
-    if (document.querySelector('dialog[open]') !== null && tries < 50) {
-      window.setTimeout(attempt, 20);
-      return;
-    }
-    document.getElementById(id)?.focus();
-  };
-  window.setTimeout(attempt, 0);
+ * dialog is still modal is lost (the page behind is inert). The polling stops
+ * when the screen goes away, and a heading that is no longer in the page is
+ * skipped. */
+export function useFocusHeading() {
+  const timer = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+    },
+    [],
+  );
+  return useCallback((id: string) => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    let tries = 0;
+    const attempt = () => {
+      tries += 1;
+      if (document.querySelector('dialog[open]') !== null && tries < 50) {
+        timer.current = window.setTimeout(attempt, 20);
+        return;
+      }
+      timer.current = null;
+      const heading = document.getElementById(id);
+      if (heading?.isConnected === true) heading.focus();
+    };
+    timer.current = window.setTimeout(attempt, 0);
+  }, []);
 }
 
 /** Ask before a request that cannot be taken back. The cancel button has the

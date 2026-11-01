@@ -18,7 +18,7 @@ import { ErrorSummary } from '../../features/CreateDialogs';
 import { formatDateTime, roleLabel } from '../../features/labels';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
-import { ConfirmDialog, Denied, Section, focusHeading, useConfirm, useRefreshSessionOn403 } from './common';
+import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import { GeneralForm, MoveForm } from './Forms';
 import styles from './Settings.module.css';
 
@@ -73,7 +73,7 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <Section id="move-title" title={t('settings.move.title')}>
         <MoveForm kind="project" id={projectId} path={p.path} />
       </Section>
-      <Section id="delete-title" title={t('settings.delete.title')}>
+      <Section id="delete-title" title={t('settings.delete.title')} danger>
         <DeleteProject project={p} />
       </Section>
     </>
@@ -147,6 +147,7 @@ export function patternProblem(pattern: string): 'empty' | 'prefix' | 'length' |
 
 function ProtectedRefs({ projectId }: { projectId: number }) {
   const { t, i18n } = useTranslation();
+  const focusHeading = useFocusHeading();
   const api = useApi();
   const queryClient = useQueryClient();
   const refresh = useRefreshSessionOn403();
@@ -175,15 +176,19 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
     },
     onError: refresh,
   });
+  const [changed, setChanged] = useState<string | null>(null);
   const change = useMutation({
-    mutationFn: (v: { id: number; role: RoleKey }) =>
+    mutationFn: (v: { id: number; role: RoleKey; pattern: string }) =>
       call(() =>
         api.PATCH('/api/v1/projects/{id}/protected-refs/{rule_id}', {
           params: { path: { id: projectId, rule_id: v.id } },
           body: { push_min_role: v.role },
         }),
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: key }),
+    onSuccess: async (_r, v) => {
+      setChanged(v.pattern);
+      await queryClient.invalidateQueries({ queryKey: key });
+    },
     onError: refresh,
   });
   const confirm = useConfirm<{ id: number; pattern: string }>();
@@ -289,7 +294,7 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
                             aria-disabled={draft === undefined || draft === r.push_min_role || change.isPending ? 'true' : undefined}
                             onClick={() => {
                               if (draft === undefined || draft === r.push_min_role || change.isPending) return;
-                              change.mutate({ id: r.id, role: draft });
+                              change.mutate({ id: r.id, role: draft, pattern: r.pattern });
                             }}
                           >
                             {t('settings.refs.change')}
@@ -315,6 +320,9 @@ function ProtectedRefs({ projectId }: { projectId: number }) {
           </div>
         ))}
       {change.isError && <Denied error={change.error} />}
+      <p role="status" className={styles.muted}>
+        {changed === null ? '' : t('settings.refs.changed', { pattern: changed })}
+      </p>
       <form onSubmit={submit} noValidate className={styles.narrow}>
         <h3>{t('settings.refs.add')}</h3>
         <ErrorSummary errors={problemText === null ? [] : [problemText]} attempt={attempt} />
