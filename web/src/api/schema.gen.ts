@@ -3008,7 +3008,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                public_id: number;
+                public_id: string;
             };
             cookie?: never;
         };

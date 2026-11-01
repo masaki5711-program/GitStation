@@ -1508,7 +1508,11 @@ fn error_schema() -> Value {
 /// A path parameter's schema: an `{id}` is a plain positive decimal
 /// (anything else is `FG-WEB-0006`); every other parameter a string.
 fn param_schema(name: &str) -> Value {
-    if name == "id" || name.ends_with("_id") {
+    // A web session's public id is 16 lowercase hex characters
+    // (`forge_db::sessions::is_public_id`), not a numeric id.
+    if name == "public_id" {
+        json!({ "type": "string", "pattern": "^[0-9a-f]{16}$" })
+    } else if name == "id" || name.ends_with("_id") {
         json!({ "type": "integer", "format": "int64", "minimum": 1 })
     } else {
         json!({ "type": "string" })

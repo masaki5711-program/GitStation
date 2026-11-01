@@ -4191,9 +4191,8 @@
             "name": "public_id",
             "required": true,
             "schema": {
-              "format": "int64",
-              "minimum": 1,
-              "type": "integer"
+              "pattern": "^[0-9a-f]{16}$",
+              "type": "string"
             }
           }
         ],

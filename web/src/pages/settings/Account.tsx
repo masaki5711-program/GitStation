@@ -84,10 +84,7 @@ function Sessions() {
     mutationFn: (item: SessionItem) =>
       callNoContent(() =>
         api.DELETE('/api/v1/user/sessions/{public_id}', {
-          // docs/api/openapi.json declares `{public_id}` as an integer, but it
-          // is 16 hex characters (SessionItem.public_id): a defect of the
-          // generated document (handoff MR11), worked around here.
-          params: { path: { public_id: item.public_id as unknown as number } },
+          params: { path: { public_id: item.public_id } },
         }),
       ),
     onSuccess: async (_r, item) => {
