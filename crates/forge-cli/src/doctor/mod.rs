@@ -8,7 +8,8 @@
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
 //! administers forge (`users.administration`), repository provisioning and
 //! storage (`repositories.provisioning`, `repositories.storage`), storage
-//! root, the git binary and the embedded web UI (`web.ui`). One line
+//! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
+//! provider (`auth.oidc`, M2 MR4). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool, except `audit.seal_verify`, which reads the sealed act-as columns
@@ -28,6 +29,7 @@ use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
+mod oidc;
 mod render;
 // ── D4 MR3b ──
 mod repositories;
@@ -129,6 +131,7 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         }
         checks.push(git_check().await);
         checks.push(web_ui_check());
+        checks.push(skip("auth.oidc", "configuration invalid"));
         return checks;
     };
 
@@ -154,6 +157,8 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
     });
     checks.push(git_check().await);
     checks.push(web_ui_check());
+    // M2 MR4: the sign-in's provider (needs no database).
+    checks.push(oidc::oidc_check(&cfg).await);
     checks
 }
 

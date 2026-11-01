@@ -20,6 +20,8 @@ clap = { workspace = true, features = ["env"] }
 forge-git.workspace = true
 forge-web.workspace = true
 forge-hosting.workspace = true
+forge-oidc.workspace = true
+httpdate.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
@@ -30,6 +32,7 @@ tracing.workspace = true
 embed-ui = ["forge-web/embed-ui"]
 
 [dev-dependencies]
+forge-oidc = { workspace = true, features = ["test-support"] }
 forge-db = { workspace = true, features = ["test-support"] }
 # tests/smart_http_e2e.rs: gzip request bodies.
 flate2.workspace = true

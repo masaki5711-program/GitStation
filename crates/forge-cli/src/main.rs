@@ -24,6 +24,7 @@ mod admin_user;
 mod db;
 mod doctor;
 mod explain;
+mod oidc;
 mod runtime;
 mod serve;
 mod worker;
@@ -259,6 +260,21 @@ enum UserCommand {
         reclaim: bool,
     },
     // ── end D5 MR5 ──
+    // ── M2 MR4 ──
+    /// Link a sign-in identity (OIDC issuer + subject) to a user
+    /// (runbook oidc-identity-link; settles FG-AUTH-0014).
+    LinkIdentity {
+        /// The username.
+        #[arg(long)]
+        user: String,
+        /// The issuer, exactly as `auth.oidc.issuer`.
+        #[arg(long)]
+        issuer: String,
+        /// The `sub` claim of the identity.
+        #[arg(long)]
+        subject: String,
+    },
+    // ── end M2 MR4 ──
 }
 
 #[derive(Subcommand)]
@@ -334,7 +350,10 @@ fn main() -> ExitCode {
                     command: TokenCommand::Issue { .. } | TokenCommand::Revoke { .. },
                 }
                 | AdminCommand::User {
-                    command: UserCommand::Disable { .. } | UserCommand::Rename { .. },
+                    command:
+                        UserCommand::Disable { .. }
+                        | UserCommand::Rename { .. }
+                        | UserCommand::LinkIdentity { .. },
                 }
                 | AdminCommand::Group {
                     command: GroupCommand::Move { .. },
@@ -549,6 +568,19 @@ fn main() -> ExitCode {
                 reclaim,
             )
         }),
+        Command::Admin {
+            command:
+                AdminCommand::User {
+                    command:
+                        UserCommand::LinkIdentity {
+                            user,
+                            issuer,
+                            subject,
+                        },
+                },
+        } => config().and_then(|cfg| {
+            admin_user::link_identity(&cfg.database, &request_id, &user, &issuer, &subject)
+        }),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or_else(|| cfg.server.bind.clone()); // clone: cfg is passed whole below
             serve::serve(&bind, &cfg)
@@ -642,6 +674,34 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn user_link_identity_takes_user_issuer_and_subject() {
+        let cli = parse(&[
+            "admin",
+            "user",
+            "link-identity",
+            "--user",
+            "alice",
+            "--issuer",
+            "https://sso.example.invalid/realms/r",
+            "--subject",
+            "sub-1",
+        ])
+        .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::User {
+                    command: UserCommand::LinkIdentity { ref user, ref issuer, ref subject }
+                }
+            } if user == "alice" && issuer.ends_with("/realms/r") && subject == "sub-1"
+        ));
+        assert!(
+            parse(&["admin", "user", "link-identity", "--user", "alice"]).is_err(),
+            "issuer and subject are required"
+        );
     }
 
     #[test]

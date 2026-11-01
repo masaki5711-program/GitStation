@@ -192,6 +192,24 @@ pub(crate) fn now_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// `forge doctor auth.oidc`: one fresh check of the provider (discovery
+/// and the JWKS, never cached) without a database or the session keys —
+/// the same HTTP client rules as the sign-in (no proxy, no redirects, only
+/// `auth.oidc.ca_file`). Returns the document and the number of usable keys.
+pub async fn check_provider(settings: &OidcSettings) -> Result<(Discovery, usize), ForgeError> {
+    let http = IdpClient::new(settings.ca_pem.as_deref(), settings.timeouts.connect)?;
+    fetch_provider(&http, settings).await
+}
+
+async fn fetch_provider(
+    http: &IdpClient,
+    settings: &OidcSettings,
+) -> Result<(Discovery, usize), ForgeError> {
+    let doc = discovery::fetch(http, &settings.issuer, settings.timeouts.fetch).await?;
+    let keys = crate::jwks::fetch(http, &doc.jwks_uri, settings.timeouts.fetch).await?;
+    Ok((doc, keys.len()))
+}
+
 impl Oidc {
     /// Build the service: the HTTP client, the JWT verifier (installs the
     /// provider) and the three purpose keys of `web.session_key_file`.
@@ -264,15 +282,7 @@ impl Oidc {
     /// One fresh check of the provider for `forge doctor`: discovery and
     /// the JWKS (never cached).
     pub async fn check(&self) -> Result<(Discovery, usize), ForgeError> {
-        let doc = discovery::fetch(
-            &self.http,
-            &self.settings.issuer,
-            self.settings.timeouts.fetch,
-        )
-        .await?;
-        let keys =
-            crate::jwks::fetch(&self.http, &doc.jwks_uri, self.settings.timeouts.fetch).await?;
-        Ok((doc, keys.len()))
+        fetch_provider(&self.http, &self.settings).await
     }
 
     async fn discovered(&self) -> Result<std::sync::Arc<Discovery>, ForgeError> {

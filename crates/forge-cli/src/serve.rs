@@ -22,6 +22,13 @@
 //! (`forge_db::sessions::SessionStore`, `web.session_idle_secs`), behind
 //! the same permits as the token lookups.
 //!
+//! OIDC sign-in (M2 MR4, ADR-0021 §3, §11): with `auth.oidc` configured,
+//! `web.session_key_file` is required (`FG-SYS-0002 reason=missing`), the
+//! settings (and `auth.oidc.ca_file`) are read before the server binds, and
+//! the discovery document is prefetched in the background (a failing
+//! provider is a warning: signed-in sessions keep working, the first
+//! sign-in tries again). Without it the login routes are `FG-AUTH-0018`.
+//!
 //! Smart HTTP (M1 phase 9 MR3): `storage.root` is required; git runs from
 //! `PATH` with HOME pinned to the storage root (as the worker does), its
 //! stream pools and timeouts from `git.http.*`, the version checked
@@ -69,7 +76,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // the database (forge-web reads both through forge-core traits).
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
-        let state = app_state(&db, database, cfg.web.session_idle)
+        let oidc = crate::oidc::service(cfg, &db)?;
+        let mut state = app_state(&db, database, cfg.web.session_idle)
             .with_web_origin(&web_origin)
             // D5 MR3: the deletion grace period (`hosting.deletion_grace_days`).
             .with_hosting(
@@ -85,6 +93,20 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )
                 .with_api_config(&cfg.api),
             );
+        match oidc {
+            Some(oidc) => {
+                tracing::info!(issuer = oidc.issuer(), "forge.serve.oidc_enabled");
+                let prefetch = Arc::clone(&oidc);
+                // Detached: the prefetch logs its own failures and ends
+                // after three attempts; nothing waits for it.
+                tokio::spawn(async move { prefetch.prefetch().await });
+                state = state.with_oidc(oidc);
+            }
+            None => tracing::warn!(
+                reason = "auth_oidc_not_configured",
+                "forge.serve.oidc_disabled"
+            ),
+        }
         let router = forge_web::app(
             state,
             app_config_for(database, &cfg.git_http, &cfg.server.limits),

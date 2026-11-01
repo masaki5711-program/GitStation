@@ -24,6 +24,9 @@ fn forge_web_never_names_the_operator_only_user_commands() {
         format!("{}{}", "Guard::", "Force"),
         format!("{}{}", "disable_", "with"),
         format!("{}{}", "bootstrap_", "admin"),
+        // M2 MR4 (ADR-0019 Amendment M2 6): the operator's identity link.
+        format!("{}{}", "operator_link_", "identity"),
+        format!("{}{}", "link_by_", "operator"),
     ];
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../forge-web/src");
     let mut files = Vec::new();

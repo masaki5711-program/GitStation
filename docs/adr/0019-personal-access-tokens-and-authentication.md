@@ -467,3 +467,10 @@ receive-pack（MR4）と一緒に書く。
      含まないことを、`forge_web_never_names_the_operator_only_user_commands` と同じ形のテストで守る（MR4）。
    - この例外は CLI の経路だけ。HTTP に結び付けの操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
    - CLAUDE.md §3.4 の例外の一覧への追記は、MR4 が入るときにユーザーに確かめてから行う（この MR では CLAUDE.md を変えない）。
+   - **実装（2026-11-01、M2 MR4）**: `forge admin user link-identity --user <username> --issuer <issuer> --subject <sub>` は、トークンの
+     コマンドや移動・名前の変更のコマンドと同じく `authorize()` を通らない運用のコマンドとして入った。forge-cli `admin_user.rs` の
+     `link_identity` → `users::id_by_username` → `forge_oidc::operator_link_identity` → `forge_db::identities::link_by_operator`（どちらも
+     actor が `system` でなければ FG-SYS-0001 `reason=operator_not_system`）。actor `system`（`actor_label = forge-cli:<OS のアカウント>`）、
+     監査 `user.identity_linked`（`via=operator`、`issuer`。`sub` は監査にもログにも入れない）、ログの `event=forge.admin.user.identity_linked`
+     （`user_id`・`issuer`・`outcome=linked|already_linked`）。結び直しはしない（他の利用者の ID なら FG-AUTH-0014 `subject_linked`）。
+     CLAUDE.md の契約 4 の例外の一覧には、ユーザーの承認のうえで追記済み（`aab2ee2`）。

@@ -41,7 +41,9 @@ pub mod state;
 pub mod test_support;
 
 pub use discovery::Discovery;
-pub use flow::{CallbackInput, LoginDone, LoginStart, Oidc, OidcSettings, Timeouts};
+pub use flow::{
+    check_provider, CallbackInput, LoginDone, LoginStart, Oidc, OidcSettings, Timeouts,
+};
 pub use keys::{KeyEntry, KeySet, VerifyKey};
 pub use operator::operator_link_identity;
 
