@@ -20,7 +20,7 @@ A restore (POST /api/v1/projects/{id}/restore, forge_db::projects::restore_decid
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>) and the purge job (D5 MR4) is running or stuck; for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row.
+The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>): the purge task of `forge worker` (D5 MR4) has started and finishes on its next run, or it is stuck (FG-REPO-0020, runbook repository-purge); for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row.
 
 ## 対処 (fix)
 

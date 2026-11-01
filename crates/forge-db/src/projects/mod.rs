@@ -33,6 +33,7 @@ mod member_writes;
 mod members;
 mod moves;
 pub(crate) mod ownership;
+pub mod purge;
 mod update;
 
 pub use crate::groups::MemberChange;

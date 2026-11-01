@@ -66,6 +66,16 @@ fn project_deleted_and_restored_are_integration_class() {
     }
 }
 
+/// Step D5 plan answer (ADR-0016 §10 Amendment D5): the purge is an admin
+/// event — the project is gone, so no project role can authorize a reader.
+#[test]
+fn project_purged_is_admin_class() {
+    assert_eq!(
+        EventType::ProjectPurged.visibility_class(),
+        VisibilityClass::Admin
+    );
+}
+
 #[test]
 fn all_lists_every_event_type_once() {
     let names: Vec<&str> = EventType::ALL.iter().map(|t| t.as_str()).collect();
@@ -85,7 +95,8 @@ fn all_lists_every_event_type_once() {
             "repository.pushed",
             "project.visibility_changed",
             "project.deleted",
-            "project.restored"
+            "project.restored",
+            "project.purged"
         ]
     );
 }

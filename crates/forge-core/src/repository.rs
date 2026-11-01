@@ -31,22 +31,27 @@ impl RepositoryKind {
 /// Whether the bare repository exists yet: `provisioning` from the creating
 /// transaction until the provisioning job has run `init_bare` and committed
 /// `mark_ready` (step D4 option A); then `ready`. The database keeps
-/// `ready_at` set exactly when the state is `ready`.
+/// `ready_at` set exactly when the state is `ready`. `purging` (D5 MR4):
+/// the purge job has started removing the repository of a project whose
+/// grace period is over; nothing comes back from it (the database's guard),
+/// and the rows are deleted once the bare directory is gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RepositoryState {
     Provisioning,
     Ready,
+    Purging,
 }
 
 impl RepositoryState {
-    /// Every state, in the order provisioning, ready.
-    pub const ALL: &'static [RepositoryState] = &[Self::Provisioning, Self::Ready];
+    /// Every state, in the order provisioning, ready, purging.
+    pub const ALL: &'static [RepositoryState] = &[Self::Provisioning, Self::Ready, Self::Purging];
 
     /// The database string.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Provisioning => "provisioning",
             Self::Ready => "ready",
+            Self::Purging => "purging",
         }
     }
 

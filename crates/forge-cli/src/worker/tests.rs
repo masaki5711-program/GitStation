@@ -50,7 +50,7 @@ async fn the_worker_numbers_events_until_it_is_told_to_stop() {
         let (dir, storage) = super::provision::tests::storage();
         tokio::spawn(async move {
             let _root = dir;
-            run(&db, seal_keys(), &storage, stopped).await
+            run(&db, seal_keys(), &storage, None, stopped).await
         })
     };
     until_sequenced(&t).await;
@@ -76,7 +76,7 @@ async fn a_gone_shutdown_sender_stops_the_worker_with_an_internal_error() {
     let (_root, storage) = super::provision::tests::storage();
     let err = tokio::time::timeout(
         Duration::from_secs(10),
-        run(&t.db, seal_keys(), &storage, stopped),
+        run(&t.db, seal_keys(), &storage, None, stopped),
     )
     .await
     .expect("stops in time")

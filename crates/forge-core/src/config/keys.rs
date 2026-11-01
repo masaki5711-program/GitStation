@@ -162,4 +162,9 @@ pub const KEYS: &[Key] = &[
         "hosting.deletion_grace_days",
         "FORGE_HOSTING_DELETION_GRACE_DAYS",
     ),
+    // D5 MR4: the period of the worker's purge task.
+    number(
+        "hosting.purge_interval_secs",
+        "FORGE_HOSTING_PURGE_INTERVAL_SECS",
+    ),
 ];

@@ -129,7 +129,7 @@ pub struct Config {
     pub audit: AuditConfig,
     /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
     pub git_http: GitHttpConfig,
-    /// `hosting.*` (the deletion grace period, D5 MR3).
+    /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
     pub hosting: HostingConfig,
 }
 

@@ -958,3 +958,34 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   `project_restored:<project_id>:<取り消す削除の deleted_at の epoch>`。epoch は **マイクロ秒**（列の精度）にした: 秒だと、同じ秒の中の
   削除 → 復元 → 削除が 2 回目の削除で重複扱い（`Deduped`）になり、利用者に 500 を返すことになる。
 - 墓標は削除では書かない（purge が `deleted` の墓標を書く。MR4）。
+
+### D5 MR4: 完全削除（`feat/repo-purge`）
+
+- **どこで動くか**: `forge worker` の監督下のタスク `purge`（ジョブの待ち行列ではない。監査の封印と同じく周期の単独のタスク）。周期は
+  設定 `hosting.purge_interval_secs`（既定 300、10〜86400、範囲外は FG-SYS-0002）。1 回に最大 20 件、`purge_after` の古い順。
+  20 件すべて完全削除できたら間を置かずに次の回。1 回の持ち時間は 5 分で、それを過ぎたら新しいプロジェクトに手を付けない（残りは
+  次の回、`forge.repo.purge_cut`。停止を待たせる時間を抑える）。`forge serve` では動かさない（背景の処理は worker、ADR-0016 §7）。運用の CLI
+  `forge admin project purge --dry-run | --now` が同じ 1 回分を実行する（`--now` は承認済みの Runbook の手順、猶予は短くしない）。
+- **段 1（開始）**: 1 つのトランザクション。プロジェクトの行 `FOR UPDATE`（復元と同じ順）→ `deleted_at` / `purge_after <= clock_timestamp()` を
+  読み直す → リポジトリの行 `FOR UPDATE` → `purging` と監査のみの `repository.purge_started`（`{project_id, repository_id, from}`）。
+  復元が先に確定していれば（または削除待ちでない、猶予が終わっていない、行が無い）何も書かずに飛ばす（debug のログ、エラーではない）。
+  すでに `purging` なら再開（段 2 へ）。ガード（20261102100200）は DB 側の二重の確かめのまま。
+- **段 2（保存先）**: リポジトリの作成のジョブが `running` なら次の回まで待つ（その実行が開始の前に状態を読んでいれば、削除の後で
+  ディレクトリを作りうる。実行が終われば、次の実行は `purging` を見て何もしない — `outcome=purging`、`MarkReady::Purging`、
+  `reprovision` は `FG-REPO-0014 reason=repository_purging`）。forge-git `StorageRoot::remove_until`: パスはリポジトリの ID から
+  決まるもの（要求のパスは使わない）、ルートからシャードまで本物のディレクトリであることを確かめ、リポジトリのディレクトリを同じ
+  シャードの `.purge-<id>-<uuid>.git` に名前を変えてから（1 回の rename でパスが空く）、`.purge-<id>-*` と `.tmp-<id>-*` をすべて
+  `remove_dir_all` で消す（中のシンボリックリンクはたどらない）。シンボリックリンクやファイルは拒否して残す（FG-REPO-0001）。
+  何も無いのは成功。各手順は締め切り（1 件 120 秒）の中で、超えたら FG-REPO-0003 `reason=deadline`（次の回で残りを消す）。
+- **段 3（行）**: 1 つのトランザクション。プロジェクトの行、リポジトリの行（`purging` でなければ FG-SYS-0001 `not_purging`）、
+  プロジェクトの名前空間の行（`FOR UPDATE`）→ そのパスの advisory lock（行が先、パスが後: 移動・作成・墓標の解放と同じ）→ 削除:
+  メンバー、保護 ref、リポジトリ、名前空間（その名前空間を指す `moved` の墓標は `ON DELETE SET NULL` で行き先を失う = 転送が
+  終わり、パスは塞いだまま。解放は `deleted` の墓標と同じ規則）、`deleted` の墓標（`old_path` = 今のパス、`parent_namespace_id` =
+  親、`owner_at_write` = `deleted_by`、`cause` = プロジェクト）、プロジェクト。監査とイベント `project.purged`（ADR-0016 の D5 MR4）。
+  プロジェクトの名前空間は葉なので、上のグループの移動は名前空間の行を先に取ってからパスのロックを取る。段 3 はその行を待ち、移動が
+  確定させたパスを読む。互いのロックを逆の順で取らない。
+- **失敗**: 1 件の失敗は、その場（タスクの中）で 1 回だけ FG-REPO-0020 RepositoryPurgeStuck（alert、`step` = start / storage / finish、
+  `cause_code`、元のエラーを `source`、`overdue_s`）でログし、次のプロジェクトへ進む。次の回で止まったところから再開する
+  （`purging` は `ready` に戻らない）。一覧の読み取りの失敗だけが回の失敗（監督者がログしてバックオフ）。
+- **見送り（MR4 の外）**: `forge doctor` の「`purging` のまま古い」検査（今は毎回のログの FG-REPO-0020 で分かる）、
+  `purge_after` の部分索引（M1 の件数では `LIMIT` 付きの全件走査で足りる）。

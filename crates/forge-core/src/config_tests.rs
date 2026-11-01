@@ -1024,3 +1024,35 @@ fn hosting_deletion_grace_has_a_default_env_and_a_range() {
     let err = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE", "7")])).expect_err("typo");
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+/// `hosting.purge_interval_secs` (D5 MR4): default 300 s, env, and the
+/// 10..=86400 range (FG-SYS-0002 naming the key).
+#[test]
+fn hosting_purge_interval_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.hosting.purge_interval, Duration::from_secs(300));
+    assert_eq!(
+        cfg.hosting.purge_interval,
+        HostingConfig::DEFAULT_PURGE_INTERVAL
+    );
+    for (value, secs) in [("10", 10), ("86400", 86_400), (" 60 ", 60)] {
+        let cfg = load(None, &env(&[("FORGE_HOSTING_PURGE_INTERVAL_SECS", value)])).expect(value);
+        assert_eq!(cfg.hosting.purge_interval, Duration::from_secs(secs));
+    }
+    for (value, reason) in [
+        ("9", "below_min"),
+        ("0", "below_min"),
+        ("86401", "above_max"),
+        ("-1", "invalid"),
+        ("5m", "invalid"),
+    ] {
+        let err =
+            load(None, &env(&[("FORGE_HOSTING_PURGE_INTERVAL_SECS", value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("hosting.purge_interval_secs") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}

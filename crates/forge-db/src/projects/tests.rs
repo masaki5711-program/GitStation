@@ -17,6 +17,7 @@ use crate::users::{self, NewUser};
 mod delete;
 mod member_writes;
 mod members;
+mod purge;
 mod race;
 mod update;
 

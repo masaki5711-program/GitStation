@@ -524,3 +524,13 @@ mod adopt_hardening_tests;
 #[cfg(test)]
 #[path = "storage_deadline_tests.rs"]
 mod deadline_tests;
+
+// ── D5 MR4: the purge removes a repository ──
+#[path = "storage_remove.rs"]
+mod remove;
+pub use remove::Removal;
+
+#[cfg(test)]
+#[path = "storage_remove_tests.rs"]
+mod remove_tests;
+// ── end D5 MR4 ──

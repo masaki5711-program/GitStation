@@ -9,7 +9,7 @@ use forge_core::{EventType, Role};
 use super::*;
 use crate::audited_tests::sql;
 
-const GRACE: Duration = Duration::from_secs(3 * 86_400);
+pub(super) const GRACE: Duration = Duration::from_secs(3 * 86_400);
 
 fn deny() -> ForgeError {
     ForgeError::new(ErrorCode::Forbidden).with_context("reason", "test_denied")
@@ -31,7 +31,7 @@ async fn marks(su: &mut PgConnection, project: ProjectId) -> Row {
 
 /// The grace period is over: the purge may start (the guard of migration
 /// 20261102100200 refuses `purging` before).
-async fn expire(t: &FreshDb, project: ProjectId) {
+pub(super) async fn expire(t: &FreshDb, project: ProjectId) {
     commit(
         t,
         &[

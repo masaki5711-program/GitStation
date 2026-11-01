@@ -51,6 +51,8 @@
        （入れ替えは ADR-0013 の Amendment MR6 の手順）
      - `config_key=hosting.deletion_grace_days`（D5 MR3。削除したプロジェクトを復元できる日数）: `below_min`（0。1 日以上）、`above_max`（366 以上。365 日まで）、
        `invalid`（整数でない）。未設定なら 7 日。`FORGE_HOSTING_DELETION_GRACE_DAYS` か設定ファイルの `[hosting] deletion_grace_days`
+     - `config_key=hosting.purge_interval_secs`（D5 MR4。`forge worker` の完全削除のタスクの周期、秒）: `below_min`（10 未満）、`above_max`
+       （86400 超）、`invalid`（整数でない）。未設定なら 300 秒。`FORGE_HOSTING_PURGE_INTERVAL_SECS` か設定ファイルの `[hosting] purge_interval_secs`
 
    環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定の全体は `forge doctor` で検証できる（読み取りのみ。`config` の行に `config_key` と `reason` が出る。`--config` も同じように指定する）。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。

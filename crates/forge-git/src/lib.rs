@@ -40,7 +40,7 @@ mod want_check;
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
 pub use push_check::{Ancestry, CommitList, CommitQuery};
 pub use revision::Revision;
-pub use storage::{Provisioned, StorageRoot};
+pub use storage::{Provisioned, Removal, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};
 pub use version::GitVersion;
 pub use want_check::{WantCheck, WantLimits};

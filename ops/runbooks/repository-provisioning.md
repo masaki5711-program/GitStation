@@ -65,7 +65,7 @@
      次の試行は自分の目印を見て引き取る（`outcome=adopted`）
    - `FG-SYS-0002` `config_key=git.hooks_path`（すぐ `dead`）: フックの場所の設定の誤り（M1 phase 10 以降）
 5. 作りかけの一時ディレクトリ: 名前を変える前に止まった試みは、シャードの下に `.tmp-<repo_id>-<uuid>.git` を残すことがある。
-   試みごとに名前が違うので、やり直しの妨げにはならない（自動では消さない）。探す:
+   試みごとに名前が違うので、やり直しの妨げにはならない（自動では消さない。そのプロジェクトの完全削除だけが消す — `repository-purge.md`）。探す:
    `find <root>/repos -maxdepth 2 -name '.tmp-*' -mmin +60`
 
 ## Mitigate
