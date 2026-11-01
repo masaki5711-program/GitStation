@@ -46,6 +46,17 @@ hmac = "0.12"
 # float_roundtrip feature for the whole workspace.
 serde_json_canonicalizer = "0.4.1"
 # ── end C8 ──
+# ── M1 phase 9 MR1: Smart HTTP transport (forge-git) ──
+# gzip request bodies (git sends `Content-Encoding: gzip`); default backend is
+# miniz_oxide (pure Rust). MIT OR Apache-2.0.
+flate2 = "1"
+# Unix: kill a git subprocess together with its helpers (killpg). Already in
+# the lock through tempfile. Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT.
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
+# Windows (dev machines only): a Job Object with kill-on-close, through a safe
+# wrapper (the workspace forbids unsafe code). MIT.
+win32job = "2"
+# ── end M1 phase 9 MR1 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

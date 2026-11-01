@@ -8,6 +8,7 @@ use forge_errors::ErrorCode;
 
 use super::adopt_tests::{git, root};
 use super::*;
+#[cfg(unix)]
 use crate::GitConfig;
 
 #[tokio::test]
