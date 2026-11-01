@@ -60,6 +60,16 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/projects/{id}", Coverage::Planned(HOSTING)),
     ("PATCH", "/api/v1/projects/{id}", Coverage::Planned(HOSTING)),
     (
+        "DELETE",
+        "/api/v1/projects/{id}",
+        Coverage::Planned(HOSTING),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/restore",
+        Coverage::Planned(HOSTING),
+    ),
+    (
         "GET",
         "/api/v1/projects/{id}/members",
         Coverage::Planned(HOSTING),
