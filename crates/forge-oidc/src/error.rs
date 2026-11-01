@@ -13,6 +13,11 @@ pub(crate) fn id_token(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::IdTokenInvalid).with_context("reason", reason)
 }
 
+/// `FG-AUTH-0017 LogoutTokenInvalid` (the back-channel logout, MR5).
+pub(crate) fn logout_token(reason: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::LogoutTokenInvalid).with_context("reason", reason)
+}
+
 /// `FG-AUTH-0015 IdentityProviderUnavailable` for the call `call`.
 pub(crate) fn unavailable(call: &'static str, reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::IdentityProviderUnavailable)

@@ -5,11 +5,13 @@
 //! 1. public actions are allowed; the sign-in's admission (`SessionCreate`
 //!    on `Resource::Admission`, M2 MR4, ADR-0021 §3) is decided on its
 //!    facts alone → `FG-AUTH-0013` (`no_access_role`, `user_disabled`,
-//!    `not_human`);
+//!    `not_human`); so is the refresh check's `SessionContinue` (M2 MR5:
+//!    active accounts only, `account_new` otherwise);
 //! 2. no credentials → `FG-AUTH-0001`; disabled account → `FG-AUTH-0004`;
-//!    then session-only actions (`SessionRead`): a token → `FG-AUTH-0002
-//!    reason=session_required` (M2 MR3, ADR-0021 §17; the own-route
-//!    `SessionList` / `SessionRevoke` decide the same in their arm, MR6);
+//!    then session-only actions (`SessionRead`, `SessionLogout`,
+//!    `TokenCreate`): a token → `FG-AUTH-0002 reason=session_required`
+//!    (M2 MR3, ADR-0021 §17; the own-route `SessionList` /
+//!    `SessionRevoke` decide the same in their arm, MR6);
 //! 3. `PathResolve` only: token scope → `FG-AUTH-0002` here, before the
 //!    path is looked at (the same 403 for every path);
 //!    a path that resolved to nothing (`Unresolved`, any non-public action)
@@ -63,7 +65,12 @@ pub fn authorize(
         },
     ) = (action.is_admission(), resource)
     {
-        return admission(*access_role, *account)
+        let decided = if action == Action::SessionContinue {
+            continuation(*access_role, *account)
+        } else {
+            admission(*access_role, *account)
+        };
+        return decided
             .map_err(|reason| deny(ErrorCode::LoginNotPermitted).with_context("reason", reason));
     }
     let Some(user) = principal.user() else {
@@ -182,7 +189,10 @@ pub fn authorize(
 
     match (action, resource) {
         // Public actions returned above; kept for exhaustiveness.
-        (Action::Health | Action::WebShell | Action::WebLogin, _) => Ok(()),
+        (
+            Action::Health | Action::WebShell | Action::WebLogin | Action::OidcBackchannelLogout,
+            _,
+        ) => Ok(()),
 
         // Visibility (can see, not a read role: a Guest on a private project
         // resolves it) and pending deletion were decided above; groups and
@@ -522,6 +532,10 @@ pub fn authorize(
         // above); the handler shows the principal's own session only.
         (Action::SessionRead, Resource::Instance) => Ok(()),
 
+        // Every active user ends their own session (a token was refused
+        // above); the handler revokes the request's own session only.
+        (Action::SessionLogout, Resource::Instance) => Ok(()),
+
         // Listing is open to every active signed-in user (the scope was
         // checked above); what a list shows is decided row by row with
         // `ProjectRead` / `GroupRead` (M1 phase 8b MR7b, never in SQL).
@@ -571,6 +585,8 @@ pub fn authorize(
             | Action::SessionList
             | Action::SessionRevoke
             | Action::SessionCreate
+            | Action::SessionContinue
+            | Action::SessionLogout
             | Action::PathResolve
             | Action::Metrics,
             Resource::Instance
@@ -602,6 +618,19 @@ fn admission(access_role: bool, account: AdmissionAccount) -> Result<(), &'stati
         AdmissionAccount::NotHuman => Err("not_human"),
         AdmissionAccount::New | AdmissionAccount::Active if !access_role => Err("no_access_role"),
         AdmissionAccount::New | AdmissionAccount::Active => Ok(()),
+    }
+}
+
+/// `SessionContinue` (ADR-0021 §7, §17): the access role, and an active
+/// human account (`New` cannot happen to a session's account and is
+/// refused). The denial's log `reason` otherwise.
+fn continuation(access_role: bool, account: AdmissionAccount) -> Result<(), &'static str> {
+    match account {
+        AdmissionAccount::Disabled => Err("user_disabled"),
+        AdmissionAccount::NotHuman => Err("not_human"),
+        AdmissionAccount::New => Err("account_new"),
+        AdmissionAccount::Active if !access_role => Err("no_access_role"),
+        AdmissionAccount::Active => Ok(()),
     }
 }
 

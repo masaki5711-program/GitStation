@@ -1,7 +1,10 @@
-//! The browser sign-in (M2 MR4, ADR-0021 §3): `GET /-/auth/login` and
-//! `GET /-/auth/callback`, both `WebLogin` (public: the browser has no
-//! session yet). The decisions are forge-oidc's; this module is HTTP only —
-//! the query, the cookies, the redirects, the rate limit of the start.
+//! The browser sign-in and the logouts (ADR-0021 §3, §8): `GET
+//! /-/auth/login` and `GET /-/auth/callback`, both `WebLogin` (public: the
+//! browser has no session yet; M2 MR4); `POST /-/auth/logout`
+//! (`SessionLogout`, sessions only) and `POST /-/auth/backchannel-logout`
+//! (`OidcBackchannelLogout`, public; M2 MR5). The decisions are
+//! forge-oidc's; this module is HTTP only — the query, the form bodies,
+//! the cookies, the redirects, the rate limit of the start.
 //!
 //! - Login: at most [`LOGIN_LIMIT`] starts per peer (an IPv6 peer counts as
 //!   its /64) per [`LOGIN_WINDOW`] (`FG-WEB-0010`, `Retry-After`); then a
@@ -13,7 +16,18 @@
 //!   sets `__Host-gstn_session` (Max-Age = the absolute lifetime) and 302s
 //!   to `next`. Failures carry `event=forge.auth.login_failed` and are
 //!   logged once by the error renderer.
-//! - Without `auth.oidc`, both answer `FG-AUTH-0018` (503, info).
+//! - Logout: the page posts a form whose `csrf` field is the session's
+//!   CSRF token (moved into `X-GitStation-CSRF` by [`crate::auth`] before
+//!   the one CSRF check); the session is revoked (`reason=logout`), the
+//!   cookie cleared, and a 303 sends the browser to the provider's
+//!   `end_session_endpoint` with `id_token_hint` (home without one). A
+//!   request without a session is the guard's `FG-AUTH-0001`.
+//! - Back-channel logout: an `application/x-www-form-urlencoded` body of
+//!   at most 64 KiB with one `logout_token`; cookies and `Authorization`
+//!   are never read. 200 (empty) when the token is valid, whatever it
+//!   revoked; `FG-AUTH-0017` (400, `event=forge.auth.backchannel_logout_failed`)
+//!   otherwise.
+//! - Without `auth.oidc`, all four answer `FG-AUTH-0018` (503, info).
 //!
 //! Every answer is `Cache-Control: no-store`.
 
@@ -248,6 +262,210 @@ pub async fn callback(state: AppState, request: Dispatched<InstanceCtx>) -> Resp
         Ok(res)
     });
     built.unwrap_or_else(|e| fail(&request, e, true))
+}
+
+// --- M2 MR5: the logouts (ADR-0021 §8) ---
+
+pub const LOGOUT_PATH: &str = forge_oidc::LOGOUT_PATH;
+pub const BACKCHANNEL_LOGOUT_PATH: &str = forge_oidc::BACKCHANNEL_LOGOUT_PATH;
+
+/// The form field that carries the CSRF token of `POST /-/auth/logout`
+/// (the page posts a `<form>`, not a fetch; [`crate::auth`] moves it into
+/// `X-GitStation-CSRF` before the CSRF check).
+pub const LOGOUT_CSRF_FIELD: &str = "csrf";
+
+/// The largest logout form (`csrf=<64 hex>` and a little room).
+pub const MAX_LOGOUT_FORM_BYTES: usize = 4 * 1024;
+
+fn see_other(location: &str) -> Result<Response, ForgeError> {
+    let value = HeaderValue::from_str(location).map_err(|_| {
+        ForgeError::new(ErrorCode::Internal).with_context("reason", "location_not_a_header")
+    })?;
+    let mut res = StatusCode::SEE_OTHER.into_response();
+    res.headers_mut().insert(LOCATION, value);
+    no_store(&mut res);
+    Ok(res)
+}
+
+/// `POST /-/auth/logout` (`SessionLogout`, sessions only): revoke the
+/// request's own session (`reason=logout`), clear the cookie, and 303 to
+/// the provider's logout with `id_token_hint` (the ID token is only ever
+/// in this `Location`, never in a body). Without `auth.oidc` it is
+/// `FG-AUTH-0018` and the session is left as it is (ADR-0021 row 30).
+pub async fn logout(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
+    let ctx = request.ctx().clone(); // clone: the request is consumed below
+    let fail = |err: ForgeError| {
+        let mut res = ctx
+            .fail(err.with_context("event", "forge.auth.logout_failed"))
+            .into_response();
+        no_store(&mut res);
+        res
+    };
+    let (Some(user), Some(session)) = (request.principal().user(), request.session()) else {
+        // `prove(SessionLogout)` allowed an active session principal.
+        return fail(
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "session_credential_missing"),
+        );
+    };
+    let session_id = session.session_id;
+    let public_id = session.public_id.clone(); // clone: logged after the change
+    let user_agent = request
+        .headers()
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let location = match state.oidc.clone() {
+        Some(oidc) => {
+            oidc.logout(forge_oidc::LogoutRequest {
+                request_id: &ctx.request_id,
+                user,
+                session_id,
+                source_ip: request.peer(),
+                user_agent: user_agent.as_deref(),
+            })
+            .await
+        }
+        None => Err(not_configured("logout")),
+    };
+    let location = match location {
+        Ok(location) => location,
+        Err(e) => return fail(e),
+    };
+    tracing::info!(
+        target: "forge_web::auth",
+        request_id = %ctx.request_id,
+        user_id = user.get(),
+        public_id = %public_id,
+        "forge.auth.logged_out"
+    );
+    // The session is revoked now: whatever happens to the redirect, the
+    // browser goes somewhere and the cookie is cleared (review of MR5).
+    let mut res = see_other(&location)
+        .or_else(|e| {
+            tracing::warn!(
+                target: "forge_web::auth",
+                request_id = %ctx.request_id,
+                error_code = e.code().id(),
+                public_id = %public_id,
+                "forge.auth.logout_redirect_unusable; sending the browser home"
+            );
+            see_other("/")
+        })
+        .unwrap_or_else(&fail);
+    res.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_static(crate::auth::CLEAR_SESSION_COOKIE),
+    );
+    res
+}
+
+fn logout_body(detail: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::LogoutTokenInvalid)
+        .with_context("reason", "body")
+        .with_context("detail", detail)
+}
+
+/// The one `logout_token` of an `application/x-www-form-urlencoded` body.
+fn logout_token_of(content_type: Option<&str>, body: &[u8]) -> Result<String, ForgeError> {
+    let form = content_type.and_then(|c| c.split(';').next()).map(|c| {
+        c.trim()
+            .eq_ignore_ascii_case("application/x-www-form-urlencoded")
+    });
+    if form != Some(true) {
+        return Err(logout_body("content_type"));
+    }
+    let mut tokens = url::form_urlencoded::parse(body)
+        .filter(|(k, _)| k == "logout_token")
+        .map(|(_, v)| v.into_owned());
+    match (tokens.next(), tokens.next()) {
+        (Some(token), None) if !token.is_empty() => Ok(token),
+        (Some(_), Some(_)) => Err(logout_body("form")),
+        _ => Err(logout_body("token_missing")),
+    }
+}
+
+/// `POST /-/auth/backchannel-logout` (`OidcBackchannelLogout`, public:
+/// the signed logout token is the proof; cookies and `Authorization` are
+/// never read): 200 with an empty body when the token is valid, however
+/// many sessions it ended; `FG-AUTH-0017` (400) otherwise. `no-store`.
+pub async fn backchannel_logout(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
+    let ctx = request.ctx().clone(); // clone: the request is consumed by the body read
+    let fail = |err: ForgeError| {
+        let mut res = ctx
+            .fail(err.with_context("event", "forge.auth.backchannel_logout_failed"))
+            .into_response();
+        no_store(&mut res);
+        res
+    };
+    let Some(oidc) = state.oidc.clone() else {
+        return fail(not_configured("backchannel_logout"));
+    };
+    let content_type = request
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let peer = request.peer();
+    let body =
+        match axum::body::to_bytes(request.into_body(), forge_oidc::MAX_LOGOUT_BODY_BYTES).await {
+            Ok(body) => body,
+            Err(_) => return fail(logout_body("too_large")),
+        };
+    let token = match logout_token_of(content_type.as_deref(), &body) {
+        Ok(token) => token,
+        Err(e) => return fail(e),
+    };
+    match oidc.backchannel_logout(&ctx.request_id, &token, peer).await {
+        Ok(_revoked) => {
+            let mut res = StatusCode::OK.into_response();
+            no_store(&mut res);
+            res
+        }
+        Err(e) => fail(e),
+    }
+}
+
+#[cfg(test)]
+mod logout_tests {
+    use super::*;
+
+    const FORM: Option<&str> = Some("application/x-www-form-urlencoded");
+
+    fn detail(err: &ForgeError) -> String {
+        err.context()
+            .iter()
+            .find(|(k, _)| *k == "detail")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn the_logout_token_is_the_one_form_field() {
+        assert_eq!(
+            logout_token_of(FORM, b"logout_token=a.b.c").expect("one"),
+            "a.b.c"
+        );
+        assert_eq!(
+            logout_token_of(
+                Some("application/x-www-form-urlencoded; charset=UTF-8"),
+                b"x=1&logout_token=a%2Eb.c"
+            )
+            .expect("decoded"),
+            "a.b.c"
+        );
+        for (ct, body, want) in [
+            (Some("application/json"), &b"{}"[..], "content_type"),
+            (None, &b"logout_token=x"[..], "content_type"),
+            (FORM, &b""[..], "token_missing"),
+            (FORM, &b"logout_token="[..], "token_missing"),
+            (FORM, &b"logout_token=a&logout_token=b"[..], "form"),
+        ] {
+            let err = logout_token_of(ct, body).expect_err(want);
+            assert_eq!(err.code(), ErrorCode::LogoutTokenInvalid);
+            assert_eq!(detail(&err), want);
+        }
+    }
 }
 
 #[cfg(test)]

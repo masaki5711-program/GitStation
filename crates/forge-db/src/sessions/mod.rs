@@ -37,10 +37,15 @@ macro_rules! utc {
 mod auth;
 // M2 MR6: the session list and the purge of old rows.
 mod list;
+mod oidc;
 mod purge;
 
-pub use auth::{authenticate, SessionStore};
+pub use auth::{authenticate, authenticate_with, touch_session, SessionStore, TouchPolicy};
 pub use list::{is_public_id, list, owner, SessionInfo, SessionList, MAX_LISTED};
+pub use oidc::{
+    account_of, backchannel_targets, claim_refresh, logout_view, store_refreshed,
+    BackchannelTargets, LogoutTarget, RefreshClaim, Refreshed, BACKCHANNEL_BATCH,
+};
 pub use purge::{purge_expired, Purged, MAX_BATCH as PURGE_MAX_BATCH, PURGE_AFTER_DAYS};
 
 /// The audit resource type of session changes (tables.toml `audit_resource`).

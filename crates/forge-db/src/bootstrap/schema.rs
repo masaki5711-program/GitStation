@@ -32,7 +32,7 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.purge_delete_guard()",
     // ── M2 MR3: a session's revocation is final (20261103100100) ──
     "forge.web_sessions_revocation_guard()",
-    // ── M2 MR6: sessions are deleted only 30 days after they ended (20261104100000) ──
+    // ── M2 MR6: sessions are deleted only 30 days after they ended (20261105100000) ──
     "forge.web_sessions_purge_guard()",
 ];
 
@@ -47,7 +47,7 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER web_sessions_revocation_final BEFORE UPDATE ON forge.web_sessions \
          FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_revocation_guard()",
     ),
-    // ── M2 MR6: the purge's DELETE only 30 days after a session ended (20261104100000) ──
+    // ── M2 MR6: the purge's DELETE only 30 days after a session ended (20261105100000) ──
     (
         "web_sessions",
         "web_sessions_purge_only",
@@ -458,7 +458,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         (
             "forge.web_sessions",
             [
-                // M2 MR6: DELETE for the purge (20261104100000, guarded).
+                // M2 MR6: DELETE for the purge (20261105100000, guarded).
                 plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", WEB_SESSIONS_APP_UPDATE),
                 columns("forge_ro", "SELECT", WEB_SESSIONS_RO),
@@ -488,6 +488,7 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "id_token_enc",
     "refresh_checked_at",
     "access_role_seen_at",
+    "refresh_without_id_token",
 ];
 
 /// The read pool's columns of web_sessions (tables.toml `ro_columns`): not
@@ -506,6 +507,7 @@ const WEB_SESSIONS_RO: &[&str] = &[
     "oidc_sid",
     "refresh_checked_at",
     "access_role_seen_at",
+    "refresh_without_id_token",
 ];
 
 /// The read pool's columns of user_identities: not subject.

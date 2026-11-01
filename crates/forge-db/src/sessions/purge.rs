@@ -7,7 +7,7 @@
 //! change writes one `session.purged` row per user it touches (the first
 //! as the change's own row, the others as [`ChangeRecord::affected`]),
 //! with the count only. No domain event (ADR-0021 §5). The migration
-//! `20261104100000` grants `forge_app` the DELETE and narrows it with a
+//! `20261105100000` grants `forge_app` the DELETE and narrows it with a
 //! guard: only a row that is old enough by the same rule (XF001 →
 //! `FG-DB-0009` otherwise), so no other writer can delete a live session.
 
@@ -22,7 +22,7 @@ use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle, MAX_AFFECTED}
 use crate::{query_error, Db};
 
 /// Days after its revocation or absolute expiry a session row is kept
-/// (the guard of migration `20261104100000` states the same 30 days).
+/// (the guard of migration `20261105100000` states the same 30 days).
 pub const PURGE_AFTER_DAYS: i32 = 30;
 
 /// The most rows one change deletes (one audit row per owner, so at most

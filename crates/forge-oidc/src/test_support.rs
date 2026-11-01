@@ -6,7 +6,9 @@
 //! status, broken JSON, replaced keys). The browser's visit to the
 //! authorization endpoint is [`MockOp::authorize`]: it reads the
 //! authorization URL forge built and issues a code for chosen claims.
-//! Everything here is synthetic.
+//! The refresh grant rotates refresh tokens and can answer without an ID
+//! token ([`RefreshMode`]); [`MockOp::logout_token`] signs back-channel
+//! logout tokens (M2 MR5). Everything here is synthetic.
 #![allow(clippy::expect_used, clippy::panic)] // test helpers: failing loudly is the point
 
 use std::collections::HashMap;
@@ -63,6 +65,16 @@ pub enum Fault {
     OAuthError(u16, &'static str),
 }
 
+/// How the token endpoint answers `grant_type=refresh_token` (M2 MR5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshMode {
+    /// A new ID token (the sign-in's claims, fresh times, the refresh
+    /// overrides merged) and a rotated refresh token.
+    WithIdToken,
+    /// A rotated refresh token and no ID token.
+    WithoutIdToken,
+}
+
 struct Pending {
     claims: Value,
     challenge: String,
@@ -84,6 +96,12 @@ struct Inner {
     signing_kid: String,
     signers: Vec<(String, Signer)>,
     next_code: u64,
+    /// Live refresh tokens → the claims of their sign-in (no nonce).
+    refresh_tokens: HashMap<String, Value>,
+    refresh_mode: RefreshMode,
+    refresh_overrides: Value,
+    next_refresh: u64,
+    next_jti: u64,
 }
 
 /// A running mock provider (stops when dropped).
@@ -145,6 +163,11 @@ impl MockOp {
                 (EC_KID.to_owned(), Signer::Ec(ec)),
             ],
             next_code: 1,
+            refresh_tokens: HashMap::new(),
+            refresh_mode: RefreshMode::WithIdToken,
+            refresh_overrides: json!({}),
+            next_refresh: 0,
+            next_jti: 1,
         }));
         let app = axum::Router::<Arc<Mutex<Inner>>>::new()
             // The mock is not forge's server: plain axum routes (forge-web's
@@ -186,6 +209,7 @@ impl MockOp {
                 connect: Duration::from_millis(500),
                 fetch: Duration::from_millis(800),
                 token: Duration::from_millis(800),
+                refresh: Duration::from_millis(800),
                 jwks: JwksTiming::default(),
                 prefetch_backoff: [Duration::from_millis(10), Duration::from_millis(20)],
             },
@@ -217,6 +241,41 @@ impl MockOp {
     /// Sign the ID tokens of later codes with this key (`RSA_KID`, `EC_KID`).
     pub fn sign_with(&self, kid: &str) {
         self.inner().signing_kid = kid.to_owned();
+    }
+
+    /// How later refreshes answer, with `overrides` merged into a refreshed
+    /// ID token's claims (a `null` removes a claim).
+    pub fn set_refresh(&self, mode: RefreshMode, overrides: Value) {
+        let mut inner = self.inner();
+        inner.refresh_mode = mode;
+        inner.refresh_overrides = overrides;
+    }
+
+    /// End every refresh token (an administrator ended the sessions in
+    /// the realm): later refreshes are `invalid_grant`.
+    pub fn revoke_refresh_tokens(&self) {
+        self.inner().refresh_tokens.clear();
+    }
+
+    /// A back-channel logout token signed with the current signing key:
+    /// `iss`, `aud`, `iat` now, a fresh `jti`, `sid` synthetic-sid-1 and
+    /// the back-channel event, with `overrides` merged (`null` removes).
+    pub fn logout_token(&self, overrides: Value) -> String {
+        let now = now_secs().expect("clock after 1970");
+        let mut inner = self.inner();
+        let jti = format!("synthetic-jti-{}", inner.next_jti);
+        inner.next_jti += 1;
+        let mut claims = json!({
+            "iss": inner.issuer,
+            "aud": CLIENT_ID,
+            "iat": now,
+            "jti": jti,
+            "sid": "synthetic-sid-1",
+            "events": { crate::jwt::BACKCHANNEL_LOGOUT_EVENT: {} },
+        });
+        merge(&mut claims, overrides);
+        let kid = inner.signing_kid.clone();
+        sign_with(&inner, &kid, json!({"typ": "logout+jwt"}), &claims)
     }
 
     /// The JWKS of the mock's keys.
@@ -267,15 +326,7 @@ impl MockOp {
         assert_eq!(q.get("client_id").map(String::as_str), Some(CLIENT_ID));
         let nonce = q.get("nonce").expect("nonce").clone();
         let mut claims = self.claims(&nonce);
-        if let (Some(base), Value::Object(extra)) = (claims.as_object_mut(), overrides) {
-            for (k, v) in extra {
-                if v.is_null() {
-                    base.remove(&k);
-                } else {
-                    base.insert(k, v);
-                }
-            }
-        }
+        merge(&mut claims, overrides);
         let mut inner = self.inner();
         let code = format!("synthetic-code-{}", inner.next_code);
         inner.next_code += 1;
@@ -288,6 +339,19 @@ impl MockOp {
             },
         );
         (code, q.get("state").expect("state").clone())
+    }
+}
+
+/// Merge `overrides` into `claims` (a `null` removes a claim).
+fn merge(claims: &mut Value, overrides: Value) {
+    if let (Some(base), Value::Object(extra)) = (claims.as_object_mut(), overrides) {
+        for (k, v) in extra {
+            if v.is_null() {
+                base.remove(&k);
+            } else {
+                base.insert(k, v);
+            }
+        }
     }
 }
 
@@ -439,10 +503,12 @@ async fn token(
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client");
     }
     let form: HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
-    if form.get("grant_type").map(String::as_str) != Some("authorization_code") {
-        return oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type");
-    }
     let mut inner = shared.lock().expect("mock state");
+    match form.get("grant_type").map(String::as_str) {
+        Some("authorization_code") => {}
+        Some("refresh_token") => return refresh(&mut inner, &form),
+        _ => return oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type"),
+    }
     // Single use: a second redemption is invalid_grant.
     let Some(pending) = form.get("code").and_then(|c| inner.codes.remove(c)) else {
         return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant");
@@ -455,12 +521,56 @@ async fn token(
     }
     let kid = inner.signing_kid.clone();
     let id_token = sign_with(&inner, &kid, json!({}), &pending.claims);
+    let refresh_token = new_refresh_token(&mut inner, &pending.claims);
     axum::Json(json!({
         "access_token": "synthetic-access-token",
         "token_type": "Bearer",
         "expires_in": 300,
         "id_token": id_token,
-        "refresh_token": "synthetic-refresh-token",
+        "refresh_token": refresh_token,
     }))
     .into_response()
+}
+
+/// A new live refresh token for `claims` (the first one of the process is
+/// `synthetic-refresh-token`).
+fn new_refresh_token(inner: &mut Inner, claims: &Value) -> String {
+    let token = match inner.next_refresh {
+        0 => "synthetic-refresh-token".to_owned(),
+        n => format!("synthetic-refresh-token-{n}"),
+    };
+    inner.next_refresh += 1;
+    let mut claims = claims.clone();
+    if let Some(c) = claims.as_object_mut() {
+        c.remove("nonce");
+    }
+    inner.refresh_tokens.insert(token.clone(), claims);
+    token
+}
+
+/// `grant_type=refresh_token`: a live token is rotated; an unknown or
+/// ended one is `invalid_grant`.
+fn refresh(inner: &mut Inner, form: &HashMap<String, String>) -> Response {
+    let Some(mut claims) = form
+        .get("refresh_token")
+        .and_then(|t| inner.refresh_tokens.remove(t))
+    else {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant");
+    };
+    let now = now_secs().expect("clock after 1970");
+    claims["iat"] = json!(now);
+    claims["exp"] = json!(now + 300);
+    let rotated = new_refresh_token(inner, &claims);
+    let mut body = json!({
+        "access_token": "synthetic-access-token",
+        "token_type": "Bearer",
+        "expires_in": 300,
+        "refresh_token": rotated,
+    });
+    if inner.refresh_mode == RefreshMode::WithIdToken {
+        merge(&mut claims, inner.refresh_overrides.clone());
+        let kid = inner.signing_kid.clone();
+        body["id_token"] = json!(sign_with(inner, &kid, json!({}), &claims));
+    }
+    axum::Json(body).into_response()
 }

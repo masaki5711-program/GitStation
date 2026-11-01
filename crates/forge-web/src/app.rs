@@ -250,9 +250,14 @@ pub const PLANNED: &[Action] = &[Action::UserCreate, Action::AuditRead, Action::
 
 /// Actions decided inside another route's handler, never a route's own
 /// (M2 MR4): `SessionCreate` is decided in `GET /-/auth/callback`
-/// (ADR-0021 §3), with its own allow and deny rows.
-pub const DECIDED_IN_ROUTE: &[(Action, &str)] =
-    &[(Action::SessionCreate, routes::auth::CALLBACK_PATH)];
+/// (ADR-0021 §3), with its own allow and deny rows. `SessionContinue` (M2
+/// MR5, ADR-0021 §7) is decided by the session authentication of every
+/// cookie-authenticated route when the 5-minute refresh check is due;
+/// `GET /api/v1/session` (which the page reads first) stands for them.
+pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
+    (Action::SessionCreate, routes::auth::CALLBACK_PATH),
+    (Action::SessionContinue, routes::session::PATH),
+];
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
 /// 系統"). `raw` and `archive` are `RepoRead` content routes
@@ -367,6 +372,21 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             Action::WebLogin,
             "Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next",
             routes::auth::callback,
+        )
+        // M2 MR5: the logouts (ADR-0021 §8).
+        .route(
+            Verb::Post,
+            routes::auth::LOGOUT_PATH,
+            Action::SessionLogout,
+            "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
+            routes::auth::logout,
+        )
+        .route(
+            Verb::Post,
+            routes::auth::BACKCHANNEL_LOGOUT_PATH,
+            Action::OidcBackchannelLogout,
+            "OIDC Back-Channel Logout: the identity provider ends sessions with a signed logout token",
+            routes::auth::backchannel_logout,
         )
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH)
         .queries(
@@ -1032,9 +1052,11 @@ pub(crate) fn build(
     config: AppConfig,
 ) -> Result<Router, ForgeError> {
     let authenticator = AuthenticatorExt(Arc::clone(&state.authenticator));
-    // The IdP origin for the shell's `form-action` arrives with `auth.oidc`
-    // (MR4, ADR-0021 §8); until then the shell allows `'self'` only.
-    let security = SecurityHeaders::new(config.hsts, None)?;
+    // The shell's `form-action` also allows the identity provider's origin
+    // when `auth.oidc` is configured: the logout form's 303 goes to its
+    // `end_session_endpoint` (M2 MR5, ADR-0021 §8, ADR-0022 §3).
+    let idp_origin = state.oidc.as_ref().and_then(|o| o.issuer_origin());
+    let security = SecurityHeaders::new(config.hsts, idp_origin.as_deref())?;
     let origin = ExpectedOrigin(state.web_origin.clone()); // clone: shared by both checks
     let sessions = SessionsExt {
         sessions: state.sessions.clone(), // clone: the Arc is shared

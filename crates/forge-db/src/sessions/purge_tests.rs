@@ -186,7 +186,7 @@ async fn the_purge_deletes_at_most_one_batch_oldest_first() {
     t.drop_now().await;
 }
 
-/// Migration 20261104100000: the DELETE grant is for old rows only, for
+/// Migration 20261105100000: the DELETE grant is for old rows only, for
 /// every role (the guard is enabled ALWAYS).
 #[tokio::test]
 async fn a_session_that_ended_less_than_30_days_ago_cannot_be_deleted() {

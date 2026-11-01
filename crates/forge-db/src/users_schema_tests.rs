@@ -133,6 +133,7 @@ async fn every_audited_table_has_its_audit_trigger() {
                     "id_token_enc",
                     "refresh_checked_at",
                     "access_role_seen_at",
+                    "refresh_without_id_token",
                 ]),
                 txn_audited_columns: vec![],
             },

@@ -41,4 +41,4 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261104100000, "guarded_changes": ["forge.web_sessions_purge_guard", "forge.web_sessions.web_sessions_purge_only", "forge.web_sessions"]}');
+    '{"version": 20261105100000, "guarded_changes": ["forge.web_sessions_purge_guard", "forge.web_sessions.web_sessions_purge_only", "forge.web_sessions"]}');

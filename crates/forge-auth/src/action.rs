@@ -125,6 +125,21 @@ actions! {
     /// anonymous principal on the admission facts only — the IdP's access
     /// role and the account the identity belongs to (or `New`).
     SessionCreate,
+    /// On a cookie-authenticated request whose 5-minute refresh check ran
+    /// (M2 MR5, ADR-0021 §7, §17): may the session go on after the
+    /// identity provider answered? Decided like `SessionCreate` on
+    /// `Resource::Admission` alone, but only an active account with the
+    /// access role continues (`New` is refused: a session's account exists).
+    SessionContinue,
+    /// `POST /-/auth/logout`: end the caller's own web session and send the
+    /// browser to the identity provider's logout (M2 MR5, ADR-0021 §8).
+    /// Sessions only (a token is `FG-AUTH-0002 reason=session_required`).
+    SessionLogout,
+    /// `POST /-/auth/backchannel-logout`: the identity provider ends
+    /// sessions (OIDC Back-Channel Logout, M2 MR5, ADR-0021 §8). Public:
+    /// the caller is the IdP's server, proven by the signed logout token,
+    /// not by a credential (cookies and `Authorization` are never read).
+    OidcBackchannelLogout,
     // --- web (ADR-0015) ---
     /// `GET /api/v1/namespaces/resolve?path=`: which namespace a path names,
     /// decided by whether the caller can see it (`Resource::Unresolved` /
@@ -141,7 +156,10 @@ actions! {
 impl Action {
     /// Reachable without credentials.
     pub fn is_public(self) -> bool {
-        matches!(self, Action::Health | Action::WebShell | Action::WebLogin)
+        matches!(
+            self,
+            Action::Health | Action::WebShell | Action::WebLogin | Action::OidcBackchannelLogout
+        )
     }
 
     /// Decided on `Resource::Admission` alone, whoever the principal is
@@ -149,14 +167,17 @@ impl Action {
     /// resource it is decided like every other action (an anonymous
     /// caller is `FG-AUTH-0001`).
     pub fn is_admission(self) -> bool {
-        matches!(self, Action::SessionCreate)
+        matches!(self, Action::SessionCreate | Action::SessionContinue)
     }
 
     /// Only a web session may perform it (ADR-0021 §17): a personal access
     /// token is refused whatever its scopes (`FG-AUTH-0002
     /// reason=session_required`, before the resource is looked at).
     pub fn is_session_only(self) -> bool {
-        matches!(self, Action::SessionRead | Action::TokenCreate)
+        matches!(
+            self,
+            Action::SessionRead | Action::SessionLogout | Action::TokenCreate
+        )
     }
 
     /// Also performed through the git protocol (Smart HTTP). `RepoRead` is
@@ -177,7 +198,10 @@ impl Action {
             | Action::SessionRead
             | Action::TokenCreate
             | Action::WebLogin
-            | Action::SessionCreate => None,
+            | Action::SessionCreate
+            | Action::SessionContinue
+            | Action::SessionLogout
+            | Action::OidcBackchannelLogout => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
             Action::ProjectRead
