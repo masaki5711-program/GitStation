@@ -21,6 +21,166 @@
           "request_id"
         ],
         "type": "object"
+      },
+      "ProjectBody": {
+        "additionalProperties": false,
+        "description": "A project as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "The repository kind: `spec` or `system`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The current full path (`group/sub/project`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one\n(an administrator, or a reader of an internal project).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "description": "`private` or `internal`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "kind",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "Resolution": {
+        "additionalProperties": false,
+        "description": "Which namespace a path names. Exactly one of `project_id`, `group_id`,\n`user_id` is present, by `kind`.",
+        "properties": {
+          "canonical_path": {
+            "description": "The namespace's current path (a moved path: the target's).",
+            "type": "string"
+          },
+          "group_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`project`, `group` or `user`.",
+            "type": "string"
+          },
+          "moved": {
+            "description": "A `moved` tombstone led here.",
+            "type": "boolean"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "namespace_id",
+          "kind",
+          "canonical_path",
+          "moved"
+        ],
+        "type": "object"
+      },
+      "UserSelf": {
+        "additionalProperties": false,
+        "description": "The caller's account as the API shows it.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "description": "The account's administrator flag.",
+            "type": "boolean"
+          },
+          "is_agent": {
+            "description": "The credential is a token issued for an AI agent.",
+            "type": "boolean"
+          },
+          "token_scopes": {
+            "description": "The token's scopes; `null` for a session.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "is_admin",
+          "is_agent",
+          "token_scopes"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -41,6 +201,16 @@
       "get": {
         "operationId": "get_api_v1_namespaces_resolve",
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolution"
+                }
+              }
+            },
+            "description": "Success"
+          },
           "default": {
             "content": {
               "application/json": {
@@ -65,11 +235,23 @@
             "name": "id",
             "required": true,
             "schema": {
-              "type": "string"
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
             }
           }
         ],
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
           "default": {
             "content": {
               "application/json": {
@@ -83,6 +265,35 @@
         },
         "summary": "Read one project by id (ADR-0015 MR5)",
         "x-forge-action": "ProjectRead"
+      }
+    },
+    "/api/v1/user": {
+      "get": {
+        "operationId": "get_api_v1_user",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSelf"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own account (M1 phase 8b MR6)",
+        "x-forge-action": "UserSelfRead"
       }
     },
     "/healthz": {

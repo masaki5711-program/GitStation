@@ -296,6 +296,10 @@ pub fn authorize(
             admin_only()
         }
 
+        // Every active signed-in user reads their own account (the scope
+        // was checked above); the handler shows the principal's own data.
+        (Action::UserSelfRead, Resource::Instance) => Ok(()),
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -325,6 +329,7 @@ pub fn authorize(
             | Action::UserCreate
             | Action::UserDisable
             | Action::AuditRead
+            | Action::UserSelfRead
             | Action::PathResolve
             | Action::Metrics,
             Resource::Instance

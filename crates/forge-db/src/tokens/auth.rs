@@ -15,20 +15,22 @@ use crate::{query_error, Db};
 /// same hash and comparison as a hit (no timing signal for existence).
 const DUMMY_HASH: [u8; 32] = [0u8; 32];
 
-/// id, user_id, secret_sha256, scopes, is_agent, revoked, expired,
-/// is_admin, owner active, last_used_at stale.
-type Row = (
-    i64,
-    i64,
-    Vec<u8>,
-    Vec<String>,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-    bool,
-);
+/// The token and its owner, as one statement reads them.
+#[derive(sqlx::FromRow)]
+struct Row {
+    id: i64,
+    user_id: i64,
+    secret_sha256: Vec<u8>,
+    scopes: Vec<String>,
+    is_agent: bool,
+    revoked: bool,
+    expired: bool,
+    is_admin: bool,
+    active: bool,
+    stale: bool,
+    username: String,
+    display_name: String,
+}
 
 fn rejected(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Unauthenticated).with_context("reason", reason)
@@ -61,8 +63,10 @@ pub async fn authenticate(
             .map_err(|e| query_error("tokens.authenticate.acquire", e))?;
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.id, t.user_id, t.secret_sha256, t.scopes, t.is_agent, \
-             t.revoked_at IS NOT NULL, t.expires_at <= now(), u.is_admin, u.state = 'active', \
-             t.last_used_at IS NULL OR t.last_used_at < now() - interval '10 minutes' \
+             t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, u.is_admin, \
+             u.state = 'active' AS active, \
+             (t.last_used_at IS NULL OR t.last_used_at < now() - interval '10 minutes') AS stale, \
+             u.username, u.display_name \
              FROM forge.tokens t JOIN forge.users u ON u.id = t.user_id \
              WHERE t.public_id = $1",
         )
@@ -70,8 +74,20 @@ pub async fn authenticate(
         .fetch_optional(&mut *conn)
         .await
         .map_err(|e| query_error("tokens.authenticate.lookup", e))?;
-        let Some((id, user_id, hash, scopes, is_agent, revoked, expired, is_admin, active, stale)) =
-            row
+        let Some(Row {
+            id,
+            user_id,
+            secret_sha256: hash,
+            scopes,
+            is_agent,
+            revoked,
+            expired,
+            is_admin,
+            active,
+            stale,
+            username,
+            display_name,
+        }) = row
         else {
             // Equal work for a miss; black_box keeps the comparison from
             // being optimised away, since its result is deliberately unused.
@@ -102,6 +118,8 @@ pub async fn authenticate(
         Ok(TokenIdentity {
             token_id: id,
             user_id: UserId::new(user_id),
+            username,
+            display_name,
             is_admin,
             scopes,
             is_agent,

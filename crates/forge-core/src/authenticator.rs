@@ -18,6 +18,10 @@ use crate::{RequestId, Scope, UserId};
 pub struct TokenIdentity {
     pub token_id: i64,
     pub user_id: UserId,
+    /// The owner's username and display name (`GET /api/v1/user`; never an
+    /// authorization input).
+    pub username: String,
+    pub display_name: String,
     /// The owner is an administrator. Administrator **rights** also need the
     /// token's `admin` scope (`forge_auth::Principal::admin_rights`).
     pub is_admin: bool,

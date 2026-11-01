@@ -888,9 +888,10 @@ async fn path_resolve_denials_are_identical_and_cost_one_lookup() {
     }
     assert!(answers.iter().all(|a| a == &answers[0]));
 
-    // A malformed parameter is answered like an absent path, without a
-    // lookup (until FG-WEB-0006, phase 8b).
+    // A malformed parameter is FG-WEB-0006 (phase 8b MR6): the same 400
+    // for every malformed value, decided without a lookup.
     let before = script.calls();
+    let mut malformed = Vec::new();
     for query in [
         "",
         "path=",
@@ -901,8 +902,11 @@ async fn path_resolve_denials_are_identical_and_cost_one_lookup() {
     ] {
         let uri = format!("/api/v1/namespaces/resolve?{query}");
         let answer = send(product(&script), request("GET", &uri, Some(reporter()))).await;
-        assert_eq!(answer.without_request_id(), answers[0], "{query}");
+        assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{query}");
+        assert_eq!(answer.code(), ErrorCode::RequestInvalid.id(), "{query}");
+        malformed.push(answer.without_request_id());
     }
+    assert!(malformed.iter().all(|a| a == &malformed[0]));
     assert_eq!(script.calls(), before);
 
     // Authentication first; a wrong-scope token gets the same 403 for

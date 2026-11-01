@@ -140,7 +140,7 @@ impl SealKeys {
     }
 }
 
-fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(hex: &str) -> Option<Vec<u8>> {
     // Digits only: from_str_radix alone would take a pair like "+a".
     if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;

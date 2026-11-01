@@ -11,8 +11,9 @@ admitted proof.
 **Public API**
 - `app(AppState, AppConfig) -> Result<Router, ForgeError>` — the product
   router (routes come only from `app::registry()`).
-- A handler is an `Endpoint<S, R>`: `async fn(state, Dispatched<R>) -> impl
-  IntoResponse`. `Dispatched<R>` (private fields, no `Clone` / `Default`,
+- A handler is an `Endpoint<S, R, B = ()>`: `async fn(state, Dispatched<R, B>)
+  -> impl IntoResponse` (`B` is the parsed body of a body route, `input()`).
+  `Dispatched<R, B>` (private fields, no `Clone` / `Default`,
   `compile_fail` doctests in `src/registry.rs`) is built only by the
   registry's `admit()`, which checks `proof.action() == def.action`
   (`FG-SYS-0001 reason=proof_action_mismatch` otherwise) — so a handler cannot
@@ -23,7 +24,9 @@ admitted proof.
   `via_tombstone()`, `project()` (the `ProjectRecord` a project was loaded
   from) and `repository()` (the project's `ProjectRepository { id, state }`
   the resolver read with the path, scoped project routes; MR3) — all
-  revealed only after `authorize()` — and `into_body()`.
+  revealed only after `authorize()` — `caller()` (the authenticator's
+  `CallerProfile`: username, display name, flags, token scopes; phase 8b
+  MR6) and `into_body()`.
 - `registry::Registry::route(Verb, path, Action, summary, handler)` — a fixed
   path deciding on the instance (`InstanceCtx`); `route_with(.., loader,
   handler)` — a fixed path deciding on what a `Loader` loads (one lookup;
@@ -34,6 +37,20 @@ admitted proof.
   authentication guard: no authenticated `Principal` → `FG-AUTH-0001` before
   anything is loaded. Public routes never look at credentials and decide as
   anonymous. An invalid or duplicate path is a startup error (`FG-WEB-0004`).
+- `registry::Registry::route_with_body(Verb, path, Action, summary,
+  max_body_bytes, loader, handler)` (M1 phase 8b MR6) — a fixed write route
+  with a strict JSON body `B: RequestBody` (`Deserialize` +
+  `utoipa::ToSchema`, `#[serde(deny_unknown_fields)]`). Order:
+  authentication → `body::read_json` (`Content-Type: application/json`
+  else `FG-WEB-0006 reason=content_type`; the route's cap, 1 ..= 64 KiB and
+  never above `AppConfig::body_limit_bytes`, from `Content-Length` or while
+  streaming → `FG-WEB-0009` 413; a stalled body → the server's read-idle
+  timeout; bad JSON → `FG-WEB-0006 reason=json_syntax | unknown_field |
+  missing_field | type`, field names and positions logged, never values)
+  → `BodyLoader::load(state, parts, &B, viewer)` → `prove()` → `admit()` →
+  handler. A safe verb, a public action or a cap out of range is
+  `FG-WEB-0004`. `Registry::responds::<T>(verb, path)` documents a fixed
+  route's `200` body (OpenAPI).
 - `registry::Registry::scoped(RouteScope, Verb, ScopedRoute, query_key,
   Action, summary, handler)` — a namespace URL for the dispatcher; unique by
   `(scope, verb, route, query_key)`. Public actions take `InstanceCtx` (they
@@ -67,8 +84,8 @@ admitted proof.
   `{ namespace_id, kind, canonical_path, moved }` plus, since MR5, the
   owner's id under the kind's key — `project_id`, `group_id` or `user_id` —
   after `authorize()` allowed; `Cache-Control: private, no-store`; a
-  missing / repeated / malformed `path` is answered like an absent path
-  until FG-WEB-0006, phase 8b) and the SPA shell (`WebShell`,
+  missing / repeated / malformed `path` is `FG-WEB-0006 reason=param_invalid
+  param=path` since phase 8b MR6, without a lookup) and the SPA shell (`WebShell`,
   `src/routes/shell.rs`: the same bytes for every page — namespace home,
   `/-/tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags`
   `settings` `members`, group `settings` / `members`, `/-/projects/{id}/…`;
@@ -78,8 +95,9 @@ admitted proof.
   `ProjectAccessLoader::load_project` call per request (bounded by
   `lookup_timeout`, `FG-WEB-0002 operation=project_load`), then `prove()`:
   no such id, an invisible project, pending deletion to a caller who cannot
-  see the project and an id that is not a plain positive decimal
-  (`lookup=id_param_invalid`, no lookup) are byte-identical `FG-REPO-0005`;
+  see the project are byte-identical `FG-REPO-0005`; an id that is not a
+  plain positive decimal is one byte-identical `FG-WEB-0006
+  reason=param_invalid param=id` 400 (phase 8b MR6, no lookup);
   pending deletion to a caller who can see it is `FG-REPO-0006`, a Guest
   `FG-AUTH-0003`, a token without `read_api` / `api` `FG-AUTH-0002` (on a
   visible project). The body comes from `project_view(proof, record)`, the
@@ -87,6 +105,17 @@ admitted proof.
   display_name, description, visibility, kind, created_at, role }` (`kind`
   = repository kind, `role` = the caller's effective role or `null`);
   `Cache-Control: private, no-store`, `Vary: Authorization, Cookie`.
+- Route (M1 phase 8b MR6, `src/routes/users.rs`): `GET|HEAD /api/v1/user`
+  (`UserSelfRead`, `read_api`): `{ id, username, display_name, is_admin,
+  is_agent, token_scopes }` from the principal and what the authenticator
+  read with the token (`TokenIdentity`, no second lookup); `is_admin` is the
+  account flag. `Cache-Control: private, no-store`.
+- OpenAPI (phase 8b MR6): request / response schemas come from the Rust
+  types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
+  `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body
+  routes carry `requestBody` and `x-forge-max-body-bytes`; `{id}` is a
+  positive int64. Every object schema is strict (`additionalProperties:
+  false`, tested) and the document is deterministic.
 - Routes (M1 phase 9 MR3, `src/routes/git.rs`, `src/git_stream.rs`; all
   `RepoRead`, `RouteScope::ProjectGit`): `GET|HEAD
   {path}.git/info/refs?service=git-upload-pack` (HEAD: headers only, no
@@ -182,7 +211,8 @@ admitted proof.
 **Middleware** (outermost first): request id (always generated by the server;
 a client `X-Request-Id` is logged as `client_request_id`) + access log →
 request timeout (`FG-WEB-0002`) → panic catcher (`FG-SYS-0001`) → body
-limit → fixed routes → the dispatcher as the fallback (`FG-WEB-0001` for a
+limit (`DefaultBodyLimit` for axum extractors and the `BodyLimit` extension
+the registry's JSON bodies read) → fixed routes → the dispatcher as the fallback (`FG-WEB-0001` for a
 path in no table) and `FG-WEB-0003` for a wrong method on a fixed path
 (`Allow` kept). Every logged path goes through `log_safe_path` (256
 characters, control / invisible characters escaped). The authenticator

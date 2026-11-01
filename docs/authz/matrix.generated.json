@@ -20,6 +20,7 @@
   { "action": "UserCreate", "allow": 2, "deny": 3, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 1, "deny": 1, "public": false, "git_operation": false },
   { "action": "AuditRead", "allow": 3, "deny": 4, "public": false, "git_operation": false },
+  { "action": "UserSelfRead", "allow": 5, "deny": 5, "public": false, "git_operation": false },
   { "action": "PathResolve", "allow": 8, "deny": 14, "public": false, "git_operation": false },
   { "action": "WebShell", "allow": 3, "deny": 0, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 0, "public": true, "git_operation": false },

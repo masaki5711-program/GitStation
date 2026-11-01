@@ -896,3 +896,36 @@ fn server_limits_have_defaults_file_env_and_rules() {
         assert_invalid(&err, key, reason);
     }
 }
+
+// ── M1 phase 8b MR6: api.cursor_keys_file ──
+#[test]
+fn the_cursor_keys_file_is_checked_at_load_and_read_on_use() {
+    let keys = file(&format!("3 {}\n9 {}\n", "33".repeat(32), "99".repeat(32)));
+    let path = keys.path().to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_API_CURSOR_KEYS_FILE", path.as_str())])).expect("loads");
+    assert!(cfg.api.has_cursor_keys());
+    let read = cfg.api.cursor_keys().expect("read").expect("configured");
+    assert_eq!(read.encrypting().kid(), 9);
+    assert!(!format!("{cfg:?} {read:?}").contains("9999"));
+
+    let toml = file(&format!("[api]\ncursor_keys_file = {path:?}\n"));
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file.api.has_cursor_keys());
+
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.api.cursor_keys().expect("unset").is_none());
+    assert_invalid(
+        &none.api.require_cursor_keys().expect_err("required"),
+        "api.cursor_keys_file",
+        "missing",
+    );
+    let err = load(
+        None,
+        &env(&[("FORGE_API_CURSOR_KEYS_FILE", "relative/keys")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "api.cursor_keys_file", "not_absolute");
+    // A typo under the new namespace fails like every other one.
+    let err = load(None, &env(&[("FORGE_API_CURSOR_KEY_FILE", path.as_str())])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}

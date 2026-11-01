@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A Smart HTTP advertisement request (`GET {path}.git/info/refs`) did not carry exactly one `service` query parameter whose value is `git-upload-pack` or `git-receive-pack` (byte for byte, no decoding, no case folding; ADR-0015 step 3). Decided from the string alone, before authentication and before any lookup, so it says nothing about the path. Dumb HTTP clients (no `service`) get this too: forge serves Smart HTTP only. FG-WEB-0006 stays reserved for request validation (phase 8b).
+A Smart HTTP advertisement request (`GET {path}.git/info/refs`) did not carry exactly one `service` query parameter whose value is `git-upload-pack` or `git-receive-pack` (byte for byte, no decoding, no case folding; ADR-0015 step 3). Decided from the string alone, before authentication and before any lookup, so it says nothing about the path. Dumb HTTP clients (no `service`) get this too: forge serves Smart HTTP only.
 
 ## 調べ方 (diagnosis)
 

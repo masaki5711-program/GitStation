@@ -69,6 +69,8 @@ fn identity(user: i64, is_admin: bool, scopes: &[Scope]) -> TokenIdentity {
     TokenIdentity {
         token_id: user * 10,
         user_id: UserId::new(user),
+        username: format!("user{user}"),
+        display_name: format!("User {user}"),
         is_admin,
         scopes: scopes.to_vec(),
         is_agent: false,

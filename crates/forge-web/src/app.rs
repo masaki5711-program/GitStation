@@ -137,7 +137,8 @@ pub struct AppConfig {
     /// `git-receive-pack`): they read the whole request before answering,
     /// under their own idle / size limits (`git.http.timeout_ms`, 1 h).
     pub git_rpc_timeout: Duration,
-    /// Request body limit for extractors (raw streams set their own).
+    /// Request body limit for extractors and the registry's JSON bodies (a
+    /// route's own cap is at most 64 KiB; raw git streams set their own).
     pub body_limit_bytes: usize,
 }
 
@@ -216,7 +217,7 @@ pub fn registry() -> Registry<AppState> {
         )
         .route_with(
             Verb::Get,
-            "/api/v1/namespaces/resolve",
+            routes::namespaces::PATH,
             Action::PathResolve,
             "Resolve a namespace path for the caller (ADR-0015)",
             routes::namespaces::PathParam,
@@ -230,7 +231,17 @@ pub fn registry() -> Registry<AppState> {
             "Read one project by id (ADR-0015 MR5)",
             routes::projects::ProjectById,
             routes::projects::read,
-        );
+        )
+        .responds::<routes::projects::ProjectBody>(Verb::Get, routes::projects::PATH)
+        .route(
+            Verb::Get,
+            routes::users::PATH,
+            Action::UserSelfRead,
+            "The caller's own account (M1 phase 8b MR6)",
+            routes::users::me,
+        )
+        .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
+        .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
     git_routes(shell_routes(fixed))
 }
 
@@ -375,7 +386,13 @@ pub(crate) fn build(
     Ok(registry
         .into_router()?
         .method_not_allowed_fallback(method_not_allowed)
+        // DefaultBodyLimit bounds axum's own body extractors (no route uses
+        // one); the registry's JSON bodies read BodyLimit and answer
+        // FG-WEB-0009 (`crate::body`).
         .layer(DefaultBodyLimit::max(config.body_limit_bytes))
+        .layer(axum::Extension(crate::body::BodyLimit(
+            config.body_limit_bytes,
+        )))
         .layer(axum::Extension(authenticator))
         .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(
