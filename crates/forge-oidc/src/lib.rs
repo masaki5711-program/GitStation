@@ -23,9 +23,15 @@
 //! - [`operator_link_identity`]: `forge admin user link-identity` (actor
 //!   `system` only; ADR-0019 §8's exception list, ADR-0021 §4 2a).
 //!
+//! - [`RefreshingSessions`], [`Oidc::logout`], [`Oidc::backchannel_logout`]:
+//!   the running session's side (M2 MR5, ADR-0021 §7, §8) — the 5-minute
+//!   refresh check decided with `SessionContinue`, the RP logout and the
+//!   back-channel logout (module `session`).
+//!
 //! Failures: `FG-AUTH-0011` (state), `0012` (ID token), `0013`
-//! (admission), `0014` (link), `0015` (identity provider), with the log
-//! `reason`; never a token, a claim value or the IdP's response body.
+//! (admission), `0014` (link), `0015` (identity provider), `0017` (logout
+//! token), with the log `reason`; never a token, a claim value or the
+//! IdP's response body.
 
 mod discovery;
 mod error;
@@ -35,6 +41,7 @@ pub mod jwks;
 pub mod jwt;
 mod keys;
 mod operator;
+mod session;
 pub mod state;
 
 #[cfg(feature = "test-support")]
@@ -46,6 +53,17 @@ pub use flow::{
 };
 pub use keys::{KeyEntry, KeySet, VerifyKey};
 pub use operator::operator_link_identity;
+pub use session::{
+    LogoutRequest, RefreshVerdict, RefreshingSessions, JTI_MEMORY_SECS, MAX_JTIS,
+    MAX_REFRESH_WITHOUT_ID_TOKEN,
+};
+
+/// `POST /-/auth/logout` (M2 MR5, ADR-0021 §8).
+pub const LOGOUT_PATH: &str = "/-/auth/logout";
+/// `POST /-/auth/backchannel-logout` (M2 MR5, ADR-0021 §8).
+pub const BACKCHANNEL_LOGOUT_PATH: &str = "/-/auth/backchannel-logout";
+/// The largest back-channel logout body (ADR-0021 §8).
+pub const MAX_LOGOUT_BODY_BYTES: usize = 64 * 1024;
 
 /// The state cookie (ADR-0021 §3): HttpOnly, Secure, SameSite=Lax,
 /// `Path=/`, no Domain, 10 minutes.

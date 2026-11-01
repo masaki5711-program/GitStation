@@ -1013,3 +1013,303 @@ async fn a_revoked_session_stays_revoked_with_its_reason() {
     );
     t.drop_now().await;
 }
+
+// --- M2 MR5: the refresh check and the logouts (ADR-0021 §7, §8) ---
+
+const ISSUER: &str = "https://sso.example.test/realms/iot";
+
+async fn oidc_session(
+    t: &FreshDb,
+    req: &str,
+    user: UserId,
+    sub: &str,
+    sid: Option<&str>,
+) -> Issued {
+    let new = NewSession {
+        oidc: Some(OidcSession {
+            issuer: ISSUER.to_owned(),
+            subject: sub.to_owned(),
+            sid: sid.map(str::to_owned),
+            refresh_token_enc: Some(vec![7, 7]),
+            id_token_enc: Some(vec![6]),
+        }),
+        ..new_session(user)
+    };
+    issue(&t.db, &ctx(req), &new).await.expect("issue")
+}
+
+/// Unaudited: no audit row is needed to move the last check back.
+async fn make_due(su: &mut PgConnection, session_id: i64) {
+    sqlx::query(
+        "UPDATE forge.web_sessions SET refresh_checked_at = now() - interval '301 seconds' \
+         WHERE id = $1",
+    )
+    .bind(session_id)
+    .execute(su)
+    .await
+    .expect("make due");
+}
+
+/// Only the first request after 5 minutes takes the claim; a session
+/// without a refresh token, a revoked one, or one checked recently is
+/// never claimed; `authenticate` says `refresh_due` exactly then.
+#[tokio::test]
+async fn the_refresh_claim_is_taken_once_per_five_minutes() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let issued = oidc_session(&t, "req-claim-1", alice, "synthetic-sub-a", None).await;
+    let mut su = t.superuser().await;
+    let cookie = issued.token.reveal().to_owned();
+    let fresh = authenticate(&t.db, &rid("req-claim-2"), &cookie, IDLE)
+        .await
+        .expect("auth");
+    assert!(!fresh.refresh_due, "the login was the first check");
+    assert!(claim_refresh(&t.db, issued.session_id)
+        .await
+        .expect("claim")
+        .is_none());
+    make_due(&mut su, issued.session_id).await;
+    let due = authenticate(&t.db, &rid("req-claim-3"), &cookie, IDLE)
+        .await
+        .expect("auth");
+    assert!(due.refresh_due);
+    let claim = claim_refresh(&t.db, issued.session_id)
+        .await
+        .expect("claim")
+        .expect("due");
+    assert_eq!(claim.user, alice);
+    assert_eq!(claim.issuer, ISSUER);
+    assert_eq!(claim.subject, "synthetic-sub-a");
+    assert_eq!(claim.refresh_token_enc, vec![7, 7]);
+    assert_eq!(claim.without_id_token, 0);
+    assert!(
+        !format!("{claim:?}").contains("synthetic-sub-a"),
+        "Debug hides the subject and the sealed token"
+    );
+    assert!(
+        claim_refresh(&t.db, issued.session_id)
+            .await
+            .expect("again")
+            .is_none(),
+        "a second request does not refresh"
+    );
+    // A session without a refresh token never refreshes.
+    let plain = issue_ok(&t, "req-claim-4", alice).await;
+    make_due(&mut su, plain.session_id).await;
+    assert!(claim_refresh(&t.db, plain.session_id)
+        .await
+        .expect("claim")
+        .is_none());
+    // A revoked one neither.
+    make_due(&mut su, issued.session_id).await;
+    let _ = revoke(
+        &t.db,
+        &ctx("req-claim-5"),
+        issued.session_id,
+        SessionRevokeReason::Logout,
+    )
+    .await
+    .expect("revoke");
+    assert!(claim_refresh(&t.db, issued.session_id)
+        .await
+        .expect("claim")
+        .is_none());
+    t.drop_now().await;
+}
+
+/// A stored refresh with an ID token confirms the role and resets the
+/// count; without one the count rises and the sealed tokens stay. Nothing
+/// is audited, and a revoked session stores nothing.
+#[tokio::test]
+async fn a_stored_refresh_counts_the_answers_without_an_id_token() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let issued = oidc_session(&t, "req-store-1", alice, "synthetic-sub-b", None).await;
+    let mut su = t.superuser().await;
+    let audits_before = count(&mut su, "SELECT count(*) FROM forge.audit_log").await;
+    let without = Refreshed {
+        refresh_token_enc: Some(&[1]),
+        id_token_enc: None,
+    };
+    assert!(store_refreshed(&t.db, issued.session_id, without)
+        .await
+        .expect("store"));
+    assert!(store_refreshed(&t.db, issued.session_id, without)
+        .await
+        .expect("store"));
+    let row: (i16, Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT refresh_without_id_token, refresh_token_enc, id_token_enc \
+         FROM forge.web_sessions WHERE id = $1",
+    )
+    .bind(issued.session_id)
+    .fetch_one(&mut su)
+    .await
+    .expect("row");
+    assert_eq!(
+        row,
+        (2, vec![1], vec![6]),
+        "the old ID token stays for the logout"
+    );
+    sqlx::query(
+        "UPDATE forge.web_sessions SET access_role_seen_at = now() - interval '1 hour' \
+         WHERE id = $1",
+    )
+    .bind(issued.session_id)
+    .execute(&mut su)
+    .await
+    .expect("age");
+    let with = Refreshed {
+        refresh_token_enc: None,
+        id_token_enc: Some(&[2, 2]),
+    };
+    assert!(store_refreshed(&t.db, issued.session_id, with)
+        .await
+        .expect("store"));
+    let row: (i16, Vec<u8>, Vec<u8>, bool) = sqlx::query_as(
+        "SELECT refresh_without_id_token, refresh_token_enc, id_token_enc, \
+         access_role_seen_at > now() - interval '1 minute' \
+         FROM forge.web_sessions WHERE id = $1",
+    )
+    .bind(issued.session_id)
+    .fetch_one(&mut su)
+    .await
+    .expect("row");
+    assert_eq!(row, (0, vec![1], vec![2, 2], true));
+    assert_eq!(
+        count(&mut su, "SELECT count(*) FROM forge.audit_log").await,
+        audits_before,
+        "the refresh check is unaudited"
+    );
+    let _ = revoke(
+        &t.db,
+        &ctx("req-store-2"),
+        issued.session_id,
+        SessionRevokeReason::IdpRevoked,
+    )
+    .await
+    .expect("revoke");
+    assert!(!store_refreshed(&t.db, issued.session_id, with)
+        .await
+        .expect("store"));
+    t.drop_now().await;
+}
+
+/// `account_of` reads the user again: active, a bot, disabled, unknown.
+#[tokio::test]
+async fn the_refresh_check_reads_the_account_again() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    assert_eq!(
+        account_of(&t.db, alice).await.expect("alice"),
+        crate::identities::LoginAccount::Active
+    );
+    let mut su = t.superuser().await;
+    su_change(
+        &mut su,
+        alice,
+        &format!(
+            "UPDATE forge.users SET kind = 'bot' WHERE id = {}",
+            alice.get()
+        ),
+    )
+    .await;
+    assert_eq!(
+        account_of(&t.db, alice).await.expect("bot"),
+        crate::identities::LoginAccount::NotHuman
+    );
+    su_change(
+        &mut su,
+        alice,
+        &format!(
+            "UPDATE forge.users SET state = 'disabled' WHERE id = {}",
+            alice.get()
+        ),
+    )
+    .await;
+    assert_eq!(
+        account_of(&t.db, alice).await.expect("off"),
+        crate::identities::LoginAccount::Disabled
+    );
+    let err = account_of(&t.db, UserId::new(999_999))
+        .await
+        .expect_err("unknown");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    t.drop_now().await;
+}
+
+/// The back-channel targets: by `sid` when given, else every row of the
+/// subject — of this issuer only, unrevoked only. The RP logout's view is
+/// the live session's public id and sealed ID token.
+#[tokio::test]
+async fn backchannel_targets_stay_within_the_issuer_and_logout_reads_the_id_token() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let a1 = oidc_session(
+        &t,
+        "req-bc-1",
+        alice,
+        "synthetic-sub-c",
+        Some("synthetic-sid-x"),
+    )
+    .await;
+    let a2 = oidc_session(
+        &t,
+        "req-bc-2",
+        alice,
+        "synthetic-sub-c",
+        Some("synthetic-sid-y"),
+    )
+    .await;
+    let other_idp = issue(
+        &t.db,
+        &ctx("req-bc-3"),
+        &NewSession {
+            oidc: Some(OidcSession {
+                issuer: "https://other.example.test/realms/iot".to_owned(),
+                subject: "synthetic-sub-c".to_owned(),
+                sid: Some("synthetic-sid-x".to_owned()),
+                refresh_token_enc: None,
+                id_token_enc: None,
+            }),
+            ..new_session(alice)
+        },
+    )
+    .await
+    .expect("issue");
+    let by_sid = backchannel_targets(&t.db, ISSUER, LogoutTarget::Sid("synthetic-sid-x"))
+        .await
+        .expect("sid");
+    assert_eq!(by_sid, vec![a1.session_id]);
+    let by_sub = backchannel_targets(&t.db, ISSUER, LogoutTarget::Subject("synthetic-sub-c"))
+        .await
+        .expect("sub");
+    assert_eq!(by_sub, vec![a1.session_id, a2.session_id]);
+    assert!(!by_sub.contains(&other_idp.session_id));
+    let (public_id, id_token) = logout_view(&t.db, a2.session_id)
+        .await
+        .expect("view")
+        .expect("live");
+    assert_eq!(public_id, a2.token.public_id().as_str());
+    assert_eq!(id_token, Some(vec![6]));
+    let _ = revoke(
+        &t.db,
+        &ctx("req-bc-4"),
+        a2.session_id,
+        SessionRevokeReason::Logout,
+    )
+    .await
+    .expect("revoke");
+    assert!(logout_view(&t.db, a2.session_id)
+        .await
+        .expect("view")
+        .is_none());
+    let by_sub = backchannel_targets(&t.db, ISSUER, LogoutTarget::Subject("synthetic-sub-c"))
+        .await
+        .expect("sub");
+    assert_eq!(by_sub, vec![a1.session_id], "revoked rows are not targets");
+    let err = backchannel_targets(&t.db, ISSUER, LogoutTarget::Sid(""))
+        .await
+        .expect_err("empty");
+    assert_reason(&err, ErrorCode::Internal, "backchannel_target_empty");
+    t.drop_now().await;
+}

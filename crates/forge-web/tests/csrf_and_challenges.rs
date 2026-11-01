@@ -138,6 +138,7 @@ impl SessionAuthenticator for Sessions {
                     is_admin: false,
                     idle_expires_at: "2026-11-01T16:00:00Z".to_owned(),
                     absolute_expires_at: "2026-11-02T00:00:00Z".to_owned(),
+                    refresh_due: false,
                 }),
                 (Ok(_), Some(Kind::Expired)) => Err(rejected("session_expired")),
                 (Ok(_), Some(Kind::Disabled)) => Err(ForgeError::new(ErrorCode::AccountDisabled)

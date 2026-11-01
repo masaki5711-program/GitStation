@@ -516,3 +516,17 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 26 | MEDIUM（レビュー） | JWKS のキャッシュがロックを持ったまま取得を待ち（最長 5 秒）、失敗は 60 秒の制限に数えない | 状態のロックは読み書きの間だけ。取得は 1 本ずつ（single flight）で、待っていた呼び出しは前の取得の結果を使う。**失敗も含めすべての試行が 60 秒の制限に入る**（最初の取得も）。60 秒以内に失敗していて使える鍵がなければ FG-AUTH-0015 `call=jwks reason=backoff`（呼び出しなし）。復旧からログインが戻るまで最長 60 秒 |
 | 27 | MEDIUM（レビュー） | コールバックに回数の制限がない。満杯の制限の表が全員を断る。毒された表が黙って断る | コールバックもピアごとに 20 回 / 60 秒（開始とは別に数える、`route=callback`）。満杯のときは最も古いピアを追い出す。毒された表は FG-SYS-0001 `reason=login_limiter_poisoned` を 1 回ログに出して断る |
 | 28 | LOW（レビュー） | 時計が 1970 年より前だと 0 秒として扱い、期限の検査が通る | FG-SYS-0001 `reason=clock_before_epoch` |
+
+### 実装で決めた点（2026-11-01、M2 MR5 `feat/auth-oidc-logout-refresh` の実装）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 29 | MEDIUM | §7 の「ID トークンが返らないときは最後の判定を絶対の寿命まで保つ」だと、ロールを外された人がリフレッシュのたびに ID トークンのない応答を受けるかぎり、12 時間残る | **ID トークンのない応答は 3 回続けてまで**受け入れる（ロールは前回の値）。4 回目でセッションを `reason=idp_revoked` で失効させる（fail closed、ログ `forge.auth.session_refresh_revoked why=id_token_missing`）。ID トークンのある応答で数を 0 に戻す。列 `web_sessions.refresh_without_id_token`（マイグレーション `20261104100000`、追記、監査しない） |
+| 30 | LOW | §8 の「セッションがない・期限切れのログアウトも 303 でホーム」は、`SessionLogout` を匿名に許すことになり、権限の表（匿名は deny）と合わない | 権限の表を優先し、セッションのないログアウトは今のとおり FG-AUTH-0001（401、Cookie を消す）。画面はセッションがあるときだけログアウトのボタンを出す（MR9）。`auth.oidc` のないサーバーでのログアウトは 503 FG-AUTH-0018（セッションは失効させない） |
+| 31 | LOW | `SessionContinue` はルートの中ではなく、Cookie で認証するすべてのルートの認証の中（`forge_oidc::RefreshingSessions`）で判定する | `app::DECIDED_IN_ROUTE` に `(SessionContinue, /api/v1/session)` を足した（画面が最初に読むルートを代表にする）。エージェントモデルの `authz-coverage` のゲートは `decided_in` を読む（MR4 の 22 と同じ後の作業） |
+
+ほかの細目（ADR の範囲内）: リフレッシュの呼び出しのログの `call` は `refresh`（FG-AUTH-0015、warn）。`invalid_grant` 以外の 400 / 401
+（`invalid_client` など）はクライアントの問題として `client_rejected` で続行する。リフレッシュトークンが復号できない（鍵の kid を消した）
+ときは FG-DB-0019 を出して `idp_revoked` で失効させる。ログアウトの `csrf` はフォームの本文（4 KiB まで）から `X-GitStation-CSRF` に
+移して、ほかのルートと同じ 1 つの CSRF の検査を通す。バックチャネルの `jti` は 10 分・1 万件まで覚え、満杯は `replay_table_full` で断る
+（古いものを追い出すと再送を通すため）。失効の書き込みが失敗した `jti` は忘れる（Keycloak の再送を `replayed` にしない）。

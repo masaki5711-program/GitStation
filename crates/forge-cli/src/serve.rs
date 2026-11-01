@@ -29,6 +29,11 @@
 //! provider is a warning: signed-in sessions keep working, the first
 //! sign-in tries again). Without it the login routes are `FG-AUTH-0018`.
 //!
+//! Logout and refresh (M2 MR5, ADR-0021 §7, §8): with `auth.oidc` the
+//! session authenticator is wrapped in `forge_oidc::RefreshingSessions`
+//! (the 5-minute refresh check), and the shell's CSP `form-action` allows
+//! the issuer's origin (the logout form's 303).
+//!
 //! Smart HTTP (M1 phase 9 MR3): `storage.root` is required; git runs from
 //! `PATH` with HOME pinned to the storage root (as the worker does), its
 //! stream pools and timeouts from `git.http.*`, the version checked
@@ -77,7 +82,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
         let oidc = crate::oidc::service(cfg, &db)?;
-        let mut state = app_state(&db, database, cfg.web.session_idle)
+        let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
             .with_web_origin(&web_origin)
             // D5 MR3: the deletion grace period (`hosting.deletion_grace_days`).
             .with_hosting(
@@ -175,14 +180,27 @@ fn smart_http(storage: StorageRoot, limits: &GitHttpConfig) -> SmartHttp {
 
 /// The server's state: the database as readiness probe and as token and
 /// session authenticator, together bounded to [`auth_permits`] concurrent
-/// lookups; `session_idle` is `web.session_idle_secs`.
-fn app_state(db: &Db, database: &DatabaseConfig, session_idle: Duration) -> AppState {
+/// lookups; `session_idle` is `web.session_idle_secs`. With `oidc` the
+/// sessions also run the 5-minute refresh check (M2 MR5, ADR-0021 §7)
+/// outside those permits: the provider call holds no database connection.
+fn app_state(
+    db: &Db,
+    database: &DatabaseConfig,
+    session_idle: Duration,
+    oidc: Option<&Arc<forge_oidc::Oidc>>,
+) -> AppState {
     // clone: the pool handle is shared (Arc inside)
     let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone());
     let bounded = BoundedAuthenticator::new(Arc::new(db.clone()), auth_permits(database));
-    let sessions: Arc<dyn SessionAuthenticator> = Arc::new(bounded.sessions(Arc::new(
+    let mut sessions: Arc<dyn SessionAuthenticator> = Arc::new(bounded.sessions(Arc::new(
         forge_db::sessions::SessionStore::new(db.clone(), session_idle),
     )));
+    if let Some(oidc) = oidc {
+        sessions = Arc::new(forge_oidc::RefreshingSessions::new(
+            sessions,
+            Arc::clone(oidc),
+        ));
+    }
     let authenticator: Arc<dyn Authenticator> = Arc::new(bounded);
     let lookups = Lookups {
         namespaces: Arc::new(db.clone()),
@@ -399,7 +417,7 @@ mod tests {
             &Env::from_pairs([("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "4000")]),
         )
         .expect("config");
-        let state = app_state(&t.db, &cfg.database, cfg.web.session_idle);
+        let state = app_state(&t.db, &cfg.database, cfg.web.session_idle, None);
         let identity = state
             .authenticator
             .authenticate(&rid("req-serve-auth"), &issued.token.reveal())

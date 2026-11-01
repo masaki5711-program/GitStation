@@ -29,6 +29,7 @@ struct Row {
     revoked_reason: Option<String>,
     expired: bool,
     stale: bool,
+    refresh_due: bool,
     is_admin: bool,
     active: bool,
     username: String,
@@ -74,6 +75,9 @@ pub async fn authenticate(
              s.revoked_reason, \
              (s.absolute_expires_at <= now() OR s.idle_expires_at <= now()) AS expired, \
              s.last_seen_at < now() - interval '1 minute' AS stale, \
+             (s.oidc_issuer IS NOT NULL AND s.refresh_token_enc IS NOT NULL \
+              AND (s.refresh_checked_at IS NULL \
+                   OR s.refresh_checked_at < now() - interval '300 seconds')) AS refresh_due, \
              u.is_admin, u.state = 'active' AS active, u.username, u.display_name, ",
             utc!("s.idle_expires_at"),
             " AS idle_expires_at, ",
@@ -129,6 +133,7 @@ pub async fn authenticate(
             is_admin: row.is_admin,
             idle_expires_at,
             absolute_expires_at: row.absolute_expires_at,
+            refresh_due: row.refresh_due,
         })
     })
     .await

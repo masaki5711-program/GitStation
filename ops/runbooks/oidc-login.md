@@ -1,6 +1,7 @@
-# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0018）
+# Runbook: oidc-login（FG-AUTH-0012 / FG-AUTH-0011 / FG-AUTH-0013 / FG-AUTH-0017 / FG-AUTH-0018）
 
-ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するときの診断。MR5 で FG-AUTH-0017（ログアウトのトークン）もここに入る。
+ブラウザのログイン（Keycloak の OIDC、ADR-0021 §3・§9）が失敗するとき、バックチャネルのログアウト（FG-AUTH-0017、ADR-0021 §8）が
+断られるとき、5 分ごとのリフレッシュの確認でセッションが切れるとき（ADR-0021 §7、M2 MR5）の診断。
 
 ## Trigger
 
@@ -9,11 +10,21 @@
   `signature`、`issuer`、`audience`、`azp`、`expired`、`not_yet_valid`（`claim`）、`nonce`、`subject`、`missing_claim`（`claim`）。
 - 利用者から「ログインできない」の問い合わせ（`request_id` 付き）。FG-AUTH-0011（state の誤り）、FG-AUTH-0013（入場の拒否）、
   FG-AUTH-0018（`auth.oidc` がない）も同じ手順で見分ける。
+- `error_code=FG-AUTH-0017` LogoutTokenInvalid（warn、400）。`POST /-/auth/backchannel-logout` で、呼ぶのは Keycloak のサーバー
+  （人は見ない）。ログの `context` に `event=forge.auth.backchannel_logout_failed` と `reason`: `body`（`detail`: content_type、
+  too_large、form、token_missing）、0012 と同じ署名・鍵の理由、`issuer`、`audience`、`expired`、`not_yet_valid`、`too_old`
+  （`iat` が 2 分より古い）、`missing_claim`（`claim`: iat、jti、events、sid_or_sub）、`events`、`nonce_present`、`replayed`、
+  `replay_table_full`。
+- 「ログインしていたのに急に出された」の問い合わせ: ログの `forge.auth.session_refresh_revoked`（`why`: invalid_grant、
+  session_continue_denied、id_token_invalid、id_token_missing、refresh_token_unreadable、`revoked_reason`）か
+  `forge.auth.backchannel_logout`（`revoked`）。
 
 ## Impact
 
 - 新しいログインだけが失敗する。ログイン済みのセッション、`git`、トークンの API、`gstn` は影響を受けない。
 - 何も書かれていない（利用者・結び付け・セッションのどれも）。
+- FG-AUTH-0017: そのログアウトでセッションは失効していない。Keycloak で切った人が GitStation では最長 5 分（とその人の次の操作）
+  まで残る（リフレッシュの確認が補う）。
 
 ## Diagnose（読み取りだけ）
 
@@ -29,6 +40,17 @@
    - FG-AUTH-0011 `state_cookie_invalid`: 複数のプロセスで `web.session_key_file` が違う、またはログインの途中で鍵を変えた。
    - FG-AUTH-0013 `no_access_role`: Keycloak でクライアントロール `access` が付いていない。`user_disabled`: GitStation の利用者が無効。
    - FG-AUTH-0018: `[auth.oidc]` が設定されていない。
+   - FG-AUTH-0017 `issuer` / `audience` / `signature`: Keycloak のクライアント `gitstation` の「Backchannel logout URL」が
+     `web.base_url` + `/-/auth/backchannel-logout` か、realm と `auth.oidc.issuer`・client id が同じか。同じピアからの連続は
+     探りの可能性（有効な署名のトークンなしには何も失効しない）。
+   - FG-AUTH-0017 `missing_claim claim=sid_or_sub`: 「Backchannel logout session required」を有効にする（`sid` を送らせる）。
+   - FG-AUTH-0017 `too_old` / `not_yet_valid`: 両方のサーバーの時計（`forge doctor` のずれ）か、Keycloak の配送の遅れ。
+   - FG-AUTH-0017 `replayed`: Keycloak の再起動の後の再送なら無害（最初の配送で失効済み）。
+   - リフレッシュでの失効 `why=session_continue_denied`: Keycloak で `access` のロールが外れた（`revoked_reason=idp_revoked`）か
+     GitStation で無効化された（`user_disabled`）。`why=id_token_missing`: リフレッシュの応答に ID トークンが 4 回続けてない
+     （クライアントの scope に `openid` があるか）。`why=refresh_token_unreadable`（FG-DB-0019 も出る）: `web.session_key_file`
+     から古い kid を早く消した。
+   - FG-AUTH-0015 `call=refresh`（warn）: リフレッシュの時に Keycloak に届かない。ログイン済みは続く（runbook keycloak-unreachable）。
 
 ## Mitigate
 
@@ -39,8 +61,11 @@
 ## Verify
 
 - 同じ利用者でログインが通り、ログに `forge.auth.login_succeeded`（`user_id`、`outcome`、`public_id`）が出る。
+- バックチャネル: Keycloak の管理画面でその人のセッションを切ると、ログに `forge.auth.backchannel_logout`（`revoked` ≥ 1）が出て、
+  その人の次の要求が FG-AUTH-0001 `session_revoked`（`revoked_reason=backchannel`）になる。
 - `forge doctor` の `auth.oidc` が `ok`。
 
 ## Feedback
 
 - 新しい失敗の形なら、errors.toml の FG-AUTH-0012 の diagnosis に `reason` を足し、forge-oidc の `tests/jwt.rs` にテストを足す。
+  ログアウトのトークンなら FG-AUTH-0017 と `tests/session.rs`（`logout_token_failures_are_logout_token_invalid`）。

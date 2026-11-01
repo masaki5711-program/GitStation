@@ -478,6 +478,7 @@ const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
     "id_token_enc",
     "refresh_checked_at",
     "access_role_seen_at",
+    "refresh_without_id_token",
 ];
 
 /// The read pool's columns of web_sessions (tables.toml `ro_columns`): not
@@ -496,6 +497,7 @@ const WEB_SESSIONS_RO: &[&str] = &[
     "oidc_sid",
     "refresh_checked_at",
     "access_role_seen_at",
+    "refresh_without_id_token",
 ];
 
 /// The read pool's columns of user_identities: not subject.

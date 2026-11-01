@@ -34,6 +34,8 @@ pub struct Timeouts {
     pub fetch: Duration,
     /// The token endpoint at the callback: 5 s.
     pub token: Duration,
+    /// The token endpoint for the 5-minute refresh check (M2 MR5): 3 s.
+    pub refresh: Duration,
     /// The JWKS cache.
     pub jwks: JwksTiming,
     /// The waits between the start's discovery attempts (1 s, 2 s).
@@ -46,6 +48,7 @@ impl Default for Timeouts {
             connect: Duration::from_secs(2),
             fetch: Duration::from_secs(5),
             token: Duration::from_secs(5),
+            refresh: Duration::from_secs(3),
             jwks: JwksTiming::default(),
             prefetch_backoff: [Duration::from_secs(1), Duration::from_secs(2)],
         }
@@ -165,16 +168,18 @@ pub struct LoginDone {
 
 /// The sign-in service (one per process).
 pub struct Oidc {
-    settings: OidcSettings,
-    redirect_uri: String,
-    http: IdpClient,
+    pub(crate) settings: OidcSettings,
+    pub(crate) redirect_uri: String,
+    pub(crate) http: IdpClient,
     discovery: DiscoveryCache,
-    jwks: JwksCache,
-    verifier: JwtVerifier,
+    pub(crate) jwks: JwksCache,
+    pub(crate) verifier: JwtVerifier,
     state_keys: PurposeKeys,
-    refresh_keys: PurposeKeys,
-    id_keys: PurposeKeys,
-    db: Db,
+    pub(crate) refresh_keys: PurposeKeys,
+    pub(crate) id_keys: PurposeKeys,
+    pub(crate) db: Db,
+    /// The back-channel logout's seen `jti`s (M2 MR5, ADR-0021 §8).
+    pub(crate) jtis: crate::session::JtiCache,
 }
 
 impl std::fmt::Debug for Oidc {
@@ -239,6 +244,7 @@ impl Oidc {
             refresh_keys: keys.purpose(KeyPurpose::RefreshToken)?,
             id_keys: keys.purpose(KeyPurpose::IdToken)?,
             db,
+            jtis: crate::session::JtiCache::default(),
             settings,
         })
     }
@@ -246,6 +252,18 @@ impl Oidc {
     /// The configured issuer.
     pub fn issuer(&self) -> &str {
         &self.settings.issuer
+    }
+
+    /// The issuer's origin (`scheme://host[:port]`): the shell's CSP
+    /// `form-action` allows it, because the logout form's 303 goes to the
+    /// provider's `end_session_endpoint`, which discovery requires to have
+    /// this origin (ADR-0021 §8, ADR-0022 §3). `None` for an issuer that is
+    /// not a URL (refused at load).
+    pub fn issuer_origin(&self) -> Option<String> {
+        url::Url::parse(&self.settings.issuer)
+            .ok()
+            .map(|u| u.origin().ascii_serialization())
+            .filter(|o| o != "null")
     }
 
     /// The `redirect_uri` (`web.base_url` + `/-/auth/callback`).
@@ -297,7 +315,7 @@ impl Oidc {
         fetch_provider(&self.http, &self.settings).await
     }
 
-    async fn discovered(&self) -> Result<std::sync::Arc<Discovery>, ForgeError> {
+    pub(crate) async fn discovered(&self) -> Result<std::sync::Arc<Discovery>, ForgeError> {
         self.discovery
             .get(
                 &self.http,
@@ -538,7 +556,7 @@ impl Oidc {
     }
 
     /// `resource_access.<client_id>.roles` holds `auth.oidc.access_role`.
-    fn has_access_role(&self, claims: &Value) -> bool {
+    pub(crate) fn has_access_role(&self, claims: &Value) -> bool {
         claims
             .get("resource_access")
             .and_then(|r| r.get(&self.settings.client_id))
