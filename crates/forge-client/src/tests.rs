@@ -168,6 +168,7 @@ fn host_parsing_rules() {
     assert!(parse_host("http://127.0.0.1:3000", false).is_ok());
     assert!(parse_host("http://localhost", false).is_ok());
     assert!(parse_host("http://[::1]:3000", false).is_ok());
+    assert!(parse_host("https://git-1.example.internal", false).is_ok());
     assert!(parse_host("http://git.example.internal", false).is_err());
     assert!(parse_host("http://git.example.internal", true).is_ok());
     for bad in [

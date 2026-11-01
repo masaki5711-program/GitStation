@@ -15,13 +15,19 @@ pub struct Installed {
     pub helper: String,
 }
 
+/// POSIX single-quote a word.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// The helper command line git runs through its shell: single-quote the
 /// executable (forward slashes: Git for Windows runs `sh`) and pin the host.
 pub fn helper_command(exe: &str, cfg: &Config) -> String {
-    let exe = exe.replace('\\', "/").replace('\'', "'\\''");
+    let host = host_key(&cfg.host);
     format!(
-        "!'{exe}' --host {} auth git-credential",
-        host_key(&cfg.host)
+        "!{} --host {} auth git-credential",
+        sh_quote(&exe.replace('\\', "/")),
+        sh_quote(&host)
     )
 }
 

@@ -75,7 +75,7 @@ impl ClientError {
             request_id: None,
             retryable: code == ErrorCode::CliServerUnreachable,
             exit,
-            detail: (!detail.is_empty()).then_some(detail),
+            detail: (!detail.is_empty()).then(|| sanitize(&detail)),
         }
     }
 
@@ -99,9 +99,9 @@ impl ClientError {
             _ => Exit::Other,
         };
         Self {
-            code_id: code_id.to_string(),
-            user_message: user_message.to_string(),
-            request_id: request_id.map(str::to_string),
+            code_id: sanitize(code_id),
+            user_message: sanitize(user_message),
+            request_id: request_id.map(sanitize),
             retryable: exit == Exit::Retryable,
             exit,
             detail: None,
@@ -168,5 +168,24 @@ impl std::fmt::Display for ClientError {
 }
 
 impl std::error::Error for ClientError {}
+
+/// Server-provided text is untrusted: control characters (terminal escape
+/// sequences, newlines that fake extra lines) and bidi overrides are replaced,
+/// and the length is bounded, before anything is printed.
+pub fn sanitize(s: &str) -> String {
+    s.chars()
+        .take(500)
+        .map(|c| {
+            if c.is_control()
+                || ('\u{202a}'..='\u{202e}').contains(&c)
+                || ('\u{2066}'..='\u{2069}').contains(&c)
+            {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
 
 pub type Result<T> = std::result::Result<T, ClientError>;

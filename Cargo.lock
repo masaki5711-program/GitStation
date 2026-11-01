@@ -712,12 +712,14 @@ dependencies = [
  "keyring-core",
  "percent-encoding",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "url",
  "windows-native-keyring-store",
+ "zeroize",
 ]
 
 [[package]]

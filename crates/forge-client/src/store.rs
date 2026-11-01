@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 /// A personal access token. Never printed, never logged.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Token(String);
+pub struct Token(zeroize::Zeroizing<String>);
 
 impl std::fmt::Debug for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,7 +35,7 @@ impl Token {
                 "reason=token_malformed (expected one token, printable ASCII, no spaces)",
             ));
         }
-        Ok(Self(t.to_string()))
+        Ok(Self(zeroize::Zeroizing::new(t.to_string())))
     }
 
     pub fn expose(&self) -> &str {
@@ -149,8 +149,11 @@ impl FileBackend {
     fn read(&self) -> std::result::Result<CredFile, String> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
             match std::fs::metadata(&self.path) {
+                Ok(m) if m.uid() != rustix::process::getuid().as_raw() => {
+                    return Err("insecure_owner (the file belongs to another user)".to_string())
+                }
                 Ok(m) if m.permissions().mode() & 0o077 != 0 => {
                     return Err(format!(
                         "insecure_permissions mode={:o} (must be 0600)",
@@ -177,7 +180,8 @@ impl FileBackend {
         let text = toml::to_string(f).map_err(|_| "serialize_failed".to_string())?;
         // Write a private temp file next to the target, then rename over it:
         // the secret is never visible with a wider mode, even briefly.
-        let tmp = dir.join(format!(".credentials.{}.tmp", std::process::id()));
+        remove_stale_temps(dir);
+        let tmp = dir.join(format!(".credentials.{:016x}.tmp", random_u64()));
         let mut o = std::fs::OpenOptions::new();
         o.write(true).create_new(true);
         #[cfg(unix)]
@@ -210,8 +214,51 @@ fn cleanup(tmp: &Path, reason: String) -> std::result::Result<(), String> {
     }
 }
 
+/// A random suffix without a new dependency: `RandomState` is seeded by the OS.
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
+}
+
+/// Temp files left by a crashed run (older than a minute, so a concurrent
+/// gstn is not disturbed). A failure to remove one is not fatal: the next
+/// write retries, and the file is private (0600).
+fn remove_stale_temps(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > std::time::Duration::from_secs(60));
+        if name.starts_with(".credentials.") && name.ends_with(".tmp") && old {
+            // Best effort by design (see above); the temp file holds no more than the real one.
+            drop(std::fs::remove_file(e.path()));
+        }
+    }
+}
+
 fn create_private_dir(dir: &Path) -> std::result::Result<(), String> {
     if dir.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let m = std::fs::metadata(dir).map_err(|e| format!("unreadable: {}", e.kind()))?;
+            // Writable by others: they could swap the credentials file.
+            if m.permissions().mode() & 0o022 != 0 {
+                return Err(format!(
+                    "insecure_directory mode={:o} (group/other must not write)",
+                    m.permissions().mode() & 0o777
+                ));
+            }
+        }
         return Ok(());
     }
     let mut b = std::fs::DirBuilder::new();
@@ -301,11 +348,18 @@ impl TokenStore {
     /// `file`: the 0600 file only (CI, headless hosts, tests).
     pub fn open(dir: &Path, mode: &str) -> Result<Self> {
         match mode {
+            // The file fallback's protection is a Unix mode (0600); on Windows
+            // only the Credential Manager is used (GSTN_TOKEN needs no storage).
+            "" | "auto" if cfg!(windows) => Ok(Self::new(Box::new(KeyringBackend), None)),
             "" | "auto" => Ok(Self::new(
                 Box::new(KeyringBackend),
                 Some(Box::new(FileBackend::new(dir))),
             )),
             "keyring" => Ok(Self::new(Box::new(KeyringBackend), None)),
+            "file" if cfg!(windows) => Err(ClientError::local(
+                ErrorCode::CliConfigInvalid,
+                "config_key=GSTN_CREDENTIAL_STORE reason=file_unsupported_on_windows (use the Credential Manager, or set GSTN_TOKEN)",
+            )),
             "file" => Ok(Self::new(Box::new(FileBackend::new(dir)), None)),
             _ => Err(ClientError::local(
                 ErrorCode::CliConfigInvalid,
@@ -315,9 +369,14 @@ impl TokenStore {
     }
 
     fn failure(&self, backend: &str, reason: &str) -> ClientError {
+        let hint = if self.fallback.is_none() && cfg!(windows) {
+            " (no file fallback on Windows: fix the Credential Manager, or set GSTN_TOKEN to use a token without storing it)"
+        } else {
+            ""
+        };
         ClientError::local(
             ErrorCode::CliCredentialStoreFailed,
-            format!("backend={backend} reason={reason}"),
+            format!("backend={backend} reason={reason}{hint}"),
         )
     }
 

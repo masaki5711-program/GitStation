@@ -433,14 +433,20 @@ fn api(cli: &Cli, a: &crate::cli::ApiArgs, env: EnvFn<'_>, io: &mut Io<'_>) -> R
         }
     } else if let Some(p) = &a.input {
         let mut text = String::new();
+        // Same cap as a response body; over the cap is an error, never a silent cut.
+        let limit = crate::http::MAX_BODY_BYTES + 1;
         if p.as_os_str() == "-" {
             io.stdin
-                .take(1024 * 1024)
+                .take(limit)
                 .read_to_string(&mut text)
                 .map_err(|_| usage("input_unreadable"))?;
         } else {
-            text = std::fs::read_to_string(p)
+            std::fs::File::open(p)
+                .and_then(|f| f.take(limit).read_to_string(&mut text))
                 .map_err(|_| usage(format!("input_unreadable (path {})", p.display())))?;
+        }
+        if text.len() as u64 > crate::http::MAX_BODY_BYTES {
+            return Err(usage("input_too_large (16 MiB at most)"));
         }
         body = Some(serde_json::from_str(&text).map_err(|_| usage("input_not_json"))?);
     } else if !fields.is_empty() {

@@ -15,7 +15,7 @@ use serde_json::Value;
 use std::io::Read;
 use url::Url;
 
-const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 /// A cursor loop that never ends (a broken server) stops here.
 const MAX_PAGES: usize = 10_000;
 
@@ -66,6 +66,27 @@ pub struct ApiResponse {
     pub status: u16,
     pub body: Value,
     pub request_id: Option<String>,
+    /// Size of the response body on the wire.
+    pub bytes: usize,
+}
+
+/// Bounds of `--paginate`: a hostile or broken server cannot grow memory
+/// without limit.
+#[derive(Debug, Clone, Copy)]
+pub struct PageLimits {
+    pub max_pages: usize,
+    pub max_items: usize,
+    pub max_bytes: usize,
+}
+
+impl Default for PageLimits {
+    fn default() -> Self {
+        Self {
+            max_pages: MAX_PAGES,
+            max_items: 200_000,
+            max_bytes: 64 * 1024 * 1024,
+        }
+    }
 }
 
 pub struct ApiClient {
@@ -205,6 +226,7 @@ impl ApiClient {
                 status,
                 body,
                 request_id: header_id,
+                bytes: bytes.len(),
             });
         }
         if (300..400).contains(&status) {
@@ -230,10 +252,20 @@ impl ApiClient {
     /// GET every page of a list route and merge the items. The result has the
     /// list shape of API v1 (`items`, `next_cursor: null`, `has_more: false`).
     pub fn get_all_pages(&self, path: &str, query: &[(String, String)]) -> Result<ApiResponse> {
+        self.get_all_pages_limited(path, query, PageLimits::default())
+    }
+
+    pub fn get_all_pages_limited(
+        &self,
+        path: &str,
+        query: &[(String, String)],
+        limits: PageLimits,
+    ) -> Result<ApiResponse> {
         let mut items: Vec<Value> = Vec::new();
         let mut cursor: Option<String> = None;
-        let mut seen: Vec<String> = Vec::new();
-        for _ in 0..MAX_PAGES {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut total_bytes = 0usize;
+        for _ in 0..limits.max_pages {
             let mut q: Vec<(String, String)> = query
                 .iter()
                 .filter(|(k, _)| k != "cursor")
@@ -246,13 +278,19 @@ impl ApiClient {
             let Some(arr) = page.body.get("items").and_then(Value::as_array) else {
                 return Err(invalid(page.status, "not_a_list_response"));
             };
+            total_bytes = total_bytes.saturating_add(page.bytes);
+            if total_bytes > limits.max_bytes {
+                return Err(invalid(page.status, "paginate_bytes_limit"));
+            }
+            if items.len().saturating_add(arr.len()) > limits.max_items {
+                return Err(invalid(page.status, "paginate_items_limit"));
+            }
             items.extend(arr.iter().cloned());
             match page.body.get("next_cursor") {
                 Some(Value::String(next)) => {
-                    if seen.contains(next) {
+                    if !seen.insert(next.clone()) {
                         return Err(invalid(page.status, "cursor_repeated"));
                     }
-                    seen.push(next.clone());
                     cursor = Some(next.clone());
                 }
                 Some(Value::Null) | None => {
@@ -260,6 +298,7 @@ impl ApiClient {
                         status: page.status,
                         body: serde_json::json!({"items": items, "next_cursor": null, "has_more": false}),
                         request_id: page.request_id,
+                        bytes: total_bytes,
                     })
                 }
                 Some(_) => return Err(invalid(page.status, "next_cursor_malformed")),

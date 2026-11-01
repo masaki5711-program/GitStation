@@ -5,6 +5,17 @@ use forge_client::app::{run, Io};
 use std::io::IsTerminal;
 
 fn main() {
+    // A crash must not leave a core dump holding a token (Unix).
+    #[cfg(unix)]
+    if let Err(e) = rustix::process::setrlimit(
+        rustix::process::Resource::Core,
+        rustix::process::Rlimit {
+            current: Some(0),
+            maximum: Some(0),
+        },
+    ) {
+        eprintln!("warning: could not disable core dumps ({e})");
+    }
     let args: Vec<String> = std::env::args().collect();
     let exe = std::env::current_exe()
         .ok()

@@ -307,7 +307,7 @@ fn git_credential_install_sets_a_host_scoped_helper() {
             "credential.https://git.example.internal.helper"
         );
         assert!(v["helper"].as_str().unwrap().starts_with(
-            "!'/usr/local/bin/gstn' --host https://git.example.internal auth git-credential"
+            "!'/usr/local/bin/gstn' --host 'https://git.example.internal' auth git-credential"
         ));
     }
     let got = std::process::Command::new("git")
@@ -327,7 +327,7 @@ fn git_credential_install_sets_a_host_scoped_helper() {
     assert_eq!(lines.len(), 2, "{lines:?}");
     assert_eq!(lines[0], "");
     assert!(lines[1].starts_with(
-        "!'/usr/local/bin/gstn' --host https://git.example.internal auth git-credential"
+        "!'/usr/local/bin/gstn' --host 'https://git.example.internal' auth git-credential"
     ));
 }
 
@@ -879,4 +879,155 @@ fn global_args_in_help_exist_in_the_binary() {
     assert_eq!(o.code, 0);
     assert!(o.stdout.starts_with("gstn "));
     let _ = USER_JSON;
+}
+
+#[test]
+fn hostile_hosts_never_reach_the_git_helper_line() {
+    let sb = Sandbox::new();
+    let gc = sb.dir.path().join("gitconfig");
+    for host in [
+        "https://a.example;touch${IFS}x",
+        "https://a$(id).example",
+        "https://a`id`.example",
+        "https://a&b.example",
+        "https://a(b).example",
+        "https://a'b.example",
+        "https://a|b.example",
+    ] {
+        let o = sb.run_env(
+            host,
+            &["auth", "git-credential", "--install"],
+            "",
+            &[("GIT_CONFIG_GLOBAL", gc.to_str().unwrap())],
+        );
+        assert_eq!(o.code, 2, "{host}: {}", o.stderr);
+        assert!(o.stderr.contains("FG-CLI-0005"));
+    }
+    assert!(!gc.exists(), "nothing was written");
+}
+
+#[test]
+fn api_input_over_the_cap_is_refused() {
+    let sb = Sandbox::new();
+    let f = sb.dir.path().join("big.json");
+    std::fs::write(&f, format!("\"{}\"", "a".repeat(16 * 1024 * 1024))).unwrap();
+    let o = sb.run(
+        "https://git.example.internal",
+        &["api", "POST", "/x", "--input", f.to_str().unwrap()],
+        "",
+    );
+    assert_eq!(o.code, 2);
+    assert!(o.stderr.contains("input_too_large"));
+}
+
+#[test]
+fn control_characters_in_server_messages_are_not_printed() {
+    let body = r#"{"error_code":"FG-REPO-0005","user_message":"a\u001b[31mred\nfake: line\u202e","request_id":"r\u0007"}"#;
+    let srv = Mock::start(move |_| Resp::json(404, body));
+    let sb = Sandbox::new();
+    let o = sb.run(&srv.url, &["api", "GET", "/x"], "");
+    assert!(
+        !o.stderr.chars().any(|c| c.is_control() && c != '\n'),
+        "{:?}",
+        o.stderr
+    );
+    assert_eq!(o.stderr.trim_end().lines().count(), 1, "{:?}", o.stderr);
+    assert!(!o.stderr.contains('\u{202e}'));
+}
+
+#[test]
+fn paginate_stops_at_item_and_byte_limits() {
+    use forge_client::config::{Config, Overrides};
+    use forge_client::http::{ApiClient, PageLimits};
+    let n = std::sync::atomic::AtomicUsize::new(0);
+    let srv = Mock::start(move |_| {
+        let i = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Resp::json(
+            200,
+            &format!(
+                r#"{{"items":[{{"id":1}},{{"id":2}},{{"id":3}}],"next_cursor":"c{i}","has_more":true}}"#
+            ),
+        )
+    });
+    let sb = Sandbox::new();
+    let url = srv.url.clone();
+    let env = move |k: &str| (k == "GSTN_HOST").then(|| url.clone());
+    let cfg = Config::load(
+        &env,
+        &Overrides {
+            host: None,
+            config_dir: Some(sb.path()),
+        },
+    )
+    .unwrap();
+    let c = ApiClient::new(&cfg, None).unwrap();
+    let base = PageLimits {
+        max_pages: 100,
+        max_items: 7,
+        max_bytes: 1 << 20,
+    };
+    let e = c.get_all_pages_limited("/l", &[], base).unwrap_err();
+    assert!(e.human().contains("paginate_items_limit"), "{}", e.human());
+    let e = c
+        .get_all_pages_limited(
+            "/l",
+            &[],
+            PageLimits {
+                max_items: 1000,
+                max_bytes: 100,
+                ..base
+            },
+        )
+        .unwrap_err();
+    assert!(e.human().contains("paginate_bytes_limit"), "{}", e.human());
+    let e = c
+        .get_all_pages_limited(
+            "/l",
+            &[],
+            PageLimits {
+                max_items: 1000,
+                max_pages: 2,
+                ..base
+            },
+        )
+        .unwrap_err();
+    assert!(e.human().contains("too_many_pages"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_group_writable_config_directory_is_refused_for_the_file_store() {
+    use std::os::unix::fs::PermissionsExt;
+    let srv = user_server();
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path()).unwrap();
+    std::fs::set_permissions(sb.path(), std::fs::Permissions::from_mode(0o775)).unwrap();
+    let o = sb.run(&srv.url, &["auth", "login", "--with-token"], TOKEN);
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("FG-CLI-0006") && o.stderr.contains("insecure_directory"));
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_temp_files_are_removed_on_write() {
+    let srv = user_server();
+    let sb = Sandbox::new();
+    std::fs::create_dir_all(sb.path()).unwrap();
+    let stale = sb.path().join(".credentials.deadbeef.tmp");
+    std::fs::write(&stale, "x").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let fresh = sb.path().join(".credentials.cafe.tmp");
+    std::fs::write(&fresh, "x").unwrap();
+    login(&sb, &srv.url);
+    assert!(!stale.exists());
+    assert!(
+        fresh.exists(),
+        "a recent temp file may belong to a running gstn"
+    );
 }

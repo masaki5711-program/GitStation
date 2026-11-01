@@ -102,6 +102,23 @@ pub fn parse_host(raw: &str, allow_http: bool) -> Result<Url> {
     {
         return Err(bad("invalid"));
     }
+    // The host ends up in a git config value that git runs through a shell
+    // (`auth git-credential --install`): only DNS-label characters or a
+    // bracketed IPv6 literal are accepted.
+    let host_ok = if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        !inner.is_empty()
+            && inner
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+    } else {
+        !host.is_empty()
+            && host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    };
+    if !host_ok {
+        return Err(bad("invalid"));
+    }
     let loopback = host == "localhost"
         || host
             .trim_matches(|c| c == '[' || c == ']')
