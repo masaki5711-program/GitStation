@@ -1,24 +1,76 @@
 # forge-web
 
-**Responsibility**: the HTTP layer — the route registry (ADR-0010), request
-ids, token authentication (ADR-0019 §7), the single error renderer, timeouts,
-and serving. Handlers decide with
-`forge_auth::authorize()` (DB-backed handlers arrive in M1 phase 8).
+**Responsibility**: the HTTP layer — the route registry (ADR-0010,
+ADR-0015), the one dispatcher for namespace URLs, request ids, token
+authentication (ADR-0019 §7), the single error renderer, timeouts, and
+serving. **Handlers never decide**: the registry calls
+`forge_auth::prove(principal, def.action, ctx)` and hands the handler the
+admitted proof.
 
 **Public API**
 - `app(AppState, AppConfig) -> Result<Router, ForgeError>` — the product
   router (routes come only from `app::registry()`).
-- `registry::Registry::route(Verb, path, Action, summary, handler)` — the only
-  way to add a route (a test fails on `Router::new` / `.route("..")` / `.nest`
-  outside the registry). Every non-public route gets token authentication and
-  then the authentication guard: no authenticated `Principal` →
-  `FG-AUTH-0001` before the handler runs; the handler then authorizes its
-  resource. Public routes never look at credentials. An invalid or duplicate path is a
-  startup error (`FG-WEB-0004`).
-- `AppState::new(version, probes, authenticator)` — the authenticator
-  (`forge_core::Authenticator`, `Arc<dyn …>`) is required; `forge serve`
-  passes the database (`forge_db::tokens::authenticate`), so forge-web never
-  depends on forge-db.
+- A handler is an `Endpoint<S, R>`: `async fn(state, Dispatched<R>) -> impl
+  IntoResponse`. `Dispatched<R>` (private fields, no `Clone` / `Default`,
+  `compile_fail` doctests in `src/registry.rs`) is built only by the
+  registry's `admit()`, which checks `proof.action() == def.action`
+  (`FG-SYS-0001 reason=proof_action_mismatch` otherwise) — so a handler cannot
+  be called outside the registry and a proof for another action is refused
+  (ADR-0015 MR4 musts a–c). It exposes `proof()` (action, target id,
+  context), `ctx()`, `principal()`, `method()`, `headers()`, `raw_query()`,
+  `tail()` (the validated segments after a route word), `canonical_path()`
+  and `via_tombstone()` (revealed only after `authorize()`), `into_body()`.
+- `registry::Registry::route(Verb, path, Action, summary, handler)` — a fixed
+  path deciding on the instance (`InstanceCtx`); `route_with(.., loader,
+  handler)` — a fixed path deciding on what a `Loader` loads (one lookup;
+  `Lookup::Found { ctx, canonical, tombstone }` or `Lookup::Unresolved`,
+  which `prove()` denies). The only way to add a route (a test fails on
+  `Router::new` / `.route("..")` / `.nest` outside the registry). Every
+  non-public fixed route gets token authentication and then the
+  authentication guard: no authenticated `Principal` → `FG-AUTH-0001` before
+  anything is loaded. Public routes never look at credentials and decide as
+  anonymous. An invalid or duplicate path is a startup error (`FG-WEB-0004`).
+- `registry::Registry::scoped(RouteScope, Verb, ScopedRoute, query_key,
+  Action, summary, handler)` — a namespace URL for the dispatcher; unique by
+  `(scope, verb, route, query_key)`. Public actions take `InstanceCtx` (they
+  never resolve); non-public scoped routes are `Project` / `ProjectGit` with
+  `ProjectCtx` for now (group / user contexts join with their first route).
+  `is_public_word(verb, route)` is true only when every route with the word is
+  public; a word (per verb) that mixes public and non-public routes is refused
+  (`word_mixes_public_and_non_public`). A registration that does not fit
+  (scope, query key, verb, context, mixed word) is `FG-WEB-0004`. `Verb::Head` is registered explicitly for scoped routes
+  (a fixed `GET` also answers `HEAD`, axum).
+- The dispatcher (`src/dispatch.rs`, the router's fallback; ADR-0015 "判定の
+  順序"): (1) `parse_web_path(req.uri().path(), req.uri().query())` on the raw
+  path; (2) the vocabulary — no scoped route for `(verb, route)` is
+  `FG-WEB-0001` (never the shell: `/api/…`, dumb HTTP, `raw` / `archive` /
+  git until routed); (3) `service` is part of the git route; (4) a public
+  word answers the shell without credentials or the database, any other
+  word needs an active principal; (5) **exactly one**
+  `NamespaceResolver::resolve` call, the route chosen by the resolved kind +
+  the word (none: `kind_mismatch`); (6) `prove()` — absent, deleted
+  tombstone, kind mismatch and invisible answer byte-identical `FG-REPO-0005`
+  (only the log `reason` differs); (7) a `moved` path redirects (`302`,
+  `Cache-Control: no-store`, `Location` built from validated segments, query
+  dropped) only after `authorize()` allowed and only for a safe verb that is
+  not a push (`namespace.redirected`, warn); otherwise the admitted proof
+  reaches the handler. The resolver call is bounded by
+  `AppState::lookup_timeout` (`FG-WEB-0002 operation=namespace_resolve`).
+- Routes (MR4): `GET /api/v1/namespaces/resolve?path=` (`PathResolve`:
+  `{ namespace_id, kind, canonical_path, moved }`, `Cache-Control: private,
+  no-store`; a missing / repeated / malformed `path` is answered like an
+  absent path until FG-WEB-0006, phase 8b) and the SPA shell (`WebShell`,
+  `src/routes/shell.rs`: the same bytes for every page — namespace home,
+  `/-/tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags`
+  `settings` `members`, group `settings` / `members`, `/-/projects/{id}/…`;
+  GET and HEAD).
+- `AppState::new(version, probes, authenticator, Lookups { namespaces,
+  projects })` — the authenticator (`forge_core::Authenticator`) and the
+  lookups (`forge_core::NamespaceResolver`, `ProjectAccessLoader`, each
+  `Arc<dyn …>`) are required; `forge serve` passes the database
+  (`forge_db::tokens::authenticate`, `forge_db::resolve`), so forge-web never
+  depends on forge-db. `with_lookup_timeout` (serve: acquire + statement
+  timeout + 1 s).
 - `app::with_registry(registry, state, config)` — feature `test-support`
   only (`#[doc(hidden)]`): the product middleware around a test's own
   registry. forge-web enables the feature for its own tests through a
@@ -47,9 +99,12 @@ and serving. Handlers decide with
 **Middleware** (outermost first): request id (always generated by the server;
 a client `X-Request-Id` is logged as `client_request_id`) + access log →
 request timeout (`FG-WEB-0002`) → panic catcher (`FG-SYS-0001`) → body
-limit → routes → fallbacks (`FG-WEB-0001` unknown path, `FG-WEB-0003` wrong
-method, `Allow` kept). The authenticator travels as a request extension; on
-non-public routes: token authentication → guard → handler.
+limit → fixed routes → the dispatcher as the fallback (`FG-WEB-0001` for a
+path in no table) and `FG-WEB-0003` for a wrong method on a fixed path
+(`Allow` kept). Every logged path goes through `log_safe_path` (256
+characters, control / invisible characters escaped). The authenticator
+travels as a request extension; on non-public fixed routes: token
+authentication → guard → load → prove → handler.
 
 **Token authentication** (`src/auth.rs`, step D3 MR3): `Authorization: Bearer
 <token>`, or `Authorization: Basic` whose **password** is the token (git's
@@ -92,13 +147,16 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 | Run the server | `cargo run -p forge-cli -- serve --bind 127.0.0.1:8080` |
 
 **Deferred (from review, tracked)**
-- **Before the first resource route (phase 8, MUST):** make `authorize()`
-  unskippable — the registry loads the resource and calls
-  `forge_auth::authorize(.., def.action, ..)`, handing the handler an
-  `Authorized` proof only `authorize()` can create. Until then the guard is
-  authentication only (security review HIGH, waived by the user 2026-10-26
-  because only public `/healthz` is registered). Also: a test that compares
-  the served route table with `registry().defs()` instead of the text scan.
+- Done in M1 phase 8 MR4: `authorize()` is unskippable (the registry proves
+  and admits; handlers take `Dispatched<R>`). Still open: a test that
+  compares the served route table with `registry().defs()` instead of the
+  text scan.
+- `Resource::Project` carries no `via`: an invisible project behind a moved
+  path is logged `reason=not_visible` plus `via=moved` and `tombstone_id`
+  (not `tombstone_not_visible`) on the dispatcher's project routes (ADR-0015
+  Amendment MR4).
+- A response-time floor for the resolve / dispatcher paths (ADR-0015
+  Amendment MR3) and resolve rate limiting (M2).
 - Connection fairness: per-peer connection cap, keep-alive lifetime, write
   timeout, and a 503 answer when full (before Smart HTTP, phase 9).
 - Log-capture tests asserting `error_code` + `request_id` on failures and the
@@ -115,6 +173,8 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 - `GET /readyz` (public) runs `AppState::probes` (`forge_core::readiness::ReadinessProbe`; the database today) in order, each bounded by `probe_timeout` (3 s); the first failure answers with its own code (FG-DB-0001, 503) or FG-WEB-0005. The body is `{"status":"ok"}` or the standard error body — never host names. forge-web does not depend on forge-db: `forge serve` passes the probes.
 
 **Tests**: `cargo nextest run -p forge-web` (no network beyond loopback;
-`tests/token_principal.rs` uses a fake authenticator, `tests/member_roles.rs`
-needs the development database). The real-`git` token tests are named in
+`tests/token_principal.rs` uses a fake authenticator; `src/dispatch_tests.rs`
+a scripted resolver that counts calls and the shared
+`tests/fixtures/url-vectors.json`; `tests/member_roles.rs` and
+`tests/namespace_tombstone_routes.rs` need the development database). The real-`git` token tests are named in
 ADR-0019 "見送り" and land with Smart HTTP (phase 9).

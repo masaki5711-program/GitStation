@@ -37,6 +37,25 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/namespaces/resolve": {
+      "get": {
+        "operationId": "get_api_v1_namespaces_resolve",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resolve a namespace path for the caller (ADR-0015)",
+        "x-forge-action": "PathResolve"
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "get_healthz",

@@ -8,7 +8,9 @@
 //!
 //! The database is injected into forge-web twice through forge-core traits
 //! (forge-web does not depend on forge-db): as the readiness probe and as
-//! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7).
+//! the token authenticator (`forge_db::tokens::authenticate`, ADR-0019 §7),
+//! and as the dispatcher's lookups (`forge_db::resolve`: path → namespace
+//! and project by id, ADR-0015 MR3 / MR4).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +20,7 @@ use forge_core::readiness::ReadinessProbe;
 use forge_core::Authenticator;
 use forge_db::{Db, MIGRATOR};
 use forge_errors::ForgeError;
-use forge_web::{AppConfig, AppState, BoundedAuthenticator, ServerLimits};
+use forge_web::{AppConfig, AppState, BoundedAuthenticator, Lookups, ServerLimits};
 
 use crate::runtime::block_on;
 
@@ -30,7 +32,7 @@ pub fn serve(bind: &str, database: &DatabaseConfig) -> Result<String, ForgeError
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
         let state = app_state(&db, database);
-        let router = forge_web::app(state, AppConfig::default())?;
+        let router = forge_web::app(state, app_config_for(database))?;
         let listener = forge_web::server::bind(bind).await?;
         tracing::info!(
             bind,
@@ -60,8 +62,59 @@ fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
         Arc::new(db.clone()),
         auth_permits(database),
     ));
-    AppState::new(env!("CARGO_PKG_VERSION"), vec![probe], authenticator)
-        .with_probe_timeout(probe_timeout_for(database))
+    let lookups = Lookups {
+        namespaces: Arc::new(db.clone()),
+        projects: Arc::new(db.clone()),
+    };
+    AppState::new(
+        env!("CARGO_PKG_VERSION"),
+        vec![probe],
+        authenticator,
+        lookups,
+    )
+    .with_probe_timeout(probe_timeout_for(database))
+    .with_lookup_timeout(lookup_timeout_for(database))
+}
+
+/// One lookup is one statement on the read pool: acquire, then the
+/// statement (bounded by the session's `statement_timeout`). The client
+/// bound exceeds both, so the database reports its own cause first.
+fn lookup_timeout_for(database: &DatabaseConfig) -> Duration {
+    database
+        .acquire_timeout
+        .saturating_add(database.statement_timeout)
+        .saturating_add(Duration::from_secs(1))
+}
+
+/// One token authentication is one `Db::within` operation on the write
+/// pool, bounded on the client by acquire + statement timeout (the same
+/// bound `Db` uses); it exceeds neither, so `FG-DB-0001` names the cause.
+fn auth_timeout_for(database: &DatabaseConfig) -> Duration {
+    database
+        .acquire_timeout
+        .saturating_add(database.statement_timeout)
+}
+
+/// A dispatched request runs one authentication and then one lookup, one
+/// after the other, before its handler. The request timeout
+/// (`FG-WEB-0002`) must not fire before either database bound does, or the
+/// log loses the database's own cause (`FG-DB-0001` with its reason): it is
+/// at least the default (30 s) and always exceeds both bounds together by
+/// one second. Derived instead of refused, because the defaults (acquire
+/// 3 s, statement 15 s → 18 s + 19 s) already exceed 30 s.
+fn request_timeout_for(database: &DatabaseConfig) -> Duration {
+    auth_timeout_for(database)
+        .saturating_add(lookup_timeout_for(database))
+        .saturating_add(Duration::from_secs(1))
+        .max(AppConfig::default().request_timeout)
+}
+
+/// The application config `forge serve` runs with.
+fn app_config_for(database: &DatabaseConfig) -> AppConfig {
+    AppConfig {
+        request_timeout: request_timeout_for(database),
+        ..AppConfig::default()
+    }
 }
 
 /// Token lookups run on the write pool (ADR-0018: only it can read the
@@ -99,6 +152,57 @@ mod tests {
         .expect("config");
         let bound = probe_timeout_for(&cfg.database);
         assert!(bound > cfg.database.acquire_timeout * 2, "{bound:?}");
+    }
+
+    #[test]
+    fn the_lookup_bound_exceeds_acquire_plus_statement() {
+        let cfg = load(None, &Env::from_pairs([])).expect("config");
+        let bound = lookup_timeout_for(&cfg.database);
+        assert!(
+            bound > cfg.database.acquire_timeout + cfg.database.statement_timeout,
+            "{bound:?}"
+        );
+    }
+
+    /// The request timeout never fires before the database bounds of the
+    /// authentication and the lookup of one dispatched request, for the
+    /// defaults and for large statement timeouts; it never drops below
+    /// the 30 s default.
+    #[test]
+    fn the_request_bound_exceeds_authentication_plus_lookup() {
+        let configs = [
+            vec![],
+            vec![("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "60000")],
+            vec![
+                ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "10000"),
+                ("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "120000"),
+            ],
+            vec![
+                ("FORGE_DATABASE_ACQUIRE_TIMEOUT_MS", "100"),
+                ("FORGE_DATABASE_STATEMENT_TIMEOUT_MS", "200"),
+            ],
+        ];
+        for pairs in configs {
+            let cfg = load(None, &Env::from_pairs(pairs.clone())).expect("config");
+            let db = &cfg.database;
+            let request = app_config_for(db).request_timeout;
+            let needed = auth_timeout_for(db) + lookup_timeout_for(db);
+            assert!(request > needed, "{pairs:?}: {request:?} <= {needed:?}");
+            assert!(
+                request >= AppConfig::default().request_timeout,
+                "{pairs:?}: {request:?}"
+            );
+            assert!(
+                auth_timeout_for(db) >= db.acquire_timeout + db.statement_timeout,
+                "{pairs:?}"
+            );
+        }
+        // The defaults alone would not fit the fixed 30 s.
+        let defaults = load(None, &Env::from_pairs([])).expect("config");
+        assert!(
+            auth_timeout_for(&defaults.database) + lookup_timeout_for(&defaults.database)
+                > AppConfig::default().request_timeout
+        );
     }
 
     #[test]

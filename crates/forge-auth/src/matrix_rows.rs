@@ -57,6 +57,9 @@ pub(crate) const ROWS: &[Row] = &[
     // an absent path or a tombstone: the same 404 as an invisible project
     row(A::RepoRead, W::Developer, F::Absent, deny(E::NotFound)),
     row(A::RepoRead, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
+    // a group path on a project word (`raw` on a group): the same 404 (MR4)
+    row(A::RepoRead, W::Developer, F::KindMismatch, deny(E::NotFound)),
+    row(A::RepoRead, W::Admin, F::KindMismatch, deny(E::NotFound)),
     // --- RepoPush, project level (before receive-pack starts) ---
     row(A::RepoPush, W::Developer, F::PrivateProject, Allow),
     row(A::RepoPush, W::DevTokenWriteRepository, F::PrivateProject, Allow),
@@ -244,6 +247,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::PathResolve, W::Developer, F::Absent, deny(E::NotFound)),
     row(A::PathResolve, W::Admin, F::Absent, deny(E::NotFound)),
     row(A::PathResolve, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
+    // a kind mismatch (nothing the action can act on): the same 404 as absent
+    row(A::PathResolve, W::Developer, F::KindMismatch, deny(E::NotFound)),
     row(A::PathResolve, W::NonMember, F::MovedPrivate, deny(E::NotFound)),
     // a wrong-scope token: the same 403 for every path, before the lookup
     row(A::PathResolve, W::DevTokenReadRepository, F::ResolvedPrivate, deny(E::InsufficientScope)),

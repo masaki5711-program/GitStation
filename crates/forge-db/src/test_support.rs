@@ -425,6 +425,28 @@ impl FreshDb {
         t
     }
 
+    /// One transaction as forge_app: the audit row of `cause`
+    /// (`(resource_type, resource_id)`), then `statements`, then COMMIT
+    /// (where the txn-audited triggers fire). For fixtures no command
+    /// writes yet — D5's moves and tombstones (forge-web's
+    /// `namespace_tombstone_routes`, M1 phase 8 MR4).
+    pub async fn commit_audited(&self, cause: (&str, i64), statements: &[String]) {
+        let mut tx = self.db.write_pool().begin().await.expect("begin");
+        let audit = format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             resource_id, request_id) VALUES ('system', 'probe.changed', 'succeeded', '{}', {}, \
+             'r-fixture')",
+            cause.0, cause.1
+        );
+        for sql in std::iter::once(&audit).chain(statements) {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("fixture statement failed: {e}"));
+        }
+        tx.commit().await.expect("commit");
+    }
+
     /// The application config (forge_app) with extra settings.
     pub fn app_config(&self, extra: &[(&str, &str)]) -> TestConfig {
         test_config(&url_as("forge_app", &self.name), APP_PASSWORD, extra)

@@ -13,17 +13,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::Extension;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
-use forge_auth::{authorize, Action, Credential, Principal, Resource, Scope};
+use forge_auth::{Action, Credential, InstanceCtx, Principal, Scope};
 use forge_core::authenticator::{AuthFuture, Authenticator, TokenIdentity};
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{LookupPath, ProjectAccess, ProjectId, Resolution};
 use forge_core::{RequestId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_web::registry::{Registry, Verb};
-use forge_web::{AppConfig, AppState, BoundedAuthenticator, Ctx};
+use forge_web::registry::{Dispatched, Registry, Verb};
+use forge_web::{AppConfig, AppState, BoundedAuthenticator, Lookups};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -116,16 +117,10 @@ impl Authenticator for FakeAuthenticator {
     }
 }
 
-/// The handler of the guarded test route: it sees the principal the
-/// middleware built and decides with `authorize()` like a real route.
-async fn whoami(
-    ctx: Ctx,
-    headers: HeaderMap,
-    Extension(principal): Extension<Principal>,
-) -> Response {
-    if let Err(e) = authorize(&principal, Action::UserCreate, &Resource::Instance) {
-        return ctx.fail(e).into_response();
-    }
+/// Runs only after the registry proved `UserCreate` on the instance with
+/// the principal the authentication middleware built.
+async fn whoami(_: AppState, request: Dispatched<InstanceCtx>) -> Response {
+    let principal = request.principal();
     let scopes: Vec<&str> = match principal.credential() {
         Credential::Token(scopes) => scopes.iter().map(|s| s.as_str()).collect(),
         Credential::Session => vec!["<session>"],
@@ -134,12 +129,31 @@ async fn whoami(
         "user": principal.user().map(|u| u.get()),
         "scopes": scopes,
         "admin_rights": principal.admin_rights(),
-        "authorization_header_seen": headers.contains_key("authorization"),
+        "authorization_header_seen": request.headers().contains_key("authorization"),
     }))
     .into_response()
 }
 
-async fn healthy() -> &'static str {
+/// No lookups in these tests (the dispatcher's own tests script them).
+struct NoNamespaces;
+
+impl forge_core::NamespaceResolver for NoNamespaces {
+    fn resolve<'a>(&'a self, _: &'a LookupPath, _: Option<UserId>) -> LookupFuture<'a, Resolution> {
+        Box::pin(async { Ok(Resolution::Absent) })
+    }
+}
+
+impl forge_core::ProjectAccessLoader for NoNamespaces {
+    fn project_access<'a>(
+        &'a self,
+        _: ProjectId,
+        _: Option<UserId>,
+    ) -> LookupFuture<'a, Option<ProjectAccess>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+async fn healthy(_: AppState, _: Dispatched<InstanceCtx>) -> &'static str {
     "ok"
 }
 
@@ -157,7 +171,11 @@ fn router_with(auth: Arc<dyn Authenticator>, config: AppConfig) -> axum::Router 
             whoami,
         )
         .route(Verb::Get, "/healthz", Action::Health, "test", healthy);
-    let state = AppState::new("test", Vec::new(), auth);
+    let lookups = Lookups {
+        namespaces: Arc::new(NoNamespaces),
+        projects: Arc::new(NoNamespaces),
+    };
+    let state = AppState::new("test", Vec::new(), auth, lookups);
     forge_web::app::with_registry(registry, state, config).expect("router")
 }
 

@@ -1,5 +1,5 @@
 [
-  { "action": "RepoRead", "allow": 7, "deny": 10, "public": false, "git_operation": true },
+  { "action": "RepoRead", "allow": 7, "deny": 12, "public": false, "git_operation": true },
   { "action": "RepoPush", "allow": 12, "deny": 25, "public": false, "git_operation": true },
   { "action": "ProjectRead", "allow": 4, "deny": 4, "public": false, "git_operation": false },
   { "action": "ProjectCreate", "allow": 4, "deny": 3, "public": false, "git_operation": false },
@@ -20,7 +20,7 @@
   { "action": "UserCreate", "allow": 2, "deny": 3, "public": false, "git_operation": false },
   { "action": "UserDisable", "allow": 1, "deny": 1, "public": false, "git_operation": false },
   { "action": "AuditRead", "allow": 3, "deny": 4, "public": false, "git_operation": false },
-  { "action": "PathResolve", "allow": 8, "deny": 13, "public": false, "git_operation": false },
+  { "action": "PathResolve", "allow": 8, "deny": 14, "public": false, "git_operation": false },
   { "action": "WebShell", "allow": 3, "deny": 0, "public": true, "git_operation": false },
   { "action": "Health", "allow": 1, "deny": 0, "public": true, "git_operation": false },
   { "action": "Metrics", "allow": 1, "deny": 1, "public": false, "git_operation": false }

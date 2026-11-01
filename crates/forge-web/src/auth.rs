@@ -163,48 +163,64 @@ fn basic_password(encoded: &str) -> Result<String, Refusal> {
 
 /// Per-route middleware (non-public routes, before the guard).
 pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
+    match authenticate_request(&mut req).await {
+        Ok(()) => next.run(req).await,
+        Err(res) => *res,
+    }
+}
+
+/// Turn the request's credentials into a `Principal` extension (none
+/// without an `Authorization` header); a rejection is the finished
+/// response. The fixed routes' middleware and the dispatcher's step 4 (a
+/// non-public word) share it.
+pub(crate) async fn authenticate_request(req: &mut Request) -> Result<(), Box<Response>> {
     let lang = context::language(req.headers().get(ACCEPT_LANGUAGE));
     let Some(request_id) = req.extensions().get::<RequestId>().cloned() else {
         // Only reachable if the request-id middleware stopped running
         // outside the routes: fail closed and loudly, never authenticate
         // under an id nobody can find. The response still needs an id.
-        return ApiError::new(
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "request_id_missing"),
-            RequestId::generate(),
-            lang,
-        )
-        .into_response();
+        return Err(Box::new(
+            ApiError::new(
+                ForgeError::new(ErrorCode::Internal).with_context("reason", "request_id_missing"),
+                RequestId::generate(),
+                lang,
+            )
+            .into_response(),
+        ));
     };
     let presented = match presented(req.headers()) {
-        Ok(None) => return next.run(req).await,
+        Ok(None) => return Ok(()),
         Ok(Some(p)) => p,
         Err(reason) => {
-            return token_rejected(
+            return Err(Box::new(token_rejected(
                 ForgeError::new(ErrorCode::Unauthenticated).with_context("reason", reason),
                 None,
                 request_id,
                 lang,
-            )
+            )))
         }
     };
     if req.extensions().get::<Principal>().is_some() {
-        return token_rejected(
+        return Err(Box::new(token_rejected(
             ForgeError::new(ErrorCode::Unauthenticated).with_context("reason", "ambiguous"),
             Some(presented.scheme),
             request_id,
             lang,
-        );
+        )));
     }
     let Some(AuthenticatorExt(authenticator)) = req.extensions().get::<AuthenticatorExt>().cloned()
     else {
         // Only reachable if `app::build` stopped inserting it: fail closed,
         // loudly.
-        return ApiError::new(
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "authenticator_missing"),
-            request_id,
-            lang,
-        )
-        .into_response();
+        return Err(Box::new(
+            ApiError::new(
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "authenticator_missing"),
+                request_id,
+                lang,
+            )
+            .into_response(),
+        ));
     };
     match authenticator
         .authenticate(&request_id, &presented.token)
@@ -220,7 +236,7 @@ pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
             ));
             // The credential has done its job: no handler can echo or log it.
             req.headers_mut().remove(AUTHORIZATION);
-            next.run(req).await
+            Ok(())
         }
         Err(err)
             if matches!(
@@ -228,16 +244,23 @@ pub(crate) async fn authenticate(mut req: Request, next: Next) -> Response {
                 ErrorCode::Unauthenticated | ErrorCode::AccountDisabled
             ) =>
         {
-            token_rejected(err, Some(presented.scheme), request_id, lang)
+            Err(Box::new(token_rejected(
+                err,
+                Some(presented.scheme),
+                request_id,
+                lang,
+            )))
         }
         // FG-DB-0001 (503), FG-DB-0019 and anything else: not a verdict on
         // the credentials. Logged once by the renderer.
-        Err(err) => ApiError::new(
-            err.with_context("scheme", presented.scheme.as_str()),
-            request_id,
-            lang,
-        )
-        .into_response(),
+        Err(err) => Err(Box::new(
+            ApiError::new(
+                err.with_context("scheme", presented.scheme.as_str()),
+                request_id,
+                lang,
+            )
+            .into_response(),
+        )),
     }
 }
 
@@ -315,11 +338,19 @@ mod tests {
         use crate::app::AppState;
         use crate::registry::{Registry, Verb};
 
-        async fn ok() -> &'static str {
+        async fn ok(
+            _: AppState,
+            _: crate::registry::Dispatched<forge_auth::InstanceCtx>,
+        ) -> &'static str {
             "ok"
         }
         // The product stack minus the request-id middleware.
-        let state = AppState::new("test", Vec::new(), crate::tests::no_tokens());
+        let state = AppState::new(
+            "test",
+            Vec::new(),
+            crate::tests::no_tokens(),
+            crate::tests::no_lookups(),
+        );
         let router = Registry::<AppState>::new()
             .route(Verb::Get, "/guarded", Action::UserCreate, "x", ok)
             .into_router()

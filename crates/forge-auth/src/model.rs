@@ -249,23 +249,34 @@ pub enum Resource {
     },
 }
 
-/// Why a path resolved to nothing. Both are answered with the same
-/// `FG-REPO-0005`; the difference reaches only the log's `reason`
-/// (ADR-0015 "判定の順序" step 6).
+/// Why a path resolved to nothing a route can act on. All are answered
+/// with the same `FG-REPO-0005`; the difference reaches only the log's
+/// `reason` (ADR-0015 "判定の順序" step 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnresolvedReason {
     /// No namespace and no tombstone at the path.
     Absent,
     /// A `deleted` tombstone, or a `moved` one whose target is gone.
     TombstoneDeleted,
+    /// The path names a namespace of another kind than the route's scope
+    /// (`raw` on a group, M1 phase 8 MR4): treated as absent (step 5).
+    KindMismatch,
 }
 
 impl UnresolvedReason {
+    /// Every reason.
+    pub const ALL: &'static [UnresolvedReason] = &[
+        UnresolvedReason::Absent,
+        UnresolvedReason::TombstoneDeleted,
+        UnresolvedReason::KindMismatch,
+    ];
+
     /// The log `reason`.
     pub fn as_str(self) -> &'static str {
         match self {
             UnresolvedReason::Absent => "absent",
             UnresolvedReason::TombstoneDeleted => "tombstone_deleted",
+            UnresolvedReason::KindMismatch => "kind_mismatch",
         }
     }
 }
