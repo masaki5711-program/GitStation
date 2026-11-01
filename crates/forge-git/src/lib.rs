@@ -11,6 +11,9 @@
 //! - [`smart_http`] builds upload-pack / receive-pack with fixed `-c` sets;
 //!   [`pkt_line`] frames packets and side-band; [`gzip`] decodes request
 //!   bodies with a decompressed-size cap.
+//! - [`upload_request`] reads an upload-pack request (command, wants) and
+//!   [`Git::check_wants`] checks every want is reachable from a ref before
+//!   upload-pack starts (ADR-0007 option (a)).
 
 mod command;
 mod config;
@@ -23,10 +26,13 @@ mod revision;
 pub mod smart_http;
 pub mod storage;
 mod stream;
+pub mod upload_request;
 pub mod version;
+mod want_check;
 
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
 pub use revision::Revision;
 pub use storage::{Provisioned, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};
 pub use version::GitVersion;
+pub use want_check::WantCheck;

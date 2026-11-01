@@ -50,6 +50,12 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::RepoRead, W::DevTokenWriteRepository, F::PrivateProject, Allow),
     row(A::RepoRead, W::DevTokenApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::RepoRead, W::AdminTokenApi, F::PrivateProject, deny(E::NotFound)),
+    // M1 phase 9 MR3 (Smart HTTP fetch is routed): the remaining callers
+    row(A::RepoRead, W::DisabledAdmin, F::PrivateProject, deny(E::AccountDisabled)),
+    row(A::RepoRead, W::Maintainer, F::PrivateProject, Allow),
+    row(A::RepoRead, W::Owner, F::PrivateProject, Allow),
+    row(A::RepoRead, W::AdminTokenAdmin, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::RepoRead, W::OwnerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::RepoRead, W::NonMember, F::InternalProject, Allow),
     row(A::RepoRead, W::Guest, F::InternalProject, Allow),
     row(A::RepoRead, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),

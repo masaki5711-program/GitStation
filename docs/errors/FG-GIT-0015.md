@@ -20,7 +20,7 @@ The client went away (or the request was cancelled) while a streaming git subpro
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand`, `reason` (`client_disconnected` when the HTTP layer noticed, `dropped` when the request future was cancelled), `bytes_in`, `bytes_out` and `duration_ms`. Many for one client at the same byte counts point at a proxy timeout or a client-side limit; spread across clients, at network trouble.
+The log event carries `subcommand`, `reason` (`client_disconnected` when the HTTP layer noticed, `dropped` when the request future was cancelled), `bytes_in`, `bytes_out` and `duration_ms`; `phase=request_body` (no git was started: the client went away while forge read the request body). Logged with the request id and `route`, `project_id`, `repo_id` by forge-web. Many for one client at the same byte counts point at a proxy timeout or a client-side limit; spread across clients, at network trouble.
 
 ## 対処 (fix)
 

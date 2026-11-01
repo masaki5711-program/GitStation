@@ -767,3 +767,52 @@ ID でプロジェクトを読む API を forge-web に作った（`feat/web-api
   `Project(LoadedProject)`）に置き換え、`view()` と `owner()` を同じ値から導く（種類・ID・認可の入力が食い違えない）。
 - **残り**: OpenAPI の `{id}` の型と応答の schema は utoipa（MR6）で付ける（今は文字列）。リポジトリの状態（`provisioning` / `ready`）は欄にしない
   （SPA が要る時に足す）。`prefix=true` と解決の回数の制限は M2、応答時間の下限は必要になってから（MR3 の残り）。
+
+## Amendment（2026-11-01、M1 phase 9 MR3: Smart HTTP の fetch のルート）
+
+upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_web::routes::git`、`git_stream`）。決めた点は次のとおり。
+
+- **ルート**（`scoped()`、`RouteScope::ProjectGit`、どれも `RepoRead`。`RepoRead` を `app::PLANNED` から外した）:
+  `GET {path}.git/info/refs?service=git-upload-pack`、同じ `HEAD`（ヘッダだけ。git を起動しない）、`POST {path}.git/git-upload-pack`。
+  receive-pack（`RepoPush`）は MR4 まで FG-WEB-0001 のまま。matrix の `RepoRead` の行に DisabledAdmin、Maintainer、Owner、
+  AdminTokenAdmin、OwnerTokenReadApi を足した（`authorize()` の判定どおり。管理者のトークンも `read_repository` がなければ拒否）。
+- **FG-WEB-0007 `SmartHttpServiceUnsupported`（400）**: 判定の順序の 3 の `service` の誤り（ない・重複・未知）を、FG-WEB-0001 から
+  この番号に移した（`reason=service_unsupported`、`rule` はこれまでどおり）。文字列だけで決めるので、認証と照会の前である。
+  dumb HTTP のクライアントの最初の要求（`service` なしの `info/refs`）もこれになる。dumb HTTP の残りのパス（`.git/HEAD`、
+  `.git/objects/…`）は FG-WEB-0001 のまま。FG-WEB-0006 は phase 8b の `RequestInvalid` のために空けておく。
+- **解決の文がリポジトリの ID と状態も返す**: `RESOLVE_SQL` に `forge.repositories` を `LEFT JOIN`（`project_id` で一意なので行は
+  増えない）し、`ResolvedTarget::Project` に `repository: ProjectRepository { id: RepoId, state }` を足した。文の数と形は、結果に
+  よらず同じまま（存在に依存しない）。認可の入力ではなく、`authorize()` の後で `Dispatched::repository()` からだけ読める。
+  行がない・読めない状態は FG-DB-0021（`project_without_repository` / `unknown_repository_state`）。
+- **FG-REPO-0016 `RepositoryNotReady`（503、info）**: リポジトリが `provisioning` のあいだ、許可された呼び出し元にだけ返す
+  （見えない人には、ないパスと同じ 404 のまま）。
+- **応答**: `Content-Type` は `application/x-git-upload-pack-advertisement` / `-result`、`Cache-Control: private, no-store`、
+  `Vary: Authorization`（Smart HTTP は Cookie を使わない）。git の出力は流しながら返し、クライアントが途中で去れば git を helper ごと
+  止めて FG-GIT-0015 を request_id とともに記録する。git が失敗で終われば、そのエラーを記録して応答を途中で切る（短い応答を黙って
+  正常に見せない）。主体ごとのストリームの枠の鍵は利用者の ID（`user:<id>`）。
+- **要求のタイムアウト**: git の POST（`git-upload-pack` / `git-receive-pack`）は、本文を読み終えてから答えるので、要求のタイムアウト
+  （ヘッダを返すまで）の代わりに `git.http.timeout_ms`（既定 1 時間）を使う。その中で、本文の読み込みに無通信 60 秒・全体 1 時間、
+  大きさ 16 MiB（展開後も）、git のストリームに無通信と全体の時間切れがかかる。広告の GET は従来の要求のタイムアウトのまま。
+- **設定 `git.http.*`**（起動時に検証、違反は FG-SYS-0002）: `fetch_request_max_bytes`（16 MiB、1 GiB まで）、`idle_timeout_ms`（60 秒、
+  `timeout_ms` 以下）、`timeout_ms`（1 時間）、`want_check_timeout_ms`（30 秒、`timeout_ms` 以下）、`max_streams`（16）、
+  `max_streams_per_principal`（4、`max_streams` 以下）。設定ファイルでは `[git.http]` の表に書く。`forge serve` は `storage.root` を
+  必須にし、git の HOME を保存先の根にして（worker と同じ）、起動の前に git の版（2.38 以上）を確かめる。
+- **`moved` の墓標と upload-pack の POST（上の「git」の規則の変更）**: 広告の GET は、これまでどおり許可の後でだけ `302`
+  （`service` を付け直す）。ただし git（2.45 まで）は、リダイレクトが **認証のない最初の要求** への答えのときだけ、以後の要求の
+  基準の URL を移す。資格情報の helper を使うと、`401` の後の再試行で `302` を受け取るので、git は古いパスへ POST し続ける
+  （E2E で確かめた）。POST を FG-REPO-0005（`tombstone_post`）で拒むと、名前を変えたプロジェクトの clone が、helper を使う利用者
+  全員で失敗する。そこで **`git-upload-pack` の POST に限り、墓標の先のプロジェクトで `authorize(RepoRead)` が許可したときは、その場で
+  答える**（読み取りだけで、新しいパスと同じ判定。`namespace.redirected` を `outcome=served` で記録する。302 は `outcome=redirect`）。
+  receive-pack はリダイレクトも、その場での処理もしない（`tombstone_push`）。ほかの POST は従来どおり `tombstone_post`。
+  資格情報を最初の要求に載せる git（URL に資格情報、git ≥ 2.46 の `http.proactiveAuth`）は、302 に従い `warning: redirecting to`
+  を表示する（E2E `clone_after_rename_follows_302_with_warning` は両方の形を確かめる）。
+- **git の実行の境目（MR4 の必須事項 e の置き換え）**: forge-web は forge-git に依存した。phase 8 の仕掛け
+  （`the_dispatcher_runs_no_git_and_tails_keep_leading_dashes`）を `forge_web_runs_git_only_through_smart_http_api` に置き換えた。
+  forge-web のソースは、汎用のコマンドの組み立て（`command(`、`arg_owned`、`config_override` など）を使わず、forge-git を使うのは
+  `routes/git.rs` と `git_stream.rs` だけで、git のルートは `TailSegments` を持たない（`tail()` を読まない、パスの型に `{*rest}`
+  がない）。git に届く要求の値は、forge-git が検証した `Git-Protocol` と、標準入力に渡す本文・16 進数の oid だけである。
+- **E2E**（実際の git、`crates/forge-cli/tests/smart_http_e2e.rs`、127.0.0.1:0、開発用のデータベース、合成のデータ）: トークンを
+  Basic のパスワードにした clone、資格情報なしの `WWW-Authenticate: Basic`、protocol v2（`GIT_TRACE_PACKET`）と v0 の clone、
+  shallow、`--filter=blob:none`、`api` スコープのトークンの拒否、メンバーでない人への 404（ないパスとバイト単位で同じ）、名前の変更後の
+  302、削除の墓標の 404、dumb HTTP の 404 / 400、参照されていないオブジェクトの拒否（v0 / v2）、切断で git を回収、枠の不足の 503、
+  準備中の 503、本文の上限。

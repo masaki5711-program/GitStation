@@ -6,10 +6,11 @@
 //! is chosen after resolution (forge-web).
 //!
 //! Every refusal is `FG-WEB-0001` (404) with `reason` = `path_rejected` (a
-//! grammar rule), `unknown_route` (a word, reserved top-level name or
-//! instance route the dispatcher does not serve) or `service_unsupported`
-//! (`info/refs` without exactly one known `service`; until phase 9 registers
-//! its own 400 code), plus `part` and `rule` naming where and which rule.
+//! grammar rule) or `unknown_route` (a word, reserved top-level name or
+//! instance route the dispatcher does not serve), plus `part` and `rule`
+//! naming where and which rule — except `info/refs` without exactly one
+//! known `service`: `FG-WEB-0007` SmartHttpServiceUnsupported (400,
+//! `reason=service_unsupported`, M1 phase 9 MR3).
 //! The input is never in the error: log it through [`log_safe_path`].
 //!
 //! Shared vectors: `tests/fixtures/url-vectors.json` (repository root).
@@ -451,7 +452,7 @@ fn fold_namespace(raw: &[&str]) -> Result<LookupPath, ForgeError> {
 /// (no decoding, no case folding). Other keys are ignored.
 fn advertisement(query: Option<&str>) -> Result<GitRoute, ForgeError> {
     let unsupported = |rule: &'static str| {
-        ForgeError::new(ErrorCode::RouteNotFound)
+        ForgeError::new(ErrorCode::SmartHttpServiceUnsupported)
             .with_context("reason", "service_unsupported")
             .with_context("part", "query")
             .with_context("rule", rule)

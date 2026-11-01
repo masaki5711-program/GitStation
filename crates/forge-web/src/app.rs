@@ -1,6 +1,7 @@
 //! Wiring: the registered routes, the dispatcher (the fallback for every
 //! path no fixed route matches), and the middleware stack (outermost
-//! first): request id + access log → request timeout → panic catcher →
+//! first): request id + access log → request timeout (git POSTs: their own
+//! `git_rpc_timeout`, M1 phase 9 MR3) → panic catcher →
 //! authenticator extension → body limit → routes (non-public fixed routes:
 //! token authentication → guard → load → prove → handler; scoped routes:
 //! the dispatcher's seven steps, `crate::dispatch`).
@@ -16,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use forge_auth::Action;
 use forge_core::readiness::ReadinessProbe;
-use forge_core::web_path::{InstanceRoute, RouteWord};
+use forge_core::web_path::{parse_web_path, GitRoute, InstanceRoute, ParsedPath, RouteWord};
 use forge_core::{log_safe_path, Authenticator, NamespaceResolver, ProjectAccessLoader, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 use futures_util::FutureExt;
@@ -50,6 +51,10 @@ pub struct AppState {
     /// `operation=namespace_resolve` / `project_load` when exceeded); `forge serve` derives it
     /// from the database timeouts.
     pub lookup_timeout: Duration,
+    /// git, the storage root and the `git.http.*` limits for the Smart
+    /// HTTP routes (`forge serve` always sets it; without it a git route
+    /// answers `FG-SYS-0001 reason=smart_http_unconfigured`).
+    pub smart_http: Option<Arc<routes::git::SmartHttp>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -78,7 +83,14 @@ impl AppState {
             authenticator,
             lookups,
             lookup_timeout: Duration::from_secs(5),
+            smart_http: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_smart_http(mut self, smart_http: routes::git::SmartHttp) -> Self {
+        self.smart_http = Some(Arc::new(smart_http));
+        self
     }
 
     #[must_use]
@@ -102,6 +114,7 @@ impl std::fmt::Debug for AppState {
             .field("probes", &names)
             .field("probe_timeout", &self.probe_timeout)
             .field("lookup_timeout", &self.lookup_timeout)
+            .field("smart_http", &self.smart_http.as_ref().map(|s| s.limits))
             .finish_non_exhaustive()
     }
 }
@@ -118,9 +131,12 @@ impl DispatchState for AppState {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AppConfig {
-    /// Time until the response headers are produced (not body streaming;
-    /// per-route timeouts for git streams arrive with Smart HTTP, phase 9).
+    /// Time until the response headers are produced (not body streaming).
     pub request_timeout: Duration,
+    /// Replaces `request_timeout` for the git POSTs (`git-upload-pack`,
+    /// `git-receive-pack`): they read the whole request before answering,
+    /// under their own idle / size limits (`git.http.timeout_ms`, 1 h).
+    pub git_rpc_timeout: Duration,
     /// Request body limit for extractors (raw streams set their own).
     pub body_limit_bytes: usize,
 }
@@ -129,17 +145,17 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             request_timeout: Duration::from_secs(30),
+            git_rpc_timeout: Duration::from_secs(3600),
             body_limit_bytes: 1024 * 1024,
         }
     }
 }
 
-/// Actions that have permission-matrix rows but no route yet (git operations:
-/// M1 phase 9-10; API resources: phase 8).
+/// Actions that have permission-matrix rows but no route yet (receive-pack:
+/// M1 phase 9 MR4; API resources: phase 8b).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
-    Action::RepoRead,
     Action::RepoPush,
     Action::ProjectCreate,
     Action::ProjectUpdate,
@@ -216,7 +232,42 @@ pub fn registry() -> Registry<AppState> {
             routes::projects::ProjectById,
             routes::projects::read,
         );
-    shell_routes(fixed)
+    git_routes(shell_routes(fixed))
+}
+
+/// Smart HTTP fetch (M1 phase 9 MR3): the advertisement (`GET`, and `HEAD`
+/// with the headers only) and the upload-pack RPC, all `RepoRead`.
+/// receive-pack (`RepoPush`) joins in MR4.
+fn git_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    let advertise = Some(("service", "git-upload-pack"));
+    registry
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Get,
+            ScopedRoute::Git(GitRoute::InfoRefsUploadPack),
+            advertise,
+            Action::RepoRead,
+            "Smart HTTP: upload-pack advertisement (clone / fetch)",
+            routes::git::advertise,
+        )
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Head,
+            ScopedRoute::Git(GitRoute::InfoRefsUploadPack),
+            advertise,
+            Action::RepoRead,
+            "Smart HTTP: upload-pack advertisement headers",
+            routes::git::advertise,
+        )
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Post,
+            ScopedRoute::Git(GitRoute::UploadPack),
+            None,
+            Action::RepoRead,
+            "Smart HTTP: upload-pack (clone / fetch); every want checked reachable",
+            routes::git::upload_pack,
+        )
 }
 
 /// The SPA shell (`WebShell`) for every page URL, `GET` and `HEAD`.
@@ -300,7 +351,7 @@ pub(crate) fn build(
         .layer(axum::Extension(authenticator))
         .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(
-            config.request_timeout,
+            (config.request_timeout, config.git_rpc_timeout),
             request_timeout,
         ))
         .layer(middleware::from_fn(context::request_id))
@@ -351,7 +402,29 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("non-string panic payload")
 }
 
-async fn request_timeout(State(limit): State<Duration>, req: Request, next: Next) -> Response {
+/// `POST {path}.git/git-upload-pack` / `git-receive-pack` (by the raw path,
+/// as the dispatcher reads it): exempt from the request timeout.
+pub(crate) fn is_git_rpc(req: &Request) -> bool {
+    req.method() == axum::http::Method::POST
+        && matches!(
+            parse_web_path(req.uri().path(), req.uri().query()),
+            Ok(ParsedPath::Git {
+                route: GitRoute::UploadPack | GitRoute::ReceivePack,
+                ..
+            })
+        )
+}
+
+async fn request_timeout(
+    State((request_limit, git_rpc_limit)): State<(Duration, Duration)>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let limit = if is_git_rpc(&req) {
+        git_rpc_limit
+    } else {
+        request_limit
+    };
     let request_id = req
         .extensions()
         .get::<RequestId>()

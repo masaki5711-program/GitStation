@@ -9,6 +9,8 @@
 //!   password) on every non-public route
 //! - `dispatch` — the one dispatcher for namespace URLs (ADR-0015's seven
 //!   steps on the raw path)
+//! - [`routes::git`] / `git_stream` — Smart HTTP fetch (M1 phase 9): git
+//!   only through forge-git's Smart HTTP API, streamed responses
 //! - [`app`] — wiring and middleware; [`server`] — bind and serve
 
 pub mod app;
@@ -16,6 +18,7 @@ mod auth;
 pub mod context;
 mod dispatch;
 pub mod error;
+mod git_stream;
 mod guard;
 pub mod registry;
 pub mod routes;
@@ -25,6 +28,7 @@ pub use app::{app, registry as route_registry, AppConfig, AppState, Lookups};
 pub use auth::BoundedAuthenticator;
 pub use context::Ctx;
 pub use error::ApiError;
+pub use routes::git::{GitHttpLimits, SmartHttp};
 pub use server::ServerLimits;
 
 /// Where the generated documents live, relative to the product root (`Git/`).

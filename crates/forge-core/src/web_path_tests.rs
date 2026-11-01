@@ -35,12 +35,18 @@ fn ctx<'a>(err: &'a ForgeError, key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// `parse_web_path` refused with FG-WEB-0001 and this `reason`.
+/// `parse_web_path` refused with this `reason`: FG-WEB-0001 (404), or
+/// FG-WEB-0007 (400) for `service_unsupported` (M1 phase 9 MR3).
 fn assert_reason(path: &str, query: Option<&str>, reason: &str) -> ForgeError {
     let err = parse_web_path(path, query)
         .expect_err(&format!("{path:?} {query:?} must be refused ({reason})"));
-    assert_eq!(err.code(), ErrorCode::RouteNotFound, "{path:?}: {err}");
-    assert_eq!(err.code().http_status(), 404);
+    let (code, status) = if reason == "service_unsupported" {
+        (ErrorCode::SmartHttpServiceUnsupported, 400)
+    } else {
+        (ErrorCode::RouteNotFound, 404)
+    };
+    assert_eq!(err.code(), code, "{path:?}: {err}");
+    assert_eq!(err.code().http_status(), status);
     assert_eq!(ctx(&err, "reason"), Some(reason), "{path:?}: {err}");
     err
 }
@@ -691,6 +697,10 @@ fn namespace_kinds_and_owners() {
             ResolvedTarget::Project {
                 id: ProjectId::new(3),
                 access,
+                repository: crate::ProjectRepository {
+                    id: crate::RepoId::new(30),
+                    state: crate::RepositoryState::Ready,
+                },
             },
             NamespaceOwner::Project(ProjectId::new(3)),
             NamespaceKind::Project,

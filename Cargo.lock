@@ -538,6 +538,7 @@ name = "forge-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "flate2",
  "forge-core",
  "forge-db",
  "forge-errors",
@@ -626,6 +627,7 @@ dependencies = [
  "forge-core",
  "forge-db",
  "forge-errors",
+ "forge-git",
  "forge-web",
  "futures-util",
  "http-body-util",

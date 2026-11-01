@@ -716,3 +716,83 @@ fn the_seal_keys_file_is_checked_at_load_and_read_on_use() {
     );
 }
 // ── end C8 ──
+
+/// M1 phase 9 MR3: `git.http.*` defaults, the `[git.http]` table in the
+/// file, environment overrides and the cross-key rules (FG-SYS-0002).
+#[test]
+fn git_http_limits_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.git_http, GitHttpConfig::DEFAULT);
+    assert_eq!(cfg.git_http.fetch_request_max_bytes, 16 * 1024 * 1024);
+    assert_eq!(cfg.git_http.idle_timeout, Duration::from_secs(60));
+    assert_eq!(cfg.git_http.timeout, Duration::from_secs(3600));
+    assert_eq!(cfg.git_http.max_streams, 16);
+    assert_eq!(cfg.git_http.max_streams_per_principal, 4);
+
+    let f = file("[git.http]\nmax_streams = 8\nidle_timeout_ms = 1000\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[("FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL", "2")]),
+    )
+    .expect("file + env");
+    assert_eq!(cfg.git_http.max_streams, 8);
+    assert_eq!(cfg.git_http.max_streams_per_principal, 2);
+    assert_eq!(cfg.git_http.idle_timeout, Duration::from_millis(1000));
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_GIT_HTTP_MAX_STREAMS", "0")],
+            "git.http.max_streams",
+            "zero",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_FETCH_REQUEST_MAX_BYTES", "4294967296")],
+            "git.http.fetch_request_max_bytes",
+            "invalid",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_FETCH_REQUEST_MAX_BYTES", "1073741825")],
+            "git.http.fetch_request_max_bytes",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "20000"),
+            ],
+            "git.http.want_check_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "20000"),
+            ],
+            "git.http.idle_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_MAX_STREAMS", "2"),
+                ("FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL", "3"),
+            ],
+            "git.http.max_streams_per_principal",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_NOPE", "1")],
+            "FORGE_GIT_HTTP_NOPE",
+            "unknown_env",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+    let f = file("[git.http]\nnope = 1\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("unknown key");
+    assert_invalid(&err, "git.http.nope", "unknown_key");
+    let f = file("[git.ssh]\nport = 1\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("unknown table");
+    assert_invalid(&err, "git.ssh", "unknown_key");
+}

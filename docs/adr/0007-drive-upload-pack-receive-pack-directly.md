@@ -88,3 +88,56 @@ fetch / clone は `Git-Protocol` ヘッダを `GIT_PROTOCOL` として渡し pro
     ロックを持っているかもしれないことを示す。
   - 監視のタスクが途中で捨てられたとき（ランタイムの停止など）も、プロセスの木を止める（`ProcessTree` の `Drop`）。
   - `receive.maxInputSize` は 0 を「無制限」と読むので、上限は型で 0 を許さない（`NonZeroU64`）。
+
+## Amendment（2026-11-01、M1 phase 9 MR3: fetch の公開と `want` の到達性の確認）
+
+上の決定 (a)（forge が `want` を確かめてから upload-pack を起動する）を実装し、Smart HTTP の fetch / clone を公開した
+（`feat/web-smart-http-fetch`）。決めた点は次のとおり。
+
+- **要求の読み方**（`forge_git::upload_request`）: `POST git-upload-pack` の本文（gzip を展開したもの）を pkt-line として読む。
+  - v0 / v1: `want <oid>[ <capability>…]` の行を集める（`have`、`shallow`、`deepen*`、`filter` はそのまま git に渡す）。
+  - v2: 最初の行の `command=` が `ls-refs` と `fetch` のときだけ受け付ける。`object-info`、`bundle-uri` などほかのコマンドは、
+    `want` なしに ID でオブジェクトの情報を返しうるので拒む（`FG-GIT-0014 reason=command_unsupported`、`command` 付き）。
+    1 つの要求に 2 つ目のコマンド（flush の後ろ）があれば同じく拒む（`command=multiple`）。`fetch` の引数（delim の後ろ）の
+    `want <oid>` を集める。`want-ref` は git に任せる（`uploadpack.allowRefInWant` は既定の false）。
+  - oid は 40 / 64 桁の小文字の 16 進数だけを受け付ける。それ以外は `FG-GIT-0014 reason=want_invalid`。
+- **確かめ方**（`Git::check_wants`、どれも captured / stream の git、全体を `git.http.want_check_timeout_ms`（既定 30 秒）で抑え、
+  超えたら `FG-GIT-0002 operation=want_check`）。利用者の oid は検証した 16 進数だけを、**標準入力** で渡す（argv には入れない）。
+  1. `git cat-file --batch-check='%(objectname) %(objecttype)'` で、重複を除いた `want` の種類を調べる。`missing` は到達できない。
+  2. コミット: `git rev-list --max-count=1 --stdin --not --all`。`--stdin` は置いた場所で読まれるので、`want` が正の側、すべての
+     ref が負の側になる。出力が空なら、どのコミットも ref から辿れる。普通の fetch（`want` = ref の先端）では ref を読むだけで終わる。
+     （git が `--stdin` を `--not` の後で読むように変わると、すべてが辿れることになって穴が開く。テスト
+     `unreachable_or_missing_wants_are_refused` がこれを固定している。）
+  3. ツリー・blob・注釈付きタグ（partial clone の後からの取得、タグ）: 安くて正確な方法がない。`rev-list --objects --stdin --not --all`
+     は、除外する先端のツリーに印を付けないので、辿れる blob も「辿れない」と答える（2.43 で確かめた）。そこで
+     `git rev-list --objects --all --no-object-names` をストリームで最後まで読み、`want` の ID を探す（オブジェクト全体の走査）。
+     この費用は、コミット以外を `want` する要求だけが払う。ストリームの枠は呼び出し元の主体の分として数える。
+  - `--all` は upload-pack が広告する ref と同じ（forge は `transfer.hideRefs` / `uploadpack.hideRefs` を設定しない）。隠す ref を
+    作るときは、この確認も同じ ref を除く必要がある（git ≥ 2.42 の `--exclude-hidden=uploadpack` など）。
+- **拒否は in-band**: 辿れない `want` が 1 つでもあれば upload-pack を起動せず、HTTP 200（`application/x-git-upload-pack-result`）で
+  `ERR <利用者向けの文言> (request_id: …)` の pkt-line を 1 つ返す。git は `fatal: remote error: …` と表示して止まる。ログには
+  `FG-GIT-0014 reason=want_unreachable` を 1 回、`wants`、`commits`、`objects`、`unreachable`、`first_unreachable`、`check_ms`、
+  `project_id`、`repo_id` 付きで出す。`have` はこれまでどおり git が答える（ID を知っているオブジェクトの有無が `ACK` で分かるのは、
+  中身ではないので受け入れる）。
+- **確かめた結果**（`crates/forge-cli/tests/smart_http_e2e.rs::unreferenced_object_cannot_be_fetched_by_id`）: 削除したブランチの
+  コミットと blob を、git（v2 / v0）でも、手で組み立てた v0 / v2 の要求でも取り出せない。辿れる `want` には pack が返る。
+  partial clone（`--filter=blob:none`）の後からの blob の取得と、古いコミットの blob の取得は通る。
+- **費用の測定**（`want_check_cost_with_many_refs`、手で実行する ignored テスト。4 コア、git 2.43、debug ビルドの forge から
+  git を起動。ブランチごとに 1 コミットと 1 blob を足した合成のリポジトリ）:
+
+  | ref の数 | ref の形 | 先端 1 つ | すべての先端（clone） | 古いコミット | 辿れないコミット | blob（走査） | 辿れない blob（走査） |
+  |---|---|---|---|---|---|---|---|
+  | 1 000 | loose | 12 ms | 28 ms | 10 ms | 15 ms | 13 ms | 13 ms |
+  | 20 000 | loose | 196 ms | 450 ms | 185 ms | 203 ms | 265 ms | 253 ms |
+  | 20 000 | packed | 90 ms | 282 ms | 104 ms | 97 ms | 124 ms | 129 ms |
+
+  コミットの確認の費用はほぼ ref を読む時間で、ref の数に比例する（`pack-refs` で約半分）。オブジェクトの走査はオブジェクトの数に
+  比例する（この表では 4 万個ほど）。大きなリポジトリで partial clone の後からの取得が多くなれば、bitmap
+  （`repack -a -d --write-bitmap-index`、`rev-list --use-bitmap-index`）か、結果のキャッシュで抑える（残り）。
+- **起動の前に読む本文の上限**: fetch の要求は生の大きさと展開後の大きさの両方が `git.http.fetch_request_max_bytes`（既定 16 MiB、
+  上限 1 GiB）まで（`FG-GIT-0013 limit=request_body` / `gzip_decompressed`）。`Content-Encoding` は `gzip` と `identity` だけ
+  （ほかは `FG-GIT-0014 reason=content_encoding`）。`Content-Type` は `application/x-git-upload-pack-request` だけ
+  （`reason=content_type`）。本文の読み込みは無通信 60 秒と全体 1 時間（`git.http.idle_timeout_ms` / `timeout_ms`、
+  `FG-WEB-0002 operation=git_request_body`）、途中で切れたら `FG-GIT-0015 phase=request_body`（git は起動していない）。
+- **残り**: git 2.43 の v2 の広告は `object-info` を含む（forge は要求を拒むので害はないが、広告から外す設定を確かめる）。
+  ref の多いリポジトリでの確認の費用の監視（`check_ms` をメトリクスにする）、bitmap / キャッシュ。

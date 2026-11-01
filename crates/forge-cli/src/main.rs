@@ -370,8 +370,8 @@ fn main() -> ExitCode {
             config().and_then(|cfg| admin_repo::record_push(&cfg.database, &request_id, &from_log))
         }
         Command::Serve { bind } => config().and_then(|cfg| {
-            let bind = bind.unwrap_or(cfg.server.bind);
-            serve::serve(&bind, &cfg.database)
+            let bind = bind.unwrap_or_else(|| cfg.server.bind.clone()); // clone: cfg is passed whole below
+            serve::serve(&bind, &cfg)
         }),
         Command::Worker => config().and_then(|cfg| worker::worker(&cfg)),
         Command::Db {

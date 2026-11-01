@@ -20,7 +20,7 @@ A request exceeded the server's request timeout and was cancelled.
 
 ## 調べ方 (diagnosis)
 
-The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM).
+The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM). `operation=git_request_body` (with `kind=idle|total`, `bytes_in`; route `upload_pack`): a Smart HTTP request body arrived too slowly (`git.http.idle_timeout_ms` / `timeout_ms`); git POSTs are bounded by `git.http.timeout_ms` instead of the request timeout (runbook smart-http).
 
 ## 対処 (fix)
 

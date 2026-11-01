@@ -3,6 +3,7 @@
 //! `(state, Dispatched<R>)`: it runs only with the registry's admitted
 //! proof.
 
+pub mod git;
 pub mod health;
 pub mod namespaces;
 pub mod projects;

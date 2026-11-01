@@ -661,3 +661,40 @@ fn accept_failure_has_its_own_code() {
     );
     assert_eq!(ErrorCode::AcceptFailed.http_status(), 503);
 }
+
+/// M1 phase 9 MR3: only the git POSTs leave the request timeout (for
+/// `git_rpc_timeout`); the advertisement and everything else keep it.
+#[test]
+fn only_git_posts_are_exempt_from_the_request_timeout() {
+    let req = |method: &str, uri: &str| {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+    for (method, uri, exempt) in [
+        ("POST", "/acme/x.git/git-upload-pack", true),
+        ("POST", "/acme/x.git/git-receive-pack", true),
+        ("GET", "/acme/x.git/git-upload-pack", false),
+        (
+            "GET",
+            "/acme/x.git/info/refs?service=git-upload-pack",
+            false,
+        ),
+        (
+            "POST",
+            "/acme/x.git/info/refs?service=git-upload-pack",
+            false,
+        ),
+        ("POST", "/acme/x/-/git-upload-pack", false),
+        ("POST", "/api/v1/namespaces/resolve", false),
+        ("POST", "/acme/x.git.git/git-upload-pack", false),
+    ] {
+        assert_eq!(
+            crate::app::is_git_rpc(&req(method, uri)),
+            exempt,
+            "{method} {uri}"
+        );
+    }
+}

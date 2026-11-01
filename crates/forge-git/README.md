@@ -67,6 +67,18 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
   `advertisement_prefix(Service, ProtocolVersion)` (`# service=…` + flush, none for
   upload-pack v2); `ProtocolVersion::from_git_protocol(header)` uses the sanitised value only;
   `Service::from_name` / `.name()`.
+- **Upload-pack requests** (`upload_request`, M1 phase 9 MR3):
+  `parse_upload_pack_request(body, ProtocolVersion) -> UploadPackRequest { command, wants }`
+  (v0 / v1 negotiation; v2 `ls-refs` / `fetch` only — any other v2 command or a second command
+  is `FG-GIT-0014 reason=command_unsupported`; a want that is not 40 / 64 lower-case hex is
+  `want_invalid`); `err_packet(message)` (one `ERR` pkt-line, cut to fit).
+- **Want reachability** (`Git::check_wants(&StorageRoot, RepoId, &wants, principal, timeout) ->
+  WantCheck`, ADR-0007 option (a)): `cat-file --batch-check` (missing = unreachable), commits by
+  `rev-list --max-count=1 --stdin --not --all` (empty = reachable), trees / blobs / tags by a
+  streamed `rev-list --objects --all --no-object-names` walk; ids only on stdin; one deadline
+  (`FG-GIT-0002 operation=want_check`). `WantCheck::into_result()` → `FG-GIT-0014
+  reason=want_unreachable` (`wants`, `commits`, `objects`, `unreachable`, `first_unreachable`,
+  `check_ms`). Cost measured by the ignored `want_check_cost_with_many_refs` (ADR-0007 amendment MR3).
 - **pkt-line** (`pkt_line`): `decode(buf, PktMode) -> Option<(Packet, used)>`, `decode_all`,
   `encode` / `encode_data`, `PktReader` (async, one packet ≤ 65520 bytes), `encode_sideband` /
   `decode_sideband` (`Band::{Data, Progress, Error}`, ≤ 65515 data bytes per packet). Invalid
@@ -124,7 +136,7 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
 | FG-GIT-0004 GitBusy | no free subprocess slot within `acquire_timeout`; streams `reason=streams` / `principal_streams` | `smart-http` (streams) |
 | FG-GIT-0006 GitOutputTooLarge | captured stdout over `max_output_bytes` | — |
 | FG-GIT-0013 GitRequestTooLarge | gzip body over its decompressed cap (MR3/MR4: body and command limits) | `smart-http` |
-| FG-GIT-0014 GitProtocolInvalid | bad pkt-line / gzip (MR3/MR4: content_type, too_many_commands, report_status_required, push_cert) | `smart-http` |
+| FG-GIT-0014 GitProtocolInvalid | bad pkt-line / gzip; `want_invalid`, `command_unsupported`, `want_unreachable` (MR3, here); `content_type`, `content_encoding` (forge-web); MR4: too_many_commands, report_status_required, push_cert | `smart-http` |
 | FG-GIT-0015 GitClientDisconnected | stream aborted or dropped (client went away); tree killed | `smart-http` |
 | FG-REPO-0001 StoragePathRejected | root missing / not a dir / symlink; symlink, non-dir or outside-root entry | `repo-storage` |
 | FG-REPO-0002 StorageMissing | repository directory missing | `repo-storage` |
@@ -140,9 +152,10 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
 - **protocol v2 serves unreferenced objects** (any commit / blob whose id is
   known), and `uploadpack.allowAnySHA1InWant=false` does not stop it; v0
   serves unreferenced blobs. Pinned by
-  `v2_fetch_serves_unreferenced_objects_despite_allow_any_sha1_false`; the
-  decision (check wants in forge / v0 only / accept) is MR3's (ADR-0007
-  amendment).
+  `v2_fetch_serves_unreferenced_objects_despite_allow_any_sha1_false`. Closed
+  in forge by `check_wants` before upload-pack starts (MR3, option (a)); the
+  object walk for non-commit wants costs a full `rev-list --objects --all`
+  (bitmaps / a cache are open).
 - Windows: the process is assigned to its Job Object right after spawn (a
   helper started before that would escape; git starts helpers only after
   reading the request). The Windows path is compile- and clippy-checked

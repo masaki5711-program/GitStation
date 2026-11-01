@@ -157,7 +157,7 @@ fn moved(resolution: Resolution) -> (Resolved, TombstoneId, NamespacePath) {
 }
 
 fn project_target(resolved: &Resolved) -> (ProjectId, ProjectAccess) {
-    let ResolvedTarget::Project { id, access } = resolved.target else {
+    let ResolvedTarget::Project { id, access, .. } = resolved.target else {
         panic!("expected a project, got {resolved:?}");
     };
     (id, access)
@@ -213,9 +213,55 @@ async fn live_user_group_and_project_resolve_to_their_targets() {
                     role: Some(Role::Owner),
                     pending_deletion: false,
                 },
+                repository: ProjectRepository {
+                    id: web.repository_id,
+                    state: RepositoryState::Provisioning,
+                },
             },
         }
     );
+    t.drop_now().await;
+}
+
+/// M1 phase 9 MR3: the same statement reads the project's repository (id
+/// and state) for Smart HTTP; `mark_ready` shows as `Ready`, and a moved
+/// path's target carries its repository too.
+#[tokio::test]
+async fn a_project_resolves_with_its_repository_id_and_state() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let web = project(
+        &t,
+        "web",
+        alice.namespace_id,
+        alice.user_id,
+        Visibility::Private,
+    )
+    .await;
+    let repo = |resolved: &Resolved| {
+        let ResolvedTarget::Project { repository, .. } = resolved.target else {
+            panic!("expected a project, got {resolved:?}");
+        };
+        repository
+    };
+    let before = live(resolve_ok(&t, "alice/web", Some(alice.user_id)).await);
+    assert_eq!(
+        repo(&before),
+        ProjectRepository {
+            id: web.repository_id,
+            state: RepositoryState::Provisioning,
+        }
+    );
+    let marked = crate::repositories::mark_ready(&t.db, &ctx("req-ready-web"), web.repository_id)
+        .await
+        .expect("mark ready");
+    assert!(
+        matches!(marked, crate::repositories::MarkReady::Marked { .. }),
+        "{marked:?}"
+    );
+    let after = live(resolve_ok(&t, "alice/web", None).await);
+    assert_eq!(repo(&after).state, RepositoryState::Ready);
+    assert_eq!(repo(&after).id, web.repository_id);
     t.drop_now().await;
 }
 

@@ -97,6 +97,10 @@ fn project(id: i64, role: Option<Role>) -> Resolved {
                 role,
                 pending_deletion: false,
             },
+            repository: forge_core::ProjectRepository {
+                id: forge_core::RepoId::new(id * 100),
+                state: forge_core::RepositoryState::Ready,
+            },
         },
     }
 }
@@ -345,10 +349,27 @@ async fn url_vectors_through_the_dispatcher() {
             carried += 1;
             let answer = send(product(&script), request("GET", &uri.to_string(), None)).await;
             let name = &v["name"];
+            let git = accepted && v["expect"]["kind"] == "git";
             let unbuilt = accepted
-                && (v["expect"]["kind"] == "git"
-                    || ["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or("")));
-            if accepted && !unbuilt {
+                && ["raw", "archive"].contains(&v["expect"]["word"].as_str().unwrap_or(""));
+            if git {
+                // A routed git URL needs credentials (receive-pack, not
+                // routed until MR4, is FG-WEB-0001; a GET on a POST
+                // endpoint has no route either).
+                let route = v["expect"]["route"].as_str().unwrap_or("");
+                if route == "info_refs_upload_pack" {
+                    assert_eq!(answer.status, StatusCode::UNAUTHORIZED, "{name}");
+                } else {
+                    assert_eq!(answer.status, StatusCode::NOT_FOUND, "{name}: {route}");
+                }
+            } else if v["reason"] == "service_unsupported" {
+                assert_eq!(answer.status, StatusCode::BAD_REQUEST, "{name}");
+                assert_eq!(
+                    answer.code(),
+                    ErrorCode::SmartHttpServiceUnsupported.id(),
+                    "{name}"
+                );
+            } else if accepted && !unbuilt {
                 assert_eq!(answer.status, StatusCode::OK, "{name}");
                 assert_eq!(answer.bytes, SHELL_HTML.as_bytes(), "{name}");
             } else {
@@ -403,7 +424,9 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
         "/-",
         "/acme/x.git/objects/info/packs",
         "/acme/x.git/HEAD",
-        "/acme/x.git/info/refs?service=git-upload-pack",
+        // receive-pack is routed in M1 phase 9 MR4.
+        "/acme/x.git/info/refs?service=git-receive-pack",
+        "/acme/x.git/git-receive-pack",
     ] {
         for method in ["GET", "HEAD", "POST"] {
             let answer = send(product(&script), request(method, path, None)).await;
@@ -1033,22 +1056,94 @@ async fn a_redirect_is_logged_as_namespace_redirected() {
     assert!(event.get("request_id").is_some());
 }
 
-/// MR4 must e: a tail segment may start with `-` (`--output=x` is a legal
-/// file or ref name), so it may reach git only after `--` /
-/// `--end-of-options` or as a resolved full ref name / oid. forge-git's
-/// `GitCommand` enforces that layout (options are `&'static str`; values go
-/// through `revision()` / `path()`). The dispatcher runs no git at all: this
-/// tripwire fails when forge-web first depends on forge-git (phase 9), so
-/// that change must show where the tail is placed.
+/// MR4 must e, M1 phase 9 MR3 (replaces the phase 8 tripwire that failed
+/// when forge-web first depended on forge-git): forge-web runs git only
+/// through forge-git's Smart HTTP API (`Git::upload_pack`,
+/// `Git::check_wants`, the stream types) and only in `routes/git.rs` /
+/// `git_stream.rs` — never the generic command builder, whose
+/// options would be the place a user value could become an option. The git
+/// routes carry no `TailSegments` (the git shape has no tail; their handlers
+/// never read `tail()`), and a tail segment may still start with `-`
+/// (`--output=x` is a legal file or ref name): when a content route passes
+/// one to git, it goes through `revision()` / `path()` only.
 #[test]
-fn the_dispatcher_runs_no_git_and_tails_keep_leading_dashes() {
-    let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
-    assert!(
-        !manifest.contains("forge-git"),
-        "forge-web now depends on forge-git: pass TailSegments to git only via \
-         GitCommand::revision / path (after --end-of-options / --), never arg; \
-         then update this test (ADR-0015 ref とパスの境目)"
+fn forge_web_runs_git_only_through_smart_http_api() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    let mut dirs = vec![src.clone()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read src") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    // Built at run time so this file does not match itself.
+    let forbidden = [
+        [".comm", "and("].concat(),
+        ["Git::", "command"].concat(),
+        ["Git", "Command"].concat(),
+        ["arg", "_owned"].concat(),
+        ["config", "_override"].concat(),
+    ];
+    let git_users = ["routes/git.rs", "git_stream.rs"];
+    let mut used_in = Vec::new();
+    for file in &files {
+        let rel = file
+            .strip_prefix(&src)
+            .expect("under src")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = std::fs::read_to_string(file).expect("read");
+        for needle in &forbidden {
+            assert!(
+                !text.contains(needle.as_str()),
+                "{rel} uses {needle}: run git only through forge-git's smart_http API"
+            );
+        }
+        if text.contains(&["forge", "_git"].concat()) && !rel.ends_with("_tests.rs") {
+            used_in.push(rel.clone());
+            assert!(
+                git_users.contains(&rel.as_str()),
+                "{rel} uses forge-git: only {git_users:?} may (ADR-0015 ref とパスの境目)"
+            );
+        }
+        if rel == "routes/git.rs" {
+            assert!(!text.contains(".tail()"), "git routes take no tail");
+        }
+    }
+    used_in.sort();
+    let mut expected: Vec<String> = git_users.iter().map(|s| (*s).to_owned()).collect();
+    expected.sort();
+    assert_eq!(
+        used_in, expected,
+        "the Smart HTTP files are the forge-git users"
     );
+    assert_eq!(
+        used_in,
+        git_users
+            .iter()
+            .rev()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    for def in crate::app::registry().defs() {
+        if let Some(crate::registry::ScopedRoute::Git(_)) = def.route {
+            assert_eq!(def.scope, crate::registry::RouteScope::ProjectGit);
+            assert!(!def.path.contains("{*rest}"), "{}", def.path);
+        }
+    }
     let tail = forge_core::TailSegments::decode(&["--output=x", "-n"]).expect("legal names");
     assert_eq!(tail.as_slice(), ["--output=x", "-n"]);
 }

@@ -20,7 +20,7 @@ A Smart HTTP request body went over a forge limit: the decompressed size of a gz
 
 ## 調べ方 (diagnosis)
 
-The log event carries `limit` (which limit, e.g. `gzip_decompressed`), `max_bytes` and the route context (`service`). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit.
+The log event carries `limit` (which limit: `gzip_decompressed`, `request_body` — the raw body of an upload-pack request over `git.http.fetch_request_max_bytes`), `max_bytes` and the route context (`service`). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit.
 
 ## 対処 (fix)
 
