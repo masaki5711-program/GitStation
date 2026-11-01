@@ -28,6 +28,7 @@ use crate::namespaces::{check_parent_path, is_tombstoned, lock_path, path_taken}
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, repositories, Db};
 
+mod delete;
 mod member_writes;
 mod members;
 mod moves;
@@ -36,6 +37,7 @@ mod update;
 
 pub use crate::groups::MemberChange;
 pub use crate::groups::Updated;
+pub use delete::{delete_decided, restore_decided, Deletion};
 pub use member_writes::{
     add_member_decided, change_member_decided, remove_member_decided, ProjectMemberFacts,
 };

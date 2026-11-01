@@ -375,6 +375,19 @@ diagnosis = "The log event carries `reason=moves_per_day`, `moves`, `limit`, `re
 fix = "Wait until the oldest of those moves is 24 hours old. An operator can move it with the operator CLI (exempt) when the move is approved."
 test = "the_eleventh_move_in_a_day_is_rate_limited"
 
+[[error]]
+code = "FG-REPO-0019"
+name = "RestoreUnavailable"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトは復元できません。"
+user_message_en = "This project cannot be restored."
+user_message_id = "Proyek ini tidak dapat dipulihkan."
+cause = "A restore (POST /api/v1/projects/{id}/restore, forge_db::projects::restore_decided, step D5 MR3, ADR-0015 Amendment D5) was decided and allowed, but the project cannot come back: it is not pending deletion (`reason=not_deleted`: it was restored already, or never deleted), or its repository is already being purged (`reason=purging`: the purge job has started, the bare repository is being removed and cannot be recovered). The project row is locked and the repository row read under the same transaction, so the answer is what the purge job will also see."
+diagnosis = "The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>) and the purge job (D5 MR4) is running or stuck; for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row."
+fix = "`not_deleted`: nothing to do, the project is available. `purging`: the project cannot be restored; create it again under the same path once the purge has finished and the path is released (ADR-0015), or ask the operator to restore the repository from a backup."
+test = "restoring_a_project_that_is_not_deleted_or_is_purging_is_restore_unavailable"
+
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
 [[error]]

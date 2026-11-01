@@ -542,3 +542,44 @@ fn move_details_carry_ids_counts_and_grouped_role_changes_only() {
         }
     }
 }
+
+/// D5 MR3: deletion and restore details are ids and UTC timestamps (no
+/// path, no name), an integration event whose payload is the audit JSON.
+#[test]
+fn project_deletion_details_are_ids_and_times_and_an_integration_event() {
+    use crate::ids::ProjectId;
+    use crate::{EventType, VisibilityClass};
+    let deleted = AuditDetails::ProjectDeleted {
+        project_id: ProjectId::new(21),
+        deleted_at: "2026-11-01T09:00:00Z".to_owned(),
+        purge_after: "2026-11-08T09:00:00Z".to_owned(),
+        deleted_by: Some(UserId::new(7)),
+    };
+    let restored = AuditDetails::ProjectRestored {
+        project_id: ProjectId::new(21),
+        deleted_at: "2026-11-01T09:00:00Z".to_owned(),
+        purge_after: "2026-11-08T09:00:00Z".to_owned(),
+        deleted_by: None,
+    };
+    assert_eq!(
+        deleted.to_value(),
+        json!({"project_id": 21, "deleted_at": "2026-11-01T09:00:00Z",
+               "purge_after": "2026-11-08T09:00:00Z", "deleted_by": 7})
+    );
+    assert_eq!(restored.to_value()["deleted_by"], json!(null));
+    for (details, event, action) in [
+        (&deleted, EventType::ProjectDeleted, "project.deleted"),
+        (&restored, EventType::ProjectRestored, "project.restored"),
+    ] {
+        assert_eq!(details.action(), action);
+        assert_eq!(details.event_type(), Some(event));
+        assert_eq!(event.as_str(), action);
+        assert_eq!(event.visibility_class(), VisibilityClass::Integration);
+        assert_eq!(details.event_payload(), details.to_value());
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
+        }
+    }
+}

@@ -56,6 +56,11 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
         let state = app_state(&db, database)
+            // D5 MR3: the deletion grace period (`hosting.deletion_grace_days`).
+            .with_hosting(
+                forge_hosting::Hosting::new(db.clone()) // clone: the pool handle is shared
+                    .with_deletion_grace(cfg.hosting.deletion_grace),
+            )
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(

@@ -936,3 +936,20 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   has_parent }` を渡す。監査の行は墓標の cause のリソースに `namespace_tombstone.released`。
 - MR2 では移動は監査のみ（イベントなし）。グループの移動は最大 1000 のプロジェクトに及び、1 つの変更のイベントの上限（100）を超えるため、
   移動のイベントの形は MR5 で決める。
+
+### D5 MR3: 削除と復元（`feat/hosting-project-delete-restore`）
+
+- **`DELETE /api/v1/projects/{id}`**（`ProjectDelete`、Owner か管理者、エージェント拒否）: 1 つの変更で `deleted_at = now()`、
+  `purge_after = now() + 猶予`、`deleted_by = 呼び出したユーザー`、`updated_at` を書く（forge-db `projects::delete_decided`、forge-hosting
+  `delete_project`）。応答は `200` で `{id, deleted_at, purge_after}`。猶予は設定 `hosting.deletion_grace_days`（既定 7、1〜365、
+  環境変数 `FORGE_HOSTING_DELETION_GRACE_DAYS`。範囲外は FG-SYS-0002）。
+- **`POST /api/v1/projects/{id}/restore`**（`ProjectRestore`）: ローダーは削除待ちのプロジェクトも読む（どのローダーも隠さず、`authorize()` が
+  決める）。`deleted_at` / `purge_after` / `deleted_by` を消す。リポジトリが `purging` なら `FG-REPO-0019 reason=purging`、削除待ちでなければ
+  `reason=not_deleted`（どちらも 409）。決定（`reconfirm`）の後でだけ答えるので、権限のない呼び出しは状態を知らされない。
+  リポジトリの行を `FOR UPDATE` で読むので、purge の開始（MR4 が `purging` に変える）と復元は排他になり、先に動いたほうが勝つ。
+- **削除待ちの見え方**: そのプロジェクトを見られる呼び出しには 410（`FG-REPO-0006`）、見られない呼び出しには存在しないのと同じ 404
+  （`FG-REPO-0005`）。API も Smart HTTP（clone / fetch / push の広告）も同じ `authorize()` の行で決まる（テストで固定）。
+- **イベント**: `project.deleted` / `project.restored`（integration クラス）。`dedup_key` は `project_deleted:<project_id>:<deleted_at の epoch>` と
+  `project_restored:<project_id>:<取り消す削除の deleted_at の epoch>`。epoch は **マイクロ秒**（列の精度）にした: 秒だと、同じ秒の中の
+  削除 → 復元 → 削除が 2 回目の削除で重複扱い（`Deduped`）になり、利用者に 500 を返すことになる。
+- 墓標は削除では書かない（purge が `deleted` の墓標を書く。MR4）。

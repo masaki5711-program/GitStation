@@ -1,7 +1,19 @@
 //! Project writes (M1 phase 8b MR7a): `POST /api/v1/projects`
 //! (`ProjectCreate`; the parent namespace in the body), `PATCH
-//! /api/v1/projects/{id}` (`ProjectUpdate`, Maintainer) and `PUT
-//! /api/v1/projects/{id}/visibility` (`ProjectVisibilityChange`, Owner).
+//! /api/v1/projects/{id}` (`ProjectUpdate`, Maintainer), `PUT
+//! /api/v1/projects/{id}/visibility` (`ProjectVisibilityChange`, Owner),
+//! and (D5 MR3, ADR-0015 Amendment D5) `DELETE /api/v1/projects/{id}`
+//! (`ProjectDelete`, Owner) and `POST /api/v1/projects/{id}/restore`
+//! (`ProjectRestore`, Owner).
+//!
+//! Deleting starts the grace period (`hosting.deletion_grace_days`) and
+//! answers `200` with when it began and when the purge may start; the
+//! project is then `FG-REPO-0006` (410) to everyone who can see it and the
+//! absent 404 to everyone else. Restore addresses a project that is pending
+//! deletion — [`ProjectToRestore`] loads it like the read loader does (the
+//! loaders never hide a pending project; `authorize()` decides) — and
+//! answers `200` with the project; `FG-REPO-0019` (409) when it cannot come
+//! back.
 //!
 //! As for groups: the registry authenticates, reads the strict body, loads
 //! (the parent with `forge_hosting::Hosting::parent`, a project with the
@@ -31,12 +43,15 @@ use crate::app::AppState;
 use crate::body::{param_invalid, request_invalid};
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
 use crate::routes::projects::{self, written_project_view, ProjectById, PREFIX};
-use crate::routes::write::{absent, bounded, hosting, id_in, no_store, write_request};
+use crate::routes::write::{absent, bounded, hosting, id_in, json, no_store, write_request};
 
 /// `POST` a project.
 pub const COLLECTION: &str = "/api/v1/projects";
 /// `PUT` a project's visibility.
 pub const VISIBILITY: &str = "/api/v1/projects/{id}/visibility";
+
+/// `POST` a project's restore.
+pub const RESTORE: &str = "/api/v1/projects/{id}/restore";
 
 /// The body cap of the project write routes.
 pub const MAX_BODY: usize = 16 * 1024;
@@ -102,6 +117,20 @@ pub struct UpdateProject {
 #[serde(deny_unknown_fields)]
 pub struct SetVisibility {
     pub visibility: VisibilityName,
+}
+
+/// `DELETE /api/v1/projects/{id}`: when the grace period began and when
+/// the purge may start.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeletionBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    /// UTC, RFC 3339.
+    pub deleted_at: String,
+    /// UTC, RFC 3339: the project is restorable until then (and until its
+    /// purge has started).
+    pub purge_after: String,
 }
 
 /// `POST /api/v1/projects`: the parent namespace named by the body.
@@ -221,6 +250,42 @@ impl BodyLoader<AppState, SetVisibility> for VisibilityTarget {
     }
 }
 
+/// `POST /api/v1/projects/{id}/restore`: the project by id — also while it
+/// is pending deletion, which is what restore is for.
+pub struct ProjectToRestore;
+
+impl Loader<AppState> for ProjectToRestore {
+    type Ctx = ProjectCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, ProjectCtx> {
+        Box::pin(async move {
+            let Some(id) = id_in(parts.uri.path(), PREFIX, "/restore").map(ProjectId::new) else {
+                return Err(param_invalid("id", "not_positive_decimal"));
+            };
+            let Some(record) = projects::load_bounded(state, id, viewer).await? else {
+                return Ok(absent());
+            };
+            if record.id != id {
+                return Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "loaded_another_project")
+                    .with_context("project_id", id.get())
+                    .with_context("loaded_project_id", record.id.get()));
+            }
+            Ok(Lookup::Found {
+                ctx: ProjectCtx::new(projects::loaded(&record)),
+                canonical: None,
+                tombstone: None,
+                project: None,
+                group: None,
+            })
+        })
+    }
+}
+
 /// The project `id` re-read for the caller after a committed write.
 async fn written<R: ResourceCtx>(
     state: &AppState,
@@ -303,6 +368,37 @@ pub async fn set_visibility(
     let built = async {
         hosting(&state)?
             .change_visibility(&write_request(&w), &w.proof)
+            .await?;
+        written(&state, &w.proof, *w.proof.id()).await
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `DELETE /api/v1/projects/{id}` → `200` the deletion (when it began, when
+/// the purge may start).
+pub async fn delete(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let w = request.into_write();
+    let built = async {
+        let deletion = hosting(&state)?
+            .delete_project(&write_request(&w), &w.proof)
+            .await?;
+        json(DeletionBody {
+            id: w.proof.id().get(),
+            deleted_at: deletion.deleted_at,
+            purge_after: deletion.purge_after,
+        })
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `POST /api/v1/projects/{id}/restore` → `200` the project as it is now.
+pub async fn restore(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    let w = request.into_write();
+    let built = async {
+        hosting(&state)?
+            .restore_project(&write_request(&w), &w.proof)
             .await?;
         written(&state, &w.proof, *w.proof.id()).await
     }

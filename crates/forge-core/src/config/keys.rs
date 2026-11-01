@@ -157,4 +157,9 @@ pub const KEYS: &[Key] = &[
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",
     ),
+    // D5 MR3: how long a deleted project can be restored.
+    number(
+        "hosting.deletion_grace_days",
+        "FORGE_HOSTING_DELETION_GRACE_DAYS",
+    ),
 ];

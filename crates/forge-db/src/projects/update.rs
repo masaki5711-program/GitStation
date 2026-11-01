@@ -58,7 +58,7 @@ pub enum VisibilityOutcome {
 /// The project row as locked.
 pub(crate) struct Locked {
     visibility: Visibility,
-    pending_deletion: bool,
+    pub(crate) pending_deletion: bool,
     display_name: String,
     description: String,
 }

@@ -19,6 +19,8 @@
 //! A proof for another action than the command's is a programming error
 //! (`FG-SYS-0001 reason=proof_action_mismatch`), never a pass.
 
+use std::time::Duration;
+
 use forge_auth::{
     AccountFacts, Action, Authorized, Credential, GroupCtx, GroupMemberCtx, InstanceCtx,
     LoadedGroup, LoadedMembership, LoadedParent, LoadedProject, LoadedProtection,
@@ -41,7 +43,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::groups::{CreatedGroup, MemberChange, Updated};
 pub use forge_db::members::{MemberRow, MAX_PAGE as MAX_MEMBER_PAGE};
-pub use forge_db::projects::{CreatedProject, VisibilityOutcome};
+pub use forge_db::projects::{CreatedProject, Deletion, VisibilityOutcome};
 /// A protection rule's state as a route loader reads it.
 pub use forge_db::protected_refs::RuleState as ProtectionRuleState;
 pub use forge_db::protected_refs::{RuleChange, StoredRule};
@@ -90,6 +92,8 @@ pub struct Patch {
 #[derive(Debug, Clone)]
 pub struct Hosting {
     db: Db,
+    /// How long a deleted project stays restorable (`hosting.deletion_grace_days`).
+    deletion_grace: Duration,
 }
 
 /// `FG-SYS-0001 reason=proof_action_mismatch` unless the proof is for
@@ -134,8 +138,19 @@ fn account(a: Account) -> AccountFacts {
 }
 
 impl Hosting {
+    /// Hosting commands with the default deletion grace period (7 days).
     pub fn new(db: Db) -> Self {
-        Self { db }
+        Self {
+            db,
+            deletion_grace: forge_core::config::HostingConfig::DEFAULT_DELETION_GRACE,
+        }
+    }
+
+    /// The deletion grace period of `hosting.deletion_grace_days`.
+    #[must_use]
+    pub fn with_deletion_grace(mut self, grace: Duration) -> Self {
+        self.deletion_grace = grace;
+        self
     }
 
     // ── reads for the route loaders (read pool, one statement each) ──
@@ -416,6 +431,60 @@ impl Hosting {
             })
             .await?;
         Ok(outcome)
+    }
+}
+
+impl Hosting {
+    // ── D5 MR3: deletion and restore ──
+
+    /// `DELETE /api/v1/projects/{id}` (`ProjectDelete`, Owner): the project
+    /// enters its grace period (`deleted_at`, `purge_after` = now + the
+    /// configured grace, `deleted_by` = the caller). Decided again on the
+    /// locked facts: an Owner demoted or removed after the registry's check,
+    /// a disabled account, or a project deleted meanwhile is refused
+    /// (nothing written).
+    pub async fn delete_project(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<ProjectCtx>,
+    ) -> Result<Deletion, ForgeError> {
+        require(proof.action(), Action::ProjectDelete)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (deletion, ()) = projects::delete_decided(
+            &self.db,
+            &ctx,
+            *proof.id(),
+            user,
+            self.deletion_grace,
+            |facts| {
+                let fresh = ProjectCtx::new(loaded(&facts.project));
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            },
+        )
+        .await?;
+        Ok(deletion)
+    }
+
+    /// `POST /api/v1/projects/{id}/restore` (`ProjectRestore`, Owner): the
+    /// project leaves its grace period. The proof is decided on a project
+    /// that is pending deletion (the loader shows it to the Owner); decided
+    /// again on the locked facts, then `FG-REPO-0019` when it is no longer
+    /// pending (`not_deleted`) or its purge has started (`purging`).
+    pub async fn restore_project(
+        &self,
+        request: &WriteRequest,
+        proof: &Authorized<ProjectCtx>,
+    ) -> Result<Deletion, ForgeError> {
+        require(proof.action(), Action::ProjectRestore)?;
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (cleared, ()) = projects::restore_decided(&self.db, &ctx, *proof.id(), user, |facts| {
+            let fresh = ProjectCtx::new(loaded(&facts.project));
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await?;
+        Ok(cleared)
     }
 }
 

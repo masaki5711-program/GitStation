@@ -40,6 +40,8 @@ fn only_forge_hosting_calls_the_decided_commands() {
         "move",
         "rename",
         "release",
+        // D5 MR3: deletion and restore
+        "restore",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

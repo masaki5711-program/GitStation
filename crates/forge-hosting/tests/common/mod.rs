@@ -298,3 +298,16 @@ pub fn removal(from: Option<Role>) -> MembershipChange {
         None => MembershipChange::Missing { to: None },
     }
 }
+
+/// The delete / restore routes' proof (D5 MR3), built as their loaders
+/// build it: the project as `who` sees it now (a project pending deletion
+/// is loaded too).
+pub async fn lifecycle_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    action: Action,
+    id: ProjectId,
+) -> Result<Authorized<ProjectCtx>, forge_errors::ForgeError> {
+    let loaded = project_ctx(hosting, who, id).await;
+    prove(who, action, ProjectCtx::new(loaded))
+}
