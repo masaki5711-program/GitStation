@@ -321,7 +321,7 @@ fn scrubbed_environment_is_explicit() {
     let cmd = g
         .command("status")
         .repo("/srv/forge/repos/00/1.git")
-        .build();
+        .build(false);
     let envs: std::collections::HashMap<String, Option<String>> = cmd
         .as_std()
         .get_envs()
@@ -375,7 +375,7 @@ fn pinned_variables_cannot_be_overridden_and_cwd_defaults_to_home() {
     let mut cmd = g.command("version");
     // Simulate a future bug that pushes a pinned key through the caller list.
     cmd.envs.push(("GIT_CONFIG_NOSYSTEM", OsString::from("0")));
-    let built = cmd.build();
+    let built = cmd.build(false);
     let std_cmd = built.as_std();
     let nosystem = std_cmd
         .get_envs()

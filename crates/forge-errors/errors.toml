@@ -63,8 +63,8 @@ user_message_ja = "Git の処理基盤が利用できません。管理者に連
 user_message_en = "The Git backend is unavailable. Contact the administrator."
 user_message_id = "Layanan Git tidak tersedia. Hubungi administrator."
 cause = "The configured git binary cannot be executed, or its version is older than the minimum forge requires (2.38, for merge-tree --write-tree)."
-diagnosis = "The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), or `too_old` (with `found` and `minimum`). Run the configured git binary with `version` as the forge service user."
-fix = "Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart."
+diagnosis = "The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), `too_old` (with `found` and `minimum`), `process_tree_failed` (Windows: the Job Object for a stream could not be created or assigned; `source` has the OS error), or `hooks_dir` (Smart HTTP: `<git home>/empty-hooks` is not an empty real directory; `detail` = `not_empty`, `not_a_directory`, `insecure_permissions` (group- or world-writable; with `mode` — it is created 0700), `create_failed`, `unreadable` or `not_absolute_utf8`, with `path`). Run the configured git binary with `version` as the forge service user."
+fix = "Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart. For `hooks_dir`: find out who put files into `empty-hooks` (it must stay empty — no hook runs in Smart HTTP in M1 phase 9), remove them, and record it as an incident (runbook smart-http)."
 runbook = "git-unavailable"
 test = "version_below_2_38_is_git_unavailable"
 
@@ -76,9 +76,9 @@ severity = "warn"
 user_message_ja = "Git の処理が時間内に終わりませんでした。しばらくしてから再度お試しください。"
 user_message_en = "The Git operation did not finish in time. Try again later."
 user_message_id = "Operasi Git tidak selesai tepat waktu. Coba lagi nanti."
-cause = "A git subprocess exceeded its total timeout and was killed and reaped."
-diagnosis = "The log event carries `subcommand`, `timeout_ms` and `kind` (`total`). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load."
-fix = "Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`) for that operation."
+cause = "A git subprocess exceeded its total timeout, or a streaming one (Smart HTTP) moved no byte in either direction for its idle timeout; it was killed (streams: with its process group / Job Object) and reaped."
+diagnosis = "The log event carries `subcommand` and `kind`: `total` (with `timeout_ms`) or `idle` (streams, with `idle_timeout_ms`, `bytes_in`, `bytes_out`, `duration_ms`). `idle` with small byte counts means a stalled client or a proxy buffering the body; `total` for one repository points at its size or storage latency, across repositories at host load. `reap_failed` (`kill_failed`, `wait_failed`, `wait_timeout`, with `reap_error`) on this or any FG-GIT code means forge could not confirm the killed git was reaped: it may still be running and holding repository locks (`pgrep -af git`). See runbook smart-http for streams."
+fix = "Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`, streams `GitConfig::stream_timeout_total`) for that operation. For idle kills check the reverse proxy's request buffering and timeouts first."
 test = "hung_git_is_killed_after_timeout"
 
 [[error]]
@@ -103,8 +103,8 @@ severity = "warn"
 user_message_ja = "Git の処理が混み合っています。しばらくしてから再度お試しください。"
 user_message_en = "The Git backend is busy. Try again later."
 user_message_id = "Layanan Git sedang sibuk. Coba lagi nanti."
-cause = "Every git subprocess slot was in use for longer than the acquire timeout."
-diagnosis = "Check the git concurrency limit (`GitConfig::max_concurrency`) against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots."
+cause = "Every git subprocess slot was in use for longer than the acquire timeout, or a principal already holds its maximum number of streams."
+diagnosis = "Without `reason`: the captured pool (`GitConfig::max_concurrency`). `reason=streams`: the streaming pool for Smart HTTP (`max_streams`, default 16) — long clones hold slots. `reason=principal_streams`: one principal (user or client address) already has `max_per_principal` (default 4) streams open; refused at once. Compare with the number of concurrent clones/pushes in the access log."
 fix = "Raise the git concurrency limit if the host has CPU and IO headroom, or find the operations that hold slots for long."
 test = "concurrency_limit_reports_git_busy"
 
@@ -508,6 +508,46 @@ cause = "A push targeted a ref outside refs/heads/ and refs/tags/ (for example r
 diagnosis = "The log event carries `action`. The rejected ref name is in the push command list (log only)."
 fix = "Push branches under refs/heads/ and tags under refs/tags/ only."
 test = "reserved_ref_namespace_is_rejected_even_for_admins"
+
+[[error]]
+code = "FG-GIT-0013"
+name = "GitRequestTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "Git の要求が大きすぎます。"
+user_message_en = "The Git request is too large."
+user_message_id = "Permintaan Git terlalu besar."
+cause = "A Smart HTTP request body went over a forge limit: the decompressed size of a gzip request body (`Content-Encoding: gzip`), or a body or command-list limit of the route. Decoding stops at the limit, so a compressed bomb never expands past it."
+diagnosis = "The log event carries `limit` (which limit, e.g. `gzip_decompressed`), `max_bytes` and the route context (`service`). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit."
+fix = "Nothing to fix for a hostile or broken client. For a legitimate one, check the repository's ref count; raise the limit (configuration `git.http.*`, M1 phase 9 MR3/MR4) only with that evidence."
+test = "gzip_bomb_stops_at_cap"
+
+[[error]]
+code = "FG-GIT-0014"
+name = "GitProtocolInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "Git のプロトコルとして正しくない要求です。"
+user_message_en = "The request is not valid for the Git protocol."
+user_message_id = "Permintaan tidak valid untuk protokol Git."
+cause = "A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature. git itself never saw the bytes."
+diagnosis = "The log event carries `reason`: `pkt_line` (with `detail`: `length_reserved` for 0001-0003 where not allowed, `length_too_large` over 65520, `non_hex`, `truncated`, `bad_sideband`), `gzip` (the gzip body is corrupt, truncated, or has data after its end), `content_type` (wrong or missing request Content-Type for the service), `too_many_commands` (a push with more ref updates than the limit), `report_status_required` (a push client without the report-status capability), `push_cert` (signed pushes are refused). Clients are normally real git; frequent occurrences from one address point at a scanner or a broken proxy that alters bodies."
+fix = "Nothing to fix server-side for a broken or hostile client. A git client that hits `report_status_required` or `push_cert` needs a normal `git push` (no `--signed`). A proxy that rewrites bodies must pass them through unchanged."
+test = "pkt_line_rejects_invalid_lengths"
+
+[[error]]
+code = "FG-GIT-0015"
+name = "GitClientDisconnected"
+http_status = 499
+severity = "info"
+user_message_ja = "接続が途中で切れたため、Git の処理を中止しました。"
+user_message_en = "The connection was closed before the Git operation finished; it was stopped."
+user_message_id = "Koneksi terputus sebelum operasi Git selesai; operasi dihentikan."
+cause = "The client went away (or the request was cancelled) while a streaming git subprocess was running; forge killed git together with its helpers (process group / Job Object) and reaped it. The user never sees this response; the code exists for the log."
+diagnosis = "The log event carries `subcommand`, `reason` (`client_disconnected` when the HTTP layer noticed, `dropped` when the request future was cancelled), `bytes_in`, `bytes_out` and `duration_ms`. Many for one client at the same byte counts point at a proxy timeout or a client-side limit; spread across clients, at network trouble."
+fix = "Nothing for an isolated case. For repeated ones, compare `duration_ms` with the proxy's timeouts (reverse proxy read/send timeout) and the client's `http.lowSpeedTime`. A receive-pack killed this way leaves no ref change; see runbook smart-http for a stale `.lock` file."
+runbook = "smart-http"
+test = "client_disconnect_kills_git_and_is_git_client_disconnected"
 
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 

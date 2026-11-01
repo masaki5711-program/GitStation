@@ -16,9 +16,10 @@
 //!   stdout is capped, there is a total timeout, a global concurrency limit,
 //!   and the exit status is checked.
 //!
-//! Known gap (M1 phase 9, streaming): only the direct child is killed on
-//! timeout; helpers such as `pack-objects` must be killed as a process group
-//! (Unix) / Job Object (Windows) once long-running streaming commands land.
+//! Captured runs ([`GitCommand::output`]) kill only the direct child on
+//! timeout (they are short and spawn no long-lived helpers). Streaming runs
+//! ([`GitCommand::spawn_stream`], `stream.rs`) kill the whole process group
+//! (Unix) / Job Object (Windows), helpers such as `pack-objects` included.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -27,53 +28,25 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub use crate::config::GitConfig;
+
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::process::{ignore_broken_pipe, read_capped, reap};
+use crate::process::{ignore_broken_pipe, read_capped, reap, with_reap};
 use crate::redact::stderr_head;
 pub use crate::revision::Revision;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 
-/// How git is run. Loaded from configuration in `forge serve` / `worker`.
-#[derive(Debug, Clone)]
-pub struct GitConfig {
-    /// Path to the git binary (or `git` to resolve via `PATH`).
-    pub bin: PathBuf,
-    /// The `HOME` git sees — a forge-owned directory; the global config is
-    /// pinned to `<home>/.gitconfig`, so no user or shared config applies.
-    pub home: PathBuf,
-    /// Upper bound for one invocation.
-    pub timeout_total: Duration,
-    /// How long to wait for a free subprocess slot.
-    pub acquire_timeout: Duration,
-    /// Maximum concurrent git subprocesses.
-    pub max_concurrency: usize,
-    /// Maximum captured stdout per invocation.
-    pub max_output_bytes: usize,
-}
-
 /// Captured stderr is for logs only; keep a bounded tail.
-const MAX_STDERR_BYTES: usize = 64 * 1024;
-
-impl GitConfig {
-    pub fn new(bin: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
-        Self {
-            bin: bin.into(),
-            home: home.into(),
-            timeout_total: Duration::from_secs(300),
-            acquire_timeout: Duration::from_secs(10),
-            max_concurrency: 32,
-            max_output_bytes: 16 * 1024 * 1024,
-        }
-    }
-}
+pub(crate) const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 /// Handle shared by everything that runs git. Cheap to clone.
 #[derive(Debug, Clone)]
 pub struct Git {
     config: Arc<GitConfig>,
     slots: Arc<Semaphore>,
+    pub(crate) streams: crate::stream::StreamLimits,
 }
 
 /// Captured result of a successful invocation. stderr is not exposed: it may
@@ -92,9 +65,11 @@ impl GitOutput {
 impl Git {
     pub fn new(config: GitConfig) -> Self {
         let slots = Arc::new(Semaphore::new(config.max_concurrency.max(1)));
+        let streams = crate::stream::StreamLimits::new(&config);
         Self {
             config: Arc::new(config),
             slots,
+            streams,
         }
     }
 
@@ -118,16 +93,28 @@ impl Git {
             #[cfg(test)]
             hold_stdin: false,
             option_like_value: false,
-            timeout: self.config.timeout_total,
+            timeout: None,
+            idle_timeout: None,
         }
     }
+}
+
+/// The `Git-Protocol` value git may see, or `None` (dropped): non-empty, at
+/// most 256 bytes, only `[A-Za-z0-9=:._-]`.
+pub(crate) fn sanitize_git_protocol(value: &str) -> Option<&str> {
+    let valid = !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"=:._-".contains(&b));
+    valid.then_some(value)
 }
 
 /// One git invocation being built.
 #[derive(Debug)]
 pub struct GitCommand {
-    git: Git,
-    subcommand: &'static str,
+    pub(crate) git: Git,
+    pub(crate) subcommand: &'static str,
     config: Vec<(&'static str, OsString)>,
     options: Vec<OsString>,
     revisions: Vec<OsString>,
@@ -135,13 +122,17 @@ pub struct GitCommand {
     git_dir: Option<PathBuf>,
     cwd: Option<PathBuf>,
     envs: Vec<(&'static str, OsString)>,
-    stdin: Option<Vec<u8>>,
+    pub(crate) stdin: Option<Vec<u8>>,
     /// Keep stdin open without writing (tests: simulate a stalled client).
     #[cfg(test)]
     hold_stdin: bool,
     /// Set when a forge-generated value starts with `-` (refused at run time).
-    option_like_value: bool,
-    timeout: Duration,
+    pub(crate) option_like_value: bool,
+    /// `None`: `GitConfig::timeout_total` (captured) /
+    /// `GitConfig::stream_timeout_total` (streaming).
+    pub(crate) timeout: Option<Duration>,
+    /// Streaming only; `None`: `GitConfig::stream_idle_timeout`.
+    pub(crate) idle_timeout: Option<Duration>,
 }
 
 /// Variables passed through from the server process. Everything else
@@ -189,13 +180,6 @@ impl GitCommand {
     /// `core.hooksPath` on every receive-pack). Crate-internal: `-c` counts as
     /// protected config (hooks, pack-objects hook), so values are forge-owned.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first production caller: receive-pack, M1 phase 10"
-        )
-    )]
     pub(crate) fn config_override(mut self, key: &'static str, value: impl AsRef<OsStr>) -> Self {
         self.config.push((key, value.as_ref().to_os_string()));
         self
@@ -225,13 +209,8 @@ impl GitCommand {
     /// smuggle other settings.
     #[must_use]
     pub fn git_protocol(mut self, value: &str) -> Self {
-        let valid = !value.is_empty()
-            && value.len() <= 256
-            && value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"=:._-".contains(&b));
-        if valid {
-            self.envs.push(("GIT_PROTOCOL", OsString::from(value)));
+        if let Some(valid) = sanitize_git_protocol(value) {
+            self.envs.push(("GIT_PROTOCOL", OsString::from(valid)));
         }
         self
     }
@@ -242,6 +221,15 @@ impl GitCommand {
         self
     }
 
+    /// A caller-set environment variable (tests: what git would see).
+    #[cfg(test)]
+    pub(crate) fn env_value(&self, key: &str) -> Option<&OsStr> {
+        self.envs
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.as_os_str())
+    }
+
     #[cfg(test)]
     #[must_use]
     fn hold_stdin_open(mut self) -> Self {
@@ -249,10 +237,23 @@ impl GitCommand {
         self
     }
 
+    /// Total timeout for this invocation (captured or streaming).
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = Some(timeout);
         self
+    }
+
+    /// Idle timeout for a stream: no bytes in either direction for this long
+    /// kills it (FG-GIT-0002 `kind=idle`). Ignored by [`GitCommand::output`].
+    #[must_use]
+    pub fn idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = Some(timeout);
+        self
+    }
+
+    fn total_timeout(&self) -> Duration {
+        self.timeout.unwrap_or(self.git.config().timeout_total)
     }
 
     /// The full argument vector after `git` (for tests and logs).
@@ -279,7 +280,8 @@ impl GitCommand {
     }
 
     /// Build the `tokio::process::Command` with the scrubbed environment.
-    fn build(&self) -> tokio::process::Command {
+    /// `stream`: stdin is always piped (the caller writes it).
+    pub(crate) fn build(&self, stream: bool) -> tokio::process::Command {
         let config = self.git.config();
         let mut cmd = tokio::process::Command::new(&config.bin);
         cmd.env_clear();
@@ -315,7 +317,7 @@ impl GitCommand {
         }
         cmd.args(self.argv());
         cmd.current_dir(cwd);
-        cmd.stdin(if self.wants_stdin() {
+        cmd.stdin(if stream || self.wants_stdin() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -334,14 +336,14 @@ impl GitCommand {
         self.stdin.is_some()
     }
 
-    fn fail(&self, code: ErrorCode) -> ForgeError {
+    pub(crate) fn fail(&self, code: ErrorCode) -> ForgeError {
         ForgeError::new(code).with_context("subcommand", self.subcommand)
     }
 
     fn timed_out(&self) -> ForgeError {
         self.fail(ErrorCode::GitTimeout)
             .with_context("kind", "total")
-            .with_context("timeout_ms", self.timeout.as_millis())
+            .with_context("timeout_ms", self.total_timeout().as_millis())
     }
 
     /// Run to completion and capture stdout.
@@ -372,8 +374,8 @@ impl GitCommand {
 
         let started = Instant::now();
         // One deadline for the whole run (I/O and the final wait together).
-        let deadline = tokio::time::Instant::now() + self.timeout;
-        let mut child = self.build().spawn().map_err(|e| {
+        let deadline = tokio::time::Instant::now() + self.total_timeout();
+        let mut child = self.build(false).spawn().map_err(|e| {
             self.fail(ErrorCode::GitUnavailable)
                 .with_context("reason", "spawn_failed")
                 .with_context("git_bin", config.bin.display())
@@ -420,8 +422,8 @@ impl GitCommand {
         };
 
         let Ok((write_res, out_res, err_res)) = tokio::time::timeout_at(deadline, io).await else {
-            reap(&mut child).await;
-            return Err(self.timed_out());
+            let reaped = reap(&mut child).await;
+            return Err(with_reap(self.timed_out(), reaped));
         };
         let (stderr_bytes, _) = err_res.unwrap_or_default();
         let stderr_head = stderr_head(&stderr_bytes);
@@ -429,15 +431,20 @@ impl GitCommand {
         let (stdout_bytes, overflow) = match out_res {
             Ok(r) => r,
             Err(e) => {
-                reap(&mut child).await;
-                return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
+                let reaped = reap(&mut child).await;
+                return Err(with_reap(
+                    self.fail(ErrorCode::GitProcessFailed).with_source(e),
+                    reaped,
+                ));
             }
         };
         if overflow {
-            reap(&mut child).await;
-            return Err(self
-                .fail(ErrorCode::GitOutputTooLarge)
-                .with_context("max_output_bytes", max_out));
+            let reaped = reap(&mut child).await;
+            return Err(with_reap(
+                self.fail(ErrorCode::GitOutputTooLarge)
+                    .with_context("max_output_bytes", max_out),
+                reaped,
+            ));
         }
 
         let status = match tokio::time::timeout_at(deadline, child.wait()).await {
@@ -449,8 +456,8 @@ impl GitCommand {
                     .with_source(e))
             }
             Err(_) => {
-                reap(&mut child).await;
-                return Err(self.timed_out());
+                let reaped = reap(&mut child).await;
+                return Err(with_reap(self.timed_out(), reaped));
             }
         };
         let exit_code = status

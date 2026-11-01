@@ -3,6 +3,7 @@
 use std::io;
 use std::time::Duration;
 
+use forge_errors::ForgeError;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// git may exit before reading all of stdin; its exit status (and stderr)
@@ -30,9 +31,54 @@ pub(crate) async fn read_capped<R: AsyncRead + Unpin>(
     Ok((buf, overflow))
 }
 
+/// How long [`reap`] waits for a killed child.
+const REAP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Why [`reap`] could not confirm the child is gone. The child may still be
+/// running (and holding repository locks): callers attach it to the error they
+/// return ([`ReapFailure::attach`]), so the boundary logs it once, with
+/// `request_id` and the error code.
+#[derive(Debug)]
+pub(crate) struct ReapFailure {
+    kind: &'static str,
+    detail: String,
+}
+
+impl ReapFailure {
+    /// `reap_failed=<kill_failed|wait_failed|wait_timeout>` (+ `reap_error`).
+    pub(crate) fn attach(&self, err: ForgeError) -> ForgeError {
+        err.with_context("reap_failed", self.kind)
+            .with_context("reap_error", &self.detail)
+    }
+}
+
+/// Attach a reap failure, if any, to `err`.
+pub(crate) fn with_reap(err: ForgeError, reap: Result<(), ReapFailure>) -> ForgeError {
+    match reap {
+        Ok(()) => err,
+        Err(f) => f.attach(err),
+    }
+}
+
 /// Kill and reap a child we are abandoning (bounded wait).
-pub(crate) async fn reap(child: &mut tokio::process::Child) {
-    // start_kill fails only if the child already exited; the wait observes it.
-    let _ = child.start_kill(); // ignore: outcome observed by the wait below
-    let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await; // ignore: best-effort reap after kill
+pub(crate) async fn reap(child: &mut tokio::process::Child) -> Result<(), ReapFailure> {
+    let kill = child.start_kill();
+    match tokio::time::timeout(REAP_TIMEOUT, child.wait()).await {
+        Ok(Ok(_)) => Ok(()),
+        // An exited child refuses the kill; the wait above is what counts.
+        Ok(Err(e)) => Err(ReapFailure {
+            kind: "wait_failed",
+            detail: e.to_string(),
+        }),
+        Err(_) => Err(ReapFailure {
+            kind: match kill {
+                Err(_) => "kill_failed",
+                Ok(()) => "wait_timeout",
+            },
+            detail: match kill {
+                Err(e) => e.to_string(),
+                Ok(()) => format!("not reaped within {} ms", REAP_TIMEOUT.as_millis()),
+            },
+        }),
+    }
 }

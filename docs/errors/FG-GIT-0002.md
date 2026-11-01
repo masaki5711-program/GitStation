@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-A git subprocess exceeded its total timeout and was killed and reaped.
+A git subprocess exceeded its total timeout, or a streaming one (Smart HTTP) moved no byte in either direction for its idle timeout; it was killed (streams: with its process group / Job Object) and reaped.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand`, `timeout_ms` and `kind` (`total`). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load.
+The log event carries `subcommand` and `kind`: `total` (with `timeout_ms`) or `idle` (streams, with `idle_timeout_ms`, `bytes_in`, `bytes_out`, `duration_ms`). `idle` with small byte counts means a stalled client or a proxy buffering the body; `total` for one repository points at its size or storage latency, across repositories at host load. `reap_failed` (`kill_failed`, `wait_failed`, `wait_timeout`, with `reap_error`) on this or any FG-GIT code means forge could not confirm the killed git was reaped: it may still be running and holding repository locks (`pgrep -af git`). See runbook smart-http for streams.
 
 ## 対処 (fix)
 
-Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`) for that operation.
+Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`, streams `GitConfig::stream_timeout_total`) for that operation. For idle kills check the reverse proxy's request buffering and timeouts first.
