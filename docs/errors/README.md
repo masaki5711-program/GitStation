@@ -55,6 +55,7 @@
 | [FG-WEB-0004](FG-WEB-0004.md) | 500 | alert | The route registry is inconsistent: a duplicate method and path, or a path that is empty, lacks the leading '/', or has an empty segment |
 | [FG-WEB-0005](FG-WEB-0005.md) | 503 | warn | A readiness probe (GET /readyz) did not answer within its client-side timeout, so the dependency it checks (named by `probe`, e.g |
 | [FG-WEB-0007](FG-WEB-0007.md) | 400 | info | A Smart HTTP advertisement request (`GET {path}.git/info/refs`) did not carry exactly one `service` query parameter whose value is `git-upload-pack` or `git-receive-pack` (byte for byte, no decoding, no case folding; ADR-0015 step 3) |
+| [FG-WEB-0008](FG-WEB-0008.md) | 503 | warn | A new connection was refused before any request was read, because the server already holds `server.max_connections` open connections, or `server.max_connections_per_peer` from the same socket peer address |
 | [FG-SYS-0005](FG-SYS-0005.md) | 500 | alert | forge serve (or another command that needs the async runtime, such as forge db) could not build its runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline |
 | [FG-SYS-0006](FG-SYS-0006.md) | 500 | warn | forge serve could not register a signal handler (SIGINT / SIGTERM) |
 | [FG-SYS-0007](FG-SYS-0007.md) | 503 | warn | Accepting a TCP connection failed (usually out of file descriptors) |
