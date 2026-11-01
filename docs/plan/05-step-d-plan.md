@@ -221,3 +221,36 @@ work inside is not (an absent path stops after two index probes, a deep project 
 limiting (deferred to M2) and, if needed, a response-time floor in forge-web for the resolve / dispatcher paths.
 MR3 / MR4 build `forge_auth::LoadedProject` / `LoadedNamespace` from one query result (contexts are sealed, fields private; new
 context types are added in forge-auth).
+
+## M1 phase 9 plan (planner, 2026-11-01, cloud session) — approved under the user's standing "推奨で進める"
+
+Smart HTTP clone / fetch / push. Option **B**: pre-check every ref command in forge (role, delete, reserved, tag move,
+hex-like name → whole push rejected in-band before git runs) + git-native `-c receive.denyNonFastForwards=true` when a protected
+branch is touched; no hooks in phase 9 (ADR-0008 amendment; pre-receive moves to M3 = phase 10). Option A (pre-receive now) was
+rejected: a missing hook is silently skipped by git (fail-open).
+
+MRs: **MR0** `feat/web-connection-fairness` ∥ **MR1** `feat/git-smart-http-transport` ∥ **MR2** `feat/db-push-record` →
+**MR3** `feat/web-smart-http-fetch` → **MR4** `feat/web-smart-http-push`. Codes: MR0 FG-WEB-0008 ServerBusy; MR1 FG-GIT-0013
+GitRequestTooLarge, 0014 GitProtocolInvalid, 0015 GitClientDisconnected; MR2 FG-GIT-0012 PushRecordFailed (alert, runbook
+push-record-failed); MR3 FG-WEB-0007 SmartHttpServiceUnsupported (FG-WEB-0006 stays reserved for 8b), FG-REPO-0016
+RepositoryNotReady; MR4 FG-GIT-0011 AmbiguousRefName.
+- MR1 (forge-git): streaming `spawn_stream()` (stdin sink / stdout stream / stderr ≤ 64 KiB), separate `stream_slots` (16),
+  idle + total timeouts, process-group kill (Windows: Job Object), pkt-line + sideband, gzip with decompressed cap, v2
+  advertisement without `# service=` prefix, fixed `-c` sets (fsckObjects, maxInputSize, keepAlive, empty core.hooksPath).
+- MR2 (forge-db): `record_push` (one audit row + `repository.pushed`, ≤ 100 refs / ≤ 20 commits per ref, explicit truncation),
+  dedup key `repository_pushed:<repo_id>:<sha256(request_id ‖ sorted updates)>` (ADR-0016 amendment; fixes A→B→A),
+  `protected_refs::rules_for` snapshot matching `levels_for` (property test), forge-core traits PushRecorder / ProtectionLoader,
+  `forge admin repo record-push --from-log`.
+- MR3 (forge-web): register upload-pack routes as RepoRead; resolver adds repository_id + state; git POSTs exempt from
+  request_timeout with own caps (fetch ≤ 16 MiB, 1 h, 60 s idle); 302 for moved re-appends `service`; config `git.http.*`;
+  tripwire becomes `forge_web_runs_git_only_through_smart_http_api`; real-git E2E (`crates/forge-cli/tests/smart_http_e2e.rs`).
+- MR4 (forge-web, forge-auth, forge-git): receive-pack as RepoPush; authorize before reading the body; strict command parse
+  (≤ 1000, ≤ 1 MiB, report-status required, push-cert refused); `forge_auth::authorize_ref_updates` (per-ref authorize());
+  denial = in-band `ng` for every ref, git not run; forward original bytes verbatim; push ≤ 2 GiB, 1 h, 60 s idle; receive-pack
+  detached from the request once the body is complete; log `forge.git.push_applied` first, then `record_push` (3 retries / 30 s)
+  else FG-GIT-0012.
+Answers (recommended, adopted): server is Linux, Windows dev uses a Job Object; option B; phase 10 = M3 pre-receive; commits in
+`repository.pushed` in M1 (bounded rev-list, 10 s); defaults above + ≤ 4 streams per principal; dedup key with request_id;
+v2 unreferenced-object fetch: test first, block with `uploadpack.allowAnySHA1InWant=false` if served, record in ADR-0007.
+Reviewers: rust / security / git-protocol / silent-failure on MR1, MR3, MR4; authz-matrix on MR3, MR4; database +
+error-contract on MR2; pr-test-analyzer on all.
