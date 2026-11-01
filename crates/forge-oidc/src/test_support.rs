@@ -59,6 +59,8 @@ pub enum Fault {
     Status(u16),
     /// Answer 200 with a body that is not JSON.
     InvalidJson,
+    /// Answer with this status and this OAuth `error` (RFC 6749 §5.2).
+    OAuthError(u16, &'static str),
 }
 
 struct Pending {
@@ -231,7 +233,7 @@ impl MockOp {
     /// The claims a sign-in gets unless overridden: the synthetic person
     /// alice with the access role.
     pub fn claims(&self, nonce: &str) -> Value {
-        let now = now_secs();
+        let now = now_secs().expect("clock after 1970");
         json!({
             "iss": self.issuer,
             "aud": CLIENT_ID,
@@ -364,6 +366,13 @@ async fn fault(shared: &Arc<Mutex<Inner>>, endpoint: Endpoint) -> Option<Respons
             tokio::time::sleep(d).await;
             None
         }
+        Some(Fault::OAuthError(s, error)) => Some(
+            (
+                StatusCode::from_u16(s).expect("status"),
+                axum::Json(json!({"error": error})),
+            )
+                .into_response(),
+        ),
         Some(Fault::Status(s)) => Some(
             (
                 StatusCode::from_u16(s).expect("status"),

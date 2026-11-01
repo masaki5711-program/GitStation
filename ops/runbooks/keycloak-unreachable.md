@@ -6,7 +6,8 @@ GitStation から Keycloak（OIDC の IdP）に届かないとき（ADR-0021 §1
 
 - `error_code=FG-AUTH-0015` IdentityProviderUnavailable（**alert**、503）。ログの `context` に `call`（`discovery`、`jwks`、`token`）と `reason`:
   `connect_timeout`、`timeout`（`timeout_ms`）、`connect`、`tls`、`status`（`status`）、`redirect`、`body_too_large`、`body`、`request`、
-  `invalid_json`（`detail`）、`endpoint_origin`（`endpoint`）、`issuer_mismatch`。
+  `invalid_json`（`detail`）、`endpoint_origin`（`endpoint`）、`issuer_mismatch`、`client_rejected`（`call=token`、`status`・`oauth_error`）、
+  `backoff`（`call=jwks`、60 秒以内に JWKS の取得が失敗していて、呼び出しをしなかった。最初の失敗は自分の `reason` で出ている）。
 - 起動のときの `forge.auth.discovery_failed`（warn、3 回まで）。起動は止まらない。
 - `forge doctor` の `auth.oidc` が `FAIL`。
 
@@ -28,6 +29,10 @@ GitStation から Keycloak（OIDC の IdP）に届かないとき（ADR-0021 §1
    - `endpoint_origin` / `issuer_mismatch`: discovery の文書が issuer と別のオリジン・別の issuer を示した。Keycloak の
      `frontendUrl` / hostname の設定の誤りか、途中の改ざん。設定を合わせるまでログインは止めたままにする（資格情報を別のホストへ送らないため）。
    - `body_too_large` / `invalid_json`: Keycloak 以外のもの（プロキシのエラーページ）が答えている。
+   - `client_rejected`: Keycloak が**クライアント自体**を断った（`oauth_error` が `invalid_client` = クライアントのシークレットの誤り・
+     期限切れ、`unauthorized_client` = クライアントが無効・認可コードのフローが許されていない、`invalid_request` = 要求の形）。Keycloak は
+     動いている。`auth.oidc.client_id`、`auth.oidc.client_secret_file` の中身と Keycloak のクライアントの設定を合わせる。
+   - `backoff`: JWKS の取得の失敗の後の 60 秒。その前の `call=jwks` の行の `reason` を見る。復旧後、最長 60 秒でログインが戻る。
 
 ## Mitigate
 

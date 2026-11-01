@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin. Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider).
+A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin; or the token endpoint refused the client itself (OAuth `invalid_client`, `unauthorized_client`, `invalid_request`: a wrong client secret, a disabled or misconfigured client), so no sign-in can succeed until an operator acts. Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider).
 
 ## 調べ方 (diagnosis)
 
-The log event carries `call` (discovery, jwks, token) and `reason`: connect_timeout, timeout, connect, tls, status (with `status`), redirect, body_too_large, body (the body broke off), request (any other transport failure), invalid_json (with `detail`), endpoint_origin (with `endpoint`), issuer_mismatch (the discovery document's issuer is not `auth.oidc.issuer`). The response body is never logged (it may hold tokens). `forge doctor` checks auth.oidc (discovery, JWKS, the clock skew) from the server.
+The log event carries `call` (discovery, jwks, token) and `reason`: connect_timeout, timeout, connect, tls, status (with `status`), redirect, body_too_large, body (the body broke off), request (any other transport failure), invalid_json (with `detail`), endpoint_origin (with `endpoint`), issuer_mismatch (the discovery document's issuer is not `auth.oidc.issuer`), client_rejected (call=token, with `status` and `oauth_error`: check `auth.oidc.client_id`, the client secret file and the client in Keycloak), backoff (call=jwks: a JWKS fetch failed less than 60 s ago, so no new call was made; the first failure is logged with its own reason). The response body is never logged (it may hold tokens). `forge doctor` checks auth.oidc (discovery, JWKS, the clock skew) from the server.
 
 ## 対処 (fix)
 

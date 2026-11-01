@@ -17,7 +17,7 @@ use forge_errors::ForgeError;
 use serde_json::Value;
 
 use crate::discovery::{self, Discovery, DiscoveryCache};
-use crate::error::{loggable, state, unavailable};
+use crate::error::{internal, loggable, state, unavailable};
 use crate::http::IdpClient;
 use crate::jwks::{JwksCache, JwksTiming};
 use crate::jwt::{Expected, IdClaims, JwtVerifier};
@@ -185,11 +185,23 @@ impl std::fmt::Debug for Oidc {
     }
 }
 
-/// Seconds since the epoch.
-pub(crate) fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+/// The token endpoint's OAuth errors that refuse the client, not the code
+/// (RFC 6749 §5.2).
+const CLIENT_REFUSALS: [&str; 3] = ["invalid_client", "unauthorized_client", "invalid_request"];
+
+/// Seconds since the epoch. A clock before 1970 is `FG-SYS-0001
+/// reason=clock_before_epoch`: reading it as 0 would make every expiry
+/// (the state cookie's, the ID token's `exp`) lie in the future.
+pub(crate) fn now_secs() -> Result<u64, ForgeError> {
+    secs_since_epoch(SystemTime::now())
+}
+
+fn secs_since_epoch(at: SystemTime) -> Result<u64, ForgeError> {
+    at.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .map_err(|e| {
+            internal("clock_before_epoch").with_context("behind_secs", e.duration().as_secs())
+        })
 }
 
 /// `forge doctor auth.oidc`: one fresh check of the provider (discovery
@@ -300,7 +312,7 @@ impl Oidc {
     pub async fn start(&self, next: Option<&str>) -> Result<LoginStart, ForgeError> {
         let doc = self.discovered().await?;
         let (next, next_rejected) = safe_next(next);
-        let login = LoginState::generate(next, now_secs())?;
+        let login = LoginState::generate(next, now_secs()?)?;
         let location = with_query(
             &doc.authorization_endpoint,
             &[
@@ -419,7 +431,7 @@ impl Oidc {
             .state_cookie
             .filter(|c| !c.is_empty())
             .ok_or_else(|| state("state_cookie_missing"))?;
-        let login = LoginState::open(cookie, &self.state_keys, now_secs(), STATE_MAX_AGE_SECS)?;
+        let login = LoginState::open(cookie, &self.state_keys, now_secs()?, STATE_MAX_AGE_SECS)?;
         if let Some(error) = input.error {
             return Err(state("idp_error").with_context("idp_error", loggable(error)));
         }
@@ -461,6 +473,19 @@ impl Oidc {
                     .and_then(|b| b.get("error"))
                     .and_then(Value::as_str)
                     .map_or_else(|| "none".to_owned(), loggable);
+                // The client itself refused (wrong secret, client disabled
+                // or misconfigured in Keycloak, a request forge built
+                // wrongly): no sign-in can succeed until an operator acts,
+                // so it is the alerting FG-AUTH-0015, not the user's
+                // FG-AUTH-0011 (ADR-0021 §11, MR4 decision 25).
+                if CLIENT_REFUSALS.contains(&oauth.as_str()) {
+                    return Err(unavailable("token", "client_rejected")
+                        .with_context("status", reply.status)
+                        .with_context("oauth_error", oauth));
+                }
+                // invalid_grant (a used, expired or foreign code: a double
+                // click, a replayed callback) and anything else the user
+                // can retry.
                 return Err(state("code_rejected")
                     .with_context("status", reply.status)
                     .with_context("oauth_error", oauth));
@@ -506,7 +531,7 @@ impl Oidc {
             issuer: &self.settings.issuer,
             client_id: &self.settings.client_id,
             nonce: Some(nonce),
-            now: now_secs(),
+            now: now_secs()?,
             leeway: 60,
         };
         self.verifier.verify_id_token(token, &keys, &expected)
@@ -554,4 +579,27 @@ fn with_query(endpoint: &str, pairs: &[(&str, &str)]) -> Result<String, ForgeErr
 struct Tokens {
     id_token: String,
     refresh_token: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use forge_errors::ErrorCode;
+
+    use super::*;
+
+    #[test]
+    fn a_clock_before_the_epoch_is_an_error_not_zero() {
+        let err = secs_since_epoch(UNIX_EPOCH - Duration::from_secs(5)).expect_err("1969");
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(
+            err.to_string().contains("reason=clock_before_epoch"),
+            "{err}"
+        );
+        assert_eq!(
+            secs_since_epoch(UNIX_EPOCH + Duration::from_secs(7)).expect("1970"),
+            7
+        );
+    }
 }

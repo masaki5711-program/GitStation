@@ -14,7 +14,10 @@
   - `auto_link_disabled`: `auth.oidc.auto_link = false` で、社員番号が既存の利用者のもの。
   - `username_unavailable`: `preferred_username` がない・規則に合わない・予約語・使用中・墓標と重なる。
   - `email_taken`: そのメールは別の利用者のもの。
-  - `employee_number_taken`: 同時のログインが先に利用者を作った（もう一度ログインすれば `existing` になる）。
+  - `employee_number_taken`: 同時のログインが先に利用者を作った（もう一度ログインすれば `existing` になる）。同じ人の初回のログインが
+    2 つ同時に走ると（二重のクリック、2 つのタブ）、負けた方は `employee_number_taken`・`username_unavailable`・`email_taken` の
+    どれか（先に当たった一意の制約による）になる。勝った方で利用者と結び付けはできているので、**もう一度ログインすれば通る**。
+    同じ時刻・同じ `employee_number` の成功（`forge.auth.login_succeeded`）があれば、この場合で、対応は要らない。
   - `claim_invalid`（`detail`）: claim が利用者の表の規則に合わない。
   - CLI の `subject_linked`（その ID は別の利用者のもの）、`already_linked`（その利用者は既にこの IdP の別の ID を持つ）。
 

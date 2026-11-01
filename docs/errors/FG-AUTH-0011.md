@@ -20,7 +20,7 @@ The browser came back to `GET /-/auth/callback` (ADR-0021 §3) without a usable 
 
 ## 調べ方 (diagnosis)
 
-The log event `forge.auth.login_failed` carries `reason`: state_cookie_missing, state_cookie_invalid (with `detail` = truncated|version|kid|tag|json), state_expired, state_mismatch, query_missing (no `code` / `state`), idp_error (with `idp_error`, the OAuth error code only — never `error_description`), code_rejected (the token endpoint's 4xx answer, with `status` and `oauth_error`). A burst of state_mismatch / state_cookie_missing from one client is a login-CSRF attempt or a browser that blocks cookies; one code_rejected after a double click is a replayed callback.
+The log event `forge.auth.login_failed` carries `reason`: state_cookie_missing, state_cookie_invalid (with `detail` = truncated|version|kid|tag|json), state_expired, state_mismatch, query_missing (no `code` / `state`), idp_error (with `idp_error`, the OAuth error code only — never `error_description`), code_rejected (the token endpoint refused the code, usually `oauth_error=invalid_grant`, with `status`; a refusal of the client itself is FG-AUTH-0015 client_rejected). A burst of state_mismatch / state_cookie_missing from one client is a login-CSRF attempt or a browser that blocks cookies; one code_rejected after a double click is a replayed callback.
 
 ## 対処 (fix)
 

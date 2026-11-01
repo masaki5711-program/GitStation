@@ -319,20 +319,21 @@ async fn an_unknown_kid_refetches_the_jwks_at_most_once_a_minute() {
         assert_eq!(reason(&err), "unknown_kid", "{err}");
         hits.push(op.hits(Endpoint::Jwks));
     }
-    // 1: the first fetch; 2: one refetch for the unknown kid; then none.
-    assert_eq!(hits, [1, 2, 2]);
+    // 1: the first fetch, which also starts the minute: no refetch for
+    // the unknown kid within it (every attempt counts, M2 MR4 review).
+    assert_eq!(hits, [1, 1, 1]);
     // Publishing the key does not help within the minute (no fetch)…
     op.set_jwks(None);
     sign_in(&oidc, &op, json!({}), None)
         .await
         .expect_err("still unknown");
-    assert_eq!(op.hits(Endpoint::Jwks), 2);
+    assert_eq!(op.hits(Endpoint::Jwks), 1);
     // …but the known EC key verifies from the cache.
     op.sign_with(EC_KID);
     sign_in(&oidc, &op, json!({}), None)
         .await
         .expect("EC key cached");
-    assert_eq!(op.hits(Endpoint::Jwks), 2);
+    assert_eq!(op.hits(Endpoint::Jwks), 1);
     t.drop_now().await;
 }
 
@@ -467,5 +468,163 @@ async fn the_operator_link_needs_the_system_actor() {
             .await
             .expect("linked");
     assert_eq!(linked, forge_db::identities::OperatorLink::Linked);
+    t.drop_now().await;
+}
+
+/// The token endpoint refusing the client (wrong secret, client disabled,
+/// a malformed request) is the alerting FG-AUTH-0015
+/// `reason=client_rejected`; a refused code (`invalid_grant`) stays the
+/// user's FG-AUTH-0011 `code_rejected`.
+#[tokio::test]
+async fn the_token_endpoint_refusing_the_client_alerts() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let wrong = oidc_with(&t, &op, |s| s.client_secret = "wrong-synthetic".to_owned()).await;
+    let err = sign_in(&wrong, &op, json!({}), None)
+        .await
+        .expect_err("wrong secret");
+    assert_eq!(err.code(), ErrorCode::IdentityProviderUnavailable, "{err}");
+    assert_eq!(reason(&err), "client_rejected");
+    assert!(
+        err.to_string().contains("oauth_error=invalid_client"),
+        "{err}"
+    );
+    let oidc = oidc_with(&t, &op, |_| {}).await;
+    for error in ["unauthorized_client", "invalid_request"] {
+        op.set_fault(Endpoint::Token, Some(Fault::OAuthError(400, error)));
+        let err = sign_in(&oidc, &op, json!({}), None).await.expect_err(error);
+        assert_eq!(err.code(), ErrorCode::IdentityProviderUnavailable, "{err}");
+        assert_eq!(reason(&err), "client_rejected", "{err}");
+    }
+    op.set_fault(
+        Endpoint::Token,
+        Some(Fault::OAuthError(400, "invalid_grant")),
+    );
+    let err = sign_in(&oidc, &op, json!({}), None)
+        .await
+        .expect_err("invalid_grant");
+    assert_eq!(err.code(), ErrorCode::LoginStateInvalid, "{err}");
+    assert_eq!(reason(&err), "code_rejected");
+    t.drop_now().await;
+}
+
+/// With the JWKS endpoint down, concurrent callbacks share one fetch (no
+/// lock held across it), and a failure counts against the refetch limit:
+/// later callbacks within it are FG-AUTH-0015 `backoff` without a call.
+/// After the window the cache fetches again and recovers.
+#[tokio::test]
+async fn a_failing_jwks_is_fetched_once_for_concurrent_callbacks() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = oidc_with(&t, &op, |s| {
+        s.timeouts.jwks.refetch_every = Duration::from_millis(400);
+    })
+    .await;
+    op.set_fault(Endpoint::Jwks, Some(Fault::Status(503)));
+    let (a, b, c) = tokio::join!(
+        sign_in(&oidc, &op, json!({}), None),
+        sign_in(&oidc, &op, json!({}), None),
+        sign_in(&oidc, &op, json!({}), None),
+    );
+    for result in [a, b, c] {
+        let err = result.expect_err("jwks down");
+        assert_eq!(err.code(), ErrorCode::IdentityProviderUnavailable, "{err}");
+        assert!(err.to_string().contains("call=jwks"), "{err}");
+    }
+    assert_eq!(op.hits(Endpoint::Jwks), 1, "one fetch for three callbacks");
+    // Within the window: no call, even though the provider is back.
+    op.set_fault(Endpoint::Jwks, None);
+    let err = sign_in(&oidc, &op, json!({}), None)
+        .await
+        .expect_err("backoff");
+    assert_eq!(reason(&err), "backoff", "{err}");
+    assert_eq!(op.hits(Endpoint::Jwks), 1);
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    sign_in(&oidc, &op, json!({}), None)
+        .await
+        .expect("recovers after the window");
+    assert_eq!(op.hits(Endpoint::Jwks), 2);
+    t.drop_now().await;
+}
+
+/// An identity linked to a disabled user or to a bot is refused at the
+/// admission (FG-AUTH-0013) and writes no session; an administrator
+/// linked by the operator (ADR-0021 §4 2a) with the access role signs in.
+#[tokio::test]
+async fn linked_disabled_users_and_bots_are_refused_and_linked_admins_sign_in() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = oidc_with(&t, &op, |_| {}).await;
+    let system = || ChangeContext::new(Actor::System, rid());
+    async fn create(t: &FreshDb, new: forge_db::users::NewUser) -> forge_core::UserId {
+        forge_db::users::create(&t.db, &ChangeContext::new(Actor::System, rid()), &new)
+            .await
+            .expect("user")
+            .user_id
+    }
+
+    // A disabled human, linked by the operator.
+    let mut alice = forge_db::users::NewUser::human("alice", "Alice", "alice@example.test");
+    alice.employee_number = Some("SYN0001".to_owned());
+    let alice = create(&t, alice).await;
+    let _done =
+        forge_oidc::operator_link_identity(&t.db, &system(), alice, &op.issuer, "sub-disabled")
+            .await
+            .expect("link");
+    let _done = forge_db::users::disable(&t.db, &system(), alice)
+        .await
+        .expect("disable");
+    let err = sign_in(&oidc, &op, json!({"sub": "sub-disabled"}), None)
+        .await
+        .expect_err("disabled");
+    assert_eq!(err.code(), ErrorCode::LoginNotPermitted, "{err}");
+    assert_eq!(reason(&err), "user_disabled");
+
+    // A bot, linked by the operator.
+    let robot = forge_db::users::NewUser {
+        kind: forge_core::UserKind::Bot,
+        email: None,
+        ..forge_db::users::NewUser::human("robot", "Robot", "unused@example.test")
+    };
+    let robot = create(&t, robot).await;
+    let _done =
+        forge_oidc::operator_link_identity(&t.db, &system(), robot, &op.issuer, "sub-robot")
+            .await
+            .expect("link robot");
+    let err = sign_in(
+        &oidc,
+        &op,
+        json!({"sub": "sub-robot", "employee_number": "SYN0900", "email": "robot@example.test"}),
+        None,
+    )
+    .await
+    .expect_err("bot");
+    assert_eq!(err.code(), ErrorCode::LoginNotPermitted, "{err}");
+    assert_eq!(reason(&err), "not_human");
+    assert!(t
+        .json_rows("SELECT id FROM forge.web_sessions")
+        .await
+        .is_empty());
+
+    // An administrator linked by the operator, with the access role.
+    let mut root = forge_db::users::NewUser::human("root", "Root", "root@example.test");
+    root.is_admin = true;
+    root.employee_number = Some("SYN0002".to_owned());
+    let root = create(&t, root).await;
+    let _done = forge_oidc::operator_link_identity(&t.db, &system(), root, &op.issuer, "sub-root")
+        .await
+        .expect("link root");
+    sign_in(
+        &oidc,
+        &op,
+        json!({"sub": "sub-root", "employee_number": "SYN0002", "email": "root@example.test"}),
+        None,
+    )
+    .await
+    .expect("a linked administrator signs in");
+    assert_eq!(
+        t.json_rows("SELECT user_id FROM forge.web_sessions").await,
+        vec![json!({"user_id": root.get()})]
+    );
     t.drop_now().await;
 }

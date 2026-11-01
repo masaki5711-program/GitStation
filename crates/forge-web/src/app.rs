@@ -88,6 +88,8 @@ pub struct AppState {
     pub oidc: Option<Arc<forge_oidc::Oidc>>,
     /// The login start's rate limit per peer (`FG-WEB-0010`).
     pub login_limiter: Arc<routes::auth::LoginLimiter>,
+    /// The callback's rate limit per peer (`FG-WEB-0010`, counted apart).
+    pub callback_limiter: Arc<routes::auth::LoginLimiter>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -123,6 +125,7 @@ impl AppState {
             web_origin: None,
             oidc: None,
             login_limiter: Arc::default(),
+            callback_limiter: Arc::default(),
         }
     }
 

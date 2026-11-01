@@ -227,3 +227,132 @@ async fn an_idp_outage_stops_new_sign_ins_but_not_signed_in_users() {
     assert_eq!(status, StatusCode::OK, "{me}");
     t.drop_now().await;
 }
+
+/// One whole sign-in over HTTP whose ID token has `overrides`.
+async fn sign_in_as(
+    app: &Router,
+    op: &MockOp,
+    peer: &str,
+    overrides: Value,
+) -> (StatusCode, HeaderMap, Value) {
+    let (status, headers, _) = call(app, get("/-/auth/login", None, peer)).await;
+    assert_eq!(status, StatusCode::FOUND);
+    let location = headers["location"].to_str().expect("location").to_owned();
+    let state_cookie = cookie_pair(&headers, "__Host-gstn_oidc");
+    let (code, state) = op.authorize(&location, overrides);
+    let uri = format!("/-/auth/callback?code={code}&state={state}");
+    call(app, get(&uri, Some(&state_cookie), peer)).await
+}
+
+/// The callback is limited per peer like the start, counted apart; the
+/// refusal clears the state cookie.
+#[tokio::test]
+async fn the_callback_is_rate_limited_per_peer() {
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = Oidc::new(op.settings(ORIGIN), &web_keys(), t.db.clone()).expect("oidc");
+    let app = router(state(&t).with_oidc(Arc::new(oidc)));
+    let uri = "/-/auth/callback?code=c&state=s";
+    for _ in 0..forge_web::routes::auth::LOGIN_LIMIT {
+        let (status, _, body) = call(&app, get(uri, None, "198.51.100.17")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error_code"], ErrorCode::LoginStateInvalid.id());
+    }
+    let (status, headers, body) = call(&app, get(uri, None, "198.51.100.17")).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["error_code"], ErrorCode::RateLimited.id());
+    assert!(headers.contains_key("retry-after"));
+    assert!(set_cookies(&headers)
+        .iter()
+        .any(|c| c.starts_with("__Host-gstn_oidc=;") && c.contains("Max-Age=0")));
+    let (status, _, _) = call(&app, get(uri, None, "198.51.100.18")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "another peer is not limited"
+    );
+    // The starts have their own count.
+    let (status, _, _) = call(&app, get("/-/auth/login", None, "198.51.100.17")).await;
+    assert_eq!(status, StatusCode::FOUND);
+    t.drop_now().await;
+}
+
+/// A disabled user, a bot and a person without the access role are
+/// refused over HTTP with FG-AUTH-0013: no session cookie, no session row.
+#[tokio::test]
+async fn refused_accounts_get_no_session() {
+    use forge_db::change::{Actor, ChangeContext};
+    let t = FreshDb::migrated().await;
+    let op = MockOp::start().await;
+    let oidc = Oidc::new(op.settings(ORIGIN), &web_keys(), t.db.clone()).expect("oidc");
+    let app = router(state(&t).with_oidc(Arc::new(oidc)));
+    let system = || ChangeContext::new(Actor::System, RequestId::generate());
+
+    let mut alice = forge_db::users::NewUser::human("alice", "Alice", "alice@example.test");
+    alice.employee_number = Some("SYN0001".to_owned());
+    let alice = forge_db::users::create(&t.db, &system(), &alice)
+        .await
+        .expect("alice")
+        .user_id;
+    let _linked =
+        forge_oidc::operator_link_identity(&t.db, &system(), alice, &op.issuer, "sub-off")
+            .await
+            .expect("link");
+    let _off = forge_db::users::disable(&t.db, &system(), alice)
+        .await
+        .expect("disable");
+    let robot = forge_db::users::NewUser {
+        kind: forge_core::UserKind::Bot,
+        email: None,
+        ..forge_db::users::NewUser::human("robot", "Robot", "unused@example.test")
+    };
+    let robot = forge_db::users::create(&t.db, &system(), &robot)
+        .await
+        .expect("robot")
+        .user_id;
+    let _linked =
+        forge_oidc::operator_link_identity(&t.db, &system(), robot, &op.issuer, "sub-robot")
+            .await
+            .expect("link robot");
+
+    let cases = [
+        ("user_disabled", json!({"sub": "sub-off"})),
+        (
+            "not_human",
+            json!({"sub": "sub-robot", "employee_number": "SYN0900", "email": "robot@example.test"}),
+        ),
+        (
+            "no_access_role",
+            json!({"sub": "sub-new", "employee_number": "SYN0901", "email": "new@example.test",
+                   "resource_access": {"gitstation": {"roles": []}}}),
+        ),
+    ];
+    for (i, (why, overrides)) in cases.into_iter().enumerate() {
+        let peer = format!("192.0.2.{}", 40 + i);
+        let (status, headers, body) = sign_in_as(&app, &op, &peer, overrides).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{why}: {body}");
+        assert_eq!(
+            body["error_code"],
+            ErrorCode::LoginNotPermitted.id(),
+            "{why}"
+        );
+        let cookies = set_cookies(&headers);
+        assert!(
+            !cookies
+                .iter()
+                .any(|c| c.starts_with("__Host-gstn_session=")),
+            "{why}: {cookies:?}"
+        );
+        assert!(
+            cookies
+                .iter()
+                .any(|c| c.starts_with("__Host-gstn_oidc=;") && c.contains("Max-Age=0")),
+            "{why}: the state cookie is cleared: {cookies:?}"
+        );
+    }
+    assert!(t
+        .json_rows("SELECT id FROM forge.web_sessions")
+        .await
+        .is_empty());
+    t.drop_now().await;
+}

@@ -7,7 +7,9 @@
 //!   its /64) per [`LOGIN_WINDOW`] (`FG-WEB-0010`, `Retry-After`); then a
 //!   302 to the provider with the sealed state cookie `__Host-gstn_oidc`
 //!   (HttpOnly, Secure, SameSite=Lax, `Path=/`, 10 minutes).
-//! - Callback: every answer clears the state cookie (single use); success
+//! - Callback: the same limit per peer, counted apart from the starts
+//!   (a callback costs a token request and a JWKS lookup at the provider);
+//!   every answer clears the state cookie (single use); success
 //!   sets `__Host-gstn_session` (Max-Age = the absolute lifetime) and 302s
 //!   to `next`. Failures carry `event=forge.auth.login_failed` and are
 //!   logged once by the error renderer.
@@ -17,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -25,6 +28,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use forge_auth::InstanceCtx;
 use forge_core::session_token::SESSION_COOKIE;
+use forge_core::{telemetry, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_oidc::{CallbackInput, STATE_COOKIE, STATE_MAX_AGE_SECS};
 
@@ -39,16 +43,19 @@ pub const CALLBACK_PATH: &str = forge_oidc::CALLBACK_PATH;
 pub const LOGIN_LIMIT: u32 = 20;
 pub const LOGIN_WINDOW: Duration = Duration::from_secs(60);
 /// Peers remembered at once; beyond it expired windows are dropped first,
-/// and a still-full table refuses (fail closed, logged as the 429).
+/// then the peer whose window started first (a full table never refuses
+/// everyone).
 const MAX_PEERS: usize = 10_000;
 
 const CLEAR_STATE_COOKIE: &str =
     "__Host-gstn_oidc=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax";
 
-/// The fixed-window counter of login starts per peer.
+/// The fixed-window counter of login starts (or callbacks) per peer.
 #[derive(Debug, Default)]
 pub struct LoginLimiter {
     peers: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+    /// The poisoned table was logged (once per process).
+    poison_logged: AtomicBool,
 }
 
 impl LoginLimiter {
@@ -56,13 +63,28 @@ impl LoginLimiter {
     pub fn check(&self, peer: IpAddr, now: Instant) -> Result<(), u64> {
         let key = crate::server::peer_key(peer);
         let Ok(mut peers) = self.peers.lock() else {
-            // A poisoned table: refuse rather than run unlimited.
+            // A poisoned table (a panic while it was held): refuse rather
+            // than run unlimited, and say so once — every later refusal is
+            // the same cause.
+            if !self.poison_logged.swap(true, Ordering::Relaxed) {
+                telemetry::log_failure(
+                    &ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "login_limiter_poisoned"),
+                    &RequestId::generate(),
+                );
+            }
             return Err(LOGIN_WINDOW.as_secs());
         };
         if peers.len() >= MAX_PEERS && !peers.contains_key(&key) {
             peers.retain(|_, (start, _)| now.duration_since(*start) < LOGIN_WINDOW);
             if peers.len() >= MAX_PEERS {
-                return Err(LOGIN_WINDOW.as_secs());
+                let oldest = peers
+                    .iter()
+                    .min_by_key(|(_, (start, _))| *start)
+                    .map(|(peer, _)| *peer);
+                if let Some(oldest) = oldest {
+                    peers.remove(&oldest);
+                }
             }
         }
         let entry = peers.entry(key).or_insert((now, 0));
@@ -76,6 +98,19 @@ impl LoginLimiter {
         entry.1 += 1;
         Ok(())
     }
+}
+
+fn rate_limited(request: &Dispatched<InstanceCtx>, route: &'static str, retry: u64) -> Response {
+    let err = ForgeError::new(ErrorCode::RateLimited)
+        .with_context("route", route)
+        .with_context("limit", LOGIN_LIMIT)
+        .with_context("window_s", LOGIN_WINDOW.as_secs());
+    // The callback's refusal also clears the state cookie: the login has
+    // to start again anyway.
+    let mut res = fail(request, err, route == "callback");
+    res.headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from(retry));
+    res
 }
 
 fn not_configured(route: &'static str) -> ForgeError {
@@ -131,14 +166,7 @@ pub async fn login(state: AppState, request: Dispatched<InstanceCtx>) -> Respons
         return fail(&request, err, false);
     };
     if let Err(retry) = state.login_limiter.check(peer, Instant::now()) {
-        let err = ForgeError::new(ErrorCode::RateLimited)
-            .with_context("route", "login")
-            .with_context("limit", LOGIN_LIMIT)
-            .with_context("window_s", LOGIN_WINDOW.as_secs());
-        let mut res = fail(&request, err, false);
-        res.headers_mut()
-            .insert(RETRY_AFTER, HeaderValue::from(retry));
-        return res;
+        return rate_limited(&request, "login", retry);
     }
     let next = query_param(request.raw_query(), "next");
     let start = match oidc.start(next.as_deref()).await {
@@ -169,6 +197,13 @@ pub async fn callback(state: AppState, request: Dispatched<InstanceCtx>) -> Resp
     let Some(oidc) = state.oidc.clone() else {
         return fail(&request, not_configured("callback"), true);
     };
+    let Some(peer) = request.peer() else {
+        let err = ForgeError::new(ErrorCode::Internal).with_context("reason", "peer_missing");
+        return fail(&request, err, true);
+    };
+    if let Err(retry) = state.callback_limiter.check(peer, Instant::now()) {
+        return rate_limited(&request, "callback", retry);
+    }
     let query = request.raw_query();
     let code = query_param(query, "code");
     let state_param = query_param(query, "state");
@@ -239,5 +274,46 @@ mod tests {
         }
         assert!(limiter.check(v6b, t0).is_err());
         assert!(limiter.check(a, t0 + LOGIN_WINDOW).is_ok(), "new window");
+    }
+
+    /// A full table evicts the peer whose window started first instead of
+    /// refusing every new peer.
+    #[test]
+    fn a_full_limiter_evicts_the_oldest_peer_not_everyone() {
+        let limiter = LoginLimiter::default();
+        let t0 = Instant::now();
+        let first: IpAddr = "198.51.100.1".parse().expect("ip");
+        assert!(limiter.check(first, t0).is_ok());
+        for i in 1..MAX_PEERS {
+            let n = u32::try_from(i).expect("fits");
+            let peer = IpAddr::from(std::net::Ipv4Addr::from(0x0a00_0000_u32 + n));
+            assert!(limiter.check(peer, t0 + Duration::from_millis(1)).is_ok());
+        }
+        let newcomer: IpAddr = "203.0.113.9".parse().expect("ip");
+        assert!(
+            limiter
+                .check(newcomer, t0 + Duration::from_millis(2))
+                .is_ok(),
+            "a new peer is admitted"
+        );
+        let peers = limiter.peers.lock().expect("table");
+        assert_eq!(peers.len(), MAX_PEERS);
+        assert!(!peers.contains_key(&first), "the oldest was evicted");
+    }
+
+    /// A poisoned table refuses (fail closed) and logs FG-SYS-0001 once.
+    #[test]
+    fn a_poisoned_limiter_refuses_and_logs_once() {
+        let limiter = std::sync::Arc::new(LoginLimiter::default());
+        let held = std::sync::Arc::clone(&limiter);
+        let _ = std::thread::spawn(move || {
+            let _guard = held.peers.lock().expect("table");
+            panic!("poison the table (test)");
+        })
+        .join();
+        let peer: IpAddr = "192.0.2.7".parse().expect("ip");
+        assert!(limiter.check(peer, Instant::now()).is_err());
+        assert!(limiter.poison_logged.load(Ordering::Relaxed));
+        assert!(limiter.check(peer, Instant::now()).is_err(), "still closed");
     }
 }

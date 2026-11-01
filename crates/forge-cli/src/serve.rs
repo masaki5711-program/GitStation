@@ -97,9 +97,20 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             Some(oidc) => {
                 tracing::info!(issuer = oidc.issuer(), "forge.serve.oidc_enabled");
                 let prefetch = Arc::clone(&oidc);
-                // Detached: the prefetch logs its own failures and ends
-                // after three attempts; nothing waits for it.
-                tokio::spawn(async move { prefetch.prefetch().await });
+                // Not awaited by the server: the prefetch logs its own
+                // failures and ends after three attempts. A panic or
+                // cancellation of the task is logged here once.
+                let task = tokio::spawn(async move { prefetch.prefetch().await });
+                tokio::spawn(async move {
+                    if let Err(e) = task.await {
+                        forge_core::telemetry::log_failure(
+                            &ForgeError::new(forge_errors::ErrorCode::Internal)
+                                .with_context("reason", "oidc_prefetch_task")
+                                .with_context("panicked", e.is_panic()),
+                            &forge_core::RequestId::generate(),
+                        );
+                    }
+                });
                 state = state.with_oidc(oidc);
             }
             None => tracing::warn!(

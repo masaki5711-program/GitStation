@@ -184,7 +184,12 @@ async fn insert_identity(
 /// In order, in one change (the employee number's user row `FOR UPDATE`):
 /// 1. `(issuer, subject)` is linked → that user (`Existing`, after
 ///    `decide`; nothing written — the caller records the login,
-///    [`record_login`]);
+///    [`record_login`]). This includes an administrator the operator
+///    linked (ADR-0021 §4 2a): `privileged_account` only stops the
+///    *automatic* link of step 3, so a linked administrator with the
+///    access role signs in like anyone else (`SessionCreate` allows an
+///    active human; forge-oidc `tests/flow.rs`
+///    `linked_disabled_users_and_bots_are_refused_and_linked_admins_sign_in`);
 /// 2. no employee number claim → `employee_number_missing` (ADR-0021 §4:
 ///    the claim is required, so a broken mapper never duplicates users);
 /// 3. a user has the employee number → `decide` on that account (a bot is

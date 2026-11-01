@@ -512,3 +512,7 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 22 | LOW | `SessionCreate` はルートの外（コールバックの変更の中）で判定する | `app::PLANNED` ではなく新しい `app::DECIDED_IN_ROUTE` と `routes.generated.json` の `decided_in`。エージェントモデルの `authz-coverage` のゲートが `decided_in` を知る必要がある（別のリポジトリの後の作業） |
 | 23 | LOW | ログインの開始の制限の値 | 固定（ピアごと、IPv6 は /64、20 回 / 60 秒、`Retry-After`）。設定にしない |
 | 24 | LOW | `forge doctor` の `auth.oidc` が DB に依存すると、DB の障害で IdP の確認ができない | `forge_oidc::check_provider`（DB もセッションの鍵も使わない）。時計のずれは discovery の応答の `Date` から、60 秒超で warn |
+| 25 | MEDIUM（レビュー） | トークンのエンドポイントがクライアント自体を断る（`invalid_client`・`unauthorized_client`・`invalid_request`）と、誰もログインできないのに info の FG-AUTH-0011 になる | **FG-AUTH-0015 `call=token reason=client_rejected`（alert）**。FG-SYS-0002 ではなく 0015 にした理由: 起動時の設定の検査ではなく実行中の IdP との呼び出しの失敗で、利用者への文言（今はログインできない）と Runbook `keycloak-unreachable` の手順（IdP 側のクライアントの設定を合わせる）が合う。`invalid_grant` などは今のまま 0011 `code_rejected` |
+| 26 | MEDIUM（レビュー） | JWKS のキャッシュがロックを持ったまま取得を待ち（最長 5 秒）、失敗は 60 秒の制限に数えない | 状態のロックは読み書きの間だけ。取得は 1 本ずつ（single flight）で、待っていた呼び出しは前の取得の結果を使う。**失敗も含めすべての試行が 60 秒の制限に入る**（最初の取得も）。60 秒以内に失敗していて使える鍵がなければ FG-AUTH-0015 `call=jwks reason=backoff`（呼び出しなし）。復旧からログインが戻るまで最長 60 秒 |
+| 27 | MEDIUM（レビュー） | コールバックに回数の制限がない。満杯の制限の表が全員を断る。毒された表が黙って断る | コールバックもピアごとに 20 回 / 60 秒（開始とは別に数える、`route=callback`）。満杯のときは最も古いピアを追い出す。毒された表は FG-SYS-0001 `reason=login_limiter_poisoned` を 1 回ログに出して断る |
+| 28 | LOW（レビュー） | 時計が 1970 年より前だと 0 秒として扱い、期限の検査が通る | FG-SYS-0001 `reason=clock_before_epoch` |
