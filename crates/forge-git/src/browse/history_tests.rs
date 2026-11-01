@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use forge_errors::ErrorCode;
 
-use super::diff::{attach_patches, parse_raw, split_chunks};
+use super::diff::{attach_patches, parse_raw, split_chunks, PatchOmitted};
+use super::history::parse_log;
 use super::tests::{blob, fixture, mktree, plumb, reason, update_ref};
 use super::*;
 
@@ -765,4 +766,162 @@ fn patches_split_at_headers_and_match_files_in_order() {
     let mut files = parse_raw(&bytes, false, 10).expect("raw").files;
     let e = attach_patches(&mut files, &patch[..120], false, 1000).expect_err("missing");
     assert_eq!(reason(&e), "diff_chunk_mismatch");
+}
+
+const D: &str = "2026-01-01T00:00:00+09:00";
+
+/// One `log` record as `LIST_FORMAT` writes it.
+fn log_rec(oid: &str, parents: &str, an: &str, ad: &str, rest: &str) -> Vec<u8> {
+    format!(
+        "{oid}\x1f{parents}\x1f{an}\x1fa@example.invalid\x1f{ad}\x1fc\x1fc@example.invalid\x1f{D}\x1f{rest}\0"
+    )
+    .into_bytes()
+}
+
+#[test]
+fn log_records_that_are_not_records_name_their_reason() {
+    let id = "1".repeat(40);
+    let ok = log_rec(&id, &id, "Ana", D, "subject \x1f with a separator");
+    let parsed = parse_log(&ok, false, false).expect("ok");
+    assert_eq!(parsed.records.len(), 1);
+    assert_eq!(
+        parsed.records[0].info.subject,
+        "subject \x1f with a separator"
+    );
+    assert_eq!(parsed.lossy, 0);
+    let two_parents = format!("{id} {}", "9".repeat(39));
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (b"only\x1ftwo\0".to_vec(), "log_record_fields"),
+        (log_rec(&id, &id, "An\x1fa", D, "s"), "log_record_fields"),
+        (
+            log_rec(&id, &id, "Ana", "yesterday", "s"),
+            "log_record_fields",
+        ),
+        (log_rec("nothex", &id, "Ana", D, "s"), "log_record_oid"),
+        (log_rec(&id, "zz", "Ana", D, "s"), "log_record_parent"),
+        (
+            log_rec(&id, &two_parents, "Ana", D, "s"),
+            "log_record_parent",
+        ),
+    ];
+    for (bad, want) in cases {
+        let e = parse_log(&bad, false, false).expect_err(want);
+        assert_eq!(e.code(), ErrorCode::GitProcessFailed);
+        assert_eq!(reason(&e), want);
+    }
+    // Output cut by the cap: the partial record is dropped, not an error.
+    let mut cut = ok.clone();
+    cut.extend_from_slice(b"2222222222");
+    assert_eq!(parse_log(&cut, true, false).expect("cut").records.len(), 1);
+}
+
+#[test]
+fn log_text_that_is_not_utf8_is_shown_lossily_and_counted() {
+    let id = "1".repeat(40);
+    let mut one = format!("{id}\x1f\x1fAn").into_bytes();
+    one.push(0xE9); // Latin-1 "é"
+    one.extend_from_slice(
+        format!("\x1fa@example.invalid\x1f{D}\x1fc\x1fc@example.invalid\x1f{D}\x1fs\0").as_bytes(),
+    );
+    let mut two = log_rec(&"2".repeat(40), "", "Bo", D, "fine");
+    two.extend(one);
+    let parsed = parse_log(&two, false, false).expect("lossy");
+    assert_eq!(parsed.records.len(), 2);
+    assert_eq!(parsed.lossy, 1, "only the record with bad bytes");
+    assert_eq!(parsed.records[1].info.author_name, "An\u{FFFD}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_commit_answer_for_another_commit_or_none_is_commit_record_missing() {
+    let f = fixture().await;
+    let ids = linear(&f.path);
+    let tmp = tempfile::tempdir().expect("tmp");
+    let other = format!(
+        "printf '{}\\037\\037a\\037b\\0372026-01-01T00:00:00+00:00\\037c\\037d\\0372026-01-01T00:00:00+00:00\\037s\\000'",
+        "3".repeat(40)
+    );
+    for answer in ["printf ''".to_owned(), other] {
+        let bin = super::tests::wrapping_git(tmp.path(), "[ \"$1\" = log ]", &answer);
+        let b = f.browser_with_bin(&bin, BrowseLimits::default());
+        let e = b.commit(f.id, &ids[4]).await.expect_err("missing");
+        assert_eq!(e.code(), ErrorCode::GitProcessFailed);
+        assert_eq!(reason(&e), "commit_record_missing");
+    }
+}
+
+#[test]
+fn raw_diff_entries_that_are_wrong_name_their_reason() {
+    let oid = "1".repeat(40);
+    let m = |status: &str| format!(":100644 100644 {oid} {oid} {status}\0").into_bytes();
+    let cat = |parts: &[&[u8]]| parts.concat();
+    let cases: Vec<(Vec<u8>, &str)> = vec![
+        (b"x\0".to_vec(), "diff_raw_meta"),
+        (b":100644 a b M\0p\0".to_vec(), "diff_raw_meta"),
+        (b":\xff\0".to_vec(), "diff_raw_meta"),
+        (cat(&[&m("Q"), b"p\0"]), "diff_raw_status"),
+        (cat(&[&m("R"), b"a\0b\0"]), "diff_raw_status"),
+        (cat(&[&m("Rxx"), b"a\0b\0"]), "diff_raw_status"),
+        (cat(&[&m("R999"), b"a\0b\0"]), "diff_raw_status"),
+        (m("M"), "diff_raw_paths"),
+        (cat(&[&m("R100"), b"only\0"]), "diff_raw_paths"),
+        (cat(&[&m("M"), b"p"]), "diff_raw_unterminated"),
+        (cat(&[&m("M"), b"\xff\xfe\0"]), "diff_path_not_utf8"),
+    ];
+    for (bad, want) in cases {
+        let e = parse_raw(&bad, false, 10).expect_err(want);
+        assert_eq!(e.code(), ErrorCode::GitProcessFailed, "{want}");
+        assert_eq!(reason(&e), want);
+    }
+}
+
+#[test]
+fn a_cut_patch_leaves_later_files_total_cap_and_a_type_change_takes_two_chunks() {
+    let one = |status: &str, name: &str| {
+        format!(
+            ":100644 100644 {} {} {status}\0{name}\0",
+            "1".repeat(40),
+            "2".repeat(40)
+        )
+    };
+    let bytes = format!("{}{}{}", one("T", "t"), one("M", "m"), one("M", "n")).into_bytes();
+    // T = delete + add chunks, then m; the output stopped inside n's chunk.
+    let patch = b"diff --git a/t b/t\ndeleted file mode 100644\n@@ -1 +0,0 @@\n-x\ndiff --git a/t b/t\nnew file mode 120000\n@@ -0,0 +1 @@\n+y\ndiff --git a/m b/m\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/n b/n\n@@ -1 +1 @@\n-a";
+    let mut files = parse_raw(&bytes, false, 10).expect("raw").files;
+    let capped = attach_patches(&mut files, patch, true, 1000).expect("cut");
+    assert!(capped);
+    let t = files[0].patch.as_deref().expect("type change patch");
+    assert!(t.contains("-x") && t.contains("+y"), "both halves: {t}");
+    assert!(files[1].patch.is_some() && files[1].omitted.is_none());
+    assert_eq!(files[2].omitted, Some(PatchOmitted::TotalCap));
+    assert!(files[2].patch.is_none());
+    // Complete output with the last chunk missing is a mismatch.
+    let mut files = parse_raw(&bytes, false, 10).expect("raw").files;
+    let short = &patch[..patch.len() - 40];
+    let e = attach_patches(&mut files, short, false, 1000).expect_err("short");
+    assert_eq!(reason(&e), "diff_chunk_mismatch");
+}
+
+#[test]
+fn blame_output_that_is_wrong_names_its_reason_and_lossy_metadata_is_counted() {
+    let id = "1".repeat(40);
+    let cases: Vec<(String, &str)> = vec![
+        ("\tcode\n".to_owned(), "blame_line_without_header"),
+        ("author Ana\n".to_owned(), "blame_metadata_without_header"),
+        (
+            format!("{id} 1 1 1\nauthor-time soon\n\tx\n"),
+            "blame_author_time",
+        ),
+    ];
+    for (bad, want) in cases {
+        let e = super::blame::parse_blame(bad.as_bytes(), false, 100).expect_err(want);
+        assert_eq!(e.code(), ErrorCode::GitProcessFailed);
+        assert_eq!(reason(&e), want);
+    }
+    let mut out = format!("{id} 1 1 1\nauthor An").into_bytes();
+    out.push(0xE9);
+    out.extend_from_slice(b"\nauthor-time 5\nsummary s\nfilename f\n\tx\n");
+    let parsed = super::blame::parse_blame(&out, false, 100).expect("lossy");
+    assert_eq!(parsed.lossy, 1);
+    assert_eq!(parsed.commits[0].author_name, "An\u{FFFD}");
 }

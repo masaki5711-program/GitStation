@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::routes::browse::tests::{
     blob, plumb, repo, router, send, session, token, Answer, Facts, Repo,
 };
+use crate::routes::history::cursor_param;
 use forge_auth::{Principal, Scope};
 
 const API: &str = "/api/v1/projects/7/repository";
@@ -592,4 +593,25 @@ async fn the_history_routes_need_read_api_and_a_reader() {
         let a = get(&r, &format!("/api/v1/projects/07/repository/{route}")).await;
         assert_eq!(a.code(), ErrorCode::RequestInvalid.id(), "{route}");
     }
+}
+
+#[test]
+fn a_cursor_that_is_not_one_is_cursor_invalid_with_the_payload_rule() {
+    let rule_of = |e: &forge_errors::ForgeError| {
+        let get = |k: &str| {
+            e.context()
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        (get("reason"), get("rule"))
+    };
+    let params = |v: &str| vec![("cursor", v.to_owned())];
+    for bad in ["garbage", "v1.a.b.1", "v2.x.y.1"] {
+        let e = cursor_param(&params(bad), 100).expect_err("bad cursor");
+        assert_eq!(e.code(), ErrorCode::RequestInvalid);
+        assert_eq!(rule_of(&e), ("cursor_invalid".into(), "payload".into()));
+    }
+    assert!(cursor_param(&[], 100).expect("none").is_none());
 }

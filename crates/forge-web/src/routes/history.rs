@@ -386,7 +386,7 @@ fn limit_param(params: &[(&'static str, String)], max: usize) -> Result<usize, F
 }
 
 /// `cursor`: what a page handed out (`FG-WEB-0006 reason=cursor_invalid`).
-fn cursor_param(
+pub(crate) fn cursor_param(
     params: &[(&'static str, String)],
     max_skip: usize,
 ) -> Result<Option<LogCursor>, ForgeError> {

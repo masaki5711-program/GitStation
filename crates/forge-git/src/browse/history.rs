@@ -137,9 +137,10 @@ pub struct Comparison {
 
 /// A parsed `log` record: the metadata and the rest field (subject or
 /// message).
-struct Record {
-    info: CommitInfo,
-    message: String,
+#[derive(Debug)]
+pub(super) struct Record {
+    pub(super) info: CommitInfo,
+    pub(super) message: String,
 }
 
 fn log_malformed(reason: &'static str) -> ForgeError {
@@ -158,11 +159,44 @@ fn subject_of(message: &str) -> String {
     lines.join(" ")
 }
 
+/// What [`parse_log`] read.
+#[derive(Debug)]
+pub(super) struct ParsedLog {
+    pub(super) records: Vec<Record>,
+    /// Records whose text was not UTF-8 (shown with replacement
+    /// characters).
+    pub(super) lossy: usize,
+}
+
+/// A date as `%aI` / `%cI` writes it (`2026-01-01T00:00:00+09:00`). The
+/// check also catches a `0x1f` inside a name or email, which would shift
+/// the fields.
+fn iso_date(s: &str) -> bool {
+    s.len() >= 20
+        && s.starts_with(|c: char| c.is_ascii_digit())
+        && s.contains('T')
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '-' | ':' | '+' | 'T' | 'Z' | '.'))
+}
+
+/// Log one line per call when commit text was shown lossily.
+fn log_lossy(repo: RepoId, count: usize) {
+    if count > 0 {
+        tracing::warn!(
+            target: "forge_git::browse",
+            repo_id = repo.get(),
+            error_code = ErrorCode::GitProcessFailed.id(),
+            count,
+            "forge.git.browse.log_lossy"
+        );
+    }
+}
+
 /// `log -z` output → records. `cut`: the output was truncated (the last,
 /// partial record is dropped). A record whose ids are not ids is an error
 /// (git's output is not what forge expects); the other fields are display
 /// text.
-fn parse_log(out: &[u8], cut: bool, detail: bool) -> Result<Vec<Record>, ForgeError> {
+pub(super) fn parse_log(out: &[u8], cut: bool, detail: bool) -> Result<ParsedLog, ForgeError> {
     let mut records: Vec<&[u8]> = out.split(|b| *b == 0).collect();
     // `-z` ends every record with a NUL: the tail is empty, or partial.
     let tail = records.pop();
@@ -171,14 +205,22 @@ fn parse_log(out: &[u8], cut: bool, detail: bool) -> Result<Vec<Record>, ForgeEr
         records.extend(tail);
     }
     let mut parsed = Vec::with_capacity(records.len());
+    let mut lossy = 0usize;
     for record in records {
         let text = String::from_utf8_lossy(record);
+        if matches!(text, std::borrow::Cow::Owned(_)) {
+            lossy += 1;
+        }
         let text = text.trim_start_matches('\n');
         let fields: Vec<&str> = text.splitn(9, '\x1f').collect();
         let [oid, parents, an, ae, ad, cn, ce, cd, rest] = fields.as_slice() else {
             return Err(log_malformed("log_record_fields"));
         };
         let oid = object_id(oid).ok_or_else(|| log_malformed("log_record_oid"))?;
+        // A name or email holding the field separator shifts the fields.
+        if !iso_date(ad) || !iso_date(cd) {
+            return Err(log_malformed("log_record_fields"));
+        }
         let mut parent_ids = Vec::new();
         for p in parents.split_whitespace() {
             parent_ids.push(object_id(p).ok_or_else(|| log_malformed("log_record_parent"))?);
@@ -203,7 +245,10 @@ fn parse_log(out: &[u8], cut: bool, detail: bool) -> Result<Vec<Record>, ForgeEr
             message,
         });
     }
-    Ok(parsed)
+    Ok(ParsedLog {
+        records: parsed,
+        lossy,
+    })
 }
 
 impl Browser {
@@ -254,7 +299,9 @@ impl Browser {
             .timeout(deadline.left()?)
             .output_truncated(LOG_OUTPUT_BYTES)
             .await?;
-        let mut records = parse_log(&out.stdout, cut, false)?;
+        let parsed = parse_log(&out.stdout, cut, false)?;
+        log_lossy(repo, parsed.lossy);
+        let mut records = parsed.records;
         if let Some(cursor) = after {
             let anchored = records.first().is_some_and(|r| r.info.oid == cursor.last);
             if !anchored {
@@ -305,7 +352,9 @@ impl Browser {
                 .output_truncated(LOG_OUTPUT_BYTES)
                 .await?
         };
-        let mut records = parse_log(&out.stdout, cut, true)?;
+        let parsed = parse_log(&out.stdout, cut, true)?;
+        log_lossy(repo, parsed.lossy);
+        let mut records = parsed.records;
         let record = match (records.pop(), records.is_empty()) {
             (Some(r), true) if r.info.oid == oid => r,
             _ => return Err(log_malformed("commit_record_missing")),
@@ -348,10 +397,9 @@ impl Browser {
                 .output_truncated(LOG_OUTPUT_BYTES)
                 .await?
         };
-        let mut commits: Vec<CommitInfo> = parse_log(&out.stdout, cut, false)?
-            .into_iter()
-            .map(|r| r.info)
-            .collect();
+        let parsed = parse_log(&out.stdout, cut, false)?;
+        log_lossy(repo, parsed.lossy);
+        let mut commits: Vec<CommitInfo> = parsed.records.into_iter().map(|r| r.info).collect();
         let commits_truncated = commits.len() > self.limits.max_compare_commits || cut;
         commits.truncate(self.limits.max_compare_commits);
         let diff = self.diff(repo, Some(&from), &to, deadline).await?;

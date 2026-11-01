@@ -72,6 +72,8 @@ pub(super) struct ParsedBlame {
     pub(super) commits: Vec<BlameCommit>,
     pub(super) truncated: bool,
     pub(super) binary: bool,
+    /// Metadata lines (names, summaries, file names) that were not UTF-8.
+    pub(super) lossy: usize,
 }
 
 fn malformed(reason: &'static str) -> ForgeError {
@@ -152,6 +154,9 @@ pub(super) fn parse_blame(
         // Not a content line: a header or a commit's metadata (text git
         // wrote from the commit; names may not be UTF-8 — lossy).
         let line = String::from_utf8_lossy(raw);
+        if matches!(line, std::borrow::Cow::Owned(_)) {
+            parsed.lossy += 1;
+        }
         if let Some((oid, orig, fin)) = header(&line) {
             let index = match parsed.commits.iter().position(|c| c.oid == oid) {
                 Some(i) => i,
@@ -243,6 +248,15 @@ impl Browser {
             .output_truncated(BLAME_OUTPUT_BYTES)
             .await?;
         let parsed = parse_blame(&out.stdout, cut, max_lines)?;
+        if parsed.lossy > 0 {
+            tracing::warn!(
+                target: "forge_git::browse",
+                repo_id = repo.get(),
+                error_code = ErrorCode::GitProcessFailed.id(),
+                count = parsed.lossy,
+                "forge.git.browse.log_lossy"
+            );
+        }
         Ok(Blame {
             entry,
             size,

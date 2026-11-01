@@ -155,7 +155,12 @@ pub(super) fn parse_raw(out: &[u8], cut: bool, max: usize) -> Result<ParsedRaw, 
             _ => return Err(malformed("diff_raw_status")),
         };
         let similarity = if two_paths {
-            status.get(1..).and_then(|s| s.parse::<u8>().ok())
+            Some(
+                status
+                    .get(1..)
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .ok_or_else(|| malformed("diff_raw_status"))?,
+            )
         } else {
             None
         };
