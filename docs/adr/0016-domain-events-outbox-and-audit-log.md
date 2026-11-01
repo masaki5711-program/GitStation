@@ -768,3 +768,36 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
   （`protected_ref.created`・`protected_ref.updated`・`protected_ref.deleted`、分類 `maintainer`、§5）。書き手は `protected_refs::{create, change, delete}`。
   監査の行とイベントの集約はプロジェクト（`project` / id、`project_id` あり）、ペイロードは監査の詳細（`{"protected_ref_id","pattern","push_min_role"}`、
   更新は `{"protected_ref_id","pattern","from","to"}`）。パターンは ref の名前の形で、個人に関わる値ではない。重複除去の鍵は付けない。
+
+## Amendment（2026-11-01、M1 段階 9 MR2: `repository.pushed` と push の記録）
+
+- **`repository.pushed`**（`EventType::RepositoryPushed`、分類 `integration`、§5）の書き手は `forge_db::repositories::record_push`
+  だけ（forge-web は `forge_core::PushRecorder` を通して呼ぶ。forge-db に依存しない）。git が ref を更新した後に、状態の表は書かず、
+  監査の行 `repository.pushed`（リソース `project` / そのリポジトリのプロジェクトの ID、`project_id` あり、行者は push した利用者）と
+  イベント `repository.pushed`（集約 `repository` / `repositories.id`、同じ `project_id`）を 1 つの `ChangeTx` で書く。
+- **ペイロード**: `forge_core::push::push_json`。`{project_id, repository_id, total_refs, refs_truncated, total_commits,
+  commits_truncated, refs: [{ref, old, new, kind, total_commits, commits, commits_truncated}]}`。`kind` は `create` /
+  `fast_forward` / `force` / `delete`。ref は名前順に最大 100 件、コミットは ref ごとに最大 20 件（§5 の上限）。
+  §5 の「64 KiB を超えたら FG-DB-0010 で書き込みを失敗させる」は、push については **失敗させずに切り詰める** に改める:
+  ref の名前は 1024 バイトまで許されるので、100 件 × 20 コミットは 64 KiB に収まらないことがある。書き込みを失敗させると
+  push の記録そのものが失われる（ref は既に更新済み）ので、決まったバイト数の中で組み立て（イベントは 48 KiB、監査の詳細は
+  6 KiB。保存の上限 64 KiB / 8 KiB に jsonb の分の余裕を残す）、収まらない ref はコミットなしで、それも収まらなければそこで
+  一覧を止める。省いたものは必ず `refs_truncated` / `commits_truncated` と総数で示す（黙って切り詰めない）。監査の詳細と
+  ペイロードは同じ形で、予算だけが違う（`AuditDetails::to_value` と `AuditDetails::event_payload`）。
+- **重複除去の鍵**: §6 の `push:<repo_id>:<ref の更新の一覧のハッシュ>` を
+  `repository_pushed:<repo_id>:<sha256(request_id ‖ 名前順の ref の更新) の 16 進 64 文字>` に改める（D4 の `<集約>_<動詞>` の接頭辞、
+  `DedupKey` の `Id` と `Hash`。最長 18 + 1 + 19 + 1 + 64 文字で 200 に収まり、64 文字は部分の上限ちょうどなので切り詰めない）。
+  ハッシュの入力は、領域の札 `forge.repository_pushed.v1`、push の要求の `request_id`、名前順の各更新の（名前、旧、新）で、
+  すべて長さを前に付ける。種類とコミットは旧と新から決まるので入れない。
+  - **request_id を入れる理由（A→B→A）**: ref の更新の一覧だけでは、`main` を A→B、B→A、もう一度 A→B と push したとき、
+    3 回目が 1 回目と同じ鍵になり、別の push なのに `Deduped` で記録されない。要求ごとに違う request_id を入れて 3 件にする
+    （テスト `aba_pushes_are_three_events`）。
+  - **再試行と再投入は 1 件**: 同じ要求の再試行（MR4 の 3 回）と、Runbook `push-record-failed` の再投入
+    （`forge admin repo record-push --from-log`）は、ログの `forge.git.push_applied` の行に残った request_id をそのまま使うので
+    同じ鍵になり、既に記録されていれば `Deduped`（何も書かない）。再投入の監査の行は、行者が push した利用者、`request_id` が
+    push の要求のもの、`actor_label` が `forge-cli:<OS のアカウント>`。
+- **`forge.git.push_applied`**: forge-web が git の終了後、記録の前に必ず出すログの行の形は `forge_core::PushApplied`（serde の型、
+  版 `v = 1`、未知の項目は拒否）で定め、書く側（`PushApplied::log`）と読む側（`PushApplied::from_log_line`）が同じ型を使う。
+  記録が書けなければ `FG-GIT-0012` PushRecordFailed（alert、Runbook `push-record-failed`、`PushRecord::failed`）。
+- 矛盾した記録（更新が 0 件か 1000 件超、同じ ref が 2 回、旧 = 新、種類と 0 の側の不一致、コミット付きの削除など）は
+  `FG-DB-0010 reason=invalid_push_record`（`rule`）で、何も書かない。

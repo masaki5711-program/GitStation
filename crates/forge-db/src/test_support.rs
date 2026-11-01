@@ -504,6 +504,15 @@ impl FreshDb {
         superuser(&self.name).await
     }
 
+    /// The rows of `sql` as JSON objects, read as the superuser (to inspect
+    /// from crates without sqlx).
+    pub async fn json_rows(&self, sql: &str) -> Vec<serde_json::Value> {
+        sqlx::query_scalar(&format!("SELECT pg_catalog.to_jsonb(q) FROM ({sql}) AS q"))
+            .fetch_all(&mut self.superuser().await)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+    }
+
     /// Close the pool cleanly, then drop the database (`Drop`).
     pub async fn drop_now(self) {
         self.db.close().await;

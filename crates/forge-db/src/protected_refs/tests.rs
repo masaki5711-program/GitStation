@@ -297,11 +297,17 @@ async fn more_than_100_rules_is_rejected() {
     assert_reason(&err, ErrorCode::ProtectedRefRuleInvalid, "too_many_rules");
     assert!(audit_rows(&t, "req-rule-101").await.is_empty());
     assert_eq!(rule_count(&t, p).await, 100);
-    // levels_for reads all 100.
+    // levels_for reads all 100, and so does the snapshot.
     assert_eq!(
         levels_for(&t.db, p, &ref_name("refs/heads/r99"))
             .await
             .expect("levels"),
+        [Role::Developer]
+    );
+    let snapshot = rules_for(&t.db, p).await.expect("snapshot");
+    assert_eq!(snapshot.len(), 100);
+    assert_eq!(
+        snapshot.levels(&ref_name("refs/heads/r99")),
         [Role::Developer]
     );
     // A 101st row written outside forge-db: levels_for refuses rather than
@@ -327,6 +333,14 @@ async fn more_than_100_rules_is_rejected() {
         ErrorCode::ProtectedRefDataInvalid,
         "too_many_stored_rules",
     );
+    // The snapshot refuses the 101st row too (never the first 100 of them).
+    let err = rules_for(&t.db, p).await.expect_err("over the cap");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "too_many_stored_rules",
+    );
+    assert!(err.to_string().contains(&format!("project_id={}", p.get())));
     // A create reads the same rules: the broken cap is FG-DB-0020, not
     // too_many_rules (D4 review).
     let err = create(
@@ -440,6 +454,7 @@ async fn a_stored_rule_this_build_cannot_read_is_protected_ref_data_invalid() {
     let main = ref_name("refs/heads/main");
     for err in [
         levels_for(&t.db, p, &main).await.expect_err("levels"),
+        rules_for(&t.db, p).await.expect_err("snapshot"),
         create(
             &t.db,
             &ctx("req-next"),
@@ -480,6 +495,12 @@ async fn a_stored_rule_this_build_cannot_read_is_protected_ref_data_invalid() {
     ))
     .await;
     let err = levels_for(&t.db, p, &main).await.expect_err("levels");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "stored_push_min_role_invalid",
+    );
+    let err = rules_for(&t.db, p).await.expect_err("snapshot");
     assert_reason(
         &err,
         ErrorCode::ProtectedRefDataInvalid,
@@ -551,5 +572,94 @@ async fn a_rule_this_build_cannot_read_can_still_be_deleted() {
         .expect("readable again")
         .is_empty());
     assert_eq!(rule_count(&t, p).await, 0);
+    t.drop_now().await;
+}
+
+/// The pattern and ref vocabulary of forge-web's
+/// `adding_a_rule_never_loosens_protection` (wildcards over all branches,
+/// a literal `main`, `MA*` in another case, tags), generated: a prefix and
+/// a short tail over those letters, `*`, `/`, `-` and digits.
+fn rule_pattern() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    let tail = proptest::collection::vec(
+        prop::sample::select(vec!['m', 'a', 'i', 'n', 'M', 'A', 'v', '1', '*', '/', '-']),
+        0..6,
+    );
+    (
+        prop::sample::select(vec!["refs/heads/", "refs/tags/"]),
+        tail,
+    )
+        .prop_map(|(p, cs)| format!("{p}{}", cs.into_iter().collect::<String>()))
+}
+
+fn rule_ref() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    let tail = proptest::collection::vec(
+        prop::sample::select(vec!['m', 'a', 'i', 'n', 'M', 'A', 'v', '1', '/', '-']),
+        1..7,
+    );
+    (
+        prop::sample::select(vec!["refs/heads/", "refs/tags/"]),
+        tail,
+    )
+        .prop_map(|(p, cs)| format!("{p}{}", cs.into_iter().collect::<String>()))
+}
+
+fn push_role() -> impl proptest::strategy::Strategy<Value = Role> {
+    proptest::sample::select(vec![Role::Developer, Role::Maintainer, Role::Owner])
+}
+
+/// Property test (M1 phase 9 MR2): the snapshot a push loads once
+/// (`rules_for`) answers every ref exactly as `levels_for` does — the same
+/// roles, in the same order — so moving the push path to the snapshot can
+/// never drop a matching rule. Rule sets and refs come from a deterministic
+/// proptest runner; the rules are created through `create` (so only rules
+/// the commands accept), the refs are checked against both.
+#[tokio::test]
+async fn rules_for_matches_levels_for() {
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+    let t = FreshDb::migrated().await;
+    let segments: Vec<String> = (0..6).map(|n| format!("p{n}")).collect();
+    let segment_refs: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let projects = project_of_alice(&t, &segment_refs).await;
+    let mut runner = TestRunner::deterministic();
+    let rules = proptest::collection::vec((rule_pattern(), push_role()), 0..14);
+    let refs = proptest::collection::vec(rule_ref(), 40);
+    let (mut compared, mut protected) = (0, 0);
+    for (n, created) in projects.iter().enumerate() {
+        let p = created.project_id;
+        let set = rules.new_tree(&mut runner).expect("rules").current();
+        for (k, (raw, role)) in set.iter().enumerate() {
+            let Ok(parsed) = RefPattern::parse(raw) else {
+                continue;
+            };
+            match create(&t.db, &ctx(&format!("req-prop-{n}-{k}")), p, &parsed, *role).await {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::ProtectedRefRuleInvalid => {} // duplicate
+                Err(e) => panic!("{raw}: {e}"),
+            }
+        }
+        let snapshot = rules_for(&t.db, p).await.expect("snapshot");
+        let mut names = refs.new_tree(&mut runner).expect("refs").current();
+        names.extend(["refs/heads/main", "refs/heads/MAIN", "refs/tags/v1"].map(str::to_owned));
+        for raw in &names {
+            let Ok(name) = RefName::parse(raw) else {
+                continue;
+            };
+            let direct = levels_for(&t.db, p, &name).await.expect("levels");
+            assert_eq!(snapshot.levels(&name), direct, "{raw} in project {n}");
+            compared += 1;
+            if !direct.is_empty() {
+                protected += 1;
+            }
+        }
+    }
+    // The generators reach both protected and unprotected refs.
+    assert!(compared > 100, "{compared}");
+    assert!(
+        protected > 0 && protected < compared,
+        "{protected}/{compared}"
+    );
     t.drop_now().await;
 }

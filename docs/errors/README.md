@@ -42,6 +42,7 @@
 | [FG-GIT-0008](FG-GIT-0008.md) | 403 | info | The ref is protected and the caller's role is below the protection's minimum push role. |
 | [FG-GIT-0009](FG-GIT-0009.md) | 403 | info | A push would delete a protected ref; protected refs cannot be deleted by push. |
 | [FG-GIT-0010](FG-GIT-0010.md) | 403 | info | A push targeted a ref outside refs/heads/ and refs/tags/ (for example refs/merge-requests/*, refs/replace/*, refs/meta/*) |
+| [FG-GIT-0012](FG-GIT-0012.md) | 500 | alert | git updated the refs of a push (outside any database transaction, ADR-0008), but the `repository.pushed` audit row and event could not be written afterwards (reason `record_failed`: forge_db::repositories::record_push failed on every attempt — the database was unreachable or slow, see `cause_code`) |
 | [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path: no fixed route, and the dispatcher (ADR-0015) refused the raw path by its string rules or found no scoped route for its word and method. |
 | [FG-WEB-0002](FG-WEB-0002.md) | 503 | warn | A request exceeded the server's request timeout and was cancelled. |
 | [FG-SYS-0004](FG-SYS-0004.md) | 500 | alert | forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address). |

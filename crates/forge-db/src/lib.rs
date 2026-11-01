@@ -28,7 +28,9 @@
 //!   role computation, ADR-0010).
 //! - [`projects`] creates a project with its namespace, repository, first
 //!   Owner and provisioning job (`FG-REPO-0014`); [`repositories`] holds
-//!   the provisioning job's definition.
+//!   the provisioning job's definition and records applied pushes
+//!   (`record_push`, `forge_core::PushRecorder`); [`protected_refs`] loads
+//!   the push's rule snapshot (`rules_for`, `forge_core::ProtectionLoader`).
 //! - [`resolve`] implements `forge_core::NamespaceResolver` and
 //!   `ProjectAccessLoader` on [`Db`]: path (or project id) → target and the
 //!   viewer's authorization inputs in one statement (`FG-DB-0021`).
