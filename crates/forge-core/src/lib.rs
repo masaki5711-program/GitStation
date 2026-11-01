@@ -27,7 +27,7 @@ pub mod token;
 pub mod user_kind;
 pub mod web_path;
 
-pub use audit_details::AuditDetails;
+pub use audit_details::{AuditDetails, ChangedField};
 pub use authenticator::{Authenticator, TokenIdentity};
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
@@ -35,8 +35,8 @@ pub use event_type::{EventType, VisibilityClass};
 pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
-    NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess, ProjectAccessLoader,
-    ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
+    GroupRecord, NamespaceKind, NamespaceOwner, NamespaceResolver, ProjectAccess,
+    ProjectAccessLoader, ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
 };
 pub use push::{
     ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedRef, Pusher,

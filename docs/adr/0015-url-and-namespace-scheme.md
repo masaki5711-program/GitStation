@@ -836,3 +836,18 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   別の一覧・別の利用者のカーソルはタグで落ちる。走査したが見えなかった行の ID も、飛ばした数も、カーソルからは読めない。鍵は
   `api.cursor_keys_file`（ADR-0013 の Amendment）。改ざん・切り詰め・知らない kid・別の purpose・書式の誤りは FG-WEB-0006
   `reason=cursor_invalid`（`rule=too_long|encoding|truncated|version|kid|tag`）で、**カーソルの値はログに出さない**。タグの照合は定数時間。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: グループと親の文脈、トランザクション内の再判定）
+
+- forge-auth に封印された文脈を足す: `GroupCtx`（`LoadedGroup`: グループの id と呼び出し元の実効ロール、id = `GroupId`）、
+  `UserNamespaceCtx`（`LoadedUserNamespace`: 個人の名前空間と持ち主、id = `NamespaceId`）、`ParentCtx`（`LoadedParent`: 新しい
+  プロジェクトの親 — グループか個人の名前空間、id = 親の `NamespaceId`）、`VisibilityChangeCtx`（`LoadedProject` と要求された
+  可視性、id = `ProjectId`）。どれも 1 行の読み込み結果からだけ作れる。
+- **`Authorized::reconfirm(account, fresh)`**: 証明と同じ呼び出し元（ユーザーと資格情報、トークンのスコープはそのまま）・同じ
+  アクションで、書き込みのトランザクションの中で読み直した文脈 `fresh` と、同じく読み直したアカウント（有効か、管理者か）に対して
+  `prove()` をもう一度行う。`fresh` が証明と別の対象なら `FG-SYS-0001 reason=reconfirm_target_mismatch`。forge-hosting の
+  コマンドはすべてこれで決め、registry の証明は入口の判定として残る（判定点は `authorize()` の 1 つ）。
+- `Authorized::principal()` は公開（読み取りのみ）。コマンドが変更の文脈（actor、トークン）と事実の読み込みをその呼び出し元で行う
+  ため。別の呼び出し元で判定し直す道は作らない。
+- 親がプロジェクトの名前空間である `POST /api/v1/projects` は、存在しない id と同じ `FG-REPO-0005`（`UnresolvedReason::KindMismatch`、
+  `lookup=parent_is_project`）。

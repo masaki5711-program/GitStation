@@ -405,3 +405,63 @@ fn protected_ref_details_have_their_exact_shape_and_publish_maintainer_events() 
         }
     }
 }
+
+// ── M1 phase 8b MR7a: project / group updates and the visibility change ──
+#[test]
+fn update_details_name_fields_only_and_the_visibility_change_is_a_maintainer_event() {
+    use crate::audit_details::ChangedField;
+    use crate::ids::{GroupId, ProjectId};
+    use crate::{EventType, Visibility, VisibilityClass};
+    let project = AuditDetails::ProjectUpdated {
+        project_id: ProjectId::new(21),
+        fields: vec![ChangedField::DisplayName, ChangedField::Description],
+    };
+    let group = AuditDetails::GroupUpdated {
+        group_id: GroupId::new(4),
+        fields: vec![ChangedField::Description],
+    };
+    let visibility = AuditDetails::ProjectVisibilityChanged {
+        project_id: ProjectId::new(21),
+        from: Visibility::Private,
+        to: Visibility::Internal,
+    };
+    // Which fields changed, never their values (display names are free text).
+    assert_eq!(
+        project.to_value(),
+        json!({"project_id": 21, "fields": ["display_name", "description"]})
+    );
+    assert_eq!(
+        group.to_value(),
+        json!({"group_id": 4, "fields": ["description"]})
+    );
+    assert_eq!(
+        visibility.to_value(),
+        json!({"project_id": 21, "from": "private", "to": "internal"})
+    );
+    assert_eq!(project.action(), "project.updated");
+    assert_eq!(group.action(), "group.updated");
+    assert_eq!(visibility.action(), "project.visibility_changed");
+    // project.updated / group.updated are audit-only in M1 (phase 8b plan).
+    assert_eq!(project.event_type(), None);
+    assert_eq!(group.event_type(), None);
+    assert_eq!(
+        visibility.event_type(),
+        Some(EventType::ProjectVisibilityChanged)
+    );
+    assert_eq!(
+        EventType::ProjectVisibilityChanged.as_str(),
+        visibility.action()
+    );
+    assert_eq!(
+        EventType::ProjectVisibilityChanged.visibility_class(),
+        VisibilityClass::Maintainer
+    );
+    assert_eq!(visibility.event_payload(), visibility.to_value());
+    for details in [&project, &group, &visibility] {
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS {
+            assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
+        }
+    }
+}

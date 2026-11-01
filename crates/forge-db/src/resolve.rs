@@ -520,6 +520,96 @@ fn parse_rule(e: &ForgeError) -> String {
         .unwrap_or_default()
 }
 
+// ── M1 phase 8b MR7a: the parent of a new project ──
+
+/// `$1` the namespace id, `$2` the viewer, `$3` the chain cap: the
+/// namespace's kind and owner with the viewer's role chain from it (one
+/// row whether it exists or not, as [`PROJECT_ACCESS_SQL`]).
+const PARENT_SQL: &str = concat!(
+    "WITH RECURSIVE ",
+    chain_cte!("id = $1"),
+    ", steps AS (SELECT ",
+    chain_role_columns!(),
+    " FROM chain c), \
+       agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
+         array_agg(truncated ORDER BY step) AS truncs, \
+         array_agg(role ORDER BY step) AS roles FROM steps) \
+     SELECT n.kind, n.owner_id, a.steps, a.truncs, a.roles \
+     FROM agg a LEFT JOIN forge.namespaces n ON n.id = $1"
+);
+
+#[derive(Debug, sqlx::FromRow)]
+struct ParentRow {
+    kind: Option<String>,
+    owner_id: Option<i64>,
+    #[sqlx(flatten)]
+    chain: ChainRoles,
+}
+
+/// The namespace a project would be created under, as `viewer` sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentRecord {
+    /// A group namespace and the viewer's native role on the group.
+    Group {
+        namespace: NamespaceId,
+        group: GroupId,
+        role: Option<forge_core::Role>,
+    },
+    /// A personal namespace and its owner.
+    User {
+        namespace: NamespaceId,
+        owner: UserId,
+    },
+    /// A project namespace: never a parent (the route answers it as absent).
+    Project,
+}
+
+/// The namespace `namespace` for `viewer` as a project parent, `None` when
+/// it does not exist: one [`PARENT_SQL`] round trip on the read pool.
+/// `FG-DB-0021 unknown_namespace_kind` for a kind this build does not
+/// know; `FG-DB-0018` for the chain.
+pub async fn load_parent(
+    db: &Db,
+    namespace: NamespaceId,
+    viewer: Option<UserId>,
+) -> Result<Option<ParentRecord>, ForgeError> {
+    let row: ParentRow = db
+        .within("namespaces.parent", async {
+            sqlx::query_as(PARENT_SQL)
+                .bind(namespace.get())
+                .bind(viewer.map(UserId::get))
+                .bind(CAP)
+                .fetch_one(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error("namespaces.parent", e))
+        })
+        .await?;
+    let (Some(kind), Some(owner)) = (row.kind, row.owner_id) else {
+        return Ok(None);
+    };
+    let id = namespace.get();
+    match NamespaceKind::parse(&kind) {
+        Some(NamespaceKind::Group) => {
+            let roles = row.chain.fold("namespace", id, viewer)?;
+            Ok(Some(ParentRecord::Group {
+                namespace,
+                group: GroupId::new(owner),
+                role: roles.native,
+            }))
+        }
+        Some(NamespaceKind::User) => Ok(Some(ParentRecord::User {
+            namespace,
+            owner: UserId::new(owner),
+        })),
+        Some(NamespaceKind::Project) => Ok(Some(ParentRecord::Project)),
+        None => Err(invalid("unknown_namespace_kind")
+            .with_context("namespace_id", id)
+            .with_context("raw", bounded(&kind))),
+    }
+}
+
+// ── end M1 phase 8b MR7a ──
+
 /// The dispatcher's resolver (`forge serve` injects the `Db`): exactly
 /// [`resolve`].
 impl forge_core::NamespaceResolver for Db {

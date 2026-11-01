@@ -91,6 +91,10 @@ pub(crate) enum Fixture {
     },
     /// Making a private project internal.
     MakeInternal,
+    /// Making an internal project private (M1 phase 8b MR7a).
+    MakePrivate,
+    /// Making a private project pending deletion internal.
+    MakeInternalDeleted,
     OwnToken,
     ForeignToken,
     /// Creating an own token with plain scopes.
@@ -272,6 +276,14 @@ impl Fixture {
             },
             Fixture::MakeInternal => Resource::VisibilityChange {
                 project: private,
+                to: Visibility::Internal,
+            },
+            Fixture::MakePrivate => Resource::VisibilityChange {
+                project: internal,
+                to: Visibility::Private,
+            },
+            Fixture::MakeInternalDeleted => Resource::VisibilityChange {
+                project: deleted,
                 to: Visibility::Internal,
             },
             Fixture::OwnToken => Resource::Token { owner: ME },

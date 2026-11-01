@@ -1,6 +1,83 @@
 {
   "components": {
     "schemas": {
+      "CreateGroup": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The path segment (ADR-0015 rules; a top-level name must not be\nreserved).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "CreateProject": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/projects`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/KindName",
+                "description": "Default `system`."
+              }
+            ]
+          },
+          "namespace_id": {
+            "description": "The parent: a personal or a group namespace (`namespace_id` of a\nuser, of `GET /api/v1/groups/{id}` or of the resolver).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The path segment (ADR-0015 rules).",
+            "type": "string"
+          },
+          "visibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityName",
+                "description": "Default `private`."
+              }
+            ]
+          }
+        },
+        "required": [
+          "namespace_id",
+          "path",
+          "display_name"
+        ],
+        "type": "object"
+      },
       "Error": {
         "additionalProperties": false,
         "properties": {
@@ -21,6 +98,76 @@
           "request_id"
         ],
         "type": "object"
+      },
+      "GroupBody": {
+        "additionalProperties": false,
+        "description": "A group as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_id": {
+            "description": "The parent group; `null` at the top level.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The current full path (`group/sub`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "parent_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "KindName": {
+        "description": "A repository kind in a request (ADR-0004; fixed at creation).",
+        "enum": [
+          "spec",
+          "system"
+        ],
+        "type": "string"
       },
       "ProjectBody": {
         "additionalProperties": false,
@@ -138,6 +285,57 @@
         ],
         "type": "object"
       },
+      "SetVisibility": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/projects/{id}/visibility`.",
+        "properties": {
+          "visibility": {
+            "$ref": "#/components/schemas/VisibilityName"
+          }
+        },
+        "required": [
+          "visibility"
+        ],
+        "type": "object"
+      },
+      "UpdateGroup": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}`: at least one field.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdateProject": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/projects/{id}`: at least one field.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UserSelf": {
         "additionalProperties": false,
         "description": "The caller's account as the API shows it.",
@@ -181,6 +379,14 @@
           "token_scopes"
         ],
         "type": "object"
+      },
+      "VisibilityName": {
+        "description": "A project's visibility in a request.",
+        "enum": [
+          "private",
+          "internal"
+        ],
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -197,6 +403,189 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/groups": {
+      "post": {
+        "operationId": "post_api_v1_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a top-level group (administrators)",
+        "x-forge-action": "GroupCreateTopLevel",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/groups/{id}": {
+      "get": {
+        "operationId": "get_api_v1_groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read one group by id",
+        "x-forge-action": "GroupRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a group's display name / description (group Owner)",
+        "x-forge-action": "GroupUpdate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/groups/{id}/subgroups": {
+      "post": {
+        "operationId": "post_api_v1_groups_id_subgroups",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a subgroup (group Owner)",
+        "x-forge-action": "SubgroupCreate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
     "/api/v1/namespaces/resolve": {
       "get": {
         "operationId": "get_api_v1_namespaces_resolve",
@@ -224,6 +613,46 @@
         },
         "summary": "Resolve a namespace path for the caller (ADR-0015)",
         "x-forge-action": "PathResolve"
+      }
+    },
+    "/api/v1/projects": {
+      "post": {
+        "operationId": "post_api_v1_projects",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a project in a group or a personal namespace",
+        "x-forge-action": "ProjectCreate",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/projects/{id}": {
@@ -265,6 +694,108 @@
         },
         "summary": "Read one project by id (ADR-0015 MR5)",
         "x-forge-action": "ProjectRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a project's display name / description (Maintainer)",
+        "x-forge-action": "ProjectUpdate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/visibility": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVisibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a project's visibility (Owner)",
+        "x-forge-action": "ProjectVisibilityChange",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/user": {

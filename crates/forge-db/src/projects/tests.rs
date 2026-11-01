@@ -16,6 +16,7 @@ use crate::users::{self, NewUser};
 
 mod members;
 mod race;
+mod update;
 
 fn ctx(request: &str) -> ChangeContext {
     ChangeContext::new(

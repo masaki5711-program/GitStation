@@ -55,6 +55,10 @@ pub struct AppState {
     /// HTTP routes (`forge serve` always sets it; without it a git route
     /// answers `FG-SYS-0001 reason=smart_http_unconfigured`).
     pub smart_http: Option<Arc<routes::git::SmartHttp>>,
+    /// The group / project write commands and the group loader (M1 phase
+    /// 8b MR7a; `forge serve` always sets it; without it those routes
+    /// answer `FG-SYS-0001 reason=hosting_unconfigured`).
+    pub hosting: Option<Arc<forge_hosting::Hosting>>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -84,7 +88,14 @@ impl AppState {
             lookups,
             lookup_timeout: Duration::from_secs(5),
             smart_http: None,
+            hosting: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_hosting(mut self, hosting: forge_hosting::Hosting) -> Self {
+        self.hosting = Some(Arc::new(hosting));
+        self
     }
 
     #[must_use]
@@ -160,18 +171,11 @@ impl Default for AppConfig {
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
-    Action::ProjectCreate,
-    Action::ProjectUpdate,
-    Action::ProjectVisibilityChange,
     Action::ProjectTransfer,
     Action::ProjectDelete,
     Action::ProjectRestore,
     Action::ProtectedRefManage,
     Action::MemberManage,
-    Action::GroupRead,
-    Action::GroupCreateTopLevel,
-    Action::SubgroupCreate,
-    Action::GroupUpdate,
     Action::TokenCreate,
     Action::TokenList,
     Action::TokenRevoke,
@@ -245,7 +249,85 @@ pub fn registry() -> Registry<AppState> {
         )
         .responds::<routes::users::UserSelf>(Verb::Get, routes::users::PATH)
         .responds::<routes::namespaces::Resolution>(Verb::Get, routes::namespaces::PATH);
-    git_routes(shell_routes(fixed))
+    git_routes(shell_routes(hosting_routes(fixed)))
+}
+
+/// Group and project writes and the group read (M1 phase 8b MR7a): every
+/// body route reads its strict JSON first, the registry proves the action
+/// on what the loader read, and the handler's command decides again inside
+/// its transaction (forge-hosting).
+fn hosting_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::{groups, project_writes as pw};
+    registry
+        .route_with_body(
+            Verb::Post,
+            groups::COLLECTION,
+            Action::GroupCreateTopLevel,
+            "Create a top-level group (administrators)",
+            groups::MAX_BODY,
+            groups::TopLevel,
+            groups::create,
+        )
+        .responds_created::<groups::GroupBody>(Verb::Post, groups::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            groups::SUBGROUPS,
+            Action::SubgroupCreate,
+            "Create a subgroup (group Owner)",
+            groups::MAX_BODY,
+            groups::ParentGroup,
+            groups::create_subgroup,
+        )
+        .responds_created::<groups::GroupBody>(Verb::Post, groups::SUBGROUPS)
+        .route_with(
+            Verb::Get,
+            groups::ONE,
+            Action::GroupRead,
+            "Read one group by id",
+            groups::GroupById,
+            groups::read,
+        )
+        .responds::<groups::GroupBody>(Verb::Get, groups::ONE)
+        .route_with_body(
+            Verb::Patch,
+            groups::ONE,
+            Action::GroupUpdate,
+            "Change a group's display name / description (group Owner)",
+            groups::MAX_BODY,
+            groups::GroupToUpdate,
+            groups::update,
+        )
+        .responds::<groups::GroupBody>(Verb::Patch, groups::ONE)
+        .route_with_body(
+            Verb::Post,
+            pw::COLLECTION,
+            Action::ProjectCreate,
+            "Create a project in a group or a personal namespace",
+            pw::MAX_BODY,
+            pw::Parent,
+            pw::create,
+        )
+        .responds_created::<routes::projects::ProjectBody>(Verb::Post, pw::COLLECTION)
+        .route_with_body(
+            Verb::Patch,
+            routes::projects::PATH,
+            Action::ProjectUpdate,
+            "Change a project's display name / description (Maintainer)",
+            pw::MAX_BODY,
+            pw::ProjectToUpdate,
+            pw::update,
+        )
+        .responds::<routes::projects::ProjectBody>(Verb::Patch, routes::projects::PATH)
+        .route_with_body(
+            Verb::Put,
+            pw::VISIBILITY,
+            Action::ProjectVisibilityChange,
+            "Set a project's visibility (Owner)",
+            pw::MAX_BODY,
+            pw::VisibilityTarget,
+            pw::set_visibility,
+        )
+        .responds::<routes::projects::ProjectBody>(Verb::Put, pw::VISIBILITY)
 }
 
 /// Smart HTTP (M1 phase 9): fetch (MR3) — the advertisement (`GET`, and

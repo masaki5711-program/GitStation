@@ -19,6 +19,7 @@ serde_json.workspace = true
 clap = { workspace = true, features = ["env"] }
 forge-git.workspace = true
 forge-web.workspace = true
+forge-hosting.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

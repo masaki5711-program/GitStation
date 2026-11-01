@@ -1,0 +1,28 @@
+[package]
+name = "forge-hosting"
+description = "forge hosting commands: group and project writes, each authorized inside its own transaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (ADR-0001 amendment, M1 phase 8b MR7a): forge-web →
+# forge-hosting → forge-auth / forge-db → forge-core → forge-errors. It never
+# runs SQL itself (the db-write-boundary gate): forge-db's `*_decided`
+# commands open the transaction and hand the facts to `authorize()` here.
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+# tests/dependency_direction.rs reads the workspace manifests.
+toml.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

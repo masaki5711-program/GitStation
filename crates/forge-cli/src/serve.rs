@@ -124,6 +124,8 @@ fn app_state(db: &Db, database: &DatabaseConfig) -> AppState {
     )
     .with_probe_timeout(probe_timeout_for(database))
     .with_lookup_timeout(lookup_timeout_for(database))
+    // The group / project writes (M1 phase 8b MR7a).
+    .with_hosting(forge_hosting::Hosting::new(db.clone()))
 }
 
 /// One lookup is one statement on the read pool: acquire, then the

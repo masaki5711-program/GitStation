@@ -1,0 +1,195 @@
+//! Shared fixtures of the forge-hosting tests (synthetic users and groups
+//! on a fresh migrated database, ADR-0011).
+#![allow(dead_code, clippy::expect_used, clippy::panic)]
+
+use forge_auth::{
+    prove, Action, Authorized, Credential, GroupCtx, LoadedGroup, LoadedParent, LoadedProject,
+    LoadedUserNamespace, ParentCtx, Principal, ProjectCtx, ResourceCtx, VisibilityChangeCtx,
+};
+use forge_core::{GroupId, ProjectId, RequestId, UserId, Visibility};
+use forge_db::change::{Actor, ChangeContext};
+use forge_db::groups::{self, CreatedGroup, NewGroup};
+use forge_db::projects::{self, CreatedProject, NewProject};
+use forge_db::test_support::FreshDb;
+use forge_db::users::{self, NewUser};
+use forge_hosting::{Hosting, NewGroupFields, NewProjectFields, WriteRequest};
+
+pub fn system(request: &str) -> ChangeContext {
+    ChangeContext::new(
+        Actor::System,
+        RequestId::parse(request).expect("request id"),
+    )
+}
+
+pub fn request(id: &str) -> WriteRequest {
+    WriteRequest {
+        request_id: RequestId::parse(id).expect("request id"),
+        credential_id: None,
+    }
+}
+
+pub async fn user(t: &FreshDb, name: &str, is_admin: bool) -> users::Created {
+    let mut new = NewUser::human(name, name, &format!("{name}@example.test"));
+    new.is_admin = is_admin;
+    users::create(&t.db, &system(&format!("req-user-{name}")), &new)
+        .await
+        .expect("user")
+}
+
+pub async fn group(t: &FreshDb, segment: &str, owner: UserId) -> CreatedGroup {
+    groups::create(
+        &t.db,
+        &system(&format!("req-group-{segment}")),
+        &NewGroup {
+            segment: segment.to_owned(),
+            parent: None,
+            display_name: format!("Group {segment}"),
+            description: String::new(),
+            owner,
+        },
+    )
+    .await
+    .expect("group")
+}
+
+pub async fn project(
+    t: &FreshDb,
+    segment: &str,
+    parent: CreatedGroup,
+    creator: UserId,
+) -> CreatedProject {
+    projects::create(
+        &t.db,
+        &system(&format!("req-project-{segment}")),
+        &NewProject::new(
+            segment,
+            parent.namespace_id,
+            &format!("Project {segment}"),
+            creator,
+        ),
+    )
+    .await
+    .expect("project")
+}
+
+pub fn session(user: UserId, is_admin: bool) -> Principal {
+    Principal::authenticated(user, is_admin, true, Credential::Session)
+}
+
+/// The registry's proof, built the way its loaders build it: from what
+/// `hosting` reads for the caller now.
+pub async fn group_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    action: Action,
+    id: GroupId,
+) -> Authorized<GroupCtx> {
+    let record = hosting
+        .group(id, who.user())
+        .await
+        .expect("load")
+        .expect("group exists");
+    prove(
+        who,
+        action,
+        GroupCtx::new(LoadedGroup {
+            id: record.id,
+            role: record.role,
+        }),
+    )
+    .expect("allowed before the race")
+}
+
+pub async fn project_ctx(hosting: &Hosting, who: &Principal, id: ProjectId) -> LoadedProject {
+    let record = hosting
+        .project(id, who.user())
+        .await
+        .expect("load")
+        .expect("project exists");
+    LoadedProject {
+        id: record.id,
+        visibility: record.access.visibility,
+        role: record.access.role,
+        pending_deletion: record.access.pending_deletion,
+    }
+}
+
+pub async fn project_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    id: ProjectId,
+) -> Authorized<ProjectCtx> {
+    let loaded = project_ctx(hosting, who, id).await;
+    prove(who, Action::ProjectUpdate, ProjectCtx::new(loaded)).expect("allowed before the race")
+}
+
+pub async fn visibility_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    id: ProjectId,
+    to: Visibility,
+) -> Authorized<VisibilityChangeCtx> {
+    let loaded = project_ctx(hosting, who, id).await;
+    prove(
+        who,
+        Action::ProjectVisibilityChange,
+        VisibilityChangeCtx::new(loaded, to),
+    )
+    .expect("allowed before the race")
+}
+
+pub async fn parent_proof(
+    hosting: &Hosting,
+    who: &Principal,
+    namespace: forge_core::NamespaceId,
+) -> Authorized<ParentCtx> {
+    let parent = match hosting
+        .parent(namespace, who.user())
+        .await
+        .expect("load")
+        .expect("namespace exists")
+    {
+        forge_hosting::Parent::Group {
+            namespace,
+            group,
+            role,
+        } => LoadedParent::Group {
+            namespace,
+            group: LoadedGroup { id: group, role },
+        },
+        forge_hosting::Parent::User { namespace, owner } => {
+            LoadedParent::User(LoadedUserNamespace { namespace, owner })
+        }
+        forge_hosting::Parent::Project => panic!("a project is not a parent"),
+    };
+    let ctx = ParentCtx::new(parent);
+    assert_eq!(ctx.id(), namespace);
+    prove(who, Action::ProjectCreate, ctx).expect("allowed before the race")
+}
+
+pub fn group_fields(path: &str) -> NewGroupFields {
+    NewGroupFields {
+        path: path.to_owned(),
+        display_name: format!("Group {path}"),
+        description: String::new(),
+    }
+}
+
+pub fn project_fields(path: &str) -> NewProjectFields {
+    NewProjectFields {
+        path: path.to_owned(),
+        display_name: format!("Project {path}"),
+        description: "synthetic".to_owned(),
+        visibility: Visibility::Private,
+        kind: forge_core::RepositoryKind::System,
+    }
+}
+
+/// The rows of `sql` (a count) as the superuser.
+pub async fn count(t: &FreshDb, sql: &str) -> i64 {
+    let rows = t.json_rows(sql).await;
+    rows.first()
+        .and_then(|r| r.get("n"))
+        .and_then(serde_json::Value::as_i64)
+        .expect("a count named n")
+}

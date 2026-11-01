@@ -39,7 +39,7 @@ use crate::registry::{Dispatched, LoadFuture, Loader, Lookup};
 pub const PATH: &str = "/api/v1/projects/{id}";
 
 /// What precedes the id in the raw path.
-const PREFIX: &str = "/api/v1/projects/";
+pub(crate) const PREFIX: &str = "/api/v1/projects/";
 
 /// Loads the project named by the path's `{id}` for `ProjectRead`.
 pub struct ProjectById;
@@ -75,13 +75,14 @@ impl Loader<AppState> for ProjectById {
                 canonical: Some(record.path.clone()), // clone: the record moves on too
                 tombstone: None,
                 project: Some(record),
+                group: None,
             })
         })
     }
 }
 
 /// forge-auth's loaded project from the one row (id and facts together).
-fn loaded(record: &ProjectRecord) -> LoadedProject {
+pub(crate) fn loaded(record: &ProjectRecord) -> LoadedProject {
     loaded_project(record.id, record.access)
 }
 
@@ -95,7 +96,7 @@ pub(crate) fn id_param(raw_path: &str) -> Option<ProjectId> {
 /// One loader call, bounded on the client side (forge-db bounds its own
 /// statement too): `FG-WEB-0002 operation=project_load` when it does not
 /// answer in time.
-async fn load_bounded(
+pub(crate) async fn load_bounded(
     state: &AppState,
     id: ProjectId,
     viewer: Option<UserId>,
@@ -157,6 +158,22 @@ pub fn project_view(
             .with_context("details_project_id", record.id.get()));
     }
     let view = proof.ctx().view();
+    build(record, view.visibility, view.role)
+}
+
+/// The API shape of a project the caller just wrote (phase 8b MR7a): the
+/// same shape as [`project_view`], from the row forge-hosting re-read
+/// after the commit for the caller (its access facts give visibility and
+/// role). Only a handler whose command committed calls it.
+pub(crate) fn written_project_view(record: &ProjectRecord) -> Result<Value, ForgeError> {
+    build(record, record.access.visibility, record.access.role)
+}
+
+fn build(
+    record: &ProjectRecord,
+    visibility: forge_core::Visibility,
+    role: Option<Role>,
+) -> Result<Value, ForgeError> {
     let name = record
         .path
         .segments()
@@ -164,16 +181,16 @@ pub fn project_view(
         .map(|s| s.as_str().to_owned())
         .unwrap_or_default();
     let body = ProjectBody {
-        id: proof.id().get(),
+        id: record.id.get(),
         namespace_id: record.namespace_id.get(),
         path: record.path.full_path(),
         name,
         display_name: record.display_name.clone(), // clone: the record is borrowed
         description: record.description.clone(),
-        visibility: view.visibility.as_str().to_owned(),
+        visibility: visibility.as_str().to_owned(),
         kind: record.kind.as_str().to_owned(),
         created_at: record.created_at.clone(),
-        role: view.role.map(|r| Role::as_str(r).to_owned()),
+        role: role.map(|r| Role::as_str(r).to_owned()),
     };
     serde_json::to_value(body).map_err(|e| {
         ForgeError::new(ErrorCode::Internal)

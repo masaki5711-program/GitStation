@@ -87,13 +87,18 @@
 use std::fmt;
 
 use forge_core::{GroupId, NamespaceId, NamespaceOwner, ProjectId, UserId};
-use forge_errors::ForgeError;
+use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
 use crate::authorize::authorize;
 use crate::model::{
     NamespaceView, Principal, ProjectView, ResolvedVia, Resource, Role, UnresolvedReason,
     Visibility,
+};
+
+pub use crate::contexts::{
+    GroupCtx, LoadedGroup, LoadedParent, LoadedUserNamespace, ParentCtx, UserNamespaceCtx,
+    VisibilityChangeCtx,
 };
 
 /// Seals [`ResourceCtx`]: only this crate implements it, so every context's
@@ -146,10 +151,52 @@ impl<R: ResourceCtx> Authorized<R> {
         &self.ctx
     }
 
-    /// The principal the decision was made for.
-    pub(crate) fn principal(&self) -> &Principal {
+    /// The principal the decision was made for (read-only: a command acts
+    /// for this caller — forge-hosting builds its change context and loads
+    /// the caller's facts from it — and decides again with
+    /// [`Authorized::reconfirm`], never with another principal).
+    pub fn principal(&self) -> &Principal {
         &self.principal
     }
+
+    /// Decide the same action again, for the same caller, on `fresh` — the
+    /// same target re-loaded inside the write transaction that will act on
+    /// it (M1 phase 8b MR7a: no time-of-check / time-of-use gap). The
+    /// caller's account facts (`account`) are re-read there too: the
+    /// principal keeps its user and credential (a token keeps its scopes),
+    /// with the fresh `active` and administrator flags. Denies exactly like
+    /// [`prove`]; a `fresh` context for another target than this proof's is
+    /// a programming error (`FG-SYS-0001 reason=reconfirm_target_mismatch`),
+    /// never a pass.
+    pub fn reconfirm(&self, account: AccountFacts, fresh: R) -> Result<Authorized<R>, ForgeError>
+    where
+        R::Id: PartialEq,
+    {
+        if fresh.id() != self.id {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "reconfirm_target_mismatch")
+                .with_context("action", self.action.name()));
+        }
+        let principal = match self.principal.user() {
+            Some(user) => Principal::authenticated(
+                user,
+                account.is_admin,
+                account.active,
+                self.principal.credential().clone(), // clone: the new proof owns its principal
+            ),
+            None => Principal::anonymous(),
+        };
+        prove(&principal, self.action, fresh)
+    }
+}
+
+/// The caller's own account as re-read inside a write transaction (the
+/// user row, locked `FOR SHARE`): [`Authorized::reconfirm`]. A missing row
+/// is `active: false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccountFacts {
+    pub active: bool,
+    pub is_admin: bool,
 }
 
 impl<R> fmt::Debug for Authorized<R>

@@ -18,6 +18,9 @@ forge-errors.workspace = true
 # M1 phase 9 MR3: Smart HTTP — git only through forge-git's smart_http /
 # upload_request / check_wants API (test forge_web_runs_git_only_through_smart_http_api).
 forge-git.workspace = true
+# M1 phase 8b MR7a: the group / project write commands (web → hosting →
+# auth / db, ADR-0001 amendment); forge-web names no forge-db item itself.
+forge-hosting.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).
 base64.workspace = true

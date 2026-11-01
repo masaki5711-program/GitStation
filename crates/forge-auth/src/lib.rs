@@ -13,6 +13,7 @@
 
 mod action;
 mod authorize;
+mod contexts;
 pub mod matrix;
 mod matrix_rows;
 mod model;
@@ -26,8 +27,9 @@ pub use model::{
     RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, UnresolvedReason, Visibility,
 };
 pub use prove::{
-    prove, Authorized, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, ProjectCtx,
-    ResolvedCtx, ResourceCtx, UnresolvedCtx,
+    prove, AccountFacts, Authorized, GroupCtx, InstanceCtx, LoadedGroup, LoadedNamespace,
+    LoadedParent, LoadedProject, LoadedTarget, LoadedUserNamespace, ParentCtx, ProjectCtx,
+    ResolvedCtx, ResourceCtx, UnresolvedCtx, UserNamespaceCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 

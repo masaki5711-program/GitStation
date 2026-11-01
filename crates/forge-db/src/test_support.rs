@@ -447,6 +447,49 @@ impl FreshDb {
         tx.commit().await.expect("commit");
     }
 
+    /// [`FreshDb::commit_audited`] without the COMMIT: the transaction stays
+    /// open (holding its row locks) until [`HeldChange::commit`] (M1 phase
+    /// 8b MR7a: forge-hosting's race tests hold a membership change while a
+    /// write decides). Dropping it rolls back.
+    pub async fn hold_audited(&self, cause: (&str, i64), statements: &[String]) -> HeldChange {
+        let mut tx = self.db.write_pool().begin().await.expect("begin");
+        let audit = format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             resource_id, request_id) VALUES ('system', 'probe.changed', 'succeeded', '{}', {}, \
+             'r-fixture')",
+            cause.0, cause.1
+        );
+        for sql in std::iter::once(&audit).chain(statements) {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("fixture statement failed: {e}"));
+        }
+        HeldChange(tx)
+    }
+
+    /// Wait (bounded, 10 s) until a backend of this database runs a
+    /// statement containing `fragment` and waits on a lock; panics when none
+    /// does — a race test that relies on a lock fails when the lock is gone.
+    pub async fn until_waiting(&self, fragment: &str) {
+        let mut su = self.superuser().await;
+        for _ in 0..500 {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+                 AND datname = current_database() AND strpos(query, $1) > 0",
+            )
+            .bind(fragment)
+            .fetch_one(&mut su)
+            .await
+            .expect("pg_stat_activity");
+            if waiting > 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("no statement containing {fragment:?} waited on a lock within 10 s");
+    }
+
     /// The application config (forge_app) with extra settings.
     pub fn app_config(&self, extra: &[(&str, &str)]) -> TestConfig {
         test_config(&url_as("forge_app", &self.name), APP_PASSWORD, extra)
@@ -562,6 +605,15 @@ impl Drop for FreshDb {
                 panic!("FreshDb: could not drop test database {name}: {e}");
             }
         }
+    }
+}
+
+/// An open fixture transaction ([`FreshDb::hold_audited`]).
+pub struct HeldChange(sqlx::Transaction<'static, sqlx::Postgres>);
+
+impl HeldChange {
+    pub async fn commit(self) {
+        self.0.commit().await.expect("commit the held change");
     }
 }
 
