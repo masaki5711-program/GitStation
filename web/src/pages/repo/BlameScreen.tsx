@@ -1,10 +1,12 @@
 // Who last changed each line. The server blames up to 10 000 lines
 // (`truncated`) and sends no lines for a binary file; both are said in words.
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate } from 'react-router';
 
 import { refParam, useBlame } from '../../api/repo';
 import type { BlameBody, Rev } from '../../api/types';
+import controls from '../../components/controls.module.css';
 import { Loading } from '../../components/Loading';
 import { tokensClass, useLineNodes } from '../../features/CodeView';
 import { formatEpoch } from '../../features/labels';
@@ -12,6 +14,9 @@ import { baseName, blobUrl, commitUrl, treeUrl } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { PathCrumbs, RepoError, shortOid, WithSpec } from './common';
 import styles from './Repo.module.css';
+
+/** Lines of blame in the page at first, and added by each "Show more". */
+export const BLAME_WINDOW = 500;
 
 export function BlameScreen({
   projectId,
@@ -73,6 +78,10 @@ function BlameTable({
   const all = blame.hunks.flatMap((h) => h.lines);
   const nodes = useLineNodes(path, all);
   const byId = new Map(blame.commits.map((c) => [c.oid, c]));
+  // Only a window of lines is in the page (10 000 lines of blame is 10 000
+  // rows); "Show more" widens it.
+  const [limit, setLimit] = useState(BLAME_WINDOW);
+  const shown = Math.min(limit, all.length);
   let offset = 0;
   return (
     <>
@@ -116,10 +125,11 @@ function BlameTable({
                 const commit = byId.get(hunk.commit);
                 const first = offset;
                 offset += hunk.lines.length;
-                return hunk.lines.map((_, i) => (
+                const visible = Math.min(hunk.lines.length, Math.max(0, shown - first));
+                return hunk.lines.slice(0, visible).map((_, i) => (
                   <tr key={`${hunk.start}-${i}`} className={i === 0 ? styles.hunkStart : undefined}>
                     {i === 0 && (
-                      <th scope="row" rowSpan={hunk.lines.length} className={styles.blameCommit}>
+                      <th scope="row" rowSpan={visible} className={styles.blameCommit}>
                         <Link to={commitUrl(project, hunk.commit)}>{shortOid(hunk.commit)}</Link>
                         {commit !== undefined && (
                           <>
@@ -141,6 +151,22 @@ function BlameTable({
             </tbody>
           </table>
         </div>
+      )}
+      {shown < all.length && (
+        <p>
+          <span role="status" className={styles.hint}>
+            {t('blame.showing', { shown, total: all.length })}
+          </span>{' '}
+          <button
+            type="button"
+            className={controls.button}
+            onClick={() => {
+              setLimit(shown + BLAME_WINDOW);
+            }}
+          >
+            {t('blame.more', { count: all.length - shown })}
+          </button>
+        </p>
       )}
     </>
   );

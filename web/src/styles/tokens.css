@@ -74,6 +74,8 @@
   --gs-font-size-lg: 1.25rem;
   --gs-font-size-xl: 1.5rem;
   --gs-line-height: 1.6;
+  --gs-code-line-height: 1.5rem; /* >= 24px: the line-number links are touch targets (WCAG 2.5.8) */
+  --gs-code-tab-size: 4;
 
   /* Spacing and shape */
   --gs-space-1: 0.25rem;

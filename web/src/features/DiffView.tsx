@@ -3,7 +3,7 @@
 // case is said in words: binary, too large, total cap, not UTF-8, and a
 // diff the server cut (`truncated`). A change is shown by its sign (+ / -) as
 // text as well as by colour.
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -51,21 +51,34 @@ export function parsePatch(patch: string): DiffRow[] {
   return rows;
 }
 
-/** Past this many rows a file's patch is folded until asked for. */
+/** Past this many rows a file's patch is folded until asked for, and the
+ * patches of one diff together open at most TOTAL_ROWS rows (a 500-file diff
+ * must not put 100 000 rows in the page). */
 export const FOLD_ROWS = 600;
+export const TOTAL_ROWS = 2000;
 
 function FileDiff({
   file,
+  rows,
+  defaultOpen,
   project,
   refName,
 }: {
   file: DiffFile;
+  rows: DiffRow[];
+  defaultOpen: boolean;
   project: string;
   refName: string | null;
 }) {
   const { t } = useTranslation();
-  const rows = file.patch === null || file.patch === '' ? [] : parsePatch(file.patch);
-  const [open, setOpen] = useState(rows.length <= FOLD_ROWS);
+  const [open, setOpen] = useState(defaultOpen);
+  const regionId = useId();
+  const region = useRef<HTMLDivElement>(null);
+  const asked = useRef(false);
+  // The button disappears when it is used: the focus goes to what it revealed.
+  useEffect(() => {
+    if (open && asked.current) region.current?.focus();
+  }, [open]);
   const shownPath = file.new_path ?? file.old_path ?? '';
   const status =
     file.status === 'added'
@@ -116,6 +129,8 @@ function FileDiff({
       {rows.length > 0 &&
         (open ? (
           <div
+            id={regionId}
+            ref={region}
             className={styles.scroll}
             role="region"
             aria-label={t('diff.patchLabel', { path: shownPath })}
@@ -133,8 +148,9 @@ function FileDiff({
                 {rows.map((row, i) =>
                   row.kind === 'hunk' || row.kind === 'note' ? (
                     <tr key={i} className={row.kind === 'hunk' ? styles.hunk : styles.noNewline}>
-                      <td colSpan={2} />
-                      <td className={styles.text}>{row.text}</td>
+                      <td colSpan={3} className={styles.text}>
+                        {row.text}
+                      </td>
                     </tr>
                   ) : (
                     <tr key={i} className={styles[row.kind]}>
@@ -163,7 +179,10 @@ function FileDiff({
           <button
             type="button"
             className={styles.fold}
+            aria-expanded="false"
+            aria-controls={regionId}
             onClick={() => {
+              asked.current = true;
               setOpen(true);
             }}
           >
@@ -185,6 +204,13 @@ export function DiffView({
   refName: string | null;
 }) {
   const { t } = useTranslation();
+  let budget = TOTAL_ROWS;
+  const prepared = diff.files.map((file) => {
+    const rows = file.patch === null || file.patch === '' ? [] : parsePatch(file.patch);
+    const defaultOpen = rows.length <= FOLD_ROWS && rows.length <= budget;
+    if (defaultOpen) budget -= rows.length;
+    return { file, rows, defaultOpen };
+  });
   return (
     <div data-testid="diff">
       <p className={styles.summary}>{t('diff.files', { count: diff.files.length })}</p>
@@ -193,10 +219,12 @@ export function DiffView({
           {t('diff.truncated')}
         </p>
       )}
-      {diff.files.map((file, i) => (
+      {prepared.map(({ file, rows, defaultOpen }, i) => (
         <FileDiff
           key={`${file.old_path ?? ''}\0${file.new_path ?? ''}\0${i}`}
           file={file}
+          rows={rows}
+          defaultOpen={defaultOpen}
           project={project}
           refName={refName}
         />

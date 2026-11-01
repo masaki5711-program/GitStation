@@ -74,7 +74,8 @@ function Blob({
     );
   }
   const file = blob.data;
-  const raw = rawUrl(project, rev.name, path);
+  // The commit id names exactly one version, whatever the short name is.
+  const raw = rawUrl(project, rev.commit, path);
   const text = file.content;
   const image = file.binary && isImagePath(path);
   const markdown = isMarkdownPath(path) && text !== null && file.type === 'blob';
@@ -168,6 +169,7 @@ function Blob({
               source={text}
               project={project}
               refName={rev.name}
+              rawRef={rev.commit}
               dir={parentPath(path)}
               headingOffset={1}
             />

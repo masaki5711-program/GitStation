@@ -69,7 +69,7 @@ function backend() {
     if (path.startsWith('/-/auth/')) return false;
 
     // The raw route (server-served; headers as ADR-0015): the README's image.
-    if (req.method === 'GET' && path === '/acme/forge-web/-/raw/main/logo.png') {
+    if (req.method === 'GET' && path === `/acme/forge-web/-/raw/${'a'.repeat(40)}/logo.png`) {
       res.writeHead(200, {
         'Content-Type': 'image/png',
         'Content-Security-Policy': "sandbox; default-src 'none'",

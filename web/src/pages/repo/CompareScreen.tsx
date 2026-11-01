@@ -25,6 +25,70 @@ export function parseCompare(spec: string): { from: string; to: string } | null 
   return from === '' || to === '' ? null : { from, to };
 }
 
+function CompareForm({
+  projectId,
+  project,
+  parsed,
+}: {
+  projectId: number;
+  project: string;
+  parsed: { from: string; to: string } | null;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const refs = useRefs(projectId);
+  const [from, setFrom] = useState(parsed?.from ?? '');
+  const [to, setTo] = useState(parsed?.to ?? refs.data?.default_branch ?? '');
+  const fromId = useId();
+  const toId = useId();
+  const listId = useId();
+
+  const submit = (e: SyntheticEvent) => {
+    e.preventDefault();
+    if (from.trim() === '' || to.trim() === '') return;
+    void navigate(compareUrl(project, from.trim(), to.trim()));
+  };
+
+  return (
+    <form onSubmit={submit} className={styles.compareForm}>
+      <div className={styles.field}>
+        <label htmlFor={fromId}>{t('compare.from')}</label>
+        <input
+          id={fromId}
+          className={controls.input}
+          list={listId}
+          value={from}
+          onChange={(e) => {
+            setFrom(e.target.value);
+          }}
+          autoComplete="off"
+        />
+      </div>
+      <div className={styles.field}>
+        <label htmlFor={toId}>{t('compare.to')}</label>
+        <input
+          id={toId}
+          className={controls.input}
+          list={listId}
+          value={to}
+          onChange={(e) => {
+            setTo(e.target.value);
+          }}
+          autoComplete="off"
+        />
+      </div>
+      <datalist id={listId}>
+        {(refs.data?.refs ?? []).map((r) => (
+          <option key={r.full_name} value={r.name} />
+        ))}
+      </datalist>
+      <button type="submit" className={controls.primary}>
+        {t('compare.submit')}
+      </button>
+    </form>
+  );
+}
+
 export function CompareScreen({
   projectId,
   project,
@@ -35,62 +99,15 @@ export function CompareScreen({
   spec: string;
 }) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const parsed = parseCompare(spec);
-  const refs = useRefs(projectId);
   const compare = useCompare(projectId, parsed?.from ?? null, parsed?.to ?? null);
-  const [from, setFrom] = useState(parsed?.from ?? '');
-  const [to, setTo] = useState(parsed?.to ?? refs.data?.default_branch ?? '');
-  const fromId = useId();
-  const toId = useId();
-  const listId = useId();
   useDocumentTitle(t('compare.title'));
-
-  const submit = (e: SyntheticEvent) => {
-    e.preventDefault();
-    if (from.trim() === '' || to.trim() === '') return;
-    void navigate(compareUrl(project, from.trim(), to.trim()));
-  };
 
   return (
     <>
       <h1 className={styles.title}>{t('compare.title')}</h1>
-      <form onSubmit={submit} className={styles.compareForm}>
-        <div className={styles.field}>
-          <label htmlFor={fromId}>{t('compare.from')}</label>
-          <input
-            id={fromId}
-            className={controls.input}
-            list={listId}
-            value={from}
-            onChange={(e) => {
-              setFrom(e.target.value);
-            }}
-            autoComplete="off"
-          />
-        </div>
-        <div className={styles.field}>
-          <label htmlFor={toId}>{t('compare.to')}</label>
-          <input
-            id={toId}
-            className={controls.input}
-            list={listId}
-            value={to}
-            onChange={(e) => {
-              setTo(e.target.value);
-            }}
-            autoComplete="off"
-          />
-        </div>
-        <datalist id={listId}>
-          {(refs.data?.refs ?? []).map((r) => (
-            <option key={r.full_name} value={r.name} />
-          ))}
-        </datalist>
-        <button type="submit" className={controls.primary}>
-          {t('compare.submit')}
-        </button>
-      </form>
+      {/* Keyed by the address: the inputs follow it (back / forward, a link). */}
+      <CompareForm key={spec} projectId={projectId} project={project} parsed={parsed} />
       <p className={styles.hint}>{t('compare.hint')}</p>
 
       {parsed === null && <p>{t('compare.choose')}</p>}

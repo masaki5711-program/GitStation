@@ -24,6 +24,7 @@
 }
 
 .navLink {
+  composes: interactive from '../../components/controls.module.css';
   display: inline-block;
   padding: var(--gs-space-1) 0;
   border-bottom: 3px solid transparent;
@@ -330,4 +331,19 @@
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Rows answer the pointer like every other control (tokens only). */
+.table tbody tr:hover,
+.commit:hover {
+  background: var(--gs-color-hover-surface);
+}
+
+.table tbody tr:active,
+.commit:active {
+  background: var(--gs-color-active-surface);
+}
+
+.links a {
+  position: relative;
 }

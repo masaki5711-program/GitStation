@@ -1,12 +1,13 @@
 // Pieces the repository screens share: the resolved `{ref}[/{path}]` of an
 // address, the error display (an unresolved ref or path is a 404 with its own
 // message), the ref switcher and the path crumbs.
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 
 import { ApiFailure } from '../../api/client';
 import { useRefs, useSpec, type Spec } from '../../api/repo';
+import type { RefEntry, Rev } from '../../api/types';
 import { ErrorNotice } from '../../components/ErrorNotice';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
@@ -69,8 +70,18 @@ export function WithSpec({
   return <>{children(resolved.data)}</>;
 }
 
-/** A select over the branches and tags: choosing one goes to `to(name)`. */
-export function RefSwitcher({
+/** A select over the branches and tags and a button: changing the select
+ * only picks (arrow keys must not navigate, WCAG 3.2.2); the button goes to
+ * `to(name)`. The form is keyed by the current ref, so it follows the address. */
+export function RefSwitcher(props: {
+  projectId: number;
+  current: string;
+  to: (ref: string) => string;
+}) {
+  return <SwitcherForm key={props.current} {...props} />;
+}
+
+function SwitcherForm({
   projectId,
   current,
   to,
@@ -82,20 +93,27 @@ export function RefSwitcher({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const id = useId();
+  const [choice, setChoice] = useState(current);
   const refs = useRefs(projectId);
   const list = refs.data?.refs ?? [];
   const branches = list.filter((r) => r.type === 'branch');
   const tags = list.filter((r) => r.type === 'tag');
   const known = list.some((r) => r.name === current);
   return (
-    <div className={styles.switcher}>
+    <form
+      className={styles.switcher}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (choice !== current) void navigate(to(choice));
+      }}
+    >
       <label htmlFor={id}>{t('repo.switchRef')}</label>
       <select
         id={id}
         className={controls.input}
-        value={current}
+        value={choice}
         onChange={(e) => {
-          void navigate(to(e.target.value));
+          setChoice(e.target.value);
         }}
       >
         {!known && <option value={current}>{current.slice(0, 12)}</option>}
@@ -118,8 +136,11 @@ export function RefSwitcher({
           </optgroup>
         )}
       </select>
+      <button type="submit" className={controls.button}>
+        {t('repo.switchGo')}
+      </button>
       {refs.data?.truncated === true && <span className={styles.hint}>{t('repo.refsTruncated')}</span>}
-    </div>
+    </form>
   );
 }
 
@@ -161,6 +182,16 @@ export function PathCrumbs({
       </ol>
     </nav>
   );
+}
+
+/** The ref to put in a raw / archive address: the short name, unless a
+ * branch and a tag share it (the server reads a short name as the branch
+ * first, so the tag would silently give the branch's files): then the commit
+ * id, which names exactly one thing. */
+export function exactRef(rev: Rev, refs: RefEntry[] | undefined): string {
+  if (rev.type === 'commit') return rev.name;
+  const same = (refs ?? []).filter((r) => r.name === rev.name);
+  return same.length > 1 ? rev.commit : rev.name;
 }
 
 export function shortOid(oid: string): string {

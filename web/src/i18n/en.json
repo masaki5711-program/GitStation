@@ -156,7 +156,8 @@
     "navLabel": "Repository screens",
     "files": "Files",
     "commits": "Commits",
-    "compare": "Compare"
+    "compare": "Compare",
+    "switchGo": "Go"
   },
   "tree": {
     "title": "Files",
@@ -190,7 +191,8 @@
     "truncated": "Only the first 1 MiB of the file ({{size}} in all) is shown. The whole file is under \"Raw\".",
     "downloadOnly": "This format (SVG, HTML, XML, PDF) is not drawn on screen for safety; download it instead.",
     "symlinkTo": "Symbolic link to:",
-    "emptyFile": "This file is empty."
+    "emptyFile": "This file is empty.",
+    "lineLabel": "Line {{n}}"
   },
   "blame": {
     "title": "Blame",
@@ -200,7 +202,9 @@
     "tableLabel": "Who last changed each line",
     "commit": "Last changed in",
     "line": "Line",
-    "code": "Code"
+    "code": "Code",
+    "more": "Show more ({{count}} lines left)",
+    "showing": "Showing {{shown}} of {{total}} lines."
   },
   "commits": {
     "title": "Commits",
@@ -210,7 +214,8 @@
     "allPaths": "Show all commits",
     "empty": "There are no commits.",
     "more": "Load more",
-    "end": "That is all of them."
+    "end": "That is all of them.",
+    "loaded": "Loaded {{count}} more commits."
   },
   "commit": {
     "messageLabel": "Commit message",

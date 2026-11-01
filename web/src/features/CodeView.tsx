@@ -1,11 +1,12 @@
-// A file's text as numbered lines. Colours come from classes (`hljs-*`), the
-// numbers from a CSS counter (so copying the code never copies them); a line
-// has an id (`L12`) a link can point at. The scroll area is a focusable
-// region (keyboard users can scroll it).
+// A file's text as numbered lines in a table: the line number is a row header
+// and a link to that line (`#L12`, reachable by keyboard, named "Line 12"),
+// not selectable text, so copying the code never copies the numbers. Colours
+// come from classes (`hljs-*`). The scroll area is a focusable region.
 import type { ElementContent } from 'hast';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import controls from '../components/controls.module.css';
 import { highlightLines, plainLines, type Line } from './highlight';
 import styles from './CodeView.module.css';
 
@@ -24,62 +25,91 @@ function renderNode(node: ElementContent, key: number): ReactNode {
   );
 }
 
-/** The highlighted lines of a text; `null` until they are ready or when the
- * file has no grammar (the caller then shows plain lines). A failure to load
- * a grammar is logged once and the file stays plain. */
+/** The highlighted lines of a text; `null` until they are ready, when the
+ * file has no grammar, or when loading the grammar failed (the caller then
+ * shows the current text as plain lines). The result belongs to the exact
+ * path and text it was made for: a new text never shows the old colours. A
+ * failure is logged once, as unexpected failures of the page are. */
 export function useHighlighted(path: string, text: string): Line[] | null {
-  const [state, setState] = useState<{ key: string; lines: Line[] | null }>({
-    key: '',
-    lines: null,
-  });
-  const key = `${path}\0${text.length}`;
+  const [state, setState] = useState<{ path: string; text: string; lines: Line[] | null } | null>(
+    null,
+  );
   useEffect(() => {
     let cancelled = false;
     highlightLines(path, text).then(
       (lines) => {
-        if (!cancelled) setState({ key, lines });
+        if (!cancelled) setState({ path, text, lines });
       },
       (error: unknown) => {
         console.error('gitstation: syntax colouring failed', error);
+        if (!cancelled) setState({ path, text, lines: null });
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [path, text, key]);
-  return state.key === key ? state.lines : null;
+  }, [path, text]);
+  return state !== null && state.path === path && state.text === text ? state.lines : null;
 }
+
+/** Lines in the page at first, and added by each "Show more" (a 20 000-line
+ * file is 20 000 rows with a link each). A `#L…` address opens its line. */
+export const CODE_WINDOW = 3000;
 
 export function CodeView({ path, text, label }: { path: string; text: string; label?: string }) {
   const { t } = useTranslation();
   const highlighted = useHighlighted(path, text);
-  const plain = highlighted === null ? plainLines(text) : null;
-  const count = highlighted?.length ?? plain?.length ?? 0;
+  const all: ReactNode[] =
+    highlighted !== null ? highlighted.map((line) => line.map(renderNode)) : plainLines(text);
+  const [limit, setLimit] = useState(CODE_WINDOW);
+  useEffect(() => {
+    const line = /^#L(\d+)$/.exec(window.location.hash);
+    const wanted = line === null ? 0 : Number(line[1]);
+    if (wanted > limit) setLimit(wanted + CODE_WINDOW);
+  }, [limit]);
+  const rows = all.slice(0, limit);
   return (
+    <>
     <div
       className={styles.scroll}
       role="region"
       aria-label={label ?? t('file.contentLabel')}
       tabIndex={0}
       data-testid="code"
-      data-lines={count}
+      data-lines={all.length}
     >
-      <pre className={`${styles.code} ${styles.tokens}`}>
-        <code>
-          {highlighted !== null
-            ? highlighted.map((line, i) => (
-                <span key={i} id={`L${i + 1}`} className={styles.line}>
-                  {line.map(renderNode)}
-                </span>
-              ))
-            : (plain ?? []).map((line, i) => (
-                <span key={i} id={`L${i + 1}`} className={styles.line}>
-                  {line}
-                </span>
-              ))}
-        </code>
-      </pre>
+      <table className={`${styles.code} ${styles.tokens}`}>
+        <tbody>
+          {rows.map((content, i) => (
+            <tr key={i} id={`L${i + 1}`} className={styles.line}>
+              <th scope="row" className={styles.number}>
+                <a href={`#L${i + 1}`} aria-label={t('file.lineLabel', { n: i + 1 })}>
+                  {i + 1}
+                </a>
+              </th>
+              <td className={styles.source}>{content}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
+    {rows.length < all.length && (
+      <p>
+        <span role="status" className={styles.hint}>
+          {t('blame.showing', { shown: rows.length, total: all.length })}
+        </span>{' '}
+        <button
+          type="button"
+          className={controls.button}
+          onClick={() => {
+            setLimit(rows.length + CODE_WINDOW);
+          }}
+        >
+          {t('blame.more', { count: all.length - rows.length })}
+        </button>
+      </p>
+    )}
+    </>
   );
 }
 

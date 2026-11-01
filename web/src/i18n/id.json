@@ -156,7 +156,8 @@
     "navLabel": "Layar repositori",
     "files": "Berkas",
     "commits": "Commit",
-    "compare": "Bandingkan"
+    "compare": "Bandingkan",
+    "switchGo": "Pergi"
   },
   "tree": {
     "title": "Berkas",
@@ -190,7 +191,8 @@
     "truncated": "Hanya 1 MiB pertama dari berkas ({{size}} seluruhnya) yang ditampilkan. Seluruh berkas ada di \"Mentah\".",
     "downloadOnly": "Format ini (SVG, HTML, XML, PDF) tidak digambar di layar demi keamanan; silakan unduh.",
     "symlinkTo": "Tautan simbolis ke:",
-    "emptyFile": "Berkas ini kosong."
+    "emptyFile": "Berkas ini kosong.",
+    "lineLabel": "Baris {{n}}"
   },
   "blame": {
     "title": "Blame",
@@ -200,7 +202,9 @@
     "tableLabel": "Siapa terakhir mengubah tiap baris",
     "commit": "Terakhir diubah di",
     "line": "Baris",
-    "code": "Isi"
+    "code": "Isi",
+    "more": "Tampilkan lebih banyak (sisa {{count}} baris)",
+    "showing": "Menampilkan {{shown}} dari {{total}} baris."
   },
   "commits": {
     "title": "Commit",
@@ -210,7 +214,8 @@
     "allPaths": "Tampilkan semua commit",
     "empty": "Tidak ada commit.",
     "more": "Muat lebih banyak",
-    "end": "Hanya itu semuanya."
+    "end": "Hanya itu semuanya.",
+    "loaded": "{{count}} commit lagi dimuat."
   },
   "commit": {
     "messageLabel": "Pesan commit",

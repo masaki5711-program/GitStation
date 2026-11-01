@@ -86,6 +86,9 @@ describe('tree', () => {
     await renderApp({ fetch: server.fetch, path: `${BASE}/tree/main`, lang: 'en' });
     const select = await screen.findByLabelText('Branch or tag');
     fireEvent.change(select, { target: { value: 'v1' } });
+    // Choosing does not navigate (arrow keys in a select would): the button does.
+    expect(screen.getByTestId('location').textContent).toBe(`${BASE}/tree/main`);
+    fireEvent.click(screen.getByRole('button', { name: 'Go' }));
     await waitFor(() => {
       expect(screen.getByTestId('location').textContent).toBe(`${BASE}/tree/v1`);
     });
@@ -179,9 +182,13 @@ describe('file', () => {
     });
     expect(code.querySelector('.hljs-comment')?.textContent).toBe('// sum');
     expect(code.querySelectorAll('[style]')).toHaveLength(0);
-    expect(code.querySelector('#L3')?.textContent).toBe('    a + b');
+    expect(code.querySelector('#L3 td')?.textContent).toBe('    a + b');
+    expect(code.querySelector('#L3 th a')?.getAttribute('aria-label')).toBe('Line 3');
+    expect(code.querySelector('#L3 th a')?.getAttribute('href')).toBe('#L3');
     // The text is intact after colouring.
-    expect(code.textContent).toBe(LIB_RS.replace(/\n$/, '').split('\n').join(''));
+    expect([...code.querySelectorAll('td')].map((td) => td.textContent).join('\n')).toBe(
+      LIB_RS.replace(/\n$/, ''),
+    );
     const calls = server.to('GET', '/api/v1/projects/7/repository/blob');
     expect(calls[0]?.query.get('ref')).toBe('refs/heads/main');
     expect(calls[0]?.query.get('path')).toBe('src/lib.rs');
@@ -192,7 +199,7 @@ describe('file', () => {
     await renderApp({ fetch: server.fetch, path: `${BASE}/blob/main/src/lib.rs`, lang: 'en' });
     await screen.findByTestId('code');
     expect(screen.getByRole('link', { name: 'Raw' }).getAttribute('href')).toBe(
-      '/acme/forge-web/-/raw/main/src/lib.rs',
+      `/acme/forge-web/-/raw/${C1}/src/lib.rs`,
     );
     expect(screen.getByRole('link', { name: 'Download' }).getAttribute('download')).toBe('lib.rs');
     expect(screen.getByRole('link', { name: 'Blame' }).getAttribute('href')).toBe(
@@ -211,7 +218,7 @@ describe('file', () => {
       `${BASE}/blob/main/docs/guide.md`,
     );
     expect(screen.getByRole('link', { name: 'outside link' }).getAttribute('rel')).toBe('noopener noreferrer');
-    expect(screen.getByAltText('logo').getAttribute('src')).toBe('/acme/forge-web/-/raw/main/logo.png');
+    expect(screen.getByAltText('logo').getAttribute('src')).toBe(`/acme/forge-web/-/raw/${C1}/logo.png`);
     fireEvent.click(screen.getByRole('button', { name: 'Source' }));
     expect((await screen.findByTestId('code')).textContent).toContain('# Press Line Spec');
     expect(screen.queryByTestId('markdown')).toBeNull();
@@ -262,7 +269,7 @@ describe('file', () => {
     const server = mockServer(repoRoutes());
     await renderApp({ fetch: server.fetch, path: `${BASE}/blob/main/logo.png`, lang: 'en' });
     const img = await screen.findByAltText('logo.png');
-    expect(img.getAttribute('src')).toBe('/acme/forge-web/-/raw/main/logo.png');
+    expect(img.getAttribute('src')).toBe(`/acme/forge-web/-/raw/${C1}/logo.png`);
     expect(screen.queryByTestId('binary')).toBeNull();
   });
 
@@ -314,6 +321,12 @@ describe('file', () => {
     const code = await screen.findByTestId('code');
     expect(code.getAttribute('data-lines')).toBe('20000');
     expect(code.querySelector('.hljs-keyword')).toBeNull();
+    // Only a window is in the page; "Show more" widens it.
+    expect(code.querySelectorAll('tr')).toHaveLength(3000);
+    fireEvent.click(screen.getByRole('button', { name: /Show more \(17000 lines left\)/ }));
+    await waitFor(() => {
+      expect(code.querySelectorAll('tr')).toHaveLength(6000);
+    });
   });
 
   it('a path that is a folder goes to the tree screen', async () => {
@@ -735,5 +748,135 @@ describe('words and addresses', () => {
       view.unmount();
     }
     expect(document.querySelectorAll('style').length).toBe(before);
+  });
+});
+
+describe('review fixes (MR10)', () => {
+  it('a new text with the same path and length never shows the old colours', async () => {
+    const { useHighlighted } = await import('../src/features/CodeView');
+    const { renderHook, waitFor: wait } = await import('@testing-library/react');
+    const view = renderHook(({ text }) => useHighlighted('x.rs', text), {
+      initialProps: { text: 'fn aa() {}' },
+    });
+    await wait(() => {
+      expect(view.result.current).not.toBeNull();
+    });
+    // Same path, same length, different content: the old lines must not be returned.
+    view.rerender({ text: 'xx bb() {}' });
+    expect(view.result.current).toBeNull();
+    await wait(() => {
+      expect(view.result.current).not.toBeNull();
+    });
+    const first = (view.result.current ?? [])[0] ?? [];
+    expect(JSON.stringify(first)).toContain('xx ');
+    expect(JSON.stringify(first)).not.toContain('"fn"');
+  });
+
+  it('a failed grammar load leaves the current text as plain lines and is logged', async () => {
+    const { vi } = await import('vitest');
+    const hl = await import('../src/features/highlight');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const boom = vi.spyOn(hl, 'highlightLines').mockRejectedValue(new Error('chunk failed'));
+    const server = mockServer(repoRoutes());
+    await renderApp({ fetch: server.fetch, path: `${BASE}/blob/main/src/lib.rs`, lang: 'en' });
+    const code = await screen.findByTestId('code');
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalled();
+    });
+    expect(code.querySelector('#L3 td')?.textContent).toBe('    a + b');
+    expect(code.querySelector('.hljs-keyword')).toBeNull();
+    boom.mockRestore();
+    spy.mockRestore();
+  });
+
+  it('raw, image and archive addresses name one thing when a branch and a tag share a name', async () => {
+    const refs = {
+      default_branch: 'main',
+      truncated: false,
+      refs: [
+        ...REFS_FILLED.refs,
+        { name: 'dev', full_name: 'refs/tags/dev', type: 'tag', target: C2, commit: C2 },
+      ],
+    };
+    const server = mockServer(
+      repoRoutes({ 'GET /api/v1/projects/7/repository/refs': () => json(200, refs) }),
+    );
+    const first = await renderApp({ fetch: server.fetch, path: `${BASE}/tree/dev`, lang: 'en' });
+    expect((await screen.findByRole('link', { name: 'Download zip' })).getAttribute('href')).toBe(
+      `/acme/forge-web/-/archive/${C2}.zip`,
+    );
+    first.unmount();
+    const other = mockServer(repoRoutes());
+    await renderApp({ fetch: other.fetch, path: `${BASE}/tree/dev`, lang: 'en' });
+    expect((await screen.findByRole('link', { name: 'Download zip' })).getAttribute('href')).toBe(
+      '/acme/forge-web/-/archive/dev.zip',
+    );
+  });
+
+  it('a diff opens at most a total budget of rows; the rest is folded, with aria-expanded and focus on reveal', async () => {
+    const lines = ['@@ -1,500 +1,500 @@', ...Array.from({ length: 499 }, (_, i) => ` row ${i}`)];
+    const files = Array.from({ length: 6 }, (_, i) => ({
+      ...DIFF.files[0],
+      old_path: `f${i}.rs`,
+      new_path: `f${i}.rs`,
+      patch: lines.join('\n'),
+    }));
+    const server = mockServer(
+      repoRoutes({
+        [`GET /api/v1/projects/7/repository/commits/${C1}`]: () =>
+          json(200, { ...COMMIT_DETAIL, diff: { truncated: false, files } }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: `${BASE}/commit/${C1}`, lang: 'en' });
+    const folded = await screen.findAllByRole('button', { name: /Show the diff/ });
+    // 2000 rows / 500 per file: four open, two folded.
+    expect(folded).toHaveLength(2);
+    expect(folded[0]?.getAttribute('aria-expanded')).toBe('false');
+    expect(folded[0]?.getAttribute('aria-controls')).toBeTruthy();
+    fireEvent.click(folded[0] as HTMLElement);
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('region');
+    });
+  });
+
+  it('blame shows a window of lines and "Show more" widens it', async () => {
+    const many = Array.from({ length: 1200 }, (_, i) => `l${i}`);
+    const server = mockServer(
+      repoRoutes({
+        'GET /api/v1/projects/7/repository/blame': () =>
+          json(200, { ...BLAME, hunks: [{ commit: C1, start: 1, orig_start: 1, lines: many }] }),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: `${BASE}/blame/main/src/lib.rs`, lang: 'en' });
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(501);
+    expect(screen.getAllByRole('status').some((s) => s.textContent.includes('500 of 1200'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Show more \(700 lines left\)/ }));
+    await waitFor(() => {
+      expect(within(table).getAllByRole('row')).toHaveLength(1001);
+    });
+  });
+
+  it('after "Load more" the focus is on the first new commit and a live region says how many', async () => {
+    const pageOne = { ref: MAIN, head: C1, path: '', commits: [COMMIT_1], next_cursor: 'c1', has_more: true };
+    const server = mockServer(
+      repoRoutes({
+        'GET /api/v1/projects/7/repository/commits': (c) =>
+          json(
+            200,
+            c.query.get('cursor') === null
+              ? pageOne
+              : { ...pageOne, commits: [COMMIT_2], next_cursor: null, has_more: false },
+          ),
+      }),
+    );
+    await renderApp({ fetch: server.fetch, path: `${BASE}/commits`, lang: 'en' });
+    await screen.findByTestId('commit-list');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    const second = await screen.findByRole('link', { name: 'Initial commit' });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(second);
+    });
+    expect(screen.getAllByRole('status').some((s) => s.textContent === 'Loaded 1 more commits.')).toBe(true);
   });
 });

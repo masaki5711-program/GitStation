@@ -156,7 +156,8 @@
     "navLabel": "リポジトリの画面",
     "files": "ファイル",
     "commits": "コミット",
-    "compare": "比較"
+    "compare": "比較",
+    "switchGo": "切り替える"
   },
   "tree": {
     "title": "ファイル",
@@ -190,7 +191,8 @@
     "truncated": "ファイル全体（{{size}}）のうち、先頭の 1 MiB だけを表示しています。全体は「生のファイル」で見られます。",
     "downloadOnly": "この形式（SVG・HTML・XML・PDF）は、安全のため画面では描かずダウンロードだけにしています。",
     "symlinkTo": "シンボリックリンクの行き先:",
-    "emptyFile": "このファイルは空です。"
+    "emptyFile": "このファイルは空です。",
+    "lineLabel": "{{n}} 行目"
   },
   "blame": {
     "title": "行ごとの履歴",
@@ -200,7 +202,9 @@
     "tableLabel": "行ごとの変更者",
     "commit": "最後に変えたコミット",
     "line": "行",
-    "code": "内容"
+    "code": "内容",
+    "more": "さらに表示（残り {{count}} 行）",
+    "showing": "{{total}} 行のうち {{shown}} 行を表示しています。"
   },
   "commits": {
     "title": "コミット",
@@ -210,7 +214,8 @@
     "allPaths": "すべてのコミットを見る",
     "empty": "コミットはありません。",
     "more": "さらに読み込む",
-    "end": "以上がすべてです。"
+    "end": "以上がすべてです。",
+    "loaded": "{{count}} 件を追加で読み込みました。"
   },
   "commit": {
     "messageLabel": "コミットのメッセージ",

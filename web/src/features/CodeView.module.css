@@ -1,5 +1,5 @@
 /* Code: colours from the token set only; the highlight.js classes are global
- * names, scoped here under .code. */
+ * names, scoped here under .tokens. */
 .scroll {
   overflow: auto;
   max-width: 100%;
@@ -9,36 +9,46 @@
 }
 
 .code {
-  margin: 0;
-  padding: var(--gs-space-2) 0;
-  font-size: var(--gs-font-size-sm);
-  line-height: 1.5;
-  counter-reset: line;
+  border-collapse: collapse;
   width: max-content;
   min-width: 100%;
-}
-
-.line {
-  display: block;
-  min-height: 1.5em;
-  padding: 0 var(--gs-space-3) 0 0;
-  white-space: pre;
-  counter-increment: line;
-}
-
-.line::before {
-  content: counter(line);
-  display: inline-block;
-  min-width: 4ch;
-  margin-right: var(--gs-space-3);
-  padding: 0 var(--gs-space-2);
-  text-align: right;
-  color: var(--gs-color-text-muted);
-  user-select: none;
+  font-family: var(--gs-font-mono);
+  font-size: var(--gs-font-size-sm);
+  line-height: var(--gs-code-line-height);
+  tab-size: var(--gs-code-tab-size);
 }
 
 .line:target {
   background: var(--gs-color-warning-surface);
+}
+
+/* The line numbers stay in view while the code scrolls sideways. */
+.number {
+  position: sticky;
+  left: 0;
+  min-width: 4ch;
+  padding: 0;
+  text-align: right;
+  font-weight: normal;
+  background: var(--gs-color-code-surface);
+  user-select: none;
+}
+
+.number a {
+  display: block;
+  padding: 0 var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+  text-decoration: none;
+}
+
+.number a:hover {
+  text-decoration: underline;
+  color: var(--gs-color-link);
+}
+
+.source {
+  padding: 0 var(--gs-space-3);
+  white-space: pre;
 }
 
 .tokens :global(.hljs-keyword),
@@ -93,4 +103,9 @@
 
 .tokens :global(.hljs-strong) {
   font-weight: bold;
+}
+
+.hint {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
 }

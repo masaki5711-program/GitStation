@@ -36,6 +36,8 @@ export function RefsScreen({
     );
   }
   const list = refs.data.refs.filter((r) => r.type === type);
+  // A branch and a tag with one name: the short name would mean the branch.
+  const shared = (name: string) => refs.data.refs.filter((r) => r.name === name).length > 1;
   return (
     <>
       <h1 className={styles.title}>{title}</h1>
@@ -81,11 +83,11 @@ export function RefsScreen({
                 <td>
                   {r.commit !== null && (
                     <span className={styles.links}>
-                      <a href={archiveUrl(project, r.name, 'zip')}>
+                      <a href={archiveUrl(project, shared(r.name) ? r.commit : r.name, 'zip')}>
                         {t('refs.zip')}
                         <span className={styles.srOnly}> {r.name}</span>
                       </a>
-                      <a href={archiveUrl(project, r.name, 'tar.gz')}>
+                      <a href={archiveUrl(project, shared(r.name) ? r.commit : r.name, 'tar.gz')}>
                         {t('refs.targz')}
                         <span className={styles.srOnly}> {r.name}</span>
                       </a>

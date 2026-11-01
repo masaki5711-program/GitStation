@@ -1,6 +1,7 @@
 // The history of a ref (optionally of one path), newest first. The server
 // pages with a keyset cursor: "load more" asks for the next page from the
 // commit the first page was read at, so a push in between shifts nothing.
+import { useEffect, useRef, useState, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -14,10 +15,18 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { RefSwitcher, RepoError, shortOid, WithSpec } from './common';
 import styles from './Repo.module.css';
 
-export function CommitList({ project, commits }: { project: string; commits: CommitSummary[] }) {
+export function CommitList({
+  project,
+  commits,
+  listRef,
+}: {
+  project: string;
+  commits: CommitSummary[];
+  listRef?: Ref<HTMLOListElement>;
+}) {
   const { t, i18n } = useTranslation();
   return (
-    <ol className={styles.commits} data-testid="commit-list">
+    <ol className={styles.commits} data-testid="commit-list" ref={listRef}>
       {commits.map((c) => (
         <li key={c.oid} className={styles.commit}>
           <Link to={commitUrl(project, c.oid)} className={styles.subject}>
@@ -69,6 +78,19 @@ function History({
   const { t } = useTranslation();
   const commits = useCommits(projectId, refParam(rev), path);
   useDocumentTitle(t('commits.title'));
+  const list = useRef<HTMLOListElement>(null);
+  const before = useRef<number | null>(null);
+  const [announce, setAnnounce] = useState('');
+  const total = commits.data?.pages.reduce((n, p) => n + p.commits.length, 0) ?? 0;
+  // After "Load more" the focus goes to the first new commit, and a
+  // permanent live region says how many came (the button may be gone).
+  useEffect(() => {
+    const from = before.current;
+    if (from === null || total <= from) return;
+    list.current?.querySelectorAll('li')[from]?.querySelector('a')?.focus();
+    setAnnounce(t('commits.loaded', { count: total - from }));
+    before.current = null;
+  }, [total, t]);
   if (commits.isPending) return <Loading />;
   if (commits.isError && commits.data === undefined) {
     return (
@@ -95,11 +117,15 @@ function History({
           <Link to={commitsUrl(project, rev.name)}>{t('commits.allPaths')}</Link>
         </p>
       )}
-      {all.length === 0 ? <p>{t('commits.empty')}</p> : <CommitList project={project} commits={all} />}
+      {all.length === 0 ? <p>{t('commits.empty')}</p> : <CommitList project={project} commits={all} listRef={list} />}
+      <p role="status" className={styles.srOnly}>
+        {announce}
+      </p>
       {commits.isError && (
         <RepoError
           error={commits.error}
           onRetry={() => {
+            before.current = all.length;
             void commits.fetchNextPage();
           }}
         />
@@ -111,7 +137,9 @@ function History({
             className={controls.button}
             aria-disabled={commits.isFetchingNextPage ? 'true' : undefined}
             onClick={() => {
-              if (!commits.isFetchingNextPage) void commits.fetchNextPage();
+              if (commits.isFetchingNextPage) return;
+              before.current = all.length;
+              void commits.fetchNextPage();
             }}
           >
             {commits.isFetchingNextPage ? t('common.loading') : t('commits.more')}

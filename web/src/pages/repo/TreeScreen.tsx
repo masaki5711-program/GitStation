@@ -3,11 +3,13 @@
 // listing with the README.
 import { useTranslation } from 'react-i18next';
 
+import { useRefs } from '../../api/repo';
+
 import type { Spec } from '../../api/repo';
 import { CopyButton } from '../../components/CopyButton';
 import { archiveUrl, treeUrl } from '../../features/repoUrls';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import { PathCrumbs, RefSwitcher, WithSpec } from './common';
+import { exactRef, PathCrumbs, RefSwitcher, WithSpec } from './common';
 import { TreeListing } from './TreeListing';
 import styles from './Repo.module.css';
 
@@ -22,14 +24,7 @@ export function TreeScreen({
 }) {
   return (
     <WithSpec projectId={projectId} project={project} spec={spec}>
-      {(s) => (
-        <Files
-          projectId={projectId}
-          project={project}
-          rev={s.rev.name}
-          spec={s}
-        />
-      )}
+      {(s) => <Files projectId={projectId} project={project} spec={s} />}
     </WithSpec>
   );
 }
@@ -37,15 +32,16 @@ export function TreeScreen({
 function Files({
   projectId,
   project,
-  rev,
   spec,
 }: {
   projectId: number;
   project: string;
-  rev: string;
   spec: Spec;
 }) {
   const { t } = useTranslation();
+  const refs = useRefs(projectId);
+  const rev = spec.rev.name;
+  const archiveRef = exactRef(spec.rev, refs.data?.refs);
   const folder = spec.path === '' ? t('tree.root') : (spec.path.split('/').pop() ?? '');
   useDocumentTitle(spec.path === '' ? t('tree.title') : folder);
   const cloneUrl = `${window.location.origin}/${project}.git`;
@@ -56,8 +52,8 @@ function Files({
       <div className={styles.toolbar}>
         <RefSwitcher projectId={projectId} current={rev} to={(ref) => treeUrl(project, ref)} />
         <p className={styles.links}>
-          <a href={archiveUrl(project, rev, 'zip')}>{t('tree.downloadZip')}</a>
-          <a href={archiveUrl(project, rev, 'tar.gz')}>{t('tree.downloadTar')}</a>
+          <a href={archiveUrl(project, archiveRef, 'zip')}>{t('tree.downloadZip')}</a>
+          <a href={archiveUrl(project, archiveRef, 'tar.gz')}>{t('tree.downloadTar')}</a>
         </p>
       </div>
       <div className={styles.cloneLine}>

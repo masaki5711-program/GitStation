@@ -94,11 +94,13 @@ export interface MarkdownProps {
   refName: string;
   /** Directory of the document in the repository (`docs`, '' for the root). */
   dir: string;
+  /** What the raw addresses of images use (the commit id: exact); default `refName`. */
+  rawRef?: string;
   /** Added to every heading level (the page already has its own h1 / h2). */
   headingOffset?: number;
 }
 
-export function Markdown({ source, project, refName, dir, headingOffset = 0 }: MarkdownProps) {
+export function Markdown({ source, project, refName, dir, headingOffset = 0, rawRef }: MarkdownProps) {
   const { t } = useTranslation();
 
   const components: Components = {
@@ -140,7 +142,7 @@ export function Markdown({ source, project, refName, dir, headingOffset = 0 }: M
       if (resolved === null || resolved === '' || !isImagePath(resolved)) {
         return <span>{label}</span>;
       }
-      return <img src={rawUrl(project, refName, resolved)} alt={label} loading="lazy" />;
+      return <img src={rawUrl(project, rawRef ?? refName, resolved)} alt={label} loading="lazy" />;
     },
     input({ checked }) {
       return (

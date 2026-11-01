@@ -142,6 +142,7 @@ function Readme({
             {isMarkdownPath(path) ? (
               <MarkdownView
                 headingOffset={2}
+                rawRef={spec.rev.commit}
                 source={blob.data.content}
                 project={project}
                 refName={spec.rev.name}
