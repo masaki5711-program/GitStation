@@ -32,6 +32,12 @@ pub struct ServerLimitsConfig {
     /// connection (default 60 s, like `git.http.idle_timeout_ms`). Only a
     /// stalled socket counts: a git stream that keeps sending is never idle.
     pub write_idle_timeout: Duration,
+    /// `server.read_idle_timeout_ms`: a request body that delivers nothing
+    /// for this long, while the handler waits for it, fails the read
+    /// (default 60 s; not below `git.http.idle_timeout_ms`, which is checked
+    /// when the whole configuration is loaded). A request whose handler is
+    /// busy elsewhere is not affected.
+    pub read_idle_timeout: Duration,
 }
 
 impl ServerLimitsConfig {
@@ -43,6 +49,7 @@ impl ServerLimitsConfig {
         keep_alive_max: Duration::from_secs(600),
         keep_alive_max_requests: 1000,
         write_idle_timeout: Duration::from_secs(60),
+        read_idle_timeout: Duration::from_secs(60),
     };
 
     /// Cross-key rules (each key is already positive).

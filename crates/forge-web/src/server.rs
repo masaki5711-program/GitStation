@@ -30,13 +30,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
 use axum::http::header::{HeaderValue, CONNECTION, CONTENT_LANGUAGE, CONTENT_TYPE, RETRY_AFTER};
 use axum::http::Request;
 use axum::Router;
 use forge_core::config::ServerLimitsConfig;
 use forge_core::{telemetry, RequestId};
 use forge_errors::{ErrorCode, ForgeError, Lang};
-use hyper::body::Incoming;
+use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -62,6 +63,10 @@ pub struct ServerLimits {
     pub keep_alive_max_requests: u32,
     /// A response write without progress for this long closes the connection.
     pub write_idle_timeout: Duration,
+    /// A request body that delivers nothing for this long (while the
+    /// handler waits for it) fails the read. Not armed while a handler is
+    /// busy elsewhere, so a git fetch waiting for its response is not cut.
+    pub read_idle_timeout: Duration,
     /// How long in-flight requests may run after shutdown is requested.
     pub shutdown_grace: Duration,
 }
@@ -78,6 +83,7 @@ impl ServerLimits {
             keep_alive_max: cfg.keep_alive_max,
             keep_alive_max_requests: cfg.keep_alive_max_requests,
             write_idle_timeout: cfg.write_idle_timeout,
+            read_idle_timeout: cfg.read_idle_timeout,
             shutdown_grace: Duration::from_secs(30),
         }
     }
@@ -127,7 +133,22 @@ fn serve_failed(operation: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::ServeFailed).with_context("operation", operation)
 }
 
-/// Open connections per peer address.
+/// The key a peer is counted under: the address, except that an IPv6 peer
+/// counts as its /64 prefix (one subscriber routinely owns a whole /64, so
+/// per-address counting would give it 2^64 free identities). IPv4-mapped
+/// IPv6 addresses count as the IPv4 address.
+fn peer_key(ip: IpAddr) -> IpAddr {
+    match ip.to_canonical() {
+        IpAddr::V6(v6) => {
+            let mut octets = v6.octets();
+            octets[8..].fill(0);
+            IpAddr::V6(octets.into())
+        }
+        v4 => v4,
+    }
+}
+
+/// Open connections per peer key (see [`peer_key`]).
 struct PeerTable {
     counts: Mutex<HashMap<IpAddr, usize>>,
     limit: usize,
@@ -207,6 +228,18 @@ impl RefusalLog {
         self.last = Some(now);
         Some(std::mem::take(&mut self.suppressed))
     }
+
+    /// Log the refusals that were not logged one by one, once the flood has
+    /// stopped (after a quiet interval) and at shutdown.
+    fn flush(&mut self) {
+        let suppressed = std::mem::take(&mut self.suppressed);
+        if suppressed > 0 {
+            let err = ForgeError::new(ErrorCode::ServerBusy)
+                .with_context("reason", "summary")
+                .with_context("suppressed", suppressed);
+            telemetry::log_failure(&err, &RequestId::generate());
+        }
+    }
 }
 
 /// Serve until `shutdown` resolves; then stop accepting, let in-flight
@@ -235,6 +268,11 @@ pub async fn serve(
     loop {
         let accepted = tokio::select! {
             () = &mut shutdown => break,
+            // No connection for a whole interval: the flood is over.
+            () = tokio::time::sleep(REFUSAL_LOG_INTERVAL), if refusal_log.suppressed > 0 => {
+                refusal_log.flush();
+                continue;
+            }
             accepted = listener.accept() => accepted,
         };
         let (stream, peer) = match accepted {
@@ -252,7 +290,7 @@ pub async fn serve(
             }
         };
         let ip = peer.ip().to_canonical();
-        match admit(&peers, &slots, ip, limits.max_connections) {
+        match admit(&peers, &slots, peer_key(ip), limits.max_connections) {
             Ok((permit, guard)) => {
                 tokio::spawn(run_connection(
                     stream,
@@ -288,6 +326,7 @@ pub async fn serve(
         }
     }
 
+    refusal_log.flush();
     drop(listener);
     stop.send_replace(true);
     tokio::select! {
@@ -379,8 +418,14 @@ async fn run_connection(
     ));
     let served = Arc::new(AtomicU32::new(0));
     let max_requests = limits.keep_alive_max_requests;
+    let read_idle = limits.read_idle_timeout;
     let service = service_fn(move |req: Request<Incoming>| {
         let router = router.clone();
+        let (parts, body) = req.into_parts();
+        let req = Request::from_parts(
+            parts,
+            axum::body::Body::new(IdleBody::new(body, read_idle, peer)),
+        );
         let nth = served.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         async move {
             let mut res = match router.oneshot(req).await {
@@ -440,8 +485,7 @@ async fn run_connection(
 /// never cut by it.
 struct WriteIdle {
     inner: TcpStream,
-    idle: Duration,
-    timer: Option<Pin<Box<Sleep>>>,
+    timer: IdleTimer,
     stalled: Arc<AtomicBool>,
 }
 
@@ -449,26 +493,9 @@ impl WriteIdle {
     fn new(inner: TcpStream, idle: Duration, stalled: Arc<AtomicBool>) -> Self {
         Self {
             inner,
-            idle,
-            timer: None,
+            timer: IdleTimer::new(idle),
             stalled,
         }
-    }
-
-    /// The inner write is pending: arm the clock (once) and fail when it ran out.
-    fn pending<T>(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<T>> {
-        let idle = self.idle;
-        let timer = self
-            .timer
-            .get_or_insert_with(|| Box::pin(tokio::time::sleep(idle)));
-        if timer.as_mut().poll(cx).is_ready() {
-            self.stalled.store(true, Ordering::Relaxed);
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "response write idle timeout",
-            )));
-        }
-        Poll::Pending
     }
 
     fn settle<T>(
@@ -477,12 +504,175 @@ impl WriteIdle {
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<T>> {
         match polled {
-            Poll::Pending => self.pending(cx),
+            Poll::Pending if self.timer.stalled(cx) => {
+                self.stalled.store(true, Ordering::Relaxed);
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "response write idle timeout",
+                )))
+            }
+            Poll::Pending => Poll::Pending,
             ready => {
-                self.timer = None;
+                self.timer.progress();
                 ready
             }
         }
+    }
+}
+
+/// What an [`IdleTimer`] decided at a pending poll.
+#[derive(Debug, PartialEq, Eq)]
+enum Wait {
+    Expired,
+    Left(Duration),
+}
+
+/// Measures how long something has been *waiting* (a pending write, a
+/// pending body read). It stores when the wait began, not an armed timer:
+/// if nobody polled for longer than twice the idle time, the gap was not a
+/// stall of the peer (nothing asked it to make progress), so the wait starts
+/// over instead of firing at once on a stale deadline.
+struct IdleTimer {
+    idle: Duration,
+    since: Option<Instant>,
+    last_poll: Option<Instant>,
+    wake: Option<Pin<Box<Sleep>>>,
+}
+
+impl IdleTimer {
+    fn new(idle: Duration) -> Self {
+        Self {
+            idle,
+            since: None,
+            last_poll: None,
+            wake: None,
+        }
+    }
+
+    /// Progress was made: the next pending poll starts a new wait.
+    fn progress(&mut self) {
+        self.since = None;
+        self.last_poll = None;
+    }
+
+    /// A poll returned pending at `now`.
+    fn pending_at(&mut self, now: Instant) -> Wait {
+        if self
+            .last_poll
+            .is_some_and(|t| now.duration_since(t) > self.idle.saturating_mul(2))
+        {
+            self.since = None;
+        }
+        let since = *self.since.get_or_insert(now);
+        self.last_poll = Some(now);
+        match self.idle.checked_sub(now.duration_since(since)) {
+            Some(left) if !left.is_zero() => Wait::Left(left),
+            _ => Wait::Expired,
+        }
+    }
+
+    /// `true` when the wait ran out; otherwise the task is woken when it would.
+    fn stalled(&mut self, cx: &mut Context<'_>) -> bool {
+        let Wait::Left(left) = self.pending_at(Instant::now()) else {
+            return true;
+        };
+        let deadline = tokio::time::Instant::now() + left;
+        let wake = match &mut self.wake {
+            Some(sleep) => {
+                sleep.as_mut().reset(deadline);
+                sleep
+            }
+            none => none.insert(Box::pin(tokio::time::sleep_until(deadline))),
+        };
+        if wake.as_mut().poll(cx).is_ready() {
+            cx.waker().wake_by_ref();
+        }
+        false
+    }
+}
+
+/// The request body as the handler reads it: a read that stays pending for
+/// `idle` fails with [`ReadError::Idle`]. Only a handler that is waiting on
+/// the body polls it, so a request whose handler is busy elsewhere (a git
+/// fetch computing its response) is never cut by this.
+struct IdleBody {
+    inner: Incoming,
+    timer: IdleTimer,
+    peer: IpAddr,
+    reported: bool,
+}
+
+impl IdleBody {
+    fn new(inner: Incoming, idle: Duration, peer: IpAddr) -> Self {
+        Self {
+            inner,
+            timer: IdleTimer::new(idle),
+            peer,
+            reported: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ReadError {
+    Idle,
+    Hyper(hyper::Error),
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("request body idle timeout"),
+            Self::Hyper(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Idle => None,
+            Self::Hyper(e) => Some(e),
+        }
+    }
+}
+
+impl hyper::body::Body for IdleBody {
+    type Data = Bytes;
+    type Error = ReadError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, ReadError>>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(frame) => {
+                this.timer.progress();
+                Poll::Ready(frame.map(|f| f.map_err(ReadError::Hyper)))
+            }
+            Poll::Pending if this.timer.stalled(cx) => {
+                if !this.reported {
+                    this.reported = true;
+                    let err = ForgeError::new(ErrorCode::RequestTimeout)
+                        .with_context("operation", "request_read")
+                        .with_context("kind", "idle")
+                        .with_context("peer", this.peer)
+                        .with_context("idle_ms", this.timer.idle.as_millis());
+                    telemetry::log_failure(&err, &RequestId::generate());
+                }
+                Poll::Ready(Some(Err(ReadError::Idle)))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        self.inner.size_hint()
     }
 }
 

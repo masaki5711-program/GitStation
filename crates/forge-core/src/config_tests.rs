@@ -872,6 +872,19 @@ fn server_limits_have_defaults_file_env_and_rules() {
         ),
         (
             vec![
+                ("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "6000"),
+            ],
+            "server.read_idle_timeout_ms",
+            "below_git_idle_timeout",
+        ),
+        (
+            vec![("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "0")],
+            "server.read_idle_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![
                 ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "5000"),
                 ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),
             ],

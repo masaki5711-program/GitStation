@@ -245,8 +245,10 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
 - Done in M1 phase 9 MR0 (`src/server.rs`, runbook connections): per-peer
   and global connection caps (`FG-WEB-0008`, 503 + `Retry-After`, refused
   before any request is read), keep-alive lifetime / request count (close
-  after the running request), response-write idle timeout. The peer is the
-  socket address: no trusted-proxy setting exists, so behind a reverse proxy
+  after the running request), response-write idle timeout, request-body
+  read-idle timeout (`server.read_idle_timeout_ms`, armed only while a
+  handler waits on the body; at least `git.http.idle_timeout_ms`, checked at
+  load). The peer is the socket address (IPv6 counted by /64): no trusted-proxy setting exists, so behind a reverse proxy
   `server.max_connections_per_peer` caps the proxy as a whole. Still open: a
   body-limit (413) test — `DefaultBodyLimit` has no consumer yet (every body
   reader sets its own cap; the first extractor route in phase 8b needs it).

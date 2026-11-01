@@ -123,6 +123,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Rules across sections: a server read-idle timeout shorter than the
+    /// git idle timeout would cut a slow Smart HTTP body before git's own
+    /// (documented) idle limit.
+    fn validate_across(self) -> Result<Self, ForgeError> {
+        if self.server.limits.read_idle_timeout < self.git_http.idle_timeout {
+            return Err(invalid(
+                "server.read_idle_timeout_ms",
+                "below_git_idle_timeout",
+            ));
+        }
+        Ok(self)
+    }
+
     /// The storage root; required by commands that touch repositories.
     pub fn storage_root(&self) -> Result<&Path, ForgeError> {
         self.storage
@@ -287,7 +300,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         return Err(invalid("database.min_connections", "above_max"));
     }
 
-    Ok(Config {
+    Config {
         server: ServerConfig {
             bind: bind.to_owned(),
             limits: server_limits(get)?,
@@ -326,7 +339,8 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         },
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
-    })
+    }
+    .validate_across()
 }
 
 /// `server.*` connection limits, defaults from [`ServerLimitsConfig::DEFAULT`].
@@ -358,6 +372,7 @@ fn server_limits<'a>(
             "server.write_idle_timeout_ms",
             ms(d.write_idle_timeout),
         )?,
+        read_idle_timeout: millis(get, "server.read_idle_timeout_ms", ms(d.read_idle_timeout))?,
     }
     .validate()
 }
