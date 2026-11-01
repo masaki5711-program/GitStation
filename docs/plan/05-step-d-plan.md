@@ -284,3 +284,23 @@ transfer / delete wait for D5 (planned in the C-1 gate).
 Answers (recommended, adopted): L1; is_agent becomes an authz input in MR8; project parent in the body, subgroups via their own
 route; project.updated / group.updated audit-only in M1; gstn as a separate series. Opus for MR6/MR7a/MR8 core and security
 reviews; Sonnet for schemas, docs regeneration, matrix boilerplate, list tests and most gstn glue.
+
+## D5 plan (planner, 2026-11-01) — approved under the user's standing "推奨で進める"
+
+Option **A**: all of ADR-0015 rename / transfer / delete / restore / purge / tombstone release in M1, through API + worker + operator
+CLI (one subtree-move routine for project, group and user renames). Premises found: `Resource::Transfer` is the pre-ADR shape
+(admins must NOT move a project to top level); GroupTransfer / UserRename / NamespaceTombstoneRelease actions missing; ChangeTx
+writes one audit row (subtree moves need one per affected project — closes the ADR-0015 D1 note); purge needs DELETE grants, a
+`purging` repository state, `run_after` on jobs and a forge-git remove; create can read a moved parent's new path outside its
+advisory lock → re-check the locked path in MR2; storage is keyed by RepoId (renames never touch disk).
+MRs: **MR1** `feat/auth-transfer-targets` (Opus) ∥ **MR2** `feat/db-namespace-move` (Opus) → **MR3**
+`feat/hosting-project-delete-restore` (Sonnet, Opus review) → {**MR4** `feat/repo-purge` (Opus) ∥ **MR5**
+`feat/web-api-namespace-moves` (Opus)} → `feat/client-gstn-hosting` adds repo rename/transfer/delete/restore.
+Codes: FG-REPO-0015 TransferInvalid (409), FG-REPO-0018 RenameRateLimited (429), FG-REPO-0019 RestoreUnavailable (409),
+FG-REPO-0020 RepositoryPurgeStuck (alert, runbook repository-purge). Runbooks: repository-purge, namespace-redirects.
+Answers (recommended, adopted): one audit row per affected project; `reclaim` flag for A→B→A (release + rename in one transaction,
+only when the tombstone points at the same namespace; ADR-0015 amendment); purge deletes the rows; a deleted tombstone's
+owner_at_write = deleted_by; rate limit 10 moves per namespace per 24 h (admins included, operator CLI exempt); agents denied
+every D5 action incl. restore; UserRename changes username and namespace path; subtree cap 1000 namespaces; `project.purged`
+admin class, other project.* integration (ADR-0016 §10 amendment); operator `forge admin project purge --now`; deletion grace
+`hosting.deletion_grace` 7 d (min 1 d); pending deletion: 410 for callers who can see the project, 404 for others.
