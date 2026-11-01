@@ -82,7 +82,7 @@ async fn the_worker_seals_numbered_rows_and_drains_a_backlog_at_once() {
         let (dir, storage) = super::provision::tests::storage();
         tokio::spawn(async move {
             let _root = dir;
-            run(&db, seal_keys(), &storage, stopped).await
+            run(&db, seal_keys(), &storage, None, stopped).await
         })
     };
     // The second seal holds fewer than eager_rows rows a moment after the
@@ -129,7 +129,7 @@ async fn a_gap_is_logged_once_with_its_code_and_request_id_while_the_worker_runs
         let (dir, storage) = super::provision::tests::storage();
         tokio::spawn(async move {
             let _root = dir;
-            run(&db, seal_keys(), &storage, stopped).await
+            run(&db, seal_keys(), &storage, None, stopped).await
         })
     };
     // Retried after the backoff (≤ 5 s) at least once in this time.

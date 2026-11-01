@@ -384,9 +384,37 @@ user_message_ja = "このプロジェクトは復元できません。"
 user_message_en = "This project cannot be restored."
 user_message_id = "Proyek ini tidak dapat dipulihkan."
 cause = "A restore (POST /api/v1/projects/{id}/restore, forge_db::projects::restore_decided, step D5 MR3, ADR-0015 Amendment D5) was decided and allowed, but the project cannot come back: it is not pending deletion (`reason=not_deleted`: it was restored already, or never deleted), or its repository is already being purged (`reason=purging`: the purge job has started, the bare repository is being removed and cannot be recovered). The project row is locked and the repository row read under the same transaction, so the answer is what the purge job will also see."
-diagnosis = "The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>) and the purge job (D5 MR4) is running or stuck; for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row."
+diagnosis = "The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>): the purge task of `forge worker` (D5 MR4) has started and finishes on its next run, or it is stuck (FG-REPO-0020, runbook repository-purge); for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row."
 fix = "`not_deleted`: nothing to do, the project is available. `purging`: the project cannot be restored; create it again under the same path once the purge has finished and the path is released (ADR-0015), or ask the operator to restore the repository from a backup."
 test = "restoring_a_project_that_is_not_deleted_or_is_purging_is_restore_unavailable"
+
+[[error]]
+code = "FG-REPO-0020"
+name = "RepositoryPurgeStuck"
+http_status = 500
+severity = "alert"
+user_message_ja = "削除したプロジェクトの完全削除が終わっていません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The purge of a deleted project has not finished. Contact the administrator with the request ID."
+user_message_id = "Penghapusan permanen proyek yang dihapus belum selesai. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The purge (step D5 MR4, ADR-0015 Amendment D5: the `purge` task of `forge worker` every `hosting.purge_interval_secs`, or `forge admin project purge --now`) could not finish one project whose grace period is over. The purge has two phases: (1) one transaction moves the repository to `purging` (after that the project can no longer be restored, FG-REPO-0019 reason=purging); (2) the bare directory is removed from the storage root (renamed aside, then deleted, bounded by a deadline) and one transaction deletes the rows (members, protected refs, repository, namespace, project), writes the `deleted` tombstone of the path, the `project.purged` audit row and event. A failure in either phase leaves the project as it was at the end of the last completed step; the next run resumes it (a `purging` repository never goes back to `ready`). `step` says where it failed: `lock` (taking the project's purge lock: the database), `start` (phase 1: the database), `provision_check` (reading the state of the repository's provisioning job), `storage` (the directory: FG-REPO-0001 a symlink or a file where the repository or a leftover should be — possible tampering, FG-REPO-0003 an I/O failure), `finish` (phase 2's transaction). Not failures (no code): a project whose purge lock another purge holds, and a removal slower than the run's 120 s wait (it goes on in the background holding the lock) — both are `forge.repo.purge_deferred` (`reason=in_progress` / `removal_running`)."
+diagnosis = "The log event of the purge task (`task=purge`, or the CLI's) carries `step`, `project_id`, `repo_id`, `cause_code` (the code of the underlying failure, whose own `context` is in `source`) and `overdue_s` (seconds since `purge_after`). The same project failing on every run is stuck; one failure followed by `forge.repo.purged` for that project was transient. Look at the state with privileged queries: SELECT state FROM forge.repositories WHERE project_id = <id>; SELECT deleted_at, purge_after FROM forge.projects WHERE id = <id>. `forge admin repo-path <repo_id>` prints the directory and whether it still exists; leftovers of an interrupted removal are named `.purge-<repo_id>-*.git` (and of an interrupted provisioning `.tmp-<repo_id>-*.git`) in the same shard directory. `cause_code=FG-DB-0009 reason=rejected` in `start` means the database guard refused `purging` (the project is not pending deletion or its grace period is not over: a clock difference, or a restore committed in between — it is skipped on the next run). A purge also waits (`forge.repo.purge_deferred`, not an error) while the repository's provisioning job is running."
+fix = "Follow the runbook: for FG-REPO-0003 free space or fix the permissions of the storage root, for FG-REPO-0001 inspect what is at the path (never delete it blindly: a symlink there may point outside the storage root), for database failures restore database access. Then run `forge admin project purge --dry-run` to see what is due and `forge admin project purge --now` (an approved runbook step) or wait for the next run of the worker: the purge resumes where it stopped and is idempotent (a directory already gone is not an error, the rows and the event are written once)."
+runbook = "repository-purge"
+test = "a_failed_purge_is_repository_purge_stuck_and_retried_next_run"
+
+[[error]]
+code = "FG-REPO-0021"
+name = "PurgeBatchIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "完全削除できなかったプロジェクトがあります。"
+user_message_en = "Some projects could not be purged."
+user_message_id = "Beberapa proyek tidak dapat dihapus permanen."
+cause = "`forge admin project purge --now` (step D5 MR4) ran one batch and at least one project failed. Each failed project was already logged on its own as FG-REPO-0020 RepositoryPurgeStuck (the alert); this summary only makes the command's exit code non-zero and is deliberately not an alert, so one failure never raises two."
+diagnosis = "The context carries `failed` and `purged`; the command's output has one line per project with `failed` and the project's `request_id`. Look up those request ids for the FG-REPO-0020 lines (`step`, `cause_code`)."
+fix = "Follow the runbook repository-purge for each failed project, then run `forge admin project purge --now` again (it resumes where it stopped)."
+runbook = "repository-purge"
+test = "now_fails_when_a_project_could_not_be_purged"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 

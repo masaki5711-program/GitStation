@@ -77,7 +77,7 @@ async fn the_worker_reaps_at_startup_and_stops_cleanly() {
         let (dir, storage) = super::provision::tests::storage();
         tokio::spawn(async move {
             let _root = dir;
-            run(&db, seal_keys(), &storage, stopped).await
+            run(&db, seal_keys(), &storage, None, stopped).await
         })
     };
     until(&t, "the reaper never ran", |h| h.oldest_expired.is_none()).await;

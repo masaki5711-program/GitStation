@@ -5,7 +5,7 @@ use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
-use crate::repository::RepositoryKind;
+use crate::repository::{RepositoryKind, RepositoryState};
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
@@ -250,6 +250,35 @@ pub enum AuditDetails {
         deleted_by: Option<UserId>,
     },
     // ── end D5 MR3 ──
+    // ── D5 MR4: purge ──
+    /// `repository.purge_started` (audit-only): phase 1 of the purge moved
+    /// the repository of a project whose grace period is over to
+    /// `purging` (`from`: its state before, `provisioning` or `ready`).
+    RepositoryPurgeStarted {
+        project_id: ProjectId,
+        repository_id: RepoId,
+        from: RepositoryState,
+    },
+    /// `project.purged`: also the payload of the event (admin class). The
+    /// bare directory is gone (`storage_removed`: it was there; false when
+    /// it was already absent), the rows are deleted, the path is kept by a
+    /// `deleted` tombstone (`tombstone_id`), and `redirects_ended` `moved`
+    /// tombstones lost their target (they keep blocking their paths). The
+    /// deletion's times are UTC RFC 3339.
+    ProjectPurged {
+        project_id: ProjectId,
+        repository_id: RepoId,
+        namespace_id: NamespaceId,
+        deleted_at: String,
+        purge_after: String,
+        deleted_by: Option<UserId>,
+        tombstone_id: TombstoneId,
+        redirects_ended: i64,
+        members_removed: i64,
+        protected_refs_removed: i64,
+        storage_removed: bool,
+    },
+    // ── end D5 MR4 ──
 }
 
 impl AuditDetails {
@@ -286,6 +315,8 @@ impl AuditDetails {
             Self::TombstoneReleased { .. } => "namespace_tombstone.released",
             Self::ProjectDeleted { .. } => "project.deleted",
             Self::ProjectRestored { .. } => "project.restored",
+            Self::RepositoryPurgeStarted { .. } => "repository.purge_started",
+            Self::ProjectPurged { .. } => "project.purged",
         }
     }
 
@@ -328,6 +359,9 @@ impl AuditDetails {
             | Self::TombstoneReleased { .. } => None,
             Self::ProjectDeleted { .. } => Some(EventType::ProjectDeleted),
             Self::ProjectRestored { .. } => Some(EventType::ProjectRestored),
+            // D5 MR4: the start is audit-only; the end is the one event.
+            Self::RepositoryPurgeStarted { .. } => None,
+            Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
         }
     }
 
@@ -358,6 +392,10 @@ impl AuditDetails {
     /// ProjectVisibilityChanged `{"project_id","from","to"}`,
     /// ProjectDeleted / ProjectRestored
     /// `{"project_id","deleted_at","purge_after","deleted_by"}`,
+    /// RepositoryPurgeStarted `{"project_id","repository_id","from"}`,
+    /// ProjectPurged `{"project_id","repository_id","namespace_id","deleted_at",
+    /// "purge_after","deleted_by","tombstone_id","redirects_ended","members_removed",
+    /// "protected_refs_removed","storage_removed"}`,
     /// ProjectMoved `{"project_id"}` + [`MoveSummary`]'s fields,
     /// ProjectMovedWithAncestor `{"project_id","namespace_id","moved_namespace_id"}`,
     /// GroupMoved `{"group_id"}` + the summary, UserRenamed `{"user_id"}` +
@@ -569,6 +607,40 @@ impl AuditDetails {
                 "purge_after": purge_after,
                 "deleted_by": deleted_by.map(UserId::get),
             }),
+            Self::RepositoryPurgeStarted {
+                project_id,
+                repository_id,
+                from,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "repository_id": repository_id.get(),
+                "from": from.as_str(),
+            }),
+            Self::ProjectPurged {
+                project_id,
+                repository_id,
+                namespace_id,
+                deleted_at,
+                purge_after,
+                deleted_by,
+                tombstone_id,
+                redirects_ended,
+                members_removed,
+                protected_refs_removed,
+                storage_removed,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "repository_id": repository_id.get(),
+                "namespace_id": namespace_id.get(),
+                "deleted_at": deleted_at,
+                "purge_after": purge_after,
+                "deleted_by": deleted_by.map(UserId::get),
+                "tombstone_id": tombstone_id.get(),
+                "redirects_ended": redirects_ended,
+                "members_removed": members_removed,
+                "protected_refs_removed": protected_refs_removed,
+                "storage_removed": storage_removed,
+            }),
             Self::GroupMoved { group_id, summary } => with_id("group_id", group_id.get(), summary),
             Self::UserRenamed { user_id, summary } => with_id("user_id", user_id.get(), summary),
             Self::TombstoneReleased {
@@ -629,7 +701,9 @@ impl AuditDetails {
             | Self::UserRenamed { .. }
             | Self::TombstoneReleased { .. }
             | Self::ProjectDeleted { .. }
-            | Self::ProjectRestored { .. } => self.to_value(),
+            | Self::ProjectRestored { .. }
+            | Self::RepositoryPurgeStarted { .. }
+            | Self::ProjectPurged { .. } => self.to_value(),
         }
     }
 }

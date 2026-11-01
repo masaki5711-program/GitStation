@@ -10,6 +10,9 @@ use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
+// ── D5 MR4 ──
+mod admin_project;
+// ── end D5 MR4 ──
 // ── D4 MR3b ──
 mod admin_repo;
 // ── end D4 MR3b ──
@@ -70,8 +73,9 @@ enum Command {
         command: DbCommand,
     },
     /// Operator commands. `token issue` / `token revoke`, `user disable`,
-    /// `bootstrap-admin`, `repo reprovision` and `repo record-push` change
-    /// data (in production: approved runbook steps); the others only read.
+    /// `bootstrap-admin`, `repo reprovision`, `repo record-push` and
+    /// `project purge --now` change data (in production: approved runbook
+    /// steps); the others only read.
     Admin {
         #[command(subcommand)]
         command: AdminCommand,
@@ -122,7 +126,32 @@ enum AdminCommand {
         command: RepoCommand,
     },
     // ── end D4 MR3b ──
+    // ── D5 MR4 ──
+    /// Projects (step D5).
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    // ── end D5 MR4 ──
 }
+
+// ── D5 MR4 ──
+#[derive(Subcommand)]
+enum ProjectCommand {
+    /// Purge the projects whose grace period is over (runbook
+    /// repository-purge): `--dry-run` lists them, `--now` runs one batch of
+    /// the worker's purge at once (removes their repositories and rows).
+    #[command(group(clap::ArgGroup::new("mode").required(true).args(["dry_run", "now"])))]
+    Purge {
+        /// List the projects due, change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Purge them now (at most one batch).
+        #[arg(long)]
+        now: bool,
+    },
+}
+// ── end D5 MR4 ──
 
 // ── D4 MR3b ──
 #[derive(Subcommand)]
@@ -241,6 +270,9 @@ fn main() -> ExitCode {
                 | AdminCommand::BootstrapAdmin { .. }
                 | AdminCommand::Repo {
                     command: RepoCommand::Reprovision { .. } | RepoCommand::RecordPush { .. },
+                }
+                | AdminCommand::Project {
+                    command: ProjectCommand::Purge { now: true, .. },
                 },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
@@ -250,6 +282,9 @@ fn main() -> ExitCode {
                 AdminCommand::RepoPath { .. }
                 | AdminCommand::Token {
                     command: TokenCommand::List { .. },
+                }
+                | AdminCommand::Project {
+                    command: ProjectCommand::Purge { now: false, .. },
                 },
         }
         | Command::Doctor { .. }
@@ -369,6 +404,12 @@ fn main() -> ExitCode {
         } => {
             config().and_then(|cfg| admin_repo::record_push(&cfg.database, &request_id, &from_log))
         }
+        Command::Admin {
+            command:
+                AdminCommand::Project {
+                    command: ProjectCommand::Purge { now, .. },
+                },
+        } => config().and_then(|cfg| admin_project::purge(&cfg, &request_id, now)),
         Command::Serve { bind } => config().and_then(|cfg| {
             let bind = bind.unwrap_or_else(|| cfg.server.bind.clone()); // clone: cfg is passed whole below
             serve::serve(&bind, &cfg)
@@ -490,6 +531,35 @@ mod tests {
         assert!(parse(&["admin", "repo", "record-push"]).is_err());
         // The read-only repo-path command is unchanged.
         assert!(parse(&["admin", "repo-path", "42"]).is_ok());
+    }
+
+    #[test]
+    fn project_purge_takes_exactly_one_of_dry_run_and_now() {
+        for (args, now) in [
+            (&["admin", "project", "purge", "--dry-run"][..], false),
+            (&["admin", "project", "purge", "--now"][..], true),
+        ] {
+            let cli = parse(args).expect("parses");
+            assert!(
+                matches!(
+                    cli.command,
+                    Command::Admin {
+                        command: AdminCommand::Project {
+                            command: ProjectCommand::Purge { now: n, .. }
+                        }
+                    } if n == now
+                ),
+                "{args:?}"
+            );
+        }
+        assert!(
+            parse(&["admin", "project", "purge"]).is_err(),
+            "a mode is required"
+        );
+        assert!(
+            parse(&["admin", "project", "purge", "--dry-run", "--now"]).is_err(),
+            "not both"
+        );
     }
 
     #[test]

@@ -854,3 +854,11 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 `EventType::ProjectDeleted` / `ProjectRestored`（integration クラス、§10 の Amendment D5 の表どおり）。ペイロードは監査の details と同じ
 `{project_id, deleted_at, purge_after, deleted_by}`（`deleted_by` は operator CLI の削除では null。restore では取り消す削除の値）。
 `dedup_key` の形は ADR-0015 の D5 MR3 の節。
+
+### D5 MR4: `project.purged`
+
+`EventType::ProjectPurged`（**admin** クラス。手順 D5 の計画の答え「`project.purged` は admin、他の `project.*` は integration」のとおり:
+プロジェクトはもう無いので、Reporter の役割で読める者を `authorize()` が決められない）。`project_id` は付ける（監査の行と同じ）。
+ペイロードは監査の details と同じ `{project_id, repository_id, namespace_id, deleted_at, purge_after, deleted_by, tombstone_id,
+redirects_ended, members_removed, protected_refs_removed, storage_removed}`（id・数・時刻だけ、パスや名前は入れない）。
+`dedup_key` = `project_purged:<project_id>`（プロジェクトの id は再利用されない）。開始の `repository.purge_started` は監査のみ。

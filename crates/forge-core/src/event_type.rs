@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -76,11 +76,18 @@ pub enum EventType {
     /// `project_restored:<project_id>:<deleted_at epoch>` of the deletion
     /// it undoes.
     ProjectRestored,
+    /// `project.purged` (D5 MR4; admin class, step D5 plan answer and
+    /// ADR-0016 §10 Amendment D5): the purge job removed the repository
+    /// and the rows of a project whose grace period was over. Admin class:
+    /// nobody holds a role on a project that no longer exists, so no
+    /// Reporter could be authorized for it. Deduplicated by
+    /// `project_purged:<project_id>` (ids are never reused).
+    ProjectPurged,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 14] = [
+    pub const ALL: [EventType; 15] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -95,6 +102,7 @@ impl EventType {
         EventType::ProjectVisibilityChanged,
         EventType::ProjectDeleted,
         EventType::ProjectRestored,
+        EventType::ProjectPurged,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -114,6 +122,7 @@ impl EventType {
             EventType::ProjectVisibilityChanged => "project.visibility_changed",
             EventType::ProjectDeleted => "project.deleted",
             EventType::ProjectRestored => "project.restored",
+            EventType::ProjectPurged => "project.purged",
         }
     }
 
@@ -130,7 +139,9 @@ impl EventType {
             | EventType::RepositoryPushed
             | EventType::ProjectDeleted
             | EventType::ProjectRestored => VisibilityClass::Integration,
-            EventType::TokenCreated | EventType::TokenRevoked => VisibilityClass::Admin,
+            EventType::TokenCreated | EventType::TokenRevoked | EventType::ProjectPurged => {
+                VisibilityClass::Admin
+            }
             EventType::MemberAdded
             | EventType::MemberRoleChanged
             | EventType::MemberRemoved

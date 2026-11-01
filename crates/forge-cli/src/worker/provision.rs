@@ -8,8 +8,14 @@
 //! event, a no-op when already ready). Every step is idempotent, so the
 //! at-least-once delivery of the job queue is safe.
 //!
+//! A repository being purged (D5 MR4, state `purging`) is never created:
+//! the run ends without touching the storage (`outcome=purging`); a run
+//! that created the directory just before the purge started gets
+//! `MarkReady::Purging` and leaves the directory to the purge, which waits
+//! while this job is running.
+//!
 //! Success is logged once here (`forge.repo.provisioned`: `repo_id`,
-//! `project_id`, `outcome` created | adopted | already_ready,
+//! `project_id`, `outcome` created | adopted | already_ready | purging,
 //! `duration_ms`); a failure is returned to the job runner, which logs it
 //! once with the job's origin `request_id`. Retry: storage failures follow
 //! `forge_git::storage::provision_error_is_retryable` (git timeout / busy /
@@ -169,6 +175,8 @@ fn outcome(made: &Provisioned, marked: MarkReady) -> &'static str {
     match marked {
         // A concurrent run marked it between the read and here.
         MarkReady::AlreadyReady { .. } => "already_ready",
+        // The purge started meanwhile: it removes the directory.
+        MarkReady::Purging { .. } => "purging",
         MarkReady::Marked { .. } => match made {
             Provisioned::Created(_) => "created",
             Provisioned::Adopted(_) => "adopted",
@@ -189,6 +197,9 @@ impl Inner {
             // An earlier attempt marked it ready and lost its lease before
             // completing: nothing left to do, never touch the directory.
             "already_ready"
+        } else if target.state == RepositoryState::Purging {
+            // D5 MR4: the project's purge has started; nothing to create.
+            "purging"
         } else {
             let s = &self.storage;
             let made = s

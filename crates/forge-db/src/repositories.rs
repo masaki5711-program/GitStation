@@ -252,12 +252,17 @@ pub enum MarkReady {
     Marked { project_id: ProjectId },
     /// The repository was ready already: nothing was written.
     AlreadyReady { project_id: ProjectId },
+    /// The purge has started (D5 MR4): the repository will never be ready;
+    /// nothing was written (the purge removes the directory).
+    Purging { project_id: ProjectId },
 }
 
 impl MarkReady {
     pub fn project_id(self) -> ProjectId {
         match self {
-            Self::Marked { project_id } | Self::AlreadyReady { project_id } => project_id,
+            Self::Marked { project_id }
+            | Self::AlreadyReady { project_id }
+            | Self::Purging { project_id } => project_id,
         }
     }
 }
@@ -322,10 +327,17 @@ async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, Forg
     let (project_id, kind, state) = tx
         .step(|c| lock_repository(c, repo, "repositories.mark_ready.lock"))
         .await?;
-    if state == RepositoryState::Ready {
-        // Nothing was written; release the lock now, not on drop.
-        tx.rollback("repository.created").await;
-        return Ok(MarkReady::AlreadyReady { project_id });
+    match state {
+        RepositoryState::Ready => {
+            // Nothing was written; release the lock now, not on drop.
+            tx.rollback("repository.created").await;
+            return Ok(MarkReady::AlreadyReady { project_id });
+        }
+        RepositoryState::Purging => {
+            tx.rollback("repository.created").await;
+            return Ok(MarkReady::Purging { project_id });
+        }
+        RepositoryState::Provisioning => {}
     }
     let updated = tx
         .step(|c| async move {
@@ -676,6 +688,27 @@ async fn current_job(
     Ok(row.map(|(id, state)| (JobId::new(id), ProvisionJobState::parse(Some(&state)))))
 }
 
+/// The state of the current provisioning job of `repo` (the end of its key
+/// chain, module docs), read without a lock: the purge (D5 MR4) waits while
+/// it is `running`, so a provisioning run that read the repository before
+/// the purge started cannot create the directory after it was removed.
+pub async fn provision_job_state(db: &Db, repo: RepoId) -> Result<ProvisionJobState, ForgeError> {
+    let row: Option<(i64, String)> = db
+        .within("repositories.provision_job_state", async {
+            sqlx::query_as(&chain_sql("$3"))
+                .bind(PROVISION_JOB)
+                .bind(format!("{PROVISION_DEDUP_PREFIX}:"))
+                .bind(repo.get())
+                .fetch_optional(db.write_pool())
+                .await
+                .map_err(|e| query_error("repositories.provision_job_state", e))
+        })
+        .await?;
+    Ok(ProvisionJobState::parse(
+        row.as_ref().map(|(_, s)| s.as_str()),
+    ))
+}
+
 /// Enqueue the provisioning job of `repo` again (`forge admin repo
 /// reprovision`). The repository row is locked; it must still be
 /// `provisioning`, else `FG-REPO-0014 reason=repository_ready`. Then, by
@@ -700,10 +733,19 @@ pub async fn reprovision(
     let (project_id, _kind, state) = tx
         .step(|c| lock_repository(c, repo, "repositories.reprovision.lock"))
         .await?;
-    if state == RepositoryState::Ready {
-        return Err(ForgeError::new(ErrorCode::ProjectRequestInvalid)
-            .with_context("reason", "repository_ready")
-            .with_context("repo_id", repo.get()));
+    match state {
+        RepositoryState::Ready => {
+            return Err(ForgeError::new(ErrorCode::ProjectRequestInvalid)
+                .with_context("reason", "repository_ready")
+                .with_context("repo_id", repo.get()));
+        }
+        // D5 MR4: a repository being purged is never provisioned again.
+        RepositoryState::Purging => {
+            return Err(ForgeError::new(ErrorCode::ProjectRequestInvalid)
+                .with_context("reason", "repository_purging")
+                .with_context("repo_id", repo.get()));
+        }
+        RepositoryState::Provisioning => {}
     }
     let after = match tx.step(|c| current_job(c, repo)).await? {
         None => None,

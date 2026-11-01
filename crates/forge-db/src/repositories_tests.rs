@@ -624,3 +624,73 @@ async fn mark_ready_after_a_concurrent_reprovision_still_marks() {
     drop(su);
     t.drop_now().await;
 }
+
+/// D5 MR4: a repository being purged is never marked ready or provisioned
+/// again; its job's state is readable for the purge (`provision_job_state`).
+#[tokio::test]
+async fn a_purging_repository_is_never_marked_ready_or_reprovisioned() {
+    let t = FreshDb::migrated().await;
+    let made = project(&t, "alice").await;
+    assert_eq!(
+        provision_job_state(&t.db, made.repository_id)
+            .await
+            .expect("job state"),
+        ProvisionJobState::Queued
+    );
+    let owner: i64 = {
+        let mut su = t.superuser().await;
+        sqlx::query_scalar("SELECT user_id FROM forge.project_members WHERE project_id = $1")
+            .bind(made.project_id.get())
+            .fetch_one(&mut su)
+            .await
+            .expect("owner")
+    };
+    projects::delete_decided(
+        &t.db,
+        &ctx("req-delete"),
+        made.project_id,
+        forge_core::ids::UserId::new(owner),
+        Duration::from_secs(86_400),
+        |_| Ok(()),
+    )
+    .await
+    .expect("delete");
+    t.commit_audited(
+        ("project", made.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET purge_after = deleted_at WHERE id = {}",
+            made.project_id.get()
+        )],
+    )
+    .await;
+    let started = projects::purge::start(&t.db, &ctx("req-start"), made.project_id)
+        .await
+        .expect("start");
+    assert!(
+        matches!(started, projects::purge::Started::Started { .. }),
+        "{started:?}"
+    );
+    let marked = mark_ready(&t.db, &ctx("req-ready"), made.repository_id)
+        .await
+        .expect("mark_ready");
+    assert_eq!(
+        marked,
+        MarkReady::Purging {
+            project_id: made.project_id
+        }
+    );
+    let err = reprovision(&t.db, &ctx("req-reprovision"), made.repository_id)
+        .await
+        .expect_err("purging");
+    assert_reason(&err, ErrorCode::ProjectRequestInvalid, "repository_purging");
+    let mut su = t.superuser().await;
+    assert_eq!(
+        count(
+            &mut su,
+            "SELECT count(*) FROM forge.audit_log WHERE action = 'repository.created'"
+        )
+        .await,
+        0
+    );
+    t.drop_now().await;
+}

@@ -583,3 +583,57 @@ fn project_deletion_details_are_ids_and_times_and_an_integration_event() {
         }
     }
 }
+
+/// D5 MR4: the purge's details are ids, counts and UTC timestamps (no path,
+/// no name); the start is audit-only, the end an admin-class event whose
+/// payload is the audit JSON.
+#[test]
+fn purge_details_are_ids_and_counts_and_an_admin_event() {
+    use crate::ids::{NamespaceId, ProjectId, RepoId, TombstoneId};
+    use crate::{EventType, RepositoryState, VisibilityClass};
+    let started = AuditDetails::RepositoryPurgeStarted {
+        project_id: ProjectId::new(21),
+        repository_id: RepoId::new(5),
+        from: RepositoryState::Ready,
+    };
+    assert_eq!(started.action(), "repository.purge_started");
+    assert_eq!(started.event_type(), None);
+    assert_eq!(
+        started.to_value(),
+        json!({"project_id": 21, "repository_id": 5, "from": "ready"})
+    );
+    let purged = AuditDetails::ProjectPurged {
+        project_id: ProjectId::new(21),
+        repository_id: RepoId::new(5),
+        namespace_id: NamespaceId::new(40),
+        deleted_at: "2026-11-01T09:00:00Z".to_owned(),
+        purge_after: "2026-11-08T09:00:00Z".to_owned(),
+        deleted_by: Some(UserId::new(7)),
+        tombstone_id: TombstoneId::new(3),
+        redirects_ended: 2,
+        members_removed: 1,
+        protected_refs_removed: 0,
+        storage_removed: true,
+    };
+    assert_eq!(purged.action(), "project.purged");
+    assert_eq!(purged.event_type(), Some(EventType::ProjectPurged));
+    assert_eq!(
+        EventType::ProjectPurged.visibility_class(),
+        VisibilityClass::Admin
+    );
+    assert_eq!(
+        purged.to_value(),
+        json!({"project_id": 21, "repository_id": 5, "namespace_id": 40,
+               "deleted_at": "2026-11-01T09:00:00Z", "purge_after": "2026-11-08T09:00:00Z",
+               "deleted_by": 7, "tombstone_id": 3, "redirects_ended": 2,
+               "members_removed": 1, "protected_refs_removed": 0, "storage_removed": true})
+    );
+    assert_eq!(purged.event_payload(), purged.to_value());
+    for details in [&started, &purged] {
+        let mut found = Vec::new();
+        keys(&details.to_value(), &mut found);
+        for pii in PII_KEYS.iter().chain(&["path", "full_path", "segment"]) {
+            assert!(!found.iter().any(|k| k == pii), "{pii} in {details:?}");
+        }
+    }
+}
