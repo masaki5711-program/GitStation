@@ -86,6 +86,9 @@ macro_rules! without_owner_sql {
 /// owns and the groups below it, or through its personal namespace) and
 /// that would have no other active Owner: their count and the first `$4`
 /// ids.
+// D5 MR2: the move's owner check uses the same set-based query.
+pub(crate) use without_owner_sql;
+
 pub(crate) const AFTER_DISABLE: &str = without_owner_sql!(
     "roots (id) AS ( \
          SELECT n.id FROM forge.group_members m \

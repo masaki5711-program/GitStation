@@ -75,8 +75,8 @@ pub async fn rename_decided<P>(
                 .with_context("reason", "user_without_namespace")
                 .with_context("user_id", user.get()));
         };
-        let subtree = lock_subtree(&mut tx, namespace).await?;
         let target = lock_target(&mut tx, None, viewer).await?;
+        let subtree = lock_subtree(&mut tx, namespace).await?;
         let account = tx.step(|c| lock_account(c, viewer)).await?;
         let decided = decide(&UserRenameFacts {
             account,

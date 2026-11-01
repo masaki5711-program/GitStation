@@ -217,11 +217,17 @@ async fn purging_a_namespace_clears_tombstone_targets() {
     )
     .await
     .expect("seed");
+    // The FK action itself: the purge guard (D5 MR2, namespaces_purge_only)
+    // deletes only project namespaces, so it is set aside for this group.
+    t.exec_superuser("ALTER TABLE forge.namespaces DISABLE TRIGGER namespaces_purge_only")
+        .await;
     t.exec_superuser(&format!(
         "BEGIN; {}; DELETE FROM forge.namespaces; COMMIT",
         audit("group", 7, "succeeded")
     ))
     .await;
+    t.exec_superuser("ALTER TABLE forge.namespaces ENABLE ALWAYS TRIGGER namespaces_purge_only")
+        .await;
     let mut su = t.superuser().await;
     let targets: (Option<i64>, Option<i64>) =
         sqlx::query_as("SELECT namespace_id, parent_namespace_id FROM forge.namespace_tombstones")

@@ -68,8 +68,9 @@ pub async fn move_decided<P>(
         let Some(namespace) = namespace.map(NamespaceId::new) else {
             return Err(not_found("group"));
         };
-        let subtree = lock_subtree(&mut tx, namespace).await?;
+        // The target before the subtree (as projects::move_decided).
         let target = lock_target(&mut tx, to.parent, viewer).await?;
+        let subtree = lock_subtree(&mut tx, namespace).await?;
         let roles = tx
             .step(|c| lock_roles(c, RoleAnchor::Group(group), viewer))
             .await?;

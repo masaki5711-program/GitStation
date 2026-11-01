@@ -79,6 +79,16 @@ pub(crate) async fn check_parent_path(
     }
 }
 
+/// `FG-DB-0002` for a conflict with a concurrent change that a retry of
+/// the whole request resolves (`retryable=true`, as `deadlock` and
+/// `serialization`): `subtree_unstable`, `tombstone_changed`.
+pub(crate) fn retry_conflict(query: &'static str, reason: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::DbQueryFailed)
+        .with_context("query", query)
+        .with_context("reason", reason)
+        .with_context("retryable", true)
+}
+
 /// Whether a tombstone blocks the path (exact match, ADR-0015).
 pub(crate) async fn is_tombstoned(conn: &mut PgConnection, path: &str) -> Result<bool, ForgeError> {
     sqlx::query_scalar(

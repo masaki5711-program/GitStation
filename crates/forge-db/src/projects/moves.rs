@@ -63,8 +63,11 @@ pub async fn move_decided<P>(
                 .map_err(|e| query_error("projects.move.namespace", e))
             })
             .await?;
-        let subtree = lock_subtree(&mut tx, NamespaceId::new(namespace)).await?;
+        // The target before the subtree (D5 review): a project moving into
+        // a group while that group's ancestor moves waits on the target
+        // without holding its own namespace, so the two never deadlock.
         let target = lock_target(&mut tx, to.parent, viewer).await?;
+        let subtree = lock_subtree(&mut tx, NamespaceId::new(namespace)).await?;
         let seen = facts(&mut tx, project, viewer, &locked).await?;
         let decided = decide(&ProjectMoveFacts {
             account: seen.account,

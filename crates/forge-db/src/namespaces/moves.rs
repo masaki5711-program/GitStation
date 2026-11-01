@@ -4,11 +4,11 @@
 //! [`move_subtree`], inside the caller's `ChangeTx`.
 //!
 //! Lock order (every command): the resource row (`projects` / `groups` /
-//! `users`, `FOR UPDATE`), then the subtree's namespace rows
-//! ([`lock_subtree`], `FOR UPDATE`, in id order, re-read until stable),
-//! then the new parent ([`lock_target`], `FOR SHARE`) with the caller's
-//! membership rows (`roles::lock_roles`, `FOR SHARE`), then the caller's
-//! account — the order of `projects::members` — and only after the
+//! `users`, `FOR UPDATE`), then the new parent ([`lock_target`], `FOR
+//! SHARE`) with the caller's membership rows there (`roles::lock_roles`,
+//! `FOR SHARE`), then the subtree's namespace rows ([`lock_subtree`], `FOR
+//! NO KEY UPDATE`, in id order, re-read until stable), then the caller's roles on
+//! the source and the account — the order of `projects::members` — and only after the
 //! decision the path advisory locks of every old and new path
 //! ([`super::lock_paths`], in byte order). A create below any node of the
 //! subtree reads its parent `FOR SHARE`, so it either commits before the
@@ -20,7 +20,8 @@
 //! `parent_owner_inactive`), a cycle, the depth (≤ 20), every new path's
 //! length (≤ 255), the subtree size (≤ [`MAX_SUBTREE`]), the rate limit
 //! ([`MAX_MOVES_PER_DAY`]) and the collisions of every new path with a live
-//! namespace or a tombstone. Then one depth-capped recursive `UPDATE`
+//! namespace or a tombstone, and after the rewrite that no project lost
+//! its last active Owner (`no_active_owner`). Then one depth-capped recursive `UPDATE`
 //! rewrites the subtree and one `moved` tombstone per node keeps its old
 //! path (ADR-0015: per node, exact match only).
 
@@ -31,15 +32,16 @@ use forge_core::{AuditDetails, MoveSummary, PathSegment, Role, RoleChange, Tombs
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
-use super::{lock_paths, path_taken};
+use super::{lock_paths, path_taken, retry_conflict};
 use crate::change::{Actor, AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome};
 use crate::query_error;
 use crate::roles::{lock_roles, RoleAnchor};
 
 /// The most namespaces one move rewrites (the root included).
 pub const MAX_SUBTREE: usize = 1000;
-/// Moves of one namespace (as the cause of its `moved` tombstones) within
-/// 24 hours; the 11th is `FG-REPO-0018`.
+/// Moves of one namespace (its own succeeded `project.moved` /
+/// `group.moved` / `user.renamed` audit rows) within 24 hours; the 11th is
+/// `FG-REPO-0018`.
 pub const MAX_MOVES_PER_DAY: i64 = 10;
 /// The most role changes a move reads (more are reported as truncated).
 const MAX_ROLE_CHANGES: i64 = 1000;
@@ -220,8 +222,12 @@ async fn subtree_ids(conn: &mut PgConnection, root: i64) -> Result<Vec<i64>, For
     Ok(ids)
 }
 
-/// Lock the namespace `root` and its descendants `FOR UPDATE`, in id
-/// order, re-reading the subtree until the locked set is stable (a child
+/// Lock the namespace `root` and its descendants `FOR NO KEY UPDATE`, in
+/// id order (it conflicts with a create's `FOR SHARE` on its parent and
+/// with another move, but not with the `FOR KEY SHARE` of a foreign-key
+/// check: a concurrent move that writes a tombstone naming one of these
+/// rows as its parent does not wait on this one — waiting there while this
+/// move waits on that move's target deadlocked, D5 review), re-reading the subtree until the locked set is stable (a child
 /// created before a node was locked is visible to the next read; after it,
 /// no create can add one). At most `MAX_SUBTREE + 1` rows are locked; a
 /// larger subtree is reported after the decision (`subtree_too_large`).
@@ -245,7 +251,8 @@ pub(crate) async fn lock_subtree(
         let to_lock = ids.clone(); // clone: compared with the next read
         tx.step(|c| async move {
             sqlx::query_scalar::<_, i64>(
-                "SELECT id FROM forge.namespaces WHERE id = ANY($1) ORDER BY id FOR UPDATE",
+                "SELECT id FROM forge.namespaces WHERE id = ANY($1) ORDER BY id \
+                 FOR NO KEY UPDATE",
             )
             .bind(&to_lock)
             .fetch_all(c)
@@ -262,9 +269,7 @@ pub(crate) async fn lock_subtree(
         }
     }
     if !stable {
-        return Err(ForgeError::new(ErrorCode::DbQueryFailed)
-            .with_context("query", "namespaces.move.lock")
-            .with_context("reason", "subtree_unstable"));
+        return Err(retry_conflict("namespaces.move.lock", "subtree_unstable"));
     }
     let ids = locked;
     let rows: Vec<NodeRow> = tx
@@ -459,7 +464,7 @@ fn target_fits(kind: &str, target: &TargetAccess) -> bool {
 /// docs), after the caller's decision. Errors (nothing is written; the
 /// caller settles): `FG-REPO-0015` (`subtree_too_large`, `target_kind`,
 /// `same_location`, `parent_owner_bot`, `parent_owner_inactive`, `cycle`,
-/// `too_deep`, `path_too_long`), `FG-REPO-0007` / `0008` the segment,
+/// `too_deep`, `path_too_long`, `no_active_owner`), `FG-REPO-0007` / `0008` the segment,
 /// `FG-REPO-0018` the rate limit, `FG-REPO-0009` a new path that is taken
 /// (`sibling`) or tombstoned (`tombstoned`, unless reclaimed).
 pub(crate) async fn move_subtree(
@@ -517,6 +522,9 @@ pub(crate) async fn move_subtree(
         Some(parent) => format!("{parent}/{}", segment.as_str()),
         None => segment.as_str().to_owned(),
     };
+    // Byte length = character length: segments are ASCII only (the CHECK
+    // of namespaces.segment, PathSegment::parse), so the byte offset used
+    // here and the character offset of SQL `substr` below agree.
     let old_root_len = root.full_path.len();
     let mut new_paths = Vec::with_capacity(subtree.nodes.len());
     for node in &subtree.nodes {
@@ -565,6 +573,13 @@ pub(crate) async fn move_subtree(
     } else {
         role_diff(tx, root.parent_id, target.id, root.kind == "project").await?
     };
+    let project_ids: Vec<i64> = subtree
+        .nodes
+        .iter()
+        .filter(|n| n.kind == "project")
+        .map(|n| n.owner_id)
+        .collect();
+    let ownerless_before = ownerless(tx, &project_ids).await?;
     let delta = new_root_depth.saturating_sub(root.depth);
     let (root_id, parent, new_root, old_len) = (
         root.id,
@@ -616,6 +631,7 @@ pub(crate) async fn move_subtree(
             .with_context("locked", subtree.nodes.len())
             .with_context("updated", updated));
     }
+    check_owners(tx, root, target, &project_ids, &ownerless_before).await?;
     let parents: Vec<Option<i64>> = subtree.nodes.iter().map(|n| n.parent_id).collect();
     let owner_at_write = ctx.actor.user();
     let (old, nodes) = (&old_paths, &ids);
@@ -693,9 +709,12 @@ pub(crate) async fn move_subtree(
 }
 
 /// `FG-REPO-0018` when the cause already moved [`MAX_MOVES_PER_DAY`] times
-/// in 24 hours, counted from its `moved` tombstones (one move = one
-/// transaction = one `created_at`). The resource row is locked, so two
-/// moves of it never count concurrently.
+/// in 24 hours, counted from its own succeeded move audit rows — not the
+/// per-project rows of a moved ancestor, which carry `moved_namespace_id`
+/// (append-only:
+/// releasing or reclaiming a tombstone does not lower the count; index
+/// `audit_log_moves`, migration 20261102100100). The resource row is
+/// locked, so two moves of it never count concurrently.
 async fn check_rate(
     tx: &mut ChangeTx,
     ctx: &ChangeContext,
@@ -714,9 +733,11 @@ async fn check_rate(
     let moves: i64 = tx
         .step(|c| async move {
             sqlx::query_scalar(
-                "SELECT count(DISTINCT created_at) FROM forge.namespace_tombstones \
-                 WHERE cause_type = $1 AND cause_id = $2 AND kind = 'moved' \
-                 AND created_at > now() - interval '24 hours'",
+                "SELECT count(*) FROM forge.audit_log \
+                 WHERE resource_type = $1 AND resource_id = $2 \
+                 AND action IN ('project.moved', 'group.moved', 'user.renamed') \
+                 AND outcome = 'succeeded' AND NOT (details ? 'moved_namespace_id') \
+                 AND occurred_at > now() - interval '24 hours'",
             )
             .bind(cause_type)
             .bind(cause_id)
@@ -732,6 +753,68 @@ async fn check_rate(
             .with_context("limit", MAX_MOVES_PER_DAY)
             .with_context("resource", cause_type)
             .with_context("id", cause_id));
+    }
+    Ok(())
+}
+
+/// The projects among `ids` without an active Owner (direct, an ancestor
+/// group's direct Owner, the owner of a personal parent), as
+/// `projects::ownership` computes them, on the current tree of the change.
+const SUBTREE_OWNERLESS: &str = crate::projects::ownership::without_owner_sql!(
+    "candidates (project_id) AS (SELECT unnest($1::bigint[]))",
+    "SELECT ARRAY(SELECT id FROM ownerless ORDER BY id)"
+);
+
+async fn ownerless(tx: &mut ChangeTx, ids: &[i64]) -> Result<Vec<i64>, ForgeError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    tx.step(|c| async move {
+        sqlx::query_scalar(SUBTREE_OWNERLESS)
+            .bind(ids)
+            .bind(0_i64)
+            .bind(DEPTH_CAP)
+            .fetch_one(c)
+            .await
+            .map_err(|e| query_error("namespaces.move.owners", e))
+    })
+    .await
+}
+
+/// After the rewrite: no project of the subtree lost its last active
+/// Owner (one that already had none may stay so), and a group moved to
+/// the top level has a direct active Owner (top-level groups always do,
+/// D2). Applies to administrators too: the invariant `users::disable` and
+/// the member commands keep. `FG-REPO-0015 reason=no_active_owner`.
+async fn check_owners(
+    tx: &mut ChangeTx,
+    root: &Node,
+    target: &Target,
+    project_ids: &[i64],
+    before: &[i64],
+) -> Result<(), ForgeError> {
+    let after = ownerless(tx, project_ids).await?;
+    if let Some(lost) = after.iter().find(|p| !before.contains(p)) {
+        return Err(invalid("no_active_owner").with_context("project_id", *lost));
+    }
+    if root.kind == "group" && target.access == TargetAccess::TopLevel {
+        let group = root.owner_id;
+        let owned: bool = tx
+            .step(|c| async move {
+                sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM forge.group_members m \
+                     JOIN forge.users u ON u.id = m.user_id \
+                     WHERE m.group_id = $1 AND m.role = 'owner' AND u.state = 'active')",
+                )
+                .bind(group)
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error("namespaces.move.group_owner", e))
+            })
+            .await?;
+        if !owned {
+            return Err(invalid("no_active_owner").with_context("group_id", group));
+        }
     }
     Ok(())
 }

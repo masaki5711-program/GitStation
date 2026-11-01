@@ -19,7 +19,7 @@ const PARENT_SHARE_WAIT: &str = "FROM forge.namespaces WHERE id = $1 FOR SHARE";
 const CREATE_PATH_WAIT: &str =
     "SELECT pg_advisory_xact_lock(hashtextextended('namespace:' || $1, 0))";
 /// What the move waits on when a node of its subtree is locked.
-const SUBTREE_LOCK_WAIT: &str = "WHERE id = ANY($1) ORDER BY id FOR UPDATE";
+const SUBTREE_LOCK_WAIT: &str = "ORDER BY id FOR NO KEY UPDATE";
 
 /// Pinned, move first: the move has locked `acme/g` and waits on the path
 /// lock of its new path; a create of `p` below `g` waits on `g`'s row
@@ -129,8 +129,8 @@ async fn two_crossing_moves_never_both_commit() {
         t.until_waiting(PATHS_WAIT).await;
         let second = move_group(&t, b.group_id, alice.user_id, to(Some(a.namespace_id), "b"));
         let release = async {
-            // The second waits on `b` (the first holds it FOR SHARE as its target).
-            t.until_waiting("FOR UPDATE").await;
+            // The second waits on `a`, its target (the first holds it FOR NO KEY UPDATE).
+            t.until_waiting("FOR SHARE").await;
             held.commit().await;
         };
         let (second, ()) = tokio::join!(second, release);
@@ -210,5 +210,215 @@ async fn a_move_waiting_on_a_release_sees_the_path_free() {
     moved.expect("the move after the release");
     assert_eq!(path_of(&mut su, api.namespace_id).await, "acme/web");
     assert_tree_consistent(&mut su).await;
+    t.drop_now().await;
+}
+
+/// Release vs reclaim (D5 review HIGH-1): a reclaiming move holds the
+/// tombstone's target row (`FOR NO KEY UPDATE`) and waits on the path lock; the
+/// release takes its row locks first (the target `FOR SHARE`), so it waits
+/// on the move instead of holding the path lock it needs — no deadlock. The
+/// move reclaims the tombstone; the release then finds it gone.
+#[tokio::test]
+async fn a_release_racing_a_reclaim_waits_on_the_rows_and_finds_the_tombstone_gone() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let acme = group(&t, "acme", None, alice.user_id).await;
+    let web = project(&t, "web", acme.namespace_id, alice.user_id).await;
+    move_project(
+        &t,
+        web.project_id,
+        alice.user_id,
+        to(Some(acme.namespace_id), "site"),
+        MoveOptions::default(),
+    )
+    .await
+    .expect("web -> site");
+    let mut su = t.superuser().await;
+    let stone: i64 = sqlx::query_scalar("SELECT id FROM forge.namespace_tombstones")
+        .fetch_one(&mut su)
+        .await
+        .expect("tombstone");
+    let held = t
+        .hold_audited(("group", acme.group_id.get()), &[hold_path("acme/web")])
+        .await;
+    let reclaim = MoveOptions {
+        reclaim: true,
+        rate_limit: RateLimit::Enforce,
+    };
+    let moving = move_project(
+        &t,
+        web.project_id,
+        alice.user_id,
+        to(Some(acme.namespace_id), "web"),
+        reclaim,
+    );
+    let releasing = async {
+        t.until_waiting(PATHS_WAIT).await;
+        let c = ctx("req-release");
+        let releasing = tombstones::release_decided(
+            &t.db,
+            &c,
+            TombstoneId::new(stone),
+            alice.user_id,
+            |_: &TombstoneReleaseFacts| Ok(()),
+        );
+        let release = async {
+            t.until_waiting("SELECT kind, owner_id FROM forge.namespaces WHERE id = $1 FOR SHARE")
+                .await;
+            held.commit().await;
+        };
+        let (released, ()) = tokio::join!(releasing, release);
+        released
+    };
+    let (moved, released) = tokio::join!(moving, releasing);
+    moved.expect("the reclaim");
+    let err = released.expect_err("reclaimed meanwhile");
+    assert_reason(&err, ErrorCode::NotFound, "absent");
+    assert_eq!(path_of(&mut su, web.namespace_id).await, "acme/web");
+    assert_tree_consistent(&mut su).await;
+    t.drop_now().await;
+}
+
+/// Release vs a rename of the caller: the rename holds the caller's user
+/// row (`FOR UPDATE`) and waits on its path locks; the release waits on the
+/// caller's account row (`FOR SHARE`) before it takes any path lock, then
+/// goes through.
+#[tokio::test]
+async fn a_release_waits_for_a_rename_of_its_caller_without_deadlock() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let acme = group(&t, "acme", None, alice.user_id).await;
+    let web = project(&t, "web", acme.namespace_id, alice.user_id).await;
+    move_project(
+        &t,
+        web.project_id,
+        alice.user_id,
+        to(Some(acme.namespace_id), "site"),
+        MoveOptions::default(),
+    )
+    .await
+    .expect("web -> site");
+    let mut su = t.superuser().await;
+    let stone: i64 = sqlx::query_scalar("SELECT id FROM forge.namespace_tombstones")
+        .fetch_one(&mut su)
+        .await
+        .expect("tombstone");
+    let held = t
+        .hold_audited(("user", alice.user_id.get()), &[hold_path("alicia")])
+        .await;
+    let c = ctx("req-rename");
+    let renaming = users::rename_decided(
+        &t.db,
+        &c,
+        alice.user_id,
+        alice.user_id,
+        "alicia",
+        MoveOptions::default(),
+        |_: &UserRenameFacts| Ok(()),
+    );
+    let releasing = async {
+        t.until_waiting(PATHS_WAIT).await;
+        let c = ctx("req-release");
+        let releasing = tombstones::release_decided(
+            &t.db,
+            &c,
+            TombstoneId::new(stone),
+            alice.user_id,
+            |_: &TombstoneReleaseFacts| Ok(()),
+        );
+        let release = async {
+            t.until_waiting("is_admin FROM forge.users WHERE id = $1 FOR SHARE")
+                .await;
+            held.commit().await;
+        };
+        let (released, ()) = tokio::join!(releasing, release);
+        released
+    };
+    let (renamed, released) = tokio::join!(renaming, releasing);
+    renamed.expect("rename");
+    released.expect("release after the rename");
+    assert_eq!(
+        count(
+            &mut su,
+            "SELECT count(*) FROM forge.namespace_tombstones WHERE old_path = 'acme/web'"
+        )
+        .await,
+        0
+    );
+    assert_tree_consistent(&mut su).await;
+    t.drop_now().await;
+}
+
+/// D5 review MEDIUM-5: a project moving into a descendant group of a group
+/// that moves at the same time. The project's move locks its target first
+/// and holds it (`FOR SHARE`) while it waits on a path lock; the group move
+/// waits on that target row in its subtree without holding the project's
+/// namespace, so both commit (locking the subtree first, they deadlocked).
+#[tokio::test]
+async fn a_project_moving_into_a_moving_group_does_not_deadlock() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let a = group(&t, "a", None, alice.user_id).await;
+    let z = group(&t, "z", None, alice.user_id).await;
+    let b = group(&t, "b", Some(a.namespace_id), alice.user_id).await;
+    // c's namespace id is below p's: the group move locks c before p.
+    let c = group(&t, "c", Some(b.namespace_id), alice.user_id).await;
+    let p = project(&t, "p", a.namespace_id, alice.user_id).await;
+    let held = t
+        .hold_audited(("group", c.group_id.get()), &[hold_path("a/b/c/p")])
+        .await;
+    let project_move = move_project(
+        &t,
+        p.project_id,
+        alice.user_id,
+        to(Some(c.namespace_id), "p"),
+        MoveOptions::default(),
+    );
+    let group_move = async {
+        t.until_waiting(PATHS_WAIT).await;
+        let moving = move_group(&t, a.group_id, alice.user_id, to(Some(z.namespace_id), "a"));
+        let release = async {
+            t.until_waiting(SUBTREE_LOCK_WAIT).await;
+            held.commit().await;
+        };
+        let (moved, ()) = tokio::join!(moving, release);
+        moved
+    };
+    let (project_moved, group_moved) = tokio::join!(project_move, group_move);
+    project_moved.expect("the project move");
+    group_moved.expect("the group move");
+    let mut su = t.superuser().await;
+    assert_eq!(path_of(&mut su, p.namespace_id).await, "z/a/b/c/p");
+    assert_tree_consistent(&mut su).await;
+    t.drop_now().await;
+}
+
+/// A deadlock (40P01) is FG-DB-0002 `reason=deadlock` with
+/// `retryable=true`: the transaction was rolled back, the whole request may
+/// be retried.
+#[tokio::test]
+async fn a_deadlock_is_reported_as_retryable() {
+    let t = FreshDb::migrated().await;
+    let mut one = t.db.write_pool().begin().await.expect("one");
+    let mut two = t.db.write_pool().begin().await.expect("two");
+    sqlx::query("SELECT pg_advisory_xact_lock(1)")
+        .execute(&mut *one)
+        .await
+        .expect("1");
+    sqlx::query("SELECT pg_advisory_xact_lock(2)")
+        .execute(&mut *two)
+        .await
+        .expect("2");
+    let (a, b) = tokio::join!(
+        sqlx::query("SELECT pg_advisory_xact_lock(2)").execute(&mut *one),
+        sqlx::query("SELECT pg_advisory_xact_lock(1)").execute(&mut *two),
+    );
+    let err = match (a, b) {
+        (Err(e), _) | (_, Err(e)) => crate::query_error("test.deadlock", e),
+        (Ok(_), Ok(_)) => panic!("no deadlock"),
+    };
+    assert_reason(&err, ErrorCode::DbQueryFailed, "deadlock");
+    assert!(err.to_string().contains("retryable=true"), "{err}");
+    drop((one, two));
     t.drop_now().await;
 }

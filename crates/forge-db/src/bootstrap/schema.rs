@@ -28,17 +28,40 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.audited_change_present()",
     // ── D4: repositories move only provisioning -> ready (20261031100000) ──
     "forge.repositories_state_guard()",
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    "forge.purge_delete_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
-const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[(
-    "repositories",
-    "repositories_state_forward",
-    "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
-     FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
-)];
+const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    (
+        "repositories",
+        "repositories_state_forward",
+        "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
+    ),
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    (
+        "repositories",
+        "repositories_purge_only",
+        "CREATE TRIGGER repositories_purge_only BEFORE DELETE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "projects",
+        "projects_purge_only",
+        "CREATE TRIGGER projects_purge_only BEFORE DELETE ON forge.projects \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "namespaces",
+        "namespaces_purge_only",
+        "CREATE TRIGGER namespaces_purge_only BEFORE DELETE ON forge.namespaces \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
 /// (with `search_path = pg_catalog`): no other trigger may exist.

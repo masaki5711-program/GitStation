@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A namespace (a project, group or user) was renamed or moved 10 times within the last 24 hours (step D5 plan; ADR-0015: every move leaves a tombstone per node, so moves are limited to keep tombstones from piling up). The count is the number of moves recorded by the `moved` tombstones whose cause is this resource (forge.namespace_tombstones cause_type / cause_id, created_at within 24 h). Administrators are limited too; only the operator CLI (actor system) is exempt.
+A namespace (a project, group or user) was renamed or moved 10 times within the last 24 hours (step D5 plan; ADR-0015: every move leaves a tombstone per node, so moves are limited to keep tombstones from piling up). The count is the number of the resource's own succeeded move audit rows within 24 h (forge.audit_log, action project.moved / group.moved / user.renamed on that resource_type / resource_id, without the per-project rows of a moved ancestor, which carry `moved_namespace_id`); the audit log is append-only, so releasing or reclaiming tombstones does not lower it. Administrators are limited too; only the operator CLI (actor system) is exempt.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason=moves_per_day`, `moves`, `limit`, `resource` and `id`. List the recent moves with a privileged query on forge.namespace_tombstones (cause_type, cause_id, created_at > now() - interval '24 hours', grouped by created_at) or on forge.audit_log (action project.moved / group.moved / user.renamed for that resource).
+The log event carries `reason=moves_per_day`, `moves`, `limit`, `resource` and `id`. List the recent moves with a privileged query on forge.audit_log (resource_type, resource_id, action IN ('project.moved', 'group.moved', 'user.renamed'), occurred_at > now() - interval '24 hours'; index audit_log_moves).
 
 ## 対処 (fix)
 

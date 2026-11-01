@@ -4,11 +4,12 @@
 //! cause (`cause_type` / `cause_id`, the resource whose move or deletion
 //! wrote it — the audit trigger of forge.namespace_tombstones requires it).
 //!
-//! Lock order: the path advisory lock of the tombstone's path first (as a
-//! move or create of that path takes it before it reads tombstones; it is
-//! also what serializes two deleters of the row), then the tombstone row,
-//! then the namespace it names or its parent with the caller's roles there,
-//! then the caller's account.
+//! Lock order (rows before path locks, as moves and creates): the
+//! namespace the tombstone names or its parent (`FOR SHARE`) with the
+//! caller's roles there, then the caller's account, then the path advisory
+//! lock of the tombstone's path (a move or create of that path takes it
+//! before it reads tombstones; it also serializes the row's deleters), then
+//! the tombstone is re-read and must be unchanged.
 
 use forge_core::ids::{NamespaceId, TombstoneId, UserId};
 use forge_core::{AuditDetails, Role, TombstoneKind};
@@ -17,7 +18,7 @@ use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
-use crate::namespaces::lock_path;
+use crate::namespaces::{lock_path, retry_conflict};
 use crate::roles::{lock_roles, RoleAnchor};
 use crate::{query_error, Db};
 
@@ -96,12 +97,27 @@ async fn role_on(
     Ok(Some(roles.native))
 }
 
-async fn path_of(conn: &mut PgConnection, id: TombstoneId) -> Result<Option<String>, ForgeError> {
-    sqlx::query_scalar("SELECT old_path FROM forge.namespace_tombstones WHERE id = $1")
-        .bind(id.get())
-        .fetch_optional(conn)
-        .await
-        .map_err(|e| query_error("tombstones.release.path", e))
+/// A tombstone row: old_path, kind, namespace_id, parent_namespace_id,
+/// owner_at_write, cause_type, cause_id.
+type Row = (
+    String,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    String,
+    i64,
+);
+
+async fn read(conn: &mut PgConnection, id: TombstoneId) -> Result<Option<Row>, ForgeError> {
+    sqlx::query_as(
+        "SELECT old_path, kind, namespace_id, parent_namespace_id, owner_at_write, cause_type, \
+         cause_id FROM forge.namespace_tombstones WHERE id = $1",
+    )
+    .bind(id.get())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| query_error("tombstones.release.read", e))
 }
 
 /// Release `tombstone` for `viewer`, deciding inside the transaction
@@ -119,42 +135,11 @@ pub async fn release_decided<P>(
 ) -> Result<(Released, P), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let Some(path) = tx.step(|c| path_of(c, tombstone)).await? else {
+        // The tombstone as read before any lock; re-read under its path lock.
+        let Some(row) = tx.step(|c| read(c, tombstone)).await? else {
             return Err(not_found());
         };
-        let locked_path = path.as_str();
-        tx.step(|c| lock_path(c, locked_path)).await?;
-        type Row = (
-            String,
-            String,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            String,
-            i64,
-        );
-        let row: Option<Row> = tx
-            .step(|c| async move {
-                sqlx::query_as(
-                    "SELECT old_path, kind, namespace_id, parent_namespace_id, owner_at_write, \
-                     cause_type, cause_id FROM forge.namespace_tombstones WHERE id = $1",
-                )
-                .bind(tombstone.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("tombstones.release.lock", e))
-            })
-            .await?;
-        // No row lock (forge_app has no UPDATE on the table, which a
-        // locking read needs): every deleter of a tombstone — a release, a
-        // reclaiming move — takes its path lock first, so the path lock held
-        // here serializes them. old_path is never updated.
-        let Some((old_path, kind, namespace, parent, recorded, cause_type, cause_id)) = row else {
-            return Err(not_found());
-        };
-        if old_path != path {
-            return Err(not_found());
-        }
+        let (old_path, kind, namespace, parent, recorded, cause_type, cause_id) = row.clone(); // clone: compared after the path lock
         let mut access = None;
         let mut target_id = None;
         if kind == "moved" {
@@ -188,6 +173,24 @@ pub async fn release_decided<P>(
             }
         };
         let account = tx.step(|c| lock_account(c, viewer)).await?;
+        // Every row lock is taken: now the path lock (rows before path
+        // locks, the order of moves and creates — the other way round a
+        // release and a move holding the target's row deadlock). No row
+        // lock on the tombstone itself (forge_app has no UPDATE on the
+        // table, which a locking read needs): its deleters — a release, a
+        // reclaiming move — take its path lock first, so the path lock
+        // serializes them. Re-read under it: gone is FG-REPO-0005; changed
+        // (its target purged meanwhile) is a retryable conflict, never a
+        // decision on stale facts.
+        let locked_path = old_path.as_str();
+        tx.step(|c| lock_path(c, locked_path)).await?;
+        match tx.step(|c| read(c, tombstone)).await? {
+            None => return Err(not_found()),
+            Some(now) if now != row => {
+                return Err(retry_conflict("tombstones.release", "tombstone_changed"))
+            }
+            Some(_) => {}
+        }
         let decided = decide(&TombstoneReleaseFacts {
             account,
             tombstone,

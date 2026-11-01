@@ -27,7 +27,11 @@
 # Shape (validated by scripts/validate-migrations.js in the root repo):
 # [tables.<bare name>] with a boolean `guarded`.
 
-guarded_functions = ["audited_change_present", "repositories_state_guard"]
+guarded_functions = [
+    "audited_change_present", "repositories_state_guard",
+    # D5 MR2: deletes for the purge only.
+    "purge_delete_guard",
+]
 
 [tables.events]
 guarded = true

@@ -238,6 +238,7 @@ async fn a_repository_moves_to_purging_and_never_back() {
             &t,
             &[
                 audit("project", 1, "succeeded"),
+                sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
                 sql("DELETE FROM forge.repositories"),
                 sql("DELETE FROM forge.project_members"),
                 sql("DELETE FROM forge.namespaces WHERE kind = 'project'"),
@@ -248,6 +249,57 @@ async fn a_repository_moves_to_purging_and_never_back() {
         .expect("forge_app deletes the purged rows");
         t.drop_now().await;
     }
+}
+
+/// D5 MR2 review (migration 20261102100100): the DELETE grants are for
+/// the purge only. A repository not `purging`, a project not pending
+/// deletion and any namespace but a pending project's are refused (XF001,
+/// FG-DB-0009 `rejected`), audit row or not.
+#[tokio::test]
+async fn deletes_are_refused_outside_the_purge() {
+    let t = FreshDb::migrated().await;
+    commit(&t, &seed()).await.expect("seed");
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql(REPOSITORY),
+            sql(
+                "INSERT INTO forge.namespaces (parent_id, kind, owner_id, segment, full_path, \
+                 depth) VALUES (NULL, 'project', 1, 'p', 'p', 1)",
+            ),
+            audit("user", 1, "succeeded"),
+            sql(
+                "INSERT INTO forge.namespaces (kind, owner_id, segment, full_path, depth) \
+                 VALUES ('user', 1, 'alice', 'alice', 1)",
+            ),
+        ],
+    )
+    .await
+    .expect("repository and namespace");
+    for (cause, change) in [
+        (("project", 1), "DELETE FROM forge.repositories"),
+        (("project", 1), "DELETE FROM forge.projects"),
+        (
+            ("project", 1),
+            "DELETE FROM forge.namespaces WHERE kind = 'project'",
+        ),
+        (
+            ("user", 1),
+            "DELETE FROM forge.namespaces WHERE kind = 'user'",
+        ),
+    ] {
+        let err = commit(&t, &[audit(cause.0, cause.1, "succeeded"), sql(change)])
+            .await
+            .expect_err(change);
+        assert_reason(
+            &err,
+            forge_errors::ErrorCode::AppendOnlyViolation,
+            "rejected",
+        );
+        assert!(chain(&err).contains("sqlstate=XF001"), "{change}: {err}");
+    }
+    t.drop_now().await;
 }
 
 /// Doctor compares the state guard's trigger and function body like the
@@ -429,9 +481,15 @@ async fn a_project_table_change_without_its_audit_row_cannot_commit() {
     .expect("delete with the audit row");
     // D5 MR2: forge_app may delete a project (the purge), but only with
     // its audit row; deleted_by is audited like the other columns.
-    let err = commit(&t, &[sql("DELETE FROM forge.projects")])
-        .await
-        .expect_err("no audit row");
+    let err = commit(
+        &t,
+        &[
+            sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
+            sql("DELETE FROM forge.projects"),
+        ],
+    )
+    .await
+    .expect_err("no audit row");
     assert_refused(&err, "projects");
     let err = commit(&t, &[sql("UPDATE forge.projects SET deleted_by = 1")])
         .await
@@ -441,11 +499,12 @@ async fn a_project_table_change_without_its_audit_row_cannot_commit() {
         &t,
         &[
             audit("project", 1, "succeeded"),
+            sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
             sql("DELETE FROM forge.projects"),
         ],
     )
     .await
-    .expect("delete with the audit row");
+    .expect("delete a pending deletion with the audit row");
     t.drop_now().await;
 }
 

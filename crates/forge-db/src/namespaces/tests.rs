@@ -707,6 +707,23 @@ async fn the_eleventh_move_in_a_day_is_rate_limited() {
     .expect_err("rate limited");
     assert_reason(&err, ErrorCode::RenameRateLimited, "moves_per_day");
     assert_eq!(err.code().http_status(), 429);
+    // The count comes from the append-only audit log: removing the
+    // tombstones (as releases or reclaims do) does not lower it.
+    t.commit_audited(
+        ("project", web.project_id.get()),
+        &["DELETE FROM forge.namespace_tombstones".to_owned()],
+    )
+    .await;
+    let err = move_project(
+        &t,
+        web.project_id,
+        alice.user_id,
+        to(Some(acme.namespace_id), "w-late"),
+        MoveOptions::default(),
+    )
+    .await
+    .expect_err("still rate limited");
+    assert_reason(&err, ErrorCode::RenameRateLimited, "moves_per_day");
     let exempt = MoveOptions {
         reclaim: false,
         rate_limit: RateLimit::Exempt,
@@ -843,5 +860,61 @@ async fn a_moved_tombstone_is_released_by_its_targets_owner_and_a_deleted_one_na
         .await
         .expect_err("already released");
     assert_reason(&err, ErrorCode::NotFound, "absent");
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_move_that_leaves_no_active_owner_is_refused() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let carol = user(&t, "carol").await;
+    let beta = group(&t, "beta", None, alice.user_id).await;
+    // carol's project: Owner only through her personal namespace.
+    let web = project(&t, "web", carol.namespace_id, carol.user_id).await;
+    projects::remove_member(
+        &t.db,
+        &ctx("req-rm"),
+        web.project_id,
+        carol.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("carol still inherits Owner");
+    // beta's only Owner is disabled: moving web there leaves it ownerless.
+    let _ = users::disable_with(&t.db, &ctx("req-off"), alice.user_id, users::Guard::Force)
+        .await
+        .expect("disable alice");
+    let err = move_project(
+        &t,
+        web.project_id,
+        carol.user_id,
+        to(Some(beta.namespace_id), "web"),
+        MoveOptions::default(),
+    )
+    .await
+    .expect_err("ownerless");
+    assert_reason(&err, ErrorCode::TransferInvalid, "no_active_owner");
+    // A subgroup without a direct Owner cannot become top level.
+    let dave = user(&t, "dave").await;
+    let acme = group(&t, "acme", None, dave.user_id).await;
+    let sub = group(&t, "sub", Some(acme.namespace_id), dave.user_id).await;
+    groups::remove_member(
+        &t.db,
+        &ctx("req-rm-sub"),
+        sub.group_id,
+        dave.user_id,
+        Role::Owner,
+    )
+    .await
+    .expect("a subgroup may lose its direct Owner");
+    let err = move_group(&t, sub.group_id, dave.user_id, to(None, "sub"))
+        .await
+        .expect_err("no direct Owner at the top level");
+    assert_reason(&err, ErrorCode::TransferInvalid, "no_active_owner");
+    let mut su = t.superuser().await;
+    assert_eq!(
+        count(&mut su, "SELECT count(*) FROM forge.namespace_tombstones").await,
+        0
+    );
     t.drop_now().await;
 }
