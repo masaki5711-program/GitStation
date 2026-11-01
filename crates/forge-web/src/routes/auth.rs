@@ -339,14 +339,25 @@ pub async fn logout(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
         public_id = %public_id,
         "forge.auth.logged_out"
     );
-    let built = see_other(&location).map(|mut res| {
-        res.headers_mut().append(
-            SET_COOKIE,
-            HeaderValue::from_static(crate::auth::CLEAR_SESSION_COOKIE),
-        );
-        res
-    });
-    built.unwrap_or_else(fail)
+    // The session is revoked now: whatever happens to the redirect, the
+    // browser goes somewhere and the cookie is cleared (review of MR5).
+    let mut res = see_other(&location)
+        .or_else(|e| {
+            tracing::warn!(
+                target: "forge_web::auth",
+                request_id = %ctx.request_id,
+                error_code = e.code().id(),
+                public_id = %public_id,
+                "forge.auth.logout_redirect_unusable; sending the browser home"
+            );
+            see_other("/")
+        })
+        .unwrap_or_else(&fail);
+    res.headers_mut().append(
+        SET_COOKIE,
+        HeaderValue::from_static(crate::auth::CLEAR_SESSION_COOKIE),
+    );
+    res
 }
 
 fn logout_body(detail: &'static str) -> ForgeError {

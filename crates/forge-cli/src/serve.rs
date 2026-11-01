@@ -192,9 +192,13 @@ fn app_state(
     // clone: the pool handle is shared (Arc inside)
     let probe: Arc<dyn ReadinessProbe> = Arc::new(db.clone());
     let bounded = BoundedAuthenticator::new(Arc::new(db.clone()), auth_permits(database));
-    let mut sessions: Arc<dyn SessionAuthenticator> = Arc::new(bounded.sessions(Arc::new(
-        forge_db::sessions::SessionStore::new(db.clone(), session_idle),
-    )));
+    let mut store = forge_db::sessions::SessionStore::new(db.clone(), session_idle);
+    if oidc.is_some() {
+        // The refresh check decides before a due session's activity is
+        // recorded (RefreshingSessions touches after a Continue).
+        store = store.deferring_touch_to_refresh_check();
+    }
+    let mut sessions: Arc<dyn SessionAuthenticator> = Arc::new(bounded.sessions(Arc::new(store)));
     if let Some(oidc) = oidc {
         sessions = Arc::new(forge_oidc::RefreshingSessions::new(
             sessions,

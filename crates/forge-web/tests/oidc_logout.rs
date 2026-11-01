@@ -55,10 +55,10 @@ async fn world() -> World {
         namespaces: Arc::new(t.db.clone()),
         projects: Arc::new(t.db.clone()),
     };
-    let store: Arc<dyn SessionAuthenticator> = Arc::new(forge_db::sessions::SessionStore::new(
-        t.db.clone(),
-        Duration::from_secs(4 * 3600),
-    ));
+    let store: Arc<dyn SessionAuthenticator> = Arc::new(
+        forge_db::sessions::SessionStore::new(t.db.clone(), Duration::from_secs(4 * 3600))
+            .deferring_touch_to_refresh_check(),
+    );
     // As `forge serve` wires it with auth.oidc.
     let sessions: Arc<dyn SessionAuthenticator> =
         Arc::new(RefreshingSessions::new(store, Arc::clone(&oidc)));
@@ -319,12 +319,20 @@ async fn a_person_the_provider_ended_is_refused_on_the_next_request() {
         "UPDATE forge.web_sessions SET refresh_checked_at = now() - interval '301 seconds'",
     )
     .await;
-    let (status, headers, body) = w.session(&pair).await;
+    // Any cookie route runs the check, not only /api/v1/session (the
+    // `decided_in` representative): here the caller's own account.
+    let (status, headers, body) = call(
+        &w.app,
+        request("GET", "/api/v1/user", &[("cookie", &pair)], ""),
+    )
+    .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
     assert_eq!(body["error_code"], ErrorCode::Unauthenticated.id());
     assert!(set_cookies(&headers)
         .iter()
         .any(|c| c.starts_with("__Host-gstn_session=;")));
+    let (status, _, _) = w.session(&pair).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "revoked for every route");
     w.t.drop_now().await;
 }
 

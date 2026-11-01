@@ -51,6 +51,10 @@
      （クライアントの scope に `openid` があるか）。`why=refresh_token_unreadable`（FG-DB-0019 も出る）: `web.session_key_file`
      から古い kid を早く消した。
    - FG-AUTH-0015 `call=refresh`（warn）: リフレッシュの時に Keycloak に届かない。ログイン済みは続く（runbook keycloak-unreachable）。
+   - リフレッシュでの失効 `why=invalid_grant` が多い: Keycloak の「Revoke Refresh Token」（回転）が有効だと、受け取った新しい
+     リフレッシュトークンを保存できなかったセッションは次で `invalid_grant` になる。確認は要求から切り離したタスクで保存まで
+     行う（ADR-0021 の 33）ので、続くなら DB の書き込みの失敗（同じ `request_id` の FG-DB-0001 / 0002）か、同じリフレッシュ
+     トークンを別のプロセスが使った（複数の GitStation が同じ DB を見ている）かを確かめる。
 
 ## Mitigate
 

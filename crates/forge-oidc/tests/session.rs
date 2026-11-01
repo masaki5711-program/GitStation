@@ -275,7 +275,8 @@ async fn answers_without_an_id_token_are_accepted_three_times_in_a_row() {
 async fn the_refreshing_authenticator_refuses_a_session_the_provider_ended() {
     let w = world().await;
     let done = sign_in(&w.oidc, &w.op).await;
-    let store: Arc<dyn SessionAuthenticator> = Arc::new(SessionStore::new(w.t.db.clone(), IDLE));
+    let store: Arc<dyn SessionAuthenticator> =
+        Arc::new(SessionStore::new(w.t.db.clone(), IDLE).deferring_touch_to_refresh_check());
     let sessions = RefreshingSessions::new(store, Arc::clone(&w.oidc));
     let hits = w.op.hits(Endpoint::Token);
     sessions
@@ -471,4 +472,154 @@ async fn logout_token_failures_are_logout_token_invalid() {
 fn base64_url(v: &Value) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+}
+
+// --- review of MR5: cancellation, the touch order, sid with sub ---
+
+/// The provider's request goes away (it disconnects, the request times
+/// out) while the back-channel logout runs: the detached task still
+/// finishes, so the session is revoked and the provider's retry finds the
+/// `jti` remembered for a logout that happened (HIGH of the review).
+#[tokio::test]
+async fn a_backchannel_logout_finishes_when_its_request_goes_away() {
+    let w = world().await;
+    let done = sign_in(&w.oidc, &w.op).await;
+    // A cold instance: its discovery is slow, so the call is still inside
+    // the task when the caller gives up.
+    let cold = Arc::new(Oidc::new(w.op.settings(BASE), &web_keys(), w.t.db.clone()).expect("oidc"));
+    w.op.set_fault(
+        Endpoint::Discovery,
+        Some(Fault::Delay(Duration::from_millis(300))),
+    );
+    let token = w.op.logout_token(json!({}));
+    let request_id = rid();
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(50),
+        cold.backchannel_logout(&request_id, &token, None),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the caller went away first");
+    w.op.set_fault(Endpoint::Discovery, None);
+    let mut revoked = Value::Null;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        revoked = w.revoked_reason(&done).await;
+        if !revoked.is_null() {
+            break;
+        }
+    }
+    assert_eq!(revoked, "backchannel", "the task finished the logout");
+    let err = cold
+        .backchannel_logout(&rid(), &token, None)
+        .await
+        .expect_err("the retry is a replay of a done logout");
+    assert_eq!(reason(&err), "replayed");
+    w.t.drop_now().await;
+}
+
+/// The request goes away after the provider rotated the refresh token:
+/// the detached check still stores the rotated token, so the next refresh
+/// is not `invalid_grant` (MEDIUM of the review).
+#[tokio::test]
+async fn a_refresh_whose_request_goes_away_still_stores_the_rotated_token() {
+    let w = world().await;
+    let done = sign_in(&w.oidc, &w.op).await;
+    let identity = w.due(&done).await;
+    w.op.set_fault(
+        Endpoint::Token,
+        Some(Fault::Delay(Duration::from_millis(300))),
+    );
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(50),
+        w.oidc.refresh_check(&rid(), &identity),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the caller went away first");
+    w.op.set_fault(Endpoint::Token, None);
+    let refresh = web_keys().purpose(KeyPurpose::RefreshToken).expect("keys");
+    let mut stored = Vec::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let row = w.row(&done, "refresh_token_enc").await;
+        stored = refresh
+            .open(done.public_id.as_bytes(), &unhex(&row["refresh_token_enc"]))
+            .expect("opens");
+        if stored != b"synthetic-refresh-token" {
+            break;
+        }
+    }
+    assert_eq!(
+        stored, b"synthetic-refresh-token-1",
+        "the rotated token was stored"
+    );
+    assert_eq!(
+        w.check(&done).await,
+        RefreshVerdict::Continue,
+        "no invalid_grant"
+    );
+    w.t.drop_now().await;
+}
+
+/// The store defers the activity of a due session to the check: a session
+/// the check revokes keeps its idle expiry; one it lets go on is touched.
+#[tokio::test]
+async fn a_due_session_is_touched_only_after_the_check_lets_it_go_on() {
+    let w = world().await;
+    let store: Arc<dyn SessionAuthenticator> =
+        Arc::new(SessionStore::new(w.t.db.clone(), IDLE).deferring_touch_to_refresh_check());
+    let sessions = RefreshingSessions::new(store, Arc::clone(&w.oidc));
+    let stale_and_due = |public_id: &str| {
+        format!(
+            "UPDATE forge.web_sessions SET refresh_checked_at = now() - interval '301 seconds', \
+             last_seen_at = now() - interval '2 minutes', \
+             idle_expires_at = now() + interval '1 hour' WHERE public_id = '{public_id}'"
+        )
+    };
+    let kept = sign_in(&w.oidc, &w.op).await;
+    w.t.exec_superuser(&stale_and_due(&kept.public_id)).await;
+    let before = w.row(&kept, "idle_expires_at").await;
+    sessions
+        .authenticate_session(&rid(), &kept.token.reveal())
+        .await
+        .expect("goes on");
+    let after = w.row(&kept, "idle_expires_at").await;
+    assert_ne!(before, after, "touched after the Continue");
+
+    let ended = sign_in(&w.oidc, &w.op).await;
+    w.t.exec_superuser(&stale_and_due(&ended.public_id)).await;
+    let before = w.row(&ended, "idle_expires_at, last_seen_at").await;
+    w.op.revoke_refresh_tokens();
+    sessions
+        .authenticate_session(&rid(), &ended.token.reveal())
+        .await
+        .expect_err("revoked");
+    let after = w.row(&ended, "idle_expires_at, last_seen_at").await;
+    assert_eq!(before, after, "a revoked session was never extended");
+    w.t.drop_now().await;
+}
+
+/// A logout token with `sid` and another `sub` revokes nothing (the
+/// mismatch is logged).
+#[tokio::test]
+async fn a_logout_token_whose_sub_does_not_match_its_sid_revokes_nothing() {
+    let w = world().await;
+    let done = sign_in(&w.oidc, &w.op).await;
+    let token = w.op.logout_token(json!({"sub": "synthetic-sub-mallory"}));
+    assert_eq!(
+        w.oidc
+            .backchannel_logout(&rid(), &token, None)
+            .await
+            .expect("valid token"),
+        0
+    );
+    assert!(w.revoked_reason(&done).await.is_null());
+    let token = w.op.logout_token(json!({"sub": "synthetic-sub-alice"}));
+    assert_eq!(
+        w.oidc
+            .backchannel_logout(&rid(), &token, None)
+            .await
+            .expect("valid token"),
+        1
+    );
+    w.t.drop_now().await;
 }

@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin; or the token endpoint refused the client itself (OAuth `invalid_client`, `unauthorized_client`, `invalid_request`: a wrong client secret, a disabled or misconfigured client), so no sign-in can succeed until an operator acts. Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider).
+A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin; or the token endpoint refused the client itself (OAuth `invalid_client`, `unauthorized_client`, `invalid_request`: a wrong client secret, a disabled or misconfigured client), so no sign-in can succeed until an operator acts; or the 5-minute refresh check of a signed-in session (M2 MR5, call=refresh, 3 s) could not reach the token endpoint (logged as warn, the session goes on). Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider).
 
 ## 調べ方 (diagnosis)
 

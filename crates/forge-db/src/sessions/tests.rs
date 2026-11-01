@@ -1276,15 +1276,30 @@ async fn backchannel_targets_stay_within_the_issuer_and_logout_reads_the_id_toke
     )
     .await
     .expect("issue");
-    let by_sid = backchannel_targets(&t.db, ISSUER, LogoutTarget::Sid("synthetic-sid-x"))
+    let sid = |sub| LogoutTarget::Sid {
+        sid: "synthetic-sid-x",
+        sub,
+    };
+    let by_sid = backchannel_targets(&t.db, ISSUER, sid(None))
         .await
         .expect("sid");
-    assert_eq!(by_sid, vec![a1.session_id]);
+    assert_eq!(by_sid.ids, vec![a1.session_id]);
+    assert_eq!(by_sid.other_subject, 0);
+    // sid and sub together: the subject must match too; another one is
+    // counted, not revoked.
+    let same = backchannel_targets(&t.db, ISSUER, sid(Some("synthetic-sub-c")))
+        .await
+        .expect("sid+sub");
+    assert_eq!((same.ids, same.other_subject), (vec![a1.session_id], 0));
+    let other = backchannel_targets(&t.db, ISSUER, sid(Some("synthetic-sub-other")))
+        .await
+        .expect("sid+other sub");
+    assert_eq!((other.ids, other.other_subject), (vec![], 1));
     let by_sub = backchannel_targets(&t.db, ISSUER, LogoutTarget::Subject("synthetic-sub-c"))
         .await
         .expect("sub");
-    assert_eq!(by_sub, vec![a1.session_id, a2.session_id]);
-    assert!(!by_sub.contains(&other_idp.session_id));
+    assert_eq!(by_sub.ids, vec![a1.session_id, a2.session_id]);
+    assert!(!by_sub.ids.contains(&other_idp.session_id));
     let (public_id, id_token) = logout_view(&t.db, a2.session_id)
         .await
         .expect("view")
@@ -1306,10 +1321,53 @@ async fn backchannel_targets_stay_within_the_issuer_and_logout_reads_the_id_toke
     let by_sub = backchannel_targets(&t.db, ISSUER, LogoutTarget::Subject("synthetic-sub-c"))
         .await
         .expect("sub");
-    assert_eq!(by_sub, vec![a1.session_id], "revoked rows are not targets");
-    let err = backchannel_targets(&t.db, ISSUER, LogoutTarget::Sid(""))
+    assert_eq!(
+        by_sub.ids,
+        vec![a1.session_id],
+        "revoked rows are not targets"
+    );
+    let err = backchannel_targets(&t.db, ISSUER, LogoutTarget::Sid { sid: "", sub: None })
         .await
         .expect_err("empty");
     assert_reason(&err, ErrorCode::Internal, "backchannel_target_empty");
+    t.drop_now().await;
+}
+
+/// Each target kind is one statement on its partial index (review of MR5:
+/// a single OR query with parameter-only conditions got a generic plan).
+#[tokio::test]
+async fn backchannel_targets_use_their_partial_indexes() {
+    let t = FreshDb::migrated().await;
+    let mut su = t.superuser().await;
+    let explain = |sql: &'static str| sql;
+    for (query, index) in [
+        (
+            explain(
+                "EXPLAIN SELECT id FROM forge.web_sessions WHERE oidc_issuer = 'i' \
+                 AND oidc_sid = 's' AND revoked_at IS NULL AND oidc_sid IS NOT NULL",
+            ),
+            "web_sessions_oidc_sid",
+        ),
+        (
+            explain(
+                "EXPLAIN SELECT id FROM forge.web_sessions WHERE oidc_issuer = 'i' \
+                 AND oidc_sub = 's' AND revoked_at IS NULL AND oidc_sub IS NOT NULL",
+            ),
+            "web_sessions_oidc_sub",
+        ),
+    ] {
+        sqlx::raw_sql("SET enable_seqscan = off")
+            .execute(&mut su)
+            .await
+            .expect("planner");
+        let plan: Vec<String> = sqlx::query_scalar(query)
+            .fetch_all(&mut su)
+            .await
+            .expect("explain");
+        assert!(
+            plan.iter().any(|line| line.contains(index)),
+            "{index}: {plan:?}"
+        );
+    }
     t.drop_now().await;
 }

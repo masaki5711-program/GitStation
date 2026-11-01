@@ -62,6 +62,30 @@ pub async fn authenticate(
     presented: &str,
     idle: Duration,
 ) -> Result<SessionIdentity, ForgeError> {
+    authenticate_with(db, request_id, presented, idle, TouchPolicy::Always).await
+}
+
+/// When [`authenticate_with`] records activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchPolicy {
+    /// Whenever the last record is older than a minute.
+    Always,
+    /// The same, except for a session whose refresh check is due
+    /// (`refresh_due`): the check decides first (`SessionContinue`, M2 MR5)
+    /// and its caller records the activity with [`touch_session`] only when
+    /// the session goes on — a session about to be revoked is never
+    /// extended.
+    AfterRefreshCheck,
+}
+
+/// [`authenticate`] with an explicit [`TouchPolicy`].
+pub async fn authenticate_with(
+    db: &Db,
+    request_id: &RequestId,
+    presented: &str,
+    idle: Duration,
+    policy: TouchPolicy,
+) -> Result<SessionIdentity, ForgeError> {
     let plain = session_token::parse(presented).map_err(|_| rejected("session_malformed"))?;
     let public_id = plain.public_id().as_str();
     db.within("sessions.authenticate", async {
@@ -119,7 +143,8 @@ pub async fn authenticate(
             return Err(rejected("session_expired").with_context("public_id", public_id));
         }
         let mut idle_expires_at = row.idle_expires_at;
-        if row.stale {
+        let deferred = policy == TouchPolicy::AfterRefreshCheck && row.refresh_due;
+        if row.stale && !deferred {
             if let Some(moved) = touch(&mut conn, request_id, row.id, idle).await {
                 idle_expires_at = moved;
             }
@@ -196,6 +221,42 @@ async fn touch(
     }
 }
 
+/// Record the activity of a session whose touch [`authenticate_with`]
+/// deferred ([`TouchPolicy::AfterRefreshCheck`]), after its refresh check
+/// let it go on: at most once a minute, never past the absolute expiry.
+/// Returns the new idle expiry, `None` when nothing moved. A failure is
+/// logged once here (`FG-DB-0002` / `FG-DB-0001`, warn) and the request
+/// proceeds, as for the touch inside authentication.
+pub async fn touch_session(
+    db: &Db,
+    request_id: &RequestId,
+    session_id: i64,
+    idle: Duration,
+) -> Option<String> {
+    let acquired = db
+        .within("sessions.touch_session", async {
+            db.write_pool()
+                .acquire()
+                .await
+                .map_err(|e| query_error("sessions.touch_session.acquire", e))
+        })
+        .await;
+    match acquired {
+        Ok(mut conn) => touch(&mut conn, request_id, session_id, idle).await,
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_db",
+                request_id = %request_id,
+                error_code = e.code().id(),
+                session_id,
+                error = %e,
+                "recording the session's activity failed; authentication proceeds"
+            );
+            None
+        }
+    }
+}
+
 /// The HTTP layer's session authenticator (`forge serve` injects it as
 /// `forge_web::Sessions`): [`authenticate`] with the configured idle
 /// lifetime.
@@ -203,11 +264,24 @@ async fn touch(
 pub struct SessionStore {
     db: Db,
     idle: Duration,
+    policy: TouchPolicy,
 }
 
 impl SessionStore {
     pub fn new(db: Db, idle: Duration) -> Self {
-        Self { db, idle }
+        Self {
+            db,
+            idle,
+            policy: TouchPolicy::Always,
+        }
+    }
+
+    /// Leave the touch of a session whose refresh check is due to the
+    /// check (`forge_oidc::RefreshingSessions` wraps this store; M2 MR5).
+    #[must_use]
+    pub fn deferring_touch_to_refresh_check(mut self) -> Self {
+        self.policy = TouchPolicy::AfterRefreshCheck;
+        self
     }
 }
 
@@ -215,6 +289,7 @@ impl std::fmt::Debug for SessionStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionStore")
             .field("idle", &self.idle)
+            .field("policy", &self.policy)
             .finish_non_exhaustive()
     }
 }
@@ -225,6 +300,12 @@ impl forge_core::SessionAuthenticator for SessionStore {
         request_id: &'a RequestId,
         presented: &'a str,
     ) -> SessionAuthFuture<'a> {
-        Box::pin(authenticate(&self.db, request_id, presented, self.idle))
+        Box::pin(authenticate_with(
+            &self.db,
+            request_id,
+            presented,
+            self.idle,
+            self.policy,
+        ))
     }
 }

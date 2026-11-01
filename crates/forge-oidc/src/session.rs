@@ -149,12 +149,32 @@ impl Oidc {
     /// The refresh check of one cookie-authenticated request (see the
     /// module documentation). `Err` only when the database fails (the
     /// request is then `FG-DB-0001`, like its authentication).
+    ///
+    /// The check runs as its own task, awaited here: a request that goes
+    /// away (the browser closes, the request times out) does not stop it
+    /// between the token endpoint's answer and `store_refreshed`. The
+    /// provider rotates refresh tokens, so losing the rotated one would make
+    /// the next refresh `invalid_grant` and end a good session (review of
+    /// MR5, MEDIUM).
     pub async fn refresh_check(
-        &self,
+        self: &Arc<Self>,
         request_id: &RequestId,
         identity: &SessionIdentity,
     ) -> Result<RefreshVerdict, ForgeError> {
-        let Some(claim) = sessions::claim_refresh(&self.db, identity.session_id).await? else {
+        let me = Arc::clone(self);
+        let request_id_owned = request_id.clone(); // clone: the task owns its id
+        let session_id = identity.session_id;
+        tokio::spawn(async move { me.refresh_detached(&request_id_owned, session_id).await })
+            .await
+            .map_err(|e| internal("refresh_task_failed").with_context("panicked", e.is_panic()))?
+    }
+
+    async fn refresh_detached(
+        &self,
+        request_id: &RequestId,
+        session_id: i64,
+    ) -> Result<RefreshVerdict, ForgeError> {
+        let Some(claim) = sessions::claim_refresh(&self.db, session_id).await? else {
             return Ok(RefreshVerdict::Continue);
         };
         let aad = claim.public_id.as_bytes();
@@ -249,7 +269,11 @@ impl Oidc {
                     in_a_row = claim.without_id_token + 1,
                     "forge.auth.session_refresh_without_id_token"
                 );
-                // The last confirmed role stands (ADR-0021 §7).
+                // The last confirmed role stands (ADR-0021 §7, row 32): a
+                // live session's last confirmed role is always "present" —
+                // the session was issued only with it (SessionCreate), and
+                // every refresh whose ID token lacked it revoked the
+                // session. The account is still read again below.
                 true
             }
         };
@@ -454,9 +478,14 @@ impl Oidc {
         let Some(endpoint) = doc.end_session_endpoint.as_deref() else {
             return Ok(home);
         };
-        let mut url = url::Url::parse(endpoint).map_err(|_| {
-            unavailable("discovery", "invalid_json").with_context("detail", "end_session_endpoint")
-        })?;
+        // The session is revoked by now: a bad endpoint must not turn the
+        // logout into an error page that keeps the cookie (review of MR5).
+        let Ok(mut url) = url::Url::parse(endpoint) else {
+            let e = unavailable("discovery", "invalid_json")
+                .with_context("detail", "end_session_endpoint");
+            warn_and_go_on(&e, &ctx.request_id, "-");
+            return Ok(home);
+        };
         {
             let mut q = url.query_pairs_mut();
             if let Some(hint) = hint.as_deref() {
@@ -471,7 +500,30 @@ impl Oidc {
     /// `POST /-/auth/backchannel-logout`: verify `token` and revoke the
     /// sessions it names (see the module documentation). Returns how many
     /// were revoked (0 is a success: the provider must not retry).
+    ///
+    /// Verification, the `jti` and the revocations run as one task, awaited
+    /// here: when the provider's request goes away mid-way (it disconnects,
+    /// the request times out), the task still revokes what it remembered
+    /// the `jti` for, so the provider's retry being `replayed` never leaves
+    /// a session alive (review of MR5, HIGH).
     pub async fn backchannel_logout(
+        self: &Arc<Self>,
+        request_id: &RequestId,
+        token: &str,
+        source_ip: Option<IpAddr>,
+    ) -> Result<usize, ForgeError> {
+        let me = Arc::clone(self);
+        let request_id_owned = request_id.clone(); // clone: the task owns its id
+        let token = token.to_owned();
+        tokio::spawn(async move {
+            me.backchannel_detached(&request_id_owned, &token, source_ip)
+                .await
+        })
+        .await
+        .map_err(|e| internal("backchannel_task_failed").with_context("panicked", e.is_panic()))?
+    }
+
+    async fn backchannel_detached(
         &self,
         request_id: &RequestId,
         token: &str,
@@ -521,21 +573,43 @@ impl Oidc {
         source_ip: Option<IpAddr>,
     ) -> Result<usize, ForgeError> {
         let target = match (&claims.sid, &claims.sub) {
-            (Some(sid), _) => LogoutTarget::Sid(sid),
+            (Some(sid), sub) => LogoutTarget::Sid {
+                sid,
+                sub: sub.as_deref(),
+            },
             (None, Some(sub)) => LogoutTarget::Subject(sub),
             (None, None) => {
                 return Err(logout_token("missing_claim").with_context("claim", "sid_or_sub"))
             }
         };
-        let ids = sessions::backchannel_targets(&self.db, &self.settings.issuer, target).await?;
         let mut ctx = system(request_id);
         ctx.source_ip = source_ip;
         let mut revoked = 0;
-        for id in ids {
-            if sessions::revoke(&self.db, &ctx, id, SessionRevokeReason::Backchannel).await?
-                == RevokeOutcome::Revoked
-            {
-                revoked += 1;
+        let mut mismatch_logged = false;
+        // Batches until none is left: a revoked row is not a target any
+        // more, so every round shrinks the set (review of MR5: no silent
+        // leftover beyond one batch).
+        loop {
+            let batch =
+                sessions::backchannel_targets(&self.db, &self.settings.issuer, target).await?;
+            if batch.other_subject > 0 && !mismatch_logged {
+                mismatch_logged = true;
+                tracing::warn!(
+                    target: "forge_oidc",
+                    request_id = %request_id,
+                    other_subject = batch.other_subject,
+                    "forge.auth.backchannel_logout_subject_mismatch"
+                );
+            }
+            if batch.ids.is_empty() {
+                break;
+            }
+            for id in batch.ids {
+                if sessions::revoke(&self.db, &ctx, id, SessionRevokeReason::Backchannel).await?
+                    == RevokeOutcome::Revoked
+                {
+                    revoked += 1;
+                }
             }
         }
         Ok(revoked)
@@ -559,7 +633,9 @@ fn as_logout_error(e: ForgeError) -> ForgeError {
 /// the sessions the inner authenticator accepted and marked
 /// `refresh_due`. `forge serve` wraps the bounded database authenticator
 /// with it when `auth.oidc` is configured; the provider call runs outside
-/// the database permits.
+/// the database permits. The inner store must defer the touch of a due
+/// session (`SessionStore::deferring_touch_to_refresh_check`): this wrapper
+/// records the activity after a `Continue`.
 pub struct RefreshingSessions {
     inner: Arc<dyn SessionAuthenticator>,
     oidc: Arc<Oidc>,
@@ -586,7 +662,23 @@ impl SessionAuthenticator for RefreshingSessions {
                 return Ok(identity);
             }
             match self.oidc.refresh_check(request_id, &identity).await? {
-                RefreshVerdict::Continue => Ok(identity),
+                RefreshVerdict::Continue => {
+                    // The store deferred the activity record of a due
+                    // session to here: a session the check revokes is never
+                    // extended first (review of MR5).
+                    let mut identity = identity;
+                    if let Some(moved) = sessions::touch_session(
+                        &self.oidc.db,
+                        request_id,
+                        identity.session_id,
+                        self.oidc.settings.session_idle,
+                    )
+                    .await
+                    {
+                        identity.idle_expires_at = moved;
+                    }
+                    Ok(identity)
+                }
                 RefreshVerdict::Revoked(reason) => Err(ForgeError::new(ErrorCode::Unauthenticated)
                     .with_context("reason", "session_revoked")
                     .with_context("public_id", &identity.public_id)

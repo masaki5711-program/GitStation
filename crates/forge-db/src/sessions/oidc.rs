@@ -212,25 +212,45 @@ pub async fn logout_view(
 /// Which IdP session a back-channel logout names (ADR-0021 §8).
 #[derive(Debug, Clone, Copy)]
 pub enum LogoutTarget<'a> {
-    /// The token's `sid`: the rows with this `oidc_sid`.
-    Sid(&'a str),
+    /// The token's `sid`: the rows with this `oidc_sid` — and, when the
+    /// token also carries `sub`, only those of that subject.
+    Sid { sid: &'a str, sub: Option<&'a str> },
     /// No `sid`: every row of this `oidc_sub`.
     Subject(&'a str),
 }
 
+/// At most this many targets per [`backchannel_targets`] call; the caller
+/// revokes them and asks again until none is left.
+pub const BACKCHANNEL_BATCH: i64 = 1000;
+
+/// One batch of back-channel targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackchannelTargets {
+    /// Unrevoked sessions to revoke (at most [`BACKCHANNEL_BATCH`]).
+    pub ids: Vec<i64>,
+    /// Unrevoked rows with the token's `sid` but another `oidc_sub`: not
+    /// revoked (the provider or the token is inconsistent; the caller logs
+    /// it). Always 0 for [`LogoutTarget::Subject`] or without `sub`.
+    pub other_subject: i64,
+}
+
 /// The unrevoked sessions of `issuer` the target names (never a row of
-/// another identity provider with the same `sid` / `sub`). The caller
-/// revokes each with [`super::revoke`]; at most 1 000 (a user has a few).
+/// another identity provider with the same `sid` / `sub`). One statement
+/// per target kind, each on its partial index (`web_sessions_oidc_sid`,
+/// `web_sessions_oidc_sub`). The caller revokes each id with
+/// [`super::revoke`] and calls again until `ids` is empty: a revoked row
+/// is not a target any more, so the loop ends.
 pub async fn backchannel_targets(
     db: &Db,
     issuer: &str,
     target: LogoutTarget<'_>,
-) -> Result<Vec<i64>, ForgeError> {
-    let (sid, sub) = match target {
-        LogoutTarget::Sid(sid) => (Some(sid), None),
-        LogoutTarget::Subject(sub) => (None, Some(sub)),
+) -> Result<BackchannelTargets, ForgeError> {
+    let named = match target {
+        LogoutTarget::Sid { sid, .. } => sid,
+        LogoutTarget::Subject(sub) => sub,
     };
-    if sid.or(sub).is_none_or(str::is_empty) || issuer.is_empty() {
+    let empty_sub = matches!(target, LogoutTarget::Sid { sub: Some(""), .. });
+    if named.is_empty() || issuer.is_empty() || empty_sub {
         return Err(internal("backchannel_target_empty"));
     }
     db.within("sessions.backchannel_targets", async {
@@ -239,19 +259,58 @@ pub async fn backchannel_targets(
             .acquire()
             .await
             .map_err(|e| query_error("sessions.backchannel_targets.acquire", e))?;
-        sqlx::query_scalar(
-            "SELECT id FROM forge.web_sessions \
-             WHERE oidc_issuer = $1 AND revoked_at IS NULL \
-             AND (($2::text IS NOT NULL AND oidc_sid = $2) \
-                  OR ($2::text IS NULL AND oidc_sub = $3)) \
-             ORDER BY id LIMIT 1000",
-        )
-        .bind(issuer)
-        .bind(sid)
-        .bind(sub)
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(|e| query_error("sessions.backchannel_targets.select", e))
+        match target {
+            LogoutTarget::Sid { sid, sub } => {
+                let ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM forge.web_sessions \
+                     WHERE oidc_issuer = $1 AND oidc_sid = $2 \
+                     AND revoked_at IS NULL AND oidc_sid IS NOT NULL \
+                     AND ($3::text IS NULL OR oidc_sub = $3) \
+                     ORDER BY id LIMIT $4",
+                )
+                .bind(issuer)
+                .bind(sid)
+                .bind(sub)
+                .bind(BACKCHANNEL_BATCH)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| query_error("sessions.backchannel_targets.sid", e))?;
+                let other_subject = match sub {
+                    None => 0,
+                    Some(sub) => sqlx::query_scalar(
+                        "SELECT count(*) FROM forge.web_sessions \
+                         WHERE oidc_issuer = $1 AND oidc_sid = $2 \
+                         AND revoked_at IS NULL AND oidc_sid IS NOT NULL \
+                         AND oidc_sub IS DISTINCT FROM $3",
+                    )
+                    .bind(issuer)
+                    .bind(sid)
+                    .bind(sub)
+                    .fetch_one(&mut *conn)
+                    .await
+                    .map_err(|e| query_error("sessions.backchannel_targets.sid_other", e))?,
+                };
+                Ok(BackchannelTargets { ids, other_subject })
+            }
+            LogoutTarget::Subject(sub) => {
+                let ids: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM forge.web_sessions \
+                     WHERE oidc_issuer = $1 AND oidc_sub = $2 \
+                     AND revoked_at IS NULL AND oidc_sub IS NOT NULL \
+                     ORDER BY id LIMIT $3",
+                )
+                .bind(issuer)
+                .bind(sub)
+                .bind(BACKCHANNEL_BATCH)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| query_error("sessions.backchannel_targets.sub", e))?;
+                Ok(BackchannelTargets {
+                    ids,
+                    other_subject: 0,
+                })
+            }
+        }
     })
     .await
 }
