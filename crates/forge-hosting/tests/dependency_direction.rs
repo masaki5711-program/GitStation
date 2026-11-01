@@ -49,6 +49,8 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // The `gstn` client sits outside the server graph (ADR-0020).
+    ("forge-client", &["forge-errors"]),
 ];
 
 /// The forge crates `table` names (a `[dependencies]`-like table).
