@@ -406,3 +406,45 @@ receive-pack（MR4）と一緒に書く。
   墓標、監査の行、移動のイベントは API と同じ。
 - **この例外は CLI の経路だけ**（§8 と同じ）: HTTP の移動・名前の変更は `ProjectTransfer` / `GroupTransfer` / `UserRename` の
   `authorize()` と権限の表の行で判定する。
+
+## Amendment（2026-11-01、M2: ブラウザの 401、`SessionCreate`、無効化とセッション、トークンの発行はセッションだけ）
+
+計画 10（承認 2026-11-01）の M2 の MR1 で決めたこと。セッションとログインの全体は ADR-0021。トークンの形式・照合・寿命（§1〜§6）は変えない。
+
+1. **ブラウザの要求の 401 に `Basic` のチャレンジを付けない**（Amendment D3 MR3 の「`WWW-Authenticate`」を変える）。
+   - `/api/v1/*` への要求に **`X-GitStation-Client: web`** があるか、**`Sec-Fetch-Site`** ヘッダーがある（＝ブラウザが送った）ときは、
+     401 の `WWW-Authenticate` を `Bearer realm="GitStation"` だけにする。`Basic` を付けると、ブラウザが fetch の 401 でパスワードの
+     入力画面を出し、入力された Basic の資格情報を覚えて以後の要求に自動で付ける（Cookie と並ぶもう 1 つの「自動で付く資格情報」になり、
+     CSRF の対策の前提を崩す）。
+   - SPA は API の要求に必ず `X-GitStation-Client: web` を付ける（`Sec-Fetch-Site` を送らない古いブラウザのため）。この値は認証にも認可にも
+     使わない（チャレンジの形だけを変える。偽っても得るものはない）。
+   - **git のルート（Smart HTTP）と raw / archive は今のまま** `Basic` と `Bearer` の両方を付ける（git は `Basic` のチャレンジで資格情報
+     ヘルパーに聞く。`smart_http_e2e.rs` の `git_without_credentials_gets_www_authenticate_basic` は変わらない）。
+   - 判定はエラーの描画（`error.rs`）の 1 か所のまま。描画にルートの種類と 2 つのヘッダーの有無を渡す（ヘッダーの値はログに出さない）。
+   - テスト（MR3）: 3 つの組（ヘッダーなし / `X-GitStation-Client: web` / `Sec-Fetch-Site`）× API と git のルート。E2E でブラウザが
+     入力画面を出さないことを確かめる（計画 10 §8）。
+2. **入場の判定 `SessionCreate`**: OIDC のコールバックが、セッションを作る前に
+   `authorize(Principal::anonymous(), Action::SessionCreate, Resource::Admission { access_role, account })` で判定する（ADR-0021 §3）。
+   - `account` は `New`（最初のログインで作る）/ `Active` / `Disabled` / `NotHuman`（ボット・サービスアカウント）。allow は `access` のロールが
+     あり、かつ `New` か `Active` のときだけ。拒否は FG-AUTH-0013（`reason=no_access_role|user_disabled|not_human`）。
+   - 単一判定点（CLAUDE.md §3.4）の中に置く。権限の表に allow 2 行と deny 4 行（ロールなし × `Active`、ロールあり × `Disabled`、
+     ロールあり × `NotHuman`、ロールなし × `New`）を足す（MR4）。
+   - ボット・サービスアカウントは Web にログインしない（トークンだけ）。
+3. **無効化でセッションも失効させる**（§12 の拡張）: `users::disable`（と `disable_with(Guard::Force)`）は、トークンと **同じ `ChangeTx`** で、
+   その利用者の有効な `web_sessions` をすべて `revoked_reason = 'user_disabled'` で失効させる。
+   - 監査は `user.disabled` の 1 行のまま、`details` に `revoked_sessions`（数）を足す（今の 5 つの鍵に 1 つ足し、常に書く）。
+     セッションごとの監査の行は出さない。イベントも出さない（`session.*` はドメインイベントにしない。ADR-0021 §5）。
+   - ガードが拒否した無効化は何も失効させない（§10 のまま）。
+   - 次の要求は FG-AUTH-0004（`reason=owner_disabled`）。処理中の要求はその要求の間は完了しうる（受け入れたリスクのまま）。
+   - Keycloak の側だけで無効にした利用者は、ADR-0021 §7・§8（リフレッシュの確認とバックチャネルのログアウト）で切る。
+     GitStation の `users.state` は変えない（管理者が Runbook `user-offboarding` で無効にする）。
+4. **トークンの発行は HTTP ではセッションだけ**（§8 の「HTTP で発行する経路を作るときは別に認可の行を足す」の実装の方針）。
+   - `POST /api/v1/user/tokens`（`TokenCreate` / `TokenRequest`）は、`Credential::Session` のプリンシパルだけを許す。トークンでの要求は
+     FG-AUTH-0002（403、`reason=session_required`）。トークンはトークンを作らない（漏れたトークンから寿命の長い別のトークンを作らせない）。
+   - `admin` スコープは管理者だけ（`authorize()` で判定し、`tokens::issue` の `admin_scope_requires_admin` は二重の守りとして残す）。
+   - `is_agent` は発行の要求で宣言する（今の CLI と同じ）。CSRF の対策（ADR-0021 §6）が掛かる。
+   - 一覧（`TokenList`、`read_api`）と失効（`TokenRevoke`、`api`）はトークンでも使える。他人のトークンは見つからない扱い（FG-REPO-0005 と
+     同じ形の 404）。
+   - `TokenCreate`・`TokenList`・`TokenRevoke`・`UserDisable` を `app::PLANNED` から外すのは、ルートを入れる MR6。
+5. **変えないもの**: `forge admin token issue|revoke|list`・`user disable`・`bootstrap-admin` は CLI の経路のまま（§8 の例外）。
+   トークンの照合と、`Authorization` が 2 つ・Cookie と `Authorization` の両方のときの `ambiguous`（401）も今のまま。

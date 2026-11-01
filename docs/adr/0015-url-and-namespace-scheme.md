@@ -1041,3 +1041,68 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - 権限の表の行（純粋な `authorize()`）は MR1 の行に名前の変更の行を足した。ルートごとの行（Owner / Maintainer / 管理者 / 読み取りのトークン /
   `admin` のない管理者のトークン / エージェント / 他人 / 削除待ち / 不正な id）は `forge-web/tests/namespace_move_routes.rs`、
   Owner の降格と移動の競合は `forge-hosting/tests/moves.rs`。
+
+## Amendment（2026-11-01、M2: 画面の資産・ログインの語、予約、`RepoBrowse`、プレビュー用のオリジンを作らないこと）
+
+計画 10（承認 2026-11-01）の M2 の MR1 で決めたこと。ADR-0021（ログインとセッション）と ADR-0022（画面の土台）と組で読む。
+URL の 3 つの形と判定の順序（上の「判定の順序」）は変えない。
+
+### 新しいインスタンスの語（`/-/` の直後）
+
+`forge_core::web_path::InstanceRoute` に足す（今は `projects` だけ）。
+
+| 語 | パス | Action / Resource | 公開 | 入る MR |
+|---|---|---|---|---|
+| `assets` | `GET|HEAD /-/assets/{file}`（1 セグメント） | `WebShell` / `Instance` | 公開。資格情報を見ない | MR2 |
+| `auth` | `GET /-/auth/login`、`GET /-/auth/callback` | `WebLogin` / `Instance` | 公開 | MR4 |
+| `auth` | `POST /-/auth/backchannel-logout` | `OidcBackchannelLogout` / `Instance` | 公開。Cookie も `Authorization` も見ない（判定は JWT の検証の後） | MR5 |
+
+- **資産の置き場所は `/-/assets/` に決める**。上の「トップレベルの予約語」の節の「静的なファイルは `/assets/…` か `/-/static/…` にだけ置く」
+  を置き換える。トップレベルの `assets` は予約語のまま残す（名前空間に使わせない）。`/-/static` は作らない。
+- `assets` は、その語を持つ RouteDef がすべて `WebShell` なので公開の語になる（「判定の順序」の 4）。ただし殻ではなく、埋め込みの一覧にある
+  ファイルだけを返す。一覧にない名前は FG-WEB-0001（`reason=unknown_route`、`part=instance`。殻は返さない）。
+- `auth` の下の語は固定の 3 つだけ。それ以外（`/-/auth`、`/-/auth/x`）は FG-WEB-0001。`auth` の語は公開でも、殻の「どのパスでも同じバイト」の
+  対象ではない（ログインの手順を行う）。`/-/auth/*` は DB を見る（callback と backchannel-logout）が、パスの解決はしない。
+- 登録の仕組みの今のテスト（公開の語の RouteDef はすべて `WebShell`）は、`auth` のために「公開の語の RouteDef は `WebShell`・`WebLogin`・
+  `OidcBackchannelLogout` のどれか」に広げる。この 3 つ以外の Action は公開にできない（テストで固定する）。
+
+### 予約するインスタンスの語（ルートを作らない）
+
+- **`/-/agent`**（W15、エージェントビルダー。計画 09 §4 で M4 の後）と **`/-/preview`**（W16、MR ごとのプレビューの環境。M4 が前提）を
+  インスタンスの語の予約に足す。M2 ではルートも画面のナビの枠も作らない（計画 08 原則 1）。予約の語への要求は FG-WEB-0001
+  （`reason=unknown_route`、`part=instance`）で、ほかの未知の語と同じ応答にする。
+- 予約は `InstanceRoute` とは別の定数（`RESERVED_INSTANCE_WORDS`）に持ち、テストで「予約の語と `InstanceRoute` の語が重ならない」
+  「予約の語は殻を返さない」ことを確かめる。将来その段階の ADR が Action を決めたときに、予約から `InstanceRoute` へ移す。
+
+### `RepoBrowse`（閲覧の API の Action）
+
+- 上の「ルートの系統と認可」の表は、画面のデータ（ファイル、コミット、ブランチ、blame、比較）を `RepoRead` / `read_repository` としていた。
+  M2 では **新しい Action `RepoBrowse`**（Resource `Project`、スコープ **`read_api`**）にする。
+  - 役割の判定は `RepoRead` と同じ（Reporter 以上、internal のプロジェクトは有効な利用者、削除待ちは拒否、`kind` は問わない）。
+    `authorize()` の中で同じ arm を共有し、判定の規則を 2 つにしない。
+  - 分ける理由: 閲覧の API は JSON の API で、`read_api` のトークン（`gstn browse`、MCP）が使う。`read_repository` は git の取得のスコープで、
+    `read_repository` だけのトークン（CI の clone 用）に API の閲覧まで許すと、スコープの意味がずれる。逆に `read_api` だけのトークンで
+    `git clone` はできないまま。
+  - raw と archive は今のまま `RepoRead` / `read_repository`（中身をそのまま返すもので、git の取得と同じ扱い）。dispatcher で
+    Cookie を受け付けるのは raw と archive の語だけ（Smart HTTP は Cookie を見ない。ADR-0021 §10）。
+- ルート（MR7・MR8）: `GET /api/v1/projects/{id}/repository/{refs,resolve,tree,blob,commits,commits/{oid},compare,blame}`。
+  どれも `RepoBrowse`。ref とパスの境目と `RefNotResolved` は上の「ref とパスの境目」のとおり、認可の後でだけ決める。
+  解決できない ref・パスは新しい **FG-REPO-0023 RepositoryPathNotResolved**（404、info。番号は登録の時の次の空き、MR7 で登録）。
+- 権限の表の行（MR7）: allow = Reporter・Developer・Maintainer・Owner・管理者、internal のプロジェクトの有効な利用者、`read_api` のトークン、
+  セッション。deny = 匿名（private / internal）、Guest（private）、無効な利用者、削除待ち、`read_repository` だけのトークン、
+  `write_repository` だけのトークン。
+
+### プレビュー用のオリジンは M2 では作らない
+
+- 上の「応答の安全」の「プレビュー用のオリジン（M2 で決める）」は、**M2 では作らない** と決める。`web.content_origin` の設定もルートも足さない。
+- SVG・HTML・PDF は **表示せず、ダウンロードだけ** にする（raw は `application/octet-stream` と `Content-Disposition: attachment`、画面は
+  「この形式は画面で表示しません。ダウンロードしてください」と出す）。画像は今の許可リスト（png / jpeg / gif / webp）だけを表示する。
+- 理由: 別のオリジン（DNS、TLS の証明書、署名付きの URL の鍵）を用意する運用の費用に比べて、M2 の利用（コードと仕様書の閲覧）で
+  SVG・HTML・PDF を画面で見る必要が小さい。文書ポータル（M7）で PDF の表示が要るときに、上に書いた前提（署名、60 秒、
+  `authorize(RepoRead)` のやり直し、matrix の行）で改めて決める。
+
+### 変えないもの
+
+- 公開の殻は DB も資格情報も見ず、どのパスにも同じバイトを返す（ADR-0022 §2）。
+- GitHub の形の URL の救済（`resolve?prefix=true`）は上の規則のまま（MR6 で実装。回数の制限は FG-WEB-0010）。
+- サーバーが返すリダイレクトの規則（`web.base_url` か相対パス）。`web.base_url` は ADR-0021 §12 で設定として足す（今の墓標の 302 は相対パス）。
