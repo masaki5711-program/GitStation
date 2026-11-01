@@ -366,6 +366,7 @@ async fn mark_ready_tx(repo: RepoId, mut tx: ChangeTx) -> Result<MarkReady, Forg
             error_code: None,
             details: value.clone(), // clone: the same JSON is the event payload
         },
+        affected: Vec::new(),
         events: vec![DomainEvent {
             event_type,
             schema_version: 1,
@@ -911,6 +912,7 @@ async fn record(
             error_code: None,
             details: details.to_value(),
         },
+        affected: Vec::new(),
         events: vec![DomainEvent {
             event_type,
             schema_version: 1,

@@ -44,6 +44,7 @@ fn record(events: Vec<DomainEvent>) -> ChangeRecord {
             error_code: None,
             details: json!({ "name": "r1" }),
         },
+        affected: Vec::new(),
         events,
     }
 }
@@ -765,5 +766,78 @@ async fn a_malformed_dedup_key_is_change_rejected() {
         assert_reason(&err, ErrorCode::ChangeRejected, "invalid_dedup_key");
     }
     assert_eq!(count(&t, "forge.events").await, 0);
+    t.drop_now().await;
+}
+
+/// D5 MR2 (ADR-0016 Amendment D5): a change may carry one audit row per
+/// resource it changed (`affected`). Each is written in the transaction;
+/// each project row must name its project; all share one outcome; and the
+/// event scope rule holds per event — an event may name the project of any
+/// of the change's audit rows, never another.
+#[tokio::test]
+async fn per_resource_audit_rows_are_written_and_scope_every_event() {
+    let t = FreshDb::migrated().await;
+    let project_row = |id: i64| AuditEntry {
+        action: "project.moved",
+        outcome: Outcome::Succeeded,
+        resource_type: "project",
+        resource_id: Some(id),
+        project_id: Some(ProjectId::new(id)),
+        error_code: None,
+        details: json!({ "project_id": id }),
+    };
+    let on = |project: i64| DomainEvent {
+        project_id: Some(ProjectId::new(project)),
+        ..event(project, None)
+    };
+    // Primary on project 3, affected on 7 and 8: events of 3, 7 and 8 fit.
+    let mut ok = record(vec![on(3), on(7), on(8)]);
+    ok.affected = vec![project_row(7), project_row(8)];
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(ok).await.expect("commit");
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE action = 'project.moved'").await,
+        2
+    );
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        3,
+        "one row per resource"
+    );
+    let mut stray = record(vec![on(9)]);
+    stray.affected = vec![project_row(7)];
+    let mut misnamed = record(Vec::new());
+    misnamed.affected = vec![AuditEntry {
+        project_id: Some(ProjectId::new(5)),
+        ..project_row(7)
+    }];
+    let mut mixed = record(Vec::new());
+    mixed.affected = vec![AuditEntry {
+        outcome: Outcome::Failed,
+        ..project_row(7)
+    }];
+    let mut too_big = record(Vec::new());
+    too_big.affected = vec![AuditEntry {
+        details: json!({ "pad": "x".repeat(9000) }),
+        ..project_row(7)
+    }];
+    for (rec, reason) in [
+        (stray, "event_scope_mismatch"),
+        (misnamed, "audit_scope_mismatch"),
+        (mixed, "audit_outcome_mismatch"),
+        (too_big, "field_too_long"),
+    ] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err(reason);
+        assert_reason(&err, ErrorCode::ChangeRejected, reason);
+    }
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        3
+    );
     t.drop_now().await;
 }

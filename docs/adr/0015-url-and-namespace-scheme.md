@@ -897,3 +897,42 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
   id = `TombstoneId`）。証明は移動元と移動先を一緒に束ねるので、ある移動先への証明で別の場所へは移せない。
 - エージェントの資格情報は D5 のすべての操作（`ProjectTransfer`、`GroupTransfer`、`UserRename`、`NamespaceTombstoneRelease`、
   `ProjectDelete`、`ProjectRestore`）を拒否される（ADR-0017 の Amendment D5）。
+
+## Amendment（2026-11-02、手順 D5 MR2: 部分木の移動、墓標の解放、`reclaim`）
+
+- **移動は 1 つの手続き**（`forge_db::namespaces::move_subtree`）。プロジェクトの移管・名前の変更（`projects::move_decided`）、グループの
+  移管・名前の変更（`groups::move_decided`）、ユーザーの名前の変更（`users::rename_decided`、ユーザー名と個人の名前空間のパスを一緒に変える）は
+  どれもこれを使う。認可は MR7a と同じく、ロックの後で `decide` の閉包が判定する（forge-db は forge-auth の型を持たない）。
+- **ロックの順**: リソースの行（`FOR UPDATE`）→ 移動先の親（`FOR SHARE`）と呼び手の所属の行 → 部分木の名前空間の行（`FOR NO KEY UPDATE`、
+  id の順。ロックした集合が変わらなくなるまで読み直す。外部キーの検査の `FOR KEY SHARE` とは衝突しない）→ 呼び手のアカウント → 判定 →
+  古いパスと新しいパスのすべての advisory lock（バイト順）。行のロックは常にパスのロックより先（解放も同じ）。交差する 2 つの移動のような
+  避けられないデッドロックは FG-DB-0002 `reason=deadlock`、`retryable=true`（要求ごと再試行してよい）。
+  作成は親を `FOR SHARE` で読むので、移動より先に確定するか（移動が読み直して子を一緒に動かす）、移動の確定を待って新しいパスを読む。
+  さらに作成は、パスのロックの後で `親の full_path || '/' || segment = ロックしたパス` を確かめ、違えば FG-REPO-0009 `reason=parent_moved`。
+- **同じトランザクションで検査する**（何も書かない、FG-REPO-0015 `TransferInvalid`、409）: 部分木が 1000 を超える（`subtree_too_large`）、
+  移動先の種類（`target_kind`: プロジェクトはグループか個人の名前空間の下、グループはグループの下かトップレベル、ユーザーはトップレベル）、
+  変化がない（`same_location`）、個人の名前空間の持ち主が bot（`parent_owner_bot`）か無効（`parent_owner_inactive`）、循環（`cycle`）、
+  深さ 20 超（`too_deep`）、新しいパスが 255 文字超（`path_too_long`）。子孫も含めたすべての新しいパスについて、生きているパスと墓標との
+  衝突は FG-REPO-0009（`sibling` / `tombstoned`）。
+- **書き込み**: 深さを制限した 1 つの再帰の `UPDATE` で部分木を書き換え、節ごとに `moved` の墓標を 1 行書く（`cause` = 動かしたリソース、
+  `owner_at_write` = 操作したユーザー、system なら NULL）。継承のロールが変わる利用者（移動元と移動先の親の連鎖の差、最大 1000 件、
+  超えたら truncated）を監査の details に残す（遷移ごとに user id をまとめ、最初の 400 件まで）。
+- **回数の制限**: 名前空間ごとに 24 時間で 10 回（FG-REPO-0018 `RenameRateLimited`、429）。数えるのは、そのリソース自身の成功した
+  移動の監査の行（`project.moved` / `group.moved` / `user.renamed`。祖先の移動でプロジェクトごとに書く行は除く。索引 `audit_log_moves`）。
+  監査ログは追記のみなので、墓標の解放や `reclaim` で数は減らない。管理者も対象で、運用の CLI（actor `system`、`RateLimit::Exempt`）だけ除外。
+- **Owner の不変条件**: 移動の後で、部分木のプロジェクトが有効な Owner（直接、祖先のグループの直接の Owner、個人の親の持ち主）を失う、
+  またはトップレベルへ移したグループに有効な直接の Owner がいない場合は、FG-REPO-0015 `reason=no_active_owner`（管理者も同じ）。
+  もともと Owner のいなかったプロジェクトは数えない。
+- **削除の権限**: forge_app の DELETE は purge のためだけで、ガード `forge.purge_delete_guard`（マイグレーション 20261102100100）が、
+  `purging` でないリポジトリ、削除待ちでないプロジェクト、削除待ちのプロジェクト以外の名前空間の削除を拒否する（XF001）。
+- **`reclaim`（A → B → A）**: `MoveOptions::reclaim` のとき、新しいパスにある墓標のうち、**そのパスへ移る同じ名前空間を指す** `moved` の墓標だけを、
+  同じトランザクションで解放してから移動する。別の名前空間を指す墓標や `deleted` の墓標は、引き続き FG-REPO-0009 `tombstoned`。
+  「墓標は解放されるまで必ず塞ぐ」の規則は変えない（解放と移動を 1 つの変更にするだけ）。
+- **解放**（`tombstones::release_decided`）: 墓標を読み、行のロック（行き先または親の名前空間 `FOR SHARE`、所属、アカウント）を取ってから
+  パスの advisory lock を取り、墓標を読み直す（なくなっていれば FG-REPO-0005、変わっていれば FG-DB-0002 `reason=tombstone_changed`、
+  `retryable=true`）。forge_app は墓標の表に UPDATE を持たないので行ロックはできない。墓標を消すのは解放と `reclaim` だけで、
+  どちらもパスのロックを取ってから消すので、それで直列になる。
+  `decide` には `TombstoneAccess::Moved { target, target_role }`（行き先がある `moved`）か `Deleted { recorded_owner, caller_parent_role,
+  has_parent }` を渡す。監査の行は墓標の cause のリソースに `namespace_tombstone.released`。
+- MR2 では移動は監査のみ（イベントなし）。グループの移動は最大 1000 のプロジェクトに及び、1 つの変更のイベントの上限（100）を超えるため、
+  移動のイベントの形は MR5 で決める。

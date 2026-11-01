@@ -28,17 +28,40 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.audited_change_present()",
     // ── D4: repositories move only provisioning -> ready (20261031100000) ──
     "forge.repositories_state_guard()",
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    "forge.purge_delete_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
 /// each must exist with this exact definition, enabled ALWAYS. Unlike
 /// `GUARDED_TRIGGERS`, the table may have other triggers.
-const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[(
-    "repositories",
-    "repositories_state_forward",
-    "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
-     FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
-)];
+const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    (
+        "repositories",
+        "repositories_state_forward",
+        "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
+    ),
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    (
+        "repositories",
+        "repositories_purge_only",
+        "CREATE TRIGGER repositories_purge_only BEFORE DELETE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "projects",
+        "projects_purge_only",
+        "CREATE TRIGGER projects_purge_only BEFORE DELETE ON forge.projects \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "namespaces",
+        "namespaces_purge_only",
+        "CREATE TRIGGER namespaces_purge_only BEFORE DELETE ON forge.namespaces \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
 /// (with `search_path = pg_catalog`): no other trigger may exist.
@@ -332,12 +355,14 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]
             .concat(),
         ),
+        // D5 MR2: DELETE for the purge (migration 20261102100000).
         (
             "forge.namespaces",
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
                 "forge_app:UPDATE",
+                "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),
         ),
@@ -384,22 +409,23 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end D3 ──
-        // ── D4: no DELETE on projects / repositories yet (D5), repository
-        // kind fixed (UPDATE of state and ready_at only), the read pool
-        // without provision_token, TRUNCATE for no one ──
+        // ── D4: repository kind fixed (UPDATE of state and ready_at only),
+        // the read pool without provision_token, TRUNCATE for no one; D5
+        // MR2: DELETE on projects / repositories for the purge ──
         (
             "forge.projects",
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
                 "forge_app:UPDATE",
+                "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),
         ),
         (
             "forge.repositories",
             [
-                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
                 columns("forge_app", "UPDATE", &["state", "ready_at"]),
                 columns("forge_ro", "SELECT", REPOSITORIES_RO),
             ]

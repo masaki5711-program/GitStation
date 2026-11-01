@@ -39,6 +39,7 @@ async fn a_job_enqueued_in_a_rolled_back_change_does_not_exist() {
             error_code: None,
             details: json!({}),
         },
+        affected: Vec::new(),
         events: Vec::new(),
     };
     tx.commit(record).await.expect("commit");

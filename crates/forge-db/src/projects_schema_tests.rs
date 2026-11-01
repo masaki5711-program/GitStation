@@ -190,6 +190,118 @@ async fn a_repository_state_only_moves_forward() {
     t.drop_now().await;
 }
 
+/// D5 MR2 (migration 20261102100000): `purging` is reachable from
+/// provisioning and from ready (keeping ready_at), never left again; and
+/// forge_app may delete the purged rows.
+#[tokio::test]
+async fn a_repository_moves_to_purging_and_never_back() {
+    for from_ready in [false, true] {
+        let t = FreshDb::migrated().await;
+        commit(&t, &seed()).await.expect("seed");
+        commit(&t, &[audit("project", 1, "succeeded"), sql(REPOSITORY)])
+            .await
+            .expect("repository");
+        if from_ready {
+            commit(
+                &t,
+                &[
+                    audit("project", 1, "succeeded"),
+                    sql("UPDATE forge.repositories SET state = 'ready', ready_at = now()"),
+                ],
+            )
+            .await
+            .expect("ready");
+        }
+        commit(
+            &t,
+            &[
+                audit("project", 1, "succeeded"),
+                sql("UPDATE forge.repositories SET state = 'purging'"),
+            ],
+        )
+        .await
+        .expect("-> purging");
+        for change in [
+            "UPDATE forge.repositories SET state = 'ready', ready_at = coalesce(ready_at, now())",
+            "UPDATE forge.repositories SET state = 'provisioning', ready_at = NULL",
+        ] {
+            let err = commit(&t, &[audit("project", 1, "succeeded"), sql(change)])
+                .await
+                .expect_err(change);
+            let text = chain(&err);
+            assert!(
+                text.contains("sqlstate=XF001") || text.contains("sqlstate=23514"),
+                "{change}: {text}"
+            );
+        }
+        commit(
+            &t,
+            &[
+                audit("project", 1, "succeeded"),
+                sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
+                sql("DELETE FROM forge.repositories"),
+                sql("DELETE FROM forge.project_members"),
+                sql("DELETE FROM forge.namespaces WHERE kind = 'project'"),
+                sql("DELETE FROM forge.projects"),
+            ],
+        )
+        .await
+        .expect("forge_app deletes the purged rows");
+        t.drop_now().await;
+    }
+}
+
+/// D5 MR2 review (migration 20261102100100): the DELETE grants are for
+/// the purge only. A repository not `purging`, a project not pending
+/// deletion and any namespace but a pending project's are refused (XF001,
+/// FG-DB-0009 `rejected`), audit row or not.
+#[tokio::test]
+async fn deletes_are_refused_outside_the_purge() {
+    let t = FreshDb::migrated().await;
+    commit(&t, &seed()).await.expect("seed");
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql(REPOSITORY),
+            sql(
+                "INSERT INTO forge.namespaces (parent_id, kind, owner_id, segment, full_path, \
+                 depth) VALUES (NULL, 'project', 1, 'p', 'p', 1)",
+            ),
+            audit("user", 1, "succeeded"),
+            sql(
+                "INSERT INTO forge.namespaces (kind, owner_id, segment, full_path, depth) \
+                 VALUES ('user', 1, 'alice', 'alice', 1)",
+            ),
+        ],
+    )
+    .await
+    .expect("repository and namespace");
+    for (cause, change) in [
+        (("project", 1), "DELETE FROM forge.repositories"),
+        (("project", 1), "DELETE FROM forge.projects"),
+        (
+            ("project", 1),
+            "DELETE FROM forge.namespaces WHERE kind = 'project'",
+        ),
+        (
+            ("user", 1),
+            "DELETE FROM forge.namespaces WHERE kind = 'user'",
+        ),
+    ] {
+        let err = commit(&t, &[audit(cause.0, cause.1, "succeeded"), sql(change)])
+            .await
+            .expect_err(change);
+        assert_reason(
+            &err,
+            forge_errors::ErrorCode::AppendOnlyViolation,
+            "rejected",
+        );
+        assert!(chain(&err).contains("sqlstate=XF001"), "{change}: {err}");
+    }
+    t.drop_now().await;
+}
+
 /// Doctor compares the state guard's trigger and function body like the
 /// other guards (FG-DB-0009 guard_missing).
 #[tokio::test]
@@ -232,13 +344,13 @@ async fn repository_kind_cannot_change() {
     commit(&t, &[audit("project", 1, "succeeded"), sql(REPOSITORY)])
         .await
         .expect("repository");
-    // forge_app may update state and ready_at only, and delete nothing.
+    // forge_app may update state and ready_at only (D5 MR2: and delete the
+    // row, for the purge — tested in a_repository_moves_to_purging_and_never_back).
     for change in [
         "UPDATE forge.repositories SET kind = 'spec'",
         "UPDATE forge.repositories SET project_id = 1",
         "UPDATE forge.repositories SET provision_token = gen_random_uuid()",
         "UPDATE forge.repositories SET created_at = now()",
-        "DELETE FROM forge.repositories",
     ] {
         let err = commit(&t, &[audit("project", 1, "succeeded"), sql(change)])
             .await
@@ -367,16 +479,32 @@ async fn a_project_table_change_without_its_audit_row_cannot_commit() {
     )
     .await
     .expect("delete with the audit row");
+    // D5 MR2: forge_app may delete a project (the purge), but only with
+    // its audit row; deleted_by is audited like the other columns.
     let err = commit(
         &t,
         &[
-            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
             sql("DELETE FROM forge.projects"),
         ],
     )
     .await
-    .expect_err("no DELETE on projects");
-    assert!(chain(&err).contains("permission denied"), "{err}");
+    .expect_err("no audit row");
+    assert_refused(&err, "projects");
+    let err = commit(&t, &[sql("UPDATE forge.projects SET deleted_by = 1")])
+        .await
+        .expect_err("deleted_by without its audit row");
+    assert_refused(&err, "projects");
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now()"),
+            sql("DELETE FROM forge.projects"),
+        ],
+    )
+    .await
+    .expect("delete a pending deletion with the audit row");
     t.drop_now().await;
 }
 

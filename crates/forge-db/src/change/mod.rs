@@ -59,7 +59,7 @@ impl Actor {
         }
     }
 
-    fn user(&self) -> Option<i64> {
+    pub(crate) fn user(&self) -> Option<i64> {
         match self {
             Self::User(u)
             | Self::ServiceAccount(u)
@@ -155,10 +155,21 @@ pub struct DomainEvent {
     pub dedup_key: Option<DedupKey>,
 }
 
+/// At most this many further audit rows per change ([`ChangeRecord::affected`]):
+/// a subtree move audits each project it moves (at most 1000 namespaces,
+/// ADR-0015 Amendment D5) and the causes of the tombstones it reclaims.
+pub const MAX_AFFECTED: usize = 2000;
+
 /// Everything a change records besides its state writes.
 #[derive(Debug, Clone)]
 pub struct ChangeRecord {
+    /// The change's own audit row (its action names the change).
     pub audit: AuditEntry,
+    /// One further audit row per other resource the change changed, with
+    /// the same outcome (D5: a subtree move writes one `project` row per
+    /// project it moves, so each project's audit trail shows the move;
+    /// ADR-0016 Amendment D5). Usually empty.
+    pub affected: Vec<AuditEntry>,
     pub events: Vec<DomainEvent>,
 }
 
@@ -181,8 +192,15 @@ impl ChangeRecord {
                 error_code: None,
                 details: details.to_value(),
             },
+            affected: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    /// Every audit row of the change: [`Self::audit`] first, then
+    /// [`Self::affected`] in order.
+    pub(crate) fn audit_rows(&self) -> impl Iterator<Item = &AuditEntry> {
+        std::iter::once(&self.audit).chain(self.affected.iter())
     }
 }
 

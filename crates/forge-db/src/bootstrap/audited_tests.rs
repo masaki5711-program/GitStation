@@ -78,7 +78,11 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
     let ledger = Ledger::embedded().expect("tables.toml parses");
     assert_eq!(
         ledger.guarded_functions,
-        vec!["audited_change_present", "repositories_state_guard"]
+        vec![
+            "audited_change_present",
+            "repositories_state_guard",
+            "purge_delete_guard"
+        ]
     );
 }
 

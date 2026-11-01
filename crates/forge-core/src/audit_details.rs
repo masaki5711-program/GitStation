@@ -2,7 +2,8 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::event_type::EventType;
-use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, UserId};
+use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryKind;
 use crate::role::{Role, Visibility};
@@ -195,6 +196,40 @@ pub enum AuditDetails {
         fields: Vec<ChangedField>,
     },
     // ── end M1 phase 8b MR7a ──
+    // ── D5 MR2: namespace moves and tombstone releases ──
+    /// `project.moved`: the project itself moved or was renamed.
+    ProjectMoved {
+        project_id: ProjectId,
+        summary: MoveSummary,
+    },
+    /// `project.moved` of a project inside a moved group or a renamed
+    /// user's namespace (one row per project, ADR-0016 Amendment D5):
+    /// `moved_namespace_id` is the namespace that moved.
+    ProjectMovedWithAncestor {
+        project_id: ProjectId,
+        namespace_id: NamespaceId,
+        moved_namespace_id: NamespaceId,
+    },
+    /// `group.moved`: a group moved (transfer) or was renamed.
+    GroupMoved {
+        group_id: GroupId,
+        summary: MoveSummary,
+    },
+    /// `user.renamed`: the username and the personal namespace's path.
+    UserRenamed {
+        user_id: UserId,
+        summary: MoveSummary,
+    },
+    /// `namespace_tombstone.released`: the tombstone, its kind and the
+    /// namespace it named (`None` once gone); `reclaim` = released by a
+    /// move of that same namespace back to the path.
+    TombstoneReleased {
+        tombstone_id: TombstoneId,
+        kind: TombstoneKind,
+        namespace_id: Option<NamespaceId>,
+        reclaim: bool,
+    },
+    // ── end D5 MR2 ──
 }
 
 impl AuditDetails {
@@ -225,6 +260,10 @@ impl AuditDetails {
             Self::ProjectUpdated { .. } => "project.updated",
             Self::ProjectVisibilityChanged { .. } => "project.visibility_changed",
             Self::GroupUpdated { .. } => "group.updated",
+            Self::ProjectMoved { .. } | Self::ProjectMovedWithAncestor { .. } => "project.moved",
+            Self::GroupMoved { .. } => "group.moved",
+            Self::UserRenamed { .. } => "user.renamed",
+            Self::TombstoneReleased { .. } => "namespace_tombstone.released",
         }
     }
 
@@ -257,6 +296,14 @@ impl AuditDetails {
             Self::RepositoryPushed { .. } => Some(EventType::RepositoryPushed),
             Self::ProjectUpdated { .. } | Self::GroupUpdated { .. } => None,
             Self::ProjectVisibilityChanged { .. } => Some(EventType::ProjectVisibilityChanged),
+            // D5 MR2: audit-only. A group move can touch 1000 projects, more
+            // than the 100 events one change may carry; the move events
+            // come with their aggregate shape (D5 plan, MR5).
+            Self::ProjectMoved { .. }
+            | Self::ProjectMovedWithAncestor { .. }
+            | Self::GroupMoved { .. }
+            | Self::UserRenamed { .. }
+            | Self::TombstoneReleased { .. } => None,
         }
     }
 
@@ -284,7 +331,12 @@ impl AuditDetails {
     /// RepositoryPushed: [`push_json`] within [`AUDIT_BUDGET`],
     /// ProjectUpdated `{"project_id","fields"}`, GroupUpdated
     /// `{"group_id","fields"}` (field names only),
-    /// ProjectVisibilityChanged `{"project_id","from","to"}`.
+    /// ProjectVisibilityChanged `{"project_id","from","to"}`,
+    /// ProjectMoved `{"project_id"}` + [`MoveSummary`]'s fields,
+    /// ProjectMovedWithAncestor `{"project_id","namespace_id","moved_namespace_id"}`,
+    /// GroupMoved `{"group_id"}` + the summary, UserRenamed `{"user_id"}` +
+    /// the summary, TombstoneReleased
+    /// `{"tombstone_id","kind","namespace_id","reclaim"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::UserCreated {
@@ -461,6 +513,32 @@ impl AuditDetails {
                 "from": from.as_str(),
                 "to": to.as_str(),
             }),
+            Self::ProjectMoved {
+                project_id,
+                summary,
+            } => with_id("project_id", project_id.get(), summary),
+            Self::ProjectMovedWithAncestor {
+                project_id,
+                namespace_id,
+                moved_namespace_id,
+            } => serde_json::json!({
+                "project_id": project_id.get(),
+                "namespace_id": namespace_id.get(),
+                "moved_namespace_id": moved_namespace_id.get(),
+            }),
+            Self::GroupMoved { group_id, summary } => with_id("group_id", group_id.get(), summary),
+            Self::UserRenamed { user_id, summary } => with_id("user_id", user_id.get(), summary),
+            Self::TombstoneReleased {
+                tombstone_id,
+                kind,
+                namespace_id,
+                reclaim,
+            } => serde_json::json!({
+                "tombstone_id": tombstone_id.get(),
+                "kind": kind.as_str(),
+                "namespace_id": namespace_id.map(NamespaceId::get),
+                "reclaim": reclaim,
+            }),
         }
     }
 
@@ -501,7 +579,21 @@ impl AuditDetails {
             | Self::ProtectedRefDeleted { .. }
             | Self::ProjectUpdated { .. }
             | Self::ProjectVisibilityChanged { .. }
-            | Self::GroupUpdated { .. } => self.to_value(),
+            | Self::GroupUpdated { .. }
+            | Self::ProjectMoved { .. }
+            | Self::ProjectMovedWithAncestor { .. }
+            | Self::GroupMoved { .. }
+            | Self::UserRenamed { .. }
+            | Self::TombstoneReleased { .. } => self.to_value(),
         }
     }
+}
+
+/// `{<key>: id}` merged with the move summary's fields.
+fn with_id(key: &str, id: i64, summary: &MoveSummary) -> serde_json::Value {
+    let mut value = summary.to_value();
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(key.to_owned(), id.into());
+    }
+    value
 }

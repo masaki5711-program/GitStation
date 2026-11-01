@@ -253,7 +253,7 @@ user_message_ja = "この名前はすでに使われています。別の名前�
 user_message_en = "This name is already in use. Choose another name."
 user_message_id = "Nama ini sudah digunakan. Pilih nama lain."
 cause = "The path is used by a sibling (user, group or project under the same parent) or blocked by a tombstone of a renamed, moved or deleted namespace (ADR-0015); a tombstone blocks the path until it is released."
-diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created`, `group.created` or `project.created` with the same request_id) before treating it as a conflict."
+diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it), or `parent_moved` (a create's parent namespace no longer had the path the create computed when it took the path lock — a concurrent move; retry the create, D5 MR2). A move refuses a new path of any node of its subtree the same way, unless it reclaims its own `moved` tombstones (`reclaim`, ADR-0015 Amendment D5). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created`, `group.created` or `project.created` with the same request_id) before treating it as a conflict."
 fix = "Choose another name, or have the tombstone released by the current owner of its target (or an administrator) when the old path is meant to be reused."
 test = "a_reserved_or_taken_or_tombstoned_username_is_rejected"
 
@@ -324,6 +324,19 @@ fix = "Correct the field named by `reason`; create the project below a user or a
 test = "an_invalid_project_request_is_project_request_invalid"
 
 [[error]]
+code = "FG-REPO-0015"
+name = "TransferInvalid"
+http_status = 409
+severity = "info"
+user_message_ja = "この場所へは移動できません。移動先と名前を確認してください。"
+user_message_en = "This cannot be moved there. Check the destination and the name."
+user_message_id = "Tidak dapat dipindahkan ke sana. Periksa tujuan dan namanya."
+cause = "A namespace move (a project or group transfer or rename, or a user rename; forge_db::projects::move_decided, groups::move_decided, users::rename_decided, step D5 MR2, ADR-0015 Amendment D5) broke a rule of the subtree move before anything was written: the moved namespace has more than 1000 namespaces in its subtree, the new parent is of a kind it may not go under (a project only under a group or a personal namespace, a group only under a group or at the top level, a user only at the top level), the move would change nothing, the new parent is a personal namespace whose owner is a bot or not active (that owner would inherit Owner), the new parent is the moved namespace or one of its descendants, the subtree would end deeper than 20 levels, or a path of the subtree would be longer than 255 characters, or after the move a project of the subtree would have no active Owner left (direct, an ancestor group's direct Owner, or the owner of a personal parent; projects that already had none are not counted) or a group moved to the top level has no direct active Owner — refused for administrators too, the invariant the member commands and users::disable keep. Collisions with an existing path or a tombstone are FG-REPO-0009; the segment's own rules FG-REPO-0007 / 0008."
+diagnosis = "The log event carries `reason` (subtree_too_large with `limit`, target_kind, same_location, parent_owner_bot, parent_owner_inactive, cycle, too_deep with `len` = the deepest new depth, path_too_long with `len` = the longest new path in characters, no_active_owner with `project_id` or `group_id`) and the route's ids; paths and names are not logged. The subtree can be inspected with a privileged recursive query on forge.namespaces from the moved namespace's id (parent_id links, depth, full_path)."
+fix = "Choose another destination or a shorter name; move a large group in parts (move subgroups first); for no_active_owner first make an active user a direct Owner of the project (or group) that would lose it; to place a project under a disabled user's namespace, re-enable the user first."
+test = "a_move_breaking_a_subtree_rule_is_transfer_invalid"
+
+[[error]]
 code = "FG-REPO-0016"
 name = "RepositoryNotReady"
 http_status = 503
@@ -348,6 +361,19 @@ cause = "A protected ref rule was to be added (forge_db::protected_refs::create 
 diagnosis = "The log event carries `reason=duplicate_pattern` (the application check) or `reason=unique_index` (the database backstop) and `project_id`; the pattern itself is not logged. List the project's rules with `GET /api/v1/projects/{id}/protected-refs` (or a privileged query on forge.protected_refs by project_id) and compare ignoring case."
 fix = "Change the minimum push role of the existing rule (`PATCH /api/v1/projects/{id}/protected-refs/{rule_id}`) instead of adding a second one, or delete it first."
 test = "a_duplicate_protected_ref_pattern_is_pattern_taken"
+
+[[error]]
+code = "FG-REPO-0018"
+name = "RenameRateLimited"
+http_status = 429
+severity = "info"
+user_message_ja = "短い期間に名前の変更や移動を繰り返しています。時間をおいてから再度お試しください。"
+user_message_en = "This was renamed or moved too often recently. Try again later."
+user_message_id = "Nama atau lokasi ini terlalu sering diubah akhir-akhir ini. Coba lagi nanti."
+cause = "A namespace (a project, group or user) was renamed or moved 10 times within the last 24 hours (step D5 plan; ADR-0015: every move leaves a tombstone per node, so moves are limited to keep tombstones from piling up). The count is the number of the resource's own succeeded move audit rows within 24 h (forge.audit_log, action project.moved / group.moved / user.renamed on that resource_type / resource_id, without the per-project rows of a moved ancestor, which carry `moved_namespace_id`); the audit log is append-only, so releasing or reclaiming tombstones does not lower it. Administrators are limited too; only the operator CLI (actor system) is exempt."
+diagnosis = "The log event carries `reason=moves_per_day`, `moves`, `limit`, `resource` and `id`. List the recent moves with a privileged query on forge.audit_log (resource_type, resource_id, action IN ('project.moved', 'group.moved', 'user.renamed'), occurred_at > now() - interval '24 hours'; index audit_log_moves)."
+fix = "Wait until the oldest of those moves is 24 hours old. An operator can move it with the operator CLI (exempt) when the move is approved."
+test = "the_eleventh_move_in_a_day_is_rate_limited"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
@@ -810,8 +836,8 @@ user_message_ja = "データベースの処理に失敗しました。管理者�
 user_message_en = "A database operation failed. Contact the administrator."
 user_message_id = "Operasi basis data gagal. Hubungi administrator."
 cause = "A statement failed on a working connection: it exceeded database.statement_timeout_ms (SQLSTATE 57014) or database.lock_timeout_ms (55P03), lost a serialization race (40001) or a deadlock (40P01), violated a constraint (23xxx), found no row where one must exist, or the server reported another error. (A lost connection is FG-DB-0001.)"
-diagnosis = "The log event carries `query` (a static name of the statement — never its SQL text or parameters), `reason` (statement_timeout, lock_timeout, serialization, deadlock, constraint with `constraint` / `table`, row_not_found, change_timeout (a ChangeTx exceeded its 30 s deadline from begin to commit and was rolled back; see `timeout_ms`), commit_outcome_unknown (COMMIT of a change did not answer within 10 s: the change may or may not be durable — check forge.audit_log for its request_id before retrying), rollback_timeout / a failed `change.rollback` (logged at warn after a dedup hit: the change itself is still Deduped, the connection may be unhealthy), write_on_read_pool (25006 on the read pool: a write was sent to the read-only forge_ro pool — a bug, never retried), permission_denied (42501: the role lacks the privilege — a bug or a missing GRANT, never retried), idle_in_transaction_timeout (25P03: the caller left a transaction idle; the session was ended — a caller bug), server_error, client_error — e.g. a decode error) and `sqlstate`. Row values are never logged: for classes 22 / 23 the server message is dropped. For timeouts, look for long-running or blocking sessions in pg_stat_activity and pg_locks at that time; look up other SQLSTATEs in the PostgreSQL documentation."
-fix = "For timeouts remove the blocking session or fix the slow plan (EXPLAIN); serialization and deadlock are safe to retry; commit_outcome_unknown is never retried blindly — look up the request_id in forge.audit_log first (a change without a dedup_key would be applied twice); for constraint and other states fix the caller named by `query`."
+diagnosis = "The log event carries `query` (a static name of the statement — never its SQL text or parameters), `reason` (statement_timeout, lock_timeout, serialization, deadlock, constraint with `constraint` / `table`, row_not_found, change_timeout (a ChangeTx exceeded its 30 s deadline from begin to commit and was rolled back; see `timeout_ms`), subtree_unstable (a namespace move kept finding new children below its subtree while locking it, D5), tombstone_changed (a tombstone release found the tombstone changed — its target purged — after taking its path lock); deadlock, serialization, subtree_unstable and tombstone_changed carry `retryable=true`: the transaction was rolled back and the whole request may be retried, commit_outcome_unknown (COMMIT of a change did not answer within 10 s: the change may or may not be durable — check forge.audit_log for its request_id before retrying), rollback_timeout / a failed `change.rollback` (logged at warn after a dedup hit: the change itself is still Deduped, the connection may be unhealthy), write_on_read_pool (25006 on the read pool: a write was sent to the read-only forge_ro pool — a bug, never retried), permission_denied (42501: the role lacks the privilege — a bug or a missing GRANT, never retried), idle_in_transaction_timeout (25P03: the caller left a transaction idle; the session was ended — a caller bug), server_error, client_error — e.g. a decode error) and `sqlstate`. Row values are never logged: for classes 22 / 23 the server message is dropped. For timeouts, look for long-running or blocking sessions in pg_stat_activity and pg_locks at that time; look up other SQLSTATEs in the PostgreSQL documentation."
+fix = "For timeouts remove the blocking session or fix the slow plan (EXPLAIN); serialization, deadlock, subtree_unstable and tombstone_changed (`retryable=true`) are safe to retry; commit_outcome_unknown is never retried blindly — look up the request_id in forge.audit_log first (a change without a dedup_key would be applied twice); for constraint and other states fix the caller named by `query`."
 runbook = "db-unavailable"
 test = "a_slow_statement_is_db_query_failed_with_sqlstate_57014"
 
