@@ -2,7 +2,7 @@
 // `user_message` and the `request_id` — never the error code, a status,
 // a stack or a raw body. The request id is shown untranslated and can be
 // copied (ADR-0022 §6).
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { Failure } from '../api/client';
@@ -29,6 +29,7 @@ function requestIdOf(failure: Failure): string | null {
 
 export function ErrorNotice({ failure, title, onRetry }: ErrorNoticeProps) {
   const { t } = useTranslation();
+  const titleId = useId();
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const message =
     failure.kind === 'api'
@@ -59,8 +60,8 @@ export function ErrorNotice({ failure, title, onRetry }: ErrorNoticeProps) {
     copy === 'copied' ? t('error.copied') : copy === 'failed' ? t('error.copyFailed') : t('error.copy');
 
   return (
-    <section className={styles.notice} role="alert" aria-labelledby="error-notice-title">
-      <h2 id="error-notice-title" className={styles.title}>
+    <section className={styles.notice} role="alert" aria-labelledby={titleId}>
+      <h2 id={titleId} className={styles.title}>
         <span aria-hidden="true" className={styles.icon} />
         {title ?? t('error.title')}
       </h2>

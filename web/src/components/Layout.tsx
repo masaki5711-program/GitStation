@@ -26,6 +26,12 @@ export function Layout() {
     }
     const root = main.current;
     if (root === null) return;
+    // The person may have moved on while the page loaded: only take the focus
+    // when it is still on the page body (not in the header, a field, a menu).
+    const focusIsFree = () => {
+      const active = document.activeElement;
+      return active === null || active === document.body || active === root;
+    };
     const focusHeading = (): boolean => {
       const h1 = root.querySelector('h1');
       if (h1 === null) return false;
@@ -37,12 +43,16 @@ export function Layout() {
     // The page is still loading: focus its heading when it appears; if none
     // does (an error screen), the main area takes the focus.
     const observer = new MutationObserver(() => {
+      if (!focusIsFree()) {
+        observer.disconnect();
+        return;
+      }
       if (focusHeading()) observer.disconnect();
     });
     observer.observe(root, { childList: true, subtree: true });
     const timer = window.setTimeout(() => {
       observer.disconnect();
-      root.focus();
+      if (focusIsFree()) root.focus();
     }, 3000);
     return () => {
       observer.disconnect();
