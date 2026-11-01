@@ -771,3 +771,18 @@ fn login_details_are_audit_only_and_carry_no_claims() {
     .collect();
     assert_eq!(names, ["employee_number", "first_login", "operator"]);
 }
+
+/// M2 MR6: the session purge's per-user row is audit-only, counts only.
+#[test]
+fn the_session_purge_row_is_audit_only_with_a_count() {
+    let purged = AuditDetails::SessionsPurged {
+        user: crate::ids::UserId::new(4),
+        purged_sessions: 3,
+    };
+    assert_eq!(purged.action(), "session.purged");
+    assert_eq!(purged.event_type(), None);
+    assert_eq!(
+        purged.to_value(),
+        json!({"user_id": 4, "purged_sessions": 3})
+    );
+}

@@ -866,8 +866,19 @@ async fn the_app_role_cannot_delete_sessions_or_rewrite_their_audited_columns() 
     )
     .await
     .expect("seed");
+    // M2 MR6 (migration 20261105100000): forge_app may DELETE, but only a
+    // session 30 days past its end (the purge); a live one is refused.
+    let err = commit(
+        &t,
+        &[
+            audit("user", 1, "succeeded"),
+            sql("DELETE FROM forge.web_sessions"),
+        ],
+    )
+    .await
+    .expect_err("a live session");
+    assert!(chain(&err).contains("30 days after it ended"), "{err}");
     for change in [
-        "DELETE FROM forge.web_sessions",
         "UPDATE forge.web_sessions SET secret_sha256 = decode(repeat('cd', 32), 'hex')",
         "UPDATE forge.web_sessions SET user_id = 2",
         "UPDATE forge.web_sessions SET absolute_expires_at = absolute_expires_at + interval '1 hour'",

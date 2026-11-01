@@ -13,7 +13,7 @@
 use crate::app::{config_for, emit, require_token, usage, EnvFn, Io};
 use crate::cli::{
     Cli, GroupCommand, ListArgs, MemberCommand, MemberTarget, NamespaceCommand, ProjectCommand,
-    ProtectedRefCommand, UserCommand,
+    ProtectedRefCommand, TokenCommand, UserCommand,
 };
 use crate::error::{sanitize, ClientError, Result};
 use crate::http::{ApiClient, Method, PageLimits, PageShape, LIST_PAGES, MEMBER_PAGES};
@@ -484,8 +484,88 @@ pub fn group(cli: &Cli, cmd: &GroupCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> 
 
 // ── user ───────────────────────────────────────────────────────────────
 
+const USER_NAME_KEYS: [&str; 3] = ["id", "username", "display_name"];
+const ADMIN_USER_KEYS: [&str; 5] = ["id", "username", "state", "kind", "is_admin"];
+const SESSION_KEYS: [&str; 4] = [
+    "public_id",
+    "created_at",
+    "last_seen_at",
+    "absolute_expires_at",
+];
+const TOKEN_KEYS: [&str; 5] = ["id", "name", "scopes", "expires_at", "revoked_at"];
+
 pub fn user(cli: &Cli, cmd: &UserCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
+        UserCommand::Search { term } => {
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Get,
+                "/api/v1/users",
+                &[("search".to_string(), term.clone())],
+                None,
+            )?;
+            let human = list_human(&body, "items", "-", "", &USER_NAME_KEYS);
+            emit(io, cli, body, &human)
+        }
+        UserCommand::List { list: a, state } => {
+            let c = client(cli, env, io)?;
+            let mut query: Vec<(String, String)> = Vec::new();
+            if let Some(s) = state {
+                query.push(("state".to_string(), s.as_str().to_string()));
+            }
+            let body = fetch_filtered(
+                &c,
+                "/api/v1/admin/users",
+                &query,
+                a.limit,
+                a.cursor.clone(),
+                a.all,
+            )?;
+            let human = list_human(&body, "items", "next_cursor", "--cursor", &ADMIN_USER_KEYS);
+            emit(io, cli, body, &human)
+        }
+        UserCommand::Disable { id, yes } => {
+            confirm(*yes, "disabling a user")?;
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Post,
+                &format!("/api/v1/admin/users/{id}/disable"),
+                &[],
+                None,
+            )?;
+            let human = format!("User {id}: {}", text(&body, "outcome"));
+            emit(io, cli, body, &human)
+        }
+        UserCommand::Sessions { id } => {
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/admin/users/{id}/sessions"),
+                &[],
+                None,
+            )?;
+            let human = list_human(&body, "items", "-", "", &SESSION_KEYS);
+            emit(io, cli, body, &human)
+        }
+        UserCommand::EndSessions { id, yes } => {
+            confirm(*yes, "ending a user's sessions")?;
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Delete,
+                &format!("/api/v1/admin/users/{id}/sessions"),
+                &[],
+                None,
+            )?;
+            let human = format!(
+                "Ended {} session(s) of user {id}",
+                text(&body, "revoked_sessions")
+            );
+            emit(io, cli, body, &human)
+        }
         UserCommand::Rename {
             id,
             username,
@@ -508,6 +588,65 @@ pub fn user(cli: &Cli, cmd: &UserCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Re
             )?;
             let human = move_human("user", &body);
             emit(io, cli, body, &human)
+        }
+    }
+}
+
+/// A cursor-paged list with fixed filters (`user list`): one page, or
+/// every page merged with `--all`.
+fn fetch_filtered(
+    c: &ApiClient,
+    path: &str,
+    filters: &[(String, String)],
+    limit: Option<u32>,
+    cursor: Option<String>,
+    all: bool,
+) -> Result<Value> {
+    let mut query: Vec<(String, String)> = filters.to_vec();
+    match (limit, all) {
+        (Some(n), _) => query.push(("limit".to_string(), n.to_string())),
+        (None, true) => query.push(("limit".to_string(), ALL_PAGE_SIZE.to_string())),
+        (None, false) => {}
+    }
+    if let Some(v) = cursor {
+        query.push(("cursor".to_string(), v));
+    }
+    if all {
+        Ok(
+            c.get_all_keyset(path, &query, PageLimits::default(), &LIST_PAGES)?
+                .body,
+        )
+    } else {
+        call(c, Method::Get, path, &query, None)
+    }
+}
+
+// ── token ──────────────────────────────────────────────────────────────
+
+pub fn token(cli: &Cli, cmd: &TokenCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
+    match cmd {
+        TokenCommand::List => {
+            let c = client(cli, env, io)?;
+            let body = call(&c, Method::Get, "/api/v1/user/tokens", &[], None)?;
+            let human = list_human(&body, "items", "-", "", &TOKEN_KEYS);
+            emit(io, cli, body, &human)
+        }
+        TokenCommand::Revoke { id, yes } => {
+            confirm(*yes, "revoking a token")?;
+            let c = client(cli, env, io)?;
+            call(
+                &c,
+                Method::Delete,
+                &format!("/api/v1/user/tokens/{id}"),
+                &[],
+                None,
+            )?;
+            emit(
+                io,
+                cli,
+                json!({"id": id, "revoked": true}),
+                &format!("Revoked token {id}"),
+            )
         }
     }
 }

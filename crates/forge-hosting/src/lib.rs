@@ -24,6 +24,8 @@
 
 use std::time::Duration;
 
+// M2 MR6: tokens, sessions, the user search and administration.
+pub mod accounts;
 mod moves;
 mod operator;
 

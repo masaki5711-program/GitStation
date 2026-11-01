@@ -36,6 +36,17 @@
 //!   a cursor was handed out appears on a later page, and no row before the
 //!   cursor is repeated.
 //!
+//! - **Filters** (M2 MR6): `kind=spec|system` (projects), `membership=true`
+//!   (projects and groups: only where the caller holds a role, direct or
+//!   inherited) and `state=pending_deletion` (projects: only projects
+//!   pending deletion, each decided with `ProjectRestore` instead of
+//!   `ProjectRead` — so it lists what the caller may restore). A filter is
+//!   applied **after** `authorize()` allowed the row, never in SQL, and is
+//!   part of the cursor's purpose: a cursor handed out under one filter set
+//!   fails the tag under another (`rule=tag`), so a client cannot carry a
+//!   position from one view to another. Any other value is `FG-WEB-0006
+//!   reason=param_invalid param=kind|membership|state rule=invalid_value`.
+//!
 //! The answer is `{items, next_cursor, has_more}`; a project item is
 //! [`crate::routes::projects::project_view`]'s body, the one builder `GET /api/v1/projects/{id}` uses.
 
@@ -51,7 +62,7 @@ use forge_auth::{authorize, prove, Action, InstanceCtx, Principal, ProjectCtx, R
 use forge_core::config::ApiConfig;
 use forge_core::{
     parse_positive_id, CursorKeys, GroupId, GroupListing, GroupPageLoader, ProjectId,
-    ProjectPageLoader, ProjectRecord, Role, UserId,
+    ProjectPageLoader, ProjectRecord, RepositoryKind, Role, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde::Serialize;
@@ -78,7 +89,56 @@ const BUSY_RETRY_AFTER_SECS: &str = "1";
 /// The largest `limit`.
 pub const MAX_LIMIT: usize = 100;
 
-/// The query parameters of both lists (`openapi.json`).
+/// The query parameters of the project list (`openapi.json`).
+pub const PROJECTS_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "limit",
+        description: "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+        integer_range: Some((1, 100)),
+    },
+    QueryParam {
+        name: "cursor",
+        description: "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "kind",
+        description: "spec or system: only projects of this repository kind",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "membership",
+        description: "true: only projects where the caller holds a role (direct or inherited)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "state",
+        description: "pending_deletion: only projects pending deletion that the caller may restore (Owner)",
+        integer_range: None,
+    },
+];
+
+/// The query parameters of the group list (`openapi.json`).
+pub const GROUPS_QUERY: &[QueryParam] = &[
+    QueryParam {
+        name: "limit",
+        description: "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+        integer_range: Some((1, 100)),
+    },
+    QueryParam {
+        name: "cursor",
+        description: "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
+        integer_range: None,
+    },
+    QueryParam {
+        name: "membership",
+        description: "true: only groups where the caller holds a role (direct or inherited)",
+        integer_range: None,
+    },
+];
+
+/// The query parameters of both lists without filters (kept for callers
+/// that document only the paging).
 pub const QUERY: &[QueryParam] = &[
     QueryParam {
         name: "limit",
@@ -303,7 +363,7 @@ pub struct GroupPage {
 
 /// The two lists (names the cursor purpose and the timeout operation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum List {
+pub(crate) enum List {
     Projects,
     Groups,
 }
@@ -323,10 +383,80 @@ impl List {
         }
     }
 
-    /// The cursor's purpose: this list, this caller.
-    fn purpose(self, viewer: UserId) -> String {
-        format!("{}:user={}", self.name(), viewer.get())
+    /// The cursor's purpose: this list, this caller, these filters (none:
+    /// the purpose of M1, so a cursor handed out before the filters existed
+    /// still opens).
+    fn purpose(self, viewer: UserId, filter: &Filter) -> String {
+        let base = format!("{}:user={}", self.name(), viewer.get());
+        if *filter == Filter::NONE {
+            return base;
+        }
+        format!(
+            "{base}:kind={}:membership={}:state={}",
+            filter.kind.map_or("any", RepositoryKind::as_str),
+            filter.membership,
+            if filter.pending_deletion {
+                "pending_deletion"
+            } else {
+                "live"
+            }
+        )
     }
+}
+
+/// The filters of a list request (M2 MR6, see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Filter {
+    pub(crate) kind: Option<RepositoryKind>,
+    pub(crate) membership: bool,
+    pub(crate) pending_deletion: bool,
+}
+
+impl Filter {
+    pub(crate) const NONE: Filter = Filter {
+        kind: None,
+        membership: false,
+        pending_deletion: false,
+    };
+}
+
+/// The filters of `list` from the query (each at most once; `limit` and
+/// `cursor` are [`parse_query`]'s). A filter another list does not have is
+/// `param=query rule=unknown_parameter`, a value it does not know
+/// `param=<name> rule=invalid_value`, a repeated one `rule=repeated`.
+pub(crate) fn parse_filters(query: Option<&str>, list: List) -> Result<Filter, ForgeError> {
+    let mut filter = Filter::NONE;
+    let mut seen: Vec<&str> = Vec::new();
+    for pair in query.unwrap_or_default().split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let param: &'static str = match (key, list) {
+            ("kind", List::Projects) => "kind",
+            ("state", List::Projects) => "state",
+            ("membership", _) => "membership",
+            ("kind" | "state", List::Groups) => {
+                return Err(param_invalid("query", "unknown_parameter"))
+            }
+            _ => continue,
+        };
+        if seen.contains(&param) {
+            return Err(param_invalid(param, "repeated"));
+        }
+        seen.push(param);
+        match (param, value) {
+            ("kind", raw) => {
+                filter.kind = Some(
+                    RepositoryKind::parse(raw)
+                        .ok_or_else(|| param_invalid("kind", "invalid_value"))?,
+                );
+            }
+            ("membership", "true") => filter.membership = true,
+            ("membership", "false") => filter.membership = false,
+            ("state", "pending_deletion") => filter.pending_deletion = true,
+            ("state", "live") => filter.pending_deletion = false,
+            (param, _) => return Err(param_invalid(param, "invalid_value")),
+        }
+    }
+    Ok(filter)
 }
 
 /// The query of a list request.
@@ -336,7 +466,8 @@ pub(crate) struct ListQuery {
     pub(crate) cursor: Option<String>,
 }
 
-/// `limit` and `cursor`, strictly: unknown or repeated parameters, a
+/// `limit` and `cursor`, strictly (the filters `kind`, `membership` and
+/// `state` are [`parse_filters`]'): unknown or repeated parameters, a
 /// `limit` that is not a plain decimal in 1 ..= 100 and an empty cursor are
 /// `FG-WEB-0006 reason=param_invalid` (the value is never logged).
 pub(crate) fn parse_query(query: Option<&str>) -> Result<ListQuery, ForgeError> {
@@ -350,6 +481,7 @@ pub(crate) fn parse_query(query: Option<&str>) -> Result<ListQuery, ForgeError> 
         let slot = match key {
             "limit" => &mut limit,
             "cursor" => &mut cursor,
+            "kind" | "membership" | "state" => continue,
             _ => return Err(param_invalid("query", "unknown_parameter")),
         };
         if slot.replace(value).is_some() {
@@ -377,13 +509,14 @@ fn open_cursor(
     keys: &CursorKeys,
     list: List,
     viewer: UserId,
+    filter: &Filter,
     cursor: Option<&str>,
     max_age: Duration,
 ) -> Result<Option<i64>, ForgeError> {
     let Some(cursor) = cursor else {
         return Ok(None);
     };
-    let payload = keys.decode(&list.purpose(viewer), cursor, max_age)?;
+    let payload = keys.decode(&list.purpose(viewer, filter), cursor, max_age)?;
     let id = <[u8; 8]>::try_from(payload.as_slice())
         .ok()
         .map(i64::from_be_bytes)
@@ -488,11 +621,44 @@ fn next_cursor(
     keys: &CursorKeys,
     list: List,
     viewer: UserId,
+    filter: &Filter,
     next_after: Option<i64>,
 ) -> Result<Option<String>, ForgeError> {
     next_after
-        .map(|id| keys.encode(&list.purpose(viewer), &id.to_be_bytes()))
+        .map(|id| keys.encode(&list.purpose(viewer, filter), &id.to_be_bytes()))
         .transpose()
+}
+
+/// A project row through the filters, after `authorize()`: without
+/// `state=pending_deletion` it is decided with `ProjectRead` (which hides a
+/// project pending deletion), with it only projects pending deletion are
+/// considered, each decided with `ProjectRestore` (Owner, never an agent).
+/// `kind` and `membership` then narrow what was allowed.
+fn show_project(
+    principal: &Principal,
+    filter: &Filter,
+    record: &ProjectRecord,
+) -> Result<Option<ProjectBody>, ForgeError> {
+    if filter.pending_deletion != record.access.pending_deletion {
+        // Not this view's rows (decided by the next view's own action).
+        return Ok(None);
+    }
+    let action = if filter.pending_deletion {
+        Action::ProjectRestore
+    } else {
+        Action::ProjectRead
+    };
+    let ctx = ProjectCtx::new(loaded_project(record.id, record.access));
+    let proof = match prove(principal, action, ctx) {
+        Ok(proof) => proof,
+        Err(e) => return denied_or_failed(e).map(|()| None),
+    };
+    if filter.kind.is_some_and(|k| k != record.kind)
+        || (filter.membership && record.access.role.is_none())
+    {
+        return Ok(None);
+    }
+    project_body(&proof, record).map(Some)
 }
 
 async fn project_page(
@@ -502,11 +668,13 @@ async fn project_page(
 ) -> Result<ProjectPage, ForgeError> {
     let lists = state.lists.as_deref().ok_or_else(unconfigured)?;
     let query = parse_query(raw_query)?;
+    let filter = parse_filters(raw_query, List::Projects)?;
     let viewer = viewer(principal)?;
     let after = open_cursor(
         &lists.keys,
         List::Projects,
         viewer,
+        &filter,
         query.cursor.as_deref(),
         lists.cursor_max_age,
     )?;
@@ -528,16 +696,16 @@ async fn project_page(
         query.limit,
         budget,
         |r| r.id.get(),
-        |record| {
-            let ctx = ProjectCtx::new(loaded_project(record.id, record.access));
-            match prove(principal, Action::ProjectRead, ctx) {
-                Ok(proof) => project_body(&proof, record).map(Some),
-                Err(e) => denied_or_failed(e).map(|()| None),
-            }
-        },
+        |record| show_project(principal, &filter, record),
     )?;
     Ok(ProjectPage {
-        next_cursor: next_cursor(&lists.keys, List::Projects, viewer, paged.next_after)?,
+        next_cursor: next_cursor(
+            &lists.keys,
+            List::Projects,
+            viewer,
+            &filter,
+            paged.next_after,
+        )?,
         has_more: paged.has_more,
         items: paged.items,
     })
@@ -550,11 +718,13 @@ async fn group_page(
 ) -> Result<GroupPage, ForgeError> {
     let lists = state.lists.as_deref().ok_or_else(unconfigured)?;
     let query = parse_query(raw_query)?;
+    let filter = parse_filters(raw_query, List::Groups)?;
     let viewer = viewer(principal)?;
     let after = open_cursor(
         &lists.keys,
         List::Groups,
         viewer,
+        &filter,
         query.cursor.as_deref(),
         lists.cursor_max_age,
     )?;
@@ -581,13 +751,16 @@ async fn group_page(
                 role: group.viewer_role,
             };
             match authorize(principal, Action::GroupRead, &resource) {
+                // `membership=true`: after the decision, only where the
+                // caller holds a role.
+                Ok(()) if filter.membership && group.viewer_role.is_none() => Ok(None),
                 Ok(()) => Ok(Some(group_view(group))),
                 Err(e) => denied_or_failed(e).map(|()| None),
             }
         },
     )?;
     Ok(GroupPage {
-        next_cursor: next_cursor(&lists.keys, List::Groups, viewer, paged.next_after)?,
+        next_cursor: next_cursor(&lists.keys, List::Groups, viewer, &filter, paged.next_after)?,
         has_more: paged.has_more,
         items: paged.items,
     })

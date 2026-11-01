@@ -20,6 +20,75 @@
         ],
         "type": "object"
       },
+      "AdminUser": {
+        "additionalProperties": false,
+        "description": "One user as the administration sees it (no e-mail or other personal\nidentifiers: the read pool never has them).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "`human`, `service_account` or `bot`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`active` or `disabled`.",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "username",
+          "display_name",
+          "state",
+          "is_admin",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AdminUserPage": {
+        "additionalProperties": false,
+        "description": "A page of users.",
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
       "BlameBody": {
         "additionalProperties": false,
         "description": "A blamed file.",
@@ -484,6 +553,88 @@
         ],
         "type": "object"
       },
+      "CreateToken": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/user/tokens`.",
+        "properties": {
+          "expires_in_days": {
+            "description": "Days until it expires, 1..=365 (default 90).",
+            "format": "int32",
+            "maximum": 365,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "is_agent": {
+            "description": "The token is for an AI agent (ADR-0017 §4.0); default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "1..=100 characters, no control or invisible format characters.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "`read_repository`, `write_repository`, `read_api`, `api`, `admin`\n(administrators only); at least one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "CreatedToken": {
+        "additionalProperties": false,
+        "description": "A created token: the secret, shown this once.",
+        "properties": {
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "token": {
+            "description": "The whole token. It is never shown again: store it now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "public_id",
+          "name",
+          "scopes",
+          "expires_at",
+          "is_agent",
+          "token"
+        ],
+        "type": "object"
+      },
       "DeletionBody": {
         "additionalProperties": false,
         "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
@@ -604,6 +755,26 @@
           "binary",
           "patch",
           "omitted"
+        ],
+        "type": "object"
+      },
+      "Disabled": {
+        "additionalProperties": false,
+        "description": "What a disable did.",
+        "properties": {
+          "outcome": {
+            "description": "`disabled`, or `already_disabled` (nothing was written).",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "outcome"
         ],
         "type": "object"
       },
@@ -1239,6 +1410,13 @@
               "null"
             ]
           },
+          "remainder": {
+            "description": "`prefix=true` only: the requested path's segments after the\nproject's (`pull/3`); absent when nothing follows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "user_id": {
             "format": "int64",
             "minimum": 1,
@@ -1350,6 +1528,68 @@
         ],
         "type": "object"
       },
+      "SessionItem": {
+        "additionalProperties": false,
+        "description": "One active session.",
+        "properties": {
+          "absolute_expires_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "current": {
+            "description": "The session this request came with.",
+            "type": "boolean"
+          },
+          "idle_expires_at": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "oidc": {
+            "description": "Signed in through the identity provider.",
+            "type": "boolean"
+          },
+          "public_id": {
+            "description": "The session's public id (16 hex; the `{public_id}` to end it).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "created_at",
+          "last_seen_at",
+          "idle_expires_at",
+          "absolute_expires_at",
+          "oidc",
+          "current"
+        ],
+        "type": "object"
+      },
+      "SessionItems": {
+        "additionalProperties": false,
+        "description": "A user's active sessions, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SessionItem"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More active sessions exist than are shown (at most 100).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "SessionUser": {
         "additionalProperties": false,
         "description": "The signed-in user, as the session shows it.",
@@ -1378,6 +1618,27 @@
         ],
         "type": "object"
       },
+      "SessionsRevoked": {
+        "additionalProperties": false,
+        "description": "What ending a user's sessions did.",
+        "properties": {
+          "revoked_sessions": {
+            "description": "How many sessions ended (0: there were none).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "revoked_sessions"
+        ],
+        "type": "object"
+      },
       "SetVisibility": {
         "additionalProperties": false,
         "description": "`PUT /api/v1/projects/{id}/visibility`.",
@@ -1388,6 +1649,76 @@
         },
         "required": [
           "visibility"
+        ],
+        "type": "object"
+      },
+      "TokenBody": {
+        "additionalProperties": false,
+        "description": "One token as the API shows it (never the secret or its hash).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "description": "The token's public part (`fgp_<public_id>_…`).",
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "public_id",
+          "name",
+          "scopes",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
+        ],
+        "type": "object"
+      },
+      "TokenList": {
+        "additionalProperties": false,
+        "description": "The caller's tokens.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TokenBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -1530,6 +1861,45 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UserName": {
+        "additionalProperties": false,
+        "description": "One search match: names only.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "UserNames": {
+        "additionalProperties": false,
+        "description": "The matches of a search.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserName"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
         "type": "object"
       },
       "UserSelf": {
@@ -1678,6 +2048,187 @@
         "x-forge-action": "SessionLogout"
       }
     },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "get_api_v1_admin_users",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and the state filter)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "active or disabled (default: every user)",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every user with its state (administrators; keyset, opaque cursor)",
+        "x-forge-action": "UserAdminList"
+      }
+    },
+    "/api/v1/admin/users/{id}/disable": {
+      "post": {
+        "operationId": "post_api_v1_admin_users_id_disable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Disabled"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Disable a user (administrators, never an agent; the administration guard always holds)",
+        "x-forge-action": "UserDisable"
+      }
+    },
+    "/api/v1/admin/users/{id}/sessions": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_users_id_sessions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsRevoked"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End every web session of a user (administrators, never an agent)",
+        "x-forge-action": "AdminSessionRevoke"
+      },
+      "get": {
+        "operationId": "get_api_v1_admin_users_id_sessions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionItems"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A user's active web sessions (administrators)",
+        "x-forge-action": "AdminSessionList"
+      }
+    },
     "/api/v1/groups": {
       "get": {
         "operationId": "get_api_v1_groups",
@@ -1694,9 +2245,18 @@
             }
           },
           {
-            "description": "The previous page's next_cursor (opaque; bound to this list and this caller)",
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: only groups where the caller holds a role (direct or inherited)",
+            "in": "query",
+            "name": "membership",
             "required": false,
             "schema": {
               "type": "string"
@@ -2182,6 +2742,26 @@
     "/api/v1/namespaces/resolve": {
       "get": {
         "operationId": "get_api_v1_namespaces_resolve",
+        "parameters": [
+          {
+            "description": "The namespace path (percent-encoded)",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: the longest prefix of path that is a project the caller can see, with the rest as remainder (M2 rescue of GitHub-shaped URLs)",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2264,9 +2844,36 @@
             }
           },
           {
-            "description": "The previous page's next_cursor (opaque; bound to this list and this caller)",
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
             "in": "query",
             "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "spec or system: only projects of this repository kind",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: only projects where the caller holds a role (direct or inherited)",
+            "in": "query",
+            "name": "membership",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "pending_deletion: only projects pending deletion that the caller may restore (Owner)",
+            "in": "query",
+            "name": "state",
             "required": false,
             "schema": {
               "type": "string"
@@ -3544,6 +4151,210 @@
         },
         "summary": "The caller's own account (M1 phase 8b MR6)",
         "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/sessions": {
+      "get": {
+        "operationId": "get_api_v1_user_sessions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionItems"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's active web sessions (sessions only)",
+        "x-forge-action": "SessionList"
+      }
+    },
+    "/api/v1/user/sessions/{public_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_user_sessions_public_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End one of the caller's web sessions (sessions only)",
+        "x-forge-action": "SessionRevoke"
+      }
+    },
+    "/api/v1/user/tokens": {
+      "get": {
+        "operationId": "get_api_v1_user_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's personal access tokens (never a secret)",
+        "x-forge-action": "TokenList"
+      },
+      "post": {
+        "operationId": "post_api_v1_user_tokens",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a personal access token for the caller (never with a token; the secret is shown once)",
+        "x-forge-action": "TokenCreate",
+        "x-forge-max-body-bytes": 2048
+      }
+    },
+    "/api/v1/user/tokens/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_user_tokens_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revoke one of the caller's tokens",
+        "x-forge-action": "TokenRevoke"
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "get_api_v1_users",
+        "parameters": [
+          {
+            "description": "2..=64 characters: a username prefix or part of a display name",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserNames"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Find active users by username prefix or display name (names only, at most 20)",
+        "x-forge-action": "UserSearch"
       }
     },
     "/api/v1/users/{id}/rename": {

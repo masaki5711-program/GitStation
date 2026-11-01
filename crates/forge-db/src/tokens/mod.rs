@@ -47,7 +47,7 @@ mod auth;
 mod list;
 
 pub use auth::authenticate;
-pub use list::list;
+pub use list::{list, owner};
 
 /// The request to issue a token.
 #[derive(Debug, Clone)]

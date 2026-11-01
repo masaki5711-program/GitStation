@@ -15,6 +15,10 @@
 //!   after this long without activity, and at the latest this long after
 //!   sign-in. Each at least 60 s, idle ≤ absolute ≤ 86 400 (24 h).
 //!
+//! - `web.session_purge_interval_secs` (default 3 600, at least 60, at most
+//!   86 400; M2 MR6): the period of the `forge worker` task that deletes
+//!   sessions 30 days past their revocation or absolute expiry.
+//!
 //! Every problem is `FG-SYS-0002` with `config_key` and `reason`
 //! (`invalid`, `scheme`, `insecure_http`, `has_path`, `has_query`,
 //! `has_user_info`, `not_absolute`, `below_min`, `above_max`,
@@ -31,6 +35,7 @@ use crate::web_keys::{WebKeys, KEYS_CONFIG_KEY};
 const BASE_URL_KEY: &str = "web.base_url";
 const IDLE_KEY: &str = "web.session_idle_secs";
 const ABSOLUTE_KEY: &str = "web.session_absolute_secs";
+const PURGE_INTERVAL_KEY: &str = "web.session_purge_interval_secs";
 /// Upper bound for the key file (as `api.cursor_keys_file`).
 const MAX_KEYS_BYTES: u64 = 64 * 1024;
 
@@ -81,6 +86,8 @@ pub struct WebConfig {
     pub session_idle: Duration,
     /// `web.session_absolute_secs`.
     pub session_absolute: Duration,
+    /// `web.session_purge_interval_secs` (M2 MR6).
+    pub session_purge_interval: Duration,
 }
 
 impl WebConfig {
@@ -88,6 +95,9 @@ impl WebConfig {
     pub const DEFAULT_SESSION_ABSOLUTE_SECS: u32 = 12 * 3600;
     pub const MIN_SESSION_SECS: u32 = 60;
     pub const MAX_SESSION_ABSOLUTE_SECS: u32 = 24 * 3600;
+    pub const DEFAULT_SESSION_PURGE_INTERVAL_SECS: u32 = 3600;
+    pub const MIN_SESSION_PURGE_INTERVAL_SECS: u32 = 60;
+    pub const MAX_SESSION_PURGE_INTERVAL_SECS: u32 = 86_400;
 
     pub(super) fn load<'a>(
         get: impl Fn(&str) -> Option<&'a str> + Copy,
@@ -108,11 +118,23 @@ impl WebConfig {
         if idle > absolute {
             return Err(invalid(IDLE_KEY, "above_absolute"));
         }
+        let purge = unsigned(
+            get,
+            PURGE_INTERVAL_KEY,
+            Self::DEFAULT_SESSION_PURGE_INTERVAL_SECS,
+        )?;
+        if purge < Self::MIN_SESSION_PURGE_INTERVAL_SECS {
+            return Err(invalid(PURGE_INTERVAL_KEY, "below_min"));
+        }
+        if purge > Self::MAX_SESSION_PURGE_INTERVAL_SECS {
+            return Err(invalid(PURGE_INTERVAL_KEY, "above_max"));
+        }
         Ok(Self {
             base_url,
             session_key_file,
             session_idle: Duration::from_secs(u64::from(idle)),
             session_absolute: Duration::from_secs(u64::from(absolute)),
+            session_purge_interval: Duration::from_secs(u64::from(purge)),
         })
     }
 

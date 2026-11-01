@@ -189,6 +189,11 @@ pub(crate) enum Fixture {
     OwnAdminTokenRequest,
     /// Creating a token for another user.
     ForeignTokenRequest,
+    /// The caller's own sessions (`own`) or another user's (M2 MR6,
+    /// ADR-0021 §17).
+    Session {
+        own: bool,
+    },
     Instance,
     /// A path resolved (live) to a private project.
     ResolvedPrivate,
@@ -524,6 +529,9 @@ impl Fixture {
             Fixture::ForeignTokenRequest => Resource::TokenRequest {
                 owner: OTHER,
                 scopes: vec![Scope::ReadRepository],
+            },
+            Fixture::Session { own } => Resource::Session {
+                owner: if own { ME } else { OTHER },
             },
             Fixture::Instance => Resource::Instance,
             Fixture::ResolvedPrivate => {

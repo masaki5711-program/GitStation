@@ -282,7 +282,14 @@ fn a_token_cannot_mint_tokens() {
             &request(vec![Scope::ReadRepository]),
         )
         .expect_err("token cannot mint");
-        assert_eq!(err.code(), ErrorCode::Forbidden);
+        // Sessions only (ADR-0019 Amendment M2 4, M2 MR6).
+        assert_eq!(err.code(), ErrorCode::InsufficientScope);
+        assert!(
+            err.context()
+                .iter()
+                .any(|(k, v)| *k == "reason" && v == "session_required"),
+            "{err}"
+        );
     }
     assert!(authorize(&session(), Action::TokenCreate, &request(vec![Scope::Api])).is_ok());
 }

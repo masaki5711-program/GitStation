@@ -276,6 +276,12 @@ pub enum Resource {
     Token {
         owner: UserId,
     },
+    /// The web sessions of `owner` (`SessionList` / `SessionRevoke` on the
+    /// user's own route, `AdminSessionList` / `AdminSessionRevoke` on the
+    /// administration's; M2 MR6, ADR-0021 §17).
+    Session {
+        owner: UserId,
+    },
     /// A token about to be created for `owner` with these scopes.
     TokenRequest {
         owner: UserId,

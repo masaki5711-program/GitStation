@@ -31,8 +31,9 @@ pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,
     LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection,
     LoadedTarget, LoadedTombstone, LoadedTransferTarget, LoadedUserNamespace, ParentCtx,
-    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, TombstoneCtx,
-    TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx, VisibilityChangeCtx,
+    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, SessionCtx, TokenCtx,
+    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx,
+    UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 

@@ -543,3 +543,15 @@ FG-WEB-0002（コールバックの時間切れ）。
 見送り（LOW）: ログアウトのトークンの JOSE の `typ`（`logout+jwt`）は見ない（Keycloak の版により値が違いうる。`events` と `nonce` なしで
 ID トークンとの取り違えは防げる）。バックチャネルのエンドポイントのピアごとの回数の制限は入れない（Keycloak は管理者の一括ログアウトで
 セッションの数だけ送る。有効な署名のトークンなしには何も失効しないので、探りの費用は JWT の検証 1 回）。
+
+### 実装で決めた点（2026-11-01、M2 MR6 `feat/web-ui-support-api` の実装）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 36 | MEDIUM | §17 の `Resource::Session { owner }` で 1 つの Action を利用者のルートと管理のルートに使うと、利用者のルートで管理者が他人のセッションを消せ、トークンがセッションの有無を知れる | **Action を分けた**: 利用者のルートは `SessionList` / `SessionRevoke`（**セッションだけ**: `is_session_only`、トークンは調べる前に FG-AUTH-0002 `session_required`。他人のセッションは管理者も FG-REPO-0005 `foreign_session`）、管理のルートは新しい `AdminSessionList` / `AdminSessionRevoke`（管理者の権利、トークンは `admin` スコープ、失効はエージェントを拒否）。Resource は `Session { owner }` のまま（MR6 レビューで `route` の欄をやめた） |
+| 37 | LOW | 利用者のルートで消すセッションを数字の id で指すと、一覧に内部の id が出る | `DELETE /api/v1/user/sessions/{public_id}`（16 桁の 16 進、形が違えば FG-WEB-0006 `param=public_id`）。一覧は `public_id`・作成・最後の操作・2 つの期限・`oidc`・`current` だけ（最大 100 件、`truncated`） |
+| 38 | LOW | 利用者のルートで、トークンの呼び出し元が「ない `public_id`」と「ある `public_id`」で違う答えを受ける（MR6 のレビュー MEDIUM） | 36 のとおりセッションだけにしたので、トークンはどの id でも同じ 403（HTTP のテストで本文を比べる）。権限の表に `Absent` の行 |
+| 39 | LOW | 管理者の一括の失効と一覧のルートで、存在しない利用者 | 一括の失効は `sessions::revoke_all` の FG-REPO-0005。一覧は空の一覧（行を読まない） |
+| 40 | LOW | 古い行の掃除（MR3 の引き継ぎ §4b の宿題） | `forge worker` のタスク `session_purge`（`web.session_purge_interval_secs`、既定 3600、60〜86 400）。失効か絶対の期限から **30 日** を過ぎた行を 1 回の変更で最大 500 行、id の順、`FOR UPDATE SKIP LOCKED`。持ち主ごとに監査 `session.purged`（`{"user_id","purged_sessions"}`、actor `system`、最初の行が変更の行、残りは `ChangeRecord.affected`）。満杯のバッチの後はすぐもう 1 回。マイグレーション `20261105100000`（追記）で `forge_app` に DELETE、ガード `forge.web_sessions_purge_guard()` / トリガー `web_sessions_purge_only`（ALWAYS、XF001 → FG-DB-0009）が 30 日より新しい行の DELETE をどのロールでも拒む。doctor の期待値と `tables.toml` に登録 |
+| 41 | HIGH（MR6 のレビュー） | 利用者のルートの `DELETE /api/v1/user/tokens/{id}` で、管理者（`admin` スコープのエージェントのトークンを含む）が他人のトークンを失効できた | `TokenRevoke` は持ち主だけ。他人のトークンは管理者も FG-REPO-0005（ないトークンと同じ本文）。管理者が他人のトークンを失効するルート（`/api/v1/admin/users/{id}/tokens/…`、`people_only`）は**見送り**（それまでは無効化か CLI `forge admin token revoke`） |
+| 42 | LOW（MR6 のレビュー） | 管理者が HTTP で自分を無効にできた。利用者の検索に回数の制限がない | 自分の無効化は FG-AUTH-0009 `self_disable`（CLI が経路）。検索は利用者ごとに 120 回 / 60 秒（FG-WEB-0010 `route=user_search`）。`prefix=true` は path の検査と scope の判定の後に数える。掃除の条件に部分インデックス（マイグレーション `20261105100100`） |

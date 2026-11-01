@@ -69,11 +69,17 @@ pub enum Command {
         #[command(subcommand)]
         command: BrowseCommand,
     },
-    /// Users (administrators): rename.
+    /// Users: search by name; administrators: list, disable, sessions, rename.
     #[command(disable_help_subcommand = true)]
     User {
         #[command(subcommand)]
         command: UserCommand,
+    },
+    /// Your personal access tokens: list, revoke (create one in the browser).
+    #[command(disable_help_subcommand = true)]
+    Token {
+        #[command(subcommand)]
+        command: TokenCommand,
     },
     /// Call any REST API v1 route.
     Api(ApiArgs),
@@ -609,7 +615,72 @@ pub enum BrowseCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum TokenCommand {
+    /// Your tokens (never a secret).
+    List,
+    /// Revoke one of your tokens. Needs --yes.
+    Revoke {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// The state filter of `user list`.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserState {
+    Active,
+    Disabled,
+}
+
+impl UserState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
 pub enum UserCommand {
+    /// Find active users by username prefix or display name (names only).
+    Search {
+        #[arg(value_parser = parse_text)]
+        term: String,
+    },
+    /// Every user with its state (administrators).
+    List {
+        #[command(flatten)]
+        list: ListArgs,
+        /// Only active or only disabled users.
+        #[arg(long, value_enum)]
+        state: Option<UserState>,
+    },
+    /// Disable a user (administrators): its tokens and sessions end. Needs --yes.
+    Disable {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// A user's active web sessions (administrators).
+    Sessions {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// End every web session of a user (administrators). Needs --yes.
+    #[command(name = "end-sessions")]
+    EndSessions {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Rename a user and their personal namespace (administrators). Needs --yes.
     Rename {
         #[arg(value_parser = parse_id)]

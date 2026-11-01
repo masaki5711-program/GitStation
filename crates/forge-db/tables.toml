@@ -33,6 +33,8 @@ guarded_functions = [
     "purge_delete_guard",
     # M2 MR3: a web session's revocation is final.
     "web_sessions_revocation_guard",
+    # M2 MR6: the purge deletes sessions only 30 days after they ended.
+    "web_sessions_purge_guard",
 ]
 
 [tables.events]

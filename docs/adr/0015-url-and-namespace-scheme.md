@@ -1149,3 +1149,23 @@ MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare
 | コミットの文字（追記） | UTF-8 でない名前・件名・本文・blame のメタデータは置き換えの文字で返し、**呼び出しごとに 1 回** `forge.git.browse.log_lossy`（`repo_id`、`error_code=FG-GIT-0003`、`count`）を warn で記録する。名前・メール中のフィールド区切り（0x1f）でフィールドがずれた記録は、日付の形で見つけて `FG-GIT-0003 reason=log_record_fields` にする（ページ全体の失敗。細工したコミットで履歴が見えなくなる代わりに、ずれた値を見せない） | 黙って置き換えない。ずれた値を推測で読まない |
 | blame のバイナリと上限（追記） | `binary: true` のとき `hunks` / `commits` は空。NUL / UTF-8 でない行が `-L` の上限（`max_blame_lines`+1）より後にあるファイルは検出できず、行は上限で `truncated` になる（バイナリとは言わない） | 上限より先は読まない。許容する |
 | 到達できないオブジェクト（追記） | 署名しないカーソルと `commits/{oid}` は、リポジトリにあるコミットなら ref から届かないもの（削除したブランチの先、gc 前）も読める。MR7 の `?ref=<oid>`・tree・raw と同じ「`RepoBrowse` を持つ者はリポジトリ内の任意のオブジェクトを読める」の範囲で、gc までの間のリポジトリ単位の読み取りとして受け入れる | ref からの到達を調べると 1 回ごとに `merge-base` の呼び出しが要る。権限は変わらない（同じ人が既に読める） |
+
+## Amendment（2026-11-01、M2 MR6: `resolve?prefix=true` と一覧の絞り込みの実装で決めたこと）
+
+- **`prefix=true` の候補**: `path` の先頭から、名前空間のパスとして読める接頭辞をすべて（最大 `MAX_DEPTH` = 20、読めない段で打ち切り）。
+  **候補をすべて** `resolve` に掛ける（早く見つかっても止めない。文の数は要求のセグメントの数だけで決まり、何があるかでは変わらない）。
+  数えるのは **今のパスへの完全一致（`Resolution::Live`）でプロジェクトのもの** だけ（墓標・グループ・個人の名前空間は単独の結果にしない）。
+- **選び方**: ローダーが候補ごとに `authorize(PathResolve, Resolved { Live, Project })` を呼び、許された最長のものを返し、レジストリが
+  もう一度 `prove()` する。拒否は「この接頭辞ではない」として扱い、拒否でない失敗（FG-SYS-0001）は要求の失敗。なければ FG-REPO-0005
+  （`lookup=no_visible_project_prefix`）で、ないパスと本文・状態・ヘッダーが同じ（`request_id` を除いてバイトで比べるテスト）。
+- **応答**: 今までの `Resolution` に `remainder`（残りのセグメントを `/` でつないだもの、なければ欠ける）。`moved` は常に `false`。
+- **回数の制限**: 利用者ごとに 60 回 / 60 秒（`PrefixLimiter`、`route=resolve_prefix`）。解決の前に数える。超えたら FG-WEB-0010、
+  `Retry-After`（エラーの文脈 `retry_after_s` を `error.rs` がヘッダーにする）。`prefix` が `true` / `false` 以外か重複は FG-WEB-0006
+  `param=prefix`。トークンの scope の判定は完全一致の解決と同じく、ローダーの後（`prove()`）。
+- **一覧の絞り込み**（`GET /api/v1/projects?kind=&membership=&state=pending_deletion`、`GET /api/v1/groups?membership=`）:
+  行ごとの `authorize()` の **後** に当てる（SQL では絞らない）。`state=pending_deletion` は削除待ちの行だけを `ProjectRestore` で判定する
+  （復元できるものの一覧。ふつうの一覧は今のまま `ProjectRead` で削除待ちを隠す）。`membership=true` は直接か継承のロールがある行だけ。
+  **カーソルの purpose に絞り込みを入れる**（`projects.list:user=<id>:kind=…:membership=…:state=…`。絞り込みなしは M1 と同じ purpose）。
+  別の絞り込みのカーソルはタグで落ちる（`rule=tag`）。値の誤りは FG-WEB-0006 `rule=invalid_value`、グループの `kind` / `state` は
+  `unknown_parameter`。
+

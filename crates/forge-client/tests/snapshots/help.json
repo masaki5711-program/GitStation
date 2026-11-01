@@ -2788,6 +2788,351 @@
     {
       "args": [
         {
+          "description": "A username prefix or part of a display name.",
+          "kind": "positional",
+          "name": "term",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user search ali --json"
+      ],
+      "name": "user search",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "username",
+                "display_name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/users"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Find active users by username prefix or display name (names only, at most 20; 2..=64 characters)."
+    },
+    {
+      "args": [
+        {
+          "description": "Rows per page, 1..=100 (server default 50; 100 with --all).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (the same --state; not with --all).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_cursor and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "active or disabled (default: every user).",
+          "kind": "option",
+          "name": "--state",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn user list --state disabled --json",
+        "gstn user list --all"
+      ],
+      "name": "user list",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "kind",
+                "username",
+                "display_name",
+                "state",
+                "is_admin",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/users"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List every user with its state (administrators; one page, --all follows next_cursor)."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user disable 12 --yes"
+      ],
+      "name": "user disable",
+      "output": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "disabled",
+              "already_disabled"
+            ]
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/users/{id}/disable"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Disable a user (administrators; never past the last administrator or a last Owner, FG-AUTH-0009). Its tokens and sessions end. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user sessions 12 --json"
+      ],
+      "name": "user sessions",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "public_id",
+                "created_at",
+                "last_seen_at",
+                "idle_expires_at",
+                "absolute_expires_at",
+                "oidc",
+                "current"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/users/{id}/sessions"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List a user's active web sessions (administrators)."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user end-sessions 12 --yes"
+      ],
+      "name": "user end-sessions",
+      "output": {
+        "properties": {
+          "revoked_sessions": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/admin/users/{id}/sessions"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "End every web session of a user (administrators). Needs --yes."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn token list --json"
+      ],
+      "name": "token list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "public_id",
+                "name",
+                "scopes",
+                "created_at",
+                "expires_at",
+                "revoked_at",
+                "last_used_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/tokens"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List your personal access tokens (never a secret; revoked and expired ones too)."
+    },
+    {
+      "args": [
+        {
+          "description": "The token id (token list).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn token revoke 31 --yes"
+      ],
+      "name": "token revoke",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "revoked": {
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/user/tokens/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Revoke one of your tokens (it may be the one gstn uses). Needs --yes."
+    },
+    {
+      "args": [
+        {
           "description": "GET | POST | PUT | PATCH | DELETE",
           "kind": "positional",
           "name": "method",

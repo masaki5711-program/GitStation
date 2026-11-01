@@ -305,6 +305,11 @@ pub enum AuditDetails {
         reason: SessionRevokeReason,
         revoked_sessions: i64,
     },
+    /// `session.purged` (M2 MR6): the worker deleted `purged_sessions` of
+    /// the user's sessions, each 30 days past its revocation or absolute
+    /// expiry. One row per user in the purge's change (the DELETE needs an
+    /// audit row for each owner); counts only.
+    SessionsPurged { user: UserId, purged_sessions: i64 },
     // ── end M2 MR3 ──
     // ── M2 MR4: the OIDC sign-in (ADR-0021 §4), audit-only, on the user ──
     /// `user.created` by a first sign-in (a human, never an
@@ -422,6 +427,7 @@ impl AuditDetails {
             Self::SessionCreated { .. } => "session.created",
             Self::SessionRevoked { .. } => "session.revoked",
             Self::SessionsRevoked { .. } => "session.revoked_all",
+            Self::SessionsPurged { .. } => "session.purged",
             Self::UserCreatedOnLogin { .. } => "user.created",
             Self::UserIdentityLinked { .. } => "user.identity_linked",
         }
@@ -473,6 +479,7 @@ impl AuditDetails {
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
             | Self::SessionsRevoked { .. }
+            | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
             | Self::UserIdentityLinked { .. } => None,
         }
@@ -485,6 +492,7 @@ impl AuditDetails {
     /// SessionCreated `{"session_id","user_id","public_id"}`,
     /// SessionRevoked `{"session_id","user_id","public_id","reason"}`,
     /// SessionsRevoked `{"user_id","reason","revoked_sessions"}`,
+    /// SessionsPurged `{"user_id","purged_sessions"}`,
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
@@ -801,6 +809,13 @@ impl AuditDetails {
                 "reason": reason.as_str(),
                 "revoked_sessions": revoked_sessions,
             }),
+            Self::SessionsPurged {
+                user,
+                purged_sessions,
+            } => serde_json::json!({
+                "user_id": user.get(),
+                "purged_sessions": purged_sessions,
+            }),
             Self::UserCreatedOnLogin { namespace_id } => serde_json::json!({
                 "kind": UserKind::Human.as_str(),
                 "namespace_id": namespace_id.get(),
@@ -875,6 +890,7 @@ impl AuditDetails {
             | Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
             | Self::SessionsRevoked { .. }
+            | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
             | Self::UserIdentityLinked { .. } => self.to_value(),
         }

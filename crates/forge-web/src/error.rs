@@ -6,7 +6,7 @@
 //! [`challenges`], applied to the whole application by [`challenge_layer`]).
 
 use axum::extract::Request;
-use axum::http::header::{HeaderValue, CONTENT_LANGUAGE, WWW_AUTHENTICATE};
+use axum::http::header::{HeaderValue, CONTENT_LANGUAGE, RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -17,6 +17,10 @@ use forge_errors::{ForgeError, Lang};
 use serde::Serialize;
 
 const BASIC: &str = "Basic realm=\"GitStation\", charset=\"UTF-8\"";
+
+/// The error context key whose value (whole seconds) a `429` answers as
+/// `Retry-After` (M2 MR6: the resolve rate limit, refused in a loader).
+pub(crate) const RETRY_AFTER_CONTEXT: &str = "retry_after_s";
 const BEARER: &str = "Bearer realm=\"GitStation\"";
 
 /// The challenges of a 401 (RFC 9110 §11.6.1) when nothing more is known
@@ -152,6 +156,18 @@ impl IntoResponse for ApiError {
             for challenge in CHALLENGES {
                 res.headers_mut()
                     .append(WWW_AUTHENTICATE, HeaderValue::from_static(challenge));
+            }
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let retry = self
+                .err
+                .context()
+                .iter()
+                .find(|(k, _)| *k == RETRY_AFTER_CONTEXT)
+                .and_then(|(_, v)| v.parse::<u64>().ok());
+            if let Some(secs) = retry {
+                res.headers_mut()
+                    .insert(RETRY_AFTER, HeaderValue::from(secs));
             }
         }
         res

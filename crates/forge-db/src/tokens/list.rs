@@ -68,3 +68,20 @@ pub async fn list(db: &Db, user: UserId) -> Result<Vec<TokenInfo>, ForgeError> {
         )
         .collect()
 }
+
+/// The owner of token `token_id` (`None`: no such token). Read pool, one
+/// statement: the loader of `DELETE /api/v1/user/tokens/{id}` decides on
+/// it with `authorize(TokenRevoke)` (M2 MR6).
+pub async fn owner(db: &Db, token_id: i64) -> Result<Option<UserId>, ForgeError> {
+    let owner: Option<i64> = db
+        .within("tokens.owner", async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_scalar("SELECT user_id FROM forge.tokens WHERE id = $1")
+                .bind(token_id)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| read_query_error("tokens.owner", e))
+        })
+        .await?;
+    Ok(owner.map(UserId::new))
+}
