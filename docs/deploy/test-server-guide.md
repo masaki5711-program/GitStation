@@ -18,7 +18,7 @@
 | GitStation | Rust 製の 2 プロセス構成（`forge serve` と `forge worker`）＋ PostgreSQL 16。ブラウザの画面（SPA）は `embed-ui` で `forge` に埋め込める。**TLS は持たない**（リバースプロキシの仕事）。 |
 | Kanflow | Next.js 16 / Prisma 7 / MySQL 8.4。本番は Windows 11 の常駐サービス構成。ワーカー（翻訳・AI 監視）は別プロセス。Collabora と Ollama は任意。 |
 | **連携の現状** | **GitStation↔Kanflow の機械的な連携（Webhook、イベント履歴 API、`GitStationSource`）は、どちらのリポジトリにもまだ無い**（§5.1）。明日つなげるのは「同じ利用者が Claude Code から `gstn`（GitStation）と Kanflow MCP の両方を使う」形と、ブランチ名の PBI 番号の規約まで。 |
-| 画面 | GitStation の UI は基礎（殻・ログイン）まで。ホーム・リポジトリ閲覧・設定の画面（MR9〜MR12）は**未実装**（§7）。日常の操作は `gstn` と API で行う。 |
+| 画面 | GitStation の UI は M2 の範囲がそろった（MR9〜MR12）: ログイン、ホーム、グループ・プロジェクトの一覧と作成、リポジトリ閲覧（木・ファイル・コミット・差分・比較・blame）、設定・メンバー・トークン・セッション・管理、文書ポータル（`kind=spec` の読み取り専用）。**画面を使うには Keycloak でのログインが要る**。Keycloak が無ければ `gstn` と API で操作する。 |
 | ブラウザのログイン | OIDC（Keycloak）だけ。**Keycloak 無しだと画面から入れない**（`gstn` とトークンは使える）。Keycloak は IoT プラットフォーム側が用意する想定（§3.9）。 |
 | 実機の検証 | GitHub の CI は一度も動いていない。Keycloak の E2E、Kanflow の実 MySQL のテストと E2E も**未実行**（§7）。つまり**初めての実機**であり、手順どおりに進まない箇所が出る前提で、§8 の runbook を手元に置く。 |
 
@@ -92,11 +92,11 @@ flowchart LR
 
 | リポジトリ | ブランチ | コミット | 出典 |
 |---|---|---|---|
-| GitStation | `claude/brave-cray-w62c35` | `ea83815c285ccc7e50445cde98d859ce2e8af886`（M2 の MR1〜MR8 を統合） | `git log -1` で確認（この文書の作成時） |
+| GitStation | `claude/brave-cray-w62c35` | `f95e2e8559f987bfc9b843d8c32c359ef16f296d`（M2 の MR1〜MR12 をすべて統合 = M2 の実装完了） | `git log -1` で確認（この文書の作成時） |
 | Kanflow | `claude/brave-cray-w62c35` | `23db573f14552f609ebae3270b1cde063fbf98a9`（PBI の機密フラグ D-5 まで） | 同上 |
 
 - GitStation の `main` はこのブランチの祖先（`8fea414`）で古い。**ブランチ `claude/brave-cray-w62c35` の先端を使う**。
-  MR5（ログアウト・リフレッシュ）と MR6（UI 支援 API）は**含まれる**。画面の MR9〜MR12 は含まれない(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
+  M2 の MR1〜MR12（認証・セッション・閲覧 API・画面・文書ポータル）はすべて**含まれる**(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
 - 取得元: 両リポジトリとも `origin` は GitHub の私設リポジトリ（`git remote -v`）。**テストサーバーから GitHub に届くか、社内ミラーが要るかは「未確認」**。届かないなら、PC で `git bundle` を作って持ち込む（提案）。
 - 作業の前にコミットを固定する: `git checkout --detach <上の SHA>`（提案。再現性のため）。
 
@@ -146,7 +146,7 @@ flowchart LR
 
 ```bash
 cd <GITSTATION_SRC>
-git checkout --detach ea83815c285ccc7e50445cde98d859ce2e8af886   # 提案: 固定
+git checkout --detach f95e2e8559f987bfc9b843d8c32c359ef16f296d   # 提案: 固定
 
 # (a) 画面 (SPA) — 先にビルドする。build.rs は web/dist が無いと失敗する
 cd web
@@ -377,7 +377,7 @@ $FORGE --config <CONF_DIR>/forge.toml admin token revoke <TOKEN_ID>
 ```
 
 - スコープ: `read_repository` `write_repository`（clone/fetch と push）、`read_api` `api`（REST の読み / 読み書き）、`admin`（**管理者のトークンが管理者の権限を使うために必要**。無いと普通の利用者として動く）(出典: `crates/forge-core/src/scope.rs`)。有効期限は 1d〜365d、既定 90d。
-- **トークンは画面ではまだ発行できない**（画面は MR11 で未実装）。API `POST /api/v1/user/tokens` は MR6 で入ったが、**ブラウザのセッションからだけ**呼べる（トークンからは FG-AUTH-0002。ADR-0019 Amendment M2）。Keycloak でログインできるまでは、この CLI（`forge admin token issue`）が唯一の入口。トークンをチャットやリポジトリに貼らない。
+- **トークンは画面（利用者の設定 → トークン、`/{利用者}/-/settings?tab=tokens`）で発行できる**が、ブラウザのセッションが要る（トークンからは FG-AUTH-0002。ADR-0019 Amendment M2）。Keycloak でログインできるまでは、この CLI（`forge admin token issue`）が唯一の入口。トークンをチャットやリポジトリに貼らない。
 - 他の利用者を作る方法は、OIDC の初回ログイン（自動作成）か、`bootstrap-admin --create`（管理者がいない時だけ）。OIDC を使わない場合に**2 人目以降のローカル利用者を作る経路は未確認**（`forge admin` に user create が無い）。
 - **注（接続のロール）**: runbook は `forge admin …` を `database.maint_url`（`forge_maint`）と書いているが、現行コードの `admin_token.rs` / `admin_user.rs` などは `Db::connect(cfg)`、つまり `database.url`（`forge_app`）で接続し、`maint_url()` の呼び出し元は本番コードに無い（`grep` で確認）。**権限不足で失敗したときの扱いは「未確認」**。まず `forge.toml`（app 用）で実行する。
 - `forge admin user link-identity --user … --issuer … --subject …` は OIDC の結び付けを手で直す (出典: `ops/runbooks/oidc-identity-link.md`)。
@@ -467,7 +467,7 @@ GitStation は次の形を求める（出典: `docs/adr/0021-oidc-keycloak-login
 - 入場の条件: ID トークンに `access` ロールがあること。無い・利用者が無効だと `FG-AUTH-0013`。社員番号が既存の利用者と衝突すると `FG-AUTH-0014`（`auto_link=false` のときなど）(出典: `docs/handoff/2026-11-01-m2-mr4.md` §2〜§3、`ops/runbooks/oidc-login.md`)。
 - Keycloak に届かなくても、ログイン済みのセッション・git・トークンの API・`gstn` は動き続ける。`/readyz` は Keycloak を見ない（ADR-0021 §10）。
 - 確認: `forge doctor` の `auth.oidc`（discovery・JWKS・時計のずれ・issuer の一致）。ブラウザで `https://<TEST_SERVER_HOST>/-/auth/login` → Keycloak → `/-/auth/callback` → 戻る。
-- ログイン画面（ホーム等）は未実装なので、ログイン後に見えるのは殻（SPA の基礎）まで（§7）。
+- ログイン後はホームが開く。ホーム → プロジェクト → ファイル・コミット、設定 → トークン、仕様書のプロジェクトは「文書ポータル」へ進める（§6 のチェックリストで確かめる）。
 - `auth.oidc` を設定しなければ `/-/auth/login` は `FG-AUTH-0018`（503）を返す。`gstn` とトークンだけで試験するなら、この節は飛ばしてよい。
 
 ---
@@ -500,7 +500,7 @@ GRANT ALL PRIVILEGES ON scrum_tool.* TO 'scrum_app'@'127.0.0.1';
 
 ```bash
 cd <KANFLOW_SRC>
-git checkout --detach 23db573f14552f609ebae3270b1cde063fbf98a9      # 提案: 固定
+git checkout --detach f95e2e8559f987bfc9b843d8c32c359ef16f296d      # 提案: 固定
 cd app
 # 社内で registry.npmjs.org が遮断されている場合 (出典: README.md): npm config set registry https://registry.yarnpkg.com/
 npm ci                      # CI は npm ci (出典: .github/workflows/ci.yml)。README は npm install
@@ -731,7 +731,7 @@ cargo run -q -p forge-web --bin gen-authz -- --check
 - 同時に複数の全体テストを走らせない（dev の Postgres が落ちた実績。CLAUDE.md）。DB に繋がらないときは**黙ってスキップせず失敗**する。
 - 一部だけ回す例（MR8 の確認と同じ形）: `FORGE_TEST_DATABASE_URL=… cargo nextest run -p forge-web -p forge-git -p forge-auth -p forge-core -p forge-errors -p forge-client -j 2`（761 件通過・1 件 skip が記録）(出典: `docs/handoff/2026-11-01-m2-mr8.md` §4)。
 - Web の UI: `cd web && npm ci --ignore-scripts && npm run lint && npm run typecheck && npm test`。`npm run smoke` は Chromium が要る (出典: `web/README.md`)。
-- 直近の完全な全体テストの記録: 2026-11-01、`ea83815`（MR6 まで統合）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
+- 直近の完全な全体テストの記録: 2026-11-01、`f95e2e8`（M2 の MR12 まで統合）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**、web は `npx vitest run` → **404 件合格**（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
 
 #### Kanflow（vitest / Playwright）
 
@@ -761,14 +761,14 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 |---|---|---|
 | MR5（ログアウト、バックチャネルのログアウト、5 分ごとのリフレッシュの確認、FG-AUTH-0017） | **統合済み**（`8649cc6`）。レビュー（security / rust / database / authz-matrix）の HIGH 1 件を修正し再レビューで承認。本物の Keycloak での E2E は未実行 | `docs/handoff/2026-11-01-m2-mr5.md`、`docs/adr/0021-oidc-keycloak-login-and-web-sessions.md` |
 | MR6（トークン・セッション・利用者検索・管理者の一覧と無効化の API、`gstn token`/`user`、期限切れセッションの削除） | **統合済み**（`2d72558`）。レビューの HIGH 1 件（他人のトークンの失効）を修正し再レビューで承認。管理者が他人のトークンを失効する API は見送り | `docs/handoff/2026-11-01-m2-mr6.md`、`docs/api/openapi.json` |
-| UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **未実装**。殻と基礎（i18n・トークン・ErrorNotice）まで | `docs/plan/10-m2-plan.md` §6、`web/README.md` |
-| トークンの画面での発行 | 画面は無い（MR11）。API はブラウザのセッションからのみ。CLI は `forge admin token issue` | §3.6 |
+| UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **統合済み**。各 MR で TypeScript / a11y / design（MR10 は security も）のレビューの HIGH を直し再レビューで承認。web の単体テスト 404 件、Playwright の通し（43 画面、axe 違反 0）は**スタンドインのサーバー相手**。実 `forge serve` と本物の Keycloak での通し、Firefox・Safari は未確認。文書ポータルの使いやすさの確かめ（人の作業）は未実施 | `docs/handoff/2026-11-01-m2-mr9.md`〜`-mr12.md` |
+| トークンの画面での発行 | 画面あり（MR11、ブラウザのセッションが要る）。CLI は `forge admin token issue` | §3.6 |
 | 閲覧の API | commits / commit / compare / blame / refs / resolve / tree / blob / raw / archive は**統合済み** | `docs/handoff/…-mr7.md`、`…-mr8.md` |
-| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ・文書ポータル | M3 以降（未実装） | `README.md` ロードマップ |
+| MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ、文書ポータルのアップロード・承認・編集 | M3 以降（未実装）。文書ポータルは M2 の読み取り専用版だけ | `README.md` ロードマップ |
 | Kanflow 連携 | §5.1 のとおり未実装 | 計画 02 §13 |
 | GitHub Actions の CI | **一度も動いていない**。main か PR で 1 回動かすのが MR2 の CI 追加の前提 | `docs/plan/10-m2-plan.md` §8、`docs/ci.md` |
 | Keycloak の E2E（本物の Keycloak と通す）、realm JSON の実機での取り込み | **未実行**（realm の JSON は構文確認のみ） | `docs/handoff/2026-11-01-m2-mr4.md` §6 |
-| ワークスペース全体のテスト | `ea83815` で **1607 件合格・1 件 skip**（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
+| ワークスペース全体のテスト | `f95e2e8` で Rust **1607 件合格・1 件 skip**、web 404 件合格（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
 | MR4 のレビュー | security / rust（エラー契約・握りつぶしを含む）/ database / authz-matrix を実施。CRITICAL・HIGH なし。MEDIUM の指摘を `4e1c861` で修正し、指摘した評価役の再レビューで承認のうえ統合 | `docs/handoff/2026-11-01-m2-mr4.md`、`git log` |
 | MR7・MR8 のレビュー | MR7: git-protocol / security / authz-matrix / rust を実施、HIGH 1 件を `c1cb52d` で修正し再レビューで承認。MR8: git-protocol / rust / authz-matrix を実施、HIGH 3 件を `2c9b15e` で修正し再レビューで承認。どちらも承認後に統合 | `docs/handoff/…-mr7.md`、`…-mr8.md`、`git log` |
 | 持ち越し | OIDC の discovery にキャッシュ期限が無い（Keycloak 側のエンドポイント変更時は再起動）／state Cookie のサーバー側の 1 回限りは未実装／Keycloak イメージの digest 固定／秘密の走査の許可リスト／`web.hsts` の設定キー未実装／深いカーソル（`--skip`）は O(n²)（上限と時間切れで抑制）／木の項目名が UTF-8 でないものの扱い／3 ドットの比較・`--follow` なし／`git.browse.*` の設定なし | `docs/handoff/2026-11-01-m2-mr4.md` §7、`…-mr8.md` §6、`docs/adr/0022-…` |
