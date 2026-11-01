@@ -20,7 +20,7 @@ The ref is protected and the caller's role is below the protection's minimum pus
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action`, `protection` / `required_role` (the protection's minimum) and `actual_role`.
+The log event carries `action`, `protection` / `required_role` (the protection's minimum) and `actual_role`. On a Smart HTTP push also `refs`, `denied_refs`, `denied_codes`: the whole push was refused in-band before git ran (no ref changed).
 
 ## 対処 (fix)
 

@@ -796,7 +796,8 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - **設定 `git.http.*`**（起動時に検証、違反は FG-SYS-0002）: `fetch_request_max_bytes`（16 MiB、1 GiB まで）、`idle_timeout_ms`（60 秒、
   `timeout_ms` 以下）、`timeout_ms`（1 時間）、`body_timeout_ms`（5 分、`timeout_ms` 以下）、`want_check_timeout_ms`（30 秒、
 `timeout_ms` 以下）、`max_object_wants`（10 000）、`max_streams`（16。本文の読み込みの枠の数でもある）、
-  `max_streams_per_principal`（4、`max_streams` 以下）。設定ファイルでは `[git.http]` の表に書く。`forge serve` は `storage.root` を
+  `max_streams_per_principal`（4、`max_streams` 以下）、`push_max_bytes`（2 GiB、M1 phase 9 MR4。git の
+  `receive.maxInputSize`）。設定ファイルでは `[git.http]` の表に書く。`forge serve` は `storage.root` を
   必須にし、git の HOME を保存先の根にして（worker と同じ）、起動の前に git の版（2.38 以上）を確かめる。
 - **`moved` の墓標と upload-pack の POST（上の「git」の規則の変更）**: 広告の GET は、これまでどおり許可の後でだけ `302`
   （`service` を付け直す）。ただし git（2.45 まで）は、リダイレクトが **認証のない最初の要求** への答えのときだけ、以後の要求の

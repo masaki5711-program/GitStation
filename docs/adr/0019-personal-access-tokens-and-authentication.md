@@ -362,3 +362,10 @@ D4 MR2 の Amendment が D4 MR4 に送った決定（計画 D4 の回答 2）。
 `WWW-Authenticate: Basic realm="GitStation"`、ないパスでも同じ応答）。`api` スコープだけのトークンは `read_repository` がないので
 clone できない（403 `FG-AUTH-0002`、`an_api_scope_token_is_refused`）。`git_push_with_a_read_repository_token_is_refused` は
 receive-pack（MR4）と一緒に書く。
+
+## Amendment（2026-11-01、M1 phase 9 MR4: push の e2e）
+
+`git_push_with_a_read_repository_token_is_refused`（`read_repository` と `api` のトークンでは push できない。receive-pack の
+広告が 403 `FG-AUTH-0002`、本文は読まない）を `crates/forge-cli/tests/smart_http_e2e.rs` に書き、「見送り」の e2e はすべて
+済んだ。`write_repository` のトークンでの push（作成・fast-forward・保護 ref の拒否）も同じファイルにある。管理者の権限は
+`admin` スコープ付きのトークンでだけ効き、保護 ref の force push は管理者でも FG-GIT-0007（`force_push_to_protected_is_fg_git_0007_even_for_an_admin`）。

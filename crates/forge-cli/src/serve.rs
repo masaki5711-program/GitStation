@@ -43,6 +43,9 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         forge_git::version::detect(&smart_http.git).await?;
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // Pushes load their protection snapshot from, and are recorded in,
+        // the database (forge-web reads both through forge-core traits).
+        let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let state = app_state(&db, database).with_smart_http(smart_http);
         let router = forge_web::app(state, app_config_for(database, &cfg.git_http))?;
         let listener = forge_web::server::bind(bind).await?;

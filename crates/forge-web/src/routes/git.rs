@@ -7,7 +7,10 @@
 //!
 //! - `GET|HEAD {path}.git/info/refs?service=git-upload-pack`: the
 //!   advertisement (`# service=` prefix for v0 / v1, none for v2). `HEAD`
-//!   answers the headers only and starts no git.
+//!   answers the headers only and starts no git. The receive-pack
+//!   advertisement (`service=git-receive-pack`, `RepoPush`, M1 phase 9
+//!   MR4) is the same handler with the other service (always the prefix:
+//!   receive-pack has no v2); the push itself is `routes::git_push`.
 //! - `POST {path}.git/git-upload-pack`: the request body (Content-Type
 //!   checked; gzip or identity; at most `fetch_request_max_bytes` raw and
 //!   decompressed; idle timeout and `body_timeout`; one body-read slot,
@@ -25,6 +28,7 @@
 //! client that goes away kills git (`FG-GIT-0015`, logged with the request
 //! id). The per-principal stream cap is keyed by the user id.
 
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +38,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use forge_auth::ProjectCtx;
 use forge_core::config::GitHttpConfig;
-use forge_core::{telemetry, ProjectRepository, RepositoryState};
+use forge_core::{telemetry, ProjectRepository, ProtectionLoader, PushRecorder, RepositoryState};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::smart_http::{advertisement_prefix, Phase, ProtocolVersion, Service};
 use forge_git::upload_request::{err_packet, parse_upload_pack_request};
@@ -48,6 +52,9 @@ use crate::registry::Dispatched;
 const ADVERTISEMENT: &str = "application/x-git-upload-pack-advertisement";
 const REQUEST: &str = "application/x-git-upload-pack-request";
 const RESULT: &str = "application/x-git-upload-pack-result";
+const RECEIVE_ADVERTISEMENT: &str = "application/x-git-receive-pack-advertisement";
+const RECEIVE_REQUEST: &str = "application/x-git-receive-pack-request";
+pub(crate) const RECEIVE_RESULT: &str = "application/x-git-receive-pack-result";
 
 /// The Smart HTTP limits (`git.http.*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +72,9 @@ pub struct GitHttpLimits {
     pub want_check_timeout: Duration,
     /// Distinct non-commit wants per upload-pack request.
     pub max_object_wants: usize,
+    /// One push's pack (`receive.maxInputSize`); the body forge forwards
+    /// may be this plus the command list (M1 phase 9 MR4).
+    pub push_max_bytes: NonZeroU64,
 }
 
 impl GitHttpLimits {
@@ -78,6 +88,10 @@ impl GitHttpLimits {
             body_timeout: cfg.body_timeout,
             want_check_timeout: cfg.want_check_timeout,
             max_object_wants: usize::try_from(cfg.max_object_wants).unwrap_or(usize::MAX),
+            // `git.http.push_max_bytes` is validated positive at load time;
+            // a zero would mean "unlimited" to git, so it falls back to 1.
+            push_max_bytes: NonZeroU64::new(u64::from(cfg.push_max_bytes))
+                .unwrap_or(NonZeroU64::MIN),
         }
     }
 }
@@ -91,12 +105,34 @@ impl Default for GitHttpLimits {
 /// What the Smart HTTP routes run git with: the git handle (stream pools),
 /// the storage root (paths from `RepoId` only, ADR-0009), the limits, and
 /// the request-body read slots (sized like git's stream pools).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SmartHttp {
     pub git: Git,
     pub storage: StorageRoot,
     pub limits: GitHttpLimits,
-    body_slots: BodySlots,
+    pub(crate) body_slots: BodySlots,
+    /// What a push needs besides git (`forge serve`: the database). Without
+    /// it receive-pack answers `FG-SYS-0001 reason=push_unconfigured`.
+    pub(crate) push: Option<PushServices>,
+}
+
+/// The push's protection snapshot and its recorder (forge-core traits;
+/// forge-db implements both on `Db`).
+#[derive(Clone)]
+pub(crate) struct PushServices {
+    pub(crate) protection: Arc<dyn ProtectionLoader>,
+    pub(crate) recorder: Arc<dyn PushRecorder>,
+}
+
+impl std::fmt::Debug for SmartHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SmartHttp")
+            .field("git", &self.git)
+            .field("storage", &self.storage)
+            .field("limits", &self.limits)
+            .field("push", &self.push.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SmartHttp {
@@ -115,17 +151,50 @@ impl SmartHttp {
             storage,
             limits,
             body_slots,
+            push: None,
         }
+    }
+
+    /// Enable pushes: the protection snapshot of each push is loaded from
+    /// `protection`, applied pushes are recorded with `recorder`.
+    #[must_use]
+    pub fn with_push(
+        mut self,
+        protection: Arc<dyn ProtectionLoader>,
+        recorder: Arc<dyn PushRecorder>,
+    ) -> Self {
+        self.push = Some(PushServices {
+            protection,
+            recorder,
+        });
+        self
     }
 }
 
 /// `GET|HEAD {path}.git/info/refs?service=git-upload-pack`.
 pub async fn advertise(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    advertise_service(state, request, Service::UploadPack).await
+}
+
+/// `GET|HEAD {path}.git/info/refs?service=git-receive-pack` (`RepoPush`,
+/// M1 phase 9 MR4).
+pub async fn advertise_receive_pack(state: AppState, request: Dispatched<ProjectCtx>) -> Response {
+    advertise_service(state, request, Service::ReceivePack).await
+}
+
+async fn advertise_service(
+    state: AppState,
+    request: Dispatched<ProjectCtx>,
+    service: Service,
+) -> Response {
     let ctx = request.ctx().clone(); // clone: the error path outlives the request
-    match advertise_inner(&state, request).await {
+    match advertise_inner(&state, request, service).await {
         Ok(res) => res,
         Err(err) => ctx
-            .fail(err.with_context("route", "info_refs"))
+            .fail(
+                err.with_context("route", "info_refs")
+                    .with_context("service", service.name()),
+            )
             .into_response(),
     }
 }
@@ -133,9 +202,14 @@ pub async fn advertise(state: AppState, request: Dispatched<ProjectCtx>) -> Resp
 async fn advertise_inner(
     state: &AppState,
     request: Dispatched<ProjectCtx>,
+    service: Service,
 ) -> Result<Response, ForgeError> {
     let (smart, repository) = ready(state, &request)?;
-    let mut res = git_response(ADVERTISEMENT, Body::empty());
+    let content_type = match service {
+        Service::UploadPack => ADVERTISEMENT,
+        Service::ReceivePack => RECEIVE_ADVERTISEMENT,
+    };
+    let mut res = git_response(content_type, Body::empty());
     if *request.method() == Method::HEAD {
         return Ok(res);
     }
@@ -144,21 +218,29 @@ async fn advertise_inner(
     let principal = principal_key(&request)?;
     let log = StreamLog::new(&request, repository, "info_refs");
     drop(request);
-    let mut stream = smart
-        .git
-        .upload_pack(
+    let cmd = match service {
+        Service::UploadPack => smart.git.upload_pack(
             &smart.storage,
             repository.id,
             Phase::Advertise,
             protocol.as_deref(),
-        )?
+        )?,
+        Service::ReceivePack => smart.git.receive_pack(
+            &smart.storage,
+            repository.id,
+            Phase::Advertise,
+            protocol.as_deref(),
+            smart.limits.push_max_bytes,
+        )?,
+    };
+    let mut stream = cmd
         .idle_timeout(smart.limits.idle_timeout)
         .timeout(smart.limits.timeout)
         .spawn_stream(&principal)
         .await?;
     // --advertise-refs reads nothing.
     drop(stream.take_stdin());
-    let prefix = advertisement_prefix(Service::UploadPack, version);
+    let prefix = advertisement_prefix(service, version);
     *res.body_mut() = GitResponse::new(prefix, stream, log)?.into_body();
     Ok(res)
 }
@@ -180,8 +262,8 @@ async fn upload_pack_inner(
 ) -> Result<Response, ForgeError> {
     let (smart, repository) = ready(state, &request)?;
     let smart = Arc::clone(smart);
-    check_content_type(request.headers())?;
-    let gzip = gzip_encoded(request.headers())?;
+    check_content_type(request.headers(), Service::UploadPack)?;
+    let gzip = gzip_encoded(request.headers(), Service::UploadPack)?;
     let protocol = git_protocol(request.headers());
     let version = ProtocolVersion::from_git_protocol(protocol.as_deref());
     let principal = principal_key(&request)?;
@@ -258,7 +340,7 @@ async fn upload_pack_inner(
 
 /// The Smart HTTP state and the repository, once it is ready
 /// (`FG-REPO-0016` while provisioning; decided after `authorize()`).
-fn ready<'a>(
+pub(crate) fn ready<'a>(
     state: &'a AppState,
     request: &Dispatched<ProjectCtx>,
 ) -> Result<(&'a Arc<SmartHttp>, ProjectRepository), ForgeError> {
@@ -283,7 +365,7 @@ fn ready<'a>(
 
 /// The per-principal stream key: the user id (Smart HTTP needs an
 /// authenticated user; the dispatcher refused anonymous callers).
-fn principal_key(request: &Dispatched<ProjectCtx>) -> Result<String, ForgeError> {
+pub(crate) fn principal_key(request: &Dispatched<ProjectCtx>) -> Result<String, ForgeError> {
     request
         .principal()
         .user()
@@ -294,33 +376,37 @@ fn principal_key(request: &Dispatched<ProjectCtx>) -> Result<String, ForgeError>
 }
 
 /// The raw `Git-Protocol` header (forge-git keeps only a safe value).
-fn git_protocol(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn git_protocol(headers: &HeaderMap) -> Option<String> {
     headers
         .get("git-protocol")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned)
 }
 
-/// `Content-Type: application/x-git-upload-pack-request` (parameters and
+/// `Content-Type: application/x-git-<service>-request` (parameters and
 /// case ignored), else `FG-GIT-0014 reason=content_type`.
-fn check_content_type(headers: &HeaderMap) -> Result<(), ForgeError> {
+pub(crate) fn check_content_type(headers: &HeaderMap, service: Service) -> Result<(), ForgeError> {
+    let expected = match service {
+        Service::UploadPack => REQUEST,
+        Service::ReceivePack => RECEIVE_REQUEST,
+    };
     let media = headers
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(';').next())
         .map(str::trim);
-    if media.is_some_and(|m| m.eq_ignore_ascii_case(REQUEST)) {
+    if media.is_some_and(|m| m.eq_ignore_ascii_case(expected)) {
         return Ok(());
     }
     Err(ForgeError::new(ErrorCode::GitProtocolInvalid)
         .with_context("reason", "content_type")
-        .with_context("service", Service::UploadPack.name()))
+        .with_context("service", service.name()))
 }
 
 /// `true` for `Content-Encoding: gzip` (git's only one), `false` without
 /// one or for `identity`; anything else is `FG-GIT-0014
 /// reason=content_encoding`.
-fn gzip_encoded(headers: &HeaderMap) -> Result<bool, ForgeError> {
+pub(crate) fn gzip_encoded(headers: &HeaderMap, service: Service) -> Result<bool, ForgeError> {
     let mut values = headers.get_all(CONTENT_ENCODING).iter();
     let Some(first) = values.next() else {
         return Ok(false);
@@ -336,12 +422,12 @@ fn gzip_encoded(headers: &HeaderMap) -> Result<bool, ForgeError> {
     }
     Err(ForgeError::new(ErrorCode::GitProtocolInvalid)
         .with_context("reason", "content_encoding")
-        .with_context("service", Service::UploadPack.name()))
+        .with_context("service", service.name()))
 }
 
 /// A Smart HTTP response: 200, the content type, and never cached by a
 /// shared cache (ADR-0015 "応答の安全").
-fn git_response(content_type: &'static str, body: Body) -> Response {
+pub(crate) fn git_response(content_type: &'static str, body: Body) -> Response {
     let mut res = (StatusCode::OK, body).into_response();
     let headers = res.headers_mut();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));

@@ -24,4 +24,4 @@ The log event carries `subcommand`, `reason` (`client_disconnected` when the HTT
 
 ## 対処 (fix)
 
-Nothing for an isolated case. For repeated ones, compare `duration_ms` with the proxy's timeouts (reverse proxy read/send timeout) and the client's `http.lowSpeedTime`. A receive-pack killed this way leaves no ref change; see runbook smart-http for a stale `.lock` file.
+Nothing for an isolated case. For repeated ones, compare `duration_ms` with the proxy's timeouts (reverse proxy read/send timeout) and the client's `http.lowSpeedTime`. A receive-pack is killed this way only while its request body is still arriving (`phase=request_body`, route `receive_pack`, M1 phase 9 MR4): no ref has changed then; once the body is complete receive-pack runs to its end even if the client goes away. See runbook smart-http for a stale `.lock` file.

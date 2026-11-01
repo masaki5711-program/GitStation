@@ -162,6 +162,16 @@ impl GitCommand {
         self
     }
 
+    /// `--exclude=<ref>` (rev-list: leave this ref out of the next
+    /// `--all` / `--glob`). A validated `RefName` starts with `refs/` and holds no
+    /// glob character, so the pattern names exactly that ref.
+    #[must_use]
+    pub(crate) fn exclude_ref(mut self, name: &forge_core::RefName) -> Self {
+        self.options
+            .push(OsString::from(format!("--exclude={}", name.as_str())));
+        self
+    }
+
     /// A revision (ref or object id), placed after `--end-of-options`.
     #[must_use]
     pub fn revision(mut self, rev: impl Into<Revision>) -> Self {

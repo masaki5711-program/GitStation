@@ -116,6 +116,8 @@ pub const KEYS: &[Key] = &[
         "FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS",
     ),
     number("git.http.max_streams", "FORGE_GIT_HTTP_MAX_STREAMS"),
+    // M1 phase 9 MR4: the push size limit (receive.maxInputSize).
+    number("git.http.push_max_bytes", "FORGE_GIT_HTTP_PUSH_MAX_BYTES"),
     number(
         "git.http.max_streams_per_principal",
         "FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL",

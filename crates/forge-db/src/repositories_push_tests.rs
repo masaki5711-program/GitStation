@@ -83,6 +83,7 @@ fn update(name: &str, old: char, new: char, kind: PushUpdateKind) -> PushedRef {
         new,
         kind,
         total_commits: commits.len() as u64,
+        total_commits_partial: false,
         commits,
     }
 }
@@ -325,6 +326,7 @@ async fn payload_truncation_is_explicit() {
             kind: PushUpdateKind::Force,
             commits: vec![wide('c'); forge_core::push::MAX_LISTED_COMMITS],
             total_commits: 40,
+            total_commits_partial: false,
         })
         .collect();
     let push = PushRecord {

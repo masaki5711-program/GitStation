@@ -151,12 +151,11 @@ impl Default for AppConfig {
     }
 }
 
-/// Actions that have permission-matrix rows but no route yet (receive-pack:
-/// M1 phase 9 MR4; API resources: phase 8b).
+/// Actions that have permission-matrix rows but no route yet (API
+/// resources: phase 8b).
 /// Explicit, so the `authz-coverage` gate can tell "not built yet" from a
 /// stale row; an action leaves this list in the commit that routes it.
 pub const PLANNED: &[Action] = &[
-    Action::RepoPush,
     Action::ProjectCreate,
     Action::ProjectUpdate,
     Action::ProjectVisibilityChange,
@@ -235,12 +234,41 @@ pub fn registry() -> Registry<AppState> {
     git_routes(shell_routes(fixed))
 }
 
-/// Smart HTTP fetch (M1 phase 9 MR3): the advertisement (`GET`, and `HEAD`
-/// with the headers only) and the upload-pack RPC, all `RepoRead`.
-/// receive-pack (`RepoPush`) joins in MR4.
+/// Smart HTTP (M1 phase 9): fetch (MR3) — the advertisement (`GET`, and
+/// `HEAD` with the headers only) and the upload-pack RPC, `RepoRead`; push
+/// (MR4) — the same for receive-pack, `RepoPush` (decided on the project
+/// before the body is read; every ref again in the handler).
 fn git_routes(registry: Registry<AppState>) -> Registry<AppState> {
     let advertise = Some(("service", "git-upload-pack"));
+    let advertise_push = Some(("service", "git-receive-pack"));
     registry
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Get,
+            ScopedRoute::Git(GitRoute::InfoRefsReceivePack),
+            advertise_push,
+            Action::RepoPush,
+            "Smart HTTP: receive-pack advertisement (push)",
+            routes::git::advertise_receive_pack,
+        )
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Head,
+            ScopedRoute::Git(GitRoute::InfoRefsReceivePack),
+            advertise_push,
+            Action::RepoPush,
+            "Smart HTTP: receive-pack advertisement headers",
+            routes::git::advertise_receive_pack,
+        )
+        .scoped(
+            RouteScope::ProjectGit,
+            Verb::Post,
+            ScopedRoute::Git(GitRoute::ReceivePack),
+            None,
+            Action::RepoPush,
+            "Smart HTTP: receive-pack (push); every ref decided before git runs",
+            routes::git_push::receive_pack,
+        )
         .scoped(
             RouteScope::ProjectGit,
             Verb::Get,

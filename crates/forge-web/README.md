@@ -113,10 +113,39 @@ admitted proof.
   `user:<id>`. The git POSTs are exempt from the request timeout:
   `AppConfig::git_rpc_timeout` (`git.http.timeout_ms`, 1 h) bounds them
   instead.
+- Routes (M1 phase 9 MR4, `src/routes/git_push.rs`; `RepoPush`,
+  ADR-0008 option B): `GET|HEAD {path}.git/info/refs?service=git-receive-pack`
+  and `POST {path}.git/git-receive-pack`. The project-level `RepoPush`
+  is proved by the dispatcher before the body is read; a push through a
+  `moved` tombstone stays `FG-REPO-0005 reason=tombstone_push`. The POST
+  reads the command section under a body-read slot (`PushBody`,
+  `body_timeout`), parses it strictly (`forge_git::receive_request`: ≤ 1000
+  commands, ≤ 1 MiB, `report-status` required, `push-cert` refused, every
+  ref through `RefName::parse` / the hex-like check `FG-GIT-0011`), loads
+  the protection snapshot once (`ProtectionLoader`), classifies each update
+  (create / delete; an existing tag moved = force; a protected branch whose
+  new commit exists is checked with `Git::fast_forwards`) and decides every
+  ref with `forge_auth::authorize_ref_updates` (handlers never call
+  `authorize()`). Any denial: the body is drained (≤ 64 MiB), git is not
+  run, the whole push is answered in-band (`unpack ok`, `ng <ref> <FG code>
+  <user message>` / `atomic push failure`, side-band 2 with the request
+  id), one log line. Otherwise receive-pack gets the original decoded bytes
+  verbatim (`-c receive.denyNonFastForwards=true` when a protected branch
+  is updated, `receive.maxInputSize = push_max_bytes`); its answer streams
+  back through `ReportRewriter` (git's `non-fast-forward` on a protected
+  ref becomes `FG-GIT-0007`). Once the body is complete receive-pack runs
+  in its own task (a disconnect cannot kill it mid ref-update); after it
+  exits the applied refs' kinds and commits are read (10 s each),
+  `forge.git.push_applied` is logged, then `PushRecorder::record_push` is
+  tried 3 times within 30 s, else `FG-GIT-0012`. git's probe request
+  (`0000`) is answered without git. The token id that authenticated the
+  request is kept as a request extension (`Dispatched::credential_id`) for
+  the record.
 - `AppState::with_smart_http(SmartHttp::new(git, storage,
-  GitHttpLimits))` — `forge serve` always sets it (storage root required,
+  GitHttpLimits).with_push(protection, recorder))` — `forge serve` always sets it (storage root required,
   git HOME = storage root, pools and timeouts from `git.http.*`); without it
-  a git route is `FG-SYS-0001 reason=smart_http_unconfigured`.
+  a git route is `FG-SYS-0001 reason=smart_http_unconfigured`, and without
+  `with_push` receive-pack is `FG-SYS-0001 reason=push_unconfigured`.
 - `AppState::new(version, probes, authenticator, Lookups { namespaces,
   projects })` — the authenticator (`forge_core::Authenticator`) and the
   lookups (`forge_core::NamespaceResolver`, `ProjectAccessLoader` —
@@ -223,6 +252,12 @@ FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
   timeout, not the request timeout (a permit flood can hold a git POST
   longer); `check_ms` as a metric; hiding `object-info` from the v2
   advertisement (forge refuses the command).
+- From M1 phase 9 MR4 (tracked): `source_ip` of a push record (needs a
+  trusted client address behind the reverse proxy); a push touching a
+  protected branch cannot force-update an unprotected branch in the same
+  push (`receive.denyNonFastForwards` applies to the whole push — fixed by
+  the M3 pre-receive hook); git's own `non-fast-forward` refusal is per ref
+  (the rest of that push may apply).
 - JSON / path / query rejections wrapped into `ApiError` before the first
   route that takes a body (phase 8).
 - `gen-authz --check` in CI and self-heal (needs cargo in the gate runner).

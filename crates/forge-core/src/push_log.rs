@@ -35,6 +35,11 @@ pub struct PushAppliedRef {
     pub kind: String,
     pub commits: Vec<String>,
     pub total_commits: u64,
+    /// `total_commits` is a lower bound (counting timed out, MR4). Absent
+    /// (and written only when `true`) so lines of the first MR2 layout
+    /// still read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub total_commits_partial: bool,
 }
 
 /// The `push` field of the line: everything `record_push` needs.
@@ -86,6 +91,7 @@ impl PushApplied {
                     kind: u.kind.as_str().to_owned(),
                     commits: u.commits.iter().map(|c| c.as_str().to_owned()).collect(),
                     total_commits: u.total_commits,
+                    total_commits_partial: u.total_commits_partial,
                 })
                 .collect(),
         }
@@ -178,6 +184,7 @@ impl PushApplied {
                         .map(|c| ObjectId::parse(c).map_err(|_| unreadable("commits")))
                         .collect::<Result<_, _>>()?,
                     total_commits: u.total_commits,
+                    total_commits_partial: u.total_commits_partial,
                 })
             })
             .collect::<Result<Vec<_>, ForgeError>>()?;

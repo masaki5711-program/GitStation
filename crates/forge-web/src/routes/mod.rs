@@ -4,6 +4,7 @@
 //! proof.
 
 pub mod git;
+pub mod git_push;
 pub mod health;
 pub mod namespaces;
 pub mod projects;

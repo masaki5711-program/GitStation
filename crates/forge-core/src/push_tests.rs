@@ -35,6 +35,7 @@ fn update(raw: &str, old: ObjectId, new: ObjectId, kind: PushUpdateKind) -> Push
         new,
         kind,
         total_commits: commits.len() as u64,
+        total_commits_partial: false,
         commits,
     }
 }
@@ -347,6 +348,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
             kind: PushUpdateKind::Force,
             commits: vec![wide('c'); MAX_LISTED_COMMITS],
             total_commits: 50,
+            total_commits_partial: false,
         })
         .collect();
     let push = record(updates);
@@ -406,6 +408,7 @@ fn the_json_stays_within_its_budget_and_flags_truncation() {
         kind: PushUpdateKind::FastForward,
         commits: vec![wide('c'); MAX_LISTED_COMMITS],
         total_commits: 20,
+        total_commits_partial: false,
     };
     let v = push_json(
         ProjectId::new(3),
@@ -603,4 +606,49 @@ fn protection_levels_are_every_matching_rule_in_order() {
     assert_eq!(rules.levels(&name("refs/heads/dev")), [Role::Maintainer]);
     assert!(rules.levels(&name("refs/tags/v1")).is_empty());
     assert!(ProtectionRules::default().is_empty());
+}
+
+/// A ref whose commit count timed out (MR4: `total_commits` is a lower
+/// bound) is flagged `commits_truncated` even when every counted commit is
+/// listed, survives the log round trip, and old lines without the field
+/// still read.
+#[test]
+fn a_partial_commit_count_is_stated_as_truncated() {
+    let mut main = update(
+        "refs/heads/main",
+        oid('a'),
+        oid('b'),
+        PushUpdateKind::FastForward,
+    );
+    main.total_commits_partial = true;
+    let push = record(vec![main]);
+    push.check().expect("valid");
+    let v = push_json(
+        ProjectId::new(3),
+        push.repository_id,
+        &push.sorted_updates(),
+        None,
+        EVENT_BUDGET,
+    );
+    assert_eq!(v["total_commits"], 1);
+    assert_eq!(v["commits_truncated"], true);
+    assert_eq!(v["refs"][0]["commits_truncated"], true);
+    let applied = PushApplied::new(&pusher(), ProjectId::new(3), &push);
+    let line = logged_line(&applied);
+    let parsed = PushApplied::from_log_line(&line)
+        .expect("readable")
+        .expect("a push line");
+    assert_eq!(parsed.to_parts().expect("parts").2, push);
+    // Without the flag the field is not written (the MR2 layout).
+    let mut plain = push.clone(); // clone: compared with the original below
+    plain.updates[0].total_commits_partial = false;
+    let json = PushApplied::new(&pusher(), ProjectId::new(3), &plain)
+        .to_json()
+        .expect("json");
+    assert!(!json.contains("total_commits_partial"), "{json}");
+    // A delete cannot carry a partial count.
+    let mut delete = update("refs/heads/old", oid('a'), zero(), PushUpdateKind::Delete);
+    delete.total_commits_partial = true;
+    let err = record(vec![delete]).check().expect_err("refused");
+    assert_eq!(err.code(), ErrorCode::ChangeRejected);
 }

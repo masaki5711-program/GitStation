@@ -4,6 +4,8 @@
 //! - [`authorize`] — pure decision over [`Principal`], [`Action`], [`Resource`]
 //! - [`prove`] — calls `authorize()` and returns the unforgeable proof
 //!   [`Authorized`] a handler takes (ADR-0015); it adds no rule of its own
+//! - [`authorize_ref_updates`] — every ref of a push through `authorize()`,
+//!   on the project-level `RepoPush` proof (M1 phase 9 MR4)
 //! - [`matrix`] — the permission matrix (specification as data; every row is
 //!   asserted by the tests and summarized for the `authz-coverage` gate)
 //!
@@ -15,6 +17,7 @@ pub mod matrix;
 mod matrix_rows;
 mod model;
 mod prove;
+mod ref_updates;
 
 pub use action::Action;
 pub use authorize::authorize;
@@ -26,6 +29,7 @@ pub use prove::{
     prove, Authorized, InstanceCtx, LoadedNamespace, LoadedProject, LoadedTarget, ProjectCtx,
     ResolvedCtx, ResourceCtx, UnresolvedCtx,
 };
+pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 
 #[cfg(test)]
 #[path = "authorize_tests.rs"]
@@ -34,3 +38,7 @@ mod tests;
 #[cfg(test)]
 #[path = "prove_tests.rs"]
 mod prove_tests;
+
+#[cfg(test)]
+#[path = "ref_updates_tests.rs"]
+mod ref_updates_tests;

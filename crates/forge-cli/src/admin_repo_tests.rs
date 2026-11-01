@@ -142,6 +142,7 @@ mod record_push {
                 kind: PushUpdateKind::FastForward,
                 commits: vec![oid('b')],
                 total_commits: 1,
+                total_commits_partial: false,
             }],
         };
         logged(&PushApplied::new(&pusher, project, &push))

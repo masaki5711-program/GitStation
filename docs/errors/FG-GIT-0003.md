@@ -20,7 +20,7 @@ A git subprocess exited with an unexpected non-zero status, or reading its outpu
 
 ## 調べ方 (diagnosis)
 
-The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`, URL credentials redacted); when reading or waiting failed there is no `exit_code` and the cause is in `source`. Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`.
+The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`, URL credentials redacted); when reading or waiting failed there is no `exit_code` and the cause is in `source`. Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`. receive-pack (M1 phase 9 MR4): `reason=report_unreadable` (with `detail`, `refs`) — git's answer to a push had no readable report-status; forge forwarded it unchanged and could not tell which refs changed, so nothing was recorded: compare the repository's refs with the push's commands (runbook smart-http). `phase=push_record_kinds` / `push_record_commits`: classifying or listing the commits of an applied push failed; the push was recorded as `force` / without commits (`total_commits_partial`).
 
 ## 対処 (fix)
 

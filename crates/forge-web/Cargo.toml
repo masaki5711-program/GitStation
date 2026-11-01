@@ -42,6 +42,9 @@ tracing-subscriber.workspace = true
 # D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
 forge-db = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true
+# M1 phase 9 MR4: the push record retries (paused time) and a scratch git home.
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

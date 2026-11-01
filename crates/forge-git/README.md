@@ -4,7 +4,8 @@
 only place repository storage paths are derived (ADR-0009). It also owns the
 Smart HTTP transport (ADR-0007, M1 phase 9): streaming subprocesses,
 pkt-line / side-band framing, gzip decoding and the upload-pack /
-receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
+receive-pack command sets, and reads / answers receive-pack requests for the push path
+(M1 phase 9 MR4, ADR-0008 option B). Protected-ref hooks follow in phase 10 (M3).
 
 **Public API**
 - `Git::new(GitConfig)` / `Git::command(subcommand) -> GitCommand`. Argument
@@ -67,6 +68,19 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
   `advertisement_prefix(Service, ProtocolVersion)` (`# service=…` + flush, none for
   upload-pack v2); `ProtocolVersion::from_git_protocol(header)` uses the sanitised value only;
   `Service::from_name` / `.name()`.
+- **Push** (M1 phase 9 MR4): `GitCommand::deny_non_fast_forwards()` (`-c
+  receive.denyNonFastForwards=true`); `receive_request::CommandParser::feed(&buf) -> Parsed`
+  (the command section read incrementally: ≤ 1000 commands / 1 MiB, known capabilities on the
+  first line only, `report-status` required, `push-cert` refused; each `RefCommand` keeps its
+  name as sent and `RefName` or its refusal — `FG-GIT-0005`, `FG-GIT-0011` via
+  `check_unambiguous`); `receive_report::ReportRewriter` (forwards side-band 2 / 3, holds the
+  report ≤ 4 MiB, rewrites `ng <protected ref> non-fast-forward`, returns the parsed `Report`;
+  unreadable answers are forwarded unchanged) and `refusal_report(sideband, messages, refs)`;
+  `Git::fast_forwards(&StorageRoot, RepoId, &[(old, new)], timeout) -> Vec<Ancestry>`
+  (`cat-file --batch-check`, then `rev-list --count --max-count=1 --stdin` with `old\n^new`) and
+  `Git::new_commits(…, &[CommitQuery], principal, timeout) -> Vec<CommitList>` (≤ 20 listed,
+  all counted, streamed; create: `--not --exclude=<pushed refs> --glob=refs/*` + old ids — not
+  `--all`, whose HEAD no `--exclude` removes; one deadline, past it `partial`). Ids on stdin only.
 - **Upload-pack requests** (`upload_request`, M1 phase 9 MR3):
   `parse_upload_pack_request(body, ProtocolVersion) -> UploadPackRequest { command, wants }`
   (v0 / v1 negotiation; v2 `ls-refs` / `fetch` only — any other v2 command or a second command
@@ -135,8 +149,9 @@ receive-pack command sets. Protected-ref hooks (ADR-0008) follow in phase 10.
 | FG-GIT-0003 GitProcessFailed | unexpected non-zero exit, or reading / waiting failed | `git-process-failed` |
 | FG-GIT-0004 GitBusy | no free subprocess slot within `acquire_timeout`; streams `reason=streams` / `principal_streams` | `smart-http` (streams) |
 | FG-GIT-0006 GitOutputTooLarge | captured stdout over `max_output_bytes` | — |
-| FG-GIT-0013 GitRequestTooLarge | gzip body over its decompressed cap (MR3/MR4: body and command limits) | `smart-http` |
-| FG-GIT-0014 GitProtocolInvalid | bad pkt-line / gzip; `want_invalid`, `command_unsupported`, `want_unreachable` (MR3, here); `content_type`, `content_encoding` (forge-web); MR4: too_many_commands, report_status_required, push_cert | `smart-http` |
+| FG-GIT-0013 GitRequestTooLarge | gzip body over its decompressed cap; MR4 `limit=command_section` (here), `push_body` (forge-web) | `smart-http` |
+| FG-GIT-0011 AmbiguousRefName | a pushed branch / tag name of 40 / 64 hex digits (`receive_request`) | — |
+| FG-GIT-0014 GitProtocolInvalid | bad pkt-line / gzip; `want_invalid`, `command_unsupported`, `want_unreachable` (MR3, here); `content_type`, `content_encoding` (forge-web); MR4 (`receive_request`): `too_many_commands`, `report_status_required`, `push_cert`, `command_invalid`, `capability_unsupported`, `duplicate_ref`, `shallow_misplaced` | `smart-http` |
 | FG-GIT-0015 GitClientDisconnected | stream aborted or dropped (client went away); tree killed | `smart-http` |
 | FG-REPO-0001 StoragePathRejected | root missing / not a dir / symlink; symlink, non-dir or outside-root entry | `repo-storage` |
 | FG-REPO-0002 StorageMissing | repository directory missing | `repo-storage` |

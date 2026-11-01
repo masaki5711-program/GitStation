@@ -91,3 +91,35 @@ ref ごとの `update` フックでは、複数の ref の push が一部だけ�
   `forge.git.push_applied`（`forge_core::PushApplied`）、`FG-GIT-0012` PushRecordFailed、Runbook `push-record-failed`、
   `forge admin repo record-push --from-log` で実現した。再投入の鍵は ADR-0016 の M1 段階 9 MR2 の Amendment
   （`repository_pushed:<repo_id>:<sha256(request_id ‖ 名前順の更新)>`）。
+
+## Amendment（2026-11-01、M1 段階 9 MR4: 案 B — 事前の検査と git 自身の拒否。フックは M3 へ）
+
+Smart HTTP の push（`POST {path}.git/git-receive-pack`）は、Decision の (c)（pre-receive フック）を **使わずに** 実装した。
+フックがない・実行できないとき git はそれを黙って飛ばす（判定が素通りになる、fail-open）ため、検証の仕組みのないまま
+フックに頼るのはやめ、段階 9 では次の **案 B** を採った（案 A「pre-receive を今入れる」は不採用）。pre-receive と
+`post-receive` は **M3（段階 10）** で、フックが確かに動いたことを検査する仕組みと一緒に入れる。
+
+- **認可の順序**: プロジェクト単位の `RepoPush`（Developer 以上、`write_repository`）はディスパッチャーが本文を読む **前** に
+  判定する（権限のない呼び出しには `100 Continue` も返さない）。
+- **(a) 事前の検査（拡張）**: ハンドラーがコマンド部（≤ 1000 件、≤ 1 MiB、`report-status` 必須、`push-cert` 拒否）を読み、
+  各 ref を `RefName::parse`（FG-GIT-0005）と 16 進の名前の検査（FG-GIT-0011 AmbiguousRefName: ブランチ名・タグ名が
+  40 / 64 桁の 16 進）に通す。規則は push ごとに **1 回** 読み（`ProtectionLoader`、MR2 のスナップショット）、各更新を
+  分類する: 旧が 0 なら作成、新が 0 なら削除、既存の **タグの更新はすべて force**、保護ブランチで新しいコミットが
+  すでにリポジトリにあれば `rev-list --count --max-count=1 <old> ^<new>` で判定、それ以外は fast-forward として扱い
+  最終判定を git に任せる。各 ref は `forge_auth::authorize_ref_updates`（プロジェクトの証明を受け取り、ref ごとに
+  `authorize()` を呼ぶ。判定点は 1 つのまま）で判定する。ハンドラーは `authorize()` を直接呼ばない。
+- **一括の拒否**: 1 つでも拒否があれば git を起動せず、本文を読み捨て（最大 64 MiB）、push 全体を帯域内で拒否する:
+  `unpack ok`、拒否された ref は `ng <ref> <FG コード> <利用者向けメッセージ>`、他の ref は `ng <ref> atomic push failure`、
+  サイドバンド 2 に `<FG コード> <メッセージ> (request_id: …)`。どの ref も変わらない。
+- **(c') git 自身の拒否**: 保護ブランチを更新する push には `-c receive.denyNonFastForwards=true` を付ける（新しいコミットは
+  パックで届くので、fast-forward かどうかはパックの後でないと分からない）。git の `ng <ref> non-fast-forward` は、
+  保護 ref については FG-GIT-0007 の文言に書き換えて返す（`reason=git_denied_non_fast_forward` をログ）。
+  この経路の拒否は ref ごと（git の通常の push と同じ）で、同じ push の他の ref は反映されうる。また
+  `denyNonFastForwards` は push 全体に効くので、保護ブランチを含む push では保護されていないブランチの force push も
+  git が拒否する（別の push に分ければ通る。既知の制限、M3 の pre-receive で解消）。
+- **git に渡すもの**: 展開済みの元のバイト列をそのまま（コマンド部もパックも）。`receive.fsckObjects`、
+  `receive.maxInputSize = git.http.push_max_bytes`（既定 2 GiB）、空のフックディレクトリ（`core.hooksPath`）は MR1 の固定設定。
+- **記録**: 本文を受け取り終えた receive-pack はリクエストの持たないタスクで動く（ref 更新の途中でクライアントが切れても
+  殺さない）。git の終了後、report-status で `ok` の ref について種類と新しいコミット（ref ごとに 20 件まで、すべて数える、
+  push 全体で 10 秒。超えたら `total_commits_partial`、件数は数えた分＝下限）を読み、**先に** `forge.git.push_applied` を
+  ログに出してから `record_push` を 30 秒以内に 3 回まで試す（`Deduped` は成功）。すべて失敗したら FG-GIT-0012。

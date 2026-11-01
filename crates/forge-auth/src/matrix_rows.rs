@@ -75,6 +75,16 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::RepoPush, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::RepoPush, W::Developer, F::Absent, deny(E::NotFound)),
     row(A::RepoPush, W::Developer, F::DeletedTombstone, deny(E::NotFound)),
+    // M1 phase 9 MR4: the receive-pack routes (decided before the body is read).
+    row(A::RepoPush, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    row(A::RepoPush, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    row(A::RepoPush, W::Guest, F::InternalProject, deny(E::Forbidden)),
+    row(A::RepoPush, W::Maintainer, F::PrivateProject, Allow),
+    row(A::RepoPush, W::Owner, F::PrivateProject, Allow),
+    row(A::RepoPush, W::Admin, F::PrivateProject, Allow),
+    row(A::RepoPush, W::DevTokenApi, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::RepoPush, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::RepoPush, W::Developer, F::KindMismatch, deny(E::NotFound)),
     // --- RepoPush (one ref update) ---
     row(A::RepoPush, W::Anonymous, r(BR, U::FastForward, None), deny(E::Unauthenticated)),
     row(A::RepoPush, W::NonMember, r(BR, U::FastForward, None), deny(E::NotFound)),

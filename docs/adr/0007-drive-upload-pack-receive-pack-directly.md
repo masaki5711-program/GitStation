@@ -153,3 +153,27 @@ fetch / clone は `Git-Protocol` ヘッダを `GIT_PROTOCOL` として渡し pro
     （`FG-WEB-0002 operation=git_request_body kind=total`）。遅い要求を何本も開いて本文をため込ませることを防ぐ。
 - **残り**: git 2.43 の v2 の広告は `object-info` を含む（forge は要求を拒むので害はないが、広告から外す設定を確かめる）。
   ref の多いリポジトリでの確認の費用の監視（`check_ms` をメトリクスにする）、bitmap / キャッシュ。
+
+## Amendment（2026-11-01、M1 phase 9 MR4: push の公開）
+
+receive-pack を `RepoPush` のルートとして公開した（`feat/web-smart-http-push`）。判定の流れは ADR-0008 の M1 段階 9 MR4 の
+Amendment（案 B）。転送の面で決めた点:
+
+- **ルート**: `GET|HEAD {path}.git/info/refs?service=git-receive-pack`（広告。receive-pack には v2 がないので常に
+  `# service=` の前置き）と `POST {path}.git/git-receive-pack`。どちらもプロジェクトの `RepoPush` を本文より前に判定する。
+  `moved` の墓石を通る push は、広告も POST も `FG-REPO-0005 reason=tombstone_push`（404）のまま。
+- **コマンド部の読み方**（`forge_git::receive_request::CommandParser`）: 本文が届くたびに続きから読む（1 バイトを 2 度読まない）。
+  `shallow` 行はコマンドの前だけ、capability は最初のコマンドだけで、receive-pack が広告するもの（`report-status(-v2)`、
+  `side-band-64k`、`quiet`、`atomic`、`ofs-delta`、`delete-refs`、`object-format`、`agent`、`session-id`）以外は
+  `FG-GIT-0014 reason=capability_unsupported`（`push-options` も。広告していない）。oid は交渉した形式の小文字の 16 進数。
+  git の「大きい push の前の確かめ」（本文が `0000` だけ、`http.postBuffer` を超えるとき）は git を起動せずに 200 で答える。
+- **上限**: パックは `git.http.push_max_bytes`（既定 2 GiB、`receive.maxInputSize`）、forge が転送する本文は生でも展開後でも
+  それ + 1 MiB まで（`FG-GIT-0013 limit=push_body`、git を殺し ref は変わらない）。コマンド部は `body_timeout_ms` 以内、
+  パックは全体 `timeout_ms`、無通信 `idle_timeout_ms`。拒否した push の本文は 64 MiB まで読み捨てる。
+- **答えの読み方**（`forge_git::receive_report::ReportRewriter`）: side-band 2 / 3 はすぐに流し、report-status（band 1 の中、または
+  そのままの pkt-line）は最後まで（4 MiB まで）ためてから、保護 ref の `non-fast-forward` を FG-GIT-0007 に書き換えて流す。
+  読めない答えは手を加えずに流し、`FG-GIT-0003 reason=report_unreadable` をログに出す（記録はしない）。
+- **切断**: 本文の途中でクライアントが切れたら receive-pack を殺す（ref はまだ変わらない、`FG-GIT-0015 phase=request_body`）。
+  本文を受け取り終えた後は、receive-pack はリクエストが持たないタスクで最後まで動く。
+- **tripwire**: forge-web が git を使ってよいファイルは `routes/git.rs`、`routes/git_push.rs`、`git_stream.rs`
+  （`forge_web_runs_git_only_through_smart_http_api`）。
