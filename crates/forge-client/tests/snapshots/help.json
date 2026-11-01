@@ -1,0 +1,367 @@
+{
+  "api_version": "v1",
+  "commands": [
+    {
+      "args": [
+        {
+          "description": "Read the token from standard input (never prompts, never an argument).",
+          "kind": "flag",
+          "name": "--with-token",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn auth login --with-token < token.txt",
+        "echo $TOKEN | gstn --host https://git.example.internal auth login --with-token"
+      ],
+      "name": "auth login",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "stored_in": {
+            "enum": [
+              "keyring",
+              "file"
+            ]
+          },
+          "token_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "username",
+          "is_agent",
+          "token_scopes",
+          "stored_in"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Verify a token against the server and store it (OS credential store, else a 0600 file)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auth status --json"
+      ],
+      "name": "auth status",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "logged_in": {
+            "const": true
+          },
+          "token_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token_source": {
+            "enum": [
+              "env",
+              "keyring",
+              "file"
+            ]
+          },
+          "user": {
+            "required": [
+              "id",
+              "username",
+              "display_name",
+              "is_admin",
+              "is_agent"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "host",
+          "logged_in",
+          "user",
+          "token_scopes",
+          "token_source"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show who the stored token belongs to: user, scopes, is_agent. Never the token."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auth logout"
+      ],
+      "name": "auth logout",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Remove the stored token for the host (does not revoke it on the server)."
+    },
+    {
+      "args": [
+        {
+          "description": "get | store | erase (git passes it; reads key=value lines on stdin).",
+          "kind": "positional",
+          "name": "operation",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Register this helper for the configured host: git config --global credential.<host>.helper.",
+          "kind": "flag",
+          "name": "--install",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn auth git-credential --install",
+        "git clone https://git.example.internal/team/app.git"
+      ],
+      "name": "auth git-credential",
+      "output": {
+        "description": "--install only; get/store/erase speak the git credential protocol on stdout",
+        "properties": {
+          "git_config_key": {
+            "type": "string"
+          },
+          "helper": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "installed",
+          "git_config_key",
+          "helper"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [
+        "read_repository",
+        "write_repository"
+      ],
+      "summary": "git credential helper for the configured host only (get/store/erase), or --install it in the global git config."
+    },
+    {
+      "args": [
+        {
+          "description": "GET | POST | PUT | PATCH | DELETE",
+          "kind": "positional",
+          "name": "method",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A path on the configured host, e.g. /api/v1/projects",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "key=value (a string) or key:=<json> (a JSON value).",
+          "kind": "option",
+          "name": "--field",
+          "repeatable": true,
+          "required": false
+        },
+        {
+          "description": "Send this file (or - for stdin) as the JSON body.",
+          "kind": "option",
+          "name": "--input",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "GET only: follow next_cursor and merge all items into one list.",
+          "kind": "flag",
+          "name": "--paginate",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Print the request that would be sent (no token) and send nothing.",
+          "kind": "flag",
+          "name": "--dry-run",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn api GET /api/v1/projects --paginate",
+        "gstn api POST /api/v1/projects --field name=app --field 'parent_id:=12'",
+        "gstn api PUT /api/v1/projects/7/visibility --input body.json"
+      ],
+      "name": "api",
+      "output": {
+        "description": "the response body of API v1, as sent (a list when --paginate)"
+      },
+      "routes": [],
+      "scopes": [
+        "read_api",
+        "api"
+      ],
+      "summary": "Call any REST API v1 route: gstn api <METHOD> <path>. GET/DELETE fields become the query, other methods send a JSON body."
+    },
+    {
+      "args": [
+        {
+          "description": "Limit to one command, e.g. auth login.",
+          "kind": "positional",
+          "name": "command",
+          "repeatable": true,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn help --json"
+      ],
+      "name": "help",
+      "output": {
+        "required": [
+          "gstn_version",
+          "api_version",
+          "global_args",
+          "exit_codes",
+          "commands"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Describe the commands; with --json, every command, argument, example, required scope and route."
+    },
+    {
+      "args": [
+        {
+          "description": "The command path, e.g. auth login.",
+          "kind": "positional",
+          "name": "command",
+          "repeatable": true,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn schema auth status"
+      ],
+      "name": "schema",
+      "output": {
+        "required": [
+          "command",
+          "summary",
+          "args",
+          "output",
+          "exit_codes"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "The machine-readable description of one command: arguments, output JSON Schema, exit codes."
+    }
+  ],
+  "exit_codes": [
+    {
+      "code": 0,
+      "meaning": "success"
+    },
+    {
+      "code": 1,
+      "meaning": "other failure"
+    },
+    {
+      "code": 2,
+      "meaning": "usage or configuration error"
+    },
+    {
+      "code": 3,
+      "meaning": "not authenticated, or not allowed"
+    },
+    {
+      "code": 4,
+      "meaning": "not found"
+    },
+    {
+      "code": 5,
+      "meaning": "conflict"
+    },
+    {
+      "code": 6,
+      "meaning": "temporary failure; retrying may help"
+    }
+  ],
+  "global_args": [
+    {
+      "description": "Machine-readable output: JSON on stdout, and on failure a JSON error {error_code,user_message,request_id,retryable,detail} on stderr.",
+      "kind": "flag",
+      "name": "--json",
+      "repeatable": false,
+      "required": false
+    },
+    {
+      "description": "Server base URL (https://…); overrides GSTN_HOST and config.toml.",
+      "kind": "option",
+      "name": "--host",
+      "repeatable": false,
+      "required": false
+    },
+    {
+      "description": "Comma-separated top-level fields to keep in --json output (applied to each item of a list).",
+      "kind": "option",
+      "name": "--fields",
+      "repeatable": false,
+      "required": false
+    }
+  ],
+  "gstn_version": "<version>"
+}

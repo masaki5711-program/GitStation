@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-web", "crates/forge-cli"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"

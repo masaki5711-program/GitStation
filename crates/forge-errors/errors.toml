@@ -1052,3 +1052,97 @@ fix = "Restore the rows from the audit log or a backup through an approved runbo
 runbook = "namespace-data"
 test = "a_moved_target_path_that_does_not_parse_is_namespace_data_invalid"
 # ── end M1 phase 8 MR3 ─────────────────────────────────────────────────
+
+# ── M1 gstn core: client-side codes (area CLI; http_status is the nominal class) ──
+[[error]]
+code = "FG-CLI-0001"
+name = "CliUsageInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "コマンドの使い方が正しくありません。`gstn help` を確認してください。"
+user_message_en = "The command was used incorrectly. Check `gstn help`."
+user_message_id = "Perintah digunakan dengan tidak benar. Periksa `gstn help`."
+cause = "A `gstn` command line was rejected before any request was sent: an unknown command, a missing or conflicting argument, a malformed `--field k=v`, an unreadable `--input` file, a path that is not a path on the configured host, or `auth login` without `--with-token` (gstn never prompts, plan 01 §3.11 C-4)."
+diagnosis = "The error is printed on stderr with `reason` in the detail line. Compare with `gstn help --json` (all commands and arguments) and `gstn schema <command>`."
+fix = "Correct the command line; exit code 2."
+test = "cli_usage_errors_exit_2"
+
+[[error]]
+code = "FG-CLI-0002"
+name = "CliNotLoggedIn"
+http_status = 401
+severity = "info"
+user_message_ja = "ログインしていません。`gstn auth login --with-token` を実行してください。"
+user_message_en = "You are not logged in. Run `gstn auth login --with-token`."
+user_message_id = "Anda belum masuk. Jalankan `gstn auth login --with-token`."
+cause = "No token is stored for the configured host (and GSTN_TOKEN is not set), or the credential store holding it could not be read."
+diagnosis = "`gstn auth status --json` shows the host and whether a token exists (never the token). A credential store that exists but fails is reported as a warning on stderr before this error."
+fix = "Issue a token in the GitStation web UI and run `gstn auth login --with-token < token-file`; exit code 3."
+test = "not_logged_in_exits_3"
+
+[[error]]
+code = "FG-CLI-0003"
+name = "CliServerUnreachable"
+http_status = 503
+severity = "warn"
+user_message_ja = "GitStation サーバーに接続できません。しばらくしてからもう一度試してください。"
+user_message_en = "The GitStation server could not be reached. Try again shortly."
+user_message_id = "Server GitStation tidak dapat dihubungi. Coba lagi sebentar lagi."
+cause = "A request failed before an HTTP response was read: DNS, connection refused, timeout (connect or total), or a TLS failure (certificate not trusted, hostname mismatch). Retryable."
+diagnosis = "The detail line carries `reason` (`connect`, `timeout`, `tls`, `other`) and the host. For `tls` the CA bundle is the cause: the system store is used plus `ca_file` in config.toml / `GSTN_CA_FILE`. Check `forge doctor` on the server and the reverse proxy."
+fix = "Fix the network or certificate path; retry. Exit code 6 (`retryable: true` in the JSON error)."
+test = "unreachable_server_exits_6_and_is_retryable"
+
+[[error]]
+code = "FG-CLI-0004"
+name = "CliResponseInvalid"
+http_status = 502
+severity = "warn"
+user_message_ja = "サーバーの応答を解釈できませんでした。サーバーの版を確認してください。"
+user_message_en = "The server response could not be understood. Check the server version."
+user_message_id = "Respons server tidak dapat dipahami. Periksa versi server."
+cause = "The server answered with a body that is not the API v1 shape (not JSON, an error body without `error_code`, an unexpected redirect, a body above the size limit, a repeated pagination cursor) — typically a proxy page or a server of another version."
+diagnosis = "The detail line carries `reason` and the HTTP status. Fetch the same path with `gstn api GET /healthz` and compare with docs/api/openapi.json of the server's version."
+fix = "Point `host` at the GitStation server itself (not a login page or proxy); upgrade gstn or the server to matching versions. Exit code 1."
+test = "non_api_response_is_response_invalid"
+
+[[error]]
+code = "FG-CLI-0005"
+name = "CliConfigInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "gstn の設定が正しくありません。設定ファイルと環境変数を確認してください。"
+user_message_en = "The gstn configuration is invalid. Check the config file and environment."
+user_message_id = "Konfigurasi gstn tidak valid. Periksa file konfigurasi dan variabel lingkungan."
+cause = "config.toml or a GSTN_* variable is unreadable or invalid, no host is configured, the host is not an https URL (http is allowed only for loopback, or with `allow_http = true`), or the CA bundle file is unreadable."
+diagnosis = "The detail line carries `config_key` and `reason` (`missing`, `invalid`, `unreadable`, `insecure_scheme`). The token is never sent over a plain-http host."
+fix = "Set `host` in config.toml (`gstn` prints the path in the detail) or pass `--host`; exit code 2."
+test = "config_without_host_is_config_invalid"
+
+[[error]]
+code = "FG-CLI-0006"
+name = "CliCredentialStoreFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "トークンを保存できませんでした。保存先の権限を確認してください。"
+user_message_en = "The token could not be stored. Check the permissions of the storage location."
+user_message_id = "Token tidak dapat disimpan. Periksa izin lokasi penyimpanan."
+cause = "Neither the OS credential store (Windows Credential Manager, Linux Secret Service) nor the 0600 file fallback accepted the token."
+diagnosis = "The detail line carries `backend` and `reason`. Linux without a Secret Service (no desktop session, headless) falls back to the file; this code means the file failed too (directory not writable, mode could not be set)."
+fix = "Make the config directory writable (GSTN_CONFIG_DIR) or start a Secret Service; exit code 1."
+test = "credential_file_failure_is_credential_store_failed"
+
+# ── end gstn core ──
+
+[[error]]
+code = "FG-CLI-0007"
+name = "CliOutputFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "出力を書き込めませんでした。出力先が閉じられていないか確認してください。"
+user_message_en = "The output could not be written. Check that the output is not closed."
+user_message_id = "Output tidak dapat ditulis. Pastikan tujuan output tidak tertutup."
+cause = "Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran."
+diagnosis = "The detail line carries `stream` (stdout or stderr) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`."
+fix = "Fix the redirection or the reader of the pipe and run the read-only command again; exit code 1."
+test = "closed_stdout_is_output_failed"
