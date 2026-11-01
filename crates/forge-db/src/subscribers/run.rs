@@ -310,9 +310,18 @@ async fn count_refused_commit(
         .map_err(|e| query_error("subscribers.begin", e))?;
     let now = match cursor::claim(&mut tx, subscriber, Wait::Bounded).await? {
         Some(Some(now)) if now.last_seq == attempt.cursor.last_seq => now,
-        // Held, disabled or moved meanwhile: not counted here; the next
-        // step meets the event again.
-        Some(_) | None => return Err(refused.with_context("counted", false)),
+        // Held (even after the wait), disabled or moved meanwhile: not
+        // counted here, and said so; the next step meets the event again.
+        claimed => {
+            let why = match claimed {
+                None => "row_held",
+                Some(None) => "disabled",
+                Some(Some(_)) => "moved",
+            };
+            return Err(refused
+                .with_context("counted", false)
+                .with_context("not_counted", why));
+        }
     };
     let attempt = Attempt {
         cursor: now,
