@@ -17,15 +17,6 @@ pub enum Coverage {
     Planned(&'static str),
 }
 
-/// The series that adds the rest of the hosting routes (a protected ref's
-/// role change, a project's visibility), with namespace move / transfer.
-const HOSTING_MORE: &str = "feat/client-gstn-hosting-more";
-
-/// The namespace moves of step D5 MR5 (project / group transfer and rename,
-/// user rename, tombstone release): `gstn repo rename|transfer` and the
-/// group / namespace commands arrive with the hosting-more series.
-const NAMESPACE_MOVES: &str = HOSTING_MORE;
-
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
     ("GET", "/api/v1/groups", Coverage::Command("group list")),
@@ -68,7 +59,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "POST",
         "/api/v1/groups/{id}/transfer",
-        Coverage::Planned(NAMESPACE_MOVES),
+        Coverage::Command("group move"),
     ),
     (
         "GET",
@@ -78,7 +69,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "POST",
         "/api/v1/namespaces/tombstones/release",
-        Coverage::Planned(NAMESPACE_MOVES),
+        Coverage::Command("namespace release-path"),
     ),
     ("GET", "/api/v1/projects", Coverage::Command("project list")),
     (
@@ -109,7 +100,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "POST",
         "/api/v1/projects/{id}/transfer",
-        Coverage::Planned(NAMESPACE_MOVES),
+        Coverage::Command("project move"),
     ),
     (
         "GET",
@@ -144,7 +135,7 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "PATCH",
         "/api/v1/projects/{id}/protected-refs/{rule_id}",
-        Coverage::Planned(HOSTING_MORE),
+        Coverage::Command("protected-ref edit"),
     ),
     (
         "DELETE",
@@ -154,12 +145,12 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     (
         "PUT",
         "/api/v1/projects/{id}/visibility",
-        Coverage::Planned(HOSTING_MORE),
+        Coverage::Command("project visibility"),
     ),
     (
         "POST",
         "/api/v1/users/{id}/rename",
-        Coverage::Planned(NAMESPACE_MOVES),
+        Coverage::Command("user rename"),
     ),
 ];
 

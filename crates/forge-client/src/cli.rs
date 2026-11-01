@@ -33,13 +33,13 @@ pub enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
-    /// Projects: list, view, create, edit, delete, restore.
+    /// Projects: list, view, create, edit, visibility, move, delete, restore.
     #[command(disable_help_subcommand = true)]
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
     },
-    /// Groups: list, view, create, edit.
+    /// Groups: list, view, create, edit, move.
     #[command(disable_help_subcommand = true)]
     Group {
         #[command(subcommand)]
@@ -62,6 +62,12 @@ pub enum Command {
     Namespace {
         #[command(subcommand)]
         command: NamespaceCommand,
+    },
+    /// Users (administrators): rename.
+    #[command(disable_help_subcommand = true)]
+    User {
+        #[command(subcommand)]
+        command: UserCommand,
     },
     /// Call any REST API v1 route.
     Api(ApiArgs),
@@ -274,6 +280,34 @@ pub enum ProjectCommand {
         #[arg(long, value_parser = parse_description)]
         description: Option<String>,
     },
+    /// Set a project's visibility (private | internal). Needs --yes.
+    Visibility {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_enum)]
+        visibility: Visibility,
+        /// Confirm the change (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Move a project to another namespace and/or rename it (--path alone).
+    /// The old path stops working for others. Needs --yes.
+    Move {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The new parent namespace id (a group's or a user's).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        namespace_id: Option<i64>,
+        /// The new last path segment.
+        #[arg(long, value_parser = parse_text)]
+        path: Option<String>,
+        /// Take back an old path of this very project (A -> B -> A).
+        #[arg(long)]
+        reclaim: bool,
+        /// Confirm the move (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
     /// Delete a project (restorable for the grace period).
     Delete {
         #[arg(value_parser = parse_id)]
@@ -312,6 +346,26 @@ pub enum GroupCommand {
         display_name: Option<String>,
         #[arg(long, value_parser = parse_description)]
         description: Option<String>,
+    },
+    /// Move a group (and its subtree) and/or rename it. Needs --yes.
+    Move {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The new parent group's namespace id.
+        #[arg(long, alias = "namespace", value_parser = parse_id, value_name = "ID", conflicts_with = "top_level")]
+        namespace_id: Option<i64>,
+        /// Move to the top level (administrators only).
+        #[arg(long)]
+        top_level: bool,
+        /// The new last path segment.
+        #[arg(long, value_parser = parse_text)]
+        path: Option<String>,
+        /// Take back an old path of this group's subtree.
+        #[arg(long)]
+        reclaim: bool,
+        /// Confirm the move (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -391,6 +445,15 @@ pub enum ProtectedRefCommand {
         #[arg(long, value_enum)]
         push_min_role: PushRole,
     },
+    /// Change a rule's minimum push role (the pattern is fixed).
+    Edit {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        rule_id: i64,
+        #[arg(long, value_enum)]
+        push_min_role: PushRole,
+    },
     /// Remove a rule.
     Remove {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
@@ -410,6 +473,33 @@ pub enum NamespaceCommand {
         /// The full path, e.g. `team/app`.
         #[arg(value_parser = parse_text)]
         path: String,
+    },
+    /// Release a moved/deleted path's tombstone so it can be used again. Needs --yes.
+    #[command(name = "release-path")]
+    ReleasePath {
+        /// The tombstoned full path, exactly (`group/sub/project`).
+        #[arg(value_parser = parse_text)]
+        path: String,
+        /// Confirm the release (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum UserCommand {
+    /// Rename a user and their personal namespace (administrators). Needs --yes.
+    Rename {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long, value_parser = parse_text)]
+        username: String,
+        /// Take back an old username of this very user.
+        #[arg(long)]
+        reclaim: bool,
+        /// Confirm the rename (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
     },
 }
 
