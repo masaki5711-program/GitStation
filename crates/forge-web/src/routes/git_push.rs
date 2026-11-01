@@ -260,6 +260,30 @@ async fn receive_pack_inner(
         .map(|n| n.as_str().to_owned())
         .collect();
 
+    // 4a. git refuses a non-fast-forward per ref; with more than one
+    // command a push updating a protected branch becomes atomic, so it is
+    // applied as a whole or not at all (as forge's own refusals are).
+    let deny_nff = parsed.commands.iter().any(|c| {
+        !c.is_delete()
+            && c.name
+                .as_ref()
+                .is_ok_and(|n| protected.contains(n.as_str()))
+    });
+    let mut decided = decided;
+    if deny_nff && parsed.commands.len() > 1 && !parsed.atomic() {
+        match parsed.with_atomic(&buffered) {
+            Ok(atomic) => buffered = atomic,
+            // A first command too long to take ` atomic`: refused in-band
+            // with the push, like the other pre-checks.
+            Err(e) if e.code() == ErrorCode::GitProtocolInvalid => {
+                if let Some(first) = decided.first_mut() {
+                    first.denial = Some(e);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
     // 3. Any refusal refuses the whole push, before git runs.
     if decided.iter().any(|d| d.denial.is_some()) {
         let drained = body.drain(DRAIN_MAX).await;
@@ -267,13 +291,7 @@ async fn receive_pack_inner(
         return refuse(&log, &parsed, decided, drained.err());
     }
 
-    // 4. receive-pack gets the original bytes.
-    let deny_nff = parsed.commands.iter().any(|c| {
-        !c.is_delete()
-            && c.name
-                .as_ref()
-                .is_ok_and(|n| protected.contains(n.as_str()))
-    });
+    // 4. receive-pack gets the original bytes (`atomic` added above).
     let mut cmd = smart.git.receive_pack(
         &smart.storage,
         repository.id,
@@ -311,13 +329,6 @@ async fn receive_pack_inner(
         ),
         scrub: vec![smart.storage.path().to_string_lossy().into_owned()],
     };
-    // git refuses a non-fast-forward of a protected branch per ref; with
-    // more than one command the push becomes atomic, so it is applied as a
-    // whole or not at all (as forge's own refusals are).
-    let add_atomic = deny_nff && parsed.commands.len() > 1 && !parsed.atomic();
-    if add_atomic {
-        buffered = parsed.with_atomic(&buffered)?;
-    }
     let task = Receiver {
         smart: Arc::clone(&smart),
         recorder: Arc::clone(&push.recorder),
@@ -334,7 +345,9 @@ async fn receive_pack_inner(
         answer: Some(answer_tx),
         bytes_in: 0,
     };
-    tokio::spawn(task.run(stream, stdout, body_rx));
+    // Counted before the spawn: `wait_idle` never sees 0 in between.
+    let guard = smart.push_tasks.start();
+    tokio::spawn(task.run(stream, stdout, body_rx, guard));
 
     // The body, verbatim, to git (the pack streamed as it arrives). A
     // failure here ends the request; dropping `body_tx` kills git.
@@ -610,8 +623,8 @@ impl Receiver {
         stream: GitStream,
         mut stdout: GitStdout,
         mut body: oneshot::Receiver<BodyEnd>,
+        _task: super::git::PushTask,
     ) {
-        let _task = self.smart.push_tasks.start();
         let mut body_done = false;
         let mut buf = vec![0u8; CHUNK];
         let read_error = loop {

@@ -254,3 +254,23 @@ fn atomic_is_added_to_the_first_command_only() {
     // Already atomic: unchanged.
     assert_eq!(again.with_atomic(&atomic).expect("same"), atomic);
 }
+
+/// A first command line within 7 bytes of the pkt-line limit cannot take
+/// ` atomic`: a client-side protocol limit (FG-GIT-0014), not a forge bug.
+#[test]
+fn atomic_that_does_not_fit_the_packet_is_a_protocol_error() {
+    let fixed = format!("{A} {B} refs/heads/main\0report-status agent=\n").len();
+    let agent = "a".repeat(crate::pkt_line::MAX_PKT_DATA - 3 - fixed);
+    let mut body = first(
+        A,
+        B,
+        "refs/heads/main",
+        &format!("report-status agent={agent}"),
+    );
+    body.extend(next(Z, B, "refs/heads/x"));
+    body.extend_from_slice(b"0000");
+    let r = parse(&body).expect("valid");
+    let err = r.with_atomic(&body).expect_err("no room");
+    assert_eq!(err.code(), ErrorCode::GitProtocolInvalid);
+    assert!(reason(&err).contains("detail=atomic_overflow"), "{err}");
+}

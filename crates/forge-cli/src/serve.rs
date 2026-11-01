@@ -75,8 +75,8 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 &forge_core::RequestId::generate(),
             );
         }
-        served?;
         db.close().await;
+        served?;
         tracing::info!("forge.serve.stopped");
         Ok(String::new())
     })

@@ -124,7 +124,9 @@ impl ReceivePackRequest {
     /// git applies all of the push or none of it (M1 phase 9 MR4: a push
     /// that git may refuse in part, `receive.denyNonFastForwards` on a
     /// protected branch). The rest of the bytes is unchanged. receive-pack
-    /// advertises `atomic` (`receive.advertiseAtomic`, git's default).
+    /// advertises `atomic` (`receive.advertiseAtomic`, git's default). A
+    /// first line too long to take ` atomic` within one packet is
+    /// `FG-GIT-0014 reason=pkt_line detail=atomic_overflow`.
     pub fn with_atomic(&self, body: &[u8]) -> Result<Vec<u8>, ForgeError> {
         if self.atomic() {
             return Ok(body.to_vec());
@@ -146,6 +148,13 @@ impl ReceivePackRequest {
         new.extend_from_slice(b" atomic");
         if newline {
             new.push(b'\n');
+        }
+        if new.len() > pkt_line::MAX_PKT_DATA {
+            // The client's line leaves no room for ` atomic`: a protocol
+            // limit of this push, refused like the other pre-checks.
+            return Err(refused("pkt_line")
+                .with_context("detail", "atomic_overflow")
+                .with_context("len", new.len()));
         }
         let mut out = Vec::with_capacity(body.len() + 7);
         out.extend_from_slice(body.get(..at).unwrap_or_default());
