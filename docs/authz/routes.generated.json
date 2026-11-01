@@ -80,7 +80,7 @@
     "word": "fixed"
   },
   {
-    "action": "SessionList",
+    "action": "AdminSessionList",
     "method": "GET",
     "path": "/api/v1/admin/users/{id}/sessions",
     "public": false,
@@ -88,7 +88,7 @@
     "word": "fixed"
   },
   {
-    "action": "SessionRevoke",
+    "action": "AdminSessionRevoke",
     "method": "DELETE",
     "path": "/api/v1/admin/users/{id}/sessions",
     "public": false,

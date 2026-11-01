@@ -39,8 +39,8 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::action::Action;
 use crate::model::{
     AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
-    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, SessionRoute,
-    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease,
+    TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -470,13 +470,10 @@ pub fn authorize(
             Ok(())
         }
         (Action::TokenList, Resource::Token { owner }) => own_token(*owner),
-        (Action::TokenRevoke, Resource::Token { owner }) => {
-            if admin {
-                Ok(())
-            } else {
-                own_token(*owner)
-            }
-        }
+        // The user's own route (M2 MR6, plan 10 §5): another user's token
+        // is not found for everyone, administrators included (an
+        // administration route for others' tokens is not built yet).
+        (Action::TokenRevoke, Resource::Token { owner }) => own_token(*owner),
 
         (Action::UserCreate | Action::UserAdminList | Action::Metrics, Resource::Instance) => {
             admin_only()
@@ -493,35 +490,23 @@ pub fn authorize(
         // user (the scope was checked above); names only.
         (Action::UserSearch, Resource::Instance) => Ok(()),
 
-        // Web sessions (M2 MR6, ADR-0021 §17).
-        (Action::SessionList | Action::SessionRevoke, Resource::Session { owner, route }) => {
-            match route {
-                // The user's own route: sessions only (a token never sees
-                // or ends a browser session), and another user's session is
-                // not found — administrators included (they use the
-                // administration route).
-                SessionRoute::Own => {
-                    if let Credential::Token(scopes) = principal.credential() {
-                        let held: Vec<&str> = scopes.iter().map(|s| s.as_str()).collect();
-                        return Err(deny(ErrorCode::InsufficientScope)
-                            .with_context("reason", "session_required")
-                            .with_context("token_scopes", held.join(",")));
-                    }
-                    if *owner == user {
-                        Ok(())
-                    } else {
-                        Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_session"))
-                    }
-                }
-                // The administration's route: administrator rights; ending
-                // someone's sessions is a person's decision.
-                SessionRoute::Admin => {
-                    if action == Action::SessionRevoke {
-                        people_only()?;
-                    }
-                    admin_only()
-                }
+        // Web sessions (M2 MR6, ADR-0021 §17). The user's own route is
+        // session-only (a token was refused above, before the lookup), and
+        // another user's session is not found — administrators included
+        // (they use the administration's route).
+        (Action::SessionList | Action::SessionRevoke, Resource::Session { owner }) => {
+            if *owner == user {
+                Ok(())
+            } else {
+                Err(deny(ErrorCode::NotFound).with_context("reason", "foreign_session"))
             }
+        }
+        // The administration's route: administrator rights; ending
+        // someone's sessions is a person's decision.
+        (Action::AdminSessionList, Resource::Session { .. }) => admin_only(),
+        (Action::AdminSessionRevoke, Resource::Session { .. }) => {
+            people_only()?;
+            admin_only()
         }
 
         // Every active signed-in user reads their own account (the scope
@@ -584,6 +569,8 @@ pub fn authorize(
             | Action::SessionRead
             | Action::SessionList
             | Action::SessionRevoke
+            | Action::AdminSessionList
+            | Action::AdminSessionRevoke
             | Action::SessionCreate
             | Action::SessionContinue
             | Action::SessionLogout

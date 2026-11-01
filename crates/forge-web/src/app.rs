@@ -92,6 +92,8 @@ pub struct AppState {
     pub callback_limiter: Arc<routes::auth::LoginLimiter>,
     /// `resolve?prefix=true`'s rate limit per caller (M2 MR6, `FG-WEB-0010`).
     pub resolve_limiter: Arc<routes::namespaces::PrefixLimiter>,
+    /// The user search's rate limit per caller (M2 MR6, `FG-WEB-0010`).
+    pub search_limiter: Arc<routes::namespaces::CallerLimiter>,
 }
 
 /// Path → namespace and project-by-id lookups (`forge serve` passes the
@@ -129,6 +131,7 @@ impl AppState {
             login_limiter: Arc::default(),
             callback_limiter: Arc::default(),
             resolve_limiter: Arc::default(),
+            search_limiter: Arc::new(routes::directory::search_limiter()),
         }
     }
 
@@ -468,7 +471,7 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
         .route_with(
             Verb::Get,
             s::ADMIN,
-            Action::SessionList,
+            Action::AdminSessionList,
             "A user's active web sessions (administrators)",
             s::UserSessions,
             s::list,
@@ -477,7 +480,7 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
         .route_with(
             Verb::Delete,
             s::ADMIN,
-            Action::SessionRevoke,
+            Action::AdminSessionRevoke,
             "End every web session of a user (administrators, never an agent)",
             s::UserSessions,
             s::revoke_all,

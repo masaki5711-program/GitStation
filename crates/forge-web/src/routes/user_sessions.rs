@@ -1,16 +1,18 @@
 //! Web sessions as their owner and the administration see them (M2 MR6,
-//! ADR-0021 §17): `SessionList` / `SessionRevoke` on `Resource::Session`.
+//! ADR-0021 §17), all on `Resource::Session`.
 //!
-//! - `GET /api/v1/user/sessions`: the caller's active sessions, with the
-//!   one this request came with marked `current`. Sessions only (a token is
-//!   `FG-AUTH-0002 reason=session_required`).
-//! - `DELETE /api/v1/user/sessions/{public_id}`: end one of them
+//! - `GET /api/v1/user/sessions` (`SessionList`): the caller's active
+//!   sessions, with the one this request came with marked `current`.
+//!   Sessions only (a token is `FG-AUTH-0002 reason=session_required`,
+//!   decided before the lookup, so a token learns nothing of a session).
+//! - `DELETE /api/v1/user/sessions/{public_id}` (`SessionRevoke`, sessions
+//!   only): end one of them
 //!   (`reason=logout`). The loader reads the session's owner; another
 //!   user's session is the same `FG-REPO-0005` as an absent one —
 //!   administrators included (they use the administration's route).
-//! - `GET /api/v1/admin/users/{id}/sessions`: a user's active sessions
+//! - `GET /api/v1/admin/users/{id}/sessions` (`AdminSessionList`): a user's active sessions
 //!   (administrator rights; a token needs the `admin` scope).
-//! - `DELETE /api/v1/admin/users/{id}/sessions`: end every session of the
+//! - `DELETE /api/v1/admin/users/{id}/sessions` (`AdminSessionRevoke`): end every session of the
 //!   user (`reason=admin`, one `session.revoked_all` audit row; never an
 //!   agent). An unknown user is `FG-REPO-0005`.
 //!
@@ -20,7 +22,7 @@
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::{SessionCtx, SessionRoute};
+use forge_auth::SessionCtx;
 use forge_core::{parse_positive_id, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_hosting::accounts::{is_session_public_id, SessionInfo};
@@ -118,7 +120,7 @@ impl Loader<AppState> for OwnSessions {
         _: &'a Parts,
         viewer: Option<UserId>,
     ) -> LoadFuture<'a, SessionCtx> {
-        Box::pin(async move { Ok(found(SessionCtx::new(me(viewer)?, None, SessionRoute::Own))) })
+        Box::pin(async move { Ok(found(SessionCtx::new(me(viewer)?, None))) })
     }
 }
 
@@ -149,9 +151,7 @@ impl Loader<AppState> for OwnSessionToRevoke {
                 )
                 .await?
                 {
-                    Some((session, owner)) => {
-                        found(SessionCtx::new(owner, Some(session), SessionRoute::Own))
-                    }
+                    Some((session, owner)) => found(SessionCtx::new(owner, Some(session))),
                     None => absent(),
                 },
             )
@@ -170,13 +170,7 @@ impl Loader<AppState> for UserSessions {
         parts: &'a Parts,
         _: Option<UserId>,
     ) -> LoadFuture<'a, SessionCtx> {
-        Box::pin(async move {
-            Ok(found(SessionCtx::new(
-                admin_target(parts)?,
-                None,
-                SessionRoute::Admin,
-            )))
-        })
+        Box::pin(async move { Ok(found(SessionCtx::new(admin_target(parts)?, None))) })
     }
 }
 

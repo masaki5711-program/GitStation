@@ -108,14 +108,20 @@ actions! {
     /// token is `FG-AUTH-0002 reason=session_required` (a token has no
     /// session to read, and must never learn a CSRF token).
     SessionRead,
-    /// `GET /api/v1/user/sessions` (one's own, sessions only) and `GET
-    /// /api/v1/admin/users/{id}/sessions` (administrators), M2 MR6,
-    /// ADR-0021 §17 (`Resource::Session`).
+    /// `GET /api/v1/user/sessions`: one's own web sessions (M2 MR6,
+    /// ADR-0021 §17, `Resource::Session`). Sessions only, so a token is
+    /// refused before anything is looked up.
     SessionList,
-    /// `DELETE /api/v1/user/sessions/{id}` (one's own, sessions only) and
-    /// `DELETE /api/v1/admin/users/{id}/sessions` (administrators, every
-    /// active session of the user), M2 MR6, ADR-0021 §17.
+    /// `DELETE /api/v1/user/sessions/{public_id}`: end one of one's own
+    /// sessions; another user's is not found, administrators included.
+    /// Sessions only.
     SessionRevoke,
+    /// `GET /api/v1/admin/users/{id}/sessions`: a user's sessions
+    /// (administrator rights; a token needs the `admin` scope).
+    AdminSessionList,
+    /// `DELETE /api/v1/admin/users/{id}/sessions`: end every session of a
+    /// user (administrator rights, never an agent).
+    AdminSessionRevoke,
     /// `GET /-/auth/login`, `GET /-/auth/callback`: start and finish the
     /// OIDC sign-in (M2 MR4, ADR-0021 §3). Public: the caller has no
     /// session yet; what the callback admits is decided by `SessionCreate`.
@@ -176,7 +182,11 @@ impl Action {
     pub fn is_session_only(self) -> bool {
         matches!(
             self,
-            Action::SessionRead | Action::SessionLogout | Action::TokenCreate
+            Action::SessionRead
+                | Action::SessionLogout
+                | Action::TokenCreate
+                | Action::SessionList
+                | Action::SessionRevoke
         )
     }
 
@@ -197,6 +207,8 @@ impl Action {
             | Action::WebShell
             | Action::SessionRead
             | Action::TokenCreate
+            | Action::SessionList
+            | Action::SessionRevoke
             | Action::WebLogin
             | Action::SessionCreate
             | Action::SessionContinue
@@ -212,7 +224,7 @@ impl Action {
             | Action::GroupRead
             | Action::GroupList
             | Action::TokenList
-            | Action::SessionList
+            | Action::AdminSessionList
             | Action::UserSearch
             | Action::UserAdminList
             | Action::AuditRead
@@ -234,7 +246,7 @@ impl Action {
             | Action::NamespaceTombstoneRelease
             | Action::UserRename
             | Action::TokenRevoke
-            | Action::SessionRevoke
+            | Action::AdminSessionRevoke
             | Action::UserCreate
             | Action::UserDisable => Some(Scope::Api),
         }

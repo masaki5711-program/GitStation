@@ -7,7 +7,6 @@ use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Expect::Allow, Fixture as F, Row};
 use crate::model::{
     AdmissionAccount as AA, MembershipChange as M, RefKind, RefUpdate as U, Role as R,
-    SessionRoute as SR,
 };
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
@@ -39,8 +38,8 @@ const fn pc(from: Option<R>, to: Option<R>) -> F {
     F::ProtectionChange { from, to }
 }
 
-const fn ses(own: bool, route: SR) -> F {
-    F::Session { own, route }
+const fn ses(own: bool) -> F {
+    F::Session { own }
 }
 
 const fn adm(access_role: bool, account: AA) -> F {
@@ -657,7 +656,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::TokenRevoke, W::DevTokenReadRepository, F::OwnToken, deny(E::InsufficientScope)),
     row(A::TokenRevoke, W::Reporter, F::ForeignToken, deny(E::NotFound)),
     row(A::TokenRevoke, W::AdminTokenApi, F::ForeignToken, deny(E::NotFound)),
-    row(A::TokenRevoke, W::Admin, F::ForeignToken, Allow),
+    row(A::TokenRevoke, W::Admin, F::ForeignToken, deny(E::NotFound)),
     // M2 MR6: the token routes (`/api/v1/user/tokens`)
     row(A::TokenCreate, W::Anonymous, F::OwnTokenRequest, deny(E::Unauthenticated)),
     row(A::TokenCreate, W::Disabled, F::OwnTokenRequest, deny(E::AccountDisabled)),
@@ -674,43 +673,57 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::TokenRevoke, W::Disabled, F::OwnToken, deny(E::AccountDisabled)),
     row(A::TokenRevoke, W::OwnerTokenReadApi, F::OwnToken, deny(E::InsufficientScope)),
     row(A::TokenRevoke, W::AgentTokenApi, F::OwnToken, Allow),
-    row(A::TokenRevoke, W::AdminTokenAdmin, F::ForeignToken, Allow),
+    row(A::TokenRevoke, W::AdminTokenAdmin, F::ForeignToken, deny(E::NotFound)),
+    row(A::TokenRevoke, W::AgentAdminTokenAdmin, F::ForeignToken, deny(E::NotFound)),
+    // no existence oracle: a foreign token and an absent one answer alike
+    row(A::TokenRevoke, W::DevTokenApi, F::ForeignToken, deny(E::NotFound)),
+    row(A::TokenRevoke, W::DevTokenApi, F::Absent, deny(E::NotFound)),
+    row(A::TokenRevoke, W::Reporter, F::Absent, deny(E::NotFound)),
     // --- Sessions (M2 MR6, ADR-0021 §17) ---
     // the own route: sessions only; another user's session is not found
-    row(A::SessionList, W::Developer, ses(true, SR::Own), Allow),
-    row(A::SessionList, W::Admin, ses(true, SR::Own), Allow),
-    row(A::SessionList, W::Anonymous, ses(true, SR::Own), deny(E::Unauthenticated)),
-    row(A::SessionList, W::Disabled, ses(true, SR::Own), deny(E::AccountDisabled)),
-    row(A::SessionList, W::OwnerTokenReadApi, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionList, W::AdminTokenAdmin, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionList, W::DevTokenReadRepository, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionList, W::Developer, ses(false, SR::Own), deny(E::NotFound)),
-    row(A::SessionList, W::Admin, ses(false, SR::Own), deny(E::NotFound)),
+    row(A::SessionList, W::Developer, ses(true), Allow),
+    row(A::SessionList, W::Admin, ses(true), Allow),
+    row(A::SessionList, W::Anonymous, ses(true), deny(E::Unauthenticated)),
+    row(A::SessionList, W::Disabled, ses(true), deny(E::AccountDisabled)),
+    row(A::SessionList, W::OwnerTokenReadApi, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionList, W::AdminTokenAdmin, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionList, W::DevTokenReadRepository, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionList, W::Developer, ses(false), deny(E::NotFound)),
+    row(A::SessionList, W::Admin, ses(false), deny(E::NotFound)),
+    row(A::SessionRevoke, W::Developer, ses(true), Allow),
+    row(A::SessionRevoke, W::Admin, ses(true), Allow),
+    row(A::SessionRevoke, W::Anonymous, ses(true), deny(E::Unauthenticated)),
+    row(A::SessionRevoke, W::Disabled, ses(true), deny(E::AccountDisabled)),
+    row(A::SessionRevoke, W::DevTokenApi, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::AgentTokenApi, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::AdminTokenAdmin, ses(true), deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::Developer, ses(false), deny(E::NotFound)),
+    row(A::SessionRevoke, W::Admin, ses(false), deny(E::NotFound)),
+    // no existence oracle: a token is refused before the lookup, so an
+    // absent, a foreign and an own session all answer the same 403
+    row(A::SessionRevoke, W::DevTokenApi, ses(false), deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::DevTokenApi, F::Absent, deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::AdminTokenAdmin, F::Absent, deny(E::InsufficientScope)),
+    row(A::SessionRevoke, W::Developer, F::Absent, deny(E::NotFound)),
     // the administration's route: administrator rights
-    row(A::SessionList, W::Admin, ses(false, SR::Admin), Allow),
-    row(A::SessionList, W::AdminTokenAdmin, ses(false, SR::Admin), Allow),
-    row(A::SessionList, W::AgentAdminTokenAdmin, ses(false, SR::Admin), Allow),
-    row(A::SessionList, W::AdminTokenApi, ses(false, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionList, W::Developer, ses(false, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionList, W::Developer, ses(true, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionList, W::DisabledAdmin, ses(false, SR::Admin), deny(E::AccountDisabled)),
-    row(A::SessionList, W::Anonymous, ses(false, SR::Admin), deny(E::Unauthenticated)),
-    row(A::SessionRevoke, W::Developer, ses(true, SR::Own), Allow),
-    row(A::SessionRevoke, W::Admin, ses(true, SR::Own), Allow),
-    row(A::SessionRevoke, W::Anonymous, ses(true, SR::Own), deny(E::Unauthenticated)),
-    row(A::SessionRevoke, W::Disabled, ses(true, SR::Own), deny(E::AccountDisabled)),
-    row(A::SessionRevoke, W::DevTokenApi, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionRevoke, W::AgentTokenApi, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionRevoke, W::AdminTokenAdmin, ses(true, SR::Own), deny(E::InsufficientScope)),
-    row(A::SessionRevoke, W::Developer, ses(false, SR::Own), deny(E::NotFound)),
-    row(A::SessionRevoke, W::Admin, ses(false, SR::Own), deny(E::NotFound)),
-    row(A::SessionRevoke, W::Admin, ses(false, SR::Admin), Allow),
-    row(A::SessionRevoke, W::AdminTokenAdmin, ses(false, SR::Admin), Allow),
-    row(A::SessionRevoke, W::AgentAdminTokenAdmin, ses(false, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionRevoke, W::AdminTokenApi, ses(false, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionRevoke, W::Maintainer, ses(false, SR::Admin), deny(E::Forbidden)),
-    row(A::SessionRevoke, W::DisabledAdmin, ses(false, SR::Admin), deny(E::AccountDisabled)),
-    row(A::SessionRevoke, W::OwnerTokenReadApi, ses(false, SR::Admin), deny(E::InsufficientScope)),
+    row(A::AdminSessionList, W::Admin, ses(false), Allow),
+    row(A::AdminSessionList, W::Admin, ses(true), Allow),
+    row(A::AdminSessionList, W::AdminTokenAdmin, ses(false), Allow),
+    row(A::AdminSessionList, W::AgentAdminTokenAdmin, ses(false), Allow),
+    row(A::AdminSessionList, W::AdminTokenApi, ses(false), deny(E::Forbidden)),
+    row(A::AdminSessionList, W::Developer, ses(false), deny(E::Forbidden)),
+    row(A::AdminSessionList, W::Developer, ses(true), deny(E::Forbidden)),
+    row(A::AdminSessionList, W::DevTokenReadRepository, ses(false), deny(E::InsufficientScope)),
+    row(A::AdminSessionList, W::DisabledAdmin, ses(false), deny(E::AccountDisabled)),
+    row(A::AdminSessionList, W::Anonymous, ses(false), deny(E::Unauthenticated)),
+    row(A::AdminSessionRevoke, W::Admin, ses(false), Allow),
+    row(A::AdminSessionRevoke, W::AdminTokenAdmin, ses(false), Allow),
+    row(A::AdminSessionRevoke, W::AgentAdminTokenAdmin, ses(false), deny(E::Forbidden)),
+    row(A::AdminSessionRevoke, W::AdminTokenApi, ses(false), deny(E::Forbidden)),
+    row(A::AdminSessionRevoke, W::Maintainer, ses(false), deny(E::Forbidden)),
+    row(A::AdminSessionRevoke, W::DisabledAdmin, ses(false), deny(E::AccountDisabled)),
+    row(A::AdminSessionRevoke, W::OwnerTokenReadApi, ses(false), deny(E::InsufficientScope)),
+    row(A::AdminSessionRevoke, W::Anonymous, ses(false), deny(E::Unauthenticated)),
     // --- Users and audit ---
     row(A::UserCreate, W::Admin, F::Instance, Allow),
     row(A::UserCreate, W::Owner, F::Instance, deny(E::Forbidden)),

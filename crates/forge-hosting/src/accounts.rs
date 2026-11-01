@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use forge_auth::{
-    Action, Authorized, SessionCtx, SessionRoute, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
+    Action, Authorized, InstanceCtx, SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx,
     UserTargetCtx,
 };
 use forge_core::{SessionRevokeReason, UserId};
@@ -114,7 +114,12 @@ impl Hosting {
         &self,
         proof: &Authorized<SessionCtx>,
     ) -> Result<SessionList, ForgeError> {
-        require(proof.action(), Action::SessionList)?;
+        if !matches!(
+            proof.action(),
+            Action::SessionList | Action::AdminSessionList
+        ) {
+            require(proof.action(), Action::SessionList)?;
+        }
         sessions::list(&self.db, proof.id().0).await
     }
 
@@ -136,15 +141,21 @@ impl Hosting {
         proof: &Authorized<SessionCtx>,
         request: &WriteRequest,
     ) -> Result<SessionRevokeOutcome, ForgeError> {
-        require(proof.action(), Action::SessionRevoke)?;
+        if !matches!(
+            proof.action(),
+            Action::SessionRevoke | Action::AdminSessionRevoke
+        ) {
+            require(proof.action(), Action::SessionRevoke)?;
+        }
         let user = caller(proof)?;
         let Some(session) = proof.id().1 else {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "session_revoke_without_session"));
         };
-        let reason = match proof.ctx().route() {
-            SessionRoute::Own => SessionRevokeReason::Logout,
-            SessionRoute::Admin => SessionRevokeReason::Admin,
+        let reason = if proof.action() == Action::SessionRevoke {
+            SessionRevokeReason::Logout
+        } else {
+            SessionRevokeReason::Admin
         };
         sessions::revoke(
             &self.db,
@@ -162,10 +173,10 @@ impl Hosting {
         proof: &Authorized<SessionCtx>,
         request: &WriteRequest,
     ) -> Result<i64, ForgeError> {
-        require(proof.action(), Action::SessionRevoke)?;
+        require(proof.action(), Action::AdminSessionRevoke)?;
         let user = caller(proof)?;
         let (owner, session) = *proof.id();
-        if session.is_some() || proof.ctx().route() != SessionRoute::Admin {
+        if session.is_some() {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "revoke_all_needs_the_admin_route"));
         }
@@ -182,7 +193,12 @@ impl Hosting {
 
     /// Active users matching `term` (`UserSearch` was proved on the
     /// instance; names only).
-    pub async fn search_users(&self, term: &str) -> Result<Vec<UserMatch>, ForgeError> {
+    pub async fn search_users(
+        &self,
+        proof: &Authorized<InstanceCtx>,
+        term: &str,
+    ) -> Result<Vec<UserMatch>, ForgeError> {
+        require(proof.action(), Action::UserSearch)?;
         users::search(&self.db, term).await
     }
 
@@ -190,16 +206,20 @@ impl Hosting {
     /// instance).
     pub async fn admin_users(
         &self,
+        proof: &Authorized<InstanceCtx>,
         after: Option<UserId>,
         state: UserStateFilter,
         max_rows: u32,
     ) -> Result<Vec<AdminUserRow>, ForgeError> {
+        require(proof.action(), Action::UserAdminList)?;
         users::admin_page(&self.db, after, state, max_rows).await
     }
 
     /// Disable the proof's user (`UserDisable`), the administration guard
     /// enforced: `FG-AUTH-0009` `last_admin` / `last_owner` refuse it and
-    /// nothing is written. There is no way to force it from here.
+    /// nothing is written. There is no way to force it from here. An
+    /// administrator never disables themself over HTTP (`FG-AUTH-0009
+    /// reason=self_disable`: the operator CLI is the path for that).
     pub async fn disable_user(
         &self,
         proof: &Authorized<UserTargetCtx>,
@@ -207,6 +227,11 @@ impl Hosting {
     ) -> Result<DisableOutcome, ForgeError> {
         require(proof.action(), Action::UserDisable)?;
         let user = caller(proof)?;
+        if *proof.id() == user {
+            return Err(ForgeError::new(ErrorCode::AdministrationConflict)
+                .with_context("reason", "self_disable")
+                .with_context("user", user.get()));
+        }
         users::disable(
             &self.db,
             &change_context(request, proof.principal(), user),

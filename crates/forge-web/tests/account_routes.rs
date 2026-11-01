@@ -723,3 +723,127 @@ async fn an_http_disable_never_passes_the_administration_guard() {
     );
     t.drop_now().await;
 }
+
+/// MR6 review: the own routes never tell a caller whether someone else's
+/// token or session exists — an administrator (or its agent) revoking
+/// another user's token gets the same 404 as for an absent one, and a
+/// token on the session routes gets the same 403 before any lookup.
+#[tokio::test]
+async fn the_own_routes_reveal_nothing_about_other_users_tokens_or_sessions() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice", false).await;
+    let root = user(&t, "root", true).await;
+    let created = call(
+        &t.db,
+        "POST",
+        "/api/v1/user/tokens",
+        Some(session(alice, false)),
+        Some(json!({"name": "ci", "scopes": ["read_api"]})),
+    )
+    .await;
+    let id = created.json["id"].as_i64().expect("id");
+    for who in [
+        session(root, true),
+        token(root, true, &[Scope::Api, Scope::Admin]),
+        token(root, true, &[Scope::Api, Scope::Admin]).as_agent(true),
+    ] {
+        let foreign = call(
+            &t.db,
+            "DELETE",
+            &format!("/api/v1/user/tokens/{id}"),
+            Some(who.clone()),
+            None,
+        )
+        .await;
+        let absent = call(
+            &t.db,
+            "DELETE",
+            "/api/v1/user/tokens/999999",
+            Some(who),
+            None,
+        )
+        .await;
+        assert_eq!(
+            (foreign.status, foreign.code()),
+            (StatusCode::NOT_FOUND, "FG-REPO-0005")
+        );
+        assert_eq!(foreign.without_request_id(), absent.without_request_id());
+    }
+    let listed = call(
+        &t.db,
+        "GET",
+        "/api/v1/user/tokens",
+        Some(session(alice, false)),
+        None,
+    )
+    .await;
+    assert!(
+        listed.json["items"][0]["revoked_at"].is_null(),
+        "still active"
+    );
+
+    // A token on the session routes: the same 403 whatever the id names.
+    let s = issue_session(&t.db, alice).await;
+    let present = format!("/api/v1/user/sessions/{}", s.token.public_id().as_str());
+    let tok = token(alice, false, &[Scope::Api]);
+    let on_present = call(&t.db, "DELETE", &present, Some(tok.clone()), None).await;
+    let on_absent = call(
+        &t.db,
+        "DELETE",
+        "/api/v1/user/sessions/0000000000000000",
+        Some(tok),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (on_present.status, on_present.code()),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0002")
+    );
+    assert_eq!(
+        on_present.without_request_id(),
+        on_absent.without_request_id()
+    );
+    // A self-disable over HTTP is refused (the operator CLI is the path).
+    let me = call(
+        &t.db,
+        "POST",
+        &format!("/api/v1/admin/users/{}/disable", root.get()),
+        Some(session(root, true)),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (me.status, me.code()),
+        (StatusCode::CONFLICT, "FG-AUTH-0009")
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn the_user_search_is_rate_limited_per_caller() {
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice", false).await;
+    let bob = user(&t, "bob", false).await;
+    let r = router(&t.db);
+    let send = |who: UserId| {
+        let r = r.clone();
+        async move {
+            let mut req = Request::get("/api/v1/users?search=al")
+                .body(Body::empty())
+                .expect("request");
+            req.extensions_mut().insert(session(who, false));
+            let res = r.oneshot(req).await.expect("infallible");
+            (res.status(), res.headers().get("retry-after").is_some())
+        }
+    };
+    for _ in 0..forge_web::routes::directory::SEARCH_LIMIT {
+        assert_eq!(send(alice).await.0, StatusCode::OK);
+    }
+    assert_eq!(send(alice).await, (StatusCode::TOO_MANY_REQUESTS, true));
+    assert_eq!(
+        send(bob).await.0,
+        StatusCode::OK,
+        "another caller has its own window"
+    );
+    t.drop_now().await;
+}

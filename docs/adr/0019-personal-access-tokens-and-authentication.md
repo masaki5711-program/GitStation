@@ -481,10 +481,10 @@ Amendment M2 の 4 と §10 の実装。
 
 1. **トークンのルート**: `GET|POST /api/v1/user/tokens`、`DELETE /api/v1/user/tokens/{id}`。`TokenCreate` を `Action::is_session_only`
    に入れた（`required_scope` は `None`）。トークンの要求は FG-AUTH-0002 `session_required`（scope の判定より前）。`authorize()` の
-   `token_cannot_mint`（FG-AUTH-0003）は、一覧から外れたときの二重の守りとして残す。`TokenRevoke` は今の表のとおり、管理者は他人の
-   トークンも失効できる（利用者のルートでも）。`gstn` には `token list` と `token revoke` だけ（作成はブラウザ。coverage は `BrowserOnly`）。
+   `token_cannot_mint`（FG-AUTH-0003）は、一覧から外れたときの二重の守りとして残す。`TokenRevoke` は持ち主だけ（MR6 のレビューの HIGH で、
+   管理者が利用者のルートで他人のトークンを失効できる行を拒否に変えた。管理のルートは見送り。ADR-0021 実装の 41）。`gstn` には `token list` と `token revoke` だけ（作成はブラウザ。coverage は `BrowserOnly`）。
 2. **HTTP の無効化** `POST /api/v1/admin/users/{id}/disable`（`UserDisable`、`api` + 管理者の権利）: エージェントを拒否（`people_only`、
-   FG-AUTH-0003 `agent_token`）。要求に本文はなく、forge-hosting は `users::disable`（`Guard::Enforce`）だけを呼ぶ。最後の管理者・最後の
+   FG-AUTH-0003 `agent_token`）。自分自身は FG-AUTH-0009 `self_disable`。要求に本文はなく、forge-hosting は `users::disable`（`Guard::Enforce`）だけを呼ぶ。最後の管理者・最後の
    Owner は FG-AUTH-0009 で何も書かない。`forge_web_never_names_the_operator_only_user_commands` は forge-hosting のソースも走査する
    （HTTP のアカウントのコマンドが forge-hosting にあるため）。
 3. **判定は 1 回**: トークン・セッションの持ち主は変わらないので、ローダーが読んだ持ち主で `prove()` した証明で書く。トークンの発行は

@@ -41,7 +41,7 @@ use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use forge_auth::{
-    authorize, Action, Principal, ResolvedCtx, ResolvedVia, ResourceCtx, UnresolvedCtx,
+    authorize, Action, Principal, ResolvedCtx, ResolvedVia, Resource, ResourceCtx, UnresolvedCtx,
     UnresolvedReason,
 };
 use forge_core::{
@@ -113,30 +113,77 @@ pub const PREFIX_WINDOW: Duration = Duration::from_secs(60);
 /// the caller whose window started first: a full table never refuses all).
 const MAX_CALLERS: usize = 10_000;
 
-/// The fixed-window counter of `prefix=true` requests per caller.
-#[derive(Debug, Default)]
-pub struct PrefixLimiter {
+/// A fixed-window counter of requests per signed-in caller (M2 MR6:
+/// `resolve?prefix=true`, the user search).
+#[derive(Debug)]
+pub struct CallerLimiter {
+    /// The log's `route`.
+    route: &'static str,
+    limit: u32,
+    window: Duration,
     callers: Mutex<HashMap<i64, (Instant, u32)>>,
-    /// The poisoned table was logged (once per process).
+    /// A poisoned table was logged (once per process).
     poison_logged: AtomicBool,
 }
 
-impl PrefixLimiter {
+/// The `prefix=true` limiter (kept under its M2 MR6 name).
+pub type PrefixLimiter = CallerLimiter;
+
+impl Default for CallerLimiter {
+    /// The `prefix=true` limit ([`PREFIX_LIMIT`] per [`PREFIX_WINDOW`]).
+    fn default() -> Self {
+        Self::new("resolve_prefix", PREFIX_LIMIT, PREFIX_WINDOW)
+    }
+}
+
+impl CallerLimiter {
+    pub fn new(route: &'static str, limit: u32, window: Duration) -> Self {
+        Self {
+            route,
+            limit,
+            window,
+            callers: Mutex::new(HashMap::new()),
+            poison_logged: AtomicBool::new(false),
+        }
+    }
+
+    /// The `FG-WEB-0010` of a refused request (`route`, `limit`,
+    /// `window_s`, `retry_after_s` → `Retry-After`).
+    pub fn refused(&self, retry: u64) -> ForgeError {
+        ForgeError::new(ErrorCode::RateLimited)
+            .with_context("route", self.route)
+            .with_context("limit", self.limit)
+            .with_context("window_s", self.window.as_secs())
+            .with_context(crate::error::RETRY_AFTER_CONTEXT, retry)
+    }
+
     /// Count one request of `user`; `Err(retry_after_secs)` over the limit.
+    /// A table poisoned by a panic while it was held is recovered and
+    /// emptied (every caller starts a new window), and `FG-SYS-0001
+    /// reason=caller_limiter_poisoned` is logged once: counting goes on,
+    /// never unlimited and never refusing everyone.
     pub fn check(&self, user: UserId, now: Instant) -> Result<(), u64> {
-        let Ok(mut callers) = self.callers.lock() else {
-            if !self.poison_logged.swap(true, Ordering::Relaxed) {
-                telemetry::log_failure(
-                    &ForgeError::new(ErrorCode::Internal)
-                        .with_context("reason", "resolve_limiter_poisoned"),
-                    &RequestId::generate(),
-                );
+        let mut callers = match self.callers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                if !self.poison_logged.swap(true, Ordering::Relaxed) {
+                    telemetry::log_failure(
+                        &ForgeError::new(ErrorCode::Internal)
+                            .with_context("reason", "caller_limiter_poisoned")
+                            .with_context("route", self.route),
+                        &RequestId::generate(),
+                    );
+                }
+                let mut guard = poisoned.into_inner();
+                guard.clear();
+                self.callers.clear_poison();
+                guard
             }
-            return Err(PREFIX_WINDOW.as_secs());
         };
         let key = user.get();
         if callers.len() >= MAX_CALLERS && !callers.contains_key(&key) {
-            callers.retain(|_, (start, _)| now.duration_since(*start) < PREFIX_WINDOW);
+            let window = self.window;
+            callers.retain(|_, (start, _)| now.duration_since(*start) < window);
             if callers.len() >= MAX_CALLERS {
                 let oldest = callers
                     .iter()
@@ -148,11 +195,11 @@ impl PrefixLimiter {
             }
         }
         let entry = callers.entry(key).or_insert((now, 0));
-        if now.duration_since(entry.0) >= PREFIX_WINDOW {
+        if now.duration_since(entry.0) >= self.window {
             *entry = (now, 0);
         }
-        if entry.1 >= PREFIX_LIMIT {
-            let left = PREFIX_WINDOW.saturating_sub(now.duration_since(entry.0));
+        if entry.1 >= self.limit {
+            let left = self.window.saturating_sub(now.duration_since(entry.0));
             return Err(left.as_secs().max(1));
         }
         entry.1 += 1;
@@ -295,15 +342,25 @@ async fn load_prefix(
         .get::<Principal>()
         .cloned()
         .unwrap_or_else(Principal::anonymous);
-    if let Err(retry) = state.resolve_limiter.check(user, Instant::now()) {
-        return Err(ForgeError::new(ErrorCode::RateLimited)
-            .with_context("route", "resolve_prefix")
-            .with_context("limit", PREFIX_LIMIT)
-            .with_context("window_s", PREFIX_WINDOW.as_secs())
-            .with_context(crate::error::RETRY_AFTER_CONTEXT, retry));
-    }
+    // The path's shape first (no count for a malformed request), then the
+    // caller's scope (a wrong-scope token is refused before any lookup:
+    // `authorize()` decides PathResolve's scope before the path), then the
+    // rate limit, then the lookups.
     let (candidates, _) =
         prefix_candidates(parts.uri.query()).map_err(|rule| param_invalid(PARAM, rule))?;
+    let nothing = Resource::Unresolved(UnresolvedReason::Absent);
+    if let Err(e) = authorize(&principal, Action::PathResolve, &nothing) {
+        if e.code() != ErrorCode::NotFound {
+            // Decided again (the same way) by the registry's prove().
+            return Ok(Lookup::Unresolved {
+                ctx: UnresolvedCtx::new(UnresolvedReason::Absent),
+                why: Some("refused_before_lookup"),
+            });
+        }
+    }
+    if let Err(retry) = state.resolve_limiter.check(user, Instant::now()) {
+        return Err(state.resolve_limiter.refused(retry));
+    }
     let mut best: Option<(ResolvedCtx, LookupPath)> = None;
     // Every candidate is resolved (no early exit): the statements are the
     // same whatever lies along the path.
@@ -415,4 +472,35 @@ pub async fn resolve(_state: AppState, request: Dispatched<ResolvedCtx>) -> Resp
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
     headers.insert(VARY, HeaderValue::from_static("Authorization, Cookie"));
     res
+}
+
+#[cfg(test)]
+mod limiter_tests {
+    #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly
+
+    use super::*;
+
+    #[test]
+    fn a_poisoned_limiter_recovers_with_a_fresh_table() {
+        let limiter = std::sync::Arc::new(CallerLimiter::new("test", 2, Duration::from_secs(60)));
+        let now = Instant::now();
+        let alice = UserId::new(1);
+        assert!(limiter.check(alice, now).is_ok());
+        assert!(limiter.check(alice, now).is_ok());
+        assert!(limiter.check(alice, now).is_err(), "over the limit");
+        let held = std::sync::Arc::clone(&limiter);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = held.callers.lock().expect("lock");
+            panic!("synthetic panic while the table is held");
+        })
+        .join();
+        assert!(poisoned.is_err());
+        assert!(limiter.callers.is_poisoned());
+        // Recovered: a fresh window, still limited afterwards.
+        assert!(limiter.check(alice, now).is_ok());
+        assert!(!limiter.callers.is_poisoned());
+        assert!(limiter.poison_logged.load(Ordering::Relaxed));
+        assert!(limiter.check(alice, now).is_ok());
+        assert_eq!(limiter.check(alice, now), Err(60));
+    }
 }

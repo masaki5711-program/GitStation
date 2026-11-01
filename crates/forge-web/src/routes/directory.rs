@@ -4,7 +4,8 @@
 //!   whose username starts with the term or whose display name contains
 //!   it — **names only** (id, username, display name), at most 20, the
 //!   term 2..=64 characters. For the member picker; every active
-//!   signed-in user may ask.
+//!   signed-in user may ask, [`SEARCH_LIMIT`] times a minute
+//!   (`FG-WEB-0010 route=user_search`).
 //! - `GET /api/v1/admin/users` (`UserAdminList`, `read_api` + administrator
 //!   rights): every user in id order, keyset-paginated with an opaque
 //!   cursor sealed for this list, this caller and the `state` filter
@@ -12,7 +13,8 @@
 //! - `POST /api/v1/admin/users/{id}/disable` (`UserDisable`, `api` +
 //!   administrator rights, never an agent): the administration guard always
 //!   holds (`FG-AUTH-0009` `last_admin` / `last_owner`; there is no force
-//!   over HTTP, and the request has no body to ask for one). The user's
+//!   over HTTP, and the request has no body to ask for one), and never on
+//!   oneself (`FG-AUTH-0009 reason=self_disable`). The user's
 //!   tokens and sessions end in the same change.
 
 use axum::http::request::Parts;
@@ -39,6 +41,16 @@ pub const ADMIN_USERS: &str = "/api/v1/admin/users";
 pub const DISABLE: &str = "/api/v1/admin/users/{id}/disable";
 const ADMIN_PREFIX: &str = "/api/v1/admin/users/";
 const DISABLE_SUFFIX: &str = "/disable";
+
+/// User searches per caller per [`SEARCH_WINDOW`] (`FG-WEB-0010
+/// route=user_search`).
+pub const SEARCH_LIMIT: u32 = 120;
+pub const SEARCH_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The user search's limiter.
+pub fn search_limiter() -> crate::routes::namespaces::CallerLimiter {
+    crate::routes::namespaces::CallerLimiter::new("user_search", SEARCH_LIMIT, SEARCH_WINDOW)
+}
 
 /// `limit` without the parameter, and its largest value.
 pub const DEFAULT_LIMIT: u32 = 50;
@@ -152,14 +164,30 @@ fn value<'q>(params: &[(&'static str, &'q str)], name: &str) -> Option<&'q str> 
 /// `GET /api/v1/users?search=` → `200` the names.
 pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
     let query = request.raw_query().map(str::to_owned);
-    let ctx = request.into_write().ctx;
+    let viewer = request.principal().user();
+    let w = request.into_write();
+    let ctx = &w.ctx;
     let built = async {
+        let viewer = viewer.ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "search_viewer_missing")
+        })?;
+        if let Err(retry) = state
+            .search_limiter
+            .check(viewer, std::time::Instant::now())
+        {
+            return Err(state.search_limiter.refused(retry));
+        }
         let params = params(query.as_deref(), &["search"])?;
         let raw = value(&params, "search").ok_or_else(|| param_invalid("search", "missing"))?;
         // A form-encoded `+` is a space in a search term.
         let term = percent_decode(&raw.replace('+', " "))
             .ok_or_else(|| param_invalid("search", "malformed"))?;
-        let found = bounded(&state, "user_search", hosting(&state)?.search_users(&term)).await?;
+        let found = bounded(
+            &state,
+            "user_search",
+            hosting(&state)?.search_users(&w.proof, &term),
+        )
+        .await?;
         json(UserNames {
             items: found
                 .into_iter()
@@ -172,7 +200,7 @@ pub async fn search(state: AppState, request: Dispatched<InstanceCtx>) -> Respon
         })
     }
     .await;
-    respond(&ctx, StatusCode::OK, built)
+    respond(ctx, StatusCode::OK, built)
 }
 
 fn admin_purpose(viewer: UserId, state: UserStateFilter) -> String {
@@ -200,7 +228,8 @@ fn admin_row(row: AdminUserRow) -> AdminUser {
 pub async fn admin_users(state: AppState, request: Dispatched<InstanceCtx>) -> Response {
     let query = request.raw_query().map(str::to_owned);
     let viewer = request.principal().user();
-    let ctx = request.into_write().ctx;
+    let w = request.into_write();
+    let ctx = &w.ctx;
     let built = async {
         let params = params(query.as_deref(), &["limit", "cursor", "state"])?;
         let limit = match value(&params, "limit") {
@@ -243,7 +272,7 @@ pub async fn admin_users(state: AppState, request: Dispatched<InstanceCtx>) -> R
         let mut rows = bounded(
             &state,
             "admin_user_page",
-            hosting(&state)?.admin_users(after, filter, limit + 1),
+            hosting(&state)?.admin_users(&w.proof, after, filter, limit + 1),
         )
         .await?;
         let has_more = rows.len() > usize::try_from(limit).unwrap_or(usize::MAX);
@@ -259,7 +288,7 @@ pub async fn admin_users(state: AppState, request: Dispatched<InstanceCtx>) -> R
         })
     }
     .await;
-    respond(&ctx, StatusCode::OK, built)
+    respond(ctx, StatusCode::OK, built)
 }
 
 /// `POST /api/v1/admin/users/{id}/disable`: the user.

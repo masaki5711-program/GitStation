@@ -25,7 +25,7 @@ pub use authorize::authorize;
 pub use model::{
     AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
     ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope,
-    SessionRoute, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,

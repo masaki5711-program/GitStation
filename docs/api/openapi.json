@@ -2187,7 +2187,7 @@
           }
         },
         "summary": "End every web session of a user (administrators, never an agent)",
-        "x-forge-action": "SessionRevoke"
+        "x-forge-action": "AdminSessionRevoke"
       },
       "get": {
         "operationId": "get_api_v1_admin_users_id_sessions",
@@ -2226,7 +2226,7 @@
           }
         },
         "summary": "A user's active web sessions (administrators)",
-        "x-forge-action": "SessionList"
+        "x-forge-action": "AdminSessionList"
       }
     },
     "/api/v1/groups": {

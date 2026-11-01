@@ -310,3 +310,28 @@ async fn the_list_shows_only_active_sessions_and_the_owner_read_names_the_user()
     assert_reason(&err, ErrorCode::Internal, "session_public_id_unchecked");
     t.drop_now().await;
 }
+
+/// Migration 20261105100100: the purge's predicate is served by the two
+/// indexes (no scan of every session with sequential scans off).
+#[tokio::test]
+async fn the_purge_predicate_uses_its_indexes() {
+    let t = FreshDb::migrated().await;
+    let mut su = t.superuser().await;
+    sqlx::raw_sql("SET enable_seqscan = off")
+        .execute(&mut su)
+        .await
+        .expect("set");
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN SELECT id FROM forge.web_sessions \
+         WHERE revoked_at < now() - make_interval(days => 30) \
+            OR absolute_expires_at < now() - make_interval(days => 30)",
+    )
+    .fetch_all(&mut su)
+    .await
+    .expect("explain");
+    let plan = plan.join("\n");
+    assert!(plan.contains("web_sessions_purge_revoked"), "{plan}");
+    assert!(plan.contains("web_sessions_purge_expiry"), "{plan}");
+    drop(su);
+    t.drop_now().await;
+}
