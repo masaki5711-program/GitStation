@@ -14,7 +14,6 @@ import {
   REFS_FILLED,
   RESOLVE_GROUP,
   RESOLVE_PROJECT,
-  SPEC,
   apiError,
   mockServer,
   page,
@@ -35,8 +34,7 @@ async function violations(root: HTMLElement): Promise<string[]> {
 
 const home = (over: Record<string, unknown> = {}) => ({
   ...signedIn(),
-  'GET /api/v1/projects': (c: { query: URLSearchParams }) =>
-    c.query.get('kind') === 'spec' ? page([SPEC]) : page([PROJECT]),
+  'GET /api/v1/projects': () => page([PROJECT]),
   'GET /api/v1/groups': () => page([LISTED_GROUP]),
   ...over,
 });
@@ -73,7 +71,6 @@ describe('axe', () => {
       const server = mockServer(home());
       const { container } = await renderApp({ fetch: server.fetch, lang });
       await screen.findByText('Forge Web');
-      await screen.findByText('Press Spec');
       fireEvent.click(container.querySelector('header button') as HTMLElement);
       expect(await violations(container)).toEqual([]);
     });

@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router';
 import { ApiFailure, call } from '../api/client';
 import { useApi } from '../api/context';
 import { groupsQuery } from '../api/lists';
-import type { Kind, Visibility } from '../api/types';
+import type { Visibility } from '../api/types';
 import { RadioField, SelectField, TextField } from '../components/Field';
 import { QueryError } from '../components/QueryError';
 import controls from '../components/controls.module.css';
@@ -126,7 +126,6 @@ function CreateProjectForm({
   const f = useNamePath();
   const [parentId, setParentId] = useState<string>(parent ? String(parent.namespaceId) : '');
   const [visibility, setVisibility] = useState<Visibility>('private');
-  const [kind, setKind] = useState<Kind>('system');
   const [submitted, setSubmitted] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const refreshSession = useRefreshSessionOn403();
@@ -155,7 +154,6 @@ function CreateProjectForm({
             path: f.path,
             description: f.description.trim() === '' ? null : f.description.trim(),
             visibility,
-            kind,
           },
         }),
       ),
@@ -251,16 +249,6 @@ function CreateProjectForm({
             label: t('visibility.internal'),
             help: t('visibility.internalHelp'),
           },
-        ]}
-      />
-      <RadioField<Kind>
-        legend={t('form.kind')}
-        name="kind"
-        value={kind}
-        onChange={setKind}
-        choices={[
-          { value: 'system', label: t('kind.system'), help: t('kind.systemHelp') },
-          { value: 'spec', label: t('kind.spec'), help: t('kind.specHelp') },
         ]}
       />
       {create.isError && <QueryError error={create.error} />}

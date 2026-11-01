@@ -99,7 +99,7 @@ export interface MarkdownProps {
   /** Added to every heading level (the page already has its own h1 / h2). */
   headingOffset?: number;
   /** Where a link to a file or folder of the project goes, instead of the
-   * file screens (the document portal keeps its readers in the portal).
+   * file screens (it served the removed document portal, ADR-0023; unused now).
    * `null`: no link, the text only. */
   linkTo?: (path: string, folder: boolean) => string | null;
 }

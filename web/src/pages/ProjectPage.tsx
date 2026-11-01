@@ -19,8 +19,7 @@ import controls from '../components/controls.module.css';
 import { CopyButton } from '../components/CopyButton';
 import { MovedNotice } from '../components/MovedNotice';
 import { QueryError } from '../components/QueryError';
-import { formatDate, kindLabel, roleLabel, visibilityLabel } from '../features/labels';
-import { portalUrl } from '../features/portal';
+import { formatDate, roleLabel, visibilityLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
@@ -166,18 +165,10 @@ export function ProjectPage({ id }: { id: number }) {
       <MovedNotice />
       <h1 className={styles.title}>{p.display_name}</h1>
       <p className={styles.meta}>
-        <span className={controls.badge}>{kindLabel(t, p.kind)}</span>
         <span className={controls.badge}>{visibilityLabel(t, p.visibility)}</span>
         {role !== null && <span className={controls.badge}>{role}</span>}
       </p>
       {p.description !== '' && <p>{p.description}</p>}
-      {p.kind === 'spec' && (
-        <p>
-          <Link className={controls.primary} to={portalUrl(p.path)}>
-            {t('portal.openSpec')}
-          </Link>
-        </p>
-      )}
       <dl className={styles.summary}>
         <dt>{t('project.path')}</dt>
         <dd>

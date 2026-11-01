@@ -63,3 +63,49 @@ ADR-0023 の「後続のコードの MR の範囲」と同じ。ブランチ名�
 - 非エンジニアが仕様を承認する経路（旧 M7 の承認フロー、Office / PDF の比較、変更の要約）を、リポジトリの画面の機能として作るか。R3（全社展開）の条件の読み替え。今は計画に入れていない。
 - 作成時の `kind` の列に入れる値（固定値か、既定値のマイグレーションか）。
 - 共有する仕様のリポジトリを複数の Kanflow のプロジェクトに結びつけてよい条件（03 §7.1 の書き換えの詳細。(c) の設計で決める）。
+
+---
+
+## 8. 後続のコードの MR（実施済み）— ブランチ `refactor/cross-drop-repo-kind-and-portal`
+
+ADR-0023 の「後続のコードの MR の範囲」を実施した（`8ec0dcb` から。**未 push**）。2 つのコミット: Rust（API・core・db・gstn）と web。
+
+### 8.1 決めたこと
+
+| 項目 | 決定 |
+|---|---|
+| 作成の本文 | `POST /api/v1/projects` から `kind` を除いた。本文は元から `deny_unknown_fields`（厳密な JSON）なので、**古い `kind` を付けると `400 FG-WEB-0006` で拒否**する（黙って無視しない。「失敗を隠さない」に沿う）。テスト: `hosting_routes.rs` |
+| 一覧の `?kind=` | 既存の規則どおり、知らない引数は `param=query rule=unknown_parameter`（`400 FG-WEB-0006`）。プロジェクト・グループの両方。テスト: `lists_tests.rs`（`the_removed_kind_filter_is_an_unknown_parameter`）、`tests/lists.rs` |
+| 応答 | `ProjectBody` から `kind` を除いた（`openapi.json`、`web/src/api/schema.gen.ts` を再生成）。`project.created` / `repository.created` の監査・イベントの payload からも `kind` を除いた |
+| DB | マイグレーションは追加しない。列 `forge.repositories.kind`（NOT NULL + CHECK）は残り、`projects::create` が**定数 `'system'` を明示的に書く**（`LEGACY_REPOSITORY_KIND`）。どこも読まない。テスト `a_project_under_a_group_keeps_its_visibility_and_stores_the_constant_kind` が保存値を確かめる |
+| カーソル | 絞り込みの purpose から `kind=` を除いた（`…:membership=…:state=…`）。古い絞り込み付きカーソルは `rule=tag` で拒否される（未公開のため互換の期間は置かない） |
+| エラー | コードは変えていない。`FG-DB-0021` の `unknown_repository_kind`（理由の文言のみ）を `errors.toml` から削除し、`gen-catalog` で再生成。`ops/runbooks/namespace-data.md` も直した |
+| 権限の表 | ルートは変わらない（`gen-authz --check`: up to date） |
+
+### 8.2 取り除いたもの
+
+- **forge-core**: `RepositoryKind`、`ProjectRecord.kind`、`AuditDetails::{ProjectCreated,RepositoryCreated}.kind`。**forge-db**: 作成の `NewProject.kind`、読み出し（`resolve` / `lists` / `repositories`）の `kind`。**forge-hosting**: `NewProjectFields.kind`。**forge-web**: `KindName`、`ProjectBody.kind`、一覧の `kind` 絞り込み。
+- **gstn**: `project create --kind`、`kind` の列・欄（`registry.rs` のスキーマ、`help.json` の snapshot を再生成）。カバレッジの表（`coverage.rs`）は `kind` を含まないため変更なし。
+- **web**: 作成フォームの種類の選択、文書ポータル（`pages/portal/`、`features/portal.ts`、`api/portal.ts`、`/{project}/-/docs`、`tests/portal*.ts*`、`scripts/journey-portal.mjs`、journey の 6d）、ホームの「仕様書」、プロジェクト画面の種類のバッジと「仕様書として開く」、一覧の種類のバッジ、辞書の `plain.*` / `portal.*` / `kind.*` / `form.kind` / `home.specs`（ja / en / id）、`tests/i18n.test.ts` の `portal.` の id 必須。ポータルと一緒に、禁止語の検査（`portal.test.tsx` 内）もなくなった。MR11 / MR12 の Step-0 の修正（Tokens の離脱ガードなど）は残した。`/{project}/-/docs` は未知の画面語として 404 になる。
+- `Markdown` の `linkTo` / `headingOffset` / `rawRef` はポータルのために入れたが、`BlobScreen` が `rawRef` / `headingOffset` を使うので残した（`linkTo` は現在どこも使わない。コメントだけ直した）。
+
+### 8.3 確かめたこと
+
+| ゲート | 結果 |
+|---|---|
+| `cargo fmt --all -- --check` | 通過 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通過 |
+| `gen-catalog --check` / `gen-authz --check` | up to date（99 files）/ up to date |
+| `cargo nextest run -p forge-client` | 99 / 99 通過（help の snapshot 更新後） |
+| `cargo nextest run -p forge-core -p forge-errors` | 173 / 173 通過 |
+| `cargo nextest run -p forge-web --lib` | 179 / 179 通過 |
+| web: lint / typecheck | 通過（警告 0） |
+| web: `npm test`（vitest） | 21 ファイル 362 / 362 通過 |
+| web: build / i18n:report / smoke / journey / licenses | 通過（id の欠落 0 / 370 キー、CSP 違反 0、axe 違反 0、578 パッケージ許可済み） |
+
+**実行できなかったもの（このセッションは Docker がなく、開発用 PostgreSQL が起動できなかった）**: DB を使うテスト — `forge-db` 全体（`projects/tests.rs`、`resolve_tests.rs` の変更を含む）、`forge-hosting`、`forge-web` の統合テスト（`tests/lists.rs`、`tests/hosting_routes.rs`）、`forge-cli`。これらは**コンパイルは通る**（`cargo check --workspace --all-targets` と clippy）が、実行していない。PostgreSQL のある環境で `cargo nextest run -p forge-db -p forge-hosting -p forge-web -p forge-cli -j 2` を実行すること。
+
+### 8.4 注意
+
+- `docs/deploy/test-server-guide.md` の `--kind` の記述は、明日（2026-11-02）にデプロイする `f95e2e8` のビルドに合わせたものなので変えていない。このブランチをデプロイする場合は直す。
+- メンテナの PC 側の `CLAUDE.md` / ルールに `kind` や文書ポータルの前提があれば別途直す（この MR は触っていない）。

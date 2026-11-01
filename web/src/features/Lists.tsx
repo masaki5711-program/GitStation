@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 
 import type { ListedGroup, Project } from '../api/types';
 import controls from '../components/controls.module.css';
-import { kindLabel, roleLabel, visibilityLabel } from './labels';
+import { roleLabel, visibilityLabel } from './labels';
 import styles from './Lists.module.css';
 
 export function ProjectList({ items }: { items: Project[] }) {
@@ -20,7 +20,6 @@ export function ProjectList({ items }: { items: Project[] }) {
             </Link>
             <code className={styles.path}>{p.path}</code>
             <span className={styles.badges}>
-              <span className={controls.badge}>{kindLabel(t, p.kind)}</span>
               <span className={controls.badge}>{visibilityLabel(t, p.visibility)}</span>
               {role !== null && <span className={controls.badge}>{role}</span>}
             </span>

@@ -908,7 +908,6 @@ export interface components {
         CreateProject: {
             description?: string | null;
             display_name: string;
-            kind?: null | components["schemas"]["KindName"];
             /**
              * Format: int64
              * @description The parent: a personal or a group namespace (`namespace_id` of a
@@ -1073,11 +1072,6 @@ export interface components {
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
         };
-        /**
-         * @description A repository kind in a request (ADR-0004; fixed at creation).
-         * @enum {string}
-         */
-        KindName: "spec" | "system";
         /** @description A group as a list shows it. */
         ListedGroup: {
             /** @description UTC, RFC 3339. */
@@ -1162,8 +1156,6 @@ export interface components {
             display_name: string;
             /** Format: int64 */
             id: number;
-            /** @description The repository kind: `spec` or `system`. */
-            kind: string;
             /** @description The path's last segment. */
             name: string;
             /** Format: int64 */
@@ -2099,8 +2091,6 @@ export interface operations {
                 limit?: number;
                 /** @description The previous page's next_cursor (opaque; bound to this list, this caller and these filters) */
                 cursor?: string;
-                /** @description spec or system: only projects of this repository kind */
-                kind?: string;
                 /** @description true: only projects where the caller holds a role (direct or inherited) */
                 membership?: string;
                 /** @description pending_deletion: only projects pending deletion that the caller may restore (Owner) */

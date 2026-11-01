@@ -87,7 +87,7 @@ describe('i18n dictionaries', () => {
 
   it('screens that must be complete in id are (login, errors; ADR-0022 §6)', () => {
     const required = [...jaKeys.keys()].filter(
-      (k) => k.startsWith('error.') || k.startsWith('login.') || k.startsWith('portal.'),
+      (k) => k.startsWith('error.') || k.startsWith('login.'),
     );
     expect(required.filter((k) => !idKeys.has(k))).toEqual([]);
   });

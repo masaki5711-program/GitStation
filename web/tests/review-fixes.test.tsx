@@ -116,7 +116,7 @@ describe('menu and page focus', () => {
   it('after a navigation the new page heading takes the focus', async () => {
     const server = mockServer({
       ...lists(),
-      'GET /api/v1/projects': (c) => (c.query.get('kind') === 'spec' ? page([]) : page([PROJECT])),
+      'GET /api/v1/projects': () => page([PROJECT]),
       'GET /api/v1/namespaces/resolve': () =>
         json(200, { canonical_path: 'acme/forge-web', kind: 'project', moved: false, namespace_id: 11, project_id: 7 }),
       'GET /api/v1/projects/7': () => json(200, PROJECT),
