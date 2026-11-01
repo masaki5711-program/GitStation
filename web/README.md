@@ -15,6 +15,7 @@ npm run gen:api              # docs/api/openapi.json → src/api/schema.gen.ts�
 npm run licenses             # 依存のライセンスの許可リスト
 npm run i18n:report          # id の欠けたキーの数（失敗にしない）
 npm run smoke                # Chromium で CSP の違反・コンソールのエラーがないこと（playwright が要る）
+npm run journey              # Chromium でログイン → ホーム → プロジェクト → 作成 → ログアウト。axe を全ルールで実行（SHOTS=dir で画面を保存）
 npm run dev                  # Vite。/api と /-/auth を FORGE_DEV_SERVER（既定 http://127.0.0.1:8080）へ中継
 ```
 
@@ -28,3 +29,13 @@ npm run dev                  # Vite。/api と /-/auth を FORGE_DEV_SERVER（�
 - 実行時に `<style>` を差し込むもの（CSS-in-JS、Radix の一部）は使わない。Radix は `src/ui/` の包みからだけ使う。
 - ロゴ・アイコンは `docs/brand/` の複製（`src/assets/brand/`。テストが SHA-256 を比べる）。
 - 依存は版を固定し、公開から 2 週間たった版だけを入れる。
+
+## 画面の構成（M2 MR9）
+
+- `/` ホーム、`/-/projects/{id}` 固定リンク、それ以外のパスは `pages/Namespace.tsx` が resolve（`prefix=true`）で判別する
+  （プロジェクト・グループ・個人。GitHub 形の `/{project}/tree/…` は `/-/tree/…` へ `replace`、移動したパスは正規のパスへ）。
+- セッションがなければ、同じ URL のままログイン画面（`next` = いまのページ）。ログインは `GET /-/auth/login` を
+  `redirect: 'manual'` で確かめてから移る（503 FG-AUTH-0018 は「ログイン未設定」の 1 行）。ログアウトは `/-/auth/logout` への
+  フォームの POST（`csrf` の隠しフィールド）。状態を変える API 要求には `X-GitStation-CSRF`（`api/client.ts`）。
+- 作成（プロジェクト・グループ・サブグループ）は `ui/Modal.tsx`（HTML の `<dialog>`）の中のフォーム。
+- テストは `tests/mock.ts`（`fetch` の経路表。MSW は使わない）。axe は vitest（jsdom、色の比は除く）と `npm run journey`（実ブラウザ、全ルール）。

@@ -26,6 +26,12 @@
 
   /* Interactive */
   --gs-color-link: #0f7a69;
+  /* Primary buttons: white text on this (5.4:1); teal-strong is large-text only. */
+  --gs-color-action: #0f7a69;
+  --gs-color-action-hover: #0b6154;
+  --gs-color-action-active: #084a40;
+  --gs-color-hover-surface: #eef8f6;
+  --gs-color-active-surface: #e8f5f2;
   --gs-color-focus: #128f7c;
 
   /* Status: never colour alone — always with text and an icon. */
@@ -40,6 +46,14 @@
   /* Header */
   --gs-header-background: #1b2a44;
   --gs-header-text: #f4fbfc;
+  --gs-header-hover: #2c3e5f;
+  --gs-header-active: #3a4f75;
+
+  /* Focus ring (every interactive element) and the dialog scrim / elevation. */
+  --gs-focus-ring: 2px solid var(--gs-color-focus);
+  --gs-focus-ring-on-dark: 2px solid var(--gs-header-text);
+  --gs-color-scrim: rgb(27 42 68 / 55%);
+  --gs-shadow-1: 0 2px 8px rgb(27 42 68 / 18%);
 
   /* Typography: system fonts only (on-prem, no CDN; 0 bytes served). */
   --gs-font-body: "Yu Gothic UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;

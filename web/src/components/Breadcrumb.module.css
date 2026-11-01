@@ -1,0 +1,19 @@
+.nav {
+  margin-bottom: var(--gs-space-3);
+  font-size: var(--gs-font-size-sm);
+}
+
+.list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item + .item::before {
+  content: "/";
+  padding-right: var(--gs-space-1);
+  color: var(--gs-color-text-muted);
+}

@@ -18,6 +18,7 @@ const ALLOWED = new Set([
   'BlueOak-1.0.0', // a glob helper (dev only; permissive, MIT-like)
   'Python-2.0', // argparse (eslint; dev only; permissive)
   'CC-BY-4.0', // caniuse-lite data (browserslist at build time; not shipped)
+  'MPL-2.0', // axe-core (a11y checks in vitest and the Playwright journey; dev only, file-level copyleft, unmodified, never shipped; reviewed for M2 MR9)
 ]);
 
 const root = new URL('..', import.meta.url).pathname;

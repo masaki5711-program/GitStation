@@ -1,34 +1,147 @@
 {
   "app": {
     "name": "GitStation",
-    "skipToContent": "Lewati ke konten",
+    "skipToContent": "Lewati ke isi",
     "logoAlt": "Beranda GitStation"
   },
-  "home": {
-    "title": "Proyek",
+  "common": {
     "loading": "Memuat…",
-    "empty": "Belum ada proyek yang dapat Anda lihat.",
-    "notLoggedIn": "Anda belum masuk.",
-    "notLoggedInHint": "Masuk dari browser akan segera tersedia.",
-    "more": "Masih ada proyek lainnya.",
-    "visibility": {
-      "private": "Privat",
-      "internal": "Internal"
+    "close": "Tutup",
+    "copied": "Tersalin",
+    "copyFailed": "Tidak dapat menyalin. Pilih teksnya lalu salin sendiri",
+    "truncated": "Hanya sebagian daftar yang ditampilkan karena sudah mencapai batas tampilan.",
+    "breadcrumb": "Lokasi saat ini"
+  },
+  "header": {
+    "language": "Bahasa tampilan",
+    "signedInAs": "Masuk sebagai",
+    "logout": "Keluar"
+  },
+  "language": {
+    "ja": "日本語",
+    "en": "English",
+    "id": "Bahasa Indonesia"
+  },
+  "login": {
+    "title": "Silakan masuk",
+    "lead": "GitStation memakai akun portal IoT Anda.",
+    "button": "Masuk dengan portal IoT",
+    "starting": "Memulai proses masuk…",
+    "hint": "Anda akan diarahkan ke halaman masuk portal IoT dan kembali ke halaman ini setelahnya.",
+    "notConfiguredTitle": "Fitur masuk belum diatur",
+    "notConfigured": "Server ini belum memiliki pengaturan masuk. Hubungi administrator.",
+    "expiredTitle": "Sesi masuk Anda telah berakhir",
+    "expired": "Silakan masuk lagi. Setelahnya Anda kembali ke halaman ini."
+  },
+  "home": {
+    "title": "Beranda",
+    "newProject": "Proyek baru",
+    "newGroup": "Grup baru",
+    "mine": "Proyek Anda",
+    "mineEmpty": "Anda belum menjadi anggota proyek mana pun.",
+    "mineEmptyHint": "Buat dengan \"Proyek baru\", atau minta administrator proyek menambahkan Anda.",
+    "filter": "Saring menurut nama atau jalur",
+    "filterEmpty": "Tidak ada proyek yang cocok.",
+    "specs": "Spesifikasi",
+    "groups": "Grup Anda",
+    "recent": "Baru dilihat",
+    "recentHint": "Hanya diingat di peramban ini."
+  },
+  "create": {
+    "parent": "Buat di",
+    "parentChoose": "Pilih salah satu",
+    "parentPersonal": "(milik Anda)",
+    "creating": "Membuat…",
+    "project": {
+      "title": "Proyek baru",
+      "submit": "Buat proyek"
+    },
+    "group": {
+      "title": "Grup baru",
+      "submit": "Buat grup"
+    },
+    "subgroup": {
+      "title": "Subgrup baru"
     }
+  },
+  "form": {
+    "displayName": "Nama",
+    "path": "Jalur (nama yang dipakai di URL)",
+    "pathHelp": "Huruf kecil, angka, tanda hubung, titik, dan garis bawah; 1 sampai 64 karakter. Jika diubah nanti, URL ikut berubah.",
+    "description": "Deskripsi (opsional)",
+    "visibility": "Visibilitas",
+    "kind": "Jenis",
+    "nameRequired": "Masukkan nama.",
+    "pathInvalid": "Gunakan huruf kecil, angka, tanda hubung, titik, dan garis bawah, diawali dan diakhiri huruf atau angka.",
+    "parentRequired": "Pilih tempat membuatnya.",
+    "errorSummary": "Periksa kembali isian Anda."
+  },
+  "visibility": {
+    "private": "Pribadi",
+    "internal": "Internal",
+    "privateHelp": "Hanya anggota yang dapat melihatnya.",
+    "internalHelp": "Semua orang yang masuk di dalam perusahaan dapat melihatnya. Hanya anggota yang dapat mengubahnya."
+  },
+  "kind": {
+    "spec": "Spesifikasi",
+    "system": "Sistem",
+    "specHelp": "Untuk dokumen seperti spesifikasi peralatan.",
+    "systemHelp": "Untuk sumber program atau sistem."
+  },
+  "role": {
+    "guest": "Tamu",
+    "reporter": "Pelapor",
+    "developer": "Pengembang",
+    "maintainer": "Pemelihara",
+    "owner": "Pemilik"
+  },
+  "namespace": {
+    "subgroups": "Subgrup",
+    "projects": "Proyek",
+    "empty": "Belum ada grup atau proyek yang dapat Anda lihat di sini.",
+    "group": "Grup",
+    "user": "Pribadi",
+    "newProject": "Proyek baru",
+    "newSubgroup": "Subgrup baru"
+  },
+  "moved": {
+    "notice": "Lokasi ini telah dipindahkan. Alamat lama tetap membukanya. Jalur sebelumnya:"
+  },
+  "project": {
+    "emptyTitle": "Repositori masih kosong",
+    "emptyBody": "Kirim berkas pertama dengan perintah berikut.",
+    "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
+    "repository": "Repositori",
+    "defaultBranch": "Cabang bawaan",
+    "branches": "Cabang",
+    "tags": "Tag",
+    "refsTruncated": "Hitungan mencapai batas; jumlah sebenarnya lebih banyak.",
+    "path": "Jalur",
+    "created": "Dibuat",
+    "clone": "URL clone",
+    "copyClone": "Salin URL",
+    "cloneHint": "Masuk ke Git dengan token akses.",
+    "copyCommands": "Salin perintah"
+  },
+  "unavailable": {
+    "title": "Layar ini belum tersedia",
+    "body": "Layar untuk melihat berkas dan riwayat akan hadir pada pembaruan berikutnya.",
+    "back": "Kembali ke proyek"
   },
   "error": {
     "title": "Terjadi kesalahan",
     "requestId": "ID permintaan",
     "copy": "Salin ID permintaan",
     "copied": "Tersalin",
-    "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin secara manual",
-    "network": "Tidak dapat terhubung ke server. Silakan coba lagi nanti.",
-    "unexpected": "Server memberikan jawaban yang tidak terduga. Silakan coba lagi nanti.",
-    "retry": "Coba lagi"
+    "copyFailed": "Tidak dapat menyalin. Pilih ID lalu salin sendiri",
+    "network": "Tidak dapat terhubung ke server. Coba lagi sebentar lagi.",
+    "unexpected": "Server memberikan jawaban yang tidak terduga. Coba lagi sebentar lagi.",
+    "retry": "Coba lagi",
+    "forbiddenTitle": "Anda tidak memiliki izin"
   },
   "notFound": {
     "title": "Halaman tidak ditemukan",
-    "body": "Periksa apakah URL sudah benar.",
+    "body": "Periksa apakah URL sudah benar. Halaman ini juga muncul jika Anda tidak berhak melihatnya.",
     "home": "Kembali ke beranda"
   }
 }

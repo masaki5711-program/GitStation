@@ -4,17 +4,129 @@
     "skipToContent": "本文へ移動",
     "logoAlt": "GitStation のホーム"
   },
-  "home": {
-    "title": "プロジェクト",
+  "common": {
     "loading": "読み込んでいます…",
-    "empty": "見られるプロジェクトはまだありません。",
-    "notLoggedIn": "ログインしていません。",
-    "notLoggedInHint": "ブラウザからのログインは準備中です。",
-    "more": "ほかにもプロジェクトがあります。",
-    "visibility": {
-      "private": "非公開",
-      "internal": "社内に公開"
+    "close": "閉じる",
+    "copied": "コピーしました",
+    "copyFailed": "コピーできませんでした。文字を選んでコピーしてください",
+    "truncated": "表示できる上限に達したため、一部しか表示していません。",
+    "breadcrumb": "いまの場所"
+  },
+  "header": {
+    "language": "表示する言語",
+    "signedInAs": "ログイン中のユーザー",
+    "logout": "ログアウト"
+  },
+  "language": {
+    "ja": "日本語",
+    "en": "English",
+    "id": "Bahasa Indonesia"
+  },
+  "login": {
+    "title": "ログインしてください",
+    "lead": "GitStation は IoT ポータルのアカウントでログインします。",
+    "button": "IoT ポータルでログイン",
+    "starting": "ログインを始めています…",
+    "hint": "ボタンを押すと IoT ポータルのログイン画面に移ります。ログイン後、この画面に戻ります。",
+    "notConfiguredTitle": "ログインがまだ設定されていません",
+    "notConfigured": "このサーバーにはログインの設定がありません。管理者に連絡してください。",
+    "expiredTitle": "ログインの有効期限が切れました",
+    "expired": "もう一度ログインしてください。ログイン後、この画面に戻ります。"
+  },
+  "home": {
+    "title": "ホーム",
+    "newProject": "プロジェクトを作る",
+    "newGroup": "グループを作る",
+    "mine": "自分のプロジェクト",
+    "mineEmpty": "あなたがメンバーのプロジェクトはまだありません。",
+    "mineEmptyHint": "「プロジェクトを作る」から作るか、プロジェクトの管理者にメンバーへの追加を頼んでください。",
+    "filter": "名前やパスで絞り込む",
+    "filterEmpty": "条件に合うプロジェクトはありません。",
+    "specs": "仕様書",
+    "groups": "自分のグループ",
+    "recent": "最近見たもの",
+    "recentHint": "このブラウザの中だけに覚えています。"
+  },
+  "create": {
+    "parent": "作る場所",
+    "parentChoose": "選んでください",
+    "parentPersonal": "（自分用）",
+    "creating": "作っています…",
+    "project": {
+      "title": "プロジェクトを作る",
+      "submit": "プロジェクトを作る"
+    },
+    "group": {
+      "title": "グループを作る",
+      "submit": "グループを作る"
+    },
+    "subgroup": {
+      "title": "サブグループを作る"
     }
+  },
+  "form": {
+    "displayName": "名前",
+    "path": "パス（URL に使う名前）",
+    "pathHelp": "半角の小文字・数字・ハイフン・ピリオド・アンダースコア。1〜64 文字。あとで変えると URL が変わります。",
+    "description": "説明（省略できます）",
+    "visibility": "公開範囲",
+    "kind": "種類",
+    "nameRequired": "名前を入力してください。",
+    "pathInvalid": "パスは半角の小文字・数字・ハイフン・ピリオド・アンダースコアで、先頭と末尾は英数字にしてください。",
+    "parentRequired": "作る場所を選んでください。",
+    "errorSummary": "入力を確かめてください。"
+  },
+  "visibility": {
+    "private": "非公開",
+    "internal": "社内に公開",
+    "privateHelp": "メンバーだけが見られます。",
+    "internalHelp": "ログインしている社内の全員が見られます。書き込めるのはメンバーだけです。"
+  },
+  "kind": {
+    "spec": "仕様書",
+    "system": "システム",
+    "specHelp": "設備の仕様書など、文書を管理します。",
+    "systemHelp": "プログラムなど、システムのソースを管理します。"
+  },
+  "role": {
+    "guest": "ゲスト",
+    "reporter": "閲覧者",
+    "developer": "開発者",
+    "maintainer": "メンテナー",
+    "owner": "オーナー"
+  },
+  "namespace": {
+    "subgroups": "サブグループ",
+    "projects": "プロジェクト",
+    "empty": "ここにはまだ、見られるグループやプロジェクトがありません。",
+    "group": "グループ",
+    "user": "個人",
+    "newProject": "プロジェクトを作る",
+    "newSubgroup": "サブグループを作る"
+  },
+  "moved": {
+    "notice": "この場所は移動しました。古いアドレスでも開けます。以前のパス："
+  },
+  "project": {
+    "emptyTitle": "リポジトリはまだ空です",
+    "emptyBody": "次のコマンドで、最初のファイルを送ってください。",
+    "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
+    "repository": "リポジトリ",
+    "defaultBranch": "既定のブランチ",
+    "branches": "ブランチの数",
+    "tags": "タグの数",
+    "refsTruncated": "数えられる上限に達したため、実際はこれより多くあります。",
+    "path": "パス",
+    "created": "作成日",
+    "clone": "clone の URL",
+    "copyClone": "URL をコピー",
+    "cloneHint": "ログインに使うのは、アクセストークンです。",
+    "copyCommands": "コマンドをコピー"
+  },
+  "unavailable": {
+    "title": "この画面はまだ使えません",
+    "body": "ファイルや履歴を見る画面は、次の更新で追加します。",
+    "back": "プロジェクトへ戻る"
   },
   "error": {
     "title": "うまくいきませんでした",
@@ -24,11 +136,12 @@
     "copyFailed": "コピーできませんでした。番号を選んでコピーしてください",
     "network": "サーバーにつながりませんでした。しばらくしてからもう一度お試しください。",
     "unexpected": "思いがけない応答がありました。しばらくしてからもう一度お試しください。",
-    "retry": "もう一度試す"
+    "retry": "もう一度試す",
+    "forbiddenTitle": "権限がありません"
   },
   "notFound": {
     "title": "ページが見つかりません",
-    "body": "URL が正しいか確かめてください。",
+    "body": "URL が正しいか確かめてください。見る権限がない場合も、このように表示されます。",
     "home": "ホームへ戻る"
   }
 }

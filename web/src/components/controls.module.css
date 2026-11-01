@@ -1,0 +1,134 @@
+/* Shared controls: buttons, form fields, badges. Tokens only. */
+/* One interactive class: every button-like control composes it, so hover,
+ * pressed and keyboard focus look the same everywhere (tokens only). */
+.interactive {
+  cursor: pointer;
+}
+
+.interactive:hover:not(:disabled) {
+  background: var(--gs-color-hover-surface);
+}
+
+.interactive:active:not(:disabled) {
+  background: var(--gs-color-active-surface);
+}
+
+.interactive:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}
+
+.interactive:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.button,
+.primary {
+  composes: interactive;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  max-width: 100%;
+  padding: var(--gs-space-2) var(--gs-space-4);
+  border: 1px solid var(--gs-brand-teal-strong);
+  border-radius: var(--gs-radius-sm);
+  font: inherit;
+  text-align: center;
+  text-decoration: none;
+  /* Long translations (id) wrap instead of overflowing. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.button {
+  background: var(--gs-color-surface);
+  color: var(--gs-color-link);
+}
+
+.primary {
+  background: var(--gs-color-action);
+  color: var(--gs-color-white);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--gs-color-action-hover);
+}
+
+.primary:active:not(:disabled) {
+  background: var(--gs-color-action-active);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-1);
+  margin: 0 0 var(--gs-space-4);
+  padding: 0;
+  border: none;
+}
+
+.label {
+  font-weight: bold;
+  padding: 0;
+}
+
+.help {
+  margin: 0;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.input {
+  composes: interactive;
+  cursor: text;
+  min-height: 2.5rem;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-text-muted);
+  border-radius: var(--gs-radius-sm);
+  font: inherit;
+  color: var(--gs-color-text);
+  background: var(--gs-color-surface);
+}
+
+.input:hover:not(:disabled) {
+  background: var(--gs-color-surface);
+  border-color: var(--gs-color-text);
+}
+
+.choice {
+  margin-bottom: var(--gs-space-2);
+}
+
+.choiceLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gs-space-2);
+  min-height: 2rem;
+  cursor: pointer;
+}
+
+.choiceHelp {
+  margin: 0 0 0 1.75rem;
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.fieldError {
+  margin: 0;
+  color: var(--gs-color-danger-text);
+  font-size: var(--gs-font-size-sm);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+  color: var(--gs-color-text-muted);
+  background: var(--gs-color-surface);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
