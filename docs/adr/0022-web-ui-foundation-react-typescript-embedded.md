@@ -252,3 +252,11 @@ MR2（`feat/web-spa-foundation`）で実物を作って分かったこと。上�
 
 - テストの「MSW」は `web/tests/mock.ts`（`fetch` の経路表。本物の API クライアントを通す）に読み替えた。依存を増やさずに同じ層を確かめられるため。`axe-core`（MPL-2.0、dev のみ、`dist` に入らない）は `check-licenses.mjs` の許可リストに理由つきで足した。
 - 主ボタンの白文字は `--gs-color-action`（`#0f7a69`、5.4:1）。`--gs-brand-teal-strong` は大きい文字だけ。操作できる部品は `controls.module.css` の `.interactive`（hover・active・フォーカスの輪 `--gs-focus-ring`）を共有する。
+
+## Amendment（2026-11-01、M2 MR10: リポジトリの画面で決めたこと）
+
+- **構文の色付け**: §3 の「highlight.js の core と言語の定義を遅延で読み込む」を、`lowlight` 3.3.0（highlight.js の結果を HTML の文字列ではなく木で返す）+ `highlight.js` 11.11.1 で実装した。木を React の要素に直接描くので `innerHTML` を使わず、`class="hljs-…"` だけを通す（正規表現で許可リストにある名前以外は捨てる）。言語は 23 個を個別のチャンクにし、開いたファイルの言語だけを読む。20 万文字を超えるファイルは色をつけない（メインスレッドで動かすため）。トークンの色は `tokens.css`（`--gs-code-*`、コードの背景 `--gs-color-code-surface` の上で 4.5:1 以上）。
+- **Markdown**: §7 のとおり `react-markdown` 10.1.0 + `remark-gfm` 4.0.1。`skipHtml`、`rehype-raw` なし。`urlTransform` が http / https / mailto / 相対 / `#` だけを通し、制御文字・バックスラッシュ・`//` で始まるものを捨てる。`<img>` は同じリポジトリの png / jpeg / gif / webp を raw の URL にしたものだけ（SVG・HTML・PDF・外部・`data:` は描かない。外部はリンク）。リポジトリのルートより上に出る相対パスはリンクにしない。見出しの `id` は `user-content-` + 文字列。見出しの段は、ページ自体の h1 / h2 の下に入るよう `headingOffset` で下げる（README は +2、ファイルは +1）。表とコードは名前つきの `role="region"` + `tabindex=0` の中に置く（キーボードでスクロールできる）。XSS のベクタの検査は `web/tests/markdown.test.tsx`。
+- **チャンク**: Markdown の部品（約 177 kB、gzip 50 kB）は `React.lazy` で別のファイルにした。最初に読む JS は 448 kB（gzip 143 kB）。
+- **推移的な依存の版**: 2 週間の規則（§8）に合わせ、公開から 2 週間たっていない版が選ばれた 5 つを `package.json` の `overrides` で古い版に固定した（`hast-util-to-jsx-runtime` 2.3.6、`mdast-util-to-markdown` 2.1.2、`mdast-util-find-and-replace` 3.0.2、`unist-util-visit` 5.1.0、`unist-util-visit-parents` 6.0.2）。いずれも react-markdown / remark-gfm の範囲（`^`）の中。上げるときは overrides を消して 2 週間後に。
+- **画面の語の扱い**: SVG・HTML・XML・PDF のファイルは、画面では「描かない」という注意を出し、テキストのものは中身を文字として（`<pre>` の中で）見せる。描画・実行はしない（ADR-0015 の「表示せず、ダウンロードだけ」の「表示」を、描画の意味に読んだ）。

@@ -39,3 +39,12 @@ npm run dev                  # Vite。/api と /-/auth を FORGE_DEV_SERVER（�
   フォームの POST（`csrf` の隠しフィールド）。状態を変える API 要求には `X-GitStation-CSRF`（`api/client.ts`）。
 - 作成（プロジェクト・グループ・サブグループ）は `ui/Modal.tsx`（HTML の `<dialog>`）の中のフォーム。
 - テストは `tests/mock.ts`（`fetch` の経路表。MSW は使わない）。axe は vitest（jsdom、色の比は除く）と `npm run journey`（実ブラウザ、全ルール）。
+
+## リポジトリの画面（M2 MR10）
+
+- `pages/repo/RepoViews.tsx` が `/{project}/-/{tree|blob|blame|commits|commit|compare|branches|tags}/…` を受ける。`settings` / `members` は MR11 まで「まだ使えません」。
+- 住所の `{ref}[/{path}]` は 1 つの尾として `resolve` API に渡し、ref とパスの境目はサーバーが決める（`api/repo.ts`）。以降の API には解決した完全な ref 名を渡す。
+- Markdown は `features/Markdown.tsx`（`react-markdown` + `remark-gfm`。生の HTML は捨てる。リンクは http(s)・mailto・相対だけ、画像は同じリポジトリの raw の png / jpeg / gif / webp だけ）。別チャンク（`MarkdownView.tsx` が遅延読み込み）。
+- 構文の色は `features/highlight.ts`（`lowlight` = highlight.js の木。クラスだけ、`style` 属性なし。言語は個別のチャンク、20 万文字を超えるファイルは色なし）。
+- 差分は `features/DiffView.tsx`。切り詰め・バイナリ・大きすぎ・UTF-8 でないものは文で言う。
+- `tests/repo-fixtures.ts` の合成データ（vitest）と `scripts/journey-repo.mjs`（Playwright のスタンドイン）は同じ形。
