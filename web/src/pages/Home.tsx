@@ -15,6 +15,7 @@ import controls from '../components/controls.module.css';
 import { QueryError } from '../components/QueryError';
 import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialogs';
 import { GroupList, ProjectList } from '../features/Lists';
+import { SpecList } from './portal/SpecList';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { readRecent } from '../hooks/recent';
 import styles from './Home.module.css';
@@ -145,7 +146,7 @@ export function Home() {
       )}
       {specs.isSuccess && specs.data.items.length > 0 && (
         <Block id="home-specs" title={t('home.specs')}>
-          <ProjectList items={specs.data.items} />
+          <SpecList items={specs.data.items} />
           <Truncated all={specs.data} />
         </Block>
       )}

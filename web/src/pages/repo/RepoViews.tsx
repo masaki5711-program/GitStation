@@ -3,7 +3,7 @@
 // small navigation frame every screen; each screen has its own h1. Any other
 // word is 404.
 import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -26,7 +26,10 @@ import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members'];
+// The portal is a separate chunk: most readers of a repository never open it.
+const DocsScreen = lazy(() => import('../portal/DocsScreen').then((m) => ({ default: m.DocsScreen })));
+
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'docs'];
 
 export function RepoViews({
   projectId,
@@ -65,6 +68,19 @@ export function RepoViews({
           void info.refetch();
         }}
       />
+    );
+  }
+  // The document portal has its own frame: no repository navigation, in the
+  // portal's own words. Only a specification has one.
+  if (word === 'docs') {
+    if (info.data.kind !== 'spec' || tail.length > 0) return <NotFound />;
+    return (
+      <>
+        <MovedNotice />
+        <Suspense fallback={<Loading />}>
+          <DocsScreen projectId={projectId} project={project} displayName={info.data.display_name} />
+        </Suspense>
+      </>
     );
   }
   const spec = tail.join('/');
@@ -108,6 +124,9 @@ export function RepoViews({
 
   const base = `/${encodePath(project)}`;
   const items = [
+    ...(info.data.kind === 'spec'
+      ? [{ words: ['docs'], to: `${base}/-/docs`, label: t('plain.spec') }]
+      : []),
     { words: ['tree', 'blob', 'blame'], to: `${base}/-/tree`, label: t('repo.files') },
     { words: ['commits', 'commit'], to: `${base}/-/commits`, label: t('repo.commits') },
     { words: ['branches'], to: `${base}/-/branches`, label: t('repo.branches') },

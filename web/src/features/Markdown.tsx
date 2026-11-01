@@ -98,9 +98,21 @@ export interface MarkdownProps {
   rawRef?: string;
   /** Added to every heading level (the page already has its own h1 / h2). */
   headingOffset?: number;
+  /** Where a link to a file or folder of the project goes, instead of the
+   * file screens (the document portal keeps its readers in the portal).
+   * `null`: no link, the text only. */
+  linkTo?: (path: string, folder: boolean) => string | null;
 }
 
-export function Markdown({ source, project, refName, dir, headingOffset = 0, rawRef }: MarkdownProps) {
+export function Markdown({
+  source,
+  project,
+  refName,
+  dir,
+  headingOffset = 0,
+  rawRef,
+  linkTo,
+}: MarkdownProps) {
   const { t } = useTranslation();
 
   const components: Components = {
@@ -124,7 +136,13 @@ export function Markdown({ source, project, refName, dir, headingOffset = 0, raw
       if (resolved === null) return <span>{children}</span>;
       const fragment = rest.length > 0 ? `#${rest.join('#')}` : '';
       const folder = bare.endsWith('/') || resolved === '';
-      const to = folder ? treeUrl(project, refName, resolved) : blobUrl(project, refName, resolved);
+      const to =
+        linkTo !== undefined
+          ? linkTo(resolved, folder)
+          : folder
+            ? treeUrl(project, refName, resolved)
+            : blobUrl(project, refName, resolved);
+      if (to === null) return <span>{children}</span>;
       return <Link to={`${to}${fragment}`}>{children}</Link>;
     },
     img({ src, alt }) {

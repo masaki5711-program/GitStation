@@ -46,6 +46,7 @@ export const VIEW_WORDS = [
   'tags',
   'settings',
   'members',
+  'docs',
 ] as const;
 
 export function isViewWord(word: string | undefined): boolean {
