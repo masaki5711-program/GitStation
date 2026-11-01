@@ -5,7 +5,7 @@ use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
-use crate::repository::{RepositoryKind, RepositoryState};
+use crate::repository::RepositoryState;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
@@ -76,16 +76,14 @@ pub enum AuditDetails {
         owner: UserId,
     },
     /// `project.created` (D4 MR2): the project, its namespace, the parent
-    /// (a user or group namespace), its repository with the repository's
-    /// kind, the visibility and the creator (the first direct Owner). Also
+    /// (a user or group namespace), its repository, the visibility and the creator (the first direct Owner). Also
     /// the payload of the `project.created` event (integration class), so
-    /// ids, kind and visibility only — never the path or the names.
+    /// ids and visibility only — never the path or the names.
     ProjectCreated {
         project_id: ProjectId,
         namespace_id: NamespaceId,
         parent_namespace_id: NamespaceId,
         repository_id: RepoId,
-        kind: RepositoryKind,
         visibility: Visibility,
         owner: UserId,
     },
@@ -114,11 +112,10 @@ pub enum AuditDetails {
     // ── D4 MR3b: repository provisioning ──
     /// `repository.created` (D4 MR3b): the provisioning job created (or
     /// adopted) the bare repository and marked it ready. Also the payload of
-    /// the `repository.created` event (integration class): ids and kind only.
+    /// the `repository.created` event (integration class): ids only.
     RepositoryCreated {
         project_id: ProjectId,
         repository_id: RepoId,
-        kind: RepositoryKind,
     },
     /// `repository.reprovision_requested` (D4 MR3b, audit-only): an
     /// operator enqueued the provisioning job again (`forge admin repo
@@ -496,12 +493,12 @@ impl AuditDetails {
     /// AdminBootstrapped `{"created","namespace_id"}`,
     /// GroupCreated `{"namespace_id","parent_namespace_id","owner_id"}`,
     /// ProjectCreated `{"project_id","namespace_id","parent_namespace_id",
-    /// "repository_id","kind","visibility","owner_id"}`,
+    /// "repository_id","visibility","owner_id"}`,
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
-    /// RepositoryCreated `{"project_id","repository_id","kind"}`,
+    /// RepositoryCreated `{"project_id","repository_id"}`,
     /// RepositoryReprovisionRequested `{"repository_id","job_id","holder_job_id",
     /// "holder_state"}` (`holder_state` = `succeeded` with its id, or `none`).
     /// ProjectMemberAdded / ProjectMemberRemoved `{"user_id","role"}`,
@@ -574,7 +571,6 @@ impl AuditDetails {
                 namespace_id,
                 parent_namespace_id,
                 repository_id,
-                kind,
                 visibility,
                 owner,
             } => serde_json::json!({
@@ -582,7 +578,6 @@ impl AuditDetails {
                 "namespace_id": namespace_id.get(),
                 "parent_namespace_id": parent_namespace_id.get(),
                 "repository_id": repository_id.get(),
-                "kind": kind.as_str(),
                 "visibility": visibility.as_str(),
                 "owner_id": owner.get(),
             }),
@@ -657,11 +652,9 @@ impl AuditDetails {
             Self::RepositoryCreated {
                 project_id,
                 repository_id,
-                kind,
             } => serde_json::json!({
                 "project_id": project_id.get(),
                 "repository_id": repository_id.get(),
-                "kind": kind.as_str(),
             }),
             Self::RepositoryReprovisionRequested {
                 repository_id,

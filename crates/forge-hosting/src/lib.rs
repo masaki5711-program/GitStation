@@ -40,7 +40,7 @@ use forge_auth::{
 };
 use forge_core::{
     GroupId, GroupRecord, NamespaceId, ProjectId, ProjectRecord, ProtectedRefId, RefPattern,
-    RepositoryKind, RequestId, Role, UserId, Visibility,
+    RequestId, Role, UserId, Visibility,
 };
 use forge_db::access::Account;
 use forge_db::change::{Actor, ChangeContext};
@@ -89,7 +89,6 @@ pub struct NewProjectFields {
     pub display_name: String,
     pub description: String,
     pub visibility: Visibility,
-    pub kind: RepositoryKind,
 }
 
 /// A display name / description change (`None` = unchanged).
@@ -376,7 +375,6 @@ impl Hosting {
             display_name: fields.display_name.clone(),
             description: fields.description.clone(),
             visibility: fields.visibility,
-            kind: fields.kind,
             creator: user,
         };
         let (created, ()) = projects::create_decided(&self.db, &ctx, &new, |facts| {

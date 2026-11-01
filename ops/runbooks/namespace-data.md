@@ -17,7 +17,6 @@
       （`moved_path_unconfirmed` と同じ食い違い。`namespace_id` に名前空間）
     - `reason=stored_path_invalid`（`project_id` 付き）: プロジェクトの `full_path` が `NamespacePath::parse` を通らない（`rule` に理由）
     - `reason=project_without_repository`: `forge.projects` の行に `forge.repositories` の行がない（1 対 1 対 1 の片側が消えている）
-    - `reason=unknown_repository_kind`: `forge.repositories.kind` が CHECK の外の値（`raw` に保存値）
   - パスの解決（Smart HTTP、M1 phase 9 MR3 からリポジトリの ID と状態も同じ文で読む）でも出るもの:
     - `reason=project_without_repository`: 上と同じ（プロジェクトのパスへの clone / fetch が 500 になる）。認可の前に出るので、
       プロジェクトが見えない人にも 404 ではなく 500 になる。`projects::create` はプロジェクト・名前空間・リポジトリを 1 つの
@@ -50,7 +49,7 @@
    ```
 
 3. 制約が残っているか: `SELECT conname FROM pg_constraint WHERE conname IN ('namespaces_segment', 'namespaces_kind',
-   'namespace_tombstones_kind', 'projects_visibility', 'repositories_kind');`
+   'namespace_tombstones_kind', 'projects_visibility', 'repositories_state');`
 4. いつ誰が変えたか: `forge_audit.ddl_audit`（制約・トリガーの変更）と、`forge.audit_log` の `user.*` / `group.*` / `project.*` の行（正しい履歴）を見る。
    監査の行のない変更は、トリガーが無効だった時間がある — Runbook `append-only-violation` も確かめる。
 

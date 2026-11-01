@@ -1085,7 +1085,7 @@ async fn a_cycle_in_the_resolved_chain_is_membership_data_invalid() {
 // ── load_project: the details of GET /api/v1/projects/{id} (MR5) ─────────
 
 /// The details come from the same statement as the access facts: the
-/// current path (after a rename), the names, the repository kind and the
+/// current path (after a rename), the names and the
 /// creation time in UTC.
 #[tokio::test]
 async fn load_project_returns_the_details_with_the_access_facts() {
@@ -1098,7 +1098,6 @@ async fn load_project_returns_the_details_with_the_access_facts() {
         &NewProject {
             visibility: Visibility::Internal,
             description: "synthetic description".to_owned(),
-            kind: forge_core::RepositoryKind::Spec,
             ..NewProject::new("web", alice.namespace_id, "Web site", alice.user_id)
         },
     )
@@ -1113,7 +1112,6 @@ async fn load_project_returns_the_details_with_the_access_facts() {
     assert_eq!(record.path.full_path(), "alice/web");
     assert_eq!(record.display_name, "Web site");
     assert_eq!(record.description, "synthetic description");
-    assert_eq!(record.kind, forge_core::RepositoryKind::Spec);
     assert_eq!(
         record.access,
         ProjectAccess {
@@ -1192,32 +1190,20 @@ async fn a_project_row_this_build_cannot_read_is_namespace_data_invalid() {
         Visibility::Private,
     )
     .await;
-    let odd_kind = project(
-        &t,
-        "doc",
-        alice.namespace_id,
-        alice.user_id,
-        Visibility::Private,
-    )
-    .await;
     t.exec_superuser(&format!(
         "ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
          UPDATE forge.namespaces SET full_path = 'alice/elsewhere' WHERE id = {ns}; \
          ALTER TABLE forge.namespaces ENABLE TRIGGER USER; \
          ALTER TABLE forge.repositories DISABLE TRIGGER USER; \
          DELETE FROM forge.repositories WHERE project_id = {no_repo}; \
-         ALTER TABLE forge.repositories DROP CONSTRAINT repositories_kind; \
-         UPDATE forge.repositories SET kind = 'library' WHERE project_id = {odd}; \
          ALTER TABLE forge.repositories ENABLE TRIGGER USER",
         ns = unconfirmed.namespace_id.get(),
         no_repo = no_repo.project_id.get(),
-        odd = odd_kind.project_id.get(),
     ))
     .await;
     for (p, reason) in [
         (&unconfirmed, "project_path_unconfirmed"),
         (&no_repo, "project_without_repository"),
-        (&odd_kind, "unknown_repository_kind"),
     ] {
         let err = load_project(&t.db, p.project_id, Some(alice.user_id))
             .await

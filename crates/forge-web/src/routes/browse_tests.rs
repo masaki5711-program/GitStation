@@ -13,8 +13,8 @@ use forge_auth::{Credential, Principal, Scope};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
     LookupPath, NamespaceId, NamespacePath, ProjectAccess, ProjectId, ProjectRecord,
-    ProjectRepository, RepoId, RepositoryKind, RepositoryState, Resolution, Resolved,
-    ResolvedTarget, Role, UserId, Visibility,
+    ProjectRepository, RepoId, RepositoryState, Resolution, Resolved, ResolvedTarget, Role, UserId,
+    Visibility,
 };
 use forge_errors::ErrorCode;
 use forge_git::browse::BrowseLimits;
@@ -104,7 +104,6 @@ impl forge_core::ProjectAccessLoader for OneProject {
             path: NamespacePath::parse("acme/app").expect("path"),
             display_name: "App".to_owned(),
             description: "synthetic".to_owned(),
-            kind: RepositoryKind::System,
             created_at: "2026-11-01T00:00:00Z".to_owned(),
             repository: self.repository(),
         });

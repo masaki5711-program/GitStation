@@ -18,8 +18,7 @@ use forge_errors::ForgeError;
 
 use crate::namespace_path::{LookupPath, NamespacePath};
 use crate::{
-    GroupId, NamespaceId, ProjectId, RepoId, RepositoryKind, RepositoryState, Role, TombstoneId,
-    UserId, Visibility,
+    GroupId, NamespaceId, ProjectId, RepoId, RepositoryState, Role, TombstoneId, UserId, Visibility,
 };
 
 /// The future these traits return (boxed: they are stored as trait objects).
@@ -208,8 +207,6 @@ pub struct ProjectRecord {
     pub path: NamespacePath,
     pub display_name: String,
     pub description: String,
-    /// The kind of the project's repository (ADR-0004).
-    pub kind: RepositoryKind,
     /// `projects.created_at` in UTC, RFC 3339 (`2026-10-31T09:00:00Z`).
     pub created_at: String,
     /// The project's repository (storage id and state; M2 MR7: the browse

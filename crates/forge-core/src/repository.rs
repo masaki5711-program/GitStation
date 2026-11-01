@@ -1,32 +1,8 @@
-//! The kind and the provisioning state of a repository (step D4; ADR-0004,
-//! the CHECKs of forge.repositories.kind / state). The kind is fixed when the
-//! repository is created (M1, step D plan Q3): forge_app has no UPDATE
-//! privilege on the column.
-
-/// `spec` (specifications) or `system` (system development), ADR-0004.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RepositoryKind {
-    Spec,
-    System,
-}
-
-impl RepositoryKind {
-    /// Every kind, in the order spec, system.
-    pub const ALL: &'static [RepositoryKind] = &[Self::Spec, Self::System];
-
-    /// The database / audit string.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Spec => "spec",
-            Self::System => "system",
-        }
-    }
-
-    /// The kind named by `raw` (exact match), `None` for anything else.
-    pub fn parse(raw: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|k| k.as_str() == raw)
-    }
-}
+//! The provisioning state of a repository (step D4; the CHECK of
+//! forge.repositories.state). There is no repository kind any more
+//! (ADR-0023): the `forge.repositories.kind` column stays (migrations are
+//! append-only) and holds the constant `'system'`, written by
+//! `forge-db` at creation; nothing reads it.
 
 /// Whether the bare repository exists yet: `provisioning` from the creating
 /// transaction until the provisioning job has run `init_bare` and committed

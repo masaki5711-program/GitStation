@@ -21,7 +21,7 @@ fn ok(body: &str) -> Resp {
     Resp::json(200, body)
 }
 
-const PROJECT: &str = r#"{"id":7,"namespace_id":3,"path":"team/app","name":"app","display_name":"App","description":"","visibility":"private","kind":"system","created_at":"2026-01-01T00:00:00Z","role":"owner"}"#;
+const PROJECT: &str = r#"{"id":7,"namespace_id":3,"path":"team/app","name":"app","display_name":"App","description":"","visibility":"private","created_at":"2026-01-01T00:00:00Z","role":"owner"}"#;
 const GROUP: &str = r#"{"id":3,"namespace_id":9,"parent_id":null,"path":"team","name":"team","display_name":"Team","description":"","created_at":"2026-01-01T00:00:00Z","role":"owner"}"#;
 const MEMBER: &str = r#"{"user_id":12,"username":"bob","display_name":"Bob","role":"developer","active":true,"created_at":"2026-01-01T00:00:00Z"}"#;
 const RULE: &str = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
@@ -133,7 +133,7 @@ fn project_view_requests_the_id_and_renders_a_detail() {
     let o = gstn(&sb, &srv, &["project", "view", "7"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(srv.seen().pop().unwrap().target, "/api/v1/projects/7");
-    assert!(o.stdout.contains("path: team/app") && o.stdout.contains("kind: system"));
+    assert!(o.stdout.contains("path: team/app"));
     let j = gstn(
         &sb,
         &srv,
@@ -215,8 +215,6 @@ fn project_create_posts_only_what_was_given() {
             "Spec",
             "--description",
             "d",
-            "--kind",
-            "spec",
             "--visibility",
             "internal",
         ],
@@ -225,7 +223,7 @@ fn project_create_posts_only_what_was_given() {
     assert_eq!(
         body_of(&srv),
         json!({"namespace_id": 3, "path": "spec", "display_name": "Spec", "description": "d",
-               "kind": "spec", "visibility": "internal"})
+               "visibility": "internal"})
     );
     assert!(full.stdout.starts_with("Created project 7"));
 }
@@ -264,8 +262,9 @@ fn project_create_rejects_bad_input_locally() {
             "a",
             "--display-name",
             "A",
+            // ADR-0023: `--kind` is gone (an unknown flag, not ignored).
             "--kind",
-            "other",
+            "spec",
         ],
         vec![
             "project",

@@ -131,11 +131,10 @@ pub(crate) fn list_human(
     lines.join("\n")
 }
 
-const PROJECT_KEYS: [&str; 7] = [
+const PROJECT_KEYS: [&str; 6] = [
     "id",
     "path",
     "display_name",
-    "kind",
     "visibility",
     "role",
     "namespace_id",
@@ -187,7 +186,6 @@ pub fn project(cli: &Cli, cmd: &ProjectCommand, env: EnvFn<'_>, io: &mut Io<'_>)
                     "path",
                     "display_name",
                     "description",
-                    "kind",
                     "visibility",
                     "role",
                     "namespace_id",
@@ -201,7 +199,6 @@ pub fn project(cli: &Cli, cmd: &ProjectCommand, env: EnvFn<'_>, io: &mut Io<'_>)
             path,
             display_name,
             description,
-            kind,
             visibility,
         } => {
             let mut m = Map::new();
@@ -209,9 +206,6 @@ pub fn project(cli: &Cli, cmd: &ProjectCommand, env: EnvFn<'_>, io: &mut Io<'_>)
             m.insert("path".to_string(), json!(path));
             m.insert("display_name".to_string(), json!(display_name));
             put_opt(&mut m, "description", description.as_ref());
-            if let Some(k) = kind {
-                m.insert("kind".to_string(), json!(k.as_str()));
-            }
             if let Some(v) = visibility {
                 m.insert("visibility".to_string(), json!(v.as_str()));
             }

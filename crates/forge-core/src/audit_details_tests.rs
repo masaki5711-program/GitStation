@@ -193,15 +193,14 @@ fn token_audit_details_have_their_exact_shape_and_no_secret() {
 }
 
 #[test]
-fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
+fn project_created_has_ids_and_visibility_only_and_publishes_its_event() {
     use crate::ids::{ProjectId, RepoId};
-    use crate::{EventType, RepositoryKind, Visibility};
+    use crate::{EventType, Visibility};
     let created = AuditDetails::ProjectCreated {
         project_id: ProjectId::new(21),
         namespace_id: NamespaceId::new(8),
         parent_namespace_id: NamespaceId::new(3),
         repository_id: RepoId::new(34),
-        kind: RepositoryKind::System,
         visibility: Visibility::Private,
         owner: UserId::new(5),
     };
@@ -212,7 +211,6 @@ fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
             "namespace_id": 8,
             "parent_namespace_id": 3,
             "repository_id": 34,
-            "kind": "system",
             "visibility": "private",
             "owner_id": 5,
         })
@@ -235,15 +233,14 @@ fn project_created_has_ids_kind_and_visibility_only_and_publishes_its_event() {
 #[test]
 fn repository_created_and_reprovision_requested_have_ids_only() {
     use crate::ids::{ProjectId, RepoId};
-    use crate::{EventType, RepositoryKind};
+    use crate::EventType;
     let created = AuditDetails::RepositoryCreated {
         project_id: ProjectId::new(21),
         repository_id: RepoId::new(34),
-        kind: RepositoryKind::Spec,
     };
     assert_eq!(
         created.to_value(),
-        json!({"project_id": 21, "repository_id": 34, "kind": "spec"})
+        json!({"project_id": 21, "repository_id": 34})
     );
     assert_eq!(created.action(), "repository.created");
     assert_eq!(created.event_type(), Some(EventType::RepositoryCreated));

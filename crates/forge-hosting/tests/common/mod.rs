@@ -183,7 +183,6 @@ pub fn project_fields(path: &str) -> NewProjectFields {
         display_name: format!("Project {path}"),
         description: "synthetic".to_owned(),
         visibility: Visibility::Private,
-        kind: forge_core::RepositoryKind::System,
     }
 }
 

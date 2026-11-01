@@ -36,7 +36,7 @@
 //!   a cursor was handed out appears on a later page, and no row before the
 //!   cursor is repeated.
 //!
-//! - **Filters** (M2 MR6): `kind=spec|system` (projects), `membership=true`
+//! - **Filters** (M2 MR6): `membership=true`
 //!   (projects and groups: only where the caller holds a role, direct or
 //!   inherited) and `state=pending_deletion` (projects: only projects
 //!   pending deletion, each decided with `ProjectRestore` instead of
@@ -45,7 +45,9 @@
 //!   part of the cursor's purpose: a cursor handed out under one filter set
 //!   fails the tag under another (`rule=tag`), so a client cannot carry a
 //!   position from one view to another. Any other value is `FG-WEB-0006
-//!   reason=param_invalid param=kind|membership|state rule=invalid_value`.
+//!   reason=param_invalid param=membership|state rule=invalid_value`.
+//!   (There is no `kind` filter since ADR-0023: `?kind=` is
+//!   `param=query rule=unknown_parameter`, like any unknown parameter.)
 //!
 //! The answer is `{items, next_cursor, has_more}`; a project item is
 //! [`crate::routes::projects::project_view`]'s body, the one builder `GET /api/v1/projects/{id}` uses.
@@ -62,7 +64,7 @@ use forge_auth::{authorize, prove, Action, InstanceCtx, Principal, ProjectCtx, R
 use forge_core::config::ApiConfig;
 use forge_core::{
     parse_positive_id, CursorKeys, GroupId, GroupListing, GroupPageLoader, ProjectId,
-    ProjectPageLoader, ProjectRecord, RepositoryKind, Role, UserId,
+    ProjectPageLoader, ProjectRecord, Role, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use serde::Serialize;
@@ -99,11 +101,6 @@ pub const PROJECTS_QUERY: &[QueryParam] = &[
     QueryParam {
         name: "cursor",
         description: "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
-        integer_range: None,
-    },
-    QueryParam {
-        name: "kind",
-        description: "spec or system: only projects of this repository kind",
         integer_range: None,
     },
     QueryParam {
@@ -392,8 +389,7 @@ impl List {
             return base;
         }
         format!(
-            "{base}:kind={}:membership={}:state={}",
-            filter.kind.map_or("any", RepositoryKind::as_str),
+            "{base}:membership={}:state={}",
             filter.membership,
             if filter.pending_deletion {
                 "pending_deletion"
@@ -407,14 +403,12 @@ impl List {
 /// The filters of a list request (M2 MR6, see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Filter {
-    pub(crate) kind: Option<RepositoryKind>,
     pub(crate) membership: bool,
     pub(crate) pending_deletion: bool,
 }
 
 impl Filter {
     pub(crate) const NONE: Filter = Filter {
-        kind: None,
         membership: false,
         pending_deletion: false,
     };
@@ -430,12 +424,9 @@ pub(crate) fn parse_filters(query: Option<&str>, list: List) -> Result<Filter, F
     for pair in query.unwrap_or_default().split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
         let param: &'static str = match (key, list) {
-            ("kind", List::Projects) => "kind",
             ("state", List::Projects) => "state",
             ("membership", _) => "membership",
-            ("kind" | "state", List::Groups) => {
-                return Err(param_invalid("query", "unknown_parameter"))
-            }
+            ("state", List::Groups) => return Err(param_invalid("query", "unknown_parameter")),
             _ => continue,
         };
         if seen.contains(&param) {
@@ -443,12 +434,6 @@ pub(crate) fn parse_filters(query: Option<&str>, list: List) -> Result<Filter, F
         }
         seen.push(param);
         match (param, value) {
-            ("kind", raw) => {
-                filter.kind = Some(
-                    RepositoryKind::parse(raw)
-                        .ok_or_else(|| param_invalid("kind", "invalid_value"))?,
-                );
-            }
             ("membership", "true") => filter.membership = true,
             ("membership", "false") => filter.membership = false,
             ("state", "pending_deletion") => filter.pending_deletion = true,
@@ -466,7 +451,7 @@ pub(crate) struct ListQuery {
     pub(crate) cursor: Option<String>,
 }
 
-/// `limit` and `cursor`, strictly (the filters `kind`, `membership` and
+/// `limit` and `cursor`, strictly (the filters `membership` and
 /// `state` are [`parse_filters`]'): unknown or repeated parameters, a
 /// `limit` that is not a plain decimal in 1 ..= 100 and an empty cursor are
 /// `FG-WEB-0006 reason=param_invalid` (the value is never logged).
@@ -481,7 +466,7 @@ pub(crate) fn parse_query(query: Option<&str>) -> Result<ListQuery, ForgeError> 
         let slot = match key {
             "limit" => &mut limit,
             "cursor" => &mut cursor,
-            "kind" | "membership" | "state" => continue,
+            "membership" | "state" => continue,
             _ => return Err(param_invalid("query", "unknown_parameter")),
         };
         if slot.replace(value).is_some() {
@@ -633,7 +618,7 @@ fn next_cursor(
 /// `state=pending_deletion` it is decided with `ProjectRead` (which hides a
 /// project pending deletion), with it only projects pending deletion are
 /// considered, each decided with `ProjectRestore` (Owner, never an agent).
-/// `kind` and `membership` then narrow what was allowed.
+/// `membership` then narrows what was allowed.
 fn show_project(
     principal: &Principal,
     filter: &Filter,
@@ -653,9 +638,7 @@ fn show_project(
         Ok(proof) => proof,
         Err(e) => return denied_or_failed(e).map(|()| None),
     };
-    if filter.kind.is_some_and(|k| k != record.kind)
-        || (filter.membership && record.access.role.is_none())
-    {
+    if filter.membership && record.access.role.is_none() {
         return Ok(None);
     }
     project_body(&proof, record).map(Some)

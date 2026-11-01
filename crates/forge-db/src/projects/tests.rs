@@ -275,13 +275,12 @@ async fn project_create_writes_namespace_project_repository_owner_job_and_one_au
 }
 
 #[tokio::test]
-async fn a_project_under_a_group_keeps_its_kind_and_visibility() {
+async fn a_project_under_a_group_keeps_its_visibility_and_stores_the_constant_kind() {
     let t = FreshDb::migrated().await;
     let alice = user(&t, "alice").await;
     let acme = group(&t, "acme", None, alice.user_id).await;
     let api = group(&t, "api", Some(acme.namespace_id), alice.user_id).await;
     let new = NewProject {
-        kind: RepositoryKind::Spec,
         visibility: Visibility::Internal,
         description: "specifications".to_owned(),
         ..project("specs", api.namespace_id, alice.user_id)
@@ -291,7 +290,7 @@ async fn a_project_under_a_group_keeps_its_kind_and_visibility() {
     let row = trio(&mut su, created.project_id).await.expect("trio");
     assert_eq!(
         (row.0.as_str(), row.1, row.3.as_str(), row.5.as_str()),
-        ("acme/api/specs", 3, "spec", "internal")
+        ("acme/api/specs", 3, "system", "internal")
     );
     assert_eq!(
         project_access(&t.db, created.project_id, Some(alice.user_id))
