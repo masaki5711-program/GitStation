@@ -18,19 +18,3 @@ export function NotFound() {
     </section>
   );
 }
-
-/** A screen of a project that exists but is not built yet (repository
- * browsing arrives with the next release): say so, and offer the way back. */
-export function Unavailable({ backTo }: { backTo: string }) {
-  const { t } = useTranslation();
-  useDocumentTitle(t('unavailable.title'));
-  return (
-    <section aria-labelledby="unavailable-title">
-      <h1 id="unavailable-title">{t('unavailable.title')}</h1>
-      <p>{t('unavailable.body')}</p>
-      <p>
-        <Link to={backTo}>{t('unavailable.back')}</Link>
-      </p>
-    </section>
-  );
-}

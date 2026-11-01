@@ -16,12 +16,13 @@ import axe from 'axe-core';
 import { chromium } from 'playwright';
 
 import { PNG, REFS, browse } from './journey-repo.mjs';
+import { SECRET, settingsBackend } from './journey-settings.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
 
 const CSRF = 'a'.repeat(64);
 const COOKIE = 'gs_journey=1';
 
-const user = { id: 5, username: 'taro', display_name: 'Taro Yamada', is_admin: false };
+const user = { id: 5, username: 'taro', display_name: 'Taro Yamada', is_admin: true };
 const forgeWeb = {
   id: 7,
   namespace_id: 11,
@@ -49,6 +50,7 @@ const group = {
 function backend() {
   const projects = [forgeWeb];
   const unexpected = [];
+  const settings = settingsBackend(CSRF);
   let nextId = 8;
   const handle = (req, res, url, body) => {
     const path = url.pathname;
@@ -90,6 +92,16 @@ function backend() {
         csrf_token: CSRF,
         user,
       }), true;
+    }
+    const more = settings.answer(req, url, body, forgeWeb);
+    if (more !== null) {
+      if (more.error) return sendError(res, more.status, ...more.error), true;
+      if (more.status === 204) {
+        res.writeHead(204, { 'Cache-Control': 'no-store' });
+        res.end();
+        return true;
+      }
+      return sendJson(res, more.status, more.body), true;
     }
     if (key === 'GET /api/v1/projects') {
       const kind = url.searchParams.get('kind');
@@ -187,8 +199,8 @@ async function main() {
     const page = await context.newPage();
     page.on('console', (msg) => {
       // The browser logs every 4xx as a console error; the journey causes a
-      // 401 (signed out), a 404 (unknown path) and a 409 (duplicate) on purpose.
-      if (/Failed to load resource: the server responded with a status of (401|404|409)/.test(msg.text())) return;
+      // 401 (signed out), a 404 (unknown path), a 409 (duplicate or the last-administrator guard) and a 429 (rename limit) on purpose.
+      if (/Failed to load resource: the server responded with a status of (401|404|409|429)/.test(msg.text())) return;
       if (msg.type() === 'error' || /Content Security Policy/i.test(msg.text())) {
         problems.push(`console ${msg.type()}: ${msg.text()}`);
       }
@@ -359,6 +371,101 @@ async function main() {
       await check(name);
     }
     await page.evaluate(() => window.localStorage.removeItem('gitstation.lang'));
+    await page.setViewportSize({ width: 1100, height: 800 });
+
+
+    // 6c. Settings, members, tokens, sessions, deleted projects, administration.
+    const h1 = (name) => page.getByRole('heading', { level: 1, name }).waitFor({ timeout: 10_000 });
+    await page.goto(`${base}/acme/forge-web/-/settings`, { waitUntil: 'networkidle' });
+    await h1('Settings');
+    await page.getByLabel('Description (optional)').fill('The web UI, edited');
+    await page.getByRole('button', { name: 'Save' }).first().click();
+    await page.getByText('Saved.').first().waitFor();
+    await page.getByLabel('Pattern').fill('refs/heads/release/*');
+    await page.getByRole('button', { name: 'Protect a ref' }).click();
+    await page.getByRole('cell', { name: /refs\/heads\/release/ }).or(page.getByRole('rowheader', { name: /release/ })).first().waitFor();
+    await check('24-settings');
+    await page.getByLabel('Last part of the path').fill('forge-web-2');
+    await page.getByRole('button', { name: 'Move or rename' }).click();
+    const refusal = page.getByRole('alert').filter({ hasText: 'renamed or moved too often' });
+    await refusal.waitFor();
+    const refusalText = await refusal.innerText();
+    if (!refusalText.includes('req-move-429') || refusalText.includes('FG-REPO')) {
+      problems.push(`move refusal text: ${refusalText}`);
+    }
+    await check('25-move-refused');
+    await page.getByRole('button', { name: 'Delete this project' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Delete this project?' }).waitFor();
+    await check('26-delete-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+
+    await page.goto(`${base}/acme/forge-web/-/members`, { waitUntil: 'networkidle' });
+    await h1('Members');
+    await page.getByLabel('Find a user').fill('han');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await page.getByRole('button', { name: 'Add Hanako Sato' }).waitFor();
+    await check('27-members');
+    await page.getByRole('button', { name: 'Add Hanako Sato' }).click();
+    await page.getByText('Hanako Sato was added.').waitFor();
+    await page.locator('tr', { hasText: 'Jiro Suzuki' }).getByRole('button', { name: 'Remove' }).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'Remove this member?' }).waitFor();
+    await check('28-member-remove-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+
+    await page.goto(`${base}/taro/-/settings`, { waitUntil: 'networkidle' });
+    await h1('Account settings');
+    await page.getByLabel('Name', { exact: true }).fill('journey token');
+    await page.getByRole('button', { name: 'Create token' }).click();
+    const secret = page.getByTestId('token-secret');
+    await secret.waitFor();
+    if ((await page.getByTestId('token-value').innerText()) !== SECRET) problems.push('token secret not shown');
+    await check('29-token-secret');
+    await page.getByRole('button', { name: 'I have stored it' }).click();
+    await page.getByRole('row', { name: /journey token/ }).waitFor();
+    await check('30-tokens');
+    await page.goto(`${base}/taro/-/settings`, { waitUntil: 'networkidle' });
+    await h1('Account settings');
+    await page.getByRole('row', { name: /journey token/ }).waitFor();
+    if ((await page.locator('body').innerText()).includes('JOURNEYSYNTHETICSECRET')) {
+      problems.push('the token secret is still on the page after a reload');
+    }
+    await page.getByRole('link', { name: 'My sessions' }).click();
+    await page.getByText('This session').waitFor();
+    await check('31-sessions');
+    await page.getByRole('button', { name: /^End session started/ }).nth(1).click();
+    await page.getByRole('dialog').getByRole('heading', { name: 'End this session?' }).waitFor();
+    await check('32-session-confirm');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('link', { name: 'Deleted projects' }).click();
+    await page.getByText('No project is waiting for deletion.').waitFor();
+    await check('33-deleted-projects');
+    await page.getByRole('link', { name: 'Administration' }).first().click();
+    await page.getByText('Hanako Sato').first().waitFor();
+    await check('34-admin');
+    await page.getByRole('button', { name: 'Disable Taro Yamada' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Disable' }).click();
+    const guard = page.getByRole('dialog').getByRole('alert');
+    await guard.waitFor();
+    const guardText = await guard.innerText();
+    if (!guardText.includes('no administrator or group Owner') || !guardText.includes('req-disable-self') || /FG-AUTH|force/i.test(guardText)) {
+      problems.push(`guard refusal text: ${guardText}`);
+    }
+    await check('35-admin-refused');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+    await page.setViewportSize({ width: 375, height: 800 });
+    for (const [path, name, heading] of [
+      ['/acme/forge-web/-/settings', '36-settings-375', 'Settings'],
+      ['/acme/forge-web/-/members', '37-members-375', 'Members'],
+      ['/taro/-/settings?tab=admin', '38-admin-375', 'Account settings'],
+    ]) {
+      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+      await h1(heading);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
+      await check(name);
+    }
     await page.setViewportSize({ width: 1100, height: 800 });
 
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.

@@ -5,6 +5,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 
 import { call } from '../api/client';
 import { Loading } from '../components/Loading';
@@ -18,6 +19,7 @@ import { CreateGroupDialog, CreateProjectDialog } from '../features/CreateDialog
 import { GroupList, ProjectList } from '../features/Lists';
 import { roleLabel } from '../features/labels';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { encodePath } from '../features/repoUrls';
 import { useSession } from '../session/session';
 import styles from './Namespace.module.css';
 
@@ -115,6 +117,10 @@ export function GroupPage({ id, path }: { id: number; path: string }) {
             {role !== null && <span className={controls.badge}>{role}</span>}
           </p>
           {g.description !== '' && <p>{g.description}</p>}
+          <p className={styles.actions}>
+            <Link to={`/${encodePath(g.path)}/-/members`}>{t('members.title')}</Link>
+            <Link to={`/${encodePath(g.path)}/-/settings`}>{t('settings.title')}</Link>
+          </p>
         </div>
         {canCreate && (
           <div className={styles.actions}>

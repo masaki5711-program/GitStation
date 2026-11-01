@@ -4,6 +4,7 @@
 // identity provider's end-session URL, so the browser itself follows it.
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 
 import type { Session } from '../api/types';
 import styles from './UserMenu.module.css';
@@ -65,6 +66,32 @@ export function UserMenu({ session }: { session: Session }) {
         <p className={styles.who}>
           <span>{t('header.signedInAs')}</span> <code>{user.username}</code>
         </p>
+        <ul className={styles.links}>
+          <li>
+            <Link
+              className={styles.link}
+              to={`/${encodeURIComponent(user.username)}/-/settings`}
+              onClick={() => {
+                setOpen(false);
+              }}
+            >
+              {t('header.account')}
+            </Link>
+          </li>
+          {user.is_admin && (
+            <li>
+              <Link
+                className={styles.link}
+                to={`/${encodeURIComponent(user.username)}/-/settings?tab=admin`}
+                onClick={() => {
+                  setOpen(false);
+                }}
+              >
+                {t('header.admin')}
+              </Link>
+            </li>
+          )}
+        </ul>
         <form method="post" action="/-/auth/logout">
           <input type="hidden" name="csrf" value={session.csrf_token} />
           <button type="submit" className={styles.logout}>

@@ -126,7 +126,7 @@ export function CompareScreen({
             {t('compare.commits', { count: compare.data.commits.length })}
           </h2>
           {compare.data.commits_truncated && (
-            <p className={styles.warning} role="note" data-testid="compare-truncated">
+            <p className={styles.warning} role="status" data-testid="compare-truncated">
               {t('compare.commitsTruncated', { count: compare.data.commits.length })}
             </p>
           )}
