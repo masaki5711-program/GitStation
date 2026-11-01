@@ -187,3 +187,29 @@ pr-test-analyzer) returned BLOCK; the decisions below refine this ADR.
   `ProjectBody`（`project_view` が組み立てる唯一の形）、`UserSelf`、`Resolution` を載せた。生成は決定的（すべての map を並べ替える）で、
   同じ名前に 2 つの形があれば `x-forge-schema-conflicts` として出し、テストが落ちる。utoipa（5.x）と aes-gcm（0.10.3）は
   `cargo deny check` と `cargo audit` を通してから入れた。
+
+## Amendment（2026-11-01、M1 phase 8b MR7b: 一覧 `ProjectList` / `GroupList`）
+
+- **新しい Action `ProjectList` / `GroupList`**（`GET /api/v1/projects`、`GET /api/v1/groups`、`read_api`）。`Resource::Instance` に対して、
+  有効なサインイン済みの利用者すべてを許す（匿名 FG-AUTH-0001、無効 FG-AUTH-0004、`read_repository` / `write_repository` だけのトークン
+  FG-AUTH-0002。matrix の行は許可 6 / 5、拒否 5 / 3）。一覧そのものを許すだけで、**行ごとにもう一度 `authorize()` が決める**:
+  プロジェクトは `prove(ProjectRead)`（`project_view` と同じ証明。private の Guest、削除待ち、見えないものは出ない）、グループは
+  `authorize(GroupRead, Resource::Group { role })`。SQL では絞らない（計画の L1）ので、一覧と 1 件のルートの判定は食い違えない。
+  `GroupRead` の行を 3 つ足した（`api` のトークン許可、無効 FG-AUTH-0004、`read_repository` FG-AUTH-0002）。`GroupRead` 自身のルートは
+  MR7a なので `PLANNED` に残る。
+- **読み込み**: forge-core の `ProjectPageLoader::project_page(after, viewer, max_rows)` / `GroupPageLoader::group_page`（id の昇順、
+  `after` より後、見えるかどうかに関わらずすべて）。forge-db は 1 ページ 1 文（`forge_db::lists`、行の形は 1 件の読み込みと同じ）。
+  1 ページで読むのは最大 1000 行（走査の予算、1001 行目は続きがあるかだけを示す）。予算が先に尽きれば短い（空のこともある）ページを
+  `has_more: true` で返す。`limit` は 1 〜 100（既定 20）。
+- **カーソル**: 最後に消費した id（見せた行か、走査した行）を AES-256-GCM で封じる（`purpose = "projects.list:user=<id>"` /
+  `"groups.list:user=<id>"`）。見えない行の id は漏れず、他人や他の一覧のカーソルは FG-WEB-0006 `cursor_invalid rule=tag`。
+  `forge serve` は `api.cursor_keys_file` がなければ起動しない（FG-SYS-0002、Runbook `config-invalid`）。
+- **同時実行の上限と期限**（レビュー指摘の修正）: 一覧は `limit` に関わらず最大 1001 行を走査するので、同時に走る数を抑える。全体で
+  `api.list_max_concurrent`（既定 16）、1 人あたり `api.list_max_concurrent_per_principal`（既定 2、総数以下）。超えたら待たせず
+  FG-WEB-0008 `reason=list_concurrency`（`scope=global|principal`）を 503 + `Retry-After: 1` で返す（既存の ServerBusy を使う。枠は読み込みの間だけ
+  持ち、成功・失敗どちらでも返す）。設定は起動時に検証（FG-SYS-0002）。カーソルには発行時刻（秒）を封じた本文の中に入れ（形式の版は 2、
+  AEAD の対象）、`api.cursor_max_age_s`（既定 86400）より古いものは FG-WEB-0006 `cursor_invalid rule=expired`。遅い `projects.page` /
+  `groups.page` の手当ては runbook `connections`。
+- 残る漏れ: ページの件数から「この区間に見えない行がある」ことは分かる（L1 で受け入れた。SQL の上位集合 L2 への切り替えは M2 で
+  1 走査あたり ~10k を超えたときに、この ADR の Amendment で決める）。
+- OpenAPI: `ProjectPage` / `GroupPage` / `ListedGroup` の schema と、`Registry::queries` で `limit` / `cursor` の query の parameter を載せた。

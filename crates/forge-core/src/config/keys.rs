@@ -126,6 +126,12 @@ pub const KEYS: &[Key] = &[
     ),
     // M1 phase 8b MR6: the AES-256-GCM keys of the opaque list cursors.
     text("api.cursor_keys_file", "FORGE_API_CURSOR_KEYS_FILE"),
+    number("api.list_max_concurrent", "FORGE_API_LIST_MAX_CONCURRENT"),
+    number(
+        "api.list_max_concurrent_per_principal",
+        "FORGE_API_LIST_MAX_CONCURRENT_PER_PRINCIPAL",
+    ),
+    number("api.cursor_max_age_s", "FORGE_API_CURSOR_MAX_AGE_S"),
     // C8: the HMAC keys of the audit seal (ADR-0018 §4).
     text("audit.seal_keys_file", "FORGE_AUDIT_SEAL_KEYS_FILE"),
     // M1 phase 9 MR3: Smart HTTP limits (ADR-0007 amendment).

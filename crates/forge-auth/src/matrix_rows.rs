@@ -289,6 +289,32 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::UserSelfRead, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
     row(A::UserSelfRead, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
     row(A::UserSelfRead, W::DevTokenWriteRepository, F::Instance, deny(E::InsufficientScope)),
+    // --- ProjectList / GroupList (`GET /api/v1/projects`, `/groups`, M1 phase 8b MR7b) ---
+    // The list itself; each row is decided again with ProjectRead / GroupRead.
+    row(A::ProjectList, W::NonMember, F::Instance, Allow),
+    row(A::ProjectList, W::Developer, F::Instance, Allow),
+    row(A::ProjectList, W::Admin, F::Instance, Allow),
+    row(A::ProjectList, W::OwnerTokenReadApi, F::Instance, Allow),
+    row(A::ProjectList, W::AgentTokenReadApi, F::Instance, Allow),
+    row(A::ProjectList, W::DevTokenApi, F::Instance, Allow),
+    row(A::ProjectList, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::ProjectList, W::Disabled, F::Instance, deny(E::AccountDisabled)),
+    row(A::ProjectList, W::DisabledAdmin, F::Instance, deny(E::AccountDisabled)),
+    row(A::ProjectList, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
+    row(A::ProjectList, W::DevTokenWriteRepository, F::Instance, deny(E::InsufficientScope)),
+    row(A::GroupList, W::NonMember, F::Instance, Allow),
+    row(A::GroupList, W::Owner, F::Instance, Allow),
+    row(A::GroupList, W::Admin, F::Instance, Allow),
+    row(A::GroupList, W::OwnerTokenReadApi, F::Instance, Allow),
+    row(A::GroupList, W::DevTokenApi, F::Instance, Allow),
+    row(A::GroupList, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::GroupList, W::Disabled, F::Instance, deny(E::AccountDisabled)),
+    row(A::GroupList, W::DevTokenReadRepository, F::Instance, deny(E::InsufficientScope)),
+    // The rows of a list: ProjectRead decides each project (pending deletion
+    // and Guest on private are hidden; internal is shown), GroupRead each group.
+    row(A::GroupRead, W::DevTokenApi, F::Group, Allow),
+    row(A::GroupRead, W::Disabled, F::Group, deny(E::AccountDisabled)),
+    row(A::GroupRead, W::DevTokenReadRepository, F::Group, deny(E::InsufficientScope)),
     // --- PathResolve (`GET /api/v1/namespaces/resolve?path=`, ADR-0015) ---
     // Decided by "can see" (Guest on private resolves), not by a read role.
     // The `prefix=true` rows (ADR-0015) arrive with that mode in M2.

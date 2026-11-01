@@ -1165,7 +1165,7 @@
     },
     {
       "name": "API prefix",
-      "path": "/api/v1/projects",
+      "path": "/api/v1/no-such-resource",
       "form": "both",
       "reason": "unknown_route"
     },

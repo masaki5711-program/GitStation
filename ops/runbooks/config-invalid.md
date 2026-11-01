@@ -44,6 +44,11 @@
      - `unverified_remote`: `database.tls_mode` が `require`（サーバーの証明書を検証しない）か `disable` のまま、ループバック以外の DB に接続しようとした。本番では `verify-full` にする。どうしても必要な場合だけ `database.tls_allow_unverified = true` を明示する（起動のたびに警告が出る）
      - `not_absolute`: パスワードファイルか CA 証明書のファイルが相対パス
      - `insecure_permissions`: Unix で、パスワードファイルをグループや他のユーザーが読める。`chmod 600` にする。Windows では権限を検査しないので、ACL を運用で管理する
+     - `config_key=api.cursor_keys_file`（M1 phase 8b MR7b から `forge serve` は起動時に必ず読む。一覧のカーソルの鍵）: `missing`（未設定。
+       `FORGE_API_CURSOR_KEYS_FILE` か設定ファイルの `[api] cursor_keys_file` に絶対パスを書く）、`empty`、`invalid` / `invalid_key_id` /
+       `invalid_key`（`line` の行が `<kid> <64 桁の 16 進数>` でない）、`duplicate`（同じ kid が 2 行）、`unreadable`、`not_absolute`、
+       `insecure_permissions`。行の中身はログに出ない。新しい鍵は `openssl rand -hex 32` で作り、`1 <hex>` の 1 行を 0600 のファイルに書く
+       （入れ替えは ADR-0013 の Amendment MR6 の手順）
 
    環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定の全体は `forge doctor` で検証できる（読み取りのみ。`config` の行に `config_key` と `reason` が出る。`--config` も同じように指定する）。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。

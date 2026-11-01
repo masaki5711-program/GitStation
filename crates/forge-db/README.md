@@ -127,6 +127,14 @@ connection, mapping driver errors to registered codes, migrations
   audit details). Path lock and tombstone checks as for groups. `creator` must be the
   acting user (`Actor::System`, the operator / worker, may name anyone). `CreatedProject {
   project_id, namespace_id, repository_id, provision_job }`.
+- `lists::{project_page, group_page}` and `impl forge_core::ProjectPageLoader /
+  GroupPageLoader for Db` (M1 phase 8b MR7b): one statement per page
+  (`PROJECT_PAGE_SQL` / `GROUP_PAGE_SQL`): the ids above `after`, in order, at most
+  `max_rows` (1..=`MAX_PAGE_ROWS` = 10000, else `FG-SYS-0001
+  reason=page_size_out_of_range`), with the viewer's chain roles anchored at every
+  scanned namespace (the role loaders' columns). **No visibility filter**: a project row
+  is `resolve::interpret_project`'s (identical to `load_project`), a group row has
+  `FG-DB-0021 group_without_namespace | group_path_unconfirmed | stored_path_invalid`.
 - `resolve::{resolve, load_project, project_access}` and `impl forge_core::NamespaceResolver /
   ProjectAccessLoader for Db` (M1 phase 8 MR3, ADR-0015 Amendment MR3; `forge serve`
   injects the `Db` into forge-web like the authenticator):

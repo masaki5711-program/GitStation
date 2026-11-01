@@ -152,3 +152,44 @@ fn serve_and_db_commands_need_a_database_url() {
         assert!(err.contains("FG-SYS-0002"), "{args:?}: {err}");
     }
 }
+
+/// M1 phase 8b MR7b: the list routes need `api.cursor_keys_file`; `serve`
+/// reads it before it connects or binds — missing and invalid both stop
+/// the start with FG-SYS-0002 naming the key (never the file's content).
+#[test]
+fn serve_needs_valid_cursor_keys_before_it_connects() {
+    let root = tempfile::tempdir().expect("dir");
+    let root_path = root.path().to_string_lossy().into_owned();
+    // Port 1: nothing listens, so reaching the database would be another error.
+    let base = [
+        (
+            "FORGE_DATABASE_URL",
+            "postgres://forge_app@127.0.0.1:1/forge",
+        ),
+        ("FORGE_STORAGE_ROOT", root_path.as_str()),
+    ];
+    let out = forge(&["serve"], &base);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("FG-SYS-0002"), "{err}");
+    assert!(err.contains("api.cursor_keys_file"), "{err}");
+    assert!(err.contains("missing"), "{err}");
+
+    let keys = root.path().join("cursor.keys");
+    std::fs::write(&keys, "1 not-a-synthetic-secret-key\n").expect("write");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    let keys_path = keys.to_string_lossy().into_owned();
+    let mut env = base.to_vec();
+    env.push(("FORGE_API_CURSOR_KEYS_FILE", keys_path.as_str()));
+    let out = forge(&["serve"], &env);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("FG-SYS-0002"), "{err}");
+    assert!(err.contains("api.cursor_keys_file"), "{err}");
+    assert!(err.contains("invalid_key"), "{err}");
+    assert!(!err.contains("not-a-synthetic-secret-key"), "{err}");
+}

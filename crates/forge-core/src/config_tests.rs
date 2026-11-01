@@ -943,3 +943,47 @@ fn the_cursor_keys_file_is_checked_at_load_and_read_on_use() {
     let err = load(None, &env(&[("FORGE_API_CURSOR_KEY_FILE", path.as_str())])).expect_err("typo");
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+/// `api.list_max_concurrent*` and `api.cursor_max_age_s`: defaults, env and
+/// the rules (FG-SYS-0002).
+#[test]
+fn api_list_limits_and_cursor_age_have_defaults_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.api.list_max_concurrent, 16);
+    assert_eq!(cfg.api.list_max_concurrent_per_principal, 2);
+    assert_eq!(cfg.api.cursor_max_age, Duration::from_secs(86_400));
+
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_API_LIST_MAX_CONCURRENT", "4"),
+            ("FORGE_API_LIST_MAX_CONCURRENT_PER_PRINCIPAL", "4"),
+            ("FORGE_API_CURSOR_MAX_AGE_S", "60"),
+        ]),
+    )
+    .expect("env");
+    assert_eq!(cfg.api.list_max_concurrent, 4);
+    assert_eq!(cfg.api.cursor_max_age, Duration::from_secs(60));
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_API_LIST_MAX_CONCURRENT", "0")],
+            "api.list_max_concurrent",
+            "zero",
+        ),
+        (
+            vec![("FORGE_API_CURSOR_MAX_AGE_S", "0")],
+            "api.cursor_max_age_s",
+            "zero",
+        ),
+        (
+            vec![("FORGE_API_LIST_MAX_CONCURRENT_PER_PRINCIPAL", "17")],
+            "api.list_max_concurrent_per_principal",
+            "above_max",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        let text = err.to_string();
+        assert!(text.contains(key) && text.contains(reason), "{key}: {text}");
+    }
+}

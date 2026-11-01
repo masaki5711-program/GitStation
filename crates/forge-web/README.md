@@ -110,6 +110,19 @@ admitted proof.
   is_agent, token_scopes }` from the principal and what the authenticator
   read with the token (`TokenIdentity`, no second lookup); `is_admin` is the
   account flag. `Cache-Control: private, no-store`.
+- Routes (M1 phase 8b MR7b, `src/routes/lists.rs`): `GET|HEAD /api/v1/projects`
+  (`ProjectList`) and `/api/v1/groups` (`GroupList`), `read_api`, any active
+  signed-in user. Every row is decided again by `authorize()` (projects:
+  `prove(ProjectRead)` + `project_body`; groups: `authorize(GroupRead)`),
+  never in SQL. One `ProjectPageLoader` / `GroupPageLoader` call per page
+  (`AppState::lists`, `Lists::new(projects, groups, keys)`; `forge serve`
+  always sets it; without it `FG-SYS-0001 reason=lists_unconfigured`),
+  scanning at most `SCAN_BUDGET` = 1000 rows (+1 to know whether more
+  exist); a budget-cut page is short with `has_more`. `limit` 1..=100
+  (default 20), `cursor` = an AEAD cursor of the last consumed id bound to
+  the list and the caller (`FG-WEB-0006 cursor_invalid`); other parameters
+  `FG-WEB-0006 param_invalid`. Answer `{ items, next_cursor, has_more }`;
+  `FG-WEB-0002 operation=project_page|group_page` on a slow scan.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body
