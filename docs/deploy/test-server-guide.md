@@ -92,11 +92,11 @@ flowchart LR
 
 | リポジトリ | ブランチ | コミット | 出典 |
 |---|---|---|---|
-| GitStation | `claude/brave-cray-w62c35` | `8649cc65dc57b0708913c5d0e44c6f0a53728871`（M2 の MR1〜MR5・MR7・MR8 を統合） | `git log -1` で確認（この文書の作成時） |
+| GitStation | `claude/brave-cray-w62c35` | `ea83815c285ccc7e50445cde98d859ce2e8af886`（M2 の MR1〜MR8 を統合） | `git log -1` で確認（この文書の作成時） |
 | Kanflow | `claude/brave-cray-w62c35` | `23db573f14552f609ebae3270b1cde063fbf98a9`（PBI の機密フラグ D-5 まで） | 同上 |
 
 - GitStation の `main` はこのブランチの祖先（`8fea414`）で古い。**ブランチ `claude/brave-cray-w62c35` の先端を使う**。
-  MR5（ログアウト・リフレッシュ）は**含まれる**。MR6（UI 支援 API）は**含まれない**（作業中）(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
+  MR5（ログアウト・リフレッシュ）と MR6（UI 支援 API）は**含まれる**。画面の MR9〜MR12 は含まれない(出典: `git log`、`docs/plan/10-m2-plan.md` §6)。
 - 取得元: 両リポジトリとも `origin` は GitHub の私設リポジトリ（`git remote -v`）。**テストサーバーから GitHub に届くか、社内ミラーが要るかは「未確認」**。届かないなら、PC で `git bundle` を作って持ち込む（提案）。
 - 作業の前にコミットを固定する: `git checkout --detach <上の SHA>`（提案。再現性のため）。
 
@@ -146,7 +146,7 @@ flowchart LR
 
 ```bash
 cd <GITSTATION_SRC>
-git checkout --detach 8649cc65dc57b0708913c5d0e44c6f0a53728871   # 提案: 固定
+git checkout --detach ea83815c285ccc7e50445cde98d859ce2e8af886   # 提案: 固定
 
 # (a) 画面 (SPA) — 先にビルドする。build.rs は web/dist が無いと失敗する
 cd web
@@ -377,7 +377,7 @@ $FORGE --config <CONF_DIR>/forge.toml admin token revoke <TOKEN_ID>
 ```
 
 - スコープ: `read_repository` `write_repository`（clone/fetch と push）、`read_api` `api`（REST の読み / 読み書き）、`admin`（**管理者のトークンが管理者の権限を使うために必要**。無いと普通の利用者として動く）(出典: `crates/forge-core/src/scope.rs`)。有効期限は 1d〜365d、既定 90d。
-- **トークンは画面で発行できない**（トークンの画面・API は MR6 / MR11 で未実装: `docs/plan/10-m2-plan.md` §6）。`gstn` の説明が「GitStation の画面で発行」と書いていても、現状はこの CLI が唯一の入口。トークンをチャットやリポジトリに貼らない。
+- **トークンは画面ではまだ発行できない**（画面は MR11 で未実装）。API `POST /api/v1/user/tokens` は MR6 で入ったが、**ブラウザのセッションからだけ**呼べる（トークンからは FG-AUTH-0002。ADR-0019 Amendment M2）。Keycloak でログインできるまでは、この CLI（`forge admin token issue`）が唯一の入口。トークンをチャットやリポジトリに貼らない。
 - 他の利用者を作る方法は、OIDC の初回ログイン（自動作成）か、`bootstrap-admin --create`（管理者がいない時だけ）。OIDC を使わない場合に**2 人目以降のローカル利用者を作る経路は未確認**（`forge admin` に user create が無い）。
 - **注（接続のロール）**: runbook は `forge admin …` を `database.maint_url`（`forge_maint`）と書いているが、現行コードの `admin_token.rs` / `admin_user.rs` などは `Db::connect(cfg)`、つまり `database.url`（`forge_app`）で接続し、`maint_url()` の呼び出し元は本番コードに無い（`grep` で確認）。**権限不足で失敗したときの扱いは「未確認」**。まず `forge.toml`（app 用）で実行する。
 - `forge admin user link-identity --user … --issuer … --subject …` は OIDC の結び付けを手で直す (出典: `ops/runbooks/oidc-identity-link.md`)。
@@ -731,7 +731,7 @@ cargo run -q -p forge-web --bin gen-authz -- --check
 - 同時に複数の全体テストを走らせない（dev の Postgres が落ちた実績。CLAUDE.md）。DB に繋がらないときは**黙ってスキップせず失敗**する。
 - 一部だけ回す例（MR8 の確認と同じ形）: `FORGE_TEST_DATABASE_URL=… cargo nextest run -p forge-web -p forge-git -p forge-auth -p forge-core -p forge-errors -p forge-client -j 2`（761 件通過・1 件 skip が記録）(出典: `docs/handoff/2026-11-01-m2-mr8.md` §4)。
 - Web の UI: `cd web && npm ci --ignore-scripts && npm run lint && npm run typecheck && npm test`。`npm run smoke` は Chromium が要る (出典: `web/README.md`)。
-- 直近の完全な全体テストの記録: 2026-11-01、`8649cc6`（MR5 まで統合）で `cargo nextest run --workspace -j 4` → **1578 件合格・1 件 skip**（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
+- 直近の完全な全体テストの記録: 2026-11-01、`ea83815`（MR6 まで統合）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
 
 #### Kanflow（vitest / Playwright）
 
@@ -760,15 +760,15 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 | 項目 | 状態 | 出典 |
 |---|---|---|
 | MR5（ログアウト、バックチャネルのログアウト、5 分ごとのリフレッシュの確認、FG-AUTH-0017） | **統合済み**（`8649cc6`）。レビュー（security / rust / database / authz-matrix）の HIGH 1 件を修正し再レビューで承認。本物の Keycloak での E2E は未実行 | `docs/handoff/2026-11-01-m2-mr5.md`、`docs/adr/0021-oidc-keycloak-login-and-web-sessions.md` |
-| MR6（トークン・セッション・利用者検索・管理者の一覧と無効化の API、`gstn token`/`user`） | **未統合**（2026-11-01 時点で作業中） | 同上 MR6、`docs/api/openapi.json`（`/api/v1/user/tokens` 等が無い） |
+| MR6（トークン・セッション・利用者検索・管理者の一覧と無効化の API、`gstn token`/`user`、期限切れセッションの削除） | **統合済み**（`2d72558`）。レビューの HIGH 1 件（他人のトークンの失効）を修正し再レビューで承認。管理者が他人のトークンを失効する API は見送り | `docs/handoff/2026-11-01-m2-mr6.md`、`docs/api/openapi.json` |
 | UI の画面 MR9〜MR12（ログイン画面、ホーム、一覧・作成、リポジトリ閲覧、設定・メンバー・トークン、文書ポータル） | **未実装**。殻と基礎（i18n・トークン・ErrorNotice）まで | `docs/plan/10-m2-plan.md` §6、`web/README.md` |
-| トークンの画面での発行 | 無い（`forge admin token issue` だけ） | §3.6 |
+| トークンの画面での発行 | 画面は無い（MR11）。API はブラウザのセッションからのみ。CLI は `forge admin token issue` | §3.6 |
 | 閲覧の API | commits / commit / compare / blame / refs / resolve / tree / blob / raw / archive は**統合済み** | `docs/handoff/…-mr7.md`、`…-mr8.md` |
 | MR・レビュー・チェック・CI/CD・ローカル LLM・Issue・ナレッジ・文書ポータル | M3 以降（未実装） | `README.md` ロードマップ |
 | Kanflow 連携 | §5.1 のとおり未実装 | 計画 02 §13 |
 | GitHub Actions の CI | **一度も動いていない**。main か PR で 1 回動かすのが MR2 の CI 追加の前提 | `docs/plan/10-m2-plan.md` §8、`docs/ci.md` |
 | Keycloak の E2E（本物の Keycloak と通す）、realm JSON の実機での取り込み | **未実行**（realm の JSON は構文確認のみ） | `docs/handoff/2026-11-01-m2-mr4.md` §6 |
-| ワークスペース全体のテスト | `8649cc6` で **1578 件合格・1 件 skip**（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
+| ワークスペース全体のテスト | `ea83815` で **1607 件合格・1 件 skip**（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
 | MR4 のレビュー | security / rust（エラー契約・握りつぶしを含む）/ database / authz-matrix を実施。CRITICAL・HIGH なし。MEDIUM の指摘を `4e1c861` で修正し、指摘した評価役の再レビューで承認のうえ統合 | `docs/handoff/2026-11-01-m2-mr4.md`、`git log` |
 | MR7・MR8 のレビュー | MR7: git-protocol / security / authz-matrix / rust を実施、HIGH 1 件を `c1cb52d` で修正し再レビューで承認。MR8: git-protocol / rust / authz-matrix を実施、HIGH 3 件を `2c9b15e` で修正し再レビューで承認。どちらも承認後に統合 | `docs/handoff/…-mr7.md`、`…-mr8.md`、`git log` |
 | 持ち越し | OIDC の discovery にキャッシュ期限が無い（Keycloak 側のエンドポイント変更時は再起動）／state Cookie のサーバー側の 1 回限りは未実装／Keycloak イメージの digest 固定／秘密の走査の許可リスト／`web.hsts` の設定キー未実装／深いカーソル（`--skip`）は O(n²)（上限と時間切れで抑制）／木の項目名が UTF-8 でないものの扱い／3 ドットの比較・`--follow` なし／`git.browse.*` の設定なし | `docs/handoff/2026-11-01-m2-mr4.md` §7、`…-mr8.md` §6、`docs/adr/0022-…` |
