@@ -6,79 +6,65 @@
 //   npm run smoke -- --url http://127.0.0.1:8080   # a running `forge serve`
 //                                                  # built with embed-ui
 //
-// The stand-in serves web/dist the way forge-web does (the same bytes for
-// every page path, /-/assets/{file}) with the shell CSP read from
-// crates/forge-web/src/security_headers.rs, so the policy has one source.
+// The stand-in (scripts/standin.mjs) serves web/dist the way forge-web does
+// (the same bytes for every page path, /-/assets/{file}) with the shell CSP
+// read from crates/forge-web/src/security_headers.rs, so the policy has one
+// source. Signed out, every page shows the sign-in screen.
 // Playwright is a pinned devDependency (in the lockfile); the browser comes
 // from `npx playwright install chromium` (never an install script).
 //
 // Before the browser runs, dist/index.html is checked for inline <script>
 // and <style> (the shell CSP allows neither).
 import { readFileSync, existsSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { chromium } from 'playwright';
 
 import { inlineProblems } from './inline-check.mjs';
+import { dist, listen, sendJson, shellCsp, standIn } from './standin.mjs';
 
-const root = new URL('..', import.meta.url).pathname;
-const dist = join(root, 'dist');
 
-function shellCsp() {
-  const src = readFileSync(join(root, '../crates/forge-web/src/security_headers.rs'), 'utf8');
-  const m = src.match(/const CSP_SHELL_BASE: &str = "([\s\S]*?)";/);
-  if (!m) throw new Error('CSP_SHELL_BASE not found in security_headers.rs');
-  return m[1].replace(/\\\n\s*/g, '');
-}
-
-const TYPES = {
-  js: 'text/javascript; charset=utf-8',
-  css: 'text/css; charset=utf-8',
-  svg: 'image/svg+xml',
-  png: 'image/png',
-  json: 'application/json',
-};
-
-function standIn(csp) {
-  const index = readFileSync(join(dist, 'index.html'));
-  return createServer((req, res) => {
-    const path = new URL(req.url ?? '/', 'http://x').pathname;
-    const common = {
-      'X-Content-Type-Options': 'nosniff',
-      'Referrer-Policy': 'same-origin',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    };
-    if (path.startsWith('/api/')) {
-      res.writeHead(200, {
-        ...common,
-        'Content-Type': 'application/json',
-        'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
-      });
-      res.end(JSON.stringify({ items: [], has_more: false, next_cursor: null }));
-      return;
-    }
-    if (path.startsWith('/-/assets/')) {
-      const name = path.slice('/-/assets/'.length);
-      const file = join(dist, name);
-      const ext = name.slice(name.lastIndexOf('.') + 1);
-      if (name.includes('/') || name === 'index.html' || !TYPES[ext] || !existsSync(file)) {
-        res.writeHead(404, common);
-        res.end();
-        return;
-      }
-      res.writeHead(200, { ...common, 'Content-Type': TYPES[ext], 'Content-Security-Policy': csp });
-      res.end(readFileSync(file));
-      return;
-    }
-    res.writeHead(200, {
-      ...common,
-      'Content-Type': 'text/html; charset=utf-8',
-      'Content-Security-Policy': csp,
-      'Cache-Control': 'no-cache',
+/** A signed-in person and one empty project, so the pages render without a
+ * failed request (a 4xx is logged by the browser as a console error). */
+function smokeApi(_req, res, url) {
+  const path = url.pathname;
+  if (path === '/api/v1/session') {
+    sendJson(res, 200, {
+      absolute_expires_at: '2026-11-02T00:00:00Z',
+      idle_expires_at: '2026-11-01T04:00:00Z',
+      public_id: '0123456789abcdef',
+      csrf_token: 'c'.repeat(64),
+      user: { id: 1, username: 'taro', display_name: 'Taro Yamada', is_admin: false },
     });
-    res.end(index);
-  });
+  } else if (path === '/api/v1/projects' || path === '/api/v1/groups') {
+    sendJson(res, 200, { items: [], has_more: false, next_cursor: null });
+  } else if (path === '/api/v1/namespaces/resolve') {
+    sendJson(res, 200, {
+      canonical_path: 'acme/forge-web',
+      kind: 'project',
+      moved: false,
+      namespace_id: 11,
+      project_id: 1,
+    });
+  } else if (path === '/api/v1/projects/1') {
+    sendJson(res, 200, {
+      id: 1,
+      namespace_id: 11,
+      path: 'acme/forge-web',
+      name: 'forge-web',
+      display_name: 'Forge Web',
+      description: '',
+      visibility: 'internal',
+      kind: 'system',
+      created_at: '2026-10-01T00:00:00Z',
+      role: 'developer',
+    });
+  } else if (path === '/api/v1/projects/1/repository/refs') {
+    sendJson(res, 200, { default_branch: null, refs: [], truncated: false });
+  } else {
+    return false;
+  }
+  return true;
 }
 
 async function main() {
@@ -95,9 +81,8 @@ async function main() {
       for (const p of inline) console.error(`smoke: dist/index.html: ${p}`);
       process.exit(1);
     }
-    server = standIn(shellCsp());
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    base = `http://127.0.0.1:${server.address().port}`;
+    server = standIn(shellCsp(), smokeApi);
+    base = await listen(server);
   }
 
   const browser = await chromium.launch();

@@ -21,6 +21,29 @@
   width: auto;
 }
 
+.spacer {
+  flex: 1;
+}
+
+.language select {
+  min-height: 2.5rem;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-header-text);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-header-background);
+  color: var(--gs-header-text);
+  font: inherit;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .skip {
   position: absolute;
   left: -10000px;

@@ -1,0 +1,118 @@
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gs-space-4);
+  margin-bottom: var(--gs-space-6);
+}
+
+.title {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin: 0 0 var(--gs-space-3);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-3);
+}
+
+.block {
+  margin-bottom: var(--gs-space-8);
+}
+
+.heading {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-brand-navy);
+}
+
+.empty {
+  padding: var(--gs-space-4);
+  border: 1px dashed var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.empty p {
+  margin: 0;
+}
+
+.hint {
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.moved {
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-brand-orange);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: 0 0 var(--gs-space-6);
+}
+
+.summary dt {
+  color: var(--gs-color-text-muted);
+}
+
+.summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.card {
+  margin-bottom: var(--gs-space-6);
+  padding: var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.card h2 {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-brand-navy);
+}
+
+.cloneRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+}
+
+.clone {
+  flex: 1;
+  min-width: 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-background);
+  overflow-wrap: anywhere;
+}
+
+.pre {
+  margin: 0;
+  padding: var(--gs-space-3);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-background);
+  overflow-x: auto;
+}

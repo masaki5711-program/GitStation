@@ -7,3 +7,7 @@
   margin: 0 auto;
   padding: var(--gs-space-6) var(--gs-space-4);
 }
+
+.main:focus {
+  outline: none;
+}

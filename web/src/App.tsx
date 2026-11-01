@@ -5,10 +5,11 @@ import { Route, Routes } from 'react-router';
 
 import { ApiFailure, type ApiClient } from './api/client';
 import { ApiProvider } from './api/context';
-import { Header } from './components/Header';
+import { Layout } from './components/Layout';
 import { Home } from './pages/Home';
+import { NamespaceRoute } from './pages/Namespace';
 import { NotFound } from './pages/NotFound';
-import styles from './App.module.css';
+import { Permalink } from './pages/Permalink';
 
 /** A 4xx is an answer, not a blip: retry only network failures and 5xx. */
 function shouldRetry(failureCount: number, error: unknown): boolean {
@@ -28,17 +29,19 @@ export function createQueryClient(): QueryClient {
   });
 }
 
+/** `/` is Home; `/-/projects/{id}` the permalink; every other path is asked
+ * of the resolver (Namespace.tsx). Anything under `/-/` that the SPA has no
+ * screen for ends in the not-found page. */
 export function AppRoutes() {
   return (
-    <div className={styles.app}>
-      <Header />
-      <main id="main" className={styles.main}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </main>
-    </div>
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<Home />} />
+        <Route path="-/projects/:id/*" element={<Permalink />} />
+        <Route path="-/*" element={<NotFound />} />
+        <Route path="*" element={<NamespaceRoute />} />
+      </Route>
+    </Routes>
   );
 }
 

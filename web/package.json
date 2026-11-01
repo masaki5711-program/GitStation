@@ -16,7 +16,8 @@
     "gen:api": "openapi-typescript ../docs/api/openapi.json --output src/api/schema.gen.ts",
     "i18n:report": "node scripts/i18n-report.mjs",
     "licenses": "node scripts/check-licenses.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "journey": "node scripts/journey.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "5.104.4",
@@ -35,6 +36,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "5.2.0",
+    "axe-core": "4.14.0",
     "eslint": "9.39.5",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "5.2.0",

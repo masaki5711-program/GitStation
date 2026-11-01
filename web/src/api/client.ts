@@ -44,33 +44,68 @@ function isAbort(e: unknown): boolean {
   return e instanceof DOMException && e.name === 'AbortError';
 }
 
-export type ApiClient = Client<paths>;
+/** The CSRF token of the web session (`GET /api/v1/session`), kept in
+ * memory only: never in storage, never logged. */
+export interface CsrfStore {
+  token: string | null;
+}
+
+/** What the pages need besides the typed calls. */
+export interface ClientEnv {
+  readonly csrf: CsrfStore;
+  /** The `fetch` the client uses (the login probe goes through it too). */
+  readonly fetch: typeof globalThis.fetch;
+  /** Leave the SPA for a server route (login): `window.location.assign`. */
+  readonly assign: (url: string) => void;
+  readonly language: () => string;
+}
+
+export type ApiClient = Client<paths> & ClientEnv;
 
 const REQUEST_ID_HEADER = 'x-request-id';
+const CSRF_HEADER = 'X-GitStation-CSRF';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 /** One client per app; `language` is sent as `Accept-Language`, so the
  * server's `user_message` comes back in the UI's language. */
 export function createApiClient(options: {
   language: () => string;
   fetch?: typeof globalThis.fetch;
+  assign?: (url: string) => void;
 }): ApiClient {
+  const csrf: CsrfStore = { token: null };
+  const rawFetch: typeof globalThis.fetch =
+    options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const client = createClient<paths>({
     // Same origin (the shell and the API are one server, ADR-0022 §2).
     baseUrl: window.location.origin,
     credentials: 'same-origin',
-    ...(options.fetch ? { fetch: options.fetch } : {}),
+    fetch: rawFetch,
   });
   client.use({
     onRequest({ request }) {
       request.headers.set('Accept-Language', options.language());
       request.headers.set('Accept', 'application/json');
+      // Every unsafe request of a session carries the CSRF token (ADR-0021 §6).
+      if (!SAFE_METHODS.has(request.method) && csrf.token !== null) {
+        request.headers.set(CSRF_HEADER, csrf.token);
+      }
       return request;
     },
   });
-  return client;
+  return Object.assign(client, {
+    csrf,
+    fetch: rawFetch,
+    assign:
+      options.assign ??
+      ((url: string) => {
+        window.location.assign(url);
+      }),
+    language: options.language,
+  });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 

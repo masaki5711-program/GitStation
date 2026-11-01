@@ -10,6 +10,8 @@ import styles from './ErrorNotice.module.css';
 
 export interface ErrorNoticeProps {
   failure: Failure;
+  /** Replaces the generic heading (a known state such as "sign-in is not configured"). */
+  title?: string;
   onRetry?: () => void;
 }
 
@@ -25,7 +27,7 @@ function requestIdOf(failure: Failure): string | null {
   }
 }
 
-export function ErrorNotice({ failure, onRetry }: ErrorNoticeProps) {
+export function ErrorNotice({ failure, title, onRetry }: ErrorNoticeProps) {
   const { t } = useTranslation();
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   const message =
@@ -60,7 +62,7 @@ export function ErrorNotice({ failure, onRetry }: ErrorNoticeProps) {
     <section className={styles.notice} role="alert" aria-labelledby="error-notice-title">
       <h2 id="error-notice-title" className={styles.title}>
         <span aria-hidden="true" className={styles.icon} />
-        {t('error.title')}
+        {title ?? t('error.title')}
       </h2>
       <p className={styles.message}>{message}</p>
       {requestId !== null && (

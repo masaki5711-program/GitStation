@@ -1,5 +1,5 @@
 import { render } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 
 import { createApiClient } from '../src/api/client';
 import { AppProviders, AppRoutes, createQueryClient } from '../src/App';
@@ -28,20 +28,37 @@ export function json(status: number, body: unknown, headers: Record<string, stri
   });
 }
 
+/** Shows the router's location, so a test can see a `replace`. */
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <output data-testid="location">{location.pathname + location.search + location.hash}</output>
+  );
+}
+
 export async function renderApp(options: {
   fetch: typeof globalThis.fetch;
   path?: string;
   lang?: Language;
+  assign?: (url: string) => void;
 }) {
   const i18n = await createI18n(options.lang ?? 'ja');
-  const api = createApiClient({ language: () => i18n.language, fetch: options.fetch });
+  const api = createApiClient({
+    language: () => i18n.language,
+    fetch: options.fetch,
+    ...(options.assign ? { assign: options.assign } : {}),
+  });
   const queryClient = createQueryClient();
   queryClient.setDefaultOptions({ queries: { retry: false } });
-  return render(
-    <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
-      <MemoryRouter initialEntries={[options.path ?? '/']}>
-        <AppRoutes />
-      </MemoryRouter>
-    </AppProviders>,
-  );
+  return {
+    api,
+    ...render(
+      <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
+        <MemoryRouter initialEntries={[options.path ?? '/']}>
+          <AppRoutes />
+          <LocationProbe />
+        </MemoryRouter>
+      </AppProviders>,
+    ),
+  };
 }

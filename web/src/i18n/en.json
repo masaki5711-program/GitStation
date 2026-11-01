@@ -4,17 +4,127 @@
     "skipToContent": "Skip to content",
     "logoAlt": "GitStation home"
   },
-  "home": {
-    "title": "Projects",
+  "common": {
     "loading": "Loading…",
-    "empty": "There are no projects you can see yet.",
-    "notLoggedIn": "You are not signed in.",
-    "notLoggedInHint": "Signing in from the browser is coming soon.",
-    "more": "There are more projects.",
-    "visibility": {
-      "private": "Private",
-      "internal": "Internal"
+    "close": "Close",
+    "copied": "Copied",
+    "copyFailed": "Could not copy. Select the text and copy it yourself",
+    "truncated": "Only part of the list is shown because it reached the display limit.",
+    "breadcrumb": "Current location"
+  },
+  "header": {
+    "language": "Display language",
+    "signedInAs": "Signed in as",
+    "logout": "Sign out"
+  },
+  "language": {
+    "ja": "日本語",
+    "en": "English",
+    "id": "Bahasa Indonesia"
+  },
+  "login": {
+    "title": "Please sign in",
+    "lead": "GitStation uses your IoT portal account.",
+    "button": "Sign in with the IoT portal",
+    "starting": "Starting sign-in…",
+    "hint": "You will go to the IoT portal sign-in page and come back to this page afterwards.",
+    "notConfiguredTitle": "Sign-in is not set up yet",
+    "notConfigured": "This server has no sign-in configured. Please contact an administrator.",
+    "expiredTitle": "Your sign-in has expired",
+    "expired": "Please sign in again. You will come back to this page afterwards."
+  },
+  "home": {
+    "title": "Home",
+    "newProject": "New project",
+    "newGroup": "New group",
+    "mine": "Your projects",
+    "mineEmpty": "You are not a member of any project yet.",
+    "mineEmptyHint": "Create one with \"New project\", or ask a project administrator to add you.",
+    "filter": "Filter by name or path",
+    "filterEmpty": "No project matches.",
+    "specs": "Specifications",
+    "groups": "Your groups",
+    "recent": "Recently viewed",
+    "recentHint": "Remembered in this browser only."
+  },
+  "create": {
+    "parent": "Create in",
+    "parentChoose": "Choose one",
+    "parentPersonal": "(yours)",
+    "creating": "Creating…",
+    "project": {
+      "title": "New project",
+      "submit": "Create project"
+    },
+    "group": {
+      "title": "New group",
+      "submit": "Create group"
+    },
+    "subgroup": {
+      "title": "New subgroup"
     }
+  },
+  "form": {
+    "displayName": "Name",
+    "path": "Path (the name used in the URL)",
+    "pathHelp": "Lowercase letters, digits, hyphen, period and underscore; 1 to 64 characters. Changing it later changes the URL.",
+    "description": "Description (optional)",
+    "visibility": "Visibility",
+    "kind": "Kind",
+    "nameRequired": "Enter a name.",
+    "pathInvalid": "Use lowercase letters, digits, hyphen, period and underscore, starting and ending with a letter or digit.",
+    "parentRequired": "Choose where to create it."
+  },
+  "visibility": {
+    "private": "Private",
+    "internal": "Internal",
+    "privateHelp": "Only members can see it.",
+    "internalHelp": "Everyone signed in inside the company can see it. Only members can change it."
+  },
+  "kind": {
+    "spec": "Specification",
+    "system": "System",
+    "specHelp": "For documents such as equipment specifications.",
+    "systemHelp": "For the source of a program or system."
+  },
+  "role": {
+    "guest": "Guest",
+    "reporter": "Reporter",
+    "developer": "Developer",
+    "maintainer": "Maintainer",
+    "owner": "Owner"
+  },
+  "namespace": {
+    "subgroups": "Subgroups",
+    "projects": "Projects",
+    "empty": "There are no groups or projects you can see here yet.",
+    "group": "Group",
+    "user": "Personal",
+    "newProject": "New project",
+    "newSubgroup": "New subgroup"
+  },
+  "moved": {
+    "notice": "This location moved. The old address still opens it. Former path:"
+  },
+  "project": {
+    "emptyTitle": "The repository is empty",
+    "emptyBody": "Send the first files with these commands.",
+    "emptyCommands": "git clone {{url}}\ncd {{name}}\ngit switch -c main\ngit add .\ngit commit -m \"first commit\"\ngit push -u origin main",
+    "repository": "Repository",
+    "defaultBranch": "Default branch",
+    "branches": "Branches",
+    "tags": "Tags",
+    "refsTruncated": "The count reached its limit; there are more than shown.",
+    "path": "Path",
+    "created": "Created",
+    "clone": "Clone URL",
+    "copyClone": "Copy the URL",
+    "cloneHint": "Sign in to Git with an access token."
+  },
+  "unavailable": {
+    "title": "This screen is not available yet",
+    "body": "The screens for browsing files and history arrive in the next update.",
+    "back": "Back to the project"
   },
   "error": {
     "title": "Something went wrong",
@@ -28,7 +138,7 @@
   },
   "notFound": {
     "title": "Page not found",
-    "body": "Check that the URL is correct.",
+    "body": "Check that the URL is correct. This page also appears when you are not allowed to see it.",
     "home": "Back to home"
   }
 }

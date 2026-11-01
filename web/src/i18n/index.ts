@@ -36,6 +36,15 @@ export function detectLanguage(
   return 'ja';
 }
 
+/** Remember the user's choice in this browser only. */
+export function rememberLanguage(lng: Language): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, lng);
+  } catch {
+    // Storage disabled: the choice lasts for this page view only.
+  }
+}
+
 function storedLanguage(): string | null {
   try {
     return window.localStorage.getItem(STORAGE_KEY);

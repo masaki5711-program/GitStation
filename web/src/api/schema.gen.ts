@@ -4,6 +4,126 @@
  */
 
 export interface paths {
+    "/-/auth/backchannel-logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** OIDC Back-Channel Logout: the identity provider ends sessions with a signed logout token */
+        post: operations["post_auth_backchannel_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/-/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next */
+        get: operations["get_auth_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/-/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Start the browser sign-in: 302 to the identity provider (ADR-0021) */
+        get: operations["get_auth_login"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/-/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End the caller's own web session and 303 to the identity provider's logout (form post, sessions only) */
+        post: operations["post_auth_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every user with its state (administrators; keyset, opaque cursor) */
+        get: operations["get_api_v1_admin_users"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a user (administrators, never an agent; the administration guard always holds) */
+        post: operations["post_api_v1_admin_users_id_disable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/users/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A user's active web sessions (administrators) */
+        get: operations["get_api_v1_admin_users_id_sessions"];
+        put?: never;
+        post?: never;
+        /** End every web session of a user (administrators, never an agent) */
+        delete: operations["delete_api_v1_admin_users_id_sessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/groups": {
         parameters: {
             query?: never;
@@ -253,6 +373,142 @@ export interface paths {
         patch: operations["patch_api_v1_projects_id_protected_refs_rule_id"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/repository/blame": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Who last changed each line of a file (hunks; capped at 10 000 lines; binary files have none) */
+        get: operations["get_api_v1_projects_id_repository_blame"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One file's head as text (at most 1 MiB), or binary without content */
+        get: operations["get_api_v1_projects_id_repository_blob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A page of a revision's history, newest first (keyset cursor; optionally one path) */
+        get: operations["get_api_v1_projects_id_repository_commits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/commits/{oid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One commit: message and the diff against its first parent (capped; truncated past the caps) */
+        get: operations["get_api_v1_projects_id_repository_commits_oid"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare two revisions: the commits to has and from does not, and the tree diff (capped) */
+        get: operations["get_api_v1_projects_id_repository_compare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a repository's branches and tags (Reporter; internal: every signed-in user) */
+        get: operations["get_api_v1_projects_id_repository_refs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Split <ref>/<path> into a revision and a path (commit id, longest branch, longest tag) */
+        get: operations["get_api_v1_projects_id_repository_resolve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/repository/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One tree level of a revision (capped; truncated past the cap) */
+        get: operations["get_api_v1_projects_id_repository_tree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/restore": {
         parameters: {
             query?: never;
@@ -304,6 +560,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's own web session and its CSRF token (sessions only, ADR-0021) */
+        get: operations["get_api_v1_session"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/user": {
         parameters: {
             query?: never;
@@ -313,6 +586,92 @@ export interface paths {
         };
         /** The caller's own account (M1 phase 8b MR6) */
         get: operations["get_api_v1_user"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's active web sessions (sessions only) */
+        get: operations["get_api_v1_user_sessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/sessions/{public_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** End one of the caller's web sessions (sessions only) */
+        delete: operations["delete_api_v1_user_sessions_public_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's personal access tokens (never a secret) */
+        get: operations["get_api_v1_user_tokens"];
+        put?: never;
+        /** Create a personal access token for the caller (never with a token; the secret is shown once) */
+        post: operations["post_api_v1_user_tokens"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/user/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke one of the caller's tokens */
+        delete: operations["delete_api_v1_user_tokens_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find active users by username prefix or display name (names only, at most 20) */
+        get: operations["get_api_v1_users"];
         put?: never;
         post?: never;
         delete?: never;
@@ -382,6 +741,100 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        /**
+         * @description One user as the administration sees it (no e-mail or other personal
+         *     identifiers: the read pool never has them).
+         */
+        AdminUser: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            is_admin: boolean;
+            /** @description `human`, `service_account` or `bot`. */
+            kind: string;
+            /** @description `active` or `disabled`. */
+            state: string;
+            username: string;
+        };
+        /** @description A page of users. */
+        AdminUserPage: {
+            has_more: boolean;
+            items: components["schemas"]["AdminUser"][];
+            next_cursor: string | null;
+        };
+        /** @description A blamed file. */
+        BlameBody: {
+            /** @description NUL bytes or not UTF-8: no hunks (download it through the raw route). */
+            binary: boolean;
+            /** @description The commits the hunks name, in order of first appearance. */
+            commits: components["schemas"]["BlameCommitBody"][];
+            /** @description Hunks in file order. */
+            hunks: components["schemas"]["BlameHunkBody"][];
+            oid: string;
+            path: string;
+            ref: components["schemas"]["RevBody"];
+            /**
+             * Format: int64
+             * @description The whole file's size in bytes.
+             */
+            size: number;
+            /** @description The file has more lines than the server blames (10 000). */
+            truncated: boolean;
+        };
+        /** @description A commit named by a blame. */
+        BlameCommitBody: {
+            author_email: string;
+            author_name: string;
+            /**
+             * Format: int64
+             * @description Seconds since the epoch.
+             */
+            author_time: number;
+            /** @description `+0900`. */
+            author_tz: string;
+            /** @description The line is as old as the history git blamed goes. */
+            boundary: boolean;
+            oid: string;
+            /** @description The file's name in that commit. */
+            path: string;
+            summary: string;
+        };
+        /** @description Consecutive lines last changed by one commit. */
+        BlameHunkBody: {
+            /** @description The commit's id (see `commits`). */
+            commit: string;
+            lines: string[];
+            /** @description The first line's number in that commit's version. */
+            orig_start: number;
+            /** @description The first line's number in the file (1-based). */
+            start: number;
+        };
+        /** @description One file's head. */
+        BlobBody: {
+            /**
+             * @description NUL bytes or not UTF-8: no `content` (download it through the raw
+             *     route).
+             */
+            binary: boolean;
+            /** @description The text, at most 1 MiB; `null` when `binary`. */
+            content: string | null;
+            mode: string;
+            name: string;
+            oid: string;
+            path: string;
+            ref: components["schemas"]["RevBody"];
+            /**
+             * Format: int64
+             * @description The whole file's size in bytes.
+             */
+            size: number;
+            /** @description The file is longer than `content`. */
+            truncated: boolean;
+            /** @description `blob` or `symlink` (the content is the link's target). */
+            type: string;
+        };
         /** @description `PATCH …/members/{user_id}`: the member's new direct role. */
         ChangeMember: {
             role: components["schemas"]["RoleName"];
@@ -392,6 +845,54 @@ export interface components {
          */
         ChangeProtectedRef: {
             push_min_role: components["schemas"]["RoleName"];
+        };
+        /** @description One commit's metadata. */
+        CommitBody: {
+            author_email: string;
+            author_name: string;
+            /** @description ISO 8601 with the author's offset. */
+            authored_at: string;
+            committed_at: string;
+            committer_email: string;
+            committer_name: string;
+            oid: string;
+            /** @description In order; the first is the mainline of a merge. */
+            parents: string[];
+            /** @description The first paragraph of the message on one line. */
+            subject: string;
+        };
+        /** @description One commit with its message and diff. */
+        CommitDetailBody: {
+            commit: components["schemas"]["CommitBody"];
+            /** @description Against the first parent (a root commit: against nothing). */
+            diff: components["schemas"]["DiffBody"];
+            /** @description The whole message. */
+            message: string;
+        };
+        /** @description A page of the history. */
+        CommitsBody: {
+            commits: components["schemas"]["CommitBody"][];
+            has_more: boolean;
+            /**
+             * @description The commit the history is read from: `ref`'s commit on the first
+             *     page, the one the cursor keeps on the next pages.
+             */
+            head: string;
+            /** @description Pass as `cursor` for the next page; `null` on the last one. */
+            next_cursor: string | null;
+            path: string;
+            ref: components["schemas"]["RevBody"];
+        };
+        /** @description Two revisions compared. */
+        CompareBody: {
+            /** @description The commits `to` has and `from` does not, newest first. */
+            commits: components["schemas"]["CommitBody"][];
+            /** @description More commits than the server lists (200). */
+            commits_truncated: boolean;
+            /** @description The tree diff from `from` to `to`. */
+            diff: components["schemas"]["DiffBody"];
+            from: components["schemas"]["RevBody"];
+            to: components["schemas"]["RevBody"];
         };
         /** @description `POST /api/v1/groups` and `…/{id}/subgroups`. */
         CreateGroup: {
@@ -428,6 +929,35 @@ export interface components {
             /** @description `developer`, `maintainer` or `owner`. */
             push_min_role: components["schemas"]["RoleName"];
         };
+        /** @description `POST /api/v1/user/tokens`. */
+        CreateToken: {
+            /**
+             * Format: int32
+             * @description Days until it expires, 1..=365 (default 90).
+             */
+            expires_in_days?: number | null;
+            /** @description The token is for an AI agent (ADR-0017 §4.0); default false. */
+            is_agent?: boolean | null;
+            /** @description 1..=100 characters, no control or invisible format characters. */
+            name: string;
+            /**
+             * @description `read_repository`, `write_repository`, `read_api`, `api`, `admin`
+             *     (administrators only); at least one.
+             */
+            scopes: string[];
+        };
+        /** @description A created token: the secret, shown this once. */
+        CreatedToken: {
+            expires_at: string;
+            /** Format: int64 */
+            id: number;
+            is_agent: boolean;
+            name: string;
+            public_id: string;
+            scopes: string[];
+            /** @description The whole token. It is never shown again: store it now. */
+            token: string;
+        };
         /**
          * @description `DELETE /api/v1/projects/{id}`: when the grace period began and when
          *     the purge may start.
@@ -442,6 +972,68 @@ export interface components {
              *     purge has started).
              */
             purge_after: string;
+        };
+        /** @description The changed files of a diff. */
+        DiffBody: {
+            files: components["schemas"]["DiffFileBody"][];
+            /**
+             * @description A cap cut the diff: more files than listed (500), or a patch left
+             *     out because of its size.
+             */
+            truncated: boolean;
+        };
+        /** @description One changed file of a diff. */
+        DiffFileBody: {
+            /** @description git reports the change as binary: no patch. */
+            binary: boolean;
+            new_mode: string;
+            new_oid: string;
+            /** @description `null` for a deleted file. */
+            new_path: string | null;
+            old_mode: string;
+            old_oid: string;
+            /** @description `null` for an added file. */
+            old_path: string | null;
+            /**
+             * @description Why a file with hunks has no `patch`: `too_large` (over 256 KiB),
+             *     `total_cap` (the diff's patch bytes ran out; 2 MiB) or `not_utf8`.
+             */
+            omitted: string | null;
+            /**
+             * @description The hunks (`@@ …`); `""` for a change without any (mode only, a
+             *     pure rename, an empty file); `null` when `binary` or `omitted`.
+             */
+            patch: string | null;
+            /**
+             * Format: int32
+             * @description Renamed / copied: the similarity in percent.
+             */
+            similarity: number | null;
+            /** @description `added`, `modified`, `deleted`, `renamed`, `copied` or `type_changed`. */
+            status: string;
+        };
+        /** @description What a disable did. */
+        Disabled: {
+            /** @description `disabled`, or `already_disabled` (nothing was written). */
+            outcome: string;
+            /** Format: int64 */
+            user_id: number;
+        };
+        /** @description One tree entry. */
+        EntryBody: {
+            /** @description The octal mode as git prints it (`100644`, `040000`, …). */
+            mode: string;
+            name: string;
+            oid: string;
+            /** @description The entry's full path in the tree. */
+            path: string;
+            /**
+             * Format: int64
+             * @description Bytes; `null` for a tree or a submodule.
+             */
+            size: number | null;
+            /** @description `tree`, `blob`, `symlink` or `submodule`. */
+            type: string;
         };
         Error: {
             error_code: string;
@@ -615,6 +1207,28 @@ export interface components {
         ProtectedRefRules: {
             rules: components["schemas"]["ProtectedRefBody"][];
         };
+        /** @description One branch or tag. */
+        RefBody: {
+            /** @description The commit it peels to; `null` for a tag of a tree or a blob. */
+            commit: string | null;
+            /** @description `refs/heads/…` or `refs/tags/…`. */
+            full_name: string;
+            /** @description The short name (`main`, `v1.0`). */
+            name: string;
+            /** @description The object the ref names (an annotated tag: the tag object). */
+            target: string;
+            /** @description `branch` or `tag`. */
+            type: string;
+        };
+        /** @description A repository's branches and tags. */
+        RefsBody: {
+            /** @description The branch HEAD names; `null` for an empty repository. */
+            default_branch: string | null;
+            /** @description In ref name order. */
+            refs: components["schemas"]["RefBody"][];
+            /** @description More refs than the server lists (5 000): the list stops there. */
+            truncated: boolean;
+        };
         /** @description `POST /api/v1/namespaces/tombstones/release`. */
         ReleaseTombstone: {
             /** @description The tombstoned path, exactly (`group/sub/project`). */
@@ -654,17 +1268,115 @@ export interface components {
             namespace_id: number;
             /** Format: int64 */
             project_id?: number | null;
+            /**
+             * @description `prefix=true` only: the requested path's segments after the
+             *     project's (`pull/3`); absent when nothing follows.
+             */
+            remainder?: string | null;
             /** Format: int64 */
             user_id?: number | null;
+        };
+        /** @description A spec split into a revision and a path. */
+        ResolveBody: {
+            /** @description The rest of the spec: a path in the tree (`""` for the root). */
+            path: string;
+            ref: components["schemas"]["RevBody"];
+        };
+        /** @description A resolved revision. */
+        RevBody: {
+            /** @description The commit id. */
+            commit: string;
+            /** @description `refs/heads/…` / `refs/tags/…`; `null` for a commit id. */
+            full_name: string | null;
+            /** @description The short ref name, or the commit id. */
+            name: string;
+            /** @description `branch`, `tag` or `commit` (a full commit id was given). */
+            type: string;
         };
         /**
          * @description A role in a request.
          * @enum {string}
          */
         RoleName: "guest" | "reporter" | "developer" | "maintainer" | "owner";
+        /** @description The caller's web session. */
+        SessionBody: {
+            /** @description When the session ends at the latest (RFC 3339, UTC). */
+            absolute_expires_at: string;
+            /**
+             * @description Send as `X-GitStation-CSRF` on every state-changing request (64
+             *     lowercase hex; derived from the cookie, the same for the session's
+             *     lifetime).
+             */
+            csrf_token: string;
+            /** @description When the session ends without activity (RFC 3339, UTC). */
+            idle_expires_at: string;
+            /** @description The session's public id (never the secret). */
+            public_id: string;
+            user: components["schemas"]["SessionUser"];
+        };
+        /** @description One active session. */
+        SessionItem: {
+            absolute_expires_at: string;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** @description The session this request came with. */
+            current: boolean;
+            idle_expires_at: string;
+            last_seen_at: string;
+            /** @description Signed in through the identity provider. */
+            oidc: boolean;
+            /** @description The session's public id (16 hex; the `{public_id}` to end it). */
+            public_id: string;
+        };
+        /** @description A user's active sessions, newest first. */
+        SessionItems: {
+            items: components["schemas"]["SessionItem"][];
+            /** @description More active sessions exist than are shown (at most 100). */
+            truncated: boolean;
+        };
+        /** @description The signed-in user, as the session shows it. */
+        SessionUser: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            /**
+             * @description The account's administrator flag (a session carries administrator
+             *     rights when it is set).
+             */
+            is_admin: boolean;
+            username: string;
+        };
+        /** @description What ending a user's sessions did. */
+        SessionsRevoked: {
+            /**
+             * Format: int64
+             * @description How many sessions ended (0: there were none).
+             */
+            revoked_sessions: number;
+            /** Format: int64 */
+            user_id: number;
+        };
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
+        };
+        /** @description One token as the API shows it (never the secret or its hash). */
+        TokenBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            expires_at: string;
+            /** Format: int64 */
+            id: number;
+            last_used_at: string | null;
+            name: string;
+            /** @description The token's public part (`fgp_<public_id>_…`). */
+            public_id: string;
+            revoked_at: string | null;
+            scopes: string[];
+        };
+        /** @description The caller's tokens. */
+        TokenList: {
+            items: components["schemas"]["TokenBody"][];
         };
         /** @description `POST /api/v1/groups/{id}/transfer`. */
         TransferGroup: {
@@ -702,6 +1414,18 @@ export interface components {
              */
             reclaim?: boolean | null;
         };
+        /** @description One tree level. */
+        TreeBody: {
+            /** @description In git's order (byte order of the names). */
+            entries: components["schemas"]["EntryBody"][];
+            /** @description The tree's id. */
+            oid: string;
+            /** @description The tree's path (`""` for the root). */
+            path: string;
+            ref: components["schemas"]["RevBody"];
+            /** @description More entries than the server lists (5 000). */
+            truncated: boolean;
+        };
         /** @description `PATCH /api/v1/groups/{id}`: at least one field. */
         UpdateGroup: {
             description?: string | null;
@@ -711,6 +1435,17 @@ export interface components {
         UpdateProject: {
             description?: string | null;
             display_name?: string | null;
+        };
+        /** @description One search match: names only. */
+        UserName: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            username: string;
+        };
+        /** @description The matches of a search. */
+        UserNames: {
+            items: components["schemas"]["UserName"][];
         };
         /** @description The caller's account as the API shows it. */
         UserSelf: {
@@ -739,13 +1474,224 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    post_auth_backchannel_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_auth_callback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_auth_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_auth_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_users: {
+        parameters: {
+            query?: {
+                /** @description Rows per page, 1..=100 (default 50) */
+                limit?: number;
+                /** @description The previous page's next_cursor (opaque; bound to this list, this caller and the state filter) */
+                cursor?: string;
+                /** @description active or disabled (default: every user) */
+                state?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserPage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_users_id_disable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Disabled"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_users_id_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionItems"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_admin_users_id_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsRevoked"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_groups: {
         parameters: {
             query?: {
                 /** @description Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first */
                 limit?: number;
-                /** @description The previous page's next_cursor (opaque; bound to this list and this caller) */
+                /** @description The previous page's next_cursor (opaque; bound to this list, this caller and these filters) */
                 cursor?: string;
+                /** @description true: only groups where the caller holds a role (direct or inherited) */
+                membership?: string;
             };
             header?: never;
             path?: never;
@@ -1081,7 +2027,12 @@ export interface operations {
     };
     get_api_v1_namespaces_resolve: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The namespace path (percent-encoded) */
+                path?: string;
+                /** @description true: the longest prefix of path that is a project the caller can see, with the rest as remainder (M2 rescue of GitHub-shaped URLs) */
+                prefix?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1146,8 +2097,14 @@ export interface operations {
             query?: {
                 /** @description Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first */
                 limit?: number;
-                /** @description The previous page's next_cursor (opaque; bound to this list and this caller) */
+                /** @description The previous page's next_cursor (opaque; bound to this list, this caller and these filters) */
                 cursor?: string;
+                /** @description spec or system: only projects of this repository kind */
+                kind?: string;
+                /** @description true: only projects where the caller holds a role (direct or inherited) */
+                membership?: string;
+                /** @description pending_deletion: only projects pending deletion that the caller may restore (Owner) */
+                state?: string;
             };
             header?: never;
             path?: never;
@@ -1574,6 +2531,290 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_repository_blame: {
+        parameters: {
+            query?: {
+                /** @description Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag) */
+                ref?: string;
+                /** @description Required. The file's path; / separated, no empty, . or .. segment */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlameBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_blob: {
+        parameters: {
+            query?: {
+                /** @description Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag) */
+                ref?: string;
+                /** @description The path in the tree (default: the root); / separated, no empty, . or .. segment */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlobBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_commits: {
+        parameters: {
+            query?: {
+                /** @description Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag) */
+                ref?: string;
+                /** @description Only commits that changed this path (default: all); / separated, no empty, . or .. segment */
+                path?: string;
+                /** @description Commits per page, 1..=100 (default 30) */
+                limit?: number;
+                /** @description The previous page's next_cursor (opaque; belongs to the same path; continues from the commit the first page was read at) */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_commits_oid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                oid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitDetailBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_compare: {
+        parameters: {
+            query?: {
+                /** @description Required. The base: a full commit id, refs/heads/… or refs/tags/…, or a short name */
+                from?: string;
+                /** @description Required. The head, named like from */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompareBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_refs: {
+        parameters: {
+            query?: {
+                /** @description branch | tag (default: both) */
+                type?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_resolve: {
+        parameters: {
+            query?: {
+                /** @description Required. <ref>/<path> as in a page URL (e.g. feature/x/src/lib.rs): full commit id first, then the longest branch, then the longest tag */
+                spec?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_repository_tree: {
+        parameters: {
+            query?: {
+                /** @description Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag) */
+                ref?: string;
+                /** @description The path in the tree (default: the root); / separated, no empty, . or .. segment */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TreeBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_api_v1_projects_id_restore: {
         parameters: {
             query?: never;
@@ -1675,6 +2916,35 @@ export interface operations {
             };
         };
     };
+    get_api_v1_session: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_user: {
         parameters: {
             query?: never;
@@ -1691,6 +2961,187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserSelf"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_sessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionItems"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_user_sessions_public_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                public_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_user_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_user_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateToken"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedToken"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_user_tokens_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_users: {
+        parameters: {
+            query?: {
+                /** @description 2..=64 characters: a username prefix or part of a display name */
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserNames"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
