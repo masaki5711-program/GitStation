@@ -110,24 +110,34 @@ impl Loader<AppState> for RepositoryOf {
             else {
                 return Err(param_invalid("id", "not_positive_decimal"));
             };
-            let Some(record) = projects::load_bounded(state, id, viewer).await? else {
-                return Ok(absent());
-            };
-            if record.id != id {
-                return Err(ForgeError::new(ErrorCode::Internal)
-                    .with_context("reason", "loaded_another_project")
-                    .with_context("project_id", id.get())
-                    .with_context("loaded_project_id", record.id.get()));
-            }
-            Ok(Lookup::Found {
-                ctx: ProjectCtx::new(projects::loaded(&record)),
-                canonical: Some(record.path.clone()), // clone: the record moves on too
-                tombstone: None,
-                project: Some(record),
-                group: None,
-            })
+            load_project_lookup(state, id, viewer).await
         })
     }
+}
+
+/// The project `id` as the browse routes' lookup: one `load_project` call,
+/// whose row carries the repository.
+pub(crate) async fn load_project_lookup(
+    state: &AppState,
+    id: ProjectId,
+    viewer: Option<UserId>,
+) -> Result<Lookup<ProjectCtx>, ForgeError> {
+    let Some(record) = projects::load_bounded(state, id, viewer).await? else {
+        return Ok(absent());
+    };
+    if record.id != id {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "loaded_another_project")
+            .with_context("project_id", id.get())
+            .with_context("loaded_project_id", record.id.get()));
+    }
+    Ok(Lookup::Found {
+        ctx: ProjectCtx::new(projects::loaded(&record)),
+        canonical: Some(record.path.clone()), // clone: the record moves on too
+        tombstone: None,
+        project: Some(record),
+        group: None,
+    })
 }
 
 // ── the answers ────────────────────────────────────────────────────────
@@ -248,7 +258,7 @@ pub struct BlobBody {
     pub truncated: bool,
 }
 
-fn rev_body(rev: &ResolvedRev) -> RevBody {
+pub(crate) fn rev_body(rev: &ResolvedRev) -> RevBody {
     RevBody {
         kind: rev.kind().to_owned(),
         name: rev.display_name().to_owned(),
@@ -337,7 +347,7 @@ fn blob_body(rev: &ResolvedRev, path: &RepoPath, blob: &Blob) -> BlobBody {
 /// The decoded values of the allowed parameters (each at most once).
 /// `FG-WEB-0006 param_invalid`: `query unknown_parameter`, `<name>
 /// repeated`, `<name> malformed` (bad percent-encoding or not UTF-8).
-fn query(
+pub(crate) fn query(
     raw: Option<&str>,
     allowed: &[&'static str],
 ) -> Result<Vec<(&'static str, String)>, ForgeError> {
@@ -359,7 +369,7 @@ fn query(
     Ok(out)
 }
 
-fn take<'a>(params: &'a [(&'static str, String)], name: &str) -> Option<&'a str> {
+pub(crate) fn take<'a>(params: &'a [(&'static str, String)], name: &str) -> Option<&'a str> {
     params
         .iter()
         .find(|(k, _)| *k == name)
@@ -367,7 +377,7 @@ fn take<'a>(params: &'a [(&'static str, String)], name: &str) -> Option<&'a str>
 }
 
 /// A required, non-empty parameter.
-fn required<'a>(
+pub(crate) fn required<'a>(
     params: &'a [(&'static str, String)],
     name: &'static str,
 ) -> Result<&'a str, ForgeError> {
@@ -378,7 +388,7 @@ fn required<'a>(
     }
 }
 
-fn path_param(params: &[(&'static str, String)]) -> Result<RepoPath, ForgeError> {
+pub(crate) fn path_param(params: &[(&'static str, String)]) -> Result<RepoPath, ForgeError> {
     RepoPath::parse(take(params, "path").unwrap_or_default())
         .map_err(|rule| param_invalid("path", rule))
 }
@@ -387,14 +397,17 @@ fn path_param(params: &[(&'static str, String)]) -> Result<RepoPath, ForgeError>
 
 /// What a handler works on, once `authorize()` allowed: the browse state,
 /// the project and its ready repository.
-struct Target {
-    smart: Arc<SmartHttp>,
-    project: ProjectId,
-    repository: ProjectRepository,
+pub(crate) struct Target {
+    pub(crate) smart: Arc<SmartHttp>,
+    pub(crate) project: ProjectId,
+    pub(crate) repository: ProjectRepository,
 }
 
 impl Target {
-    fn of(state: &AppState, request: &Dispatched<ProjectCtx>) -> Result<Self, ForgeError> {
+    pub(crate) fn of(
+        state: &AppState,
+        request: &Dispatched<ProjectCtx>,
+    ) -> Result<Self, ForgeError> {
         let Some(smart) = state.smart_http.as_ref() else {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "smart_http_unconfigured"));
@@ -422,7 +435,7 @@ impl Target {
 
 /// Run one handler body; any failure is rendered with the request id and
 /// the route (the target's ids once known).
-async fn answer<T, F, Fut>(
+pub(crate) async fn answer<T, F, Fut>(
     state: AppState,
     request: Dispatched<ProjectCtx>,
     route: &'static str,

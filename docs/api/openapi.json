@@ -20,6 +20,139 @@
         ],
         "type": "object"
       },
+      "BlameBody": {
+        "additionalProperties": false,
+        "description": "A blamed file.",
+        "properties": {
+          "binary": {
+            "description": "NUL bytes or not UTF-8: no hunks (download it through the raw route).",
+            "type": "boolean"
+          },
+          "commits": {
+            "description": "The commits the hunks name, in order of first appearance.",
+            "items": {
+              "$ref": "#/components/schemas/BlameCommitBody"
+            },
+            "type": "array"
+          },
+          "hunks": {
+            "description": "Hunks in file order.",
+            "items": {
+              "$ref": "#/components/schemas/BlameHunkBody"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "size": {
+            "description": "The whole file's size in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "The file has more lines than the server blames (10 000).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "size",
+          "binary",
+          "hunks",
+          "commits",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "BlameCommitBody": {
+        "additionalProperties": false,
+        "description": "A commit named by a blame.",
+        "properties": {
+          "author_email": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "author_time": {
+            "description": "Seconds since the epoch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "author_tz": {
+            "description": "`+0900`.",
+            "type": "string"
+          },
+          "boundary": {
+            "description": "The line is as old as the history git blamed goes.",
+            "type": "boolean"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The file's name in that commit.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "author_name",
+          "author_email",
+          "author_time",
+          "author_tz",
+          "summary",
+          "boundary",
+          "path"
+        ],
+        "type": "object"
+      },
+      "BlameHunkBody": {
+        "additionalProperties": false,
+        "description": "Consecutive lines last changed by one commit.",
+        "properties": {
+          "commit": {
+            "description": "The commit's id (see `commits`).",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "orig_start": {
+            "description": "The first line's number in that commit's version.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "description": "The first line's number in the file (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commit",
+          "start",
+          "orig_start",
+          "lines"
+        ],
+        "type": "object"
+      },
       "BlobBody": {
         "additionalProperties": false,
         "description": "One file's head.",
@@ -102,6 +235,156 @@
         },
         "required": [
           "push_min_role"
+        ],
+        "type": "object"
+      },
+      "CommitBody": {
+        "additionalProperties": false,
+        "description": "One commit's metadata.",
+        "properties": {
+          "author_email": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "authored_at": {
+            "description": "ISO 8601 with the author's offset.",
+            "type": "string"
+          },
+          "committed_at": {
+            "type": "string"
+          },
+          "committer_email": {
+            "type": "string"
+          },
+          "committer_name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "parents": {
+            "description": "In order; the first is the mainline of a merge.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "description": "The first paragraph of the message on one line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "parents",
+          "author_name",
+          "author_email",
+          "authored_at",
+          "committer_name",
+          "committer_email",
+          "committed_at",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "CommitDetailBody": {
+        "additionalProperties": false,
+        "description": "One commit with its message and diff.",
+        "properties": {
+          "commit": {
+            "$ref": "#/components/schemas/CommitBody"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody",
+            "description": "Against the first parent (a root commit: against nothing)."
+          },
+          "message": {
+            "description": "The whole message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "message",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "CommitsBody": {
+        "additionalProperties": false,
+        "description": "A page of the history.",
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "head": {
+            "description": "The commit the history is read from: `ref`'s commit on the first\npage, the one the cursor keeps on the next pages.",
+            "type": "string"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "ref",
+          "head",
+          "path",
+          "commits",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "CompareBody": {
+        "additionalProperties": false,
+        "description": "Two revisions compared.",
+        "properties": {
+          "commits": {
+            "description": "The commits `to` has and `from` does not, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "description": "More commits than the server lists (200).",
+            "type": "boolean"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody",
+            "description": "The tree diff from `from` to `to`."
+          },
+          "from": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "to": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "commits",
+          "commits_truncated",
+          "diff"
         ],
         "type": "object"
       },
@@ -223,6 +506,104 @@
           "id",
           "deleted_at",
           "purge_after"
+        ],
+        "type": "object"
+      },
+      "DiffBody": {
+        "additionalProperties": false,
+        "description": "The changed files of a diff.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiffFileBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "A cap cut the diff: more files than listed (500), or a patch left\nout because of its size.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "files",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "DiffFileBody": {
+        "additionalProperties": false,
+        "description": "One changed file of a diff.",
+        "properties": {
+          "binary": {
+            "description": "git reports the change as binary: no patch.",
+            "type": "boolean"
+          },
+          "new_mode": {
+            "type": "string"
+          },
+          "new_oid": {
+            "type": "string"
+          },
+          "new_path": {
+            "description": "`null` for a deleted file.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "old_mode": {
+            "type": "string"
+          },
+          "old_oid": {
+            "type": "string"
+          },
+          "old_path": {
+            "description": "`null` for an added file.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "omitted": {
+            "description": "Why a file with hunks has no `patch`: `too_large` (over 256 KiB),\n`total_cap` (the diff's patch bytes ran out; 2 MiB) or `not_utf8`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch": {
+            "description": "The hunks (`@@ …`); `\"\"` for a change without any (mode only, a\npure rename, an empty file); `null` when `binary` or `omitted`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "similarity": {
+            "description": "Renamed / copied: the similarity in percent.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`added`, `modified`, `deleted`, `renamed`, `copied` or `type_changed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "old_path",
+          "new_path",
+          "old_mode",
+          "new_mode",
+          "old_oid",
+          "new_oid",
+          "similarity",
+          "binary",
+          "patch",
+          "omitted"
         ],
         "type": "object"
       },
@@ -2419,6 +2800,65 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/projects/{id}/repository/blame": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_blame",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The file's path; / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlameBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Who last changed each line of a file (hunks; capped at 10 000 lines; binary files have none)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
     "/api/v1/projects/{id}/repository/blob": {
       "get": {
         "operationId": "get_api_v1_projects_id_repository_blob",
@@ -2475,6 +2915,193 @@
           }
         },
         "summary": "One file's head as text (at most 1 MiB), or binary without content",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/commits": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_commits",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only commits that changed this path (default: all); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Commits per page, 1..=100 (default 30)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; belongs to the same path; continues from the commit the first page was read at)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A page of a revision's history, newest first (keyset cursor; optionally one path)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/commits/{oid}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_commits_oid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "oid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitDetailBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One commit: message and the diff against its first parent (capped; truncated past the caps)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/compare": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_compare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. The base: a full commit id, refs/heads/… or refs/tags/…, or a short name",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The head, named like from",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Compare two revisions: the commits to has and from does not, and the tree diff (capped)",
         "x-forge-action": "RepoBrowse"
       }
     },

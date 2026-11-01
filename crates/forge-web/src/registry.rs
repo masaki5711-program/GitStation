@@ -414,6 +414,13 @@ impl<R: ResourceCtx, B> Dispatched<R, B> {
         &self.request.parts.headers
     }
 
+    /// The raw path (never decoded). For the part of a fixed route's path
+    /// that is not the target id (e.g. `…/commits/{oid}`): validate it, it
+    /// is user input.
+    pub fn raw_path(&self) -> &str {
+        self.request.parts.uri.path()
+    }
+
     /// The raw query (without `?`).
     pub fn raw_query(&self) -> Option<&str> {
         self.request.parts.uri.query()
