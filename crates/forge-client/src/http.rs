@@ -261,6 +261,19 @@ impl ApiClient {
         query: &[(String, String)],
         limits: PageLimits,
     ) -> Result<ApiResponse> {
+        self.get_all_keyset(path, query, limits, &LIST_PAGES)
+    }
+
+    /// GET every page of a keyset-paged route (`shape` names the item list,
+    /// the next-cursor field and the query parameter that carries it) and
+    /// merge the items, within `limits`.
+    pub fn get_all_keyset(
+        &self,
+        path: &str,
+        query: &[(String, String)],
+        limits: PageLimits,
+        shape: &PageShape,
+    ) -> Result<ApiResponse> {
         let mut items: Vec<Value> = Vec::new();
         let mut cursor: Option<String> = None;
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -268,14 +281,14 @@ impl ApiClient {
         for _ in 0..limits.max_pages {
             let mut q: Vec<(String, String)> = query
                 .iter()
-                .filter(|(k, _)| k != "cursor")
+                .filter(|(k, _)| k != shape.param)
                 .cloned()
                 .collect();
             if let Some(c) = &cursor {
-                q.push(("cursor".to_string(), c.clone()));
+                q.push((shape.param.to_string(), c.clone()));
             }
             let page = self.request(Method::Get, path, &q, None)?;
-            let Some(arr) = page.body.get("items").and_then(Value::as_array) else {
+            let Some(arr) = page.body.get(shape.items_key).and_then(Value::as_array) else {
                 return Err(invalid(page.status, "not_a_list_response"));
             };
             total_bytes = total_bytes.saturating_add(page.bytes);
@@ -286,27 +299,71 @@ impl ApiClient {
                 return Err(invalid(page.status, "paginate_items_limit"));
             }
             items.extend(arr.iter().cloned());
-            match page.body.get("next_cursor") {
-                Some(Value::String(next)) => {
+            let next = match page.body.get(shape.next_key) {
+                Some(Value::String(next)) if !shape.numeric => Some(next.clone()),
+                Some(Value::Number(n)) if shape.numeric => Some(n.to_string()),
+                Some(Value::Null) | None => None,
+                Some(_) => return Err(invalid(page.status, "next_cursor_malformed")),
+            };
+            match next {
+                Some(next) => {
                     if !seen.insert(next.clone()) {
                         return Err(invalid(page.status, "cursor_repeated"));
                     }
-                    cursor = Some(next.clone());
+                    cursor = Some(next);
                 }
-                Some(Value::Null) | None => {
+                None => {
+                    let mut body = serde_json::Map::new();
+                    body.insert(shape.items_key.to_string(), Value::Array(items));
+                    body.insert(shape.next_key.to_string(), Value::Null);
+                    if shape.has_more {
+                        body.insert("has_more".to_string(), Value::Bool(false));
+                    }
                     return Ok(ApiResponse {
                         status: page.status,
-                        body: serde_json::json!({"items": items, "next_cursor": null, "has_more": false}),
+                        body: Value::Object(body),
                         request_id: page.request_id,
                         bytes: total_bytes,
-                    })
+                    });
                 }
-                Some(_) => return Err(invalid(page.status, "next_cursor_malformed")),
             }
         }
         Err(invalid(200, "too_many_pages"))
     }
 }
+
+/// The paging shape of a list route.
+#[derive(Debug, Clone, Copy)]
+pub struct PageShape {
+    /// The response field holding the rows.
+    pub items_key: &'static str,
+    /// The response field holding the next cursor (`null` on the last page).
+    pub next_key: &'static str,
+    /// The query parameter that carries the cursor back.
+    pub param: &'static str,
+    /// The cursor is a number (a user id), not a string.
+    pub numeric: bool,
+    /// The response also has `has_more`.
+    pub has_more: bool,
+}
+
+/// `{items, next_cursor, has_more}` with `?cursor=` (projects, groups).
+pub const LIST_PAGES: PageShape = PageShape {
+    items_key: "items",
+    next_key: "next_cursor",
+    param: "cursor",
+    numeric: false,
+    has_more: true,
+};
+
+/// `{members, next_after}` with `?after=<user id>` (members).
+pub const MEMBER_PAGES: PageShape = PageShape {
+    items_key: "members",
+    next_key: "next_after",
+    param: "after",
+    numeric: true,
+    has_more: false,
+};
 
 fn kind(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {

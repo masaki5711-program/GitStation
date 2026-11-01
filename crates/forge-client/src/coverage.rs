@@ -17,102 +17,124 @@ pub enum Coverage {
     Planned(&'static str),
 }
 
-const HOSTING: &str = "feat/client-gstn-hosting";
+/// The series that adds the rest of the hosting routes (a protected ref's
+/// role change, a project's visibility), with namespace move / transfer.
+const HOSTING_MORE: &str = "feat/client-gstn-hosting-more";
 
 pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     ("GET", "/api/v1/user", Coverage::Command("auth status")),
-    ("GET", "/api/v1/groups", Coverage::Planned(HOSTING)),
-    ("POST", "/api/v1/groups", Coverage::Planned(HOSTING)),
-    ("GET", "/api/v1/groups/{id}", Coverage::Planned(HOSTING)),
-    ("PATCH", "/api/v1/groups/{id}", Coverage::Planned(HOSTING)),
+    ("GET", "/api/v1/groups", Coverage::Command("group list")),
+    ("POST", "/api/v1/groups", Coverage::Command("group create")),
+    (
+        "GET",
+        "/api/v1/groups/{id}",
+        Coverage::Command("group view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/groups/{id}",
+        Coverage::Command("group edit"),
+    ),
     (
         "GET",
         "/api/v1/groups/{id}/members",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member list"),
     ),
     (
         "POST",
         "/api/v1/groups/{id}/members",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member add"),
     ),
     (
         "PATCH",
         "/api/v1/groups/{id}/members/{user_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member set-role"),
     ),
     (
         "DELETE",
         "/api/v1/groups/{id}/members/{user_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member remove"),
     ),
     (
         "POST",
         "/api/v1/groups/{id}/subgroups",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("group create"),
     ),
     (
         "GET",
         "/api/v1/namespaces/resolve",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("namespace resolve"),
     ),
-    ("GET", "/api/v1/projects", Coverage::Planned(HOSTING)),
-    ("POST", "/api/v1/projects", Coverage::Planned(HOSTING)),
-    ("GET", "/api/v1/projects/{id}", Coverage::Planned(HOSTING)),
-    ("PATCH", "/api/v1/projects/{id}", Coverage::Planned(HOSTING)),
+    ("GET", "/api/v1/projects", Coverage::Command("project list")),
+    (
+        "POST",
+        "/api/v1/projects",
+        Coverage::Command("project create"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}",
+        Coverage::Command("project view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}",
+        Coverage::Command("project edit"),
+    ),
     (
         "DELETE",
         "/api/v1/projects/{id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("project delete"),
     ),
     (
         "POST",
         "/api/v1/projects/{id}/restore",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("project restore"),
     ),
     (
         "GET",
         "/api/v1/projects/{id}/members",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member list"),
     ),
     (
         "POST",
         "/api/v1/projects/{id}/members",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member add"),
     ),
     (
         "PATCH",
         "/api/v1/projects/{id}/members/{user_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member set-role"),
     ),
     (
         "DELETE",
         "/api/v1/projects/{id}/members/{user_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("member remove"),
     ),
     (
         "GET",
         "/api/v1/projects/{id}/protected-refs",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("protected-ref list"),
     ),
     (
         "POST",
         "/api/v1/projects/{id}/protected-refs",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("protected-ref add"),
     ),
     (
         "PATCH",
         "/api/v1/projects/{id}/protected-refs/{rule_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Planned(HOSTING_MORE),
     ),
     (
         "DELETE",
         "/api/v1/projects/{id}/protected-refs/{rule_id}",
-        Coverage::Planned(HOSTING),
+        Coverage::Command("protected-ref remove"),
     ),
     (
         "PUT",
         "/api/v1/projects/{id}/visibility",
-        Coverage::Planned(HOSTING),
+        Coverage::Planned(HOSTING_MORE),
     ),
 ];
 

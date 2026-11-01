@@ -67,6 +67,20 @@ git clone https://git.example.internal/team/app.git     # 素の git が自動�
   `--input file`、`--paginate`、`--dry-run`）。例: `gstn api GET /api/v1/projects --paginate --fields id,name`
 - エラーコードは `forge explain FG-…` か `docs/errors/` で原因と対処を引けます（クライアント側は `FG-CLI-*`）。
 
+### ホスティングのコマンド
+
+```
+gstn project list [--limit N] [--cursor C | --all]      # view / create / edit / delete --yes / restore
+gstn group list|view|create [--parent-id N]|edit
+gstn member list|add|set-role|remove --yes  (--project ID | --group ID)
+gstn protected-ref list|add|remove --yes --project ID
+gstn namespace resolve team/app                          # パスから project / group / user の id を引く
+```
+
+id は正の整数。破壊的な操作（`project delete` / `member remove` / `protected-ref remove`）は
+`--yes` が必須で、無いときは何も送らずに終了コード 2 で終わる（`gstn` は対話で確認しない）。
+`--all` は `next_cursor`（member は `next_after`）を、件数・サイズ・ページ数の上限つきで辿る。
+
 ## 開発者向けメモ
 
 - コマンドを足すときは `src/cli.rs`（clap）と `src/registry.rs`（`help --json` の元）の両方に書く。

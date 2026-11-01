@@ -16,6 +16,7 @@ pub mod coverage;
 pub mod credential;
 pub mod error;
 pub mod gitcfg;
+pub mod hosting;
 pub mod http;
 pub mod registry;
 pub mod store;
