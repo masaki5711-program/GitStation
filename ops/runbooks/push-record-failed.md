@@ -31,12 +31,19 @@ push の ref の更新は git が行い、DB のトランザクションには�
      `commit_outcome_unknown` のときは、実は記録できている可能性がある（下の 3 で確かめる。再投入しても二重にはならない）。
    - `FG-DB-0010` ChangeRejected `reason=invalid_push_record`（`rule`）: 記録の中身が矛盾している（forge-web の不具合）。
      再投入しても同じく拒否される。不具合として扱い、Escalate へ。
-2. 同じ `request_id` の `event=forge.git.push_applied` の行を探す（push の要求ごとに 1 行）:
+2. 同じ `request_id` の `event=forge.git.push_applied` の行を探す。M1 phase 9 MR4 からは push ごとに 2 行ある:
+   `"stage":"minimal"`（git の終了直後。種類は 0 の側から、それ以外は `force`、コミットなし）と `"stage":"final"`
+   （種類とコミット付き）。**`final` があればそれだけを使う**（無いときだけ minimal。どちらも同じ重複除去の鍵なので、
+   両方を流しても 2 件にはならないが、先に流した方の内容で記録される）。`"source"` が `report` 以外
+   （`report_unreadable`、`git_failed`、`killed` など）なら、git の答えが読めず、反映された ref はリポジトリから読んだ:
 
    ```sh
    # JSON のログ（本番の形式）から、request_id で絞る
-   grep '"request_id":"<request_id>"' <log files> | grep '"event":"forge.git.push_applied"'
+   grep '"request_id":"<request_id>"' <log files> | grep '"event":"forge.git.push_applied"' | grep '"stage":"final"'
    ```
+
+   `FG-GIT-0012 reason=reconcile_failed` のときは行が無い。`commands`（push のすべての `ref 旧 新`）と
+   `git --git-dir=<path> for-each-ref`（読み取りのみ）を比べ、反映された ref が分かってから Escalate する（手で行を作らない）。
 
 3. 記録が本当に無いか確かめる（読み取り。書き込み用ロールで）:
 

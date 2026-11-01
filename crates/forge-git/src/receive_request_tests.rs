@@ -231,3 +231,26 @@ fn too_many_commands_or_bytes_are_refused() {
     assert_eq!(err.code(), ErrorCode::GitRequestTooLarge);
     assert!(reason(&err).contains("limit=command_section"), "{err}");
 }
+
+#[test]
+fn atomic_is_added_to_the_first_command_only() {
+    let mut body = pkt(format!("shallow {A}\n").as_bytes());
+    body.extend(first(
+        A,
+        B,
+        "refs/heads/main",
+        "report-status side-band-64k",
+    ));
+    body.extend(next(Z, B, "refs/heads/x"));
+    body.extend_from_slice(b"0000PACK-bytes");
+    let r = parse(&body).expect("valid");
+    assert!(!r.atomic());
+    let atomic = r.with_atomic(&body).expect("rewritten");
+    let again = parse(&atomic).expect("still valid");
+    assert!(again.atomic());
+    assert_eq!(again.commands.len(), 2);
+    assert!(atomic.ends_with(b"0000PACK-bytes"), "the pack is untouched");
+    assert_eq!(atomic.len(), body.len() + " atomic".len());
+    // Already atomic: unchanged.
+    assert_eq!(again.with_atomic(&atomic).expect("same"), atomic);
+}

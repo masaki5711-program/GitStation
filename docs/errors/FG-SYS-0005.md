@@ -20,7 +20,7 @@ forge serve (or another command that needs the async runtime, such as forge db) 
 
 ## 調べ方 (diagnosis)
 
-The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time.
+The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`; `push_tasks_pending` with `running`, `wait_ms`: pushes whose receive-pack or record still ran when `forge serve` stopped waiting — check their refs and records by request id, runbook smart-http); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time.
 
 ## 対処 (fix)
 

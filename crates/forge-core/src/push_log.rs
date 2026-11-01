@@ -107,9 +107,19 @@ impl PushApplied {
         })
     }
 
-    /// Log the line (info): MR4 calls this after git exits successfully and
-    /// before `record_push`.
+    /// Log the line (info) as the final record of the push.
     pub fn log(&self) -> Result<(), ForgeError> {
+        self.log_as("final", "report")
+    }
+
+    /// Log the line (info) with `stage` and `source` fields (MR4): the push
+    /// path logs a `minimal` line (kinds from the zero sides, no commits)
+    /// as soon as git exits, then the `final` one with kinds and commits,
+    /// before `record_push`. `source` says how the applied refs were known
+    /// (`report`, or a reconciliation such as `report_unreadable`). A
+    /// replay uses the `final` line of a request id when there is one
+    /// (runbook push-record-failed); both have the same dedup key.
+    pub fn log_as(&self, stage: &'static str, source: &'static str) -> Result<(), ForgeError> {
         let push = self.to_json()?;
         tracing::info!(
             event = PUSH_APPLIED_EVENT,
@@ -118,6 +128,8 @@ impl PushApplied {
             project_id = self.project_id,
             user_id = self.user_id,
             refs = self.updates.len(),
+            stage,
+            source,
             push = %push,
             "push applied; recording it"
         );

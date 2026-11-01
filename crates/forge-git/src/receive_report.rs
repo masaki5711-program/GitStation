@@ -10,13 +10,19 @@
 //! data of band 1 and the answer ends with a flush of its own; band 2
 //! carries git's messages (`remote: …`), band 3 a fatal error.
 //!
-//! [`ReportRewriter`] forwards band 2 / 3 packets at once and holds the
-//! report (band 1, or the plain pkt-lines) until it is complete, at most
+//! [`ReportRewriter`] forwards band 2 packets at once (the storage root
+//! path replaced by `<storage>`: git relays index-pack's stderr there),
+//! replaces band 3 (a fatal error) with forge's text, and holds the report
+//! (band 1, or the plain pkt-lines) until it is complete, at most
 //! [`MAX_REPORT_BYTES`]; then it replaces the reason of every `ng <ref>
 //! non-fast-forward` whose ref is in the protected set (git's
 //! `receive.denyNonFastForwards`, which forge turns on for a push touching
 //! a protected branch, ADR-0008 option B) with forge's text
-//! (`FG-GIT-0007 <user message>`), and reports which refs git updated.
+//! (`FG-GIT-0007 <user message>`), keeps git's other short reasons from an
+//! allow-list ([`GIT_NG_REASONS`]) and replaces any other reason and an
+//! `unpack <error>` text with forge's withheld text (an FG code and the
+//! request id). What was replaced is returned ([`Report::withheld`],
+//! band 3 in [`ReportRewriter::withheld`]) for the caller to log once.
 //! Anything it cannot read is forwarded unchanged and reported as
 //! unreadable — never dropped.
 
@@ -28,6 +34,46 @@ use crate::pkt_line::{self, Band, Packet, PktMode};
 
 /// The most report bytes held back (1000 refs with long names fit).
 pub const MAX_REPORT_BYTES: usize = 4 * 1024 * 1024;
+
+/// git's own short `ng` reasons (receive-pack), forwarded unchanged: they
+/// name no path and no internal state.
+pub const GIT_NG_REASONS: &[&str] = &[
+    "non-fast-forward",
+    "deletion prohibited",
+    "deny updating a hidden ref",
+    "funny refname",
+    "branch is currently checked out",
+    "deletion of the current branch prohibited",
+    "bad ref",
+    "missing necessary objects",
+    "failed to update ref",
+    "failed to delete",
+    "failed to lock",
+    "failed to write",
+    "shallow update not allowed",
+    "unpacker error",
+    "unpack error",
+    "n/a (unpacker error)",
+    "atomic push failure",
+    "atomic transaction failed",
+    "transaction failed to start",
+    "invalid new value provided",
+    "stale info",
+    "hook declined",
+    "pre-receive hook declined",
+];
+
+/// forge's texts for an answer (see the module docs).
+#[derive(Debug, Clone, Default)]
+pub struct RewriteTexts {
+    /// For `ng <protected ref> non-fast-forward` (e.g. `FG-GIT-0007 <msg>`).
+    pub force_refused: String,
+    /// For a reason, `unpack` text or band-3 message forge does not pass on
+    /// (e.g. `FG-GIT-0003 <msg> (request_id: …)`).
+    pub withheld: String,
+    /// Strings replaced by `<storage>` in band-2 messages (the storage root).
+    pub scrub: Vec<String>,
+}
 
 /// What git reported.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -42,6 +88,9 @@ pub struct Report {
     pub ng: Vec<(String, String)>,
     /// Refs whose `non-fast-forward` refusal forge rewrote.
     pub rewritten: Vec<String>,
+    /// git's texts forge replaced (`unpack …`, `ng <ref> <reason>`), for
+    /// the log.
+    pub withheld: Vec<String>,
 }
 
 /// Where the rewriter is.
@@ -58,7 +107,9 @@ enum State {
 pub struct ReportRewriter {
     sideband: bool,
     protected: BTreeSet<String>,
-    replacement: String,
+    texts: RewriteTexts,
+    /// Band-3 messages forge replaced (git's original text, for the log).
+    withheld: Vec<String>,
     pending: Vec<u8>,
     report: Vec<u8>,
     state: State,
@@ -69,13 +120,16 @@ pub struct ReportRewriter {
 
 impl ReportRewriter {
     /// `protected`: the refs whose `non-fast-forward` refusal is replaced
-    /// by `replacement` (e.g. `FG-GIT-0007 <user message>`; one line,
-    /// no newline).
-    pub fn new(sideband: bool, protected: BTreeSet<String>, replacement: String) -> Self {
+    /// by `texts.force_refused`.
+    pub fn new(sideband: bool, protected: BTreeSet<String>, mut texts: RewriteTexts) -> Self {
+        texts.force_refused = texts.force_refused.replace(['\n', '\r'], " ");
+        texts.withheld = texts.withheld.replace(['\n', '\r'], " ");
+        texts.scrub.retain(|s| !s.is_empty());
         Self {
             sideband,
             protected,
-            replacement: replacement.replace(['\n', '\r'], " "),
+            texts,
+            withheld: Vec::new(),
             pending: Vec::new(),
             report: Vec::new(),
             state: State::Open,
@@ -109,7 +163,17 @@ impl ReportRewriter {
                 match packet {
                     Packet::Data(payload) => match pkt_line::decode_sideband(&payload) {
                         Ok((Band::Data, data)) => self.report.extend_from_slice(data),
-                        Ok((Band::Progress | Band::Error, _)) => out.extend_from_slice(&raw),
+                        Ok((Band::Progress, data)) => self.progress(data, &raw, &mut out),
+                        Ok((Band::Error, data)) => {
+                            self.withheld
+                                .push(String::from_utf8_lossy(data).trim_end().to_owned());
+                            let text = format!("{}\n", self.texts.withheld);
+                            if pkt_line::encode_sideband(&mut out, Band::Error, text.as_bytes())
+                                .is_err()
+                            {
+                                out.extend_from_slice(&raw);
+                            }
+                        }
                         Err(_) => out.extend_from_slice(&raw),
                     },
                     Packet::Flush => {
@@ -142,6 +206,27 @@ impl ReportRewriter {
         }
         self.pending.drain(..used_total);
         out
+    }
+
+    /// Band 2: forwarded, the scrubbed strings replaced.
+    fn progress(&self, data: &[u8], raw: &[u8], out: &mut Vec<u8>) {
+        let text = String::from_utf8_lossy(data);
+        if !self.texts.scrub.iter().any(|s| text.contains(s.as_str())) {
+            out.extend_from_slice(raw);
+            return;
+        }
+        let mut clean = text.into_owned();
+        for s in &self.texts.scrub {
+            clean = clean.replace(s.as_str(), "<storage>");
+        }
+        if pkt_line::encode_sideband(out, Band::Progress, clean.as_bytes()).is_err() {
+            out.extend_from_slice(raw);
+        }
+    }
+
+    /// git's band-3 messages forge replaced (original text, for the log).
+    pub fn withheld(&self) -> &[String] {
+        &self.withheld
     }
 
     /// git's stdout ended. Returns the bytes still held (unchanged) and
@@ -215,7 +300,11 @@ impl ReportRewriter {
                 first = false;
                 match line.strip_prefix("unpack ") {
                     Some("ok") => parsed.unpack_ok = true,
-                    Some(err) => parsed.unpack_error = Some(err.to_owned()),
+                    Some(err) => {
+                        parsed.unpack_error = Some(err.to_owned());
+                        parsed.withheld.push(format!("unpack {err}"));
+                        replaced = Some(format!("unpack {}\n", self.texts.withheld));
+                    }
                     None => self.unreadable = Some("report_unpack_missing"),
                 }
             } else if let Some(name) = line.strip_prefix("ok ") {
@@ -223,8 +312,11 @@ impl ReportRewriter {
             } else if let Some(rest) = line.strip_prefix("ng ") {
                 let (name, reason) = rest.split_once(' ').unwrap_or((rest, ""));
                 if reason.starts_with("non-fast-forward") && self.protected.contains(name) {
-                    replaced = Some(format!("ng {name} {}\n", self.replacement));
+                    replaced = Some(format!("ng {name} {}\n", self.texts.force_refused));
                     parsed.rewritten.push(name.to_owned());
+                } else if !GIT_NG_REASONS.contains(&reason) {
+                    parsed.withheld.push(format!("ng {name} {reason}"));
+                    replaced = Some(format!("ng {name} {}\n", self.texts.withheld));
                 }
                 parsed.ng.push((name.to_owned(), reason.to_owned()));
             } else if !line.starts_with("option ") {

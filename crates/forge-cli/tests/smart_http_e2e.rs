@@ -1550,6 +1550,34 @@ fn a_corrupt_object_is_refused_by_fsck() {
     let text = stderr(&out);
     assert!(!out.status.success(), "{text}");
     assert_eq!(s.refs(), before, "{text}");
+    // git's `unpack <error>` text is replaced by forge's code and the
+    // request id (git's own words go to the log only).
+    assert!(text.contains("FG-GIT-0014"), "{text}");
+    assert!(text.contains("request_id"), "{text}");
+    assert!(
+        !text.contains(&s.storage.path().to_string_lossy().into_owned()),
+        "{text}"
+    );
+}
+
+/// A push that updates a protected branch and another ref: git refuses the
+/// rewrite of the protected branch (the new commit only arrives in the
+/// pack), and forge made the push atomic, so the other ref is not created
+/// either (the review's MEDIUM: no partly applied push).
+#[test]
+fn a_rewrite_git_refuses_takes_the_whole_push_with_it() {
+    let s = server(Options::default());
+    let work = s.work();
+    s.local(&work, &["commit", "-q", "--amend", "-m", "rewritten"]);
+    let before = s.refs();
+    let out = s.push(
+        &s.alice_write,
+        &work,
+        &["+HEAD:main", "HEAD:refs/heads/side"],
+    );
+    let text = refused(&out, ErrorCode::ProtectedRefForcePush);
+    assert!(text.contains("atomic"), "{text}");
+    assert_eq!(s.refs(), before, "{text}");
 }
 
 /// The database is down once git updated the refs: the push succeeds for
@@ -1588,13 +1616,25 @@ fn a_push_the_database_cannot_record_logs_fg_git_0012_with_its_list() {
     let context = alert["context"].as_str().unwrap_or_default();
     assert!(context.contains("attempts=3"), "{context}");
     assert!(context.contains("cause_code=FG-DB-0001"), "{context}");
-    let applied = events
+    let lines: Vec<usize> = events
         .iter()
-        .position(|e| {
+        .enumerate()
+        .filter(|(_, e)| {
             e["event"] == "forge.git.push_applied" && e["request_id"] == request_id.as_str()
         })
-        .expect("the push_applied line");
+        .map(|(i, _)| i)
+        .collect();
+    // The minimal line as soon as git exited, then the final one; both
+    // before the alert.
+    assert_eq!(lines.len(), 2, "{events:?}");
+    assert_eq!(events[lines[0]]["stage"], "minimal");
+    assert_eq!(events[lines[1]]["stage"], "final");
+    let applied = lines[1];
     assert!(applied < at, "push_applied is logged before the alert");
+    let minimal = forge_core::PushApplied::from_log_line(&events[lines[0]].to_string())
+        .expect("readable")
+        .expect("a push line");
+    assert_eq!(minimal.updates[0].new, tip);
     let line = events[applied].to_string();
     let parsed = forge_core::PushApplied::from_log_line(&line)
         .expect("readable")

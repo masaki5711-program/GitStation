@@ -28,7 +28,7 @@ pub use app::{app, registry as route_registry, AppConfig, AppState, Lookups};
 pub use auth::BoundedAuthenticator;
 pub use context::Ctx;
 pub use error::ApiError;
-pub use routes::git::{GitHttpLimits, SmartHttp};
+pub use routes::git::{GitHttpLimits, PushTasks, SmartHttp};
 pub use server::ServerLimits;
 
 /// Where the generated documents live, relative to the product root (`Git/`).

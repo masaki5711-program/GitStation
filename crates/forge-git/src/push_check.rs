@@ -188,8 +188,12 @@ impl Git {
 
     /// The new commits of each update (see the module docs); `principal`
     /// is the pusher's stream key, `timeout` the push's whole budget.
-    /// Deletes get an empty list. A git failure other than the deadline is
-    /// returned (the caller records the push without commits and logs it).
+    /// Deletes, and updates whose new object does not peel to a commit (a
+    /// tag of a tree or blob), get an empty, complete list. One result per
+    /// update: a git failure of one ref is that ref's `Err` (the caller
+    /// records it without commits and logs it), the others are still
+    /// listed. The outer `Err` is a failure before any ref (storage, the
+    /// peel check).
     pub async fn new_commits(
         &self,
         storage: &StorageRoot,
@@ -197,7 +201,7 @@ impl Git {
         updates: &[CommitQuery],
         principal: &str,
         timeout: Duration,
-    ) -> Result<Vec<CommitList>, ForgeError> {
+    ) -> Result<Vec<Result<CommitList, ForgeError>>, ForgeError> {
         check_ids(
             updates
                 .iter()
@@ -205,25 +209,116 @@ impl Git {
         )?;
         let repo = storage.existing(id)?;
         let deadline = Instant::now() + timeout;
+        let wanted: Vec<&str> = updates
+            .iter()
+            .filter(|u| !zero(&u.new))
+            .map(|u| u.new.as_str())
+            .collect();
+        let peeled = match left(deadline) {
+            Some(rest) if !wanted.is_empty() => self.peels_to_commit(&repo, &wanted, rest).await?,
+            Some(_) | None => BTreeMap::new(),
+        };
         let mut out = Vec::with_capacity(updates.len());
         for update in updates {
             if zero(&update.new) {
-                out.push(CommitList::default());
+                out.push(Ok(CommitList::default()));
                 continue;
             }
+            let partial = CommitList {
+                partial: true,
+                ..CommitList::default()
+            };
             let Some(rest) = left(deadline) else {
-                out.push(CommitList {
-                    partial: true,
-                    ..CommitList::default()
-                });
+                out.push(Ok(partial));
                 continue;
             };
-            out.push(
-                self.list_commits(&repo, update, updates, principal, rest)
-                    .await?,
-            );
+            match peeled.get(update.new.as_str()) {
+                Some(true) => {
+                    out.push(
+                        self.list_commits(&repo, update, updates, principal, rest)
+                            .await,
+                    );
+                }
+                // Not a commit (a tag of a tree / blob): no commits.
+                Some(false) => out.push(Ok(CommitList::default())),
+                // Not looked at (no time was left for the peel check).
+                None => out.push(Ok(partial)),
+            }
         }
         Ok(out)
+    }
+
+    /// `id -> whether it peels to a commit` (`cat-file --batch-check` of
+    /// `<id>^{commit}`, one answer line per input line, in order).
+    async fn peels_to_commit(
+        &self,
+        repo: &Path,
+        ids: &[&str],
+        timeout: Duration,
+    ) -> Result<BTreeMap<String, bool>, ForgeError> {
+        let mut input = Vec::new();
+        for id in ids {
+            input.extend_from_slice(format!("{id}^{{commit}}\n").as_bytes());
+        }
+        let out = self
+            .command("cat-file")
+            .arg("--batch-check=%(objecttype)")
+            .repo(repo)
+            .stdin(input)
+            .timeout(timeout)
+            .output()
+            .await?;
+        let text = out.stdout_str();
+        let mut answers = text.lines();
+        let mut peeled = BTreeMap::new();
+        for id in ids {
+            let line = answers.next().ok_or_else(|| {
+                ForgeError::new(ErrorCode::GitProcessFailed)
+                    .with_context("subcommand", "cat-file")
+                    .with_context("reason", "unexpected_output")
+            })?;
+            peeled.insert((*id).to_owned(), line.trim() == "commit");
+        }
+        Ok(peeled)
+    }
+
+    /// The current value of each ref (`None` = absent), read when a push's
+    /// answer could not be read or git was stopped (the caller reconciles
+    /// which updates git applied). `for-each-ref` with the names as patterns
+    /// after `--` (a pattern also matches refs below it, so only exact names
+    /// are kept); `timeout` bounds it.
+    pub async fn ref_values(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        names: &[RefName],
+        timeout: Duration,
+    ) -> Result<BTreeMap<String, Option<String>>, ForgeError> {
+        let mut values: BTreeMap<String, Option<String>> = names
+            .iter()
+            .map(|n| (n.as_str().to_owned(), None))
+            .collect();
+        if names.is_empty() {
+            return Ok(values);
+        }
+        let repo = storage.existing(id)?;
+        let mut cmd = self
+            .command("for-each-ref")
+            .arg("--format=%(objectname) %(refname)")
+            .repo(&repo)
+            .timeout(timeout);
+        for name in names {
+            cmd = cmd.path(name.as_str());
+        }
+        let out = cmd.output().await?;
+        for line in out.stdout_str().lines() {
+            if let Some((oid, name)) = line.split_once(' ') {
+                if let Some(slot) = values.get_mut(name) {
+                    *slot = Some(oid.to_owned());
+                }
+            }
+        }
+        Ok(values)
     }
 
     async fn list_commits(

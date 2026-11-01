@@ -103,6 +103,8 @@ pub struct ReceivePackRequest {
     pub hex_len: usize,
     /// Bytes of the section, flush included (the pack, if any, follows).
     pub section_len: usize,
+    /// Where the first command's packet is in the body: (offset, length).
+    first_command: Option<(usize, usize)>,
 }
 
 impl ReceivePackRequest {
@@ -110,6 +112,46 @@ impl ReceivePackRequest {
     /// that is not a delete).
     pub fn expects_pack(&self) -> bool {
         self.commands.iter().any(|c| !c.is_delete())
+    }
+
+    /// The client asked for an atomic push.
+    pub fn atomic(&self) -> bool {
+        self.capabilities.iter().any(|c| c == "atomic")
+    }
+
+    /// `body` (the bytes this request was parsed from, the section at its
+    /// start) with `atomic` added to the first command's capabilities, so
+    /// git applies all of the push or none of it (M1 phase 9 MR4: a push
+    /// that git may refuse in part, `receive.denyNonFastForwards` on a
+    /// protected branch). The rest of the bytes is unchanged. receive-pack
+    /// advertises `atomic` (`receive.advertiseAtomic`, git's default).
+    pub fn with_atomic(&self, body: &[u8]) -> Result<Vec<u8>, ForgeError> {
+        if self.atomic() {
+            return Ok(body.to_vec());
+        }
+        let Some((at, len)) = self.first_command else {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "atomic_without_commands"));
+        };
+        let packet = body.get(at..at + len).ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "atomic_packet_out_of_range")
+        })?;
+        let payload = packet.get(4..).unwrap_or_default();
+        let (line, newline) = match payload.strip_suffix(b"\n") {
+            Some(line) => (line, true),
+            None => (payload, false),
+        };
+        let mut new = line.to_vec();
+        new.extend_from_slice(b" atomic");
+        if newline {
+            new.push(b'\n');
+        }
+        let mut out = Vec::with_capacity(body.len() + 7);
+        out.extend_from_slice(body.get(..at).unwrap_or_default());
+        pkt_line::encode_data(&mut out, &new)?;
+        out.extend_from_slice(body.get(at + len..).unwrap_or_default());
+        Ok(out)
     }
 }
 
@@ -132,6 +174,9 @@ pub struct CommandParser {
     names: BTreeSet<String>,
     capabilities: Option<Vec<String>>,
     hex_len: usize,
+    /// The packet being read: (offset, length).
+    current: (usize, usize),
+    first_command: Option<(usize, usize)>,
 }
 
 fn refused(reason: &'static str) -> ForgeError {
@@ -232,6 +277,7 @@ impl CommandParser {
                 }
                 return Ok(Parsed::NeedMore);
             };
+            self.current = (self.offset, used);
             self.offset += used;
             if self.offset > MAX_COMMAND_SECTION {
                 return Err(ForgeError::new(ErrorCode::GitRequestTooLarge)
@@ -291,6 +337,7 @@ impl CommandParser {
                 }
                 self.hex_len = hex_len_of(&caps)?;
                 self.capabilities = Some(caps);
+                self.first_command = Some(self.current);
             }
             (Some(_), true) => return Err(invalid("capabilities_not_first")),
             (None, false) => return Err(refused("report_status_required")),
@@ -344,6 +391,7 @@ impl CommandParser {
             sideband,
             hex_len: if self.hex_len == 0 { 40 } else { self.hex_len },
             section_len: self.offset,
+            first_command: self.first_command,
         })
     }
 }

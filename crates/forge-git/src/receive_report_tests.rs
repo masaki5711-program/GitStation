@@ -47,6 +47,14 @@ fn report_lines(answer: &[u8], sideband: bool) -> Vec<String> {
         .collect()
 }
 
+fn texts() -> RewriteTexts {
+    RewriteTexts {
+        force_refused: "FG-GIT-0007 no force".to_owned(),
+        withheld: "FG-GIT-0003 withheld (request_id: r1)".to_owned(),
+        scrub: vec!["/srv/forge/repos".to_owned()],
+    }
+}
+
 fn protected() -> BTreeSet<String> {
     ["refs/heads/main".to_owned()].into_iter().collect()
 }
@@ -60,7 +68,7 @@ fn a_protected_non_fast_forward_is_rewritten_in_side_band() {
         "ok refs/heads/feature",
     ]);
     let answer = sideband("error: denying non-fast-forward\n", &report);
-    let mut rw = ReportRewriter::new(true, protected(), "FG-GIT-0007 no force".to_owned());
+    let mut rw = ReportRewriter::new(true, protected(), texts());
     // Byte by byte: the packets may arrive in any pieces.
     let mut out = Vec::new();
     for b in &answer {
@@ -94,9 +102,9 @@ fn a_plain_report_is_parsed_and_v2_option_lines_are_kept() {
         "unpack ok",
         "ok refs/heads/main",
         "option forced-update",
-        "ng refs/tags/v1 already exists",
+        "ng refs/tags/v1 failed to lock",
     ]);
-    let mut rw = ReportRewriter::new(false, protected(), "x".to_owned());
+    let mut rw = ReportRewriter::new(false, protected(), texts());
     let mut out = rw.feed(&report);
     let (rest, parsed) = rw.finish();
     out.extend(rest);
@@ -105,7 +113,7 @@ fn a_plain_report_is_parsed_and_v2_option_lines_are_kept() {
     assert_eq!(parsed.ok, ["refs/heads/main"]);
     assert_eq!(
         parsed.ng,
-        [("refs/tags/v1".to_owned(), "already exists".to_owned())]
+        [("refs/tags/v1".to_owned(), "failed to lock".to_owned())]
     );
 }
 
@@ -115,7 +123,7 @@ fn an_unpack_error_and_an_incomplete_or_broken_report_are_forwarded() {
         "unpack index-pack abnormal exit",
         "ng refs/heads/main unpacker error",
     ]);
-    let mut rw = ReportRewriter::new(false, protected(), "x".to_owned());
+    let mut rw = ReportRewriter::new(false, protected(), texts());
     let out = rw.feed(&report);
     let parsed = rw.finish().1.expect("readable");
     assert!(!parsed.unpack_ok);
@@ -123,11 +131,20 @@ fn an_unpack_error_and_an_incomplete_or_broken_report_are_forwarded() {
         parsed.unpack_error.as_deref(),
         Some("index-pack abnormal exit")
     );
-    assert_eq!(out, report);
+    // git's unpack text is withheld (kept for the log), the reason is
+    // one of git's short ones.
+    assert_eq!(parsed.withheld, ["unpack index-pack abnormal exit"]);
+    assert_eq!(
+        report_lines(&out, false),
+        [
+            "unpack FG-GIT-0003 withheld (request_id: r1)\n",
+            "ng refs/heads/main unpacker error\n"
+        ]
+    );
 
     // git died before the flush: what came is forwarded, unreadable.
     let cut = &report[..report.len() - 4];
-    let mut rw = ReportRewriter::new(false, protected(), "x".to_owned());
+    let mut rw = ReportRewriter::new(false, protected(), texts());
     let mut out = rw.feed(cut);
     let (rest, parsed) = rw.finish();
     out.extend(rest);
@@ -135,7 +152,7 @@ fn an_unpack_error_and_an_incomplete_or_broken_report_are_forwarded() {
     assert_eq!(parsed, Err("report_incomplete"));
 
     // Not pkt-lines at all.
-    let mut rw = ReportRewriter::new(true, protected(), "x".to_owned());
+    let mut rw = ReportRewriter::new(true, protected(), texts());
     let mut out = rw.feed(b"zzzz garbage");
     let (rest, parsed) = rw.finish();
     out.extend(rest);
@@ -173,4 +190,50 @@ fn the_refusal_report_names_every_ref() {
     let plain = refusal_report(false, &messages, &refs).expect("report");
     assert_eq!(report_lines(&plain, false).len(), 3);
     assert!(!String::from_utf8_lossy(&plain).contains("request_id"));
+}
+
+/// Texts git may fill with server details are not passed on: an unknown
+/// `ng` reason and band 3 are replaced (originals kept for the log), the
+/// storage root is scrubbed from band 2.
+#[test]
+fn server_details_are_withheld_or_scrubbed() {
+    let report = lines(&[
+        "unpack ok",
+        "ng refs/heads/x cannot lock /srv/forge/repos/1/refs/heads/x",
+    ]);
+    let mut answer = Vec::new();
+    encode_sideband(
+        &mut answer,
+        Band::Progress,
+        b"fatal: open /srv/forge/repos/1/objects\n",
+    )
+    .expect("band 2");
+    encode_sideband(&mut answer, Band::Data, &report).expect("band 1");
+    encode_sideband(
+        &mut answer,
+        Band::Error,
+        b"fatal: /srv/forge/repos/1 broken",
+    )
+    .expect("band 3");
+    answer.extend_from_slice(pkt_line::FLUSH);
+    let mut rw = ReportRewriter::new(true, protected(), texts());
+    let mut out = rw.feed(&answer);
+    assert_eq!(rw.withheld(), ["fatal: /srv/forge/repos/1 broken"]);
+    let (rest, parsed) = rw.finish();
+    out.extend(rest);
+    let text = String::from_utf8_lossy(&out);
+    assert!(!text.contains("/srv/forge"), "{text}");
+    assert!(text.contains("open <storage>/1/objects"), "{text}");
+    assert!(text.contains("\u{3}FG-GIT-0003 withheld"), "{text}");
+    assert_eq!(
+        report_lines(&out, true),
+        [
+            "unpack ok\n",
+            "ng refs/heads/x FG-GIT-0003 withheld (request_id: r1)\n"
+        ]
+    );
+    assert_eq!(
+        parsed.expect("readable").withheld,
+        ["ng refs/heads/x cannot lock /srv/forge/repos/1/refs/heads/x"]
+    );
 }

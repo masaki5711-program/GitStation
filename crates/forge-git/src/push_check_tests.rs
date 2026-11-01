@@ -165,6 +165,7 @@ async fn new_commits_list_what_each_update_brings() {
         .new_commits(&f.root, f.id, &updates, "user:1", T)
         .await
         .expect("commits");
+    let got: Vec<CommitList> = got.into_iter().map(|r| r.expect("listed")).collect();
     assert_eq!(got[0].commits, [c3.clone(), c2.clone()]);
     assert_eq!(got[0].total, 2);
     // The create lists what the refs before the push did not reach: main
@@ -180,8 +181,9 @@ async fn new_commits_list_what_each_update_brings() {
         .new_commits(&f.root, f.id, &updates[..1], "user:1", Duration::ZERO)
         .await
         .expect("commits");
-    assert!(got[0].partial);
-    assert_eq!(got[0].total, 0);
+    let first = got[0].as_ref().expect("listed");
+    assert!(first.partial);
+    assert_eq!(first.total, 0);
 }
 
 #[tokio::test]
@@ -204,9 +206,68 @@ async fn the_commit_list_keeps_twenty_and_counts_all() {
         )
         .await
         .expect("commits");
-    assert_eq!(got[0].total, 25);
-    assert_eq!(got[0].commits.len(), MAX_LISTED_COMMITS);
-    assert_eq!(got[0].commits[0], tip);
+    let got = got[0].as_ref().expect("listed");
+    assert_eq!(got.total, 25);
+    assert_eq!(got.commits.len(), MAX_LISTED_COMMITS);
+    assert_eq!(got.commits[0], tip);
+}
+
+/// A tag of a blob has no commits: listed empty and complete, and the other
+/// refs of the push are still listed (the review's LOW: one such tag used
+/// to fail the whole listing).
+#[tokio::test]
+async fn a_tag_of_a_blob_has_no_commits_and_does_not_hide_the_others() {
+    let f = fixture().await;
+    let c1 = f.commit("one\n", None).await;
+    let c2 = f.commit("two\n", Some(&c1)).await;
+    f.set_ref("refs/heads/main", &c2).await;
+    let blob = f
+        .out(
+            f.git
+                .command("hash-object")
+                .repo(&f.path)
+                .arg("-w")
+                .arg("--stdin")
+                .stdin(b"synthetic blob\n".to_vec()),
+        )
+        .await;
+    f.set_ref("refs/tags/blob", &blob).await;
+    let got = f
+        .git
+        .new_commits(
+            &f.root,
+            f.id,
+            &[
+                q("refs/tags/blob", ZERO, &blob),
+                q("refs/heads/main", &c1, &c2),
+            ],
+            "user:1",
+            T,
+        )
+        .await
+        .expect("commits");
+    assert_eq!(got[0].as_ref().expect("blob tag"), &CommitList::default());
+    assert_eq!(got[1].as_ref().expect("main").commits, [c2]);
+}
+
+#[tokio::test]
+async fn ref_values_read_exact_refs_only() {
+    let f = fixture().await;
+    let c1 = f.commit("one\n", None).await;
+    f.set_ref("refs/heads/a", &c1).await;
+    f.set_ref("refs/heads/ab", &c1).await;
+    let names = [
+        RefName::parse("refs/heads/a").expect("ref"),
+        RefName::parse("refs/heads/gone").expect("ref"),
+    ];
+    let got = f
+        .git
+        .ref_values(&f.root, f.id, &names, T)
+        .await
+        .expect("values");
+    assert_eq!(got.len(), 2);
+    assert_eq!(got["refs/heads/a"], Some(c1));
+    assert_eq!(got["refs/heads/gone"], None);
 }
 
 /// `deny_non_fast_forwards` makes receive-pack refuse a rewrite

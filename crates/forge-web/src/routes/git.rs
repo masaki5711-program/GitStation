@@ -29,8 +29,11 @@
 //! id). The per-principal stream cap is keyed by the user id.
 
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, VARY};
@@ -114,6 +117,55 @@ pub struct SmartHttp {
     /// What a push needs besides git (`forge serve`: the database). Without
     /// it receive-pack answers `FG-SYS-0001 reason=push_unconfigured`.
     pub(crate) push: Option<PushServices>,
+    /// The detached receive-pack tasks still running (graceful shutdown
+    /// waits for them: [`SmartHttp::push_tasks`]).
+    pub(crate) push_tasks: PushTasks,
+}
+
+/// Counts running push tasks (a receive-pack the request no longer owns,
+/// and its record). `forge serve` waits for them after the server stopped
+/// (`wait_idle`), so a shutdown does not kill git mid ref-update or drop a
+/// record.
+#[derive(Debug, Clone, Default)]
+pub struct PushTasks(Arc<(AtomicUsize, Notify)>);
+
+/// One running push task; done on drop.
+#[derive(Debug)]
+pub(crate) struct PushTask(Arc<(AtomicUsize, Notify)>);
+
+impl Drop for PushTask {
+    fn drop(&mut self) {
+        self.0 .0.fetch_sub(1, Ordering::SeqCst);
+        self.0 .1.notify_waiters();
+    }
+}
+
+impl PushTasks {
+    pub(crate) fn start(&self) -> PushTask {
+        self.0 .0.fetch_add(1, Ordering::SeqCst);
+        PushTask(Arc::clone(&self.0))
+    }
+
+    /// Running tasks now.
+    pub fn running(&self) -> usize {
+        self.0 .0.load(Ordering::SeqCst)
+    }
+
+    /// Wait until no task runs, at most `timeout`; `false` = some still run.
+    pub async fn wait_idle(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.0 .1.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.running() == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+                return self.running() == 0;
+            }
+        }
+    }
 }
 
 /// The push's protection snapshot and its recorder (forge-core traits;
@@ -152,7 +204,13 @@ impl SmartHttp {
             limits,
             body_slots,
             push: None,
+            push_tasks: PushTasks::default(),
         }
+    }
+
+    /// The running push tasks (`forge serve` waits for them on shutdown).
+    pub fn push_tasks(&self) -> PushTasks {
+        self.push_tasks.clone() // clone: a shared counter
     }
 
     /// Enable pushes: the protection snapshot of each push is loaded from

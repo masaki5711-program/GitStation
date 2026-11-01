@@ -45,6 +45,7 @@ http-body-util.workspace = true
 # M1 phase 9 MR4: the push record retries (paused time) and a scratch git home.
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

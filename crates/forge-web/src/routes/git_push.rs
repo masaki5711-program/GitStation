@@ -28,21 +28,37 @@
 //!    when a protected branch is updated, `receive.maxInputSize =
 //!    git.http.push_max_bytes`) and gets the **original** decoded bytes
 //!    verbatim, the pack streamed as it arrives (idle 60 s, total
-//!    `git.http.timeout_ms`). Its answer streams back while forge reads
-//!    the report (`forge_git::receive_report`) and rewrites git's
-//!    `non-fast-forward` refusal of a protected ref into `FG-GIT-0007`.
+//!    `git.http.timeout_ms`) — with one exception: a push of more than one
+//!    command that updates a protected branch gets `atomic` added to its
+//!    first command (git refuses a non-fast-forward per ref; atomic, the
+//!    push is applied whole or not at all). Its answer streams back while
+//!    forge reads the report (`forge_git::receive_report`): git's
+//!    `non-fast-forward` refusal of a protected ref becomes `FG-GIT-0007`;
+//!    texts that may carry server details (an `unpack` error, an `ng`
+//!    reason outside git's short ones, band 3) become `FG-GIT-0014` with
+//!    the request id, the storage root is scrubbed from band 2, and git's
+//!    originals are logged once (`reason=git_refused`).
 //! 5. Once the body is complete, receive-pack belongs to a task the
-//!    request does not own: a client that goes away then cannot kill it in
-//!    the middle of its ref updates. Before that (body still arriving) a
-//!    failure or disconnect kills git — no ref has changed yet.
-//! 6. After git exits: for every ref git reported `ok`, the kind
+//!    request does not own (counted in `SmartHttp::push_tasks`, which
+//!    `forge serve` waits for on shutdown): a client that goes away then
+//!    cannot kill it in the middle of its ref updates. Before that (body
+//!    still arriving) a failure or disconnect kills git; usually no ref has
+//!    changed, but git may have read a whole pack before the bytes that
+//!    failed, so the repository is asked (step 6, reconciliation).
+//! 6. After git exits: the applied refs are those git reported `ok` — or,
+//!    when there is no readable report (git failed or was killed, the
+//!    answer was unreadable), those whose ref now holds the new object
+//!    (`Git::ref_values`; gone for a delete). A minimal
+//!    `forge.git.push_applied` line (`stage=minimal`: kinds from the zero
+//!    sides, no commits) is logged at once; then the kind
 //!    (`Git::fast_forwards`) and the new commits (`Git::new_commits`, ≤ 20
 //!    listed per ref, all counted within 10 s for the push; past it
-//!    `total_commits_partial`) are read; `forge.git.push_applied` is
-//!    logged **first** (the replay input), then the push is recorded
+//!    `total_commits_partial`) are read, the `stage=final` line is logged
+//!    (the replay input), then the push is recorded
 //!    (`PushRecorder::record_push`, 3 attempts within 30 s, `Deduped` =
 //!    success), else `FG-GIT-0012` (`PushRecord::failed`, runbook
-//!    push-record-failed).
+//!    push-record-failed). If the repository cannot be read either, every
+//!    command is logged once with `FG-GIT-0012 reason=reconcile_failed`.
 //!
 //! A push through a `moved` tombstone never reaches this handler
 //! (`FG-REPO-0005 reason=tombstone_push`, the dispatcher).
@@ -61,7 +77,7 @@ use forge_core::{
     PushUpdateKind, PushedRef, Pusher, RefName, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError, Lang};
-use forge_git::receive_report::{refusal_report, Report, ReportRewriter};
+use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
 use forge_git::receive_request::{
     check_unambiguous, CommandParser, Parsed, ReceivePackRequest, MAX_COMMAND_SECTION,
 };
@@ -94,6 +110,8 @@ const RECORD_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_se
 const ANSWER_QUEUE: usize = 256;
 /// The bytes read from git's stdout at once.
 const CHUNK: usize = 64 * 1024;
+/// The most bytes of git's withheld texts put into one log line.
+const WITHHELD_LOG_MAX: usize = 16 * 1024;
 /// The longest `User-Agent` kept for the record.
 const MAX_USER_AGENT: usize = 512;
 
@@ -173,7 +191,7 @@ async fn receive_pack_inner(
     };
     let limits = smart.limits;
     let started = Instant::now();
-    let (proof, who, body) = request.into_proof_and_body();
+    let (proof, _, body) = request.into_proof_and_body();
     let cap = limits
         .push_max_bytes
         .get()
@@ -233,7 +251,7 @@ async fn receive_pack_inner(
                 .with_context("timeout_ms", state.lookup_timeout.as_millis()))
         }
     };
-    let decided = decide(&smart, repository, &parsed, &rules, &who, &proof).await?;
+    let decided = decide(&smart, repository, &parsed, &rules, &proof).await?;
     let protected: BTreeSet<String> = parsed
         .commands
         .iter()
@@ -279,11 +297,27 @@ async fn receive_pack_inner(
     };
     let (answer_tx, answer_rx) = mpsc::channel(ANSWER_QUEUE);
     let (body_tx, body_rx) = oneshot::channel::<BodyEnd>();
-    let replacement = format!(
-        "{} {}",
-        ErrorCode::ProtectedRefForcePush.id(),
-        ErrorCode::ProtectedRefForcePush.user_message(log.lang)
-    );
+    let texts = RewriteTexts {
+        force_refused: format!(
+            "{} {}",
+            ErrorCode::ProtectedRefForcePush.id(),
+            ErrorCode::ProtectedRefForcePush.user_message(log.lang)
+        ),
+        withheld: format!(
+            "{} {} (request_id: {})",
+            ErrorCode::GitProtocolInvalid.id(),
+            ErrorCode::GitProtocolInvalid.user_message(log.lang),
+            log.request_id
+        ),
+        scrub: vec![smart.storage.path().to_string_lossy().into_owned()],
+    };
+    // git refuses a non-fast-forward of a protected branch per ref; with
+    // more than one command the push becomes atomic, so it is applied as a
+    // whole or not at all (as forge's own refusals are).
+    let add_atomic = deny_nff && parsed.commands.len() > 1 && !parsed.atomic();
+    if add_atomic {
+        buffered = parsed.with_atomic(&buffered)?;
+    }
     let task = Receiver {
         smart: Arc::clone(&smart),
         recorder: Arc::clone(&push.recorder),
@@ -296,7 +330,7 @@ async fn receive_pack_inner(
             .iter()
             .map(|c| (c.raw_name.clone(), c.old.clone(), c.new.clone())) // clone: the task owns its copy
             .collect(),
-        rewriter: ReportRewriter::new(parsed.sideband, protected, replacement),
+        rewriter: ReportRewriter::new(parsed.sideband, protected, texts),
         answer: Some(answer_tx),
         bytes_in: 0,
     };
@@ -318,7 +352,8 @@ async fn receive_pack_inner(
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
             Err(err) => {
-                // Dropping `body_tx` unsent kills git: the pack is incomplete.
+                // Dropping `body_tx` unsent kills git (the pack is usually
+                // incomplete; the task then reconciles from the repository).
                 drop(body_tx);
                 return Err(err);
             }
@@ -347,7 +382,6 @@ async fn decide(
     repository: ProjectRepository,
     parsed: &ReceivePackRequest,
     rules: &forge_core::ProtectionRules,
-    who: &forge_auth::Principal,
     proof: &forge_auth::Authorized<ProjectCtx>,
 ) -> Result<Vec<Decided>, ForgeError> {
     // Protected branches with an existing new commit: ask git.
@@ -414,7 +448,7 @@ async fn decide(
             kind: Some(kind),
         });
     }
-    let mut results: Vec<Option<ForgeError>> = authorize_ref_updates(who, proof, &ctxs)?
+    let mut results: Vec<Option<ForgeError>> = authorize_ref_updates(proof, &ctxs)?
         .into_iter()
         .map(Result::err)
         .collect();
@@ -515,6 +549,39 @@ fn answer_body(rx: mpsc::Receiver<Result<Bytes, io::Error>>) -> Body {
     }))
 }
 
+/// The record of `applied` without asking git: create / delete from the
+/// zero sides, every other update `force` (not classified yet), no
+/// commits, counts partial.
+fn minimal_record(
+    repository: forge_core::RepoId,
+    applied: &[&(String, String, String)],
+) -> Result<PushRecord, ForgeError> {
+    let mut updates = Vec::with_capacity(applied.len());
+    for (name, old, new) in applied {
+        let (old, new) = (ObjectId::parse(old)?, ObjectId::parse(new)?);
+        let kind = if old.is_zero() {
+            PushUpdateKind::Create
+        } else if new.is_zero() {
+            PushUpdateKind::Delete
+        } else {
+            PushUpdateKind::Force
+        };
+        updates.push(PushedRef {
+            name: RefName::parse(name)?,
+            old,
+            new,
+            kind,
+            commits: Vec::new(),
+            total_commits: 0,
+            total_commits_partial: kind != PushUpdateKind::Delete,
+        });
+    }
+    Ok(PushRecord {
+        repository_id: repository,
+        updates,
+    })
+}
+
 /// The handler finished the body.
 struct BodyEnd {
     bytes_in: u64,
@@ -544,17 +611,22 @@ impl Receiver {
         mut stdout: GitStdout,
         mut body: oneshot::Receiver<BodyEnd>,
     ) {
+        let _task = self.smart.push_tasks.start();
         let mut body_done = false;
         let mut buf = vec![0u8; CHUNK];
         let read_error = loop {
             tokio::select! {
                 end = &mut body, if !body_done => {
                     let Ok(end) = end else {
-                        // The request ended before the body did: the pack is
-                        // incomplete, no ref has changed. Kill git.
+                        // The request ended before the body did. Kill git.
+                        // Usually no ref has changed (the pack is incomplete),
+                        // but git may have read a whole pack before bytes
+                        // that came after it failed: ask the repository.
                         drop(stdout);
                         let err = stream.abort_client_disconnected().await;
                         self.log.failure(err.with_context("phase", "request_body"));
+                        self.answer = None;
+                        self.reconcile("killed").await;
                         return;
                     };
                     self.bytes_in = end.bytes_in;
@@ -573,8 +645,9 @@ impl Receiver {
         drop(stdout);
         let rewriter = std::mem::replace(
             &mut self.rewriter,
-            ReportRewriter::new(false, BTreeSet::new(), String::new()),
+            ReportRewriter::new(false, BTreeSet::new(), RewriteTexts::default()),
         );
+        let mut withheld = rewriter.withheld().to_vec();
         let (rest, report) = rewriter.finish();
         self.send(rest).await;
         if !body_done {
@@ -587,19 +660,27 @@ impl Receiver {
                 Err(_) => self.answer = None,
             }
         }
+        if let Ok(r) = &report {
+            withheld.extend(r.withheld.iter().cloned()); // clone: logged, the report is used below
+        }
+        self.log_withheld(&withheld);
         let finished = stream.finish().await;
         let report = match (finished, read_error, report) {
             (Err(err), _, report) => {
                 // The answer is cut: the client sees a failed push, never a
                 // silently short one. A ref git reported `ok` before it
-                // failed is still recorded below.
+                // failed is still recorded below; without a report the
+                // repository says what changed.
                 self.cut().await;
                 self.log.failure(
                     err.with_context("reported_ok", report.as_ref().map_or(0, |r| r.ok.len())),
                 );
                 match report {
                     Ok(r) => r,
-                    Err(_) => return,
+                    Err(_) => {
+                        self.reconcile("git_failed").await;
+                        return;
+                    }
                 }
             }
             (Ok(_), Some(e), _) => {
@@ -610,6 +691,7 @@ impl Receiver {
                         .with_context("subcommand", "receive-pack")
                         .with_source(e),
                 );
+                self.reconcile("stdout_read_failed").await;
                 return;
             }
             (Ok(_), None, Err(reason)) => {
@@ -621,13 +703,130 @@ impl Receiver {
                         .with_context("subcommand", "receive-pack")
                         .with_context("refs", self.commands.len()),
                 );
+                self.reconcile("report_unreadable").await;
                 return;
             }
             (Ok(_), None, Ok(report)) => report,
         };
         // The answer is complete: end the response before recording.
         self.answer = None;
-        self.after_push(report).await;
+        if !report.rewritten.is_empty() {
+            self.log.failure(
+                ForgeError::new(ErrorCode::ProtectedRefForcePush)
+                    .with_context("reason", "git_denied_non_fast_forward")
+                    .with_context("refs", report.rewritten.len()),
+            );
+        }
+        let applied: Vec<(String, String, String)> = self
+            .commands
+            .iter()
+            .filter(|(name, _, _)| report.ok.iter().any(|ok| ok == name))
+            .cloned() // clone: the task records its own copy
+            .collect();
+        self.served(applied.len(), report.ng.len(), report.unpack_ok, "report");
+        self.after_push(applied, "report").await;
+    }
+
+    /// git's texts forge did not pass on (`receive_report`), logged once.
+    fn log_withheld(&self, withheld: &[String]) {
+        if withheld.is_empty() {
+            return;
+        }
+        let mut text = withheld.join(" | ");
+        if text.len() > WITHHELD_LOG_MAX {
+            let mut cut = WITHHELD_LOG_MAX;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+        }
+        self.log.failure(
+            ForgeError::new(ErrorCode::GitProtocolInvalid)
+                .with_context("reason", "git_refused")
+                .with_context("service", "git-receive-pack")
+                .with_context("messages", withheld.len())
+                .with_context("git_messages", text),
+        );
+    }
+
+    fn served(&self, applied: usize, refused: usize, unpack_ok: bool, source: &'static str) {
+        tracing::info!(
+            target: "forge_web::git",
+            request_id = %self.log.request_id,
+            route = "receive_pack",
+            project_id = self.log.project_id.get(),
+            repo_id = self.log.repo_id,
+            refs = self.commands.len(),
+            applied,
+            refused,
+            unpack_ok,
+            source,
+            bytes_in = self.bytes_in,
+            "forge.git.served"
+        );
+    }
+
+    /// git's answer is not there to say which refs changed (it could not be
+    /// read, git failed before it, or git was killed): read every commanded
+    /// ref from the repository; an update is applied when the ref now holds
+    /// its new object (or, for a delete, is gone). Those are recorded like
+    /// reported ones (`source=<reason>`). When the repository cannot be read
+    /// either, every command is logged once with `FG-GIT-0012`
+    /// (`reason=reconcile_failed`) — the operator compares by hand.
+    async fn reconcile(self, reason: &'static str) {
+        let names: Vec<RefName> = self
+            .commands
+            .iter()
+            .filter_map(|(name, _, _)| RefName::parse(name).ok())
+            .collect();
+        let values = match self
+            .smart
+            .git
+            .ref_values(
+                &self.smart.storage,
+                self.repository.id,
+                &names,
+                PUSH_CHECK_TIMEOUT,
+            )
+            .await
+        {
+            Ok(values) => values,
+            Err(err) => {
+                let commands: Vec<String> = self
+                    .commands
+                    .iter()
+                    .map(|(name, old, new)| format!("{name} {old} {new}"))
+                    .collect();
+                self.log.failure(
+                    ForgeError::new(ErrorCode::PushRecordFailed)
+                        .with_context("reason", "reconcile_failed")
+                        .with_context("source", reason)
+                        .with_context("repo_id", self.repository.id.get())
+                        .with_context("refs", self.commands.len())
+                        .with_context("cause_code", err.code().id())
+                        .with_context("commands", commands.join(";"))
+                        .with_source(err),
+                );
+                return;
+            }
+        };
+        let applied: Vec<(String, String, String)> = self
+            .commands
+            .iter()
+            .filter(|(name, _, new)| match values.get(name.as_str()) {
+                Some(Some(now)) => now == new,
+                Some(None) => new.bytes().all(|b| b == b'0'),
+                None => false,
+            })
+            .cloned() // clone: the task records its own copy
+            .collect();
+        self.served(
+            applied.len(),
+            self.commands.len() - applied.len(),
+            false,
+            reason,
+        );
+        self.after_push(applied, reason).await;
     }
 
     async fn send(&mut self, bytes: Vec<u8>) {
@@ -648,38 +847,23 @@ impl Receiver {
         }
     }
 
-    /// Step 6.
-    async fn after_push(self, report: Report) {
-        if !report.rewritten.is_empty() {
-            self.log.failure(
-                ForgeError::new(ErrorCode::ProtectedRefForcePush)
-                    .with_context("reason", "git_denied_non_fast_forward")
-                    .with_context("refs", report.rewritten.len()),
-            );
-        }
-        let applied: Vec<&(String, String, String)> = self
-            .commands
-            .iter()
-            .filter(|(name, _, _)| report.ok.iter().any(|ok| ok == name))
-            .collect();
-        tracing::info!(
-            target: "forge_web::git",
-            request_id = %self.log.request_id,
-            route = "receive_pack",
-            project_id = self.log.project_id.get(),
-            repo_id = self.log.repo_id,
-            refs = self.commands.len(),
-            applied = applied.len(),
-            refused = report.ng.len(),
-            unpack_ok = report.unpack_ok,
-            bytes_in = self.bytes_in,
-            "forge.git.served"
-        );
+    /// Step 6, for the updates git applied (`source`: `report`, or the
+    /// reconciliation's reason).
+    async fn after_push(self, applied: Vec<(String, String, String)>, source: &'static str) {
         if applied.is_empty() {
             return;
         }
-        let record = match self.record_of(&applied).await {
-            Ok(record) => record,
+        let applied: Vec<&(String, String, String)> = applied.iter().collect();
+        // First the minimal line (kinds from the zero sides, no commits):
+        // reading kinds and commits may take ~20 s, and the refs have
+        // changed already.
+        match minimal_record(self.repository.id, &applied) {
+            Ok(minimal) => {
+                let line = PushApplied::new(&self.pusher, self.log.project_id, &minimal);
+                if let Err(err) = line.log_as("minimal", source) {
+                    self.log.failure(err);
+                }
+            }
             Err(err) => {
                 // A name git accepted but forge cannot read back is a forge
                 // bug; the refs changed, so this is the record failure.
@@ -689,13 +873,29 @@ impl Receiver {
                         updates: Vec::new(),
                     }
                     .failed(err, 0)
-                    .with_context("applied", applied.len()),
+                    .with_context("applied", applied.len())
+                    .with_context("source", source),
+                );
+                return;
+            }
+        }
+        let record = match self.record_of(&applied).await {
+            Ok(record) => record,
+            Err(err) => {
+                self.log.failure(
+                    PushRecord {
+                        repository_id: self.repository.id,
+                        updates: Vec::new(),
+                    }
+                    .failed(err, 0)
+                    .with_context("applied", applied.len())
+                    .with_context("source", source),
                 );
                 return;
             }
         };
         let line = PushApplied::new(&self.pusher, self.log.project_id, &record);
-        if let Err(err) = line.log() {
+        if let Err(err) = line.log_as("final", source) {
             self.log.failure(err);
         }
         self.record(&record).await;
@@ -792,10 +992,22 @@ impl Receiver {
             .await
         {
             Ok(lists) => {
+                let mut first_error = None;
+                let mut failed = 0usize;
                 for (u, list) in updates.iter_mut().zip(lists) {
                     if u.kind == PushUpdateKind::Delete {
                         continue;
                     }
+                    let list = match list {
+                        Ok(list) => list,
+                        Err(err) => {
+                            // This ref only: recorded without commits.
+                            failed += 1;
+                            first_error.get_or_insert(err);
+                            u.total_commits_partial = true;
+                            continue;
+                        }
+                    };
                     u.commits = list
                         .commits
                         .iter()
@@ -803,6 +1015,12 @@ impl Receiver {
                         .collect::<Result<_, _>>()?;
                     u.total_commits = list.total.max(u.commits.len() as u64);
                     u.total_commits_partial = list.partial;
+                }
+                if let Some(err) = first_error {
+                    self.log.failure(
+                        err.with_context("phase", "push_record_commits")
+                            .with_context("failed_refs", failed),
+                    );
                 }
             }
             Err(err) => {

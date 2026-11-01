@@ -32,12 +32,15 @@ fn rules() -> ProtectionRules {
         pattern: RefPattern::parse(pattern).expect("pattern"),
         push_min_role: role,
     };
-    ProtectionRules::new(vec![
-        rule("refs/heads/main", Role::Maintainer),
-        rule("refs/heads/release/*", Role::Developer),
-        rule("refs/heads/release/*", Role::Owner),
-        rule("refs/tags/v*", Role::Maintainer),
-    ])
+    ProtectionRules::for_project(
+        ProjectId::new(3),
+        vec![
+            rule("refs/heads/main", Role::Maintainer),
+            rule("refs/heads/release/*", Role::Developer),
+            rule("refs/heads/release/*", Role::Owner),
+            rule("refs/tags/v*", Role::Maintainer),
+        ],
+    )
 }
 
 #[test]
@@ -56,7 +59,7 @@ fn every_ref_is_decided_by_authorize_on_the_project_proof() {
         RefProtection::effective([Role::Owner]),
         "the strictest matching rule"
     );
-    let got = authorize_ref_updates(&me, &proof, &updates).expect("decided");
+    let got = authorize_ref_updates(&proof, &updates).expect("decided");
     let codes: Vec<Option<ErrorCode>> = got
         .iter()
         .map(|r| r.as_ref().err().map(|e| e.code()))
@@ -99,7 +102,7 @@ fn force_on_a_protected_ref_is_denied_even_for_an_administrator() {
         RefUpdateCtx::new(name("refs/tags/v1"), RefUpdate::Force, &rules()),
         RefUpdateCtx::new(name("refs/heads/main"), RefUpdate::FastForward, &rules()),
     ];
-    let got = authorize_ref_updates(&admin, &proof, &updates).expect("decided");
+    let got = authorize_ref_updates(&proof, &updates).expect("decided");
     assert_eq!(
         got[0].as_ref().expect_err("force").code(),
         ErrorCode::ProtectedRefForcePush
@@ -115,7 +118,52 @@ fn force_on_a_protected_ref_is_denied_even_for_an_administrator() {
 fn a_proof_for_another_action_is_refused() {
     let me = user(false);
     let proof = prove(&me, Action::RepoRead, project(Some(Role::Developer))).expect("reader");
-    let err = authorize_ref_updates(&me, &proof, &[]).expect_err("wrong proof");
+    let err = authorize_ref_updates(&proof, &[]).expect_err("wrong proof");
     assert_eq!(err.code(), ErrorCode::Internal);
     assert!(err.to_string().contains("proof_action_mismatch"), "{err}");
+}
+
+/// The decision uses the principal the proof was made for: a proof made
+/// for a Developer decides as that Developer whoever holds it (there is no
+/// principal parameter to pair it with another caller), and an
+/// administrator's proof keeps the administrator's rights.
+#[test]
+fn the_proof_carries_the_principal_it_was_decided_for() {
+    let dev = user(false);
+    let dev_proof = prove(&dev, Action::RepoPush, project(Some(Role::Developer))).expect("dev");
+    let admin = user(true);
+    let admin_proof =
+        prove(&admin, Action::RepoPush, project(Some(Role::Developer))).expect("admin");
+    let main = [RefUpdateCtx::new(
+        name("refs/heads/main"),
+        RefUpdate::FastForward,
+        &rules(),
+    )];
+    let as_dev = authorize_ref_updates(&dev_proof, &main).expect("decided");
+    assert_eq!(
+        as_dev[0].as_ref().expect_err("below Maintainer").code(),
+        ErrorCode::ProtectedRefPushNotAllowed
+    );
+    let as_admin = authorize_ref_updates(&admin_proof, &main).expect("decided");
+    assert!(as_admin[0].is_ok(), "the administrator's own proof");
+}
+
+/// Rules loaded for another project (or for none) are refused.
+#[test]
+fn rules_of_another_project_are_refused() {
+    let me = user(false);
+    let proof = prove(&me, Action::RepoPush, project(Some(Role::Owner))).expect("owner");
+    for rules in [
+        ProtectionRules::for_project(ProjectId::new(4), Vec::new()),
+        ProtectionRules::new(Vec::new()),
+    ] {
+        let updates = [RefUpdateCtx::new(
+            name("refs/heads/x"),
+            RefUpdate::Create,
+            &rules,
+        )];
+        let err = authorize_ref_updates(&proof, &updates).expect_err("mismatch");
+        assert_eq!(err.code(), ErrorCode::Internal);
+        assert!(err.to_string().contains("rules_project_mismatch"), "{err}");
+    }
 }

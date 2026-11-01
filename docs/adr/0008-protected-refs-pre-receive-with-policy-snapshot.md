@@ -123,3 +123,23 @@ Smart HTTP の push（`POST {path}.git/git-receive-pack`）は、Decision の (c
   殺さない）。git の終了後、report-status で `ok` の ref について種類と新しいコミット（ref ごとに 20 件まで、すべて数える、
   push 全体で 10 秒。超えたら `total_commits_partial`、件数は数えた分＝下限）を読み、**先に** `forge.git.push_applied` を
   ログに出してから `record_push` を 30 秒以内に 3 回まで試す（`Deduped` は成功）。すべて失敗したら FG-GIT-0012。
+- **レビューを受けて（同日、MR4 の追加のコミット）**:
+  - 証明は判定した主体を持つ（`Authorized` の非公開の欄）。`authorize_ref_updates(&Authorized<ProjectCtx>, &[RefUpdateCtx])` は
+    主体を引数に取らず証明の主体で判定する（別の主体と組み合わせられない）。規則のスナップショットは読み込んだプロジェクトを
+    持ち（`ProtectionRules::for_project`）、証明のプロジェクトと違えば FG-SYS-0001 `rules_project_mismatch`。
+  - 保護ブランチを更新する 2 件以上のコマンドの push には、forge が最初のコマンドに `atomic` を足す（git の
+    `denyNonFastForwards` の拒否が ref ごとなので、他の ref だけが反映されることを防ぐ）。レビューの推奨案「祖先が分からない
+    保護ブランチの更新を force とみなして拒む」は採らなかった: 新しいコミットは普通パックで届くので、保護ブランチへの
+    通常の fast-forward がすべて拒まれる。上の「保護されていないブランチの force も拒まれる」制限は、この atomic で
+    「push 全体が拒まれる」になる。
+  - git の答えが読めない・git が答えの前に失敗した・本文の途中で殺した、のどれでも、コマンドのすべての ref をリポジトリから
+    読み（`Git::ref_values`）、新しい値になっている（削除なら無い）ものを反映済みとして記録する。読めなければ
+    FG-GIT-0012 `reason=reconcile_failed` に全コマンドを 1 回で出す。
+  - `forge.git.push_applied` は git の終了直後に `stage=minimal`、種類とコミットを読んだ後に `stage=final` を出す。
+  - git の `unpack` の文言、短い既知の理由以外の `ng` の理由、サイドバンド 3 は FG-GIT-0014 と request_id に置き換え
+    （元の文はログに 1 回、`reason=git_refused`）、サイドバンド 2 からは保存先のパスを消す。
+  - 受け取り終えた receive-pack のタスクは `SmartHttp::push_tasks` で数え、`forge serve` は停止時に最大 90 秒待つ
+    （超えたら FG-SYS の `ServeFailed operation=push_tasks_pending`）。
+  - 権限表: `write_repository` / `api` / `read_repository` のトークンと保護 ref、エージェントのトークン（`is_agent`。ADR-0017 の
+    エージェントの制限はマージの系統だけなので、push は人間のトークンと同じ判定。`is_agent` はまだ認可の入力ではない、W1）、
+    保護タグの作成と force の行を足した。
