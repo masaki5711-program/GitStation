@@ -18,8 +18,18 @@
   tab-size: var(--gs-code-tab-size);
 }
 
-.line:target {
+.line:target,
+.line:target .number {
   background: var(--gs-color-warning-surface);
+}
+
+.line:focus {
+  outline: var(--gs-focus-ring);
+  outline-offset: -2px;
+}
+
+.goto {
+  margin-bottom: var(--gs-space-2);
 }
 
 /* The line numbers stay in view while the code scrolls sideways. */

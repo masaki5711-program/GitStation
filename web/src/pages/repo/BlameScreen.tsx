@@ -1,6 +1,6 @@
 // Who last changed each line. The server blames up to 10 000 lines
 // (`truncated`) and sends no lines for a binary file; both are said in words.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate } from 'react-router';
 
@@ -60,7 +60,15 @@ function Blame({
       />
     );
   }
-  return <BlameTable project={project} rev={rev} path={path} blame={blame.data} />;
+  return (
+    <BlameTable
+      key={`${path}\0${rev.commit}`}
+      project={project}
+      rev={rev}
+      path={path}
+      blame={blame.data}
+    />
+  );
 }
 
 function BlameTable({
@@ -82,6 +90,14 @@ function BlameTable({
   // rows); "Show more" widens it.
   const [limit, setLimit] = useState(BLAME_WINDOW);
   const shown = Math.min(limit, all.length);
+  // The row to focus after the last "Show more" (the button goes away).
+  const [focusRow, setFocusRow] = useState<number | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusRow === null) return;
+    tableRef.current?.querySelector<HTMLElement>(`[data-row="${focusRow}"]`)?.focus();
+    setFocusRow(null);
+  }, [focusRow]);
   let offset = 0;
   return (
     <>
@@ -93,18 +109,19 @@ function BlameTable({
         <Link to={blobUrl(project, rev.name, path)}>{t('blame.backToFile')}</Link>
       </p>
       {blame.binary && (
-        <p className={styles.warning} role="note" data-testid="blame-binary">
+        <p className={styles.warning} role="status" data-testid="blame-binary">
           {t('blame.binary')}
         </p>
       )}
       {blame.truncated && (
-        <p className={styles.warning} role="note" data-testid="blame-truncated">
+        <p className={styles.warning} role="status" data-testid="blame-truncated">
           {t('blame.truncated', { count: all.length })}
         </p>
       )}
       {!blame.binary && blame.hunks.length === 0 && <p>{t('file.emptyFile')}</p>}
       {blame.hunks.length > 0 && (
         <div
+          ref={tableRef}
           className={styles.scroll}
           role="region"
           aria-label={t('blame.tableLabel')}
@@ -127,7 +144,12 @@ function BlameTable({
                 offset += hunk.lines.length;
                 const visible = Math.min(hunk.lines.length, Math.max(0, shown - first));
                 return hunk.lines.slice(0, visible).map((_, i) => (
-                  <tr key={`${hunk.start}-${i}`} className={i === 0 ? styles.hunkStart : undefined}>
+                  <tr
+                    key={`${hunk.start}-${i}`}
+                    data-row={first + i}
+                    tabIndex={-1}
+                    className={i === 0 ? styles.hunkStart : undefined}
+                  >
                     {i === 0 && (
                       <th scope="row" rowSpan={visible} className={styles.blameCommit}>
                         <Link to={commitUrl(project, hunk.commit)}>{shortOid(hunk.commit)}</Link>
@@ -152,22 +174,26 @@ function BlameTable({
           </table>
         </div>
       )}
-      {shown < all.length && (
-        <p>
-          <span role="status" className={styles.hint}>
-            {t('blame.showing', { shown, total: all.length })}
-          </span>{' '}
-          <button
-            type="button"
-            className={controls.button}
-            onClick={() => {
-              setLimit(shown + BLAME_WINDOW);
-            }}
-          >
-            {t('blame.more', { count: all.length - shown })}
-          </button>
-        </p>
-      )}
+      <p>
+        <span role="status" className={styles.hint}>
+          {shown < all.length ? t('blame.showing', { shown, total: all.length }) : ''}
+        </span>
+        {shown < all.length && (
+          <>
+            {' '}
+            <button
+              type="button"
+              className={controls.button}
+              onClick={() => {
+                if (all.length - shown <= BLAME_WINDOW) setFocusRow(shown);
+                setLimit(shown + BLAME_WINDOW);
+              }}
+            >
+              {t('blame.more', { count: all.length - shown })}
+            </button>
+          </>
+        )}
+      </p>
     </>
   );
 }

@@ -49,7 +49,7 @@ export function TreeListing({
   return (
     <>
       {tree.data.truncated && (
-        <p className={styles.warning} role="note" data-testid="tree-truncated">
+        <p className={styles.warning} role="status" data-testid="tree-truncated">
           {t('tree.truncated', { count: tree.data.entries.length })}
         </p>
       )}
@@ -149,7 +149,7 @@ function Readme({
                 dir={parentPath(path)}
               />
             ) : (
-              <CodeView path={path} text={blob.data.content} />
+              <CodeView path={path} text={blob.data.content} commit={spec.rev.commit} />
             )}
           </>
         ))}

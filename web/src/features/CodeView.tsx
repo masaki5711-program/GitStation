@@ -3,7 +3,7 @@
 // not selectable text, so copying the code never copies the numbers. Colours
 // come from classes (`hljs-*`). The scroll area is a focusable region.
 import type { ElementContent } from 'hast';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import controls from '../components/controls.module.css';
@@ -56,59 +56,147 @@ export function useHighlighted(path: string, text: string): Line[] | null {
  * file is 20 000 rows with a link each). A `#L…` address opens its line. */
 export const CODE_WINDOW = 3000;
 
-export function CodeView({ path, text, label }: { path: string; text: string; label?: string }) {
+/** The window belongs to one file at one commit: a new path or commit starts
+ * again from the first window (the `key`). */
+export function CodeView({
+  path,
+  text,
+  label,
+  commit,
+}: {
+  path: string;
+  text: string;
+  label?: string;
+  /** The commit the text is of (resets the window when it changes). */
+  commit?: string;
+}) {
+  return <CodeWindow key={`${path}\0${commit ?? ''}`} path={path} text={text} label={label} />;
+}
+
+function lineOfHash(): number {
+  const line = /^#L(\d+)$/.exec(window.location.hash);
+  return line === null ? 0 : Number(line[1]);
+}
+
+function CodeWindow({ path, text, label }: { path: string; text: string; label: string | undefined }) {
   const { t } = useTranslation();
   const highlighted = useHighlighted(path, text);
-  const all: ReactNode[] =
-    highlighted !== null ? highlighted.map((line) => line.map(renderNode)) : plainLines(text);
+  const plain = highlighted === null ? plainLines(text) : null;
+  const total = highlighted !== null ? highlighted.length : (plain?.length ?? 0);
   const [limit, setLimit] = useState(CODE_WINDOW);
+  // Rows added by the last "Show more", for the focus move below.
+  const [focusRow, setFocusRow] = useState<number | null>(null);
+  const [goto, setGoto] = useState('');
+  const regionRef = useRef<HTMLDivElement>(null);
+  const [target, setTarget] = useState(lineOfHash);
   useEffect(() => {
-    const line = /^#L(\d+)$/.exec(window.location.hash);
-    const wanted = line === null ? 0 : Number(line[1]);
-    if (wanted > limit) setLimit(wanted + CODE_WINDOW);
-  }, [limit]);
-  const rows = all.slice(0, limit);
+    const onHash = () => {
+      setTarget(lineOfHash());
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+    };
+  }, []);
+  // A `#L…` address opens its line (the window grows to it) ...
+  useEffect(() => {
+    if (target > limit && target <= total) setLimit(target + CODE_WINDOW);
+  }, [target, limit, total]);
+  // ... and scrolls it into view once the row is in the page.
+  const shown = Math.min(limit, total);
+  useEffect(() => {
+    if (target > 0 && target <= shown) {
+      document.getElementById(`L${target}`)?.scrollIntoView({ block: 'center' });
+    }
+  }, [target, shown]);
+  useEffect(() => {
+    if (focusRow === null) return;
+    regionRef.current?.querySelector<HTMLElement>(`#L${focusRow + 1}`)?.focus();
+    setFocusRow(null);
+  }, [focusRow]);
+  // Slice first, then map: only the rows in the page are made into nodes.
+  const rows: ReactNode[] =
+    highlighted !== null
+      ? highlighted.slice(0, shown).map((line) => line.map(renderNode))
+      : (plain ?? []).slice(0, shown);
+  const left = total - shown;
   return (
     <>
-    <div
-      className={styles.scroll}
-      role="region"
-      aria-label={label ?? t('file.contentLabel')}
-      tabIndex={0}
-      data-testid="code"
-      data-lines={all.length}
-    >
-      <table className={`${styles.code} ${styles.tokens}`}>
-        <tbody>
-          {rows.map((content, i) => (
-            <tr key={i} id={`L${i + 1}`} className={styles.line}>
-              <th scope="row" className={styles.number}>
-                <a href={`#L${i + 1}`} aria-label={t('file.lineLabel', { n: i + 1 })}>
-                  {i + 1}
-                </a>
-              </th>
-              <td className={styles.source}>{content}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-    {rows.length < all.length && (
+      <form
+        className={styles.goto}
+        onSubmit={(e) => {
+          e.preventDefault();
+          const n = Number(goto);
+          if (Number.isInteger(n) && n >= 1 && n <= total) {
+            window.location.hash = `L${n}`;
+          }
+        }}
+      >
+        <label>
+          {t('file.gotoLine')}{' '}
+          <input
+            type="number"
+            min={1}
+            max={total}
+            value={goto}
+            className={controls.input}
+            onChange={(e) => {
+              setGoto(e.target.value);
+            }}
+          />
+        </label>{' '}
+        <button type="submit" className={controls.button}>
+          {t('file.gotoGo')}
+        </button>
+      </form>
+      <div
+        ref={regionRef}
+        className={styles.scroll}
+        role="region"
+        aria-label={label ?? t('file.contentLabel')}
+        tabIndex={0}
+        data-testid="code"
+        data-lines={total}
+      >
+        <table className={`${styles.code} ${styles.tokens}`}>
+          <tbody>
+            {rows.map((content, i) => (
+              <tr key={i} id={`L${i + 1}`} className={styles.line} tabIndex={-1}>
+                <th scope="row" className={styles.number}>
+                  {/* One entry: the "go to line" control above; the links
+                      are for sharing (`#L12`) and for the pointer. */}
+                  <a href={`#L${i + 1}`} tabIndex={-1} aria-label={t('file.lineLabel', { n: i + 1 })}>
+                    {i + 1}
+                  </a>
+                </th>
+                <td className={styles.source}>{content}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <p>
         <span role="status" className={styles.hint}>
-          {t('blame.showing', { shown: rows.length, total: all.length })}
-        </span>{' '}
-        <button
-          type="button"
-          className={controls.button}
-          onClick={() => {
-            setLimit(rows.length + CODE_WINDOW);
-          }}
-        >
-          {t('blame.more', { count: all.length - rows.length })}
-        </button>
+          {left > 0 ? t('blame.showing', { shown, total }) : ''}
+        </span>
+        {left > 0 && (
+          <>
+            {' '}
+            <button
+              type="button"
+              className={controls.button}
+              onClick={() => {
+                // The button goes away with the last rows: focus moves to the
+                // first new row instead of being lost.
+                if (left <= CODE_WINDOW) setFocusRow(shown);
+                setLimit(shown + CODE_WINDOW);
+              }}
+            >
+              {t('blame.more', { count: left })}
+            </button>
+          </>
+        )}
       </p>
-    )}
     </>
   );
 }

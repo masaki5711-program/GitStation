@@ -135,12 +135,12 @@ function Blob({
       </p>
 
       {file.truncated && (
-        <p className={styles.warning} role="note" data-testid="blob-truncated">
+        <p className={styles.warning} role="status" data-testid="blob-truncated">
           {t('file.truncated', { size: formatBytes(file.size, i18n.language) })}
         </p>
       )}
       {isDownloadOnly(path) && (
-        <p className={styles.warning} role="note" data-testid="download-only">
+        <p className={styles.warning} role="status" data-testid="download-only">
           {t('file.downloadOnly')}
         </p>
       )}
@@ -156,7 +156,7 @@ function Blob({
         </p>
       )}
       {file.binary && !image && (
-        <p className={styles.warning} role="note" data-testid="binary">
+        <p className={styles.warning} role="status" data-testid="binary">
           {t('file.binary')}
         </p>
       )}
@@ -174,7 +174,7 @@ function Blob({
               headingOffset={1}
             />
           ) : (
-            <CodeView path={path} text={text} />
+            <CodeView path={path} text={text} commit={rev.commit} />
           )}
         </>
       )}

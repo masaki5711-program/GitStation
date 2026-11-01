@@ -3,7 +3,7 @@
 // case is said in words: binary, too large, total cap, not UTF-8, and a
 // diff the server cut (`truncated`). A change is shown by its sign (+ / -) as
 // text as well as by colour.
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -204,18 +204,20 @@ export function DiffView({
   refName: string | null;
 }) {
   const { t } = useTranslation();
-  let budget = TOTAL_ROWS;
-  const prepared = diff.files.map((file) => {
-    const rows = file.patch === null || file.patch === '' ? [] : parsePatch(file.patch);
-    const defaultOpen = rows.length <= FOLD_ROWS && rows.length <= budget;
-    if (defaultOpen) budget -= rows.length;
-    return { file, rows, defaultOpen };
-  });
+  const prepared = useMemo(() => {
+    let budget = TOTAL_ROWS;
+    return diff.files.map((file) => {
+      const rows = file.patch === null || file.patch === '' ? [] : parsePatch(file.patch);
+      const defaultOpen = rows.length <= FOLD_ROWS && rows.length <= budget;
+      if (defaultOpen) budget -= rows.length;
+      return { file, rows, defaultOpen };
+    });
+  }, [diff]);
   return (
     <div data-testid="diff">
       <p className={styles.summary}>{t('diff.files', { count: diff.files.length })}</p>
       {diff.truncated && (
-        <p className={styles.truncated} role="note" data-testid="diff-truncated">
+        <p className={styles.truncated} role="status" data-testid="diff-truncated">
           {t('diff.truncated')}
         </p>
       )}

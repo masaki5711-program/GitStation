@@ -192,7 +192,9 @@
     "downloadOnly": "This format (SVG, HTML, XML, PDF) is not drawn on screen for safety; download it instead.",
     "symlinkTo": "Symbolic link to:",
     "emptyFile": "This file is empty.",
-    "lineLabel": "Line {{n}}"
+    "lineLabel": "Line {{n}}",
+    "gotoLine": "Go to line",
+    "gotoGo": "Go"
   },
   "blame": {
     "title": "Blame",

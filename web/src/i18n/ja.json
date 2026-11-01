@@ -192,7 +192,9 @@
     "downloadOnly": "この形式（SVG・HTML・XML・PDF）は、安全のため画面では描かずダウンロードだけにしています。",
     "symlinkTo": "シンボリックリンクの行き先:",
     "emptyFile": "このファイルは空です。",
-    "lineLabel": "{{n}} 行目"
+    "lineLabel": "{{n}} 行目",
+    "gotoLine": "行へ移動",
+    "gotoGo": "移動"
   },
   "blame": {
     "title": "行ごとの履歴",

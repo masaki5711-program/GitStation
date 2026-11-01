@@ -42,7 +42,7 @@ export function RefsScreen({
     <>
       <h1 className={styles.title}>{title}</h1>
       {refs.data.truncated && (
-        <p className={styles.warning} role="note" data-testid="refs-truncated">
+        <p className={styles.warning} role="status" data-testid="refs-truncated">
           {t('repo.refsTruncated')}
         </p>
       )}

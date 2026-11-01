@@ -192,7 +192,9 @@
     "downloadOnly": "Format ini (SVG, HTML, XML, PDF) tidak digambar di layar demi keamanan; silakan unduh.",
     "symlinkTo": "Tautan simbolis ke:",
     "emptyFile": "Berkas ini kosong.",
-    "lineLabel": "Baris {{n}}"
+    "lineLabel": "Baris {{n}}",
+    "gotoLine": "Ke baris",
+    "gotoGo": "Pergi"
   },
   "blame": {
     "title": "Blame",
