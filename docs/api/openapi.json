@@ -1599,6 +1599,26 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/-/auth/backchannel-logout": {
+      "post": {
+        "operationId": "post_auth_backchannel_logout",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "OIDC Back-Channel Logout: the identity provider ends sessions with a signed logout token",
+        "x-forge-action": "OidcBackchannelLogout"
+      }
+    },
     "/-/auth/callback": {
       "get": {
         "operationId": "get_auth_callback",
@@ -1637,6 +1657,25 @@
         "security": [],
         "summary": "Start the browser sign-in: 302 to the identity provider (ADR-0021)",
         "x-forge-action": "WebLogin"
+      }
+    },
+    "/-/auth/logout": {
+      "post": {
+        "operationId": "post_auth_logout",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
+        "x-forge-action": "SessionLogout"
       }
     },
     "/api/v1/groups": {

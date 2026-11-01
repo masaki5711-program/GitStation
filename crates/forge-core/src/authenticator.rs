@@ -67,6 +67,11 @@ pub struct SessionIdentity {
     /// When the session ends without activity / at the latest (RFC 3339, UTC).
     pub idle_expires_at: String,
     pub absolute_expires_at: String,
+    /// The session holds the identity provider's refresh token and its last
+    /// check is older than 5 minutes (ADR-0021 §7, M2 MR5): the OIDC
+    /// refresh check (`forge_oidc::RefreshingSessions`) runs on this
+    /// request. Never an authorization input by itself.
+    pub refresh_due: bool,
 }
 
 /// The future a session authenticator returns.

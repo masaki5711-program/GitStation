@@ -516,3 +516,30 @@ FG-WEB-0002（コールバックの時間切れ）。
 | 26 | MEDIUM（レビュー） | JWKS のキャッシュがロックを持ったまま取得を待ち（最長 5 秒）、失敗は 60 秒の制限に数えない | 状態のロックは読み書きの間だけ。取得は 1 本ずつ（single flight）で、待っていた呼び出しは前の取得の結果を使う。**失敗も含めすべての試行が 60 秒の制限に入る**（最初の取得も）。60 秒以内に失敗していて使える鍵がなければ FG-AUTH-0015 `call=jwks reason=backoff`（呼び出しなし）。復旧からログインが戻るまで最長 60 秒 |
 | 27 | MEDIUM（レビュー） | コールバックに回数の制限がない。満杯の制限の表が全員を断る。毒された表が黙って断る | コールバックもピアごとに 20 回 / 60 秒（開始とは別に数える、`route=callback`）。満杯のときは最も古いピアを追い出す。毒された表は FG-SYS-0001 `reason=login_limiter_poisoned` を 1 回ログに出して断る |
 | 28 | LOW（レビュー） | 時計が 1970 年より前だと 0 秒として扱い、期限の検査が通る | FG-SYS-0001 `reason=clock_before_epoch` |
+
+### 実装で決めた点（2026-11-01、M2 MR5 `feat/auth-oidc-logout-refresh` の実装）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 29 | MEDIUM | §7 の「ID トークンが返らないときは最後の判定を絶対の寿命まで保つ」だと、ロールを外された人がリフレッシュのたびに ID トークンのない応答を受けるかぎり、12 時間残る | **ID トークンのない応答は 3 回続けてまで**受け入れる（ロールは前回の値）。4 回目でセッションを `reason=idp_revoked` で失効させる（fail closed、ログ `forge.auth.session_refresh_revoked why=id_token_missing`）。ID トークンのある応答で数を 0 に戻す。列 `web_sessions.refresh_without_id_token`（マイグレーション `20261104100000`、追記、監査しない） |
+| 30 | LOW | §8 の「セッションがない・期限切れのログアウトも 303 でホーム」は、`SessionLogout` を匿名に許すことになり、権限の表（匿名は deny）と合わない | 権限の表を優先し、セッションのないログアウトは今のとおり FG-AUTH-0001（401、Cookie を消す）。画面はセッションがあるときだけログアウトのボタンを出す（MR9）。`auth.oidc` のないサーバーでのログアウトは 503 FG-AUTH-0018（セッションは失効させない） |
+| 31 | LOW | `SessionContinue` はルートの中ではなく、Cookie で認証するすべてのルートの認証の中（`forge_oidc::RefreshingSessions`）で判定する | `app::DECIDED_IN_ROUTE` に `(SessionContinue, /api/v1/session)` を足した（画面が最初に読むルートを代表にする）。エージェントモデルの `authz-coverage` のゲートは `decided_in` を読む（MR4 の 22 と同じ後の作業） |
+
+ほかの細目（ADR の範囲内）: リフレッシュの呼び出しのログの `call` は `refresh`（FG-AUTH-0015、warn）。`invalid_grant` 以外の 400 / 401
+（`invalid_client` など）はクライアントの問題として `client_rejected` で続行する。リフレッシュトークンが復号できない（鍵の kid を消した）
+ときは FG-DB-0019 を出して `idp_revoked` で失効させる。ログアウトの `csrf` はフォームの本文（4 KiB まで）から `X-GitStation-CSRF` に
+移して、ほかのルートと同じ 1 つの CSRF の検査を通す。バックチャネルの `jti` は 10 分・1 万件まで覚え、満杯は `replay_table_full` で断る
+（古いものを追い出すと再送を通すため）。失効の書き込みが失敗した `jti` は忘れる（Keycloak の再送を `replayed` にしない）。
+
+### MR5 のレビューで変えた点（2026-11-01、`b04cc5f` のレビュー: rust HIGH 1、ほか MEDIUM / LOW）
+
+| # | 重さ | 内容 | 変えたところ |
+|---|---|---|---|
+| 32 | MEDIUM（authz）・**見送りの明記** | `SessionContinue` を通らない道（IdP に届かない、JWKS が取れない、ほかの要求が権利を持つ）と、ID トークンのない応答で `access_role = true` と決め打ちしている | **列を足さずに受け入れる**。生きているセッションの「最後に確かめたロール」は作りから常に「あり」: セッションは `SessionCreate`（ロールあり）でだけ発行され、ロールのない ID トークンを見たリフレッシュはその場で失効させる。保存しても常に true の列になる。届かない道で判定しないのは §7 の決定どおり（入力が新しくない。利用者の無効化は §5 の照合が毎回見る）。ID トークンのない応答は 29 の 3 回まで。誤解を招いたコードのコメントを直した |
+| 33 | HIGH（rust）・MEDIUM | バックチャネルのログアウトで、`jti` を覚えた後・失効の前に要求が切れる（IdP の切断・時間切れ）と、何も失効せず Keycloak の再送が `replayed` になる。リフレッシュも、トークンのエンドポイントの答えの後・保存の前に切れると、回転したリフレッシュトークンを失い次が `invalid_grant` になる | どちらも**切り離したタスク**（`tokio::spawn`）で走らせて待つ（`Oidc::backchannel_logout` / `refresh_check` は `self: &Arc<Self>`）。要求が切れてもタスクは最後まで行う。タスクの panic は FG-SYS-0001（`backchannel_task_failed` / `refresh_task_failed`） |
+| 34 | MEDIUM（rust、authz、DB） | (a) ログアウトで失効の後に URL の組み立てが失敗するとエラーになり Cookie が残る。(b) 内側の認証が `SessionContinue` の前に無操作の期限を延ばす。(c) バックチャネルの対象を 1 つの OR の文で引くと汎用の計画で部分インデックスを使えない。(d) `LIMIT 1000` の残り | (a) 失効の後はホームへの 303 に落とし、Cookie は必ず消す（warn）。(b) `SessionStore::deferring_touch_to_refresh_check`（`TouchPolicy::AfterRefreshCheck`）: 確認が due のセッションは触らず、`RefreshingSessions` が `Continue` の後に `sessions::touch_session`。`forge serve` は `auth.oidc` のときだけこの方針。(c) `sid` と `sub` で文を分け、それぞれ `web_sessions_oidc_sid` / `_sub` を使う。(d) 1000 件ずつ、なくなるまで繰り返す |
+| 35 | LOW | `sid` と `sub` の両方があるとき | `sub` も一致する行だけを失効させ、違う行の数を warn `forge.auth.backchannel_logout_subject_mismatch` に出す |
+
+見送り（LOW）: ログアウトのトークンの JOSE の `typ`（`logout+jwt`）は見ない（Keycloak の版により値が違いうる。`events` と `nonce` なしで
+ID トークンとの取り違えは防げる）。バックチャネルのエンドポイントのピアごとの回数の制限は入れない（Keycloak は管理者の一括ログアウトで
+セッションの数だけ送る。有効な署名のトークンなしには何も失効しないので、探りの費用は JWT の検証 1 回）。

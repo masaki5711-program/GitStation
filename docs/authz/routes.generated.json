@@ -16,6 +16,14 @@
     "word": "assets"
   },
   {
+    "action": "OidcBackchannelLogout",
+    "method": "POST",
+    "path": "/-/auth/backchannel-logout",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "WebLogin",
     "method": "GET",
     "path": "/-/auth/callback",
@@ -28,6 +36,14 @@
     "method": "GET",
     "path": "/-/auth/login",
     "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionLogout",
+    "method": "POST",
+    "path": "/-/auth/logout",
+    "public": false,
     "scope": "fixed",
     "word": "fixed"
   },
@@ -710,5 +726,9 @@
   {
     "action": "SessionCreate",
     "decided_in": "/-/auth/callback"
+  },
+  {
+    "action": "SessionContinue",
+    "decided_in": "/api/v1/session"
   }
 ]

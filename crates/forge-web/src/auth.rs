@@ -519,6 +519,34 @@ pub(crate) async fn authenticate_request(
     }
 }
 
+/// `POST /-/auth/logout` is a form post, not a fetch (ADR-0021 §8): its
+/// CSRF token arrives as the form field `csrf`. When the request has no
+/// `X-GitStation-CSRF` header, the field (if any) becomes that header, so
+/// the one CSRF check ([`csrf::session_check`]) decides as for every other
+/// route. The body (at most 4 KiB; a larger one is dropped and the check
+/// then refuses `token_missing`) is put back for the handler. Every other
+/// request is untouched.
+async fn lift_logout_csrf(req: &mut Request) {
+    use crate::routes::auth::{LOGOUT_CSRF_FIELD, LOGOUT_PATH, MAX_LOGOUT_FORM_BYTES};
+    if req.method() != axum::http::Method::POST
+        || req.uri().path() != LOGOUT_PATH
+        || req.headers().contains_key(session_token::CSRF_HEADER)
+    {
+        return;
+    }
+    let body = std::mem::take(req.body_mut());
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_LOGOUT_FORM_BYTES).await else {
+        return;
+    };
+    let token = url::form_urlencoded::parse(&bytes)
+        .find(|(k, _)| k == LOGOUT_CSRF_FIELD)
+        .map(|(_, v)| v.into_owned());
+    *req.body_mut() = axum::body::Body::from(bytes);
+    if let Some(value) = token.and_then(|t| HeaderValue::from_str(&t).ok()) {
+        req.headers_mut().insert(session_token::CSRF_HEADER, value);
+    }
+}
+
 /// The session half of [`authenticate_request`]: exactly one session
 /// cookie and no `Authorization`.
 async fn authenticate_session(
@@ -581,6 +609,7 @@ async fn authenticate_session(
         Ok(token) => token,
         Err(_) => return internal("csrf_mac_failed", request_id),
     };
+    lift_logout_csrf(req).await;
     if let Err(refused) =
         csrf::session_check(req.method(), req.headers(), &ext.origin, plain.secret())
     {

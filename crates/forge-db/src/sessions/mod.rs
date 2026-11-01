@@ -35,8 +35,13 @@ macro_rules! utc {
 
 // Declared after `utc!` so the submodule can use it (textual macro scope).
 mod auth;
+mod oidc;
 
-pub use auth::{authenticate, SessionStore};
+pub use auth::{authenticate, authenticate_with, touch_session, SessionStore, TouchPolicy};
+pub use oidc::{
+    account_of, backchannel_targets, claim_refresh, logout_view, store_refreshed,
+    BackchannelTargets, LogoutTarget, RefreshClaim, Refreshed, BACKCHANNEL_BATCH,
+};
 
 /// The audit resource type of session changes (tables.toml `audit_resource`).
 const RESOURCE: &str = "user";

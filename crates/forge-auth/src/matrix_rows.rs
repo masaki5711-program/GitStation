@@ -709,6 +709,34 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::SessionCreate, W::Disabled, adm(true, AA::Active), Allow),
     // on any other resource it is an ordinary action
     row(A::SessionCreate, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    // --- SessionContinue (the 5-minute refresh check, M2 MR5, ADR-0021 §7, §17) ---
+    row(A::SessionContinue, W::Anonymous, adm(true, AA::Active), Allow),
+    row(A::SessionContinue, W::Anonymous, adm(false, AA::Active), deny(E::LoginNotPermitted)),
+    row(A::SessionContinue, W::Anonymous, adm(true, AA::Disabled), deny(E::LoginNotPermitted)),
+    row(A::SessionContinue, W::Anonymous, adm(true, AA::NotHuman), deny(E::LoginNotPermitted)),
+    // a session's account exists: New is never a continuation
+    row(A::SessionContinue, W::Anonymous, adm(true, AA::New), deny(E::LoginNotPermitted)),
+    row(A::SessionContinue, W::Anonymous, adm(false, AA::New), deny(E::LoginNotPermitted)),
+    // whoever the principal is, only the facts count
+    row(A::SessionContinue, W::Admin, adm(false, AA::Active), deny(E::LoginNotPermitted)),
+    row(A::SessionContinue, W::Developer, adm(true, AA::Active), Allow),
+    // on any other resource it is an ordinary action
+    row(A::SessionContinue, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    // --- SessionLogout (`POST /-/auth/logout`, M2 MR5, ADR-0021 §8): sessions only ---
+    row(A::SessionLogout, W::Developer, F::Instance, Allow),
+    row(A::SessionLogout, W::Admin, F::Instance, Allow),
+    row(A::SessionLogout, W::NonMember, F::Instance, Allow),
+    row(A::SessionLogout, W::Anonymous, F::Instance, deny(E::Unauthenticated)),
+    row(A::SessionLogout, W::Disabled, F::Instance, deny(E::AccountDisabled)),
+    row(A::SessionLogout, W::OwnerTokenReadApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionLogout, W::DevTokenApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionLogout, W::AgentTokenApi, F::Instance, deny(E::InsufficientScope)),
+    row(A::SessionLogout, W::AdminTokenAdmin, F::Instance, deny(E::InsufficientScope)),
+    // --- OidcBackchannelLogout (`POST /-/auth/backchannel-logout`, M2 MR5): public;
+    // the logout token is the proof, credentials are never read ---
+    row(A::OidcBackchannelLogout, W::Anonymous, F::Instance, Allow),
+    row(A::OidcBackchannelLogout, W::Disabled, F::Instance, Allow),
+    row(A::OidcBackchannelLogout, W::DevTokenReadRepository, F::Instance, Allow),
     // --- ProjectList / GroupList (`GET /api/v1/projects`, `/groups`, M1 phase 8b MR7b) ---
     // The list itself; each row is decided again with ProjectRead / GroupRead.
     row(A::ProjectList, W::NonMember, F::Instance, Allow),

@@ -203,7 +203,7 @@ kind = "audited"
 ro_columns = [
     "id", "public_id", "user_id", "created_at", "last_seen_at", "idle_expires_at",
     "absolute_expires_at", "revoked_at", "revoked_reason", "oidc_issuer", "oidc_sid",
-    "refresh_checked_at", "access_role_seen_at",
+    "refresh_checked_at", "access_role_seen_at", "refresh_without_id_token",
 ]
 # session.created / session.revoked (and user.disabled) are audited on the user.
 audit_resource = "user"
@@ -212,6 +212,8 @@ audit_id_column = "user_id"
 unaudited_columns = [
     "last_seen_at", "idle_expires_at", "refresh_token_enc", "id_token_enc",
     "refresh_checked_at", "access_role_seen_at",
+    # M2 MR5: refreshes in a row without an ID token (ADR-0021 §7).
+    "refresh_without_id_token",
 ]
 txn_audited_columns = []
 
