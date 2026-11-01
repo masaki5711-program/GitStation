@@ -59,7 +59,7 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         let served = forge_web::server::serve(
             listener,
             router,
-            ServerLimits::default(),
+            ServerLimits::from_config(&cfg.server.limits),
             forge_web::server::shutdown_signal(),
         )
         .await;

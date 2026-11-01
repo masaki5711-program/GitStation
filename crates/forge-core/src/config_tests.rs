@@ -818,3 +818,81 @@ fn git_http_limits_have_defaults_file_env_and_rules() {
     let err = load(Some(f.path()), &env(&[])).expect_err("unknown table");
     assert_invalid(&err, "git.ssh", "unknown_key");
 }
+
+/// M1 phase 9 MR0: `server.*` connection limits have defaults, a `[server]`
+/// table, environment overrides and cross-key rules (FG-SYS-0002).
+#[test]
+fn server_limits_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.server.limits, ServerLimitsConfig::DEFAULT);
+    assert_eq!(cfg.server.limits.max_connections, 1024);
+    assert_eq!(cfg.server.limits.max_connections_per_peer, 64);
+
+    let f = file("[server]\nmax_connections = 100\nwrite_idle_timeout_ms = 2000\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "7")]),
+    )
+    .expect("file + env");
+    assert_eq!(cfg.server.limits.max_connections, 100);
+    assert_eq!(cfg.server.limits.max_connections_per_peer, 7);
+    assert_eq!(
+        cfg.server.limits.write_idle_timeout,
+        Duration::from_millis(2000)
+    );
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_SERVER_MAX_CONNECTIONS", "0")],
+            "server.max_connections",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "0")],
+            "server.max_connections_per_peer",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_WRITE_IDLE_TIMEOUT_MS", "0")],
+            "server.write_idle_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_KEEP_ALIVE_MAX_REQUESTS", "abc")],
+            "server.keep_alive_max_requests",
+            "invalid",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_MAX_CONNECTIONS", "10"),
+                ("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "11"),
+            ],
+            "server.max_connections_per_peer",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "6000"),
+            ],
+            "server.read_idle_timeout_ms",
+            "below_git_idle_timeout",
+        ),
+        (
+            vec![("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "0")],
+            "server.read_idle_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "5000"),
+                ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),
+            ],
+            "server.header_read_timeout_ms",
+            "above_keep_alive_max",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}

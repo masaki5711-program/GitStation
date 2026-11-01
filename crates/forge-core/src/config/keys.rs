@@ -44,6 +44,29 @@ const fn boolean(key: &'static str, env: &'static str) -> Key {
 /// Every configuration key. `env` equals `env_name(key)` (tested).
 pub const KEYS: &[Key] = &[
     text("server.bind", "FORGE_SERVER_BIND"),
+    // M1 phase 9 MR0: connection fairness.
+    number("server.max_connections", "FORGE_SERVER_MAX_CONNECTIONS"),
+    number(
+        "server.max_connections_per_peer",
+        "FORGE_SERVER_MAX_CONNECTIONS_PER_PEER",
+    ),
+    number(
+        "server.header_read_timeout_ms",
+        "FORGE_SERVER_HEADER_READ_TIMEOUT_MS",
+    ),
+    number("server.keep_alive_max_ms", "FORGE_SERVER_KEEP_ALIVE_MAX_MS"),
+    number(
+        "server.keep_alive_max_requests",
+        "FORGE_SERVER_KEEP_ALIVE_MAX_REQUESTS",
+    ),
+    number(
+        "server.write_idle_timeout_ms",
+        "FORGE_SERVER_WRITE_IDLE_TIMEOUT_MS",
+    ),
+    number(
+        "server.read_idle_timeout_ms",
+        "FORGE_SERVER_READ_IDLE_TIMEOUT_MS",
+    ),
     text("storage.root", "FORGE_STORAGE_ROOT"),
     text("database.url", "FORGE_DATABASE_URL"),
     text("database.password_file", "FORGE_DATABASE_PASSWORD_FILE"),

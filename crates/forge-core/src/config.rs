@@ -19,6 +19,7 @@ mod database;
 mod git_http;
 mod keys;
 mod secret;
+mod server_limits;
 mod tls;
 
 pub use audit::{AuditConfig, SealKey, SealKeys};
@@ -26,6 +27,7 @@ pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
+pub use server_limits::ServerLimitsConfig;
 pub use tls::TlsMode;
 
 /// Environment prefixes owned by the configuration: an unknown variable
@@ -121,6 +123,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Rules across sections: a server read-idle timeout shorter than the
+    /// git idle timeout would cut a slow Smart HTTP body before git's own
+    /// (documented) idle limit.
+    fn validate_across(self) -> Result<Self, ForgeError> {
+        if self.server.limits.read_idle_timeout < self.git_http.idle_timeout {
+            return Err(invalid(
+                "server.read_idle_timeout_ms",
+                "below_git_idle_timeout",
+            ));
+        }
+        Ok(self)
+    }
+
     /// The storage root; required by commands that touch repositories.
     pub fn storage_root(&self) -> Result<&Path, ForgeError> {
         self.storage
@@ -134,6 +149,8 @@ impl Config {
 pub struct ServerConfig {
     /// `host:port`, validated at load time.
     pub bind: String,
+    /// `server.*` connection limits (M1 phase 9 MR0).
+    pub limits: ServerLimitsConfig,
 }
 
 #[derive(Debug)]
@@ -283,9 +300,10 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         return Err(invalid("database.min_connections", "above_max"));
     }
 
-    Ok(Config {
+    Config {
         server: ServerConfig {
             bind: bind.to_owned(),
+            limits: server_limits(get)?,
         },
         storage: StorageConfig {
             root: text("storage.root")?.map(PathBuf::from),
@@ -321,7 +339,42 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         },
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
         git_http: git_http(get)?,
-    })
+    }
+    .validate_across()
+}
+
+/// `server.*` connection limits, defaults from [`ServerLimitsConfig::DEFAULT`].
+fn server_limits<'a>(
+    get: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> Result<ServerLimitsConfig, ForgeError> {
+    let d = ServerLimitsConfig::DEFAULT;
+    let ms = |t: Duration| u32::try_from(t.as_millis()).unwrap_or(u32::MAX);
+    ServerLimitsConfig {
+        max_connections: positive(get, "server.max_connections", d.max_connections)?,
+        max_connections_per_peer: positive(
+            get,
+            "server.max_connections_per_peer",
+            d.max_connections_per_peer,
+        )?,
+        header_read_timeout: millis(
+            get,
+            "server.header_read_timeout_ms",
+            ms(d.header_read_timeout),
+        )?,
+        keep_alive_max: millis(get, "server.keep_alive_max_ms", ms(d.keep_alive_max))?,
+        keep_alive_max_requests: positive(
+            get,
+            "server.keep_alive_max_requests",
+            d.keep_alive_max_requests,
+        )?,
+        write_idle_timeout: millis(
+            get,
+            "server.write_idle_timeout_ms",
+            ms(d.write_idle_timeout),
+        )?,
+        read_idle_timeout: millis(get, "server.read_idle_timeout_ms", ms(d.read_idle_timeout))?,
+    }
+    .validate()
 }
 
 /// `git.http.*`, defaults from [`GitHttpConfig::DEFAULT`].
