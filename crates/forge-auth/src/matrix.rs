@@ -69,6 +69,8 @@ pub(crate) enum Fixture {
     PrivateProject,
     InternalProject,
     DeletedProject,
+    /// An internal project pending deletion (every signed-in user sees it).
+    InternalDeletedProject,
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -328,6 +330,10 @@ impl Fixture {
             Fixture::PrivateProject => Resource::Project(private),
             Fixture::InternalProject => Resource::Project(internal),
             Fixture::DeletedProject => Resource::Project(deleted),
+            Fixture::InternalDeletedProject => Resource::Project(ProjectView {
+                visibility: Visibility::Internal,
+                ..deleted
+            }),
             Fixture::Ref {
                 kind,
                 update,

@@ -5,6 +5,7 @@
 //! back, so only the constraint under test can refuse a row.
 
 use forge_core::RefPattern;
+use forge_errors::ErrorCode;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
@@ -190,6 +191,68 @@ async fn a_repository_state_only_moves_forward() {
     t.drop_now().await;
 }
 
+/// A deletion whose grace period is over (the project of `seed()`).
+const EXPIRED_DELETION: &str = "UPDATE forge.projects SET deleted_at = now() - interval '2 days', \
+     purge_after = now() - interval '1 second'";
+
+/// D5 MR3 review (migration 20261102100200): a repository enters `purging`
+/// only when its project is pending deletion and `purge_after` has passed —
+/// never for a live (never deleted or restored) project, never inside the
+/// grace period; refused as a guard error (XF001, FG-DB-0009 `rejected`).
+#[tokio::test]
+async fn purging_needs_a_project_whose_grace_period_is_over() {
+    let t = FreshDb::migrated().await;
+    commit(&t, &seed()).await.expect("seed");
+    commit(&t, &[audit("project", 1, "succeeded"), sql(REPOSITORY)])
+        .await
+        .expect("repository");
+    let purge = || {
+        [
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.repositories SET state = 'purging'"),
+        ]
+    };
+    // Never deleted.
+    let err = commit(&t, &purge()).await.expect_err("live project");
+    assert_reason(&err, ErrorCode::AppendOnlyViolation, "rejected");
+    assert!(chain(&err).contains("sqlstate=XF001"), "{}", chain(&err));
+    // Inside the grace period.
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.projects SET deleted_at = now(), purge_after = now() + interval '1 day'"),
+        ],
+    )
+    .await
+    .expect("deleted");
+    commit(&t, &purge())
+        .await
+        .expect_err("inside the grace period");
+    // Restored again.
+    commit(
+        &t,
+        &[
+            audit("project", 1, "succeeded"),
+            sql("UPDATE forge.projects SET deleted_at = NULL, purge_after = NULL"),
+        ],
+    )
+    .await
+    .expect("restored");
+    commit(&t, &purge()).await.expect_err("restored project");
+    // Past purge_after: allowed.
+    commit(
+        &t,
+        &[audit("project", 1, "succeeded"), sql(EXPIRED_DELETION)],
+    )
+    .await
+    .expect("expired");
+    commit(&t, &purge())
+        .await
+        .expect("expired deletion may purge");
+    t.drop_now().await;
+}
+
 /// D5 MR2 (migration 20261102100000): `purging` is reachable from
 /// provisioning and from ready (keeping ready_at), never left again; and
 /// forge_app may delete the purged rows.
@@ -216,6 +279,8 @@ async fn a_repository_moves_to_purging_and_never_back() {
             &t,
             &[
                 audit("project", 1, "succeeded"),
+                // D5 MR3 review: purging needs an expired deletion.
+                sql(EXPIRED_DELETION),
                 sql("UPDATE forge.repositories SET state = 'purging'"),
             ],
         )

@@ -946,7 +946,12 @@ upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_w
 - **`POST /api/v1/projects/{id}/restore`**（`ProjectRestore`）: ローダーは削除待ちのプロジェクトも読む（どのローダーも隠さず、`authorize()` が
   決める）。`deleted_at` / `purge_after` / `deleted_by` を消す。リポジトリが `purging` なら `FG-REPO-0019 reason=purging`、削除待ちでなければ
   `reason=not_deleted`（どちらも 409）。決定（`reconfirm`）の後でだけ答えるので、権限のない呼び出しは状態を知らされない。
-  リポジトリの行を `FOR UPDATE` で読むので、purge の開始（MR4 が `purging` に変える）と復元は排他になり、先に動いたほうが勝つ。
+  リポジトリの行を `FOR UPDATE` で読み、さらに **DB が排他を強制する**: マイグレーション 20261102100200 が `forge.repositories_state_guard` を
+  置き換え、リポジトリが `purging` になれるのは、プロジェクトが削除待ちで `purge_after` を過ぎているときだけ（それ以外は XF001、
+  `FG-DB-0009 reason=rejected`）。復元の `FOR UPDATE` を待っていた purge の開始は、復元のコミット後に再評価されて拒否され、purge の開始が先に
+  コミットされていれば復元は `FG-REPO-0019 reason=purging`。**MR4 の purge ジョブへ**: 復元と同じ順（プロジェクトの行、次にリポジトリの行）で
+  ロックし、`deleted_at` / `purge_after` を自分で読み直して、競り負けたときはガードのエラーではなくスキップにする。
+  `deleted_at` と `purge_after` は同じ `clock_timestamp()`（書いた時刻）から作る。
 - **削除待ちの見え方**: そのプロジェクトを見られる呼び出しには 410（`FG-REPO-0006`）、見られない呼び出しには存在しないのと同じ 404
   （`FG-REPO-0005`）。API も Smart HTTP（clone / fetch / push の広告）も同じ `authorize()` の行で決まる（テストで固定）。
 - **イベント**: `project.deleted` / `project.restored`（integration クラス）。`dedup_key` は `project_deleted:<project_id>:<deleted_at の epoch>` と

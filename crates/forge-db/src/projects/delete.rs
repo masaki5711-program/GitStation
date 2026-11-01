@@ -7,9 +7,21 @@
 //! Lock order, as in `projects::update` and `projects::members`: the project
 //! row `FOR UPDATE`, the caller's membership rows `FOR SHARE`, the caller's
 //! account row; `restore_decided` then locks the project's repository row
-//! (`FOR UPDATE`) — the row the purge job (D5 MR4) moves to `purging` — so
-//! a restore and a purge start exclude each other: exactly one of them wins
-//! and the other sees its state. `decide` (forge-hosting:
+//! (`FOR UPDATE`) — the row the purge job (D5 MR4) moves to `purging`. A
+//! restore and a purge start exclude each other, and **the database
+//! enforces it**: the guard `forge.repositories_state_guard` (migration
+//! 20261102100200) refuses `purging` unless the project is pending
+//! deletion with `purge_after` passed, so a purge start that waited on a
+//! restore's repository-row lock is refused once the restore has committed
+//! (XF001, `FG-DB-0009 reason=rejected`), and a restore that comes after a
+//! committed purge start answers `FG-REPO-0019 reason=purging`. The MR4
+//! purge job should lock the project row first (same order as restore) and
+//! re-check `deleted_at` / `purge_after` itself, so a lost race is a clean
+//! skip rather than a guard error.
+//!
+//! `deleted_at` and `purge_after` come from one `clock_timestamp()` (the
+//! time of the write, not of the transaction's start), so the grace period
+//! is exact and the purge guard compares against the same clock. `decide` (forge-hosting:
 //! `Authorized::reconfirm`) runs before anything is written or revealed.
 //!
 //! Both events carry a dedup key built from the deletion's time, so a
@@ -62,7 +74,7 @@ const RESTORE: &str =
     "WITH old AS (SELECT deleted_at, purge_after, deleted_by FROM forge.projects \
              WHERE id = $1 AND deleted_at IS NOT NULL), \
              cleared AS (UPDATE forge.projects SET deleted_at = NULL, purge_after = NULL, \
-             deleted_by = NULL, updated_at = now() WHERE id = $1 AND deleted_at IS NOT NULL \
+             deleted_by = NULL, updated_at = clock_timestamp() WHERE id = $1 AND deleted_at IS NOT NULL \
              RETURNING id) \
              SELECT to_char(old.deleted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
              to_char(old.purge_after AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
@@ -100,9 +112,10 @@ pub async fn delete_decided<P>(
         let locked = lock(&mut tx, project).await?;
         let decided = decide(&facts(&mut tx, project, viewer, &locked).await?)?;
         let sql = format!(
-            "UPDATE forge.projects SET deleted_at = now(), \
-             purge_after = now() + $2::bigint * interval '1 second', deleted_by = $3, \
-             updated_at = now() WHERE id = $1 AND deleted_at IS NULL {RETURNING}"
+            "WITH c AS (SELECT clock_timestamp() AS at) \
+             UPDATE forge.projects SET deleted_at = c.at, \
+             purge_after = c.at + $2::bigint * interval '1 second', deleted_by = $3, \
+             updated_at = c.at FROM c WHERE id = $1 AND deleted_at IS NULL {RETURNING}"
         );
         let row: Option<DeletionRow> = tx
             .step(|c| async move {

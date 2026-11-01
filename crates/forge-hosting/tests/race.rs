@@ -598,7 +598,8 @@ async fn an_owner_demoted_while_a_restore_waits_denies_it() {
     };
     let (restored, ()) = tokio::join!(restoring, committing);
     let err = restored.expect_err("bob is a Developer now");
-    assert_eq!(err.code(), ErrorCode::Forbidden);
+    // A Developer sees the pending project: 410, like every other route.
+    assert_eq!(err.code(), ErrorCode::PendingDeletion);
     assert_eq!(
         count(
             &t,

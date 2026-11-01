@@ -268,10 +268,8 @@ async fn delete_and_restore_follow_the_matrix_for_roles_tokens_and_agents() {
     let d = call(r(), "DELETE", &one, token(Scope::Api, false), None).await;
     assert_eq!(d.status, StatusCode::OK, "{}", d.json);
     let e = call(r(), "POST", &restore, session(maint.user_id, false), None).await;
-    assert_eq!(
-        (e.status, code(&e)),
-        (StatusCode::FORBIDDEN, "FG-AUTH-0003")
-    );
+    // A Maintainer sees the pending project: 410 like every other route.
+    assert_eq!((e.status, code(&e)), (StatusCode::GONE, "FG-REPO-0006"));
     let f = call(r(), "POST", &restore, token(Scope::Api, true), None).await;
     assert_eq!(
         (f.status, code(&f)),
@@ -324,6 +322,14 @@ async fn restoring_a_project_whose_repository_is_purging_is_409() {
     )
     .await;
     assert_eq!(deleted.status, StatusCode::OK);
+    t.commit_audited(
+        ("project", id),
+        &[format!(
+            "UPDATE forge.projects SET deleted_at = now() - interval '2 days', \
+             purge_after = now() - interval '1 second' WHERE id = {id}"
+        )],
+    )
+    .await;
     t.commit_audited(
         ("project", id),
         &[format!(

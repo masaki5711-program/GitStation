@@ -29,6 +29,24 @@ async fn marks(su: &mut PgConnection, project: ProjectId) -> Row {
     .expect("project")
 }
 
+/// The grace period is over: the purge may start (the guard of migration
+/// 20261102100200 refuses `purging` before).
+async fn expire(t: &FreshDb, project: ProjectId) {
+    commit(
+        t,
+        &[
+            audit("project", project.get(), "succeeded"),
+            sql(&format!(
+                "UPDATE forge.projects SET deleted_at = now() - interval '2 days', \
+                 purge_after = now() - interval '1 second' WHERE id = {}",
+                project.get()
+            )),
+        ],
+    )
+    .await
+    .expect("expire");
+}
+
 async fn rows(su: &mut PgConnection, action: &str) -> i64 {
     count(
         su,
@@ -298,6 +316,7 @@ async fn restoring_a_project_that_is_not_deleted_or_is_purging_is_restore_unavai
     .await
     .expect("delete");
     let mut su = t.superuser().await;
+    expire(&t, web.project_id).await;
     commit(
         &t,
         &[
@@ -355,6 +374,7 @@ async fn a_restore_waits_for_a_purge_start_in_flight_and_loses_to_it() {
     )
     .await
     .expect("delete");
+    expire(&t, web.project_id).await;
     let mut su = t.superuser().await;
     let mut purge = t.db.write_pool().begin().await.expect("begin");
     sqlx::raw_sql(&audit("project", web.project_id.get(), "succeeded"))
