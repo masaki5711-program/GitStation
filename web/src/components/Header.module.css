@@ -41,6 +41,10 @@
   background: var(--gs-header-hover);
 }
 
+.language .select:active:not(:disabled) {
+  background: var(--gs-header-active);
+}
+
 .select:focus-visible {
   outline: var(--gs-focus-ring-on-dark);
 }

@@ -34,6 +34,17 @@
   --gs-color-active-surface: #e8f5f2;
   --gs-color-focus: #128f7c;
 
+  /* Code and diffs (syntax classes, never style attributes): every colour
+     is >= 4.5:1 on the code surface. A diff line also carries + / - in text. */
+  --gs-color-code-surface: #f3f6f9;
+  --gs-color-hunk-surface: #e6edf6;
+  --gs-code-keyword: #9a1b6e;
+  --gs-code-string: #0b6b3a;
+  --gs-code-comment: #566170;
+  --gs-code-number: #8a4b00;
+  --gs-code-title: #0a4f9e;
+  --gs-code-meta: #5b3fa0;
+
   /* Status: never colour alone — always with text and an icon. */
   --gs-color-danger-text: #a61b1b;
   --gs-color-danger-surface: #fdecec;
@@ -63,6 +74,8 @@
   --gs-font-size-lg: 1.25rem;
   --gs-font-size-xl: 1.5rem;
   --gs-line-height: 1.6;
+  --gs-code-line-height: 1.5rem; /* >= 24px: the line-number links are touch targets (WCAG 2.5.8) */
+  --gs-code-tab-size: 4;
 
   /* Spacing and shape */
   --gs-space-1: 0.25rem;

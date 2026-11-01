@@ -81,7 +81,6 @@
 }
 
 .input {
-  composes: interactive;
   cursor: text;
   min-height: 2.5rem;
   padding: var(--gs-space-2) var(--gs-space-3);
@@ -93,8 +92,27 @@
 }
 
 .input:hover:not(:disabled) {
-  background: var(--gs-color-surface);
   border-color: var(--gs-color-text);
+}
+
+.input:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}
+
+.input:disabled {
+  opacity: 0.6;
+}
+
+/* A save under way: the button keeps the focus (aria-disabled, not disabled). */
+.primary[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.primary[aria-disabled='true']:hover,
+.primary[aria-disabled='true']:active {
+  background: var(--gs-color-action);
 }
 
 .choice {

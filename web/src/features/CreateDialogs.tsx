@@ -176,6 +176,8 @@ function CreateProjectForm({
 
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
+    // aria-disabled (not disabled) keeps the focus on the button while saving.
+    if (create.isPending) return;
     setSubmitted(true);
     setAttempt((n) => n + 1);
     if (f.displayName.trim() === '' || !isValidSegment(f.path) || parentId === '') return;
@@ -262,7 +264,11 @@ function CreateProjectForm({
         ]}
       />
       {create.isError && <QueryError error={create.error} />}
-      <button type="submit" className={controls.primary} disabled={create.isPending}>
+      <button
+        type="submit"
+        className={controls.primary}
+        aria-disabled={create.isPending ? 'true' : undefined}
+      >
         {create.isPending ? t('create.creating') : t('create.project.submit')}
       </button>
     </form>
@@ -341,6 +347,8 @@ function CreateGroupForm({
 
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
+    // aria-disabled (not disabled) keeps the focus on the button while saving.
+    if (create.isPending) return;
     setSubmitted(true);
     setAttempt((n) => n + 1);
     if (f.displayName.trim() === '' || !isValidSegment(f.path)) return;
@@ -378,7 +386,11 @@ function CreateGroupForm({
         multiline
       />
       {create.isError && <QueryError error={create.error} />}
-      <button type="submit" className={controls.primary} disabled={create.isPending}>
+      <button
+        type="submit"
+        className={controls.primary}
+        aria-disabled={create.isPending ? 'true' : undefined}
+      >
         {create.isPending ? t('create.creating') : t('create.group.submit')}
       </button>
     </form>

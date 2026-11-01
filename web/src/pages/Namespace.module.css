@@ -118,3 +118,12 @@
   background: var(--gs-color-background);
   overflow-x: auto;
 }
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

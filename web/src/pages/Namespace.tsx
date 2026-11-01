@@ -18,8 +18,9 @@ import { useApi } from '../api/context';
 import { isViewWord, pathSegments } from '../features/paths';
 import { QueryError } from '../components/QueryError';
 import { GroupPage, UserPage } from './GroupPage';
-import { NotFound, Unavailable } from './NotFound';
+import { NotFound } from './NotFound';
 import { ProjectPage } from './ProjectPage';
+import { RepoViews } from './repo/RepoViews';
 
 const encode = (segments: string[]) => segments.map(encodeURIComponent).join('/');
 
@@ -77,8 +78,8 @@ function Resolved({ path, view }: { path: string; view: string[] | null }) {
       const tail = view.length > 0 ? `/-/${encode(view)}` : '';
       return <Navigate replace to={`/${r.canonical_path}${tail}${rest}`} state={movedState} />;
     }
-    return r.kind === 'project' ? (
-      <Unavailable backTo={`/${r.canonical_path}`} />
+    return r.kind === 'project' && r.project_id != null ? (
+      <RepoViews projectId={r.project_id} project={r.canonical_path} view={view} />
     ) : (
       <NotFound />
     );

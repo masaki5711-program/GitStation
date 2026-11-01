@@ -15,13 +15,13 @@ import {
   signedIn,
 } from './mock';
 import { json, renderApp } from './render';
+import { repoRoutes } from './repo-fixtures';
 
-const project = (refs: unknown = REFS_FILLED) => ({
-  ...signedIn(),
-  'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
-  'GET /api/v1/projects/7': () => json(200, PROJECT),
-  'GET /api/v1/projects/7/repository/refs': () => json(200, refs),
-});
+const project = (refs: unknown = REFS_FILLED) =>
+  repoRoutes({
+    'GET /api/v1/namespaces/resolve': () => json(200, RESOLVE_PROJECT),
+    'GET /api/v1/projects/7/repository/refs': () => json(200, refs),
+  });
 
 describe('project top page', () => {
   it('shows the summary, the clone URL and the repository state', async () => {
@@ -88,14 +88,14 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
     const server = mockServer({
       ...project(),
       'GET /api/v1/namespaces/resolve': (c) =>
-        json(200, c.query.get('prefix') === 'true' ? { ...RESOLVE_PROJECT, remainder: 'tree/main/src' } : RESOLVE_PROJECT),
+        json(200, c.query.get('prefix') === 'true' ? { ...RESOLVE_PROJECT, remainder: 'settings' } : RESOLVE_PROJECT),
     });
-    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/tree/main/src' });
-    // The rescued address is a project screen that is not built yet.
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/settings' });
+    // The rescued address is a project screen the next release builds.
     expect(await screen.findByRole('heading', { name: 'この画面はまだ使えません' })).toBeTruthy();
-    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/-/tree/main/src');
+    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/-/settings');
     const first = server.to('GET', '/api/v1/namespaces/resolve')[0];
-    expect(first?.query.get('path')).toBe('acme/forge-web/tree/main/src');
+    expect(first?.query.get('path')).toBe('acme/forge-web/settings');
     expect(first?.query.get('prefix')).toBe('true');
     expect(screen.getByRole('link', { name: 'プロジェクトへ戻る' }).getAttribute('href')).toBe(
       '/acme/forge-web',
@@ -148,9 +148,9 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
 
   it('a permalink with a screen keeps it after /-/', async () => {
     const server = mockServer(project());
-    await renderApp({ fetch: server.fetch, path: '/-/projects/7/blob/main/README.md' });
+    await renderApp({ fetch: server.fetch, path: '/-/projects/7/members' });
     await screen.findByRole('heading', { name: 'この画面はまだ使えません' });
-    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/-/blob/main/README.md');
+    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/-/members');
   });
 
   it('a permalink whose id is not a positive number is not found without asking', async () => {

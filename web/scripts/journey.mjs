@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import axe from 'axe-core';
 import { chromium } from 'playwright';
 
+import { PNG, REFS, browse } from './journey-repo.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
 
 const CSRF = 'a'.repeat(64);
@@ -66,6 +67,18 @@ function backend() {
       return redirect(res, 303, '/', { 'Set-Cookie': `${COOKIE.split('=')[0]}=; Path=/; Max-Age=0` }), true;
     }
     if (path.startsWith('/-/auth/')) return false;
+
+    // The raw route (server-served; headers as ADR-0015): the README's image.
+    if (req.method === 'GET' && path === `/acme/forge-web/-/raw/${'a'.repeat(40)}/logo.png`) {
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Content-Security-Policy': "sandbox; default-src 'none'",
+        'X-Content-Type-Options': 'nosniff',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+      });
+      res.end(PNG);
+      return true;
+    }
 
     if (!signedIn) return sendError(res, 401, 'Sign-in is required.', 'req-401', 'FG-AUTH-0001'), true;
 
@@ -133,18 +146,21 @@ function backend() {
         ...(remainder === '' ? {} : { remainder }),
       }), true;
     }
+    const repo = path.match(/^\/api\/v1\/projects\/7\/repository\/(.+)$/);
+    if (req.method === 'GET' && repo) {
+      const answer = browse(repo[1], url);
+      if (answer !== null) {
+        if (answer.error) return sendError(res, answer.status, ...answer.error), true;
+        return sendJson(res, 200, answer.body), true;
+      }
+    }
     const one = path.match(/^\/api\/v1\/projects\/(\d+)(\/repository\/refs)?$/);
     if (req.method === 'GET' && one) {
       const p = projects.find((x) => x.id === Number(one[1]));
       if (p === undefined) return sendError(res, 404, 'Not found.', 'req-404', 'FG-WEB-0001'), true;
       if (one[2] === undefined) return sendJson(res, 200, p), true;
       const filled = p.id === 7;
-      return sendJson(res, 200, filled
-        ? { default_branch: 'main', truncated: false, refs: [
-            { name: 'main', full_name: 'refs/heads/main', type: 'branch', target: 'a'.repeat(40), commit: 'a'.repeat(40) },
-            { name: 'v1', full_name: 'refs/tags/v1', type: 'tag', target: 'a'.repeat(40), commit: 'a'.repeat(40) },
-          ] }
-        : { default_branch: null, refs: [], truncated: false }), true;
+      return sendJson(res, 200, filled ? REFS : { default_branch: null, refs: [], truncated: false }), true;
     }
     unexpected.push(key);
     return sendError(res, 500, 'Unexpected test request.', 'req-unexpected'), true;
@@ -256,11 +272,79 @@ async function main() {
     await page.getByRole('link', { name: 'Press Line' }).waitFor();
     await check('07-group');
     await page.goto(`${base}/acme/forge-web/tree/main/src`, { waitUntil: 'networkidle' });
-    await page.getByRole('heading', { name: 'This screen is not available yet' }).waitFor();
+    await page.getByRole('heading', { level: 1, name: 'src' }).waitFor();
     await expectPath('/acme/forge-web/-/tree/main/src', 'URL rescue');
     await page.goto(`${base}/nowhere/at-all`, { waitUntil: 'networkidle' });
     await page.getByRole('heading', { name: 'Page not found' }).waitFor();
     await check('08-not-found');
+
+    // 6a. The repository screens: project -> files -> folder -> file -> blame ->
+    // commits -> commit diff -> compare -> branches, and the README file.
+    const C1 = 'a'.repeat(40);
+    const repoNav = (name) =>
+      page.getByRole('navigation', { name: 'Repository screens' }).getByRole('link', { name, exact: true });
+    await page.goto(`${base}/acme/forge-web`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 1, name: 'Forge Web' }).waitFor();
+    await page.getByRole('link', { name: 'src/' }).waitFor();
+    await page.getByTestId('markdown').waitFor();
+    await check('12-project-files');
+    await repoNav('Files').click();
+    await page.getByRole('heading', { level: 1, name: 'Files' }).waitFor();
+    await expectPath('/acme/forge-web/-/tree', 'files');
+    await page.getByTestId('markdown').waitFor();
+    // The README's raw HTML and javascript: link never become active; its own image loads.
+    const pwned = await page.evaluate(() => window.__pwned);
+    if (pwned !== undefined) problems.push('README script ran');
+    const bad = await page.evaluate(
+      () => document.querySelectorAll('main script, main iframe, main [onclick], main a[href^="javascript:" i]').length,
+    );
+    if (bad > 0) problems.push(`README produced ${bad} active element(s)`);
+    const width = await page.getByAltText('logo').evaluate((img) => img.naturalWidth);
+    if (width !== 1) problems.push(`README image did not load from the raw route (width ${width})`);
+    await check('13-tree');
+    await page.getByRole('link', { name: 'src/' }).click();
+    await expectPath('/acme/forge-web/-/tree/main/src', 'folder');
+    await page.getByRole('link', { name: 'lib.rs' }).click();
+    await expectPath('/acme/forge-web/-/blob/main/src/lib.rs', 'file');
+    await page.locator('[data-testid=code] .hljs-keyword').first().waitFor({ timeout: 10_000 });
+    await check('14-file');
+    await page.getByRole('link', { name: 'Blame', exact: true }).click();
+    await expectPath('/acme/forge-web/-/blame/main/src/lib.rs', 'blame');
+    await page.getByRole('table').waitFor();
+    await check('15-blame');
+    await repoNav('Commits').click();
+    await expectPath('/acme/forge-web/-/commits', 'commits');
+    await page.getByRole('link', { name: 'Add the add function' }).waitFor();
+    await check('16-commits');
+    await page.getByRole('link', { name: 'Add the add function' }).click();
+    await expectPath(`/acme/forge-web/-/commit/${C1}`, 'commit');
+    await page.getByTestId('diff-truncated').waitFor();
+    await check('17-commit-diff');
+    await page.goto(`${base}/acme/forge-web/-/compare/main...dev`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 2, name: /Commits only in the compared revision/ }).waitFor();
+    await check('18-compare');
+    await repoNav('Branches').click();
+    await expectPath('/acme/forge-web/-/branches', 'branches');
+    await page.getByRole('table').waitFor();
+    await check('19-branches');
+    await page.goto(`${base}/acme/forge-web/-/blob/main/README.md`, { waitUntil: 'networkidle' });
+    await page.getByTestId('markdown').waitFor();
+    await check('20-readme-file');
+    await page.setViewportSize({ width: 375, height: 800 });
+    for (const [path, name] of [
+      ['/acme/forge-web/-/blob/main/src/lib.rs', '21-file-375'],
+      [`/acme/forge-web/-/commit/${C1}`, '22-commit-375'],
+      ['/acme/forge-web/-/tree', '23-tree-375'],
+    ]) {
+      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+      await page.getByRole('heading', { level: 1 }).first().waitFor();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
+      await check(name);
+    }
+    await page.setViewportSize({ width: 1100, height: 800 });
 
     // 6b. A narrow phone in Indonesian (the longest strings): nothing overflows.
     await page.setViewportSize({ width: 375, height: 800 });

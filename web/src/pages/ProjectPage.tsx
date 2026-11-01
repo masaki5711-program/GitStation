@@ -6,7 +6,12 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { Link } from 'react-router';
+
 import { call } from '../api/client';
+import { useSpec } from '../api/repo';
+import { encodePath } from '../features/repoUrls';
+import { TreeListing } from './repo/TreeListing';
 import { Loading } from '../components/Loading';
 import { useApi } from '../api/context';
 import { Breadcrumb } from '../components/Breadcrumb';
@@ -19,7 +24,18 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { rememberProject } from '../hooks/recent';
 import styles from './Namespace.module.css';
 
-function RepositoryState({ id, name, cloneUrl }: { id: number; name: string; cloneUrl: string }) {
+function RepositoryState({
+  id,
+  name,
+  path,
+  cloneUrl,
+}: {
+  id: number;
+  name: string;
+  path: string;
+  cloneUrl: string;
+}) {
+  const base = `/${encodePath(path)}`;
   const { t } = useTranslation();
   const api = useApi();
   const refs = useQuery({
@@ -79,8 +95,34 @@ function RepositoryState({ id, name, cloneUrl }: { id: number; name: string; clo
         <dd>{tags}</dd>
       </dl>
       {refs.data.truncated && <p className={styles.hint}>{t('project.refsTruncated')}</p>}
+      <nav aria-label={t('repo.navLabel')}>
+        <ul className={styles.links}>
+          <li>
+            <Link to={`${base}/-/tree`}>{t('repo.files')}</Link>
+          </li>
+          <li>
+            <Link to={`${base}/-/commits`}>{t('repo.commits')}</Link>
+          </li>
+          <li>
+            <Link to={`${base}/-/branches`}>{t('repo.branches')}</Link>
+          </li>
+          <li>
+            <Link to={`${base}/-/tags`}>{t('repo.tags')}</Link>
+          </li>
+          <li>
+            <Link to={`${base}/-/compare`}>{t('repo.compare')}</Link>
+          </li>
+        </ul>
+      </nav>
     </section>
   );
+}
+
+/** The root of the default branch, with its README, under the summary. */
+function ProjectFiles({ projectId, project }: { projectId: number; project: string }) {
+  const spec = useSpec(projectId, '');
+  if (spec.data === undefined) return null;
+  return <TreeListing projectId={projectId} project={project} spec={spec.data} />;
 }
 
 export function ProjectPage({ id }: { id: number }) {
@@ -142,7 +184,8 @@ export function ProjectPage({ id }: { id: number }) {
         <p className={styles.hint}>{t('project.cloneHint')}</p>
       </section>
 
-      <RepositoryState id={p.id} name={p.name} cloneUrl={cloneUrl} />
+      <RepositoryState id={p.id} name={p.name} path={p.path} cloneUrl={cloneUrl} />
+      <ProjectFiles projectId={p.id} project={p.path} />
     </>
   );
 }
