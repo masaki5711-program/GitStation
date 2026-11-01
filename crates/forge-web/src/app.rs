@@ -187,6 +187,10 @@ pub const PLANNED: &[Action] = &[
     Action::ProjectTransfer,
     Action::ProjectDelete,
     Action::ProjectRestore,
+    // D5 (ADR-0015): routed in MR5 `feat/web-api-namespace-moves`.
+    Action::GroupTransfer,
+    Action::UserRename,
+    Action::NamespaceTombstoneRelease,
     Action::TokenCreate,
     Action::TokenList,
     Action::TokenRevoke,

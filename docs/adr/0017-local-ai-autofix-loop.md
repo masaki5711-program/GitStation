@@ -1184,3 +1184,11 @@ pub enum SyncTrigger { Schedule, KanflowNotification }
   見えないプロジェクトには 404、スコープ不足には FG-AUTH-0002 が先に返る。
 - 一覧（`MemberList`、`ProtectedRefList`）はエージェントにも人のトークンと同じ判定で許す。
 - 権限の表に、Maintainer・Owner・管理者のエージェントのトークンの拒否の行と、`read_api` のエージェントの一覧の許可の行がある。
+
+## Amendment（2026-11-01、手順 D5 MR1: 削除・移管・名前の変更・墓標の解放もエージェントには許さない）
+
+- **エージェントの資格情報は `ProjectDelete`、`ProjectRestore`、`ProjectTransfer`、`GroupTransfer`、`UserRename`、
+  `NamespaceTombstoneRelease` も拒否される**（`FG-AUTH-0003 reason=agent_token`）。Owner でも管理者でも同じ。パスを変える・消す・
+  戻す操作は古い URL と墓標に影響し、元に戻すのに人の判断が要るため（計画 D5 の回答「agents denied every D5 action incl. restore」）。
+- 判定の順は MR8 と同じ（可視性 → スコープ → エージェント → 役割）。見えない対象には 404、スコープ不足には FG-AUTH-0002 が先に返る。
+- 権限の表に、Owner と管理者のエージェントのトークンの拒否の行がある。

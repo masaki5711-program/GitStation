@@ -508,6 +508,18 @@
     "planned": true
   },
   {
+    "action": "GroupTransfer",
+    "planned": true
+  },
+  {
+    "action": "UserRename",
+    "planned": true
+  },
+  {
+    "action": "NamespaceTombstoneRelease",
+    "planned": true
+  },
+  {
     "action": "TokenCreate",
     "planned": true
   },
