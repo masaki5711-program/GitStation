@@ -20,7 +20,7 @@
 //!   doctor`'s `review.merges` reports attempts the reconciliation has left
 //!   past their bound (it is not running, or fails every pass).
 //! - **supervisor**: a task that ends while serve is not stopping (a panic,
-//!   an unexpected return) is logged once as `FG-SYS-0003` ServeFailed
+//!   an unexpected return) is logged once as `FG-SYS-0005` ServeFailed
 //!   (`operation=merge_task_exited`, `task`, `panicked`) and started again
 //!   after a backoff (1 s doubling to 30 s, reset after a minute of running).
 //!
@@ -262,7 +262,7 @@ impl MergeTasks {
     }
 }
 
-/// `FG-SYS-0003` ServeFailed for a task (or its supervisor) that ended
+/// `FG-SYS-0005` ServeFailed for a task (or its supervisor) that ended
 /// unexpectedly; `join` tells a panic from a cancellation.
 fn log_exit(task: &'static str, join: Option<&JoinError>, operation: &'static str) {
     telemetry::log_failure(

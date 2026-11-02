@@ -14,7 +14,7 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
   - `reason=merge_request_not_open`: ref は動いたが、記録の時点で MR が開いていなかった（不変条件の破れ）。行は `failed`。
   - `reason=reconcile_overdue`: `forge doctor` の `review.merges` が、照合の期限を 3 分以上過ぎた生きた試行を数えた（照合が動いていないか、
     毎回失敗している）。
-- `FG-SYS-0003` ServeFailed（`operation=merge_task_exited`、`task=merge_runner|merge_reconcile`）: serve のマージのタスクが止まった・panic した
+- `FG-SYS-0005` ServeFailed（`operation=merge_task_exited`、`task=merge_runner|merge_reconcile`）: serve のマージのタスクが止まった・panic した
   （監督のタスクが起動し直す）。
 - `forge.review.merge_retry`（warn、`reason=ref_locked|lock_lost`）が同じ `merge_id` で繰り返し出る、ジョブがデッドレター（FG-DB-0006、
   `kind=merge_request.merge`）になった。
@@ -45,7 +45,7 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 
 0. `forge doctor --json` の `review.merges`（期限を過ぎた生きた試行の数と最も古いものの経過秒、直近 7 日の `failed`）。serve のログの
    debug のハートビート `forge.serve.merge_reconcile_pass`（照合の 1 回ごと、件数つき。debug を出していれば）と、
-   `forge.serve.merge_runner_stopped` / `FG-SYS-0003 merge_task_exited`。
+   `forge.serve.merge_runner_stopped` / `FG-SYS-0005 merge_task_exited`。
 
 1. ログを `merge_id` と、要求の `request_id`（マージを要求した HTTP の要求の ID。ジョブのログもこの ID を持つ）で読む:
    `forge.review.merge_started` → `forge.review.merge_applied`（ref が動いた直後に **先に** 出る）→ `forge.review.merge_completed`（`outcome`）。
@@ -98,7 +98,7 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 ## Escalate
 
 - `failed`（`ref_state_unknown`）は必ず人が判断する（Maintainer とマージを要求した人）。
-- 照合が動かない（`forge doctor` の `review.merges` が `reconcile_overdue`、serve のログに `FG-SYS-0003 merge_task_exited` や
+- 照合が動かない（`forge doctor` の `review.merges` が `reconcile_overdue`、serve のログに `FG-SYS-0005 merge_task_exited` や
   `operation=merge_reconcile` の失敗が続く。照合が何かを片付けた回は info の `forge.review.merge_reconciled` も出る）・同じ行が残り
   続ける: Claude（保守担当）へ、
   `merge_id`・`request_id`・行の値・target の先端を添えて。
