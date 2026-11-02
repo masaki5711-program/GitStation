@@ -4,12 +4,14 @@
 //! one commit with its diff, compare, blame, the caps and the allow / deny
 //! table of every route.
 
+#[cfg(unix)]
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use forge_core::{RepositoryState, Role, Visibility};
 use forge_errors::ErrorCode;
 use forge_git::browse::BrowseLimits;
+#[cfg(unix)]
 use forge_git::{Git, GitConfig};
 use serde_json::Value;
 

@@ -3,6 +3,7 @@
 //! content), plus fake binaries for the time limits.
 
 use std::path::Path;
+#[cfg(unix)]
 use std::time::Duration;
 
 use forge_errors::ErrorCode;

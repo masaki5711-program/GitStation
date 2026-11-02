@@ -207,7 +207,7 @@ async fn raw_inner(
         }
         RawBody::Stream(stream) => {
             let log = StreamLog::new(&request, repository, "raw");
-            let body = GitResponse::new(Vec::new(), stream, log)?.into_body();
+            let body = GitResponse::new(Vec::new(), *stream, log)?.into_body();
             Ok(content_response(
                 OCTET,
                 disposition(false, &name),

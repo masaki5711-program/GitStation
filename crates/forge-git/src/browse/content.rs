@@ -23,7 +23,9 @@ pub struct Blob {
 #[derive(Debug)]
 pub enum RawBody {
     Bytes(Vec<u8>),
-    Stream(GitStream),
+    /// Boxed: on Windows `GitStream` carries a job object and is ~10x the
+    /// `Bytes` variant (clippy::large_enum_variant).
+    Stream(Box<GitStream>),
 }
 
 /// A raw file of a commit.
@@ -179,7 +181,7 @@ impl Browser {
         Ok(RawBlob {
             size,
             oid: entry.oid,
-            body: RawBody::Stream(stream),
+            body: RawBody::Stream(Box::new(stream)),
         })
     }
 
