@@ -371,6 +371,31 @@ pub enum PushRecorded {
     Deduped,
 }
 
+/// The most commits one push records as introduced (M3 R5 round 4); past
+/// it the record is `push_commits_incomplete` and the rest have no row.
+pub const MAX_PUSHED_COMMITS: usize = 1_000_000;
+
+/// The commits a push introduced: every commit its updates made reachable
+/// that no ref reached before (M3 R5 round 4, ADR-0024 §8.3: the committer
+/// rule's source). `complete` is false when the listing stopped early (the
+/// cap, the deadline, a git failure): the commits not listed have no row,
+/// so a merge request whose range holds one has unknown committers.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PushedCommits {
+    pub commits: Vec<ObjectId>,
+    pub complete: bool,
+}
+
+impl PushedCommits {
+    /// Nothing is known (a replay from the log line, a record without git).
+    pub fn unknown() -> Self {
+        Self {
+            commits: Vec::new(),
+            complete: false,
+        }
+    }
+}
+
 /// Records applied pushes (forge-db implements it on `Db`; `forge serve`
 /// injects it into forge-web).
 pub trait PushRecorder: Send + Sync {
@@ -384,4 +409,17 @@ pub trait PushRecorder: Send + Sync {
         pusher: &'a Pusher,
         push: &'a PushRecord,
     ) -> LookupFuture<'a, PushRecorded>;
+
+    /// [`Self::record_push`] with the commits the push introduced, written
+    /// in the same transaction (M3 R5 round 4). The default ignores them
+    /// (a recorder without that store).
+    fn record_push_with_commits<'a>(
+        &'a self,
+        pusher: &'a Pusher,
+        push: &'a PushRecord,
+        commits: &'a PushedCommits,
+    ) -> LookupFuture<'a, PushRecorded> {
+        let _ = commits; // a recorder without the commit store keeps none
+        self.record_push(pusher, push)
+    }
 }
