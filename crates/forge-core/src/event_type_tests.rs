@@ -118,7 +118,8 @@ fn all_lists_every_event_type_once() {
             "merge_request.updated",
             "merge_request.draft_changed",
             "merge_request.closed",
-            "merge_request.reopened"
+            "merge_request.reopened",
+            "merge_request.pushed"
         ]
     );
 }
