@@ -105,6 +105,10 @@ pub(crate) enum Actor {
     /// The service account / bot twins of `DevTokenMergeApprove`.
     ServiceAccountTokenMergeApprove,
     BotTokenMergeApprove,
+    /// Maintainer with a `read_api` token (no `api`; R5 review).
+    MaintainerTokenReadApi,
+    /// Administrator with a `merge_approve` + `admin` token (R5 review).
+    AdminTokenMergeApproveAdmin,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -366,6 +370,8 @@ impl Actor {
             Actor::BotTokenMergeApprove => {
                 token_of(AccountKind::Bot, false, &[Scope::MergeApprove])
             }
+            Actor::MaintainerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::AdminTokenMergeApproveAdmin => token(true, &[Scope::MergeApprove, Scope::Admin]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -401,7 +407,8 @@ impl Actor {
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
             | Actor::ServiceAccountMaintainerTokenApi
-            | Actor::BotMaintainerTokenApi => Some(Role::Maintainer),
+            | Actor::BotMaintainerTokenApi
+            | Actor::MaintainerTokenReadApi => Some(Role::Maintainer),
             Actor::Owner
             | Actor::OwnerTokenReadApi
             | Actor::AgentOwnerTokenApi
@@ -422,7 +429,8 @@ impl Actor {
             | Actor::BotAdminTokenAdmin
             | Actor::BotAdminSession
             | Actor::AdminTokenMergeExecuteAdmin
-            | Actor::AdminTokenMergeExecute => None,
+            | Actor::AdminTokenMergeExecute
+            | Actor::AdminTokenMergeApproveAdmin => None,
         }
     }
 
@@ -480,7 +488,9 @@ impl Actor {
             | Actor::AdminTokenMergeExecuteAdmin
             | Actor::AdminTokenMergeExecute
             | Actor::DevTokenMergeApprove
-            | Actor::AgentTokenMergeApprove => None,
+            | Actor::AgentTokenMergeApprove
+            | Actor::MaintainerTokenReadApi
+            | Actor::AdminTokenMergeApproveAdmin => None,
         }
     }
 

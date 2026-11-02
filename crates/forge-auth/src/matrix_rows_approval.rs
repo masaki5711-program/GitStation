@@ -140,7 +140,7 @@ const APPROVE: [Row; 25] = approval_rows!(A::MergeRequestApprove);
 const UNAPPROVE: [Row; 25] = approval_rows!(A::MergeRequestUnapprove);
 
 #[rustfmt::skip]
-const OTHERS: [Row; 15] = [
+const OTHERS: [Row; 18] = [
     // The R4 debt (ADR-0024 §8.5): `merge_approve` never merges.
     row(A::MergeRequestMerge, W::DevTokenMergeApprove, OTHER_MR, deny(E::InsufficientScope)),
     // --- approval rules: people only, Maintainer and above, `api` ---
@@ -158,6 +158,13 @@ const OTHERS: [Row; 15] = [
     row(A::ApprovalRuleManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     row(A::ApprovalRuleManage, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
     row(A::ApprovalRuleManage, W::DevTokenMergeApprove, F::PrivateProject, deny(E::InsufficientScope)),
+    // R5 review: neither merge scope, nor a Maintainer's token without `api`.
+    row(A::ApprovalRuleManage, W::DevTokenMergeExecute, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::ApprovalRuleManage, W::MaintainerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
+    // An administrator's `merge_approve` + `admin` token approves another's
+    // merge request (whether it counts is evaluate_merge()'s: a non-member
+    // administrator's approval does not count).
+    row(A::MergeRequestApprove, W::AdminTokenMergeApproveAdmin, OTHER_MR, Allow),
 ];
 
 const ALL: [[Row; 25]; 2] = [APPROVE, UNAPPROVE];
