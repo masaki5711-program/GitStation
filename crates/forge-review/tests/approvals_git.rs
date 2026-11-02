@@ -1373,3 +1373,161 @@ async fn tag_churn_does_not_block_approvals() {
     assert!(report.blocks.is_empty(), "{:?}", report.blocks);
     w.t.drop_now().await;
 }
+
+impl World {
+    /// olga asks for a merge by `method`.
+    async fn ask_by(
+        &self,
+        method: forge_core::MergeMethod,
+    ) -> Result<forge_review::StoredMerge, ForgeError> {
+        let who = session(self.owner);
+        let proof = self.mr_proof(&who, Action::MergeRequestMerge).await?;
+        let credential = CredentialRef::Session(self.session_of(self.owner).await);
+        self.review
+            .request_merge(
+                &request("req-merge"),
+                credential,
+                &proof,
+                ready(self.repo),
+                &MergeAsk {
+                    sha: oid(&self.head),
+                    method: Some(method),
+                    delete_source_branch: Some(false),
+                    message: None,
+                },
+            )
+            .await
+    }
+
+    /// The pushers recorded for `commit`, sorted.
+    async fn pushers_of(&self, commit: &str) -> Vec<i64> {
+        let rows = self
+            .t
+            .json_rows(&format!(
+                "SELECT pusher_id AS n FROM forge.push_commits WHERE commit_sha = '{commit}' \
+                 ORDER BY pusher_id"
+            ))
+            .await;
+        rows.iter()
+            .filter_map(|r| r.get("n").and_then(serde_json::Value::as_i64))
+            .collect()
+    }
+
+    /// mara opens `source` → `target` as the world's merge request.
+    async fn open_next(&mut self, source: &str, target: &str) {
+        let proof = open_proof(
+            &self.t,
+            &session(self.mara),
+            self.project,
+            (source, target),
+            false,
+        )
+        .await
+        .expect("open proof");
+        self.mr = self
+            .review
+            .open(
+                &request("req-open-next"),
+                &proof,
+                ready(self.repo),
+                &NewFields {
+                    title: "Release".to_owned(),
+                    description: String::new(),
+                },
+            )
+            .await
+            .expect("open");
+        self.head = self.tip(source);
+        self.checked().await;
+    }
+}
+
+/// R5 review round 5: a squash commit is attributed to the requester and
+/// to every pusher of the merged range — after olga squashes dave's merge
+/// request, a main → release merge request holding the squash commit counts
+/// dave as a committer (his approval does not count).
+#[tokio::test]
+async fn a_squash_commit_keeps_the_range_pushers_as_committers() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    plumb(
+        &w.path,
+        &["update-ref", "refs/heads/release", &w.base],
+        None,
+    );
+    let attempt = w
+        .ask_by(forge_core::MergeMethod::Squash)
+        .await
+        .expect("queued");
+    let done = w.merger.execute(attempt.id).await.expect("merge");
+    assert_eq!(done.outcome, "applied");
+    let squash = w.tip("main");
+    assert_ne!(squash, w.head, "a new commit");
+    let mut want = vec![w.dave.get(), w.owner.get()];
+    want.sort_unstable();
+    assert_eq!(w.pushers_of(&squash).await, want);
+    w.browser.invalidate(w.repo);
+    w.open_next("main", "release").await;
+    let dave = w.approve(w.dave).await.expect("approve");
+    assert_eq!(
+        dave.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::Committer)
+        }
+    );
+    let rita = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        rita.outcome,
+        ApproveOutcome::Approved {
+            counted: true,
+            uncounted_reason: None
+        }
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 review round 5: a merge commit is attributed like a squash commit;
+/// when the range's pushers are unknown (a commit with no row) the merge
+/// commit gets no row at all (fail closed: a later range holding it has
+/// unknown committers, never just the requester).
+#[tokio::test]
+async fn a_merge_commit_is_attributed_to_the_range_pushers_or_to_no_one() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let attempt = w
+        .ask_by(forge_core::MergeMethod::MergeCommit)
+        .await
+        .expect("queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    let mut want = vec![w.dave.get(), w.owner.get()];
+    want.sort_unstable();
+    assert_eq!(w.pushers_of(&w.tip("main")).await, want);
+    w.t.drop_now().await;
+
+    let w = world_with(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+        false,
+    )
+    .await;
+    let attempt = w
+        .ask_by(forge_core::MergeMethod::Squash)
+        .await
+        .expect("queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    assert!(w.pushers_of(&w.tip("main")).await.is_empty());
+    w.t.drop_now().await;
+}

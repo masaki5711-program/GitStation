@@ -3,11 +3,13 @@
 //! committer rule reads what the push path recorded at receive time.
 //!
 //! 1. Every push records the commits it introduced — made reachable when no
-//!    ref reached them before the push — one `push_commits` row per
+//!    ref reached them before the push (a snapshot of the ref tips read
+//!    before receive-pack, review round 5) — one `push_commits` row per
 //!    (commit, pusher), in the push record's transaction. A ref update that
 //!    brings no new commit (a tag or a branch on an existing commit, a
 //!    delete) records nothing; a merge records its own merge or squash
-//!    commit for the requester.
+//!    commit for the requester and every pusher of the merged range, or
+//!    for no one when those are unknown (`merges/attribution.rs`).
 //! 2. The range is `head ^<target tip>` (at most [`MAX_RANGE_COMMITS`];
 //!    more is `range_too_long`).
 //! 3. The committers are the pushers of the range's commits (one indexed

@@ -348,11 +348,15 @@ fn merge_record(
 /// merge id (`merge_request_merged:<merge_id>`, `merge_pushed:<merge_id>`)
 /// so a retry or the reconciliation writes them once. `ctx` is the
 /// requester's (the job acts for them). `push` is the target's update.
+/// `range_pushers`: the pushers of the merged range (forge-review), who
+/// with the requester get the merge or squash commit's `push_commits` rows;
+/// `None` (unknown) writes no row (R5 review round 5, fail closed).
 pub async fn finish_merge(
     db: &Db,
     ctx: &ChangeContext,
     attempt: &StoredMerge,
     push: &PushRecord,
+    range_pushers: Option<&[forge_core::UserId]>,
 ) -> Result<MergeFinished, ForgeError> {
     const ACTION: &str = "merge_request.merged";
     push.check()?;
@@ -449,25 +453,36 @@ pub async fn finish_merge(
             head_sha: locked.head_sha.clone(), // clone: the change owns its id
             merged_by: locked.requested_by,
         };
-        // M3 R5 round 4 (ADR-0024 §8.3): a merge or squash commit is a
-        // commit this "push" introduced, by the requester (the head's
-        // commits were pushed before and keep their rows).
-        if locked.method != forge_core::MergeMethod::FastForward {
-            let (project, repo, user) =
-                (attempt.project_id, push.repository_id, locked.requested_by);
+        // M3 R5 round 4 / review round 5 (ADR-0024 §8.3): a merge or squash
+        // commit is a commit this "push" introduced — by the requester and by
+        // every pusher of the merged range (a squash must not launder them);
+        // unknown pushers: no row at all (a later range holding it has
+        // unknown committers).
+        if let (true, Some(range_pushers)) = (
+            locked.method != forge_core::MergeMethod::FastForward,
+            range_pushers,
+        ) {
+            let mut users: Vec<forge_core::UserId> = range_pushers.to_vec();
+            users.push(locked.requested_by);
+            users.sort_unstable();
+            users.dedup();
+            let (project, repo) = (attempt.project_id, push.repository_id);
             let request_id = ctx.request_id.as_str().to_owned();
             let merged = std::slice::from_ref(&new_sha);
-            tx.step(|c| async move {
-                crate::repositories::insert_push_commits(
-                    c,
-                    (project, repo),
-                    &request_id,
-                    user,
-                    merged,
-                )
-                .await
-            })
-            .await?;
+            for user in users {
+                let request_id = request_id.as_str();
+                tx.step(|c| async move {
+                    crate::repositories::insert_push_commits(
+                        c,
+                        (project, repo),
+                        request_id,
+                        user,
+                        merged,
+                    )
+                    .await
+                })
+                .await?;
+            }
         }
         let pushed = AuditDetails::RepositoryPushed {
             project_id: attempt.project_id,

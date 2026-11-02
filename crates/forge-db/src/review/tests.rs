@@ -469,13 +469,19 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                         total_commits_partial: false,
                     }],
                 };
-                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push)
+                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push, Some(&[]))
                     .await
                     .expect("finish");
                 assert!(matches!(done, merges::MergeFinished::Recorded(_)));
-                let again = merges::finish_merge(&t.db, &ctx("req-merge-again"), &attempt, &push)
-                    .await
-                    .expect("again");
+                let again = merges::finish_merge(
+                    &t.db,
+                    &ctx("req-merge-again"),
+                    &attempt,
+                    &push,
+                    Some(&[]),
+                )
+                .await
+                .expect("again");
                 assert_eq!(again, merges::MergeFinished::AlreadyApplied);
             }
             MergeRequestTransition::SourceBranchDelete => {

@@ -43,6 +43,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::Browser;
 use forge_git::{Git, StorageRoot};
 
+mod attribution;
 pub mod evaluate;
 mod execute;
 mod reconcile;

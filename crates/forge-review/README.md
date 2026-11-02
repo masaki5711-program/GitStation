@@ -153,7 +153,8 @@ MergeBlocked (`reasons`), 0008 HeadChanged (`stale_view` / `source_moved` / `tar
 0009 MergeExecutionFailed (alert: `update_ref_failed` / `record_failed` / `ref_state_unknown`),
 0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db); M3 R5: FG-REVIEW-0013
 SelfApprovalRefused (from `authorize()`), 0014 CodeownersInvalid (warn, logged once per
-evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db). Reused: FG-AUTH-0002 / 0003 (with
+evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db). Reused: FG-GIT-0016 (warn, round 5: a merge
+commit whose range pushers are unknown gets no `push_commits` row, `merges/attribution.rs`); FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid
 alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023

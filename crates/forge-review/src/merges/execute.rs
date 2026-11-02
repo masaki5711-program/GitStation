@@ -925,8 +925,10 @@ impl Merger {
             head_sha = attempt.head_sha.as_str(),
         );
         let push = self.push_record(lock, attempt, subject, old, new).await;
+        let pushers = self.merge_commit_pushers(lock, attempt, subject, old).await;
         let scopes = (!scopes.is_empty()).then_some(scopes);
-        match finish_merge(&self.db, &requester_ctx(attempt, scopes), attempt, &push).await {
+        let ctx = requester_ctx(attempt, scopes);
+        match finish_merge(&self.db, &ctx, attempt, &push, pushers.as_deref()).await {
             Ok(MergeFinished::Recorded(_)) => Ok(MergeReport {
                 outcome: "applied",
                 state: MergeState::Applied,
