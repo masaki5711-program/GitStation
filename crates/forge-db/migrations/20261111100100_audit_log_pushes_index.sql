@@ -15,4 +15,4 @@ CREATE INDEX audit_log_pushes
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261111100100, "guarded_changes": ["forge.audit_log_pushes"]}');
+    '{"version": 20261111100100, "guarded_changes": ["forge.audit_log"]}');
