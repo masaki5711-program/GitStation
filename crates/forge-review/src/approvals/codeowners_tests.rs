@@ -397,3 +397,23 @@ fn matching_stops_at_the_deadline_inside_the_rules() {
     let past = std::time::Instant::now();
     assert_eq!(c.owned_lines(&["a/b".to_owned()], Some(past)), None);
 }
+
+/// R5 round 3 (LOW): every nonspacing or enclosing mark (general category
+/// Mn / Me) is refused, not only selected blocks.
+#[test]
+fn every_combining_mark_is_refused() {
+    // Thai U+0E31, Devanagari U+093C, Hebrew U+05B0, Cyrillic U+0488 (Me).
+    for mark in ['\u{0E31}', '\u{093C}', '\u{05B0}', '\u{0488}'] {
+        let line = format!("*.rs{mark} @a\n");
+        assert_eq!(
+            err(&line),
+            CodeownersError {
+                line: 1,
+                reason: "pattern_invalid"
+            },
+            "{mark:?}"
+        );
+    }
+    // A spacing letter of the same scripts is a plain character.
+    parse("ทดสอบ/ @a\n".as_bytes()).expect("Thai letters");
+}

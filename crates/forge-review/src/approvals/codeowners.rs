@@ -127,28 +127,19 @@ fn is_format(c: char) -> bool {
 }
 
 /// Other characters that are invisible or attach to the previous one (R5
-/// review round 2): combining marks (the combining blocks of categories
-/// Mn / Me: U+0300–036F, U+0483–0489, U+1AB0–1AFF, U+1DC0–1DFF,
-/// U+20D0–20FF, U+3099–309A, U+FE20–FE2F), the Hangul fillers (U+115F,
-/// U+1160, U+3164, U+FFA0), the Braille blank (U+2800) and the variation
-/// selectors (U+FE00–FE0F, U+E0100–E01EF).
+/// review rounds 2 and 3): every nonspacing or enclosing mark (Unicode
+/// general category Mn / Me, from the `unicode-properties` tables), the
+/// Hangul fillers (U+115F, U+1160, U+3164, U+FFA0), the Braille blank
+/// (U+2800) and the variation selectors (U+FE00–FE0F, U+E0100–E01EF: Mn
+/// already, kept explicit).
 fn is_invisible(c: char) -> bool {
+    use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
     matches!(
+        c.general_category(),
+        GeneralCategory::NonspacingMark | GeneralCategory::EnclosingMark | GeneralCategory::Format
+    ) || matches!(
         u32::from(c),
-        0x0300..=0x036F
-            | 0x0483..=0x0489
-            | 0x1AB0..=0x1AFF
-            | 0x1DC0..=0x1DFF
-            | 0x20D0..=0x20FF
-            | 0x3099..=0x309A
-            | 0xFE20..=0xFE2F
-            | 0x115F
-            | 0x1160
-            | 0x3164
-            | 0xFFA0
-            | 0x2800
-            | 0xFE00..=0xFE0F
-            | 0xE0100..=0xE01EF
+        0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x2800 | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF
     )
 }
 
