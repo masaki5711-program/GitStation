@@ -24,9 +24,24 @@
 //! - [`users`] creates (with the personal namespace) and disables users
 //!   (`FG-REPO-0007`..`0009`, `FG-AUTH-0005`..`0007`).
 //! - [`groups`] creates groups and changes their direct members; [`roles`]
-//!   loads a user's roles on a group (`MemberRoles`, the one role
-//!   computation, ADR-0010).
+//!   loads a user's roles on a group or project (`MemberRoles`, the one
+//!   role computation, ADR-0010).
+//! - [`projects`] creates a project with its namespace, repository, first
+//!   Owner and provisioning job (`FG-REPO-0014`); [`repositories`] holds
+//!   the provisioning job's definition and records applied pushes
+//!   (`record_push`, `forge_core::PushRecorder`); [`protected_refs`] loads
+//!   the push's rule snapshot (`rules_for`, `forge_core::ProtectionLoader`).
+//! - [`namespaces`] moves a namespace subtree (D5: `projects::move_decided`,
+//!   `groups::move_decided`, `users::rename_decided`; `FG-REPO-0015`,
+//!   `FG-REPO-0018`); [`tombstones`] releases a tombstone
+//!   (`release_decided`).
+//! - [`resolve`] implements `forge_core::NamespaceResolver` and
+//!   `ProjectAccessLoader` on [`Db`]: path (or project id) → target and the
+//!   viewer's authorization inputs in one statement (`FG-DB-0021`).
 
+// ── M1 phase 8b MR7a: authorization facts inside a write transaction ──
+pub mod access;
+// ── end M1 phase 8b MR7a ──
 #[cfg(test)]
 mod audited_doctor_tests;
 #[cfg(test)]
@@ -51,7 +66,7 @@ pub mod sequencer;
 pub mod subscribers;
 // ── end C5 ──
 // ── D1: users and namespaces ──
-mod namespaces;
+pub mod namespaces;
 pub mod users;
 #[cfg(test)]
 mod users_constraint_tests;
@@ -64,6 +79,36 @@ pub mod groups;
 mod groups_schema_tests;
 pub mod roles;
 // ── end D2 ──
+// ── D3: personal access tokens ──
+pub mod tokens;
+// ── end D3 ──
+// ── M2 MR3: web sessions (ADR-0021 §5) ──
+pub mod sessions;
+// ── end M2 MR3 ──
+// ── M2 MR4: OIDC identities (ADR-0021 §4) ──
+pub mod identities;
+// ── end M2 MR4 ──
+// ── D4: projects, repositories, project members, protected refs ──
+pub mod projects;
+#[cfg(test)]
+mod projects_schema_tests;
+pub mod repositories;
+// ── end D4 ──
+// ── D4 MR5: protected ref rules ──
+pub mod protected_refs;
+// ── end D4 MR5 ──
+// ── M1 phase 8 MR3: the namespace resolver ──
+pub mod resolve;
+// ── end M1 phase 8 MR3 ──
+// ── M1 phase 8b MR7b: list page scans ──
+pub mod lists;
+// ── end M1 phase 8b MR7b ──
+// ── M1 phase 8b MR8: direct member lists ──
+pub mod members;
+// ── end M1 phase 8b MR8 ──
+// ── D5 MR2: namespace moves and tombstone releases ──
+pub mod tombstones;
+// ── end D5 MR2 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

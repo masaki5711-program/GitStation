@@ -12,17 +12,15 @@
 use std::net::IpAddr;
 
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::RequestId;
+use forge_core::{DedupKey, EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
 mod tx;
 mod validate;
 
-pub(crate) use tx::ChangeTx;
+pub(crate) use tx::{ChangeTx, Settle};
 // The event checks DerivedTx shares (subscribers, C5).
-pub(crate) use validate::{
-    numbers_are_safe, valid_event_type, MAX_DEDUP_KEY_CHARS, MAX_PAYLOAD_BYTES,
-};
+pub(crate) use validate::{dedup_key_ok, numbers_are_safe, MAX_PAYLOAD_BYTES};
 
 /// At most this many events per change: a command that needs more emits one
 /// aggregate event instead.
@@ -61,7 +59,7 @@ impl Actor {
         }
     }
 
-    fn user(&self) -> Option<i64> {
+    pub(crate) fn user(&self) -> Option<i64> {
         match self {
             Self::User(u)
             | Self::ServiceAccount(u)
@@ -140,8 +138,9 @@ pub struct AuditEntry {
 /// A domain event published by a change (ADR-0016 §5).
 #[derive(Debug, Clone)]
 pub struct DomainEvent {
-    /// Lowercase dotted name, e.g. `repository.pushed`.
-    pub event_type: &'static str,
+    /// The registered type (`forge_core::EventType`; its name passes the
+    /// table CHECK, test `every_event_type_passes_the_db_check`).
+    pub event_type: EventType,
     pub schema_version: i16,
     pub aggregate_type: &'static str,
     pub aggregate_id: i64,
@@ -150,15 +149,27 @@ pub struct DomainEvent {
     pub payload: serde_json::Value,
     /// Idempotency of the change (e.g. `push:<repo>:<hash>`): a second
     /// change with the same key is [`Committed::Deduped`] and rolled back.
-    /// Keys are unique instance-wide: build them from server-side ids,
-    /// never from a raw client value (another caller could pre-empt it).
-    pub dedup_key: Option<String>,
+    /// Keys are unique instance-wide, so [`DedupKey`] is built from
+    /// server-side ids, hashes and fixed words only (ADR-0016 D3 amendment);
+    /// the writers check its shape again (`invalid_dedup_key`).
+    pub dedup_key: Option<DedupKey>,
 }
+
+/// At most this many further audit rows per change ([`ChangeRecord::affected`]):
+/// a subtree move audits each project it moves (at most 1000 namespaces,
+/// ADR-0015 Amendment D5) and the causes of the tombstones it reclaims.
+pub const MAX_AFFECTED: usize = 2000;
 
 /// Everything a change records besides its state writes.
 #[derive(Debug, Clone)]
 pub struct ChangeRecord {
+    /// The change's own audit row (its action names the change).
     pub audit: AuditEntry,
+    /// One further audit row per other resource the change changed, with
+    /// the same outcome (D5: a subtree move writes one `project` row per
+    /// project it moves, so each project's audit trail shows the move;
+    /// ADR-0016 Amendment D5). Usually empty.
+    pub affected: Vec<AuditEntry>,
     pub events: Vec<DomainEvent>,
 }
 
@@ -181,8 +192,15 @@ impl ChangeRecord {
                 error_code: None,
                 details: details.to_value(),
             },
+            affected: Vec::new(),
             events: Vec::new(),
         }
+    }
+
+    /// Every audit row of the change: [`Self::audit`] first, then
+    /// [`Self::affected`] in order.
+    pub(crate) fn audit_rows(&self) -> impl Iterator<Item = &AuditEntry> {
+        std::iter::once(&self.audit).chain(self.affected.iter())
     }
 }
 

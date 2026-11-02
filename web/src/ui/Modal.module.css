@@ -1,0 +1,32 @@
+.dialog {
+  width: min(36rem, calc(100vw - var(--gs-space-8)));
+  max-height: calc(100vh - var(--gs-space-8));
+  padding: 0;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-text);
+  box-shadow: var(--gs-shadow-1);
+}
+
+.dialog::backdrop {
+  background: var(--gs-color-scrim);
+}
+
+.body {
+  padding: var(--gs-space-6);
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gs-space-4);
+  margin-bottom: var(--gs-space-4);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--gs-font-size-lg);
+  color: var(--gs-brand-navy);
+}

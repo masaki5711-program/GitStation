@@ -26,6 +26,59 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── end C5 ──
     // ── D1: the audit trigger of state tables (migration 20261028100000) ──
     "forge.audited_change_present()",
+    // ── D4: repositories move only provisioning -> ready (20261031100000) ──
+    "forge.repositories_state_guard()",
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    "forge.purge_delete_guard()",
+    // ── M2 MR3: a session's revocation is final (20261103100100) ──
+    "forge.web_sessions_revocation_guard()",
+    // ── M2 MR6: sessions are deleted only 30 days after they ended (20261105100000) ──
+    "forge.web_sessions_purge_guard()",
+];
+
+/// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
+/// each must exist with this exact definition, enabled ALWAYS. Unlike
+/// `GUARDED_TRIGGERS`, the table may have other triggers.
+const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
+    // ── M2 MR3: a session's revocation is final (20261103100100) ──
+    (
+        "web_sessions",
+        "web_sessions_revocation_final",
+        "CREATE TRIGGER web_sessions_revocation_final BEFORE UPDATE ON forge.web_sessions \
+         FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_revocation_guard()",
+    ),
+    // ── M2 MR6: the purge's DELETE only 30 days after a session ended (20261105100000) ──
+    (
+        "web_sessions",
+        "web_sessions_purge_only",
+        "CREATE TRIGGER web_sessions_purge_only BEFORE DELETE ON forge.web_sessions \
+         FOR EACH ROW EXECUTE FUNCTION forge.web_sessions_purge_guard()",
+    ),
+    (
+        "repositories",
+        "repositories_state_forward",
+        "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
+    ),
+    // ── D5 MR2: deletes for the purge only (20261102100100) ──
+    (
+        "repositories",
+        "repositories_purge_only",
+        "CREATE TRIGGER repositories_purge_only BEFORE DELETE ON forge.repositories \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "projects",
+        "projects_purge_only",
+        "CREATE TRIGGER projects_purge_only BEFORE DELETE ON forge.projects \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
+    (
+        "namespaces",
+        "namespaces_purge_only",
+        "CREATE TRIGGER namespaces_purge_only BEFORE DELETE ON forge.namespaces \
+         FOR EACH ROW EXECUTE FUNCTION forge.purge_delete_guard()",
+    ),
 ];
 
 /// Every trigger of each guarded table, as `pg_get_triggerdef` prints it
@@ -320,12 +373,14 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]
             .concat(),
         ),
+        // D5 MR2: DELETE for the purge (migration 20261102100000).
         (
             "forge.namespaces",
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
                 "forge_app:UPDATE",
+                "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),
         ),
@@ -360,8 +415,133 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         // ── end D2 ──
+        // ── D3: tokens: no DELETE, UPDATE on three columns only, the read
+        // pool without secret_sha256 (ADR-0018) ──
+        (
+            "forge.tokens",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", TOKENS_APP_UPDATE),
+                columns("forge_ro", "SELECT", TOKENS_RO),
+            ]
+            .concat(),
+        ),
+        // ── end D3 ──
+        // ── D4: repository kind fixed (UPDATE of state and ready_at only),
+        // the read pool without provision_token, TRUNCATE for no one; D5
+        // MR2: DELETE on projects / repositories for the purge ──
+        (
+            "forge.projects",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_app:DELETE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.repositories",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                columns("forge_app", "UPDATE", &["state", "ready_at"]),
+                columns("forge_ro", "SELECT", REPOSITORIES_RO),
+            ]
+            .concat(),
+        ),
+        ("forge.project_members", operational()),
+        ("forge.protected_refs", operational()),
+        // ── end D4 ──
+        // ── M2 MR3: web sessions and IdP identities: no DELETE, UPDATE of
+        // the listed columns only, the read pool without hashes, ciphertexts
+        // or the IdP's subject (ADR-0021 §4–§5) ──
+        (
+            "forge.web_sessions",
+            [
+                // M2 MR6: DELETE for the purge (20261105100000, guarded).
+                plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_app:DELETE"]),
+                columns("forge_app", "UPDATE", WEB_SESSIONS_APP_UPDATE),
+                columns("forge_ro", "SELECT", WEB_SESSIONS_RO),
+            ]
+            .concat(),
+        ),
+        (
+            "forge.user_identities",
+            [
+                plain(&["forge_app:SELECT", "forge_app:INSERT"]),
+                columns("forge_app", "UPDATE", &["last_login_at"]),
+                columns("forge_ro", "SELECT", USER_IDENTITIES_RO),
+            ]
+            .concat(),
+        ),
+        // ── end M2 MR3 ──
     ]
 }
+
+/// The columns forge_app may update on forge.web_sessions.
+const WEB_SESSIONS_APP_UPDATE: &[&str] = &[
+    "last_seen_at",
+    "idle_expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "refresh_token_enc",
+    "id_token_enc",
+    "refresh_checked_at",
+    "access_role_seen_at",
+    "refresh_without_id_token",
+];
+
+/// The read pool's columns of web_sessions (tables.toml `ro_columns`): not
+/// secret_sha256, refresh_token_enc, id_token_enc or oidc_sub.
+const WEB_SESSIONS_RO: &[&str] = &[
+    "id",
+    "public_id",
+    "user_id",
+    "created_at",
+    "last_seen_at",
+    "idle_expires_at",
+    "absolute_expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "oidc_issuer",
+    "oidc_sid",
+    "refresh_checked_at",
+    "access_role_seen_at",
+    "refresh_without_id_token",
+];
+
+/// The read pool's columns of user_identities: not subject.
+const USER_IDENTITIES_RO: &[&str] = &["id", "user_id", "issuer", "linked_at", "last_login_at"];
+
+/// The read pool's columns of repositories (tables.toml `ro_columns`): not
+/// provision_token.
+const REPOSITORIES_RO: &[&str] = &[
+    "id",
+    "project_id",
+    "kind",
+    "state",
+    "created_at",
+    "ready_at",
+];
+
+/// The columns forge_app may update on forge.tokens.
+const TOKENS_APP_UPDATE: &[&str] = &["revoked_at", "revoked_reason", "last_used_at"];
+
+/// The read pool's columns of tokens (tables.toml `ro_columns`): not
+/// secret_sha256.
+const TOKENS_RO: &[&str] = &[
+    "id",
+    "user_id",
+    "public_id",
+    "name",
+    "scopes",
+    "created_at",
+    "expires_at",
+    "revoked_at",
+    "revoked_reason",
+    "last_used_at",
+    "is_agent",
+];
 
 /// The read pool's columns of users (tables.toml `ro_columns`): not email,
 /// employee_number or external_id.
@@ -414,6 +594,19 @@ const LATER_TABLES: &[&str] = &[
     "groups",
     "group_members",
     // ── end D2 ──
+    // ── D3: tokens (migration 20261030100000) ──
+    "tokens",
+    // ── end D3 ──
+    // ── D4: projects (migration 20261031100000) ──
+    "projects",
+    "repositories",
+    "project_members",
+    "protected_refs",
+    // ── end D4 ──
+    // ── M2 MR3: web sessions (migration 20261103100000) ──
+    "web_sessions",
+    "user_identities",
+    // ── end M2 MR3 ──
 ];
 
 /// Every table the first migration creates.
@@ -532,6 +725,23 @@ pub(crate) async fn check_schema_objects_with(
             .find(|(n, ..)| !expected.iter().any(|(name, _)| name == n))
         {
             return Err(guard_missing("log_triggers").with_context("trigger", extra));
+        }
+    }
+    // D4: guard triggers of state tables. Other triggers may exist there
+    // (the audit trigger, checked against the ledger above).
+    for (table, name, definition) in STATE_GUARD_TRIGGERS {
+        let found: Option<(String, String)> = sqlx::query_as(&format!(
+            "SELECT t.tgenabled::text, pg_catalog.pg_get_triggerdef(t.oid) \
+             FROM pg_catalog.pg_trigger t \
+             WHERE t.tgrelid = 'forge.{table}'::regclass AND NOT t.tgisinternal \
+             AND t.tgname = $1"
+        ))
+        .bind(*name)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| read_query_error("bootstrap.schema_triggers", e))?;
+        if !found.is_some_and(|(enabled, def)| enabled == "A" && def == *definition) {
+            return Err(guard_missing("log_triggers").with_context("trigger", *name));
         }
     }
     for (table, grants) in expected {

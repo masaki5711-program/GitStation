@@ -1,0 +1,45 @@
+[package]
+name = "forge-client"
+description = "the `gstn` client: a typed REST API v1 client library and the `gstn` binary (AI-first CLI, plan 01 §3.11)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gstn"
+path = "src/main.rs"
+
+[dependencies]
+forge-errors.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+toml.workspace = true
+url.workspace = true
+percent-encoding.workspace = true
+base64.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+keyring-core = "1"
+
+zeroize = "1"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+# OS credential stores (plan 01 §3.11): Windows Credential Manager and the
+# Linux Secret Service. libdbus is vendored (static) so `gstn` stays a single
+# executable; the zbus route is avoided (RUSTSEC-2026-0372 and siblings:
+# zvariant / zbus_names unmaintained).
+[target.'cfg(windows)'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }

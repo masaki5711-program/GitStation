@@ -2,15 +2,34 @@
 //! with their personal namespace, and disable a user. Each command is one
 //! `ChangeTx`: the state rows and the one audit row commit together
 //! (`forge.audited_change_present` refuses anything else). `user.*` changes
-//! are audit-only: they publish no domain event.
+//! are audit-only: they publish no domain event (the `token.revoked` events of
+//! the tokens a disable revokes belong to the tokens, ADR-0019). A disable
+//! that would leave forge without an active human administrator, or a
+//! top-level group without a direct active Owner, or a project without any
+//! active Owner (D4 MR4), is refused unless forced
+//! ([`Guard`]); [`bootstrap_admin`] restores an administrator (D3 MR2,
+//! ADR-0019 §10–§11, `admin.rs`).
 
 use forge_core::ids::{NamespaceId, UserId};
 use forge_core::{AuditDetails, PathSegment, UserKind};
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::change::{ChangeContext, ChangeRecord, ChangeTx};
+use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
 use crate::namespaces::{is_tombstoned, lock_path, path_taken};
 use crate::{query_error, Db};
+
+mod admin;
+// M2 MR6: the user search and the administration list.
+mod directory;
+mod rename;
+
+pub(crate) use admin::lock_admin_set;
+pub use admin::{administration, bootstrap_admin, Administration, Bootstrap, Bootstrapped};
+pub use directory::{
+    admin_page, search, AdminUserRow, StateFilter, UserMatch, MAX_ADMIN_PAGE, MAX_SEARCH_CHARS,
+    MAX_SEARCH_RESULTS, MIN_SEARCH_CHARS,
+};
+pub use rename::{rename_decided, UserRenameFacts};
 
 /// Where a user's credentials are checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,8 +91,33 @@ pub struct Created {
 pub enum DisableOutcome {
     /// `active` became `disabled`: one `user.disabled` audit row.
     Disabled,
+    /// Disabled with [`Guard::Force`] although the guard would have refused:
+    /// what it left behind (also in the audit row). `forge doctor` reports
+    /// it as `FG-AUTH-0010` until it is recovered.
+    DisabledPastGuard {
+        /// Top-level groups left without a direct active Owner.
+        ownerless_groups: i64,
+        /// Projects left without any active Owner, direct or inherited
+        /// (D4 MR4).
+        ownerless_projects: i64,
+        /// No active human administrator is left.
+        left_without_admin: bool,
+    },
     /// Already disabled: nothing was written, not even an audit row.
     AlreadyDisabled,
+}
+
+/// Whether `disable` enforces the administration guard (ADR-0019 §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Guard {
+    /// Refuse a disable that would leave no active human administrator or a
+    /// top-level group without a direct active Owner, or a project without
+    /// any active Owner (`FG-AUTH-0009`).
+    #[default]
+    Enforce,
+    /// Disable anyway and record it (`forced`). Only the operator CLI
+    /// (`forge admin user disable --force`) passes this; HTTP never does.
+    Force,
 }
 
 /// The audit resource type of users (tables.toml `audit_resource`).
@@ -102,6 +146,13 @@ fn conflict(query: &'static str, e: sqlx::Error) -> ForgeError {
     }
 }
 
+/// `FG-REPO-0005` for a user (`reason=absent`); the name never enters it.
+fn not_found() -> ForgeError {
+    ForgeError::new(ErrorCode::NotFound)
+        .with_context("resource", RESOURCE)
+        .with_context("reason", "absent")
+}
+
 fn request_invalid(reason: &'static str, len: usize) -> ForgeError {
     ForgeError::new(ErrorCode::UserRequestInvalid)
         .with_context("reason", reason)
@@ -111,7 +162,7 @@ fn request_invalid(reason: &'static str, len: usize) -> ForgeError {
 /// The field rules of forge.users (its CHECKs, migration 20261028100100),
 /// checked before anything is written: `FG-AUTH-0006` with `reason` and
 /// `len`, never the value.
-fn validate(new: &NewUser) -> Result<(), ForgeError> {
+pub(crate) fn validate(new: &NewUser) -> Result<(), ForgeError> {
     if new.kind == UserKind::Human && new.email.is_none() {
         return Err(request_invalid("email_missing", 0));
     }
@@ -148,8 +199,31 @@ fn validate(new: &NewUser) -> Result<(), ForgeError> {
 pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Created, ForgeError> {
     let segment = PathSegment::parse_top_level(&new.username)?;
     validate(new)?;
-    let path = segment.as_str();
     let mut tx = ChangeTx::begin(db, ctx).await?;
+    let created = insert(&mut tx, new, segment.as_str()).await?;
+    let details = AuditDetails::UserCreated {
+        kind: new.kind,
+        namespace_id: created.namespace_id,
+        is_admin: new.is_admin,
+    };
+    tx.commit(ChangeRecord::audit_only(
+        &details,
+        RESOURCE,
+        created.user_id.get(),
+    ))
+    .await?
+    .require_recorded(details.action())?;
+    Ok(created)
+}
+
+/// The writes of `create` (and of `bootstrap_admin`'s `Create`), inside the
+/// caller's change: the user and their personal namespace at `path` (a
+/// validated top-level segment). The caller commits with its audit row.
+pub(crate) async fn insert(
+    tx: &mut ChangeTx,
+    new: &NewUser,
+    path: &str,
+) -> Result<Created, ForgeError> {
     // A released path stays unusable. Every writer of tombstones takes the
     // path lock first, so a tombstone committed by another transaction is
     // either visible to the check below or written after this one commits.
@@ -196,71 +270,173 @@ pub async fn create(db: &Db, ctx: &ChangeContext, new: &NewUser) -> Result<Creat
     if tx.step(|c| is_tombstoned(c, path)).await? {
         return Err(path_taken("tombstoned"));
     }
-    let created = Created {
+    Ok(Created {
         user_id: UserId::new(user_id),
         namespace_id: NamespaceId::new(namespace_id),
-    };
-    let details = AuditDetails::UserCreated {
-        kind: new.kind,
-        namespace_id: created.namespace_id,
-        is_admin: new.is_admin,
-    };
-    tx.commit(ChangeRecord::audit_only(
-        &details,
-        RESOURCE,
-        created.user_id.get(),
-    ))
-    .await?
-    .require_recorded(details.action())?;
-    Ok(created)
+    })
 }
 
 /// `active` becomes `disabled` with one audit row `user.disabled`
-/// (`AuditDetails::UserDisabled`); no event. Disabling a disabled user is
+/// (`AuditDetails::UserDisabled`, with `revoked_tokens`, `revoked_sessions`
+/// and the guard's
+/// `forced` / `ownerless_groups` / `ownerless_projects` /
+/// `left_without_admin`); the user's active
+/// tokens are revoked in the same change (`revoked_reason = 'user_disabled'`,
+/// one `token.revoked` event each, ADR-0019), and so are the user's active
+/// web sessions (`revoked_reason = 'user_disabled'`, no event, ADR-0019
+/// Amendment M2). Disabling a disabled user is
 /// `AlreadyDisabled` and writes nothing. An unknown user is `FG-REPO-0005`
 /// (`resource=user`, `reason=absent`).
+///
+/// Enforces the administration guard ([`Guard::Enforce`]): leaving no
+/// active human administrator is `FG-AUTH-0009` `last_admin`, leaving a
+/// top-level group without a direct active Owner, or a project without any
+/// active Owner (direct or inherited, D4 MR4), is `last_owner`; a refused
+/// disable writes nothing and revokes no token. [`disable_with`] can force it.
 pub async fn disable(
     db: &Db,
     ctx: &ChangeContext,
     user: UserId,
 ) -> Result<DisableOutcome, ForgeError> {
+    disable_with(db, ctx, user, Guard::Enforce).await
+}
+
+/// [`disable`] with an explicit [`Guard`]. Locks `users.admin_set`, then the
+/// user row `FOR UPDATE`, then counts without locks (ADR-0019 §11); group
+/// and project rows are never locked.
+pub async fn disable_with(
+    db: &Db,
+    ctx: &ChangeContext,
+    user: UserId,
+    guard: Guard,
+) -> Result<DisableOutcome, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
-    let row: Option<(String, String)> = tx
-        .step(|c| async move {
-            sqlx::query_as("SELECT kind, state FROM forge.users WHERE id = $1 FOR UPDATE")
+    let outcome = async {
+        tx.step(lock_admin_set).await?;
+        let row: Option<(String, String, bool)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "SELECT kind, state, is_admin FROM forge.users WHERE id = $1 FOR UPDATE",
+                )
                 .bind(user.get())
                 .fetch_optional(c)
                 .await
                 .map_err(|e| query_error("users.disable.lock", e))
-        })
-        .await?;
-    let Some((kind, state)) = row else {
-        return Err(ForgeError::new(ErrorCode::NotFound)
-            .with_context("resource", RESOURCE)
-            .with_context("reason", "absent"));
-    };
-    if state == "disabled" {
-        // Dropping the transaction rolls back the lock; nothing was written.
-        return Ok(DisableOutcome::AlreadyDisabled);
-    }
-    let kind = UserKind::parse(&kind).ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "unknown_user_kind")
-            .with_context("table", "users")
-    })?;
-    tx.step(|c| async move {
-        sqlx::query("UPDATE forge.users SET state = 'disabled', updated_at = now() WHERE id = $1")
+            })
+            .await?;
+        let Some((kind, state, is_admin)) = row else {
+            return Err(not_found());
+        };
+        if state == "disabled" {
+            // Nothing was written; `settle` rolls the lock back explicitly.
+            return Ok(Settle::Discard(DisableOutcome::AlreadyDisabled));
+        }
+        let kind = UserKind::parse(&kind).ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "unknown_user_kind")
+                .with_context("table", "users")
+        })?;
+        let leaves = tx
+            .step(|c| admin::what_disable_leaves(c, user, kind, is_admin))
+            .await?;
+        let forced = guard == Guard::Force;
+        if !forced {
+            if let Some(refused) = leaves.refusal(user) {
+                // Nothing was written and no token was revoked; `settle` rolls
+                // the locks back explicitly.
+                return Err(refused);
+            }
+        }
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.users SET state = 'disabled', updated_at = now() WHERE id = $1",
+            )
             .bind(user.get())
             .execute(c)
             .await
             .map_err(|e| query_error("users.disable.update", e))
-    })
-    .await?;
-    let details = AuditDetails::UserDisabled { kind };
-    tx.commit(ChangeRecord::audit_only(&details, RESOURCE, user.get()))
-        .await?
-        .require_recorded(details.action())?;
-    Ok(DisableOutcome::Disabled)
+        })
+        .await?;
+        // ADR-0019: the user's active tokens die with the account, in the same
+        // change, so re-enabling the user never revives them. `tokens::issue`
+        // locks the user row too, so no token is issued in between.
+        let revoked: Vec<(i64, String)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "UPDATE forge.tokens SET revoked_at = now(), revoked_reason = 'user_disabled' \
+                 WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() \
+                 RETURNING id, public_id",
+                )
+                .bind(user.get())
+                .fetch_all(c)
+                .await
+                .map_err(|e| query_error("users.disable.revoke_tokens", e))
+            })
+            .await?;
+        // ADR-0019 Amendment M2: the user's web sessions end in the same
+        // change (`revoked_reason = 'user_disabled'`); `sessions::issue`
+        // locks the user row too, so none is issued in between. Counted in
+        // the one audit row; no per-session row, no event (ADR-0021 §5).
+        let revoked_sessions = tx
+            .step(|c| {
+                crate::sessions::revoke_active(
+                    c,
+                    user,
+                    forge_core::SessionRevokeReason::UserDisabled,
+                    "users.disable.revoke_sessions",
+                )
+            })
+            .await?;
+        let details = AuditDetails::UserDisabled {
+            kind,
+            revoked_tokens: i64::try_from(revoked.len()).unwrap_or(i64::MAX),
+            revoked_sessions,
+            forced,
+            ownerless_groups: leaves.ownerless_count(),
+            ownerless_projects: leaves.ownerless_project_count(),
+            left_without_admin: leaves.without_admin,
+        };
+        let mut record = ChangeRecord::audit_only(&details, RESOURCE, user.get());
+        // One token.revoked event per token (at most MAX_ACTIVE_TOKENS = 50,
+        // inside the 100 events one change may carry).
+        for (token_id, public_id) in revoked {
+            let token = AuditDetails::TokenRevoked {
+                token_id,
+                user,
+                public_id,
+            };
+            record.events.push(crate::tokens::event(&token, token_id)?);
+        }
+        let outcome = if leaves.is_clean() {
+            DisableOutcome::Disabled
+        } else {
+            DisableOutcome::DisabledPastGuard {
+                ownerless_groups: leaves.ownerless_count(),
+                ownerless_projects: leaves.ownerless_project_count(),
+                left_without_admin: leaves.without_admin,
+            }
+        };
+        Ok(Settle::Commit(record, outcome))
+    }
+    .await;
+    tx.settle("user.disabled", outcome).await
+}
+
+/// The id of the user named `username` (the operator CLI names users this
+/// way). Reads on the read pool. An unknown name is `FG-REPO-0005`
+/// (`resource=user`, `reason=absent`); the name never enters the error.
+pub async fn id_by_username(db: &Db, username: &str) -> Result<UserId, ForgeError> {
+    let id: Option<i64> = db
+        .within("users.id_by_username", async {
+            let mut conn = db.acquire().await?;
+            sqlx::query_scalar("SELECT id FROM forge.users WHERE username = $1")
+                .bind(username)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| crate::read_query_error("users.id_by_username", e))
+        })
+        .await?;
+    id.map(UserId::new).ok_or_else(not_found)
 }
 
 #[cfg(test)]

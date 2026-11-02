@@ -20,7 +20,7 @@ A file-system operation on the storage root failed: permission denied, disk full
 
 ## 調べ方 (diagnosis)
 
-The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors.
+The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. `reason=deadline` (with `operation`): the provisioning job's deadline ran out during that file-system step (the job retries); `operation=doctor_storage reason=check_timeout`: `forge doctor` `repositories.storage` did not finish its walk over the ready repositories in 60 s (`checked`, `missing`, `other` say how far it got) — a slow or hung storage volume. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors.
 
 ## 対処 (fix)
 

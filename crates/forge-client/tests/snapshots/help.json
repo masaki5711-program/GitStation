@@ -1,0 +1,3262 @@
+{
+  "api_version": "v1",
+  "commands": [
+    {
+      "args": [
+        {
+          "description": "Read the token from standard input (never prompts, never an argument).",
+          "kind": "flag",
+          "name": "--with-token",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn auth login --with-token < token.txt",
+        "echo $TOKEN | gstn --host https://git.example.internal auth login --with-token"
+      ],
+      "name": "auth login",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "stored_in": {
+            "enum": [
+              "keyring",
+              "file"
+            ]
+          },
+          "token_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "username",
+          "is_agent",
+          "token_scopes",
+          "stored_in"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Verify a token against the server and store it (OS credential store, else a 0600 file)."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auth status --json"
+      ],
+      "name": "auth status",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "logged_in": {
+            "const": true
+          },
+          "token_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "token_source": {
+            "enum": [
+              "env",
+              "keyring",
+              "file"
+            ]
+          },
+          "user": {
+            "required": [
+              "id",
+              "username",
+              "display_name",
+              "is_admin",
+              "is_agent"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "host",
+          "logged_in",
+          "user",
+          "token_scopes",
+          "token_source"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show who the stored token belongs to: user, scopes, is_agent. Never the token."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn auth logout"
+      ],
+      "name": "auth logout",
+      "output": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "host",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Remove the stored token for the host (does not revoke it on the server)."
+    },
+    {
+      "args": [
+        {
+          "description": "get | store | erase (git passes it; reads key=value lines on stdin).",
+          "kind": "positional",
+          "name": "operation",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Register this helper for the configured host: git config --global credential.<host>.helper.",
+          "kind": "flag",
+          "name": "--install",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn auth git-credential --install",
+        "git clone https://git.example.internal/team/app.git"
+      ],
+      "name": "auth git-credential",
+      "output": {
+        "description": "--install only; get/store/erase speak the git credential protocol on stdout",
+        "properties": {
+          "git_config_key": {
+            "type": "string"
+          },
+          "helper": {
+            "type": "string"
+          },
+          "installed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "installed",
+          "git_config_key",
+          "helper"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [
+        "read_repository",
+        "write_repository"
+      ],
+      "summary": "git credential helper for the configured host only (get/store/erase), or --install it in the global git config."
+    },
+    {
+      "args": [
+        {
+          "description": "Rows per page, 1..=100 (server default 20; 100 with --all).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (not with --all).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_cursor and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn project list --json",
+        "gstn project list --all --fields id,path"
+      ],
+      "name": "project list",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "namespace_id",
+                "path",
+                "name",
+                "display_name",
+                "description",
+                "visibility",
+                "created_at",
+                "role"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List the projects you can see (one page; --all follows next_cursor, bounded)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id (a positive whole number; `namespace resolve` finds it from a path).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project view 7 --json"
+      ],
+      "name": "project view",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one project by id."
+    },
+    {
+      "args": [
+        {
+          "description": "The parent namespace id.",
+          "kind": "option",
+          "name": "--namespace-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The path segment of the new project.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The display name.",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A description.",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "private | internal (server default private).",
+          "kind": "option",
+          "name": "--visibility",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn project create --namespace-id 3 --path app --display-name 'Team app'"
+      ],
+      "name": "project create",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a project in a namespace (a user's or a group's)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new display name.",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new description (may be empty).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn project edit 7 --display-name 'New name'"
+      ],
+      "name": "project edit",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a project's display name and/or description (at least one)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "private | internal",
+          "kind": "option",
+          "name": "--visibility",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project visibility 7 --visibility internal --yes"
+      ],
+      "name": "project visibility",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/visibility"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set a project's visibility (private | internal). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new parent namespace id (at least one of --namespace-id, --path).",
+          "kind": "option",
+          "name": "--namespace-id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new last path segment.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Take back an old path of this very project (A -> B -> A).",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project move 7 --namespace-id 4 --yes",
+        "gstn project move 7 --path app2 --yes"
+      ],
+      "name": "project move",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/transfer"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Move a project to another namespace and/or rename it (--path alone). Its old path stops working for others. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project delete 7 --yes"
+      ],
+      "name": "project delete",
+      "output": {
+        "properties": {
+          "deleted_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "purge_after": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "deleted_at",
+          "purge_after"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Delete a project; it stays restorable for the grace period. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn project restore 7"
+      ],
+      "name": "project restore",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "internal"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/restore"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Restore a deleted project within its grace period."
+    },
+    {
+      "args": [
+        {
+          "description": "Rows per page, 1..=100 (server default 20; 100 with --all).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (not with --all).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_cursor and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn group list --json",
+        "gstn group list --limit 50 --cursor <next_cursor>"
+      ],
+      "name": "group list",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "namespace_id",
+                "path",
+                "name",
+                "display_name",
+                "description",
+                "created_at",
+                "role"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/groups"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List the groups you can see (one page; --all follows next_cursor, bounded)."
+    },
+    {
+      "args": [
+        {
+          "description": "The group id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn group view 3 --json"
+      ],
+      "name": "group view",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "parent_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/groups/{id}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one group by id."
+    },
+    {
+      "args": [
+        {
+          "description": "The path segment.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The display name.",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A description.",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Create it inside this group (default: top level).",
+          "kind": "option",
+          "name": "--parent-id",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn group create --path team --display-name Team",
+        "gstn group create --parent-id 3 --path web --display-name Web"
+      ],
+      "name": "group create",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "parent_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/groups",
+        "POST /api/v1/groups/{id}/subgroups"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create a top-level group, or a subgroup of --parent-id."
+    },
+    {
+      "args": [
+        {
+          "description": "The group id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new display name.",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new description (may be empty).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn group edit 3 --description 'Platform team'"
+      ],
+      "name": "group edit",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "parent_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "parent_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/groups/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a group's display name and/or description (at least one)."
+    },
+    {
+      "args": [
+        {
+          "description": "The group id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new parent group's namespace id (alias --namespace; not with --top-level).",
+          "kind": "option",
+          "name": "--namespace-id",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Move to the top level (administrators only).",
+          "kind": "flag",
+          "name": "--top-level",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new last path segment (at least one of --namespace-id, --top-level, --path).",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Take back an old path of this group's subtree.",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn group move 3 --namespace-id 9 --yes",
+        "gstn group move 3 --top-level --yes",
+        "gstn group move 3 --path platform --yes"
+      ],
+      "name": "group move",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/groups/{id}/transfer"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Move a group and its subtree and/or rename it. Old paths stop working for others. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The group id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Members per page, 1..=100 (server default 20; 100 with --all).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this user id (a previous next_after; not with --all).",
+          "kind": "option",
+          "name": "--after",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_after and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn member list --project 7 --all --json",
+        "gstn member list --group 3 --limit 20 --after 41"
+      ],
+      "name": "member list",
+      "output": {
+        "properties": {
+          "members": {
+            "items": {
+              "required": [
+                "user_id",
+                "username",
+                "display_name",
+                "role",
+                "active",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "members",
+          "next_after"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/members",
+        "GET /api/v1/groups/{id}/members"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List the direct members of a project or a group (keyset by user id; --all follows next_after, bounded)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The group id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The user id.",
+          "kind": "option",
+          "name": "--user-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "guest | reporter | developer | maintainer | owner",
+          "kind": "option",
+          "name": "--role",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn member add --project 7 --user-id 12 --role developer"
+      ],
+      "name": "member add",
+      "output": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "display_name",
+          "role",
+          "active",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/members",
+        "POST /api/v1/groups/{id}/members"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Make a user a direct member of a project or a group."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The group id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The user id.",
+          "kind": "option",
+          "name": "--user-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "guest | reporter | developer | maintainer | owner",
+          "kind": "option",
+          "name": "--role",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn member set-role --group 3 --user-id 12 --role maintainer"
+      ],
+      "name": "member set-role",
+      "output": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "display_name",
+          "role",
+          "active",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/members/{user_id}",
+        "PATCH /api/v1/groups/{id}/members/{user_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a member's direct role."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The group id (exactly one of --project, --group).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The user id.",
+          "kind": "option",
+          "name": "--user-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn member remove --project 7 --user-id 12 --yes"
+      ],
+      "name": "member remove",
+      "output": {
+        "properties": {
+          "removed": {
+            "const": true
+          },
+          "target": {
+            "enum": [
+              "project",
+              "group"
+            ]
+          },
+          "target_id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed",
+          "target",
+          "target_id",
+          "user_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/members/{user_id}",
+        "DELETE /api/v1/groups/{id}/members/{user_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Remove a direct member. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn protected-ref list --project 7 --json"
+      ],
+      "name": "protected-ref list",
+      "output": {
+        "properties": {
+          "rules": {
+            "items": {
+              "required": [
+                "id",
+                "pattern",
+                "push_min_role",
+                "created_at",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/protected-refs"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a project's protected ref rules."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "refs/heads/… or refs/tags/…, at most one * in the last part.",
+          "kind": "option",
+          "name": "--pattern",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "developer | maintainer | owner",
+          "kind": "option",
+          "name": "--push-min-role",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn protected-ref add --project 7 --pattern 'refs/heads/main' --push-min-role maintainer"
+      ],
+      "name": "protected-ref add",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "push_min_role": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/protected-refs"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Protect a ref pattern: only roles from --push-min-role up may push to matching refs."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The rule id (from protected-ref list).",
+          "kind": "option",
+          "name": "--rule-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "developer | maintainer | owner",
+          "kind": "option",
+          "name": "--push-min-role",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn protected-ref edit --project 7 --rule-id 2 --push-min-role owner"
+      ],
+      "name": "protected-ref edit",
+      "output": {
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "push_min_role": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/protected-refs/{rule_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a rule's minimum push role (the pattern is fixed: remove the rule and add another)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The rule id (from protected-ref list).",
+          "kind": "option",
+          "name": "--rule-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn protected-ref remove --project 7 --rule-id 2 --yes"
+      ],
+      "name": "protected-ref remove",
+      "output": {
+        "properties": {
+          "project_id": {
+            "type": "integer"
+          },
+          "removed": {
+            "const": true
+          },
+          "rule_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removed",
+          "project_id",
+          "rule_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/protected-refs/{rule_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Remove a protected ref rule. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The full path, e.g. team/app.",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn namespace resolve team/app --json"
+      ],
+      "name": "namespace resolve",
+      "output": {
+        "properties": {
+          "canonical_path": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "moved": {
+            "type": "boolean"
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "namespace_id",
+          "kind",
+          "canonical_path",
+          "moved"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/namespaces/resolve"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Which project, group or user a full path names (and its ids)."
+    },
+    {
+      "args": [
+        {
+          "description": "The tombstoned full path, exactly (group/sub/project).",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn namespace release-path team/old-app --yes"
+      ],
+      "name": "namespace release-path",
+      "output": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "moved",
+              "deleted"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/namespaces/tombstones/release"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Release a moved or deleted path's tombstone so the path can be used again. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "branch | tag (default: both).",
+          "kind": "option",
+          "name": "--type",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse refs --project 7 --json",
+        "gstn browse refs --project 7 --type tag"
+      ],
+      "name": "browse refs",
+      "output": {
+        "properties": {
+          "default_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refs": {
+            "items": {
+              "properties": {
+                "commit": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "full_name": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "type": {
+                  "enum": [
+                    "branch",
+                    "tag"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "full_name",
+                "type",
+                "commit",
+                "target"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "default_branch",
+          "refs",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/refs"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a project's branches and tags (with the commit each peels to) and the default branch."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The part of a page URL after /-/tree/ or /-/blob/, e.g. feature/x/src/lib.rs.",
+          "kind": "positional",
+          "name": "spec",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse resolve --project 7 feature/x/src/lib.rs --json"
+      ],
+      "name": "browse resolve",
+      "output": {
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "properties": {
+              "commit": {
+                "type": "string"
+              },
+              "full_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "branch",
+                  "tag",
+                  "commit"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref",
+          "path"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/resolve"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Split <ref>/<path> into a revision and a path (full commit id first, then the longest branch, then the longest tag)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag (refs/heads/... / refs/tags/... or a short name).",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The directory (default: the root).",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse tree --project 7 --ref main --path src --json"
+      ],
+      "name": "browse tree",
+      "output": {
+        "properties": {
+          "entries": {
+            "items": {
+              "properties": {
+                "mode": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "oid": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "enum": [
+                    "tree",
+                    "blob",
+                    "symlink",
+                    "submodule"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "path",
+                "type",
+                "mode",
+                "oid",
+                "size"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "entries",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/tree"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List one directory of a revision (capped by the server; truncated past the cap)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file's path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse file --project 7 --ref main --path README.md",
+        "gstn browse file --project 7 --ref v1.0 --path src/lib.rs --json"
+      ],
+      "name": "browse file",
+      "output": {
+        "properties": {
+          "binary": {
+            "type": "boolean"
+          },
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "blob",
+              "symlink"
+            ]
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "name",
+          "type",
+          "mode",
+          "oid",
+          "size",
+          "binary",
+          "content",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/blob"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one file of a revision: its text (at most 1 MiB; truncated past it), or that it is binary."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Only commits that changed this path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Commits per page, 1..=100 (server default 30).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (use the same --path).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse commits --project 7 --ref main --json",
+        "gstn browse commits --project 7 --ref main --path src/lib.rs --limit 50 --cursor <next_cursor>"
+      ],
+      "name": "browse commits",
+      "output": {
+        "properties": {
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "parents",
+                "author_name",
+                "author_email",
+                "authored_at",
+                "committer_name",
+                "committer_email",
+                "committed_at",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "head": {
+            "type": "string"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref",
+          "head",
+          "path",
+          "commits",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/commits"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a revision's history, newest first, one page at a time (optionally only the commits that changed --path)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The full commit id (40 or 64 hexadecimal digits).",
+          "kind": "positional",
+          "name": "oid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Print the patches too (--json always has them).",
+          "kind": "flag",
+          "name": "--patch",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --patch",
+        "gstn browse commit --project 7 0123456789abcdef0123456789abcdef01234567 --json"
+      ],
+      "name": "browse commit",
+      "output": {
+        "properties": {
+          "commit": {
+            "required": [
+              "oid",
+              "parents",
+              "author_name",
+              "author_email",
+              "authored_at",
+              "committer_name",
+              "committer_email",
+              "committed_at",
+              "subject"
+            ],
+            "type": "object"
+          },
+          "diff": {
+            "properties": {
+              "files": {
+                "items": {
+                  "properties": {
+                    "omitted": {
+                      "enum": [
+                        "too_large",
+                        "total_cap",
+                        "not_utf8",
+                        null
+                      ]
+                    },
+                    "patch": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "status": {
+                      "enum": [
+                        "added",
+                        "modified",
+                        "deleted",
+                        "renamed",
+                        "copied",
+                        "type_changed"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "old_path",
+                    "new_path",
+                    "old_mode",
+                    "new_mode",
+                    "old_oid",
+                    "new_oid",
+                    "similarity",
+                    "binary",
+                    "patch",
+                    "omitted"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "files",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "message",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/commits/{oid}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one commit: message and the diff against its first parent (per-file patches under server caps; --patch prints them)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The base: a full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--from",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The head, named like --from.",
+          "kind": "option",
+          "name": "--to",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Print the patches too (--json always has them).",
+          "kind": "flag",
+          "name": "--patch",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn browse compare --project 7 --from v1.0 --to main --json"
+      ],
+      "name": "browse compare",
+      "output": {
+        "properties": {
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "parents",
+                "subject"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "type": "boolean"
+          },
+          "diff": {
+            "required": [
+              "files",
+              "truncated"
+            ],
+            "type": "object"
+          },
+          "from": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "to": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "commits",
+          "commits_truncated",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/compare"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Compare two revisions: the commits --to has and --from does not, and the tree diff from --from to --to (capped; truncated past the caps)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A full commit id, a branch or a tag.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The file's path.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn browse blame --project 7 --ref main --path src/lib.rs",
+        "gstn browse blame --project 7 --ref main --path src/lib.rs --json"
+      ],
+      "name": "browse blame",
+      "output": {
+        "properties": {
+          "binary": {
+            "type": "boolean"
+          },
+          "commits": {
+            "items": {
+              "required": [
+                "oid",
+                "author_name",
+                "author_email",
+                "author_time",
+                "author_tz",
+                "summary",
+                "boundary",
+                "path"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "hunks": {
+            "items": {
+              "required": [
+                "commit",
+                "start",
+                "orig_start",
+                "lines"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "required": [
+              "type",
+              "name",
+              "full_name",
+              "commit"
+            ],
+            "type": "object"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "size",
+          "binary",
+          "hunks",
+          "commits",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/repository/blame"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show who last changed each line of a file (hunks; at most 10000 lines; binary files have none)."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new username (also the personal namespace path).",
+          "kind": "option",
+          "name": "--username",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Take back an old username of this very user.",
+          "kind": "flag",
+          "name": "--reclaim",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user rename 12 --username robert --yes"
+      ],
+      "name": "user rename",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "project",
+              "group",
+              "user"
+            ]
+          },
+          "namespace_id": {
+            "type": "integer"
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "type": "integer"
+          },
+          "tombstones": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/users/{id}/rename"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Rename a user and their personal namespace (administrators). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "A username prefix or part of a display name.",
+          "kind": "positional",
+          "name": "term",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user search ali --json"
+      ],
+      "name": "user search",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "username",
+                "display_name"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/users"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Find active users by username prefix or display name (names only, at most 20; 2..=64 characters)."
+    },
+    {
+      "args": [
+        {
+          "description": "Rows per page, 1..=100 (server default 50; 100 with --all).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue after this next_cursor (the same --state; not with --all).",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_cursor and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "active or disabled (default: every user).",
+          "kind": "option",
+          "name": "--state",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn user list --state disabled --json",
+        "gstn user list --all"
+      ],
+      "name": "user list",
+      "output": {
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "kind",
+                "username",
+                "display_name",
+                "state",
+                "is_admin",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/users"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List every user with its state (administrators; one page, --all follows next_cursor)."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user disable 12 --yes"
+      ],
+      "name": "user disable",
+      "output": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "disabled",
+              "already_disabled"
+            ]
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/admin/users/{id}/disable"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Disable a user (administrators; never past the last administrator or a last Owner, FG-AUTH-0009). Its tokens and sessions end. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user sessions 12 --json"
+      ],
+      "name": "user sessions",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "public_id",
+                "created_at",
+                "last_seen_at",
+                "idle_expires_at",
+                "absolute_expires_at",
+                "oidc",
+                "current"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/users/{id}/sessions"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List a user's active web sessions (administrators)."
+    },
+    {
+      "args": [
+        {
+          "description": "The user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn user end-sessions 12 --yes"
+      ],
+      "name": "user end-sessions",
+      "output": {
+        "properties": {
+          "revoked_sessions": {
+            "type": "integer"
+          },
+          "user_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/admin/users/{id}/sessions"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "End every web session of a user (administrators). Needs --yes."
+    },
+    {
+      "args": [],
+      "examples": [
+        "gstn token list --json"
+      ],
+      "name": "token list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "public_id",
+                "name",
+                "scopes",
+                "created_at",
+                "expires_at",
+                "revoked_at",
+                "last_used_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/user/tokens"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List your personal access tokens (never a secret; revoked and expired ones too)."
+    },
+    {
+      "args": [
+        {
+          "description": "The token id (token list).",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn token revoke 31 --yes"
+      ],
+      "name": "token revoke",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "revoked": {
+            "const": true
+          }
+        },
+        "required": [
+          "id",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/user/tokens/{id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Revoke one of your tokens (it may be the one gstn uses). Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "GET | POST | PUT | PATCH | DELETE",
+          "kind": "positional",
+          "name": "method",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A path on the configured host, e.g. /api/v1/projects",
+          "kind": "positional",
+          "name": "path",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "key=value (a string) or key:=<json> (a JSON value).",
+          "kind": "option",
+          "name": "--field",
+          "repeatable": true,
+          "required": false
+        },
+        {
+          "description": "Send this file (or - for stdin) as the JSON body.",
+          "kind": "option",
+          "name": "--input",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "GET only: follow next_cursor and merge all items into one list.",
+          "kind": "flag",
+          "name": "--paginate",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Print the request that would be sent (no token) and send nothing.",
+          "kind": "flag",
+          "name": "--dry-run",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn api GET /api/v1/projects --paginate",
+        "gstn api POST /api/v1/projects --field name=app --field 'parent_id:=12'",
+        "gstn api PUT /api/v1/projects/7/visibility --input body.json"
+      ],
+      "name": "api",
+      "output": {
+        "description": "the response body of API v1, as sent (a list when --paginate)"
+      },
+      "routes": [],
+      "scopes": [
+        "read_api",
+        "api"
+      ],
+      "summary": "Call any REST API v1 route: gstn api <METHOD> <path>. GET/DELETE fields become the query, other methods send a JSON body."
+    },
+    {
+      "args": [
+        {
+          "description": "Limit to one command, e.g. auth login.",
+          "kind": "positional",
+          "name": "command",
+          "repeatable": true,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn help --json"
+      ],
+      "name": "help",
+      "output": {
+        "required": [
+          "gstn_version",
+          "api_version",
+          "global_args",
+          "exit_codes",
+          "commands"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "Describe the commands; with --json, every command, argument, example, required scope and route."
+    },
+    {
+      "args": [
+        {
+          "description": "The command path, e.g. auth login.",
+          "kind": "positional",
+          "name": "command",
+          "repeatable": true,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn schema auth status"
+      ],
+      "name": "schema",
+      "output": {
+        "required": [
+          "command",
+          "summary",
+          "args",
+          "output",
+          "exit_codes"
+        ],
+        "type": "object"
+      },
+      "routes": [],
+      "scopes": [],
+      "summary": "The machine-readable description of one command: arguments, output JSON Schema, exit codes."
+    }
+  ],
+  "exit_codes": [
+    {
+      "code": 0,
+      "meaning": "success"
+    },
+    {
+      "code": 1,
+      "meaning": "other failure"
+    },
+    {
+      "code": 2,
+      "meaning": "usage or configuration error"
+    },
+    {
+      "code": 3,
+      "meaning": "not authenticated, or not allowed"
+    },
+    {
+      "code": 4,
+      "meaning": "not found"
+    },
+    {
+      "code": 5,
+      "meaning": "conflict"
+    },
+    {
+      "code": 6,
+      "meaning": "temporary failure; retrying may help"
+    }
+  ],
+  "global_args": [
+    {
+      "description": "Machine-readable output: JSON on stdout, and on failure a JSON error {error_code,user_message,request_id,retryable,detail} on stderr.",
+      "kind": "flag",
+      "name": "--json",
+      "repeatable": false,
+      "required": false
+    },
+    {
+      "description": "Server base URL (https://…); overrides GSTN_HOST and config.toml.",
+      "kind": "option",
+      "name": "--host",
+      "repeatable": false,
+      "required": false
+    },
+    {
+      "description": "Comma-separated top-level fields to keep in --json output (applied to each item of a list).",
+      "kind": "option",
+      "name": "--fields",
+      "repeatable": false,
+      "required": false
+    }
+  ],
+  "gstn_version": "<version>"
+}

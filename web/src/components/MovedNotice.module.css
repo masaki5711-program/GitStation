@@ -1,0 +1,9 @@
+.moved {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-brand-orange);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}

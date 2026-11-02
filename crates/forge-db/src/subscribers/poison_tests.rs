@@ -242,6 +242,112 @@ async fn derived_writes_refused_at_commit_are_counted_until_stuck() {
     t.drop_now().await;
 }
 
+/// The recount after a refused COMMIT claims the row while the server may
+/// still be releasing the refused transaction's lock (the client reads the
+/// COMMIT error first): it waits for a lock released shortly, where a
+/// step's claim reports Busy.
+#[tokio::test]
+async fn the_recount_claim_waits_for_a_lock_released_shortly() {
+    use super::cursor::{claim, Wait};
+    let t = FreshDb::migrated().await;
+    registered(&t, &Forges).await;
+    let mut holder = t.superuser().await;
+    sqlx::query("BEGIN")
+        .execute(&mut holder)
+        .await
+        .expect("begin");
+    sqlx::query("SELECT 1 FROM forge.event_subscribers WHERE name = 'forger' FOR UPDATE")
+        .execute(&mut holder)
+        .await
+        .expect("hold the row");
+    let mut step_tx = t.db.write_pool().begin().await.expect("begin");
+    assert!(
+        claim(&mut step_tx, &Forges, Wait::No)
+            .await
+            .expect("claim")
+            .is_none(),
+        "a step skips a held row"
+    );
+    step_tx.rollback().await.expect("rollback");
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        sqlx::query("ROLLBACK")
+            .execute(&mut holder)
+            .await
+            .expect("release");
+    });
+    // One pooled connection throughout, to see that the wait is
+    // transaction-local and never leaks to the connection's next user.
+    let mut conn = t.db.write_pool().acquire().await.expect("acquire");
+    // A session value unlike the pool's (5 s, the same as the wait) so a
+    // leak would show.
+    sqlx::query("SET lock_timeout = '1234ms'")
+        .execute(&mut *conn)
+        .await
+        .expect("session lock_timeout");
+    let pooled = lock_timeout(&mut conn).await;
+    assert_eq!(pooled, "1234ms");
+    let mut recount_tx = sqlx::Connection::begin(&mut *conn).await.expect("begin");
+    let claimed = claim(&mut recount_tx, &Forges, Wait::Bounded)
+        .await
+        .expect("claim");
+    assert!(
+        matches!(claimed, Some(Some(c)) if c.last_seq == 0),
+        "{claimed:?}"
+    );
+    assert_eq!(lock_timeout(&mut recount_tx).await, "5s");
+    recount_tx.rollback().await.expect("rollback");
+    release.await.expect("released");
+    assert_eq!(lock_timeout(&mut conn).await, pooled);
+    // The pool must not keep the session value set above.
+    conn.close_on_drop();
+    drop(conn);
+    t.drop_now().await;
+}
+
+/// The wait is bounded: a row held past it is reported as held (`None`;
+/// the recount then returns the refusal with `counted=false`,
+/// `not_counted=row_held`), never waited on for ever or taken as a pass.
+#[tokio::test]
+async fn the_recount_claim_gives_up_on_a_row_held_past_the_wait() {
+    use super::cursor::{claim, Wait};
+    let t = FreshDb::migrated().await;
+    registered(&t, &Forges).await;
+    let mut holder = t.superuser().await;
+    sqlx::query("BEGIN")
+        .execute(&mut holder)
+        .await
+        .expect("begin");
+    sqlx::query("SELECT 1 FROM forge.event_subscribers WHERE name = 'forger' FOR UPDATE")
+        .execute(&mut holder)
+        .await
+        .expect("hold the row");
+    let started = std::time::Instant::now();
+    let mut recount_tx = t.db.write_pool().begin().await.expect("begin");
+    let claimed = claim(&mut recount_tx, &Forges, Wait::Bounded)
+        .await
+        .expect("a held row is not an error of the claim");
+    assert!(claimed.is_none(), "{claimed:?}");
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_millis(4500) && waited < Duration::from_secs(10),
+        "{waited:?}"
+    );
+    recount_tx.rollback().await.expect("rollback");
+    sqlx::query("ROLLBACK")
+        .execute(&mut holder)
+        .await
+        .expect("release");
+    t.drop_now().await;
+}
+
+async fn lock_timeout(conn: &mut sqlx::PgConnection) -> String {
+    sqlx::query_scalar("SELECT current_setting('lock_timeout')")
+        .fetch_one(conn)
+        .await
+        .expect("lock_timeout")
+}
+
 /// Never returns.
 struct Hangs;
 

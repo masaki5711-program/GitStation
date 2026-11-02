@@ -29,7 +29,10 @@ pub enum MemberChange {
 /// no parent). `FG-REPO-0005` (`resource=group`) when it does not exist; a
 /// group without its namespace is a broken invariant (`FG-SYS-0001`
 /// `group_without_namespace`), not a 404.
-async fn lock_group(conn: &mut PgConnection, group: GroupId) -> Result<bool, ForgeError> {
+pub(super) async fn lock_group(
+    conn: &mut PgConnection,
+    group: GroupId,
+) -> Result<bool, ForgeError> {
     // (has a namespace, the namespace is top-level)
     let row: Option<(bool, bool)> = sqlx::query_as(
         "SELECT n.id IS NOT NULL, n.parent_id IS NULL FROM forge.groups g \
@@ -49,25 +52,63 @@ async fn lock_group(conn: &mut PgConnection, group: GroupId) -> Result<bool, For
     }
 }
 
-/// The user's direct role in the group, `None` = not a member.
-async fn direct_role(
+/// The user's direct role in the group, `None` = not a member. A stored
+/// role outside the five is `FG-DB-0018` `unknown_role`.
+pub(super) async fn direct_role(
     conn: &mut PgConnection,
     group: GroupId,
     user: UserId,
 ) -> Result<Option<Role>, ForgeError> {
-    let role: Option<String> = sqlx::query_scalar(
+    role_of(
+        conn,
         "SELECT role FROM forge.group_members WHERE group_id = $1 AND user_id = $2",
+        group,
+        user,
     )
-    .bind(group.get())
-    .bind(user.get())
-    .fetch_optional(conn)
     .await
-    .map_err(|e| query_error("groups.member_role", e))?;
-    role.map(|r| {
-        Role::parse(&r).ok_or_else(|| {
-            ForgeError::new(ErrorCode::Internal)
+}
+
+/// [`direct_role`] with the membership row locked `FOR UPDATE` (M1 phase
+/// 8b MR8): the decided member commands act on the role they read, so a
+/// write to that row from anywhere waits for them or is seen by them.
+pub(super) async fn direct_role_for_update(
+    conn: &mut PgConnection,
+    group: GroupId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    role_of(
+        conn,
+        "SELECT role FROM forge.group_members WHERE group_id = $1 AND user_id = $2 FOR UPDATE",
+        group,
+        user,
+    )
+    .await
+}
+
+async fn role_of(
+    conn: &mut PgConnection,
+    sql: &'static str,
+    group: GroupId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    let role: Option<String> = sqlx::query_scalar(sql)
+        .bind(group.get())
+        .bind(user.get())
+        .fetch_optional(conn)
+        .await
+        .map_err(|e| query_error("groups.member_role", e))?;
+    role.map(|raw| {
+        Role::parse(&raw).ok_or_else(|| {
+            // The role loader's code and context (FG-DB-0018, runbook
+            // membership-data): data changed outside forge-db, not a bug here.
+            // Bounded: the column is unchecked text once the CHECK is gone.
+            let raw: String = raw.chars().take(32).collect();
+            ForgeError::new(ErrorCode::MembershipDataInvalid)
                 .with_context("reason", "unknown_role")
-                .with_context("table", "group_members")
+                .with_context("resource", RESOURCE)
+                .with_context("id", group.get())
+                .with_context("user", user.get())
+                .with_context("raw", raw)
         })
     })
     .transpose()
@@ -78,12 +119,26 @@ async fn direct_role(
 /// owners' user rows are locked `FOR SHARE` (in id order): a concurrent
 /// `users::disable` of one of them either commits first, and the re-checked
 /// row no longer counts, or waits until this change commits. Disabling the
-/// sole Owner on its own is not refused yet (step D3).
+/// sole Owner is refused by `users::disable` itself (`FG-AUTH-0009`
+/// `last_owner`, step D3), which never locks group rows (ADR-0019 §11).
 async fn keep_an_owner(
     conn: &mut PgConnection,
     group: GroupId,
     leaving: UserId,
 ) -> Result<(), ForgeError> {
+    if !owners_remain(conn, group, leaving).await? {
+        return Err(membership_conflict("last_owner").with_context("group_id", group.get()));
+    }
+    Ok(())
+}
+
+/// Whether another direct active Owner stays once `leaving` stops being
+/// one (their user rows locked `FOR SHARE`, as [`keep_an_owner`]).
+pub(super) async fn owners_remain(
+    conn: &mut PgConnection,
+    group: GroupId,
+    leaving: UserId,
+) -> Result<bool, ForgeError> {
     let others: Vec<i64> = sqlx::query_scalar(
         "SELECT u.id FROM forge.group_members m JOIN forge.users u ON u.id = m.user_id \
          WHERE m.group_id = $1 AND m.role = 'owner' AND u.state = 'active' AND m.user_id <> $2 \
@@ -94,10 +149,22 @@ async fn keep_an_owner(
     .fetch_all(conn)
     .await
     .map_err(|e| query_error("groups.owner_count", e))?;
-    if others.is_empty() {
-        return Err(membership_conflict("last_owner").with_context("group_id", group.get()));
+    Ok(!others.is_empty())
+}
+
+/// The precondition of `change_member` / `remove_member`: the member's
+/// direct role re-read under the lock must still be `from`, the role the
+/// caller loaded and authorized against (`authorize()` with
+/// `MembershipChange::{Change, Remove}`). Otherwise the membership changed
+/// in between (e.g. a promotion to Owner) and the authorization no longer
+/// holds: `FG-REPO-0010` `role_changed` with `expected` / `actual`.
+fn check_from(stored: Role, from: Role) -> Result<(), ForgeError> {
+    if stored == from {
+        return Ok(());
     }
-    Ok(())
+    Err(membership_conflict("role_changed")
+        .with_context("expected", from.as_str())
+        .with_context("actual", stored.as_str()))
 }
 
 async fn commit(tx: ChangeTx, group: GroupId, details: &AuditDetails) -> Result<(), ForgeError> {
@@ -138,8 +205,10 @@ pub async fn add_member(
     commit(tx, group, &AuditDetails::MemberAdded { user, role }).await
 }
 
-/// Give a member another role: one `member.role_changed` audit row, or
-/// `Unchanged` (nothing written) when the role is the same. Demoting the
+/// Give a member the role `to`: one `member.role_changed` audit row, or
+/// `Unchanged` (nothing written) when `to` is `from`. `from` is the
+/// member's direct role as the caller loaded it before `authorize()`; a
+/// different stored role is `FG-REPO-0010` `role_changed` (D4 review). Demoting the
 /// last direct active Owner of a top-level group is `FG-REPO-0010`
 /// `last_owner`; a non-member is `not_member`.
 pub async fn change_member(
@@ -147,16 +216,19 @@ pub async fn change_member(
     ctx: &ChangeContext,
     group: GroupId,
     user: UserId,
-    role: Role,
+    from: Role,
+    to: Role,
 ) -> Result<MemberChange, ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let top_level = tx.step(|c| lock_group(c, group)).await?;
-    let from = tx
+    let stored = tx
         .step(|c| direct_role(c, group, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
-    if from == role {
-        // Dropping the transaction releases the lock; nothing was written.
+    check_from(stored, from)?;
+    if from == to {
+        // Nothing was written; release the lock now, not on drop.
+        tx.rollback("member.role_changed").await;
         return Ok(MemberChange::Unchanged);
     }
     if top_level && from == Role::Owner {
@@ -169,22 +241,20 @@ pub async fn change_member(
         )
         .bind(group.get())
         .bind(user.get())
-        .bind(role.as_str())
+        .bind(to.as_str())
         .execute(c)
         .await
         .map_err(|e| query_error("groups.change_member", e))
     })
     .await?;
-    let details = AuditDetails::MemberRoleChanged {
-        user,
-        from,
-        to: role,
-    };
+    let details = AuditDetails::MemberRoleChanged { user, from, to };
     commit(tx, group, &details).await?;
     Ok(MemberChange::Changed { from })
 }
 
-/// Remove a direct member: one `member.removed` audit row. Removing the
+/// Remove a direct member whose direct role is `from` (as loaded before
+/// `authorize()`; else `FG-REPO-0010` `role_changed`): one
+/// `member.removed` audit row. Removing the
 /// last direct active Owner of a top-level group is `FG-REPO-0010`
 /// `last_owner`; a non-member is `not_member`.
 pub async fn remove_member(
@@ -192,6 +262,7 @@ pub async fn remove_member(
     ctx: &ChangeContext,
     group: GroupId,
     user: UserId,
+    from: Role,
 ) -> Result<(), ForgeError> {
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let top_level = tx.step(|c| lock_group(c, group)).await?;
@@ -199,6 +270,7 @@ pub async fn remove_member(
         .step(|c| direct_role(c, group, user))
         .await?
         .ok_or_else(|| membership_conflict("not_member"))?;
+    check_from(role, from)?;
     if top_level && role == Role::Owner {
         tx.step(|c| keep_an_owner(c, group, user)).await?;
     }

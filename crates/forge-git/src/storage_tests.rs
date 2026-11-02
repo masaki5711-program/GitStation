@@ -9,6 +9,10 @@ fn root() -> (tempfile::TempDir, StorageRoot) {
     (dir, root)
 }
 
+fn token() -> uuid::Uuid {
+    uuid::Uuid::new_v4()
+}
+
 fn git() -> (tempfile::TempDir, Git) {
     let home = tempfile::tempdir().expect("home");
     let git = Git::new(GitConfig::new("git", home.path()));
@@ -139,7 +143,7 @@ async fn init_bare_creates_a_configured_bare_repository() {
     let (_h, git) = git();
     let hooks = tempfile::tempdir().expect("hooks");
     let path = root
-        .init_bare(&git, RepoId::new(5), Some(hooks.path()))
+        .init_bare(&git, RepoId::new(5), token(), Some(hooks.path()))
         .await
         .expect("init");
     assert!(path.join("HEAD").is_file());
@@ -175,11 +179,14 @@ async fn init_bare_creates_a_configured_bare_repository() {
 async fn init_bare_refuses_an_existing_path() {
     let (_d, root) = root();
     let (_h, git) = git();
-    root.init_bare(&git, RepoId::new(6), None)
+    let marker = token();
+    root.init_bare(&git, RepoId::new(6), marker, None)
         .await
         .expect("first init");
+    // Even with the same token: init_bare never adopts (only
+    // init_bare_or_adopt does).
     let err = root
-        .init_bare(&git, RepoId::new(6), None)
+        .init_bare(&git, RepoId::new(6), marker, None)
         .await
         .expect_err("second init must not reinitialize");
     assert_eq!(err.code(), ErrorCode::RepoPathOccupied);
@@ -191,7 +198,7 @@ async fn init_bare_failure_leaves_nothing_behind() {
     let home = tempfile::tempdir().expect("home");
     let broken = Git::new(GitConfig::new("/nonexistent/forge-test/git", home.path()));
     let err = root
-        .init_bare(&broken, RepoId::new(8), None)
+        .init_bare(&broken, RepoId::new(8), token(), None)
         .await
         .expect_err("git missing");
     assert_eq!(err.code(), ErrorCode::GitUnavailable);
@@ -219,7 +226,7 @@ async fn a_file_where_repos_dir_belongs_is_rejected_not_followed() {
     let (_h, git) = git();
     std::fs::write(root.path().join("repos"), b"blocking file").expect("write");
     let err = root
-        .init_bare(&git, RepoId::new(3), None)
+        .init_bare(&git, RepoId::new(3), token(), None)
         .await
         .expect_err("repos is a file");
     assert_eq!(err.code(), ErrorCode::StoragePathRejected);
@@ -234,7 +241,7 @@ async fn symlinked_repos_dir_is_rejected_before_anything_is_created_outside() {
     let outside = tempfile::tempdir().expect("outside");
     std::os::unix::fs::symlink(outside.path(), root.path().join("repos")).expect("symlink");
     let err = root
-        .init_bare(&git, RepoId::new(3), None)
+        .init_bare(&git, RepoId::new(3), token(), None)
         .await
         .expect_err("symlinked repos");
     assert_eq!(err.code(), ErrorCode::StoragePathRejected);
@@ -250,7 +257,12 @@ async fn relative_hooks_path_is_refused() {
     let (_d, root) = root();
     let (_h, git) = git();
     let err = root
-        .init_bare(&git, RepoId::new(4), Some(Path::new("relative/hooks")))
+        .init_bare(
+            &git,
+            RepoId::new(4),
+            token(),
+            Some(Path::new("relative/hooks")),
+        )
         .await
         .expect_err("relative hooks path");
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);

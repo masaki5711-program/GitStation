@@ -20,7 +20,7 @@ The database knows the repository but its directory does not exist under the sto
 
 ## 調べ方 (diagnosis)
 
-The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early.
+The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early. `forge doctor` (check `repositories.storage`) reports the first ready repository whose directory is missing, with `missing` (how many of the checked ones) and `checked`; it checks at most 10 000 ready repositories per run and says so (`truncated`).
 
 ## 対処 (fix)
 

@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-The request carried no valid credentials; forge has no anonymous access.
+The request carried no valid credentials; forge has no anonymous access. Credentials are `Authorization: Bearer <token>`, `Authorization: Basic` whose password is the token (git Smart HTTP and the raw / archive routes only), or the web session cookie `__Host-gstn_session` (the API and raw / archive; ignored on git routes; M2 MR3, ADR-0021).
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action`. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper.
+The log event carries `action`, or (`forge.auth.token_rejected` / `forge.auth.session_rejected`) `reason` and `scheme` (`bearer`, `basic`, `session`) and, when known, `public_id`. Token reasons: malformed, unknown, mismatch, revoked, expired; header reasons: malformed_header, unsupported_scheme, ambiguous (two Authorization headers, two session cookies, or a session cookie together with an Authorization header on the API or raw / archive — neither is tried), basic_not_allowed (Basic on /api/v1: the API takes Bearer only, so a browser never remembers a token as a Basic password; ADR-0019 Amendment M2). Session reasons: session_malformed, session_unknown, session_mismatch, session_revoked (with `revoked_reason`: logout, backchannel, user_disabled, admin, idp_revoked), session_expired (idle or absolute lifetime, web.session_idle_secs / web.session_absolute_secs); the response then clears the cookie. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper. /api/v1 401s challenge with Bearer only; raw / archive drop the Basic challenge for browser requests (Sec-Fetch-Mode / Sec-Fetch-Dest or the session cookie).
 
 ## 対処 (fix)
 
-Sign in, or configure the git credential helper with a personal access token.
+Sign in again (an expired or revoked session), or configure the git credential helper with a personal access token. Send API tokens as `Authorization: Bearer`, not Basic. Send either a token or the session cookie, never both.

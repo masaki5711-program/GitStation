@@ -716,3 +716,600 @@ fn the_seal_keys_file_is_checked_at_load_and_read_on_use() {
     );
 }
 // ── end C8 ──
+
+/// M1 phase 9 MR3: `git.http.*` defaults, the `[git.http]` table in the
+/// file, environment overrides and the cross-key rules (FG-SYS-0002).
+#[test]
+fn git_http_limits_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.git_http, GitHttpConfig::DEFAULT);
+    assert_eq!(cfg.git_http.fetch_request_max_bytes, 16 * 1024 * 1024);
+    assert_eq!(cfg.git_http.idle_timeout, Duration::from_secs(60));
+    assert_eq!(cfg.git_http.timeout, Duration::from_secs(3600));
+    assert_eq!(cfg.git_http.max_streams, 16);
+    assert_eq!(cfg.git_http.max_streams_per_principal, 4);
+    assert_eq!(cfg.git_http.body_timeout, Duration::from_secs(300));
+    assert_eq!(cfg.git_http.max_object_wants, 10_000);
+    assert_eq!(cfg.git_http.push_max_bytes, 2 * 1024 * 1024 * 1024);
+
+    let f = file("[git.http]\nmax_streams = 8\nidle_timeout_ms = 1000\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[
+            ("FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL", "2"),
+            ("FORGE_GIT_HTTP_PUSH_MAX_BYTES", "65536"),
+        ]),
+    )
+    .expect("file + env");
+    assert_eq!(cfg.git_http.push_max_bytes, 65536);
+    assert_eq!(cfg.git_http.max_streams, 8);
+    assert_eq!(cfg.git_http.max_streams_per_principal, 2);
+    assert_eq!(cfg.git_http.idle_timeout, Duration::from_millis(1000));
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_GIT_HTTP_MAX_STREAMS", "0")],
+            "git.http.max_streams",
+            "zero",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_FETCH_REQUEST_MAX_BYTES", "4294967296")],
+            "git.http.fetch_request_max_bytes",
+            "invalid",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_FETCH_REQUEST_MAX_BYTES", "1073741825")],
+            "git.http.fetch_request_max_bytes",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "20000"),
+            ],
+            "git.http.want_check_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_BODY_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "20000"),
+            ],
+            "git.http.idle_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_TIMEOUT_MS", "10000"),
+                ("FORGE_GIT_HTTP_WANT_CHECK_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "5000"),
+            ],
+            "git.http.body_timeout_ms",
+            "above_timeout",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_MAX_OBJECT_WANTS", "0")],
+            "git.http.max_object_wants",
+            "zero",
+        ),
+        (
+            vec![
+                ("FORGE_GIT_HTTP_MAX_STREAMS", "2"),
+                ("FORGE_GIT_HTTP_MAX_STREAMS_PER_PRINCIPAL", "3"),
+            ],
+            "git.http.max_streams_per_principal",
+            "above_max",
+        ),
+        (
+            vec![("FORGE_GIT_HTTP_NOPE", "1")],
+            "FORGE_GIT_HTTP_NOPE",
+            "unknown_env",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+    let f = file("[git.http]\nnope = 1\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("unknown key");
+    assert_invalid(&err, "git.http.nope", "unknown_key");
+    let f = file("[git.ssh]\nport = 1\n");
+    let err = load(Some(f.path()), &env(&[])).expect_err("unknown table");
+    assert_invalid(&err, "git.ssh", "unknown_key");
+}
+
+/// M1 phase 9 MR0: `server.*` connection limits have defaults, a `[server]`
+/// table, environment overrides and cross-key rules (FG-SYS-0002).
+#[test]
+fn server_limits_have_defaults_file_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.server.limits, ServerLimitsConfig::DEFAULT);
+    assert_eq!(cfg.server.limits.max_connections, 1024);
+    assert_eq!(cfg.server.limits.max_connections_per_peer, 64);
+
+    let f = file("[server]\nmax_connections = 100\nwrite_idle_timeout_ms = 2000\n");
+    let cfg = load(
+        Some(f.path()),
+        &env(&[("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "7")]),
+    )
+    .expect("file + env");
+    assert_eq!(cfg.server.limits.max_connections, 100);
+    assert_eq!(cfg.server.limits.max_connections_per_peer, 7);
+    assert_eq!(
+        cfg.server.limits.write_idle_timeout,
+        Duration::from_millis(2000)
+    );
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_SERVER_MAX_CONNECTIONS", "0")],
+            "server.max_connections",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "0")],
+            "server.max_connections_per_peer",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_WRITE_IDLE_TIMEOUT_MS", "0")],
+            "server.write_idle_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_KEEP_ALIVE_MAX_REQUESTS", "abc")],
+            "server.keep_alive_max_requests",
+            "invalid",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_MAX_CONNECTIONS", "10"),
+                ("FORGE_SERVER_MAX_CONNECTIONS_PER_PEER", "11"),
+            ],
+            "server.max_connections_per_peer",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "5000"),
+                ("FORGE_GIT_HTTP_IDLE_TIMEOUT_MS", "6000"),
+            ],
+            "server.read_idle_timeout_ms",
+            "below_git_idle_timeout",
+        ),
+        (
+            vec![("FORGE_SERVER_READ_IDLE_TIMEOUT_MS", "0")],
+            "server.read_idle_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![("FORGE_SERVER_BODY_READ_TIMEOUT_MS", "0")],
+            "server.body_read_timeout_ms",
+            "zero",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "1000"),
+                ("FORGE_SERVER_BODY_READ_TIMEOUT_MS", "5000"),
+                ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),
+            ],
+            "server.body_read_timeout_ms",
+            "above_keep_alive_max",
+        ),
+        (
+            vec![
+                ("FORGE_SERVER_HEADER_READ_TIMEOUT_MS", "5000"),
+                ("FORGE_SERVER_KEEP_ALIVE_MAX_MS", "4000"),
+            ],
+            "server.header_read_timeout_ms",
+            "above_keep_alive_max",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}
+
+// ── M1 phase 8b MR6: api.cursor_keys_file ──
+#[test]
+fn the_cursor_keys_file_is_checked_at_load_and_read_on_use() {
+    let keys = file(&format!("3 {}\n9 {}\n", "33".repeat(32), "99".repeat(32)));
+    let path = keys.path().to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_API_CURSOR_KEYS_FILE", path.as_str())])).expect("loads");
+    assert!(cfg.api.has_cursor_keys());
+    let read = cfg.api.cursor_keys().expect("read").expect("configured");
+    assert_eq!(read.encrypting().kid(), 9);
+    assert!(!format!("{cfg:?} {read:?}").contains("9999"));
+
+    let toml = file(&format!("[api]\ncursor_keys_file = {path:?}\n"));
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file.api.has_cursor_keys());
+
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.api.cursor_keys().expect("unset").is_none());
+    assert_invalid(
+        &none.api.require_cursor_keys().expect_err("required"),
+        "api.cursor_keys_file",
+        "missing",
+    );
+    let err = load(
+        None,
+        &env(&[("FORGE_API_CURSOR_KEYS_FILE", "relative/keys")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "api.cursor_keys_file", "not_absolute");
+    // A typo under the new namespace fails like every other one.
+    let err = load(None, &env(&[("FORGE_API_CURSOR_KEY_FILE", path.as_str())])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}
+
+/// `api.list_max_concurrent*` and `api.cursor_max_age_s`: defaults, env and
+/// the rules (FG-SYS-0002).
+#[test]
+fn api_list_limits_and_cursor_age_have_defaults_env_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.api.list_max_concurrent, 16);
+    assert_eq!(cfg.api.list_max_concurrent_per_principal, 2);
+    assert_eq!(cfg.api.cursor_max_age, Duration::from_secs(86_400));
+
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_API_LIST_MAX_CONCURRENT", "4"),
+            ("FORGE_API_LIST_MAX_CONCURRENT_PER_PRINCIPAL", "4"),
+            ("FORGE_API_CURSOR_MAX_AGE_S", "60"),
+        ]),
+    )
+    .expect("env");
+    assert_eq!(cfg.api.list_max_concurrent, 4);
+    assert_eq!(cfg.api.cursor_max_age, Duration::from_secs(60));
+
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_API_LIST_MAX_CONCURRENT", "0")],
+            "api.list_max_concurrent",
+            "zero",
+        ),
+        (
+            vec![("FORGE_API_CURSOR_MAX_AGE_S", "0")],
+            "api.cursor_max_age_s",
+            "zero",
+        ),
+        (
+            vec![("FORGE_API_LIST_MAX_CONCURRENT_PER_PRINCIPAL", "17")],
+            "api.list_max_concurrent_per_principal",
+            "above_max",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        let text = err.to_string();
+        assert!(text.contains(key) && text.contains(reason), "{key}: {text}");
+    }
+}
+
+/// `hosting.deletion_grace_days` (D5 MR3): default 7 days, env, and the
+/// 1..=365 range (FG-SYS-0002 naming the key).
+#[test]
+fn hosting_deletion_grace_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.hosting.deletion_grace, Duration::from_secs(7 * 86_400));
+    assert_eq!(
+        cfg.hosting.deletion_grace,
+        HostingConfig::DEFAULT_DELETION_GRACE
+    );
+    let cfg = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", "1")])).expect("min");
+    assert_eq!(cfg.hosting.deletion_grace, Duration::from_secs(86_400));
+    let cfg = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", "365")])).expect("max");
+    assert_eq!(
+        cfg.hosting.deletion_grace,
+        Duration::from_secs(365 * 86_400)
+    );
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("366", "above_max"),
+        ("-1", "invalid"),
+        ("a week", "invalid"),
+    ] {
+        let err =
+            load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE_DAYS", value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("hosting.deletion_grace_days") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+    // A typo under the new namespace fails like every other one.
+    let err = load(None, &env(&[("FORGE_HOSTING_DELETION_GRACE", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}
+
+/// `hosting.purge_interval_secs` (D5 MR4): default 300 s, env, and the
+/// 10..=86400 range (FG-SYS-0002 naming the key).
+#[test]
+fn hosting_purge_interval_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.hosting.purge_interval, Duration::from_secs(300));
+    assert_eq!(
+        cfg.hosting.purge_interval,
+        HostingConfig::DEFAULT_PURGE_INTERVAL
+    );
+    for (value, secs) in [("10", 10), ("86400", 86_400), (" 60 ", 60)] {
+        let cfg = load(None, &env(&[("FORGE_HOSTING_PURGE_INTERVAL_SECS", value)])).expect(value);
+        assert_eq!(cfg.hosting.purge_interval, Duration::from_secs(secs));
+    }
+    for (value, reason) in [
+        ("9", "below_min"),
+        ("0", "below_min"),
+        ("86401", "above_max"),
+        ("-1", "invalid"),
+        ("5m", "invalid"),
+    ] {
+        let err =
+            load(None, &env(&[("FORGE_HOSTING_PURGE_INTERVAL_SECS", value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("hosting.purge_interval_secs") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}
+
+/// `web.base_url` (M2 MR3, ADR-0021 §12): https, or http on loopback; no
+/// path, query or user info; the origin as a browser sends it. Optional at
+/// load (`forge serve` requires it).
+#[test]
+fn the_web_base_url_is_an_origin_and_is_validated() {
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.web.base_url().is_none());
+    assert_invalid(
+        &none.web.require_base_url().expect_err("required"),
+        "web.base_url",
+        "missing",
+    );
+    for (value, origin) in [
+        ("https://git.example.test", "https://git.example.test"),
+        ("https://git.example.test/", "https://git.example.test"),
+        ("https://GIT.example.test:443/", "https://git.example.test"),
+        (
+            "https://git.example.test:8443",
+            "https://git.example.test:8443",
+        ),
+        ("http://localhost:8080", "http://localhost:8080"),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080"),
+    ] {
+        let cfg = load(None, &env(&[("FORGE_WEB_BASE_URL", value)])).expect(value);
+        assert_eq!(
+            cfg.web.require_base_url().expect("set").origin(),
+            origin,
+            "{value}"
+        );
+    }
+    for (value, reason) in [
+        ("not a url", "invalid"),
+        ("http://git.example.test", "insecure_http"),
+        ("ftp://git.example.test", "scheme"),
+        ("https://git.example.test/gitstation", "has_path"),
+        ("https://git.example.test/?a=1", "has_query"),
+        ("https://git.example.test/#x", "has_query"),
+        ("https://user@git.example.test", "has_user_info"),
+    ] {
+        let err = load(None, &env(&[("FORGE_WEB_BASE_URL", value)])).expect_err(value);
+        assert_invalid(&err, "web.base_url", reason);
+    }
+    let toml = file("[web]\nbase_url = \"https://git.example.test\"\n");
+    let from_file = load(Some(toml.path()), &env(&[])).expect("file");
+    assert!(from_file.web.base_url().is_some());
+}
+
+/// `web.session_idle_secs` / `web.session_absolute_secs`: 4 h and 12 h by
+/// default, at least 60 s, idle within absolute, absolute at most 24 h.
+#[test]
+fn web_session_lifetimes_have_defaults_and_rules() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.web.session_idle, Duration::from_secs(4 * 3600));
+    assert_eq!(cfg.web.session_absolute, Duration::from_secs(12 * 3600));
+    let cfg = load(
+        None,
+        &env(&[
+            ("FORGE_WEB_SESSION_IDLE_SECS", "600"),
+            ("FORGE_WEB_SESSION_ABSOLUTE_SECS", "86400"),
+        ]),
+    )
+    .expect("set");
+    assert_eq!(cfg.web.session_idle, Duration::from_secs(600));
+    assert_eq!(cfg.web.session_absolute, Duration::from_secs(86_400));
+    for (pairs, key, reason) in [
+        (
+            vec![("FORGE_WEB_SESSION_IDLE_SECS", "59")],
+            "web.session_idle_secs",
+            "below_min",
+        ),
+        (
+            vec![("FORGE_WEB_SESSION_ABSOLUTE_SECS", "86401")],
+            "web.session_absolute_secs",
+            "above_max",
+        ),
+        (
+            vec![
+                ("FORGE_WEB_SESSION_IDLE_SECS", "7200"),
+                ("FORGE_WEB_SESSION_ABSOLUTE_SECS", "3600"),
+            ],
+            "web.session_idle_secs",
+            "above_absolute",
+        ),
+        (
+            vec![("FORGE_WEB_SESSION_IDLE_SECS", "4h")],
+            "web.session_idle_secs",
+            "invalid",
+        ),
+    ] {
+        let err = load(None, &env(&pairs)).expect_err(key);
+        assert_invalid(&err, key, reason);
+    }
+}
+
+/// `web.session_key_file` is checked at load (absolute path) and read on
+/// use (secret file rules, the `<kid> <hex>` format); `FORGE_WEB_` and
+/// `FORGE_AUTH_` are configuration namespaces (a typo fails).
+#[test]
+fn the_web_session_key_file_is_checked_at_load_and_read_on_use() {
+    let keys = file(&format!("2 {}\n", "22".repeat(32)));
+    let path = keys.path().to_string_lossy().into_owned();
+    let cfg = load(None, &env(&[("FORGE_WEB_SESSION_KEY_FILE", path.as_str())])).expect("loads");
+    assert!(cfg.web.has_session_keys());
+    let read = cfg.web.session_keys().expect("read").expect("configured");
+    assert_eq!(read.kids(), vec![2]);
+    assert!(!format!("{cfg:?} {read:?}").contains("2222"));
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.web.session_keys().expect("unset").is_none());
+    let err = load(
+        None,
+        &env(&[("FORGE_WEB_SESSION_KEY_FILE", "relative/keys")]),
+    )
+    .expect_err("relative");
+    assert_invalid(&err, "web.session_key_file", "not_absolute");
+    let broken = file("1 abcd\n");
+    let broken_path = broken.path().to_string_lossy().into_owned();
+    let cfg = load(
+        None,
+        &env(&[("FORGE_WEB_SESSION_KEY_FILE", broken_path.as_str())]),
+    )
+    .expect("checked on use");
+    assert_invalid(
+        &cfg.web.session_keys().expect_err("invalid key"),
+        "web.session_key_file",
+        "invalid_key",
+    );
+    for typo in ["FORGE_WEB_BASEURL", "FORGE_AUTH_OIDC_ISSUR"] {
+        let err = load(None, &env(&[(typo, "x")])).expect_err(typo);
+        assert_invalid(&err, typo, "unknown_env");
+    }
+}
+
+/// `auth.oidc.*` (M2 MR4, ADR-0021 §12): all or nothing, the issuer's
+/// scheme rules, the CA file for https, the algorithm allow-list, the
+/// defaults; the client secret never shows in `Debug`.
+#[test]
+fn auth_oidc_is_all_or_nothing_and_validated() {
+    let none = load(None, &env(&[])).expect("defaults");
+    assert!(none.auth.oidc.is_none());
+    let secret = file("synthetic-client-secret\n");
+    let secret_path = secret.path().to_string_lossy().into_owned();
+    let ca = file("-----BEGIN CERTIFICATE-----\n");
+    let ca_path = ca.path().to_string_lossy().into_owned();
+    let base = [
+        (
+            "FORGE_AUTH_OIDC_ISSUER",
+            "http://127.0.0.1:58080/realms/gitstation-dev",
+        ),
+        ("FORGE_AUTH_OIDC_CLIENT_ID", "gitstation"),
+        ("FORGE_AUTH_OIDC_CLIENT_SECRET_FILE", secret_path.as_str()),
+    ];
+    let cfg = load(None, &env(&base)).expect("loads");
+    let oidc = cfg.auth.oidc.as_ref().expect("configured");
+    assert_eq!(oidc.client_secret.expose(), "synthetic-client-secret");
+    assert_eq!(oidc.employee_number_claim, "employee_number");
+    assert_eq!(oidc.access_role, "access");
+    assert_eq!(oidc.signing_algs, vec![OidcSigningAlg::Rs256]);
+    assert!(oidc.auto_link);
+    assert!(!format!("{cfg:?}").contains("synthetic-client-secret"));
+
+    // Partial: the required keys are named.
+    let err =
+        load(None, &env(&[("FORGE_AUTH_OIDC_CLIENT_ID", "gitstation")])).expect_err("partial");
+    assert_invalid(&err, "auth.oidc.issuer", "missing");
+    let err = load(None, &env(&base[..2])).expect_err("no secret");
+    assert_invalid(&err, "auth.oidc.client_secret_file", "missing");
+
+    let with = |extra: &[(&'static str, &str)]| {
+        let mut pairs: Vec<(&str, &str)> = base.to_vec();
+        pairs.extend_from_slice(extra);
+        load(None, &env(&pairs))
+    };
+    for (issuer, reason) in [
+        ("http://keycloak.example.invalid/realms/x", "insecure_http"),
+        ("ftp://127.0.0.1/realms/x", "scheme"),
+        (
+            "https://u:p@keycloak.example.invalid/realms/x",
+            "has_user_info",
+        ),
+        ("https://keycloak.example.invalid/realms/x?a=b", "has_query"),
+        ("not a url", "invalid"),
+    ] {
+        let err = with(&[("FORGE_AUTH_OIDC_ISSUER", issuer)]).expect_err(issuer);
+        assert_invalid(&err, "auth.oidc.issuer", reason);
+    }
+    let https = (
+        "FORGE_AUTH_OIDC_ISSUER",
+        "https://keycloak.example.invalid/realms/x",
+    );
+    assert_invalid(
+        &with(&[https]).expect_err("https needs a CA"),
+        "auth.oidc.ca_file",
+        "ca_required",
+    );
+    let ok = with(&[https, ("FORGE_AUTH_OIDC_CA_FILE", ca_path.as_str())]).expect("https + ca");
+    assert!(ok.auth.oidc.expect("configured").ca_file.is_some());
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_CA_FILE", ca_path.as_str())]).expect_err("http + ca"),
+        "auth.oidc.ca_file",
+        "ca_not_allowed",
+    );
+    for algs in ["none", "HS256", "PS256", "RS256,EdDSA"] {
+        let err = with(&[("FORGE_AUTH_OIDC_SIGNING_ALGS", algs)]).expect_err(algs);
+        assert_invalid(&err, "auth.oidc.signing_algs", "alg_not_allowed");
+    }
+    let both = with(&[("FORGE_AUTH_OIDC_SIGNING_ALGS", "ES256, RS256")]).expect("both");
+    assert_eq!(
+        both.auth.oidc.expect("configured").signing_algs,
+        vec![OidcSigningAlg::Es256, OidcSigningAlg::Rs256]
+    );
+    let off = with(&[("FORGE_AUTH_OIDC_AUTO_LINK", "false")]).expect("auto_link");
+    assert!(!off.auth.oidc.expect("configured").auto_link);
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_AUTO_LINK", "yes")]).expect_err("bool"),
+        "auth.oidc.auto_link",
+        "invalid",
+    );
+    assert_invalid(
+        &with(&[("FORGE_AUTH_OIDC_EMPLOYEE_NUMBER_CLAIM", "a b")]).expect_err("claim"),
+        "auth.oidc.employee_number_claim",
+        "invalid",
+    );
+}
+
+/// `web.session_purge_interval_secs` (M2 MR6): default 1 h, env, and the
+/// 60..=86400 range (FG-SYS-0002 naming the key).
+#[test]
+fn web_session_purge_interval_has_a_default_env_and_a_range() {
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.web.session_purge_interval, Duration::from_secs(3600));
+    for (value, secs) in [("60", 60), ("86400", 86_400)] {
+        let cfg = load(
+            None,
+            &env(&[("FORGE_WEB_SESSION_PURGE_INTERVAL_SECS", value)]),
+        )
+        .expect(value);
+        assert_eq!(cfg.web.session_purge_interval, Duration::from_secs(secs));
+    }
+    for (value, reason) in [
+        ("59", "below_min"),
+        ("86401", "above_max"),
+        ("x", "invalid"),
+    ] {
+        let err = load(
+            None,
+            &env(&[("FORGE_WEB_SESSION_PURGE_INTERVAL_SECS", value)]),
+        )
+        .expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("web.session_purge_interval_secs") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}

@@ -167,3 +167,53 @@ async fn a_cancelled_seal_leaves_no_seal_and_the_next_call_seals_the_same_range(
     assert!(!again.more);
     t.drop_now().await;
 }
+
+/// A call that seals nothing must give up the seal lock before it returns
+/// (`finish` rolls back explicitly). sqlx sends the ROLLBACK of a dropped
+/// transaction only when a spawned task returns the connection to the pool;
+/// until then the transaction-scoped advisory lock stays held, and the next
+/// caller on another pooled connection saw `Busy` — the seal tests that
+/// failed only under load. Without load the spawned task usually wins the
+/// race, so this test guards the fix rather than reproducing the failure on
+/// every run.
+#[tokio::test]
+async fn a_call_that_seals_nothing_does_not_leave_the_lock_held() {
+    let t = FreshDb::migrated().await;
+    let keys = golden_keys();
+    // Keep several idle connections in the write pool, so the next call
+    // takes another connection at once.
+    {
+        let a = t.db.write_pool().acquire().await.expect("a");
+        let b = t.db.write_pool().acquire().await.expect("b");
+        let c = t.db.write_pool().acquire().await.expect("c");
+        drop((a, b, c));
+    }
+    tokio::task::yield_now().await;
+    for round in 0..20 {
+        // Nothing numbered yet: up to date (the lock was taken and released).
+        assert_eq!(
+            seal_pending(&t.db, &keys).await.expect("seal"),
+            SealOutcome::UpToDate,
+            "round {round}"
+        );
+    }
+    insert_audit(&t, 1).await;
+    number_all(&t).await;
+    sealed(
+        seal_due(&t.db, &keys, SealPolicy::WORKER)
+            .await
+            .expect("seal"),
+    );
+    insert_audit(&t, 1).await;
+    number_all(&t).await;
+    for round in 0..20 {
+        assert_eq!(
+            seal_due(&t.db, &keys, SealPolicy::WORKER)
+                .await
+                .expect("seal"),
+            SealOutcome::NotDue,
+            "round {round}"
+        );
+    }
+    t.drop_now().await;
+}

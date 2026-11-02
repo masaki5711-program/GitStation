@@ -5,6 +5,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as Atomic};
 use std::sync::{Arc, Mutex};
 
+use forge_core::EventType;
 use forge_errors::ErrorCode;
 use serde_json::json;
 use sqlx::Connection as _;
@@ -77,7 +78,7 @@ impl Subscriber for Scripted {
 
 pub(crate) fn derived_event(n: usize) -> DomainEvent {
     DomainEvent {
-        event_type: "repository.indexed",
+        event_type: EventType::RepositoryCreated,
         schema_version: 1,
         aggregate_type: "repository",
         aggregate_id: i64::try_from(n).expect("small"),

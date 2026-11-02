@@ -425,6 +425,71 @@ impl FreshDb {
         t
     }
 
+    /// One transaction as forge_app: the audit row of `cause`
+    /// (`(resource_type, resource_id)`), then `statements`, then COMMIT
+    /// (where the txn-audited triggers fire). For fixtures no command
+    /// writes yet — D5's moves and tombstones (forge-web's
+    /// `namespace_tombstone_routes`, M1 phase 8 MR4).
+    pub async fn commit_audited(&self, cause: (&str, i64), statements: &[String]) {
+        let mut tx = self.db.write_pool().begin().await.expect("begin");
+        let audit = format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             resource_id, request_id) VALUES ('system', 'probe.changed', 'succeeded', '{}', {}, \
+             'r-fixture')",
+            cause.0, cause.1
+        );
+        for sql in std::iter::once(&audit).chain(statements) {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("fixture statement failed: {e}"));
+        }
+        tx.commit().await.expect("commit");
+    }
+
+    /// [`FreshDb::commit_audited`] without the COMMIT: the transaction stays
+    /// open (holding its row locks) until [`HeldChange::commit`] (M1 phase
+    /// 8b MR7a: forge-hosting's race tests hold a membership change while a
+    /// write decides). Dropping it rolls back.
+    pub async fn hold_audited(&self, cause: (&str, i64), statements: &[String]) -> HeldChange {
+        let mut tx = self.db.write_pool().begin().await.expect("begin");
+        let audit = format!(
+            "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+             resource_id, request_id) VALUES ('system', 'probe.changed', 'succeeded', '{}', {}, \
+             'r-fixture')",
+            cause.0, cause.1
+        );
+        for sql in std::iter::once(&audit).chain(statements) {
+            sqlx::raw_sql(sql)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("fixture statement failed: {e}"));
+        }
+        HeldChange(tx)
+    }
+
+    /// Wait (bounded, 10 s) until a backend of this database runs a
+    /// statement containing `fragment` and waits on a lock; panics when none
+    /// does — a race test that relies on a lock fails when the lock is gone.
+    pub async fn until_waiting(&self, fragment: &str) {
+        let mut su = self.superuser().await;
+        for _ in 0..500 {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' \
+                 AND datname = current_database() AND strpos(query, $1) > 0",
+            )
+            .bind(fragment)
+            .fetch_one(&mut su)
+            .await
+            .expect("pg_stat_activity");
+            if waiting > 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("no statement containing {fragment:?} waited on a lock within 10 s");
+    }
+
     /// The application config (forge_app) with extra settings.
     pub fn app_config(&self, extra: &[(&str, &str)]) -> TestConfig {
         test_config(&url_as("forge_app", &self.name), APP_PASSWORD, extra)
@@ -482,6 +547,15 @@ impl FreshDb {
         superuser(&self.name).await
     }
 
+    /// The rows of `sql` as JSON objects, read as the superuser (to inspect
+    /// from crates without sqlx).
+    pub async fn json_rows(&self, sql: &str) -> Vec<serde_json::Value> {
+        sqlx::query_scalar(&format!("SELECT pg_catalog.to_jsonb(q) FROM ({sql}) AS q"))
+            .fetch_all(&mut self.superuser().await)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+    }
+
     /// Close the pool cleanly, then drop the database (`Drop`).
     pub async fn drop_now(self) {
         self.db.close().await;
@@ -534,12 +608,42 @@ impl Drop for FreshDb {
     }
 }
 
+/// An open fixture transaction ([`FreshDb::hold_audited`]).
+pub struct HeldChange(sqlx::Transaction<'static, sqlx::Postgres>);
+
+impl HeldChange {
+    pub async fn commit(self) {
+        self.0.commit().await.expect("commit the held change");
+    }
+}
+
 pub fn assert_reason(err: &ForgeError, code: ErrorCode, reason: &str) {
     assert_eq!(err.code(), code, "{err}");
     assert!(
         err.to_string().contains(&format!("reason={reason}")),
         "{err}"
     );
+}
+
+/// M2 MR3: a web session for `user` as the OIDC login (MR4) will issue it,
+/// without an IdP (`oidc = None`), with the default lifetimes (4 h idle,
+/// 12 h absolute). `issued.token.reveal()` is what the browser holds: the
+/// `__Host-gstn_session` cookie value. Tests only (feature `test-support`).
+pub async fn issue_session(db: &Db, user: forge_core::UserId) -> crate::sessions::Issued {
+    use std::time::Duration;
+    let ctx = crate::change::ChangeContext::new(
+        crate::change::Actor::System,
+        forge_core::RequestId::parse("req-test-session").expect("request id"),
+    );
+    let new = crate::sessions::NewSession {
+        user,
+        idle: Duration::from_secs(4 * 3600),
+        absolute: Duration::from_secs(12 * 3600),
+        oidc: None,
+    };
+    crate::sessions::issue(db, &ctx, &new)
+        .await
+        .expect("issue a test session")
 }
 
 /// The whole error chain as the log would show it.

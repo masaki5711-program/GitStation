@@ -20,7 +20,7 @@ A push would rewrite (non-fast-forward) a protected ref. In M1 no role, includin
 
 ## 調べ方 (diagnosis)
 
-The log event carries `action` and `protection` (the protection's minimum push role).
+The log event carries `action` and `protection` (the protection's minimum push role). Smart HTTP push (M1 phase 9 MR4, ADR-0008 option B): forge decides it before git runs when the new commit is already in the repository or the ref is an existing tag (then also `refs`, `denied_refs`, `denied_codes`, `first_denied_kind`: the whole push was refused in-band); `reason=git_denied_non_fast_forward` (with `refs`) means git refused it (`receive.denyNonFastForwards`, set for a push touching a protected branch) and forge rewrote git's `non-fast-forward` answer — other refs of that push may have been applied.
 
 ## 対処 (fix)
 

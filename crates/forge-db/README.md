@@ -42,20 +42,216 @@ connection, mapping driver errors to registered codes, migrations
   audit row and no event. `create` also writes the personal namespace
   (`kind = user`, `owner_id` = the user), under the path's advisory lock
   (`namespaces::lock_path`, crate-private; D5 rename / move / delete / release take
-  it too). Disabling a disabled user writes nothing.
+  it too). Disabling a disabled user writes nothing. `disable` also revokes
+  the user's active tokens in the same change (`revoked_reason = 'user_disabled'`,
+  one `token.revoked` event each, `revoked_tokens` in the `user.disabled` audit
+  row; step D3). `users::id_by_username(&Db, &str) -> Result<UserId, ForgeError>`
+  (read pool; FG-REPO-0005 `resource=user`, `reason=absent`).
+- **Disable guard** (step D3 MR2, ADR-0019 §10–§11): `disable` refuses
+  (FG-AUTH-0009, nothing written, no token revoked) when it would leave no
+  active **human** administrator (`last_admin`) or a **top-level** group
+  without a direct active Owner (`last_owner`; subgroups inherit). `disable_with(…,
+  Guard::Force)` passes it (the operator CLI's `--force` only) and records
+  `forced`, `ownerless_groups` (a count) and `left_without_admin` in the
+  `user.disabled` details; it returns `DisableOutcome::DisabledPastGuard` when
+  the guard would have refused. Lock order: advisory lock `users.admin_set`
+  (`users::lock_admin_set`, crate-private) → the user row `FOR UPDATE` →
+  unlocked counts; group rows are never locked (member changes lock group →
+  owner rows `FOR SHARE`). `users::bootstrap_admin(&Db, &ChangeContext,
+  &Bootstrap) -> Bootstrapped` (`Promote(UserId)` or `Create(NewUser)` through
+  the `create` path, `is_admin` set): refused while an active human admin
+  exists (`admin_exists`), for bots / service accounts (`not_human`) and
+  disabled users (`user_disabled`); same lock order; one audit row
+  `user.admin_bootstrapped` (`created`, `namespace_id`), no event.
+  `users::administration(&Db) -> Option<Administration>` (read pool; `None`
+  before the migration) is what `forge doctor` reports as
+  `users.administration`: `check()` is FG-AUTH-0010 (`no_admin` /
+  `ownerless_group`, counts and the first 10 group ids, read in one statement),
+  `is_fresh_install()` when there is no user at all.
+  **Operator-only**: `Guard::Force`, `disable_with` and `bootstrap_admin` are
+  for the CLI; the test `forge_web_never_names_the_operator_only_user_commands`
+  fails if a source under `crates/forge-web/src` names them. **Every future
+  change of `is_admin` or of an administrator's state** (grant / revoke admin,
+  LDAP sync, any HTTP route) must take `lock_admin_set` first (ADR-0019 §11).
+- `tokens::{issue, revoke, list, authenticate}` (step D3, ADR-0019): personal
+  access tokens `fgp_<16 hex public_id>_<64 hex secret>`; only `sha256(secret)`
+  is stored and only the write pool reads it. `issue(&Db, &ChangeContext, &NewToken)
+  -> Issued` (the `PlainToken` exists only there) and `revoke(&Db, &ChangeContext,
+  token_id) -> RevokeOutcome` write one audit row on the **owner** (resource
+  `user`) and one `token.created` / `token.revoked` event (admin class); `issue`
+  locks the owner row `FOR UPDATE`, so issues for one user and a concurrent
+  disable serialize and the limit holds. Limits: expiry 1–365 days (default 90,
+  `DEFAULT_EXPIRY` / `MIN_EXPIRY` / `MAX_EXPIRY`), 50 active tokens per user
+  (`MAX_ACTIVE_TOKENS`), name 1–100 characters. The `admin` scope only for an
+  administrator — checked here because issuing is CLI-only, outside
+  `authorize()` (ADR-0019 §8). `revoke` does not check the owner (operator
+  only); revoking a revoked token is `AlreadyRevoked` and writes nothing.
+  `list(&Db, UserId) -> Vec<TokenInfo>` (read pool, newest first, never the
+  hash). `authenticate(&Db, &RequestId, &str) -> TokenIdentity` (the type lives
+  in forge-core and is re-exported; `Db` implements `forge_core::Authenticator`
+  with it, which `forge serve` injects into forge-web): an unknown public id still
+  costs one hash and constant-time comparison; the owner must be active;
+  `last_used_at` is refreshed at most every 10 minutes, unaudited, and a failed
+  refresh is logged once (FG-DB-0002, warn) without failing the request.
 - `groups::create(&Db, &ChangeContext, &NewGroup) -> Result<CreatedGroup, ForgeError>`
   (step D2): the group, its namespace (`kind = group`, only at the top level or
   under a group) and its first Owner, under the path lock, with one
   `group.created` audit row. `groups::{add_member, change_member, remove_member}`:
   one `member.*` audit row each on the group (audit-only); every one locks the
   group row first; a top-level group keeps at least one direct active Owner;
-  bots are never members. `change_member` to the same role is
+  bots are never members. `change_member(.., user, from, to)` / `remove_member(.., user, from)`
+  take the member's direct role the caller loaded and authorized against: a different
+  stored role is FG-REPO-0010 `role_changed` (D4 review). `change_member` to the same role is
   `MemberChange::Unchanged` and writes nothing.
 - `roles::{load_group_roles, load_namespace_roles}(&Db, id, UserId) -> Result<MemberRoles, ForgeError>`
   (step D2, ADR-0010): the only role computation. `MemberRoles { native, direct }` —
   `native` is the highest direct role over the group and its ancestor groups
   (recursive query on the read pool, capped at 20 steps), `direct` the role in that
   group alone; active users only; a personal namespace has no group role.
+  `roles::load_project_roles(&Db, ProjectId, UserId) -> Result<MemberRoles, ForgeError>`
+  (step D4 MR2, ADR-0010 Amendment D4): `direct` = the project_members role,
+  `native` = the highest of it, the ancestor groups' direct roles and Owner for the
+  (non-bot, active) owner of the personal namespace that is the project's direct
+  parent; same query, same cap.
+  `load_namespace_roles` on a project namespace gives the same answer.
+- `projects::create(&Db, &ChangeContext, &NewProject) -> Result<CreatedProject, ForgeError>`
+  (step D4 MR2, ADR-0015 Amendment D4): `NewProject::new(segment, parent, display_name,
+  creator)` defaults to visibility `private`, kind `system`, an empty description. One
+  `ChangeTx` writes the project, its namespace (`kind = project`, under a user or group
+  namespace only — never under a project, nor in a bot's or an inactive user's
+  personal namespace), its repository (`provisioning`), the creator
+  as direct Owner, the `repository.provision` job (`repositories::PROVISION_JOB`, 60 s,
+  dedup `repository_provision:<repo_id>`, payload `{"repo_id"}`, origin = the request
+  id), one `project.created` audit row (resource `project`, `project_id` set) and one
+  `project.created` event (integration class, `project_id` = the project, payload = the
+  audit details). Path lock and tombstone checks as for groups. `creator` must be the
+  acting user (`Actor::System`, the operator / worker, may name anyone). `CreatedProject {
+  project_id, namespace_id, repository_id, provision_job }`.
+- `lists::{project_page, group_page}` and `impl forge_core::ProjectPageLoader /
+  GroupPageLoader for Db` (M1 phase 8b MR7b): one statement per page
+  (`PROJECT_PAGE_SQL` / `GROUP_PAGE_SQL`): the ids above `after`, in order, at most
+  `max_rows` (1..=`MAX_PAGE_ROWS` = 10000, else `FG-SYS-0001
+  reason=page_size_out_of_range`), with the viewer's chain roles anchored at every
+  scanned namespace (the role loaders' columns). **No visibility filter**: a project row
+  is `resolve::interpret_project`'s (identical to `load_project`), a group row has
+  `FG-DB-0021 group_without_namespace | group_path_unconfirmed | stored_path_invalid`.
+- `resolve::{resolve, load_project, project_access}` and `impl forge_core::NamespaceResolver /
+  ProjectAccessLoader for Db` (M1 phase 8 MR3, ADR-0015 Amendment MR3; `forge serve`
+  injects the `Db` into forge-web like the authenticator):
+  `resolve(&Db, &LookupPath, viewer: Option<UserId>) -> Result<Resolution, ForgeError>` —
+  the exact live path first, else the exact tombstone (`Live` / `Moved { resolved,
+  tombstone, current }` / `Deleted { tombstone }` / `Absent`); `project_access(&Db,
+  ProjectId, viewer) -> Result<Option<forge_core::ProjectAccess>, ForgeError>`
+  (`None` = no such project; it replaces D4's `projects::access` and its
+  `ProjectAccess { visibility, pending_deletion }` — one type, forge-core's, now with
+  the viewer's `role`); `load_project(&Db, ProjectId, viewer) ->
+  Result<Option<forge_core::ProjectRecord>, ForgeError>` (MR5: the same one statement
+  also returns the project's namespace — `full_path` confirmed against its segments —
+  names and `created_at` in UTC; `project_access` is its `access`;
+  FG-DB-0021 `project_path_unconfirmed` / `stored_path_invalid` /
+  `project_without_repository` for rows it cannot read). **One statement per call, whatever the answer**
+  (`RESOLVE_SQL`, `PROJECT_ACCESS_SQL`): it always returns exactly one row (an
+  aggregate without `GROUP BY` drives `LEFT JOIN`s), so live / moved / deleted /
+  absent, visible / invisible and signed-in / anonymous (`$2` NULL) issue the same
+  one statement on the read pool under `Db::within` (ADR-0015 step 6). Only the
+  statement count and text are constant, not the work inside (an absent path is two
+  index probes, a deep project walks its chain): an accepted residual, mitigated by
+  resolve rate limiting (M2) and, if needed, a response-time floor in forge-web. The viewer's
+  role is the role loaders' own chain CTE and fold (`roles::chain_cte!`,
+  `chain_role_columns!`, `fold_chain`): the same `native` as `load_project_roles`
+  / `load_group_roles` (tested). A `moved` tombstone's `current` path is rebuilt
+  from the target's segments, confirmed by an exact match on the live paths with
+  the target's id, and read through `NamespacePath::parse`. Only a purged target
+  (`namespace_id` NULL) is `Deleted`; a target that exists but whose rebuilt path is
+  not live is FG-DB-0021 `moved_path_unconfirmed`, a broken chain FG-DB-0018.
+  Nothing here decides visibility (`authorize()` does). The test
+  `every_outcome_runs_the_same_single_statement` counts sqlx's per-statement
+  events for every outcome.
+- `repositories` (step D4 MR3b, ADR-0009 / ADR-0016 Amendments D4 MR3b):
+  `provision_target(&Db, RepoId) -> ProvisionTarget { repo_id, project_id, state, token }`
+  (write pool — `forge_ro` cannot read `provision_token`; `Debug` redacts the token);
+  `provision_payload(&Value) -> RepoId` (the job's `{"repo_id"}`);
+  `mark_ready(&Db, &ChangeContext, RepoId) -> MarkReady::{Marked, AlreadyReady}` —
+  row `FOR UPDATE`, state `ready` + `ready_at`, one `repository.created` audit row on
+  resource (`project`, project id) with `project_id` set and one `repository.created`
+  event (integration, aggregate `repository`, payload `{project_id, repository_id,
+  kind}`, dedup `repository_created:<repo_id>`); an already ready repository writes
+  nothing (no second event); the UPDATE must touch exactly one row.
+  `mark_ready_within(.., timeout)` takes the change bound from the caller (the
+  provisioning job passes what is left of its own timeout).
+  **Key chain**: `jobs_dedup` keeps the key of queued, running and succeeded jobs, so the
+  current job of a repository is the end of `repository_provision:<id>` →
+  `repository_provision:<id>:after:<succeeded job>` → … (`CHAIN_CAP` 16 links, equality
+  lookups in a recursive CTE). `provisioning_report(&Db, stuck_after) ->
+  Option<ProvisioningReport>` (read pool; `None` before the D4 schema): repositories in
+  `provisioning` (count capped); the 10 000 oldest classified in SQL by their current job —
+  `job_not_live` (none, dead or succeeded) or `too_old` (live, older than `stuck_after`,
+  `PROVISIONING_STUCK_AFTER` = 10 min) — with per-reason counts and the first 100 stuck
+  (`job_not_live` first, each oldest first); `ProvisioningReport::check()` → FG-REPO-0012
+  (`reason`, `job_not_live`, `too_old`, `job_state`; `detail` for a succeeded job).
+  `ready_ids(&Db, after, limit)` — ready repository ids in id order, keyset pages of at
+  most `READY_PAGE_MAX` (1000). `reprovision(&Db, &ChangeContext, RepoId) ->
+  Reprovisioned::{Queued { project_id, job, after }, AlreadyLive { project_id, job, state }}`
+  — row locked, a ready repository is FG-REPO-0014 `repository_ready`; by the current job:
+  queued / running → `AlreadyLive` (nothing written), dead / none → a new job with that
+  link's key, succeeded → a new job keyed `…:after:<that job>`; the job plus an audit-only
+  `repository.reprovision_requested` row (on the project, `holder_job_id` /
+  `holder_state`) in one change. Concurrent calls serialize on the row lock.
+- `projects::{add_member, change_member, remove_member}(&Db, &ChangeContext, ProjectId,
+  UserId, ..)` (`add_member(.., role)`, `change_member(.., from, to)`, `remove_member(.., from)`;
+  `from` is the authorized direct role, else `role_changed`) (step D4 MR4, ADR-0019 Amendment D4 MR4): one `member.*` audit row on
+  (`project`, id) with `project_id` set **and** one `member.*` event of the project
+  (`EventType::Member{Added,RoleChanged,Removed}`, maintainer class, payload = the audit
+  details `AuditDetails::ProjectMember*`, the group JSON shapes; no dedup key). Lock
+  order: the project row `FOR UPDATE`, then user rows `FOR SHARE`. Bots are never
+  members; `change_member` to the same role is `MemberChange::Unchanged` (nothing
+  written). The last direct Owner may be removed or demoted while an inherited active
+  Owner exists (an ancestor group's direct Owner, the personal namespace's owner — the
+  `load_project_roles` sources), else FG-REPO-0010 `last_owner`. No authorization here:
+  a route decides with `authorize()` first.
+- `projects::ownerless(&Db) -> Result<Option<Ownerless>, ForgeError>` (D4 MR4): the
+  projects (not pending deletion) without any active Owner, direct or inherited —
+  `Ownerless { count, project_ids (first 10) }`, `check()` = FG-AUTH-0010
+  `ownerless_project`; `None` before the projects migration. For `forge doctor`
+  `users.administration`. `users::disable` refuses (FG-AUTH-0009 `last_owner`,
+  `project_id`) a disable that would leave a project without an active Owner; `--force`
+  records `ownerless_projects` in `DisableOutcome::DisabledPastGuard` and the
+  `user.disabled` details.
+- `protected_refs::{create, change, delete}` (step D4 MR5, ADR-0008 Amendment D4 MR5):
+  `create(&Db, &ChangeContext, ProjectId, &RefPattern, Role) -> ProtectedRefId`,
+  `change(.., ProjectId, ProtectedRefId, Role) -> RuleChange { Changed { from } | Unchanged }`
+  (the minimum push role only), `delete(.., ProjectId, ProtectedRefId)`. The project row is
+  locked first; at most `MAX_RULES` = 100 rules per project (`too_many_rules`), no two
+  patterns equal by `RefPattern::key()` (FG-REPO-0017 `duplicate_pattern` since M1 phase 8b
+  MR8, non-ASCII case included),
+  `push_min_role` Developer / Maintainer / Owner. One `protected_ref.*` audit row on
+  (`project`, id) and one `protected_ref.*` event (maintainer class, payload = the details,
+  no dedup key) each. `delete` does not parse the row, so a rule this build cannot read
+  (FG-DB-0020) can be deleted; its details carry `stored_invalid` and the stored text,
+  bounded. No authorization here (`Action::ProtectedRefManage` is the route's).
+- M1 phase 8b MR8 — the API's commands, decided inside their transaction (only
+  forge-hosting calls them, `decided_callers` test): `projects::{add,change,remove}_member_decided`
+  (`ProjectMemberFacts { account, project, member_role, removes_last_owner }`),
+  `groups::{add,change,remove}_member_decided` (`GroupMemberFacts`) and
+  `protected_refs::{create,change,delete}_decided` (`ProtectionFacts { account, project, rule:
+  RuleState::{New, Absent, Level, Unreadable} }`). Lock order: target row `FOR UPDATE` (project /
+  group; for a rule then the rule row `FOR UPDATE`), the caller's membership rows `FOR SHARE`, the
+  caller's account row, then the member's direct membership row `FOR UPDATE` and — when the
+  change takes an Owner away — the remaining Owners' user rows `FOR SHARE`. `decide` sees the
+  member's direct role (the `from`) and the last-owner fact; conflicts (`already_member`,
+  `not_member`, `bot_member`, 404 rule, FG-DB-0020 on a change of an unreadable rule) and the
+  last-owner backstop come after it; every non-commit exit rolls back (`ChangeTx::settle`).
+  Reads for the route loaders: `members::{page, one, direct_role}` (`MemberScope`, keyset by
+  user id, `MAX_PAGE` = 100) and `protected_refs::{list, rule_state}`.
+- `protected_refs::levels_for(&Db, ProjectId, &RefName) -> Result<Vec<Role>, ForgeError>`:
+  the `push_min_role` of every rule whose pattern matches the ref ignoring case, in rule
+  id order — feed it to `forge_auth::RefProtection::effective` (strictest wins); the
+  push policy snapshot is built from it. One bounded read (≤ 101 rows) on the read pool.
+- **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
+  `project_id` equals the audit row's — a project event needs an audit row naming
+  that project, an audit row without a project publishes only instance-wide events
+  (FG-DB-0010 `event_scope_mismatch`); an audit row on resource `project` must have
+  `project_id = resource_id` (`audit_scope_mismatch`).
 - Feature `test-support` (dev-dependency of other crates only):
   `test_support::FreshDb` — a database bootstrapped with the real files,
   logins with synthetic passwords.
@@ -76,27 +272,71 @@ hmac / gap, `detail`, `seal_id`), FG-DB-0015 AuditSealBacklog (`oldest_age_s`,
 `audit_sequencing`), FG-DB-0008 SubscriberLag (`reason` stuck / behind / quarantined /
 fanout_limit, `subscriber`, `seq`, `event_type`, `lag_events`), FG-DB-0013 AuditMissing
 (`reason` no_audit_row / derived_lineage / derived_depth / derived_fanout /
-derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`).
+derived_progress / audited_change with `table`), FG-DB-0018 MembershipDataInvalid (`roles`), FG-DB-0020 ProtectedRefDataInvalid
+(`protected_refs`), FG-DB-0021 NamespaceDataInvalid (`resolve`).
 Raised by `users::create` / `users::disable`: FG-REPO-0007 / 0008 (`PathSegment`),
 FG-REPO-0009 (`reason=sibling` or `tombstoned`), FG-AUTH-0005 (`reason=email_taken`,
 ignoring case), FG-AUTH-0006 (field rules, `reason` / `len`), FG-AUTH-0007
 (`reason=employee_number_taken` / `external_id_taken`), FG-REPO-0005 (`resource=user`,
 `reason=absent` on disable), FG-SYS-0001
-(`reason=unexpected_dedup`, `unknown_user_kind`).
+(`reason=unexpected_dedup`, `unknown_user_kind`), FG-AUTH-0009 AdministrationConflict
+(409: `last_admin` / `last_owner` from `disable`, `admin_exists` / `not_human` /
+`user_disabled` from `bootstrap_admin`; ids only). `Administration::check`:
+FG-AUTH-0010 AdministrationOrphaned (warn; `no_admin` / `ownerless_group`).
 Raised by `groups`: FG-REPO-0007 (also `too_deep`, `path_too_long`) / 0008 / 0009,
 FG-REPO-0010 MembershipConflict (`already_member`, `not_member`, `last_owner`,
 `bot_member`), FG-REPO-0011 GroupRequestInvalid (`display_name_length`,
 `description_length`, `nul_character`, `parent_not_group`, `owner_inactive`),
-FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-SYS-0001
-(`unknown_role`, `unexpected_dedup`).
-Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace`, `reason=absent`),
+FG-REPO-0005 (`resource=group` / `namespace` / `user`, `reason=absent`), FG-DB-0018
+(`unknown_role` on a stored role outside the five; `resource=group`, `id`, `user`, `raw` —
+the role loader's code since D3 MR2, it was FG-SYS-0001), FG-SYS-0001 (`unexpected_dedup`).
+Raised by `tokens`: FG-AUTH-0008 TokenRequestInvalid (`expires_out_of_range`,
+`scopes_empty`, `name_length`, `nul_character`, `control_character`, `owner_bot`,
+`owner_disabled`, `admin_scope_requires_admin`, `active_limit`; nothing is written),
+FG-AUTH-0001 from `authenticate` (`reason` in the log only: `malformed`, `unknown`,
+`mismatch`, `revoked`, `expired`, checked in that order), FG-AUTH-0004
+(`reason=owner_disabled`), FG-REPO-0005 (`resource=user` / `token`, `reason=absent`),
+FG-DB-0019 CredentialDataInvalid (a stored row this build cannot read: `unknown_scope`,
+`bad_hash`; alert), FG-SYS-0001 (`reason=rng_unavailable`), FG-DB-0001 when the database
+is down (never a 401), FG-DB-0002.
+Raised by `projects`: FG-REPO-0007 (also `too_deep`, `path_too_long`) / 0009,
+FG-REPO-0014 ProjectRequestInvalid (`display_name_length`, `description_length`,
+`nul_character`, `parent_not_owner_namespace`, `parent_owner_inactive`,
+`creator_inactive`, `creator_not_actor`), FG-REPO-0010 (`bot_member`: a bot as creator
+or a bot's personal namespace as parent), FG-REPO-0005 (`resource=namespace` / `user` /
+`project`, `reason=absent`), FG-SYS-0001 (`unexpected_dedup`, `unexpected_job_dedup`,
+`namespace_owner_missing`), FG-DB-0010 from the change checks.
+Raised by the project member commands (D4 MR4): FG-REPO-0010 (`already_member`,
+`not_member`, `last_owner` with `project_id`, `bot_member`), FG-REPO-0005
+(`resource=project` / `user`, `reason=absent`), FG-DB-0018 (`unknown_role`,
+`resource=project`), FG-SYS-0001 (`project_without_namespace`). `Ownerless::check`:
+FG-AUTH-0010 (`ownerless_project`, `ownerless_projects`, `project_ids`).
+Raised by `protected_refs` (D4 MR5): FG-REPO-0013 (`too_many_rules`
+with `rules`, `push_min_role`), FG-REPO-0017 ProtectedRefPatternTaken (409, MR8:
+`duplicate_pattern` / `unique_index`, `project_id`), FG-REPO-0005 (`resource=project` / `protected_ref`,
+`reason=absent`), FG-DB-0020 ProtectedRefDataInvalid (alert: `too_many_stored_rules`,
+`stored_pattern_invalid`, `stored_push_min_role_invalid`; ids only, never the pattern).
+Raised by `resolve`: FG-DB-0021 NamespaceDataInvalid (alert: `stored_path_invalid` with
+`rule`, `moved_path_unconfirmed`, `unknown_namespace_kind`, `unknown_tombstone_kind`, `unknown_visibility` with `raw`,
+`namespace_without_project`, `project_without_namespace`; ids only, never the path),
+FG-DB-0018 (`namespace_chain_too_deep`, `unknown_role`; `resource=namespace` / `project`,
+`user` only for a signed-in viewer), FG-DB-0001 / 0002. Absence is `Resolution::Absent` /
+`None`, never an error.
+Raised by `roles`: FG-REPO-0005 (`resource=group` / `namespace` / `project`, `reason=absent`),
 FG-DB-0018 MembershipDataInvalid (`namespace_chain_too_deep`, `unknown_role`; `resource`,
 `id`, `user`, `raw`), FG-DB-0001 / 0002.
+Raised by `repositories` (D4 MR3b): FG-REPO-0012 RepositoryProvisioningStuck (alert, from
+`ProvisioningReport::check`: `reason` job_not_live / too_old, `stuck`, `repo_id`,
+`project_id`, `age_ms`, `job_state`, `threshold_ms`), FG-REPO-0014 (`repository_ready`
+from `reprovision`), FG-REPO-0005 (`resource=repository`, `reason=absent`), FG-SYS-0001
+(`invalid_job_payload`, `unexpected_dedup`, `unknown_repository_state` /
+`invalid_provision_token` for a row outside its CHECKs).
 
 **Runbooks**: `ops/runbooks/db-unavailable.md`, `db-bootstrap.md`,
 `append-only-violation.md`, `outbox-sequencer-lag.md`, `job-dead-lettered.md`,
 `job-queue-backlog.md`, `audit-seal-mismatch.md`, `audit-seal-backlog.md`, `membership-data.md`,
-`subscriber-lag.md`.
+`subscriber-lag.md`, `credential-data.md`, `user-offboarding.md`,
+`repository-provisioning.md`, `namespace-data.md`.
 
 **Tests**: need the development database (ADR-0011) —
 `docker compose -f ops/dev/compose.yml up -d --wait` in `Git/`, then
@@ -186,7 +426,29 @@ column that is both.
 `forge.subscriber_dead_letters`, `forge.jobs`, and (step D1, migration `20261028100100`)
 `forge.users`, `forge.namespaces`, `forge.namespace_tombstones` (all `kind = "audited"`;
 `forge_ro` cannot read email, employee_number or external_id; tombstone targets are
-`ON DELETE SET NULL` foreign keys and unaudited); the DDL-status decision is
+`ON DELETE SET NULL` foreign keys and unaudited), (step D2, `20261029100000`)
+`forge.groups`, `forge.group_members` (audited, resource `group`; no DELETE on groups),
+(step D3, `20261030100000`) `forge.tokens` (audited on the owner, resource `user` /
+`user_id`; `last_used_at` unaudited; forge_app may INSERT and UPDATE only `revoked_at`,
+`revoked_reason`, `last_used_at`, never DELETE; `forge_ro` cannot read `secret_sha256`),
+(step D4 MR1, `20261031100000`) `forge.projects`, `forge.repositories`,
+`forge.project_members`, `forge.protected_refs` (all audited on the project, resource
+`project` / `id` or `project_id`; `updated_at` unaudited). A project's path is its
+`namespaces` row (`kind = 'project'`, `owner_id = projects.id`; no `namespace_id`
+column); `deleted_at` / `purge_after` both or neither, no DELETE yet (D5).
+`repositories`: one per project (`project_id` UNIQUE), `kind` (ADR-0023: no longer a concept; the column stays because migrations are append-only, and `projects::create` always writes the constant `system`; nothing reads it) —
+forge_app may UPDATE only `state` (provisioning | ready) and `ready_at` (set exactly
+when ready; the guard trigger `repositories_state_forward` — XF001, FG-DB-0009
+`rejected`, enabled ALWAYS, compared by doctor — allows only provisioning → ready and
+never changes `ready_at` once set), no DELETE; `provision_token` (uuid, default `gen_random_uuid()`) is not
+readable by `forge_ro`. `project_members`: PK (project_id, user_id), role CHECK, no
+bots (trigger `project_members_no_bot`), DELETE allowed. `protected_refs`: CHECKs
+`protected_refs_pattern_prefix` (`^refs/(heads|tags)/`) and `_length` (≤ 255 bytes) —
+the rest of `RefPattern::parse` is not in the database — `push_min_role` developer |
+maintainer | owner, unique index `protected_refs_project_pattern` on
+(project_id, lower(pattern)) (`pattern` is `COLLATE "C"`: ASCII case folding);
+tests `src/projects_schema_tests.rs`;
+the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
 (`guarded`, `kind`, `ro_columns`); rules for new migrations are in
 `migrations/README.md`. events / audit_log are append-only (per-table guard

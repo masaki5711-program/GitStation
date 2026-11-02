@@ -1,6 +1,814 @@
 {
   "components": {
     "schemas": {
+      "AddMember": {
+        "additionalProperties": false,
+        "description": "`POST …/members`: make a user a direct member.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleName"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "type": "object"
+      },
+      "AdminUser": {
+        "additionalProperties": false,
+        "description": "One user as the administration sees it (no e-mail or other personal\nidentifiers: the read pool never has them).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "`human`, `service_account` or `bot`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`active` or `disabled`.",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "username",
+          "display_name",
+          "state",
+          "is_admin",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AdminUserPage": {
+        "additionalProperties": false,
+        "description": "A page of users.",
+        "properties": {
+          "has_more": {
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUser"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "BlameBody": {
+        "additionalProperties": false,
+        "description": "A blamed file.",
+        "properties": {
+          "binary": {
+            "description": "NUL bytes or not UTF-8: no hunks (download it through the raw route).",
+            "type": "boolean"
+          },
+          "commits": {
+            "description": "The commits the hunks name, in order of first appearance.",
+            "items": {
+              "$ref": "#/components/schemas/BlameCommitBody"
+            },
+            "type": "array"
+          },
+          "hunks": {
+            "description": "Hunks in file order.",
+            "items": {
+              "$ref": "#/components/schemas/BlameHunkBody"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "size": {
+            "description": "The whole file's size in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "The file has more lines than the server blames (10 000).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "size",
+          "binary",
+          "hunks",
+          "commits",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "BlameCommitBody": {
+        "additionalProperties": false,
+        "description": "A commit named by a blame.",
+        "properties": {
+          "author_email": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "author_time": {
+            "description": "Seconds since the epoch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "author_tz": {
+            "description": "`+0900`.",
+            "type": "string"
+          },
+          "boundary": {
+            "description": "The line is as old as the history git blamed goes.",
+            "type": "boolean"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The file's name in that commit.",
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "author_name",
+          "author_email",
+          "author_time",
+          "author_tz",
+          "summary",
+          "boundary",
+          "path"
+        ],
+        "type": "object"
+      },
+      "BlameHunkBody": {
+        "additionalProperties": false,
+        "description": "Consecutive lines last changed by one commit.",
+        "properties": {
+          "commit": {
+            "description": "The commit's id (see `commits`).",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "orig_start": {
+            "description": "The first line's number in that commit's version.",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "description": "The first line's number in the file (1-based).",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commit",
+          "start",
+          "orig_start",
+          "lines"
+        ],
+        "type": "object"
+      },
+      "BlobBody": {
+        "additionalProperties": false,
+        "description": "One file's head.",
+        "properties": {
+          "binary": {
+            "description": "NUL bytes or not UTF-8: no `content` (download it through the raw\nroute).",
+            "type": "boolean"
+          },
+          "content": {
+            "description": "The text, at most 1 MiB; `null` when `binary`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "size": {
+            "description": "The whole file's size in bytes.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "The file is longer than `content`.",
+            "type": "boolean"
+          },
+          "type": {
+            "description": "`blob` or `symlink` (the content is the link's target).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "name",
+          "type",
+          "mode",
+          "oid",
+          "size",
+          "binary",
+          "content",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ChangeMember": {
+        "additionalProperties": false,
+        "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleName"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "ChangeProtectedRef": {
+        "additionalProperties": false,
+        "description": "`PATCH …/protected-refs/{rule_id}` (the pattern is fixed: delete the\nrule and create another).",
+        "properties": {
+          "push_min_role": {
+            "$ref": "#/components/schemas/RoleName"
+          }
+        },
+        "required": [
+          "push_min_role"
+        ],
+        "type": "object"
+      },
+      "CommitBody": {
+        "additionalProperties": false,
+        "description": "One commit's metadata.",
+        "properties": {
+          "author_email": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "authored_at": {
+            "description": "ISO 8601 with the author's offset.",
+            "type": "string"
+          },
+          "committed_at": {
+            "type": "string"
+          },
+          "committer_email": {
+            "type": "string"
+          },
+          "committer_name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "parents": {
+            "description": "In order; the first is the mainline of a merge.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "subject": {
+            "description": "The first paragraph of the message on one line.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "oid",
+          "parents",
+          "author_name",
+          "author_email",
+          "authored_at",
+          "committer_name",
+          "committer_email",
+          "committed_at",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "CommitDetailBody": {
+        "additionalProperties": false,
+        "description": "One commit with its message and diff.",
+        "properties": {
+          "commit": {
+            "$ref": "#/components/schemas/CommitBody"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody",
+            "description": "Against the first parent (a root commit: against nothing)."
+          },
+          "message": {
+            "description": "The whole message.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "message",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "CommitsBody": {
+        "additionalProperties": false,
+        "description": "A page of the history.",
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "head": {
+            "description": "The commit the history is read from: `ref`'s commit on the first\npage, the one the cursor keeps on the next pages.",
+            "type": "string"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "ref",
+          "head",
+          "path",
+          "commits",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "CompareBody": {
+        "additionalProperties": false,
+        "description": "Two revisions compared.",
+        "properties": {
+          "commits": {
+            "description": "The commits `to` has and `from` does not, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "description": "More commits than the server lists (200).",
+            "type": "boolean"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody",
+            "description": "The tree diff from `from` to `to`."
+          },
+          "from": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "to": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "commits",
+          "commits_truncated",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "CreateGroup": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/groups` and `…/{id}/subgroups`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The path segment (ADR-0015 rules; a top-level name must not be\nreserved).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "CreateProject": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/projects`.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "namespace_id": {
+            "description": "The parent: a personal or a group namespace (`namespace_id` of a\nuser, of `GET /api/v1/groups/{id}` or of the resolver).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The path segment (ADR-0015 rules).",
+            "type": "string"
+          },
+          "visibility": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VisibilityName",
+                "description": "Default `private`."
+              }
+            ]
+          }
+        },
+        "required": [
+          "namespace_id",
+          "path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "CreateProtectedRef": {
+        "additionalProperties": false,
+        "description": "`POST …/protected-refs`.",
+        "properties": {
+          "pattern": {
+            "description": "`refs/heads/…` or `refs/tags/…`, ≤ 255 bytes, at most one `*` and\nonly in the last part (ADR-0008); unique in the project ignoring case.",
+            "type": "string"
+          },
+          "push_min_role": {
+            "$ref": "#/components/schemas/RoleName",
+            "description": "`developer`, `maintainer` or `owner`."
+          }
+        },
+        "required": [
+          "pattern",
+          "push_min_role"
+        ],
+        "type": "object"
+      },
+      "CreateToken": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/user/tokens`.",
+        "properties": {
+          "expires_in_days": {
+            "description": "Days until it expires, 1..=365 (default 90).",
+            "format": "int32",
+            "maximum": 365,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "is_agent": {
+            "description": "The token is for an AI agent (ADR-0017 §4.0); default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "1..=100 characters, no control or invisible format characters.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "`read_repository`, `write_repository`, `read_api`, `api`, `admin`\n(administrators only); at least one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "CreatedToken": {
+        "additionalProperties": false,
+        "description": "A created token: the secret, shown this once.",
+        "properties": {
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "token": {
+            "description": "The whole token. It is never shown again: store it now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "public_id",
+          "name",
+          "scopes",
+          "expires_at",
+          "is_agent",
+          "token"
+        ],
+        "type": "object"
+      },
+      "DeletionBody": {
+        "additionalProperties": false,
+        "description": "`DELETE /api/v1/projects/{id}`: when the grace period began and when\nthe purge may start.",
+        "properties": {
+          "deleted_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purge_after": {
+            "description": "UTC, RFC 3339: the project is restorable until then (and until its\npurge has started).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "deleted_at",
+          "purge_after"
+        ],
+        "type": "object"
+      },
+      "DiffBody": {
+        "additionalProperties": false,
+        "description": "The changed files of a diff.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/DiffFileBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "A cap cut the diff: more files than listed (500), or a patch left\nout because of its size.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "files",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "DiffFileBody": {
+        "additionalProperties": false,
+        "description": "One changed file of a diff.",
+        "properties": {
+          "binary": {
+            "description": "git reports the change as binary: no patch.",
+            "type": "boolean"
+          },
+          "new_mode": {
+            "type": "string"
+          },
+          "new_oid": {
+            "type": "string"
+          },
+          "new_path": {
+            "description": "`null` for a deleted file.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "old_mode": {
+            "type": "string"
+          },
+          "old_oid": {
+            "type": "string"
+          },
+          "old_path": {
+            "description": "`null` for an added file.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "omitted": {
+            "description": "Why a file with hunks has no `patch`: `too_large` (over 256 KiB),\n`total_cap` (the diff's patch bytes ran out; 2 MiB) or `not_utf8`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "patch": {
+            "description": "The hunks (`@@ …`); `\"\"` for a change without any (mode only, a\npure rename, an empty file); `null` when `binary` or `omitted`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "similarity": {
+            "description": "Renamed / copied: the similarity in percent.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`added`, `modified`, `deleted`, `renamed`, `copied` or `type_changed`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "old_path",
+          "new_path",
+          "old_mode",
+          "new_mode",
+          "old_oid",
+          "new_oid",
+          "similarity",
+          "binary",
+          "patch",
+          "omitted"
+        ],
+        "type": "object"
+      },
+      "Disabled": {
+        "additionalProperties": false,
+        "description": "What a disable did.",
+        "properties": {
+          "outcome": {
+            "description": "`disabled`, or `already_disabled` (nothing was written).",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "EntryBody": {
+        "additionalProperties": false,
+        "description": "One tree entry.",
+        "properties": {
+          "mode": {
+            "description": "The octal mode as git prints it (`100644`, `040000`, …).",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "oid": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The entry's full path in the tree.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Bytes; `null` for a tree or a submodule.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "`tree`, `blob`, `symlink` or `submodule`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "type",
+          "mode",
+          "oid",
+          "size"
+        ],
+        "type": "object"
+      },
       "Error": {
         "additionalProperties": false,
         "properties": {
@@ -21,6 +829,1106 @@
           "request_id"
         ],
         "type": "object"
+      },
+      "GroupBody": {
+        "additionalProperties": false,
+        "description": "A group as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "parent_id": {
+            "description": "The parent group; `null` at the top level.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The current full path (`group/sub`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "parent_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "GroupPage": {
+        "additionalProperties": false,
+        "description": "A page of groups.",
+        "properties": {
+          "has_more": {
+            "description": "More rows may follow (a page can be short, even empty, when its\nscan budget ended first).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ListedGroup"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "ListedGroup": {
+        "additionalProperties": false,
+        "description": "A group as a list shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The current full path (`group/sub`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "MemberBody": {
+        "additionalProperties": false,
+        "description": "One direct member as the API shows it.",
+        "properties": {
+          "active": {
+            "description": "`false` while the account is disabled (it holds no role meanwhile).",
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "When the membership was created (UTC, RFC 3339).",
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "role": {
+            "description": "The direct role (`guest` … `owner`); inherited roles are not listed.",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "username",
+          "display_name",
+          "role",
+          "active",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "MemberPage": {
+        "additionalProperties": false,
+        "description": "One page of direct members, in user id order.",
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/MemberBody"
+            },
+            "type": "array"
+          },
+          "next_after": {
+            "description": "Pass as `after` for the next page; `null` on the last page.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "members",
+          "next_after"
+        ],
+        "type": "object"
+      },
+      "MoveBody": {
+        "additionalProperties": false,
+        "description": "A move as it was written.",
+        "properties": {
+          "id": {
+            "description": "The moved project, group or user.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`project`, `group` or `user`.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "description": "The moved namespace.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "old_path": {
+            "description": "The path before the move.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The path now.",
+            "type": "string"
+          },
+          "projects": {
+            "description": "Projects whose path changed.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reclaimed_tombstones": {
+            "description": "Tombstones of this very subtree released by `reclaim`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "tombstones": {
+            "description": "The `moved` tombstones written: one per namespace of the subtree, at\nits old path. Each keeps that path blocked until released; a clone\nor fetch through it is redirected (`302`) to the new path for\ncallers who may read the project, a push through it is refused.",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "namespace_id",
+          "old_path",
+          "path",
+          "tombstones",
+          "projects",
+          "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "ProjectBody": {
+        "additionalProperties": false,
+        "description": "A project as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "description": "The path's last segment.",
+            "type": "string"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The current full path (`group/sub/project`).",
+            "type": "string"
+          },
+          "role": {
+            "description": "The caller's effective role (`guest` … `owner`); `null` without one\n(an administrator, or a reader of an internal project).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "visibility": {
+            "description": "`private` or `internal`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "namespace_id",
+          "path",
+          "name",
+          "display_name",
+          "description",
+          "visibility",
+          "created_at",
+          "role"
+        ],
+        "type": "object"
+      },
+      "ProjectPage": {
+        "additionalProperties": false,
+        "description": "A page of projects.",
+        "properties": {
+          "has_more": {
+            "description": "More rows may follow (a page can be short, even empty, when its\nscan budget ended first).",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectBody"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` for the next page; `null` on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "ProtectedRefBody": {
+        "additionalProperties": false,
+        "description": "One protected ref rule as the API shows it.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "push_min_role": {
+            "description": "The minimum role that may push (create / fast-forward) a matching\nref; force-push and deletion are refused for everyone.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "ProtectedRefRules": {
+        "additionalProperties": false,
+        "description": "Every rule of a project, in id order.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProtectedRefBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "RefBody": {
+        "additionalProperties": false,
+        "description": "One branch or tag.",
+        "properties": {
+          "commit": {
+            "description": "The commit it peels to; `null` for a tag of a tree or a blob.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "full_name": {
+            "description": "`refs/heads/…` or `refs/tags/…`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The short name (`main`, `v1.0`).",
+            "type": "string"
+          },
+          "target": {
+            "description": "The object the ref names (an annotated tag: the tag object).",
+            "type": "string"
+          },
+          "type": {
+            "description": "`branch` or `tag`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "full_name",
+          "type",
+          "commit",
+          "target"
+        ],
+        "type": "object"
+      },
+      "RefsBody": {
+        "additionalProperties": false,
+        "description": "A repository's branches and tags.",
+        "properties": {
+          "default_branch": {
+            "description": "The branch HEAD names; `null` for an empty repository.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refs": {
+            "description": "In ref name order.",
+            "items": {
+              "$ref": "#/components/schemas/RefBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More refs than the server lists (5 000): the list stops there.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "default_branch",
+          "refs",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ReleaseTombstone": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/namespaces/tombstones/release`.",
+        "properties": {
+          "path": {
+            "description": "The tombstoned path, exactly (`group/sub/project`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "ReleasedBody": {
+        "additionalProperties": false,
+        "description": "A released tombstone.",
+        "properties": {
+          "kind": {
+            "description": "`moved` or `deleted`.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The path that can be used again.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RenameUser": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/users/{id}/rename`.",
+        "properties": {
+          "reclaim": {
+            "description": "Take back an old username of this very user.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "username": {
+            "description": "The new username, which is also the personal namespace's path\n(ADR-0015 rules; not a reserved word).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "type": "object"
+      },
+      "Resolution": {
+        "additionalProperties": false,
+        "description": "Which namespace a path names. Exactly one of `project_id`, `group_id`,\n`user_id` is present, by `kind`.",
+        "properties": {
+          "canonical_path": {
+            "description": "The namespace's current path (a moved path: the target's).",
+            "type": "string"
+          },
+          "group_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`project`, `group` or `user`.",
+            "type": "string"
+          },
+          "moved": {
+            "description": "A `moved` tombstone led here.",
+            "type": "boolean"
+          },
+          "namespace_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "remainder": {
+            "description": "`prefix=true` only: the requested path's segments after the\nproject's (`pull/3`); absent when nothing follows.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "namespace_id",
+          "kind",
+          "canonical_path",
+          "moved"
+        ],
+        "type": "object"
+      },
+      "ResolveBody": {
+        "additionalProperties": false,
+        "description": "A spec split into a revision and a path.",
+        "properties": {
+          "path": {
+            "description": "The rest of the spec: a path in the tree (`\"\"` for the root).",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          }
+        },
+        "required": [
+          "ref",
+          "path"
+        ],
+        "type": "object"
+      },
+      "RevBody": {
+        "additionalProperties": false,
+        "description": "A resolved revision.",
+        "properties": {
+          "commit": {
+            "description": "The commit id.",
+            "type": "string"
+          },
+          "full_name": {
+            "description": "`refs/heads/…` / `refs/tags/…`; `null` for a commit id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The short ref name, or the commit id.",
+            "type": "string"
+          },
+          "type": {
+            "description": "`branch`, `tag` or `commit` (a full commit id was given).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "name",
+          "full_name",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "RoleName": {
+        "description": "A role in a request.",
+        "enum": [
+          "guest",
+          "reporter",
+          "developer",
+          "maintainer",
+          "owner"
+        ],
+        "type": "string"
+      },
+      "SessionBody": {
+        "additionalProperties": false,
+        "description": "The caller's web session.",
+        "properties": {
+          "absolute_expires_at": {
+            "description": "When the session ends at the latest (RFC 3339, UTC).",
+            "type": "string"
+          },
+          "csrf_token": {
+            "description": "Send as `X-GitStation-CSRF` on every state-changing request (64\nlowercase hex; derived from the cookie, the same for the session's\nlifetime).",
+            "type": "string"
+          },
+          "idle_expires_at": {
+            "description": "When the session ends without activity (RFC 3339, UTC).",
+            "type": "string"
+          },
+          "public_id": {
+            "description": "The session's public id (never the secret).",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          }
+        },
+        "required": [
+          "user",
+          "csrf_token",
+          "public_id",
+          "idle_expires_at",
+          "absolute_expires_at"
+        ],
+        "type": "object"
+      },
+      "SessionItem": {
+        "additionalProperties": false,
+        "description": "One active session.",
+        "properties": {
+          "absolute_expires_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "current": {
+            "description": "The session this request came with.",
+            "type": "boolean"
+          },
+          "idle_expires_at": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string"
+          },
+          "oidc": {
+            "description": "Signed in through the identity provider.",
+            "type": "boolean"
+          },
+          "public_id": {
+            "description": "The session's public id (16 hex; the `{public_id}` to end it).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_id",
+          "created_at",
+          "last_seen_at",
+          "idle_expires_at",
+          "absolute_expires_at",
+          "oidc",
+          "current"
+        ],
+        "type": "object"
+      },
+      "SessionItems": {
+        "additionalProperties": false,
+        "description": "A user's active sessions, newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SessionItem"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More active sessions exist than are shown (at most 100).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "SessionUser": {
+        "additionalProperties": false,
+        "description": "The signed-in user, as the session shows it.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "description": "The account's administrator flag (a session carries administrator\nrights when it is set).",
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "is_admin"
+        ],
+        "type": "object"
+      },
+      "SessionsRevoked": {
+        "additionalProperties": false,
+        "description": "What ending a user's sessions did.",
+        "properties": {
+          "revoked_sessions": {
+            "description": "How many sessions ended (0: there were none).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "revoked_sessions"
+        ],
+        "type": "object"
+      },
+      "SetVisibility": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/projects/{id}/visibility`.",
+        "properties": {
+          "visibility": {
+            "$ref": "#/components/schemas/VisibilityName"
+          }
+        },
+        "required": [
+          "visibility"
+        ],
+        "type": "object"
+      },
+      "TokenBody": {
+        "additionalProperties": false,
+        "description": "One token as the API shows it (never the secret or its hash).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "description": "The token's public part (`fgp_<public_id>_…`).",
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "public_id",
+          "name",
+          "scopes",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at"
+        ],
+        "type": "object"
+      },
+      "TokenList": {
+        "additionalProperties": false,
+        "description": "The caller's tokens.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TokenBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "TransferGroup": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/groups/{id}/transfer`.",
+        "properties": {
+          "namespace_id": {
+            "description": "The new parent group's `namespace_id`. Omitted: the current parent\n(a rename; a top-level group stays at the top level).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The new last segment. Omitted: the current one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reclaim": {
+            "description": "As for a project: take back an old path of this group's subtree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "top_level": {
+            "description": "`true`: move to the top level (administrators only); not together\nwith `namespace_id`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TransferProject": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/projects/{id}/transfer`.",
+        "properties": {
+          "namespace_id": {
+            "description": "The new parent: a group or a personal namespace (`namespace_id` of\n`GET /api/v1/groups/{id}`, of a user, or of the resolver). Omitted:\nthe current parent (a rename).",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The new last segment (ADR-0015 rules). Omitted: the current one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reclaim": {
+            "description": "Take back an old path of this very project (A → B → A): release, in\nthe same change, the `moved` tombstone there that names it. Default\n`false` (a tombstone always blocks until released).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TreeBody": {
+        "additionalProperties": false,
+        "description": "One tree level.",
+        "properties": {
+          "entries": {
+            "description": "In git's order (byte order of the names).",
+            "items": {
+              "$ref": "#/components/schemas/EntryBody"
+            },
+            "type": "array"
+          },
+          "oid": {
+            "description": "The tree's id.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The tree's path (`\"\"` for the root).",
+            "type": "string"
+          },
+          "ref": {
+            "$ref": "#/components/schemas/RevBody"
+          },
+          "truncated": {
+            "description": "More entries than the server lists (5 000).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "oid",
+          "entries",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "UpdateGroup": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/groups/{id}`: at least one field.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdateProject": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/projects/{id}`: at least one field.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UserName": {
+        "additionalProperties": false,
+        "description": "One search match: names only.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "UserNames": {
+        "additionalProperties": false,
+        "description": "The matches of a search.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserName"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "UserSelf": {
+        "additionalProperties": false,
+        "description": "The caller's account as the API shows it.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_admin": {
+            "description": "The account's administrator flag.",
+            "type": "boolean"
+          },
+          "is_agent": {
+            "description": "The credential is a token issued for an AI agent.",
+            "type": "boolean"
+          },
+          "token_scopes": {
+            "description": "The token's scopes; `null` for a session.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "is_admin",
+          "is_agent",
+          "token_scopes"
+        ],
+        "type": "object"
+      },
+      "VisibilityName": {
+        "description": "A project's visibility in a request.",
+        "enum": [
+          "private",
+          "internal"
+        ],
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -37,6 +1945,2474 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/": {
+      "get": {
+        "operationId": "get_",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: home",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: home",
+        "x-forge-action": "WebShell"
+      }
+    },
+    "/-/auth/backchannel-logout": {
+      "post": {
+        "operationId": "post_auth_backchannel_logout",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "OIDC Back-Channel Logout: the identity provider ends sessions with a signed logout token",
+        "x-forge-action": "OidcBackchannelLogout"
+      }
+    },
+    "/-/auth/callback": {
+      "get": {
+        "operationId": "get_auth_callback",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Finish the browser sign-in: verify, admit (SessionCreate), set the session cookie, 302 to next",
+        "x-forge-action": "WebLogin"
+      }
+    },
+    "/-/auth/login": {
+      "get": {
+        "operationId": "get_auth_login",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "Start the browser sign-in: 302 to the identity provider (ADR-0021)",
+        "x-forge-action": "WebLogin"
+      }
+    },
+    "/-/auth/logout": {
+      "post": {
+        "operationId": "post_auth_logout",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
+        "x-forge-action": "SessionLogout"
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "get_api_v1_admin_users",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and the state filter)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "active or disabled (default: every user)",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every user with its state (administrators; keyset, opaque cursor)",
+        "x-forge-action": "UserAdminList"
+      }
+    },
+    "/api/v1/admin/users/{id}/disable": {
+      "post": {
+        "operationId": "post_api_v1_admin_users_id_disable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Disabled"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Disable a user (administrators, never an agent; the administration guard always holds)",
+        "x-forge-action": "UserDisable"
+      }
+    },
+    "/api/v1/admin/users/{id}/sessions": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_users_id_sessions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsRevoked"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End every web session of a user (administrators, never an agent)",
+        "x-forge-action": "AdminSessionRevoke"
+      },
+      "get": {
+        "operationId": "get_api_v1_admin_users_id_sessions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionItems"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A user's active web sessions (administrators)",
+        "x-forge-action": "AdminSessionList"
+      }
+    },
+    "/api/v1/groups": {
+      "get": {
+        "operationId": "get_api_v1_groups",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: only groups where the caller holds a role (direct or inherited)",
+            "in": "query",
+            "name": "membership",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List the groups the caller may read (keyset, opaque cursor)",
+        "x-forge-action": "GroupList"
+      },
+      "post": {
+        "operationId": "post_api_v1_groups",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a top-level group (administrators)",
+        "x-forge-action": "GroupCreateTopLevel",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/groups/{id}": {
+      "get": {
+        "operationId": "get_api_v1_groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read one group by id",
+        "x-forge-action": "GroupRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_groups_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a group's display name / description (group Owner)",
+        "x-forge-action": "GroupUpdate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/groups/{id}/members": {
+      "get": {
+        "operationId": "get_api_v1_groups_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Members per page, 1..=100 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after (a user id): members with a larger user id",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a group's direct members (every signed-in user)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_groups_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a direct group member (Maintainer; at most the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/groups/{id}/members/{user_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_groups_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a direct group member (Maintainer; a top-level group keeps an Owner)",
+        "x-forge-action": "MemberManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_groups_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a direct group member's role (Maintainer; never above the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/groups/{id}/subgroups": {
+      "post": {
+        "operationId": "post_api_v1_groups_id_subgroups",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a subgroup (group Owner)",
+        "x-forge-action": "SubgroupCreate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/groups/{id}/transfer": {
+      "post": {
+        "operationId": "post_api_v1_groups_id_transfer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferGroup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
+        "x-forge-action": "GroupTransfer",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/namespaces/resolve": {
+      "get": {
+        "operationId": "get_api_v1_namespaces_resolve",
+        "parameters": [
+          {
+            "description": "The namespace path (percent-encoded)",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: the longest prefix of path that is a project the caller can see, with the rest as remainder (M2 rescue of GitHub-shaped URLs)",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolution"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resolve a namespace path for the caller (ADR-0015)",
+        "x-forge-action": "PathResolve"
+      }
+    },
+    "/api/v1/namespaces/tombstones/release": {
+      "post": {
+        "operationId": "post_api_v1_namespaces_tombstones_release",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTombstone"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleasedBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Release a namespace tombstone so its path can be used again (the target's Owner, or an administrator)",
+        "x-forge-action": "NamespaceTombstoneRelease",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "operationId": "get_api_v1_projects",
+        "parameters": [
+          {
+            "description": "Rows per page, 1..=100 (default 20); a page can be shorter when its scan budget ends first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; bound to this list, this caller and these filters)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "true: only projects where the caller holds a role (direct or inherited)",
+            "in": "query",
+            "name": "membership",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "pending_deletion: only projects pending deletion that the caller may restore (Owner)",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List the projects the caller may read (keyset, opaque cursor)",
+        "x-forge-action": "ProjectList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a project in a group or a personal namespace",
+        "x-forge-action": "ProjectCreate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a project: it stays restorable for the grace period (Owner)",
+        "x-forge-action": "ProjectDelete"
+      },
+      "get": {
+        "operationId": "get_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read one project by id (ADR-0015 MR5)",
+        "x-forge-action": "ProjectRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a project's display name / description (Maintainer)",
+        "x-forge-action": "ProjectUpdate",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/members": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Members per page, 1..=100 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_after (a user id): members with a larger user id",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's direct members (Reporter; internal: every signed-in user)",
+        "x-forge-action": "MemberList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_members",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a direct project member (Maintainer; at most the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/members/{user_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a direct project member (Maintainer; never the last Owner)",
+        "x-forge-action": "MemberManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_members_user_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a direct project member's role (Maintainer; never above the caller's role)",
+        "x-forge-action": "MemberManage",
+        "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/protected-refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_protected_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefRules"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's protected ref rules (Reporter; internal: every signed-in user)",
+        "x-forge-action": "ProtectedRefList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_protected_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProtectedRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Add a protected ref rule (Maintainer; at most the caller's role)",
+        "x-forge-action": "ProtectedRefManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/protected-refs/{rule_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_protected_refs_rule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete a protected ref rule (Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_protected_refs_rule_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeProtectedRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a rule's minimum push role (Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/repository/blame": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_blame",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The file's path; / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlameBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Who last changed each line of a file (hunks; capped at 10 000 lines; binary files have none)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/blob": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_blob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The path in the tree (default: the root); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlobBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One file's head as text (at most 1 MiB), or binary without content",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/commits": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_commits",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only commits that changed this path (default: all); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Commits per page, 1..=100 (default 30)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_cursor (opaque; belongs to the same path; continues from the commit the first page was read at)",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A page of a revision's history, newest first (keyset cursor; optionally one path)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/commits/{oid}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_commits_oid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "oid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitDetailBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One commit: message and the diff against its first parent (capped; truncated past the caps)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/compare": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_compare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. The base: a full commit id, refs/heads/… or refs/tags/…, or a short name",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The head, named like from",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompareBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Compare two revisions: the commits to has and from does not, and the tree diff (capped)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/refs": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_refs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "branch | tag (default: both)",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a repository's branches and tags (Reporter; internal: every signed-in user)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/resolve": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. <ref>/<path> as in a page URL (e.g. feature/x/src/lib.rs): full commit id first, then the longest branch, then the longest tag",
+            "in": "query",
+            "name": "spec",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Split <ref>/<path> into a revision and a path (commit id, longest branch, longest tag)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/repository/tree": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_repository_tree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. A full commit id, refs/heads/… or refs/tags/…, or a short name (branch first, then tag)",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The path in the tree (default: the root); / separated, no empty, . or .. segment",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TreeBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One tree level of a revision (capped; truncated past the cap)",
+        "x-forge-action": "RepoBrowse"
+      }
+    },
+    "/api/v1/projects/{id}/restore": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_restore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Restore a project pending deletion (Owner)",
+        "x-forge-action": "ProjectRestore"
+      }
+    },
+    "/api/v1/projects/{id}/transfer": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_transfer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Move or rename a project (Owner; Maintainer on the target group, or the personal namespace's user)",
+        "x-forge-action": "ProjectTransfer",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/visibility": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_visibility",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVisibility"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a project's visibility (Owner)",
+        "x-forge-action": "ProjectVisibilityChange",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "get_api_v1_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own web session and its CSRF token (sessions only, ADR-0021)",
+        "x-forge-action": "SessionRead"
+      }
+    },
+    "/api/v1/user": {
+      "get": {
+        "operationId": "get_api_v1_user",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserSelf"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's own account (M1 phase 8b MR6)",
+        "x-forge-action": "UserSelfRead"
+      }
+    },
+    "/api/v1/user/sessions": {
+      "get": {
+        "operationId": "get_api_v1_user_sessions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionItems"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's active web sessions (sessions only)",
+        "x-forge-action": "SessionList"
+      }
+    },
+    "/api/v1/user/sessions/{public_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_user_sessions_public_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "public_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{16}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "End one of the caller's web sessions (sessions only)",
+        "x-forge-action": "SessionRevoke"
+      }
+    },
+    "/api/v1/user/tokens": {
+      "get": {
+        "operationId": "get_api_v1_user_tokens",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The caller's personal access tokens (never a secret)",
+        "x-forge-action": "TokenList"
+      },
+      "post": {
+        "operationId": "post_api_v1_user_tokens",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a personal access token for the caller (never with a token; the secret is shown once)",
+        "x-forge-action": "TokenCreate",
+        "x-forge-max-body-bytes": 2048
+      }
+    },
+    "/api/v1/user/tokens/{id}": {
+      "delete": {
+        "operationId": "delete_api_v1_user_tokens_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revoke one of the caller's tokens",
+        "x-forge-action": "TokenRevoke"
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "get_api_v1_users",
+        "parameters": [
+          {
+            "description": "2..=64 characters: a username prefix or part of a display name",
+            "in": "query",
+            "name": "search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserNames"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Find active users by username prefix or display name (names only, at most 20)",
+        "x-forge-action": "UserSearch"
+      }
+    },
+    "/api/v1/users/{id}/rename": {
+      "post": {
+        "operationId": "post_api_v1_users_id_rename",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoveBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Rename a user and their personal namespace (administrators)",
+        "x-forge-action": "UserRename",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "get_healthz",

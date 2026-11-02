@@ -1,94 +1,798 @@
 [
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/assets/{file}",
+    "public": true,
+    "scope": "instance",
+    "word": "assets"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/assets/{file}",
+    "public": true,
+    "scope": "instance",
+    "word": "assets"
+  },
+  {
+    "action": "OidcBackchannelLogout",
+    "method": "POST",
+    "path": "/-/auth/backchannel-logout",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebLogin",
+    "method": "GET",
+    "path": "/-/auth/callback",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebLogin",
+    "method": "GET",
+    "path": "/-/auth/login",
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionLogout",
+    "method": "POST",
+    "path": "/-/auth/logout",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/-/projects/{id}/{*rest}",
+    "public": true,
+    "scope": "instance",
+    "word": "project_permalink"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/-/projects/{id}/{*rest}",
+    "public": true,
+    "scope": "instance",
+    "word": "project_permalink"
+  },
+  {
+    "action": "UserAdminList",
+    "method": "GET",
+    "path": "/api/v1/admin/users",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserDisable",
+    "method": "POST",
+    "path": "/api/v1/admin/users/{id}/disable",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AdminSessionList",
+    "method": "GET",
+    "path": "/api/v1/admin/users/{id}/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "AdminSessionRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/admin/users/{id}/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupList",
+    "method": "GET",
+    "path": "/api/v1/groups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupCreateTopLevel",
+    "method": "POST",
+    "path": "/api/v1/groups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupRead",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/groups/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/groups/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "PATCH",
+    "path": "/api/v1/groups/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "DELETE",
+    "path": "/api/v1/groups/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SubgroupCreate",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/subgroups",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "GroupTransfer",
+    "method": "POST",
+    "path": "/api/v1/groups/{id}/transfer",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "PathResolve",
+    "method": "GET",
+    "path": "/api/v1/namespaces/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "NamespaceTombstoneRelease",
+    "method": "POST",
+    "path": "/api/v1/namespaces/tombstones/release",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectList",
+    "method": "GET",
+    "path": "/api/v1/projects",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectCreate",
+    "method": "POST",
+    "path": "/api/v1/projects",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectDelete",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/members",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MemberManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/members/{user_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/protected-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/protected-refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/blame",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/blob",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/commits",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/commits/{oid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/compare",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/refs",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "RepoBrowse",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/repository/tree",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRestore",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/restore",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectTransfer",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/transfer",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectVisibilityChange",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/visibility",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionRead",
+    "method": "GET",
+    "path": "/api/v1/session",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserSelfRead",
+    "method": "GET",
+    "path": "/api/v1/user",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionList",
+    "method": "GET",
+    "path": "/api/v1/user/sessions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "SessionRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/user/sessions/{public_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenList",
+    "method": "GET",
+    "path": "/api/v1/user/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenCreate",
+    "method": "POST",
+    "path": "/api/v1/user/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "TokenRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/user/tokens/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserSearch",
+    "method": "GET",
+    "path": "/api/v1/users",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "UserRename",
+    "method": "POST",
+    "path": "/api/v1/users/{id}/rename",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "Health",
     "method": "GET",
     "path": "/healthz",
-    "public": true
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
   },
   {
     "action": "Health",
     "method": "GET",
     "path": "/readyz",
-    "public": true
+    "public": true,
+    "scope": "fixed",
+    "word": "fixed"
   },
   {
-    "action": "RepoRead",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}",
+    "public": true,
+    "scope": "namespace",
+    "word": "home"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}",
+    "public": true,
+    "scope": "namespace",
+    "word": "home"
   },
   {
     "action": "RepoPush",
-    "planned": true
+    "method": "POST",
+    "path": "/{namespace}.git/git-receive-pack",
+    "public": false,
+    "scope": "project_git",
+    "word": "receive_pack"
   },
   {
-    "action": "ProjectRead",
-    "planned": true
+    "action": "RepoRead",
+    "method": "POST",
+    "path": "/{namespace}.git/git-upload-pack",
+    "public": false,
+    "scope": "project_git",
+    "word": "upload_pack"
   },
   {
-    "action": "ProjectCreate",
-    "planned": true
+    "action": "RepoPush",
+    "method": "GET",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-receive-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_receive_pack"
   },
   {
-    "action": "ProjectUpdate",
-    "planned": true
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-upload-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_upload_pack"
   },
   {
-    "action": "ProjectVisibilityChange",
-    "planned": true
+    "action": "RepoPush",
+    "method": "HEAD",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-receive-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_receive_pack"
   },
   {
-    "action": "ProjectTransfer",
-    "planned": true
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}.git/info/refs",
+    "public": false,
+    "query_key": [
+      "service",
+      "git-upload-pack"
+    ],
+    "scope": "project_git",
+    "word": "info_refs_upload_pack"
   },
   {
-    "action": "ProjectDelete",
-    "planned": true
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/{namespace}/-/archive/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "archive"
   },
   {
-    "action": "ProjectRestore",
-    "planned": true
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}/-/archive/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "archive"
   },
   {
-    "action": "ProtectedRefManage",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/blame/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blame"
   },
   {
-    "action": "MemberManage",
-    "planned": true
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/blame/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blame"
   },
   {
-    "action": "GroupRead",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/blob/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blob"
   },
   {
-    "action": "GroupCreateTopLevel",
-    "planned": true
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/blob/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "blob"
   },
   {
-    "action": "SubgroupCreate",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/branches/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "branches"
   },
   {
-    "action": "GroupUpdate",
-    "planned": true
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/branches/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "branches"
   },
   {
-    "action": "TokenCreate",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/commit/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commit"
   },
   {
-    "action": "TokenList",
-    "planned": true
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/commit/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commit"
   },
   {
-    "action": "TokenRevoke",
-    "planned": true
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/commits/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commits"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/commits/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "commits"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/compare/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "compare"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/compare/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "compare"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "members"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/members/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "members"
+  },
+  {
+    "action": "RepoRead",
+    "method": "GET",
+    "path": "/{namespace}/-/raw/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "raw"
+  },
+  {
+    "action": "RepoRead",
+    "method": "HEAD",
+    "path": "/{namespace}/-/raw/{*rest}",
+    "public": false,
+    "scope": "project",
+    "word": "raw"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "group",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/settings/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "settings"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/tags/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tags"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/tags/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tags"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/tree/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tree"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/tree/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "tree"
   },
   {
     "action": "UserCreate",
-    "planned": true
-  },
-  {
-    "action": "UserDisable",
     "planned": true
   },
   {
@@ -98,5 +802,13 @@
   {
     "action": "Metrics",
     "planned": true
+  },
+  {
+    "action": "SessionCreate",
+    "decided_in": "/-/auth/callback"
+  },
+  {
+    "action": "SessionContinue",
+    "decided_in": "/api/v1/session"
   }
 ]

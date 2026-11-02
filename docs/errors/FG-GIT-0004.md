@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-Every git subprocess slot was in use for longer than the acquire timeout.
+Every git subprocess slot was in use for longer than the acquire timeout, or a principal already holds its maximum number of streams.
 
 ## 調べ方 (diagnosis)
 
-Check the git concurrency limit (`GitConfig::max_concurrency`) against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots.
+Without `reason`: the captured pool (`GitConfig::max_concurrency`). `reason=streams`: the streaming pool for Smart HTTP (`max_streams`, default 16) — long clones hold slots. `reason=principal_streams`: one principal (user or client address) already has `max_per_principal` (default 4) streams open; refused at once. `reason=body_reads` / `principal_body_reads` (forge-web, M1 phase 9 MR3): every Smart HTTP request-body read slot is taken (sized like the stream pool: `git.http.max_streams` in total, waited for up to `acquire_timeout`, `wait_ms`) or this user already reads `git.http.max_streams_per_principal` bodies (`max`, refused at once) — many slow or stalled uploads at the same time. Compare with the number of concurrent clones/pushes in the access log.
 
 ## 対処 (fix)
 

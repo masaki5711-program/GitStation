@@ -21,13 +21,21 @@
 # Every other column is audited, columns added later included.
 #
 # guarded_functions: functions that are guarded although no guarded table
-# uses them (the audit trigger function of state tables, which forge_app
-# writes and are therefore not guarded tables).
+# uses them (the audit trigger function and the guards of state tables,
+# which forge_app writes and are therefore not guarded tables).
 #
 # Shape (validated by scripts/validate-migrations.js in the root repo):
 # [tables.<bare name>] with a boolean `guarded`.
 
-guarded_functions = ["audited_change_present"]
+guarded_functions = [
+    "audited_change_present", "repositories_state_guard",
+    # D5 MR2: deletes for the purge only.
+    "purge_delete_guard",
+    # M2 MR3: a web session's revocation is final.
+    "web_sessions_revocation_guard",
+    # M2 MR6: the purge deletes sessions only 30 days after they ended.
+    "web_sessions_purge_guard",
+]
 
 [tables.events]
 guarded = true
@@ -129,6 +137,99 @@ audit_id_column = "group_id"
 unaudited_columns = ["updated_at"]
 txn_audited_columns = []
 # ── end D2 ──
+
+# ── D3: personal access tokens (ADR-0019, ADR-0018) ──
+[tables.tokens]
+guarded = false
+kind = "audited"
+# Not secret_sha256 (ADR-0018: the read pool never sees token hashes).
+ro_columns = [
+    "id", "user_id", "public_id", "name", "scopes", "created_at", "expires_at", "revoked_at",
+    "revoked_reason", "last_used_at", "is_agent",
+]
+# token.created / token.revoked are audited on the owner (and publish events).
+audit_resource = "user"
+audit_id_column = "user_id"
+# last_used_at is written at most every 10 minutes by authentication.
+unaudited_columns = ["last_used_at"]
+txn_audited_columns = []
+# ── end D3 ──
+
+# ── D4: projects and what belongs to them (ADR-0004, ADR-0008, ADR-0016 §1).
+# Every change is audited on its project (resource 'project'). ──
+# D5 MR2: deleted_by (who deleted it) is audited like the other columns.
+[tables.projects]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.repositories]
+guarded = false
+kind = "audited"
+# Not provision_token (it lets a provisioning retry adopt a directory).
+ro_columns = ["id", "project_id", "kind", "state", "created_at", "ready_at"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.project_members]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+[tables.protected_refs]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+# ── end D4 ──
+
+# ── M2 MR3: web sessions and IdP identities (ADR-0021 §4–§5, ADR-0018) ──
+[tables.web_sessions]
+guarded = false
+kind = "audited"
+# Not secret_sha256, refresh_token_enc, id_token_enc or oidc_sub (ADR-0021 §5:
+# the read pool never sees session hashes, the IdP's tokens or its subject).
+ro_columns = [
+    "id", "public_id", "user_id", "created_at", "last_seen_at", "idle_expires_at",
+    "absolute_expires_at", "revoked_at", "revoked_reason", "oidc_issuer", "oidc_sid",
+    "refresh_checked_at", "access_role_seen_at", "refresh_without_id_token",
+]
+# session.created / session.revoked (and user.disabled) are audited on the user.
+audit_resource = "user"
+audit_id_column = "user_id"
+# Activity (at most once a minute) and the refresh check (ADR-0021 §7).
+unaudited_columns = [
+    "last_seen_at", "idle_expires_at", "refresh_token_enc", "id_token_enc",
+    "refresh_checked_at", "access_role_seen_at",
+    # M2 MR5: refreshes in a row without an ID token (ADR-0021 §7).
+    "refresh_without_id_token",
+]
+txn_audited_columns = []
+
+[tables.user_identities]
+guarded = false
+kind = "audited"
+# Not subject (the IdP's identifier of the person; no read path needs it).
+ro_columns = ["id", "user_id", "issuer", "linked_at", "last_login_at"]
+# user.identity_linked (MR4) is audited on the user.
+audit_resource = "user"
+audit_id_column = "user_id"
+unaudited_columns = ["last_login_at"]
+txn_audited_columns = []
+# ── end M2 MR3 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

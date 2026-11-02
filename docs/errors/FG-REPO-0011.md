@@ -16,11 +16,11 @@
 
 ## 原因 (cause)
 
-A request to create a group broke a rule before anything was written: the display name or description is empty, too long or holds a NUL character, the parent namespace is not a group (groups nest only under groups, ADR-0015 Amendment D2), or the first Owner is not an active user (a bot as first Owner is FG-REPO-0010 `bot_member`).
+A request to create or update a group (forge_db::groups::create / update_decided; `POST /api/v1/groups`, `POST /api/v1/groups/{id}/subgroups`, `PATCH /api/v1/groups/{id}`, M1 phase 8b MR7a) broke a rule before anything was written: the display name or description is empty, too long or holds a NUL character, an update names no field (`empty_update`), the parent namespace is not a group (groups nest only under groups, ADR-0015 Amendment D2), or the first Owner is not an active user (a bot as first Owner is FG-REPO-0010 `bot_member`).
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_group, owner_inactive) and `len` where it applies; values are not logged.
+The log event carries `reason` (display_name_length, description_length, nul_character, empty_update, parent_not_group, owner_inactive) and `len` where it applies; values are not logged.
 
 ## 対処 (fix)
 

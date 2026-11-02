@@ -197,6 +197,12 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
     let mut err = ForgeError::new(code)
         .with_context(field, name)
         .with_context("reason", reason);
+    // A deadlock or serialization failure (40P01 / 40001) rolled the whole
+    // transaction back: the request is safe to retry as a whole (D5 MR2 —
+    // two crossing moves may deadlock). Callers and clients key on this.
+    if code == ErrorCode::DbQueryFailed && matches!(reason, "deadlock" | "serialization") {
+        err = err.with_context("retryable", true);
+    }
     let Some(db) = e.as_database_error() else {
         if source_is_safe(&e) {
             return err.with_source(e);

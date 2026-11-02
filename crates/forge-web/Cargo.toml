@@ -15,20 +15,59 @@ path = "src/bin/gen-authz.rs"
 forge-auth.workspace = true
 forge-core.workspace = true
 forge-errors.workspace = true
+# M1 phase 9 MR3: Smart HTTP — git only through forge-git's smart_http /
+# upload_request / check_wants API (test forge_web_runs_git_only_through_smart_http_api).
+forge-git.workspace = true
+# M1 phase 8b MR7a: the group / project write commands (web → hosting →
+# auth / db, ADR-0001 amendment); forge-web names no forge-db item itself.
+forge-hosting.workspace = true
+# M2 MR4: the OIDC sign-in (web → oidc → auth / db, ADR-0021 §2).
+forge-oidc.workspace = true
+url.workspace = true
 axum.workspace = true
+# D3 MR3: decoding `Authorization: Basic` (the password is the token).
+base64.workspace = true
 futures-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 serde.workspace = true
+# M1 phase 8b MR6: request / response schemas in docs/api/openapi.json.
+utoipa.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
+# M2 MR2 (ADR-0022 §2): the built UI (web/dist) inside the binary, and the
+# SHA-256 of its index.html for `forge doctor`. Only with `embed-ui`.
+rust-embed = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+# `app::with_registry` for the integration tests' own guarded routes
+# (dev-dependency only; the product routes come from `app::registry()`).
+test-support = []
+# Embed web/dist (built by `npm run build` in web/, never by cargo). The
+# build fails when web/dist is missing or malformed (build.rs). Without it
+# the shell is the placeholder and `forge doctor` warns `web.ui=placeholder`.
+embed-ui = ["dep:rust-embed", "dep:sha2"]
 
 [dev-dependencies]
+forge-web = { workspace = true, features = ["test-support"] }
+# D3 MR3: captured JSON logs (tests/token_principal.rs).
+tracing-subscriber.workspace = true
 # D2: roles loaded from the database feed authorize() (tests/member_roles.rs).
 forge-db = { workspace = true, features = ["test-support"] }
+# M2 MR4: the mock identity provider (tests/oidc_login.rs).
+forge-oidc = { workspace = true, features = ["test-support"] }
 http-body-util.workspace = true
+# M1 phase 9 MR4: the push record retries (paused time) and a scratch git home.
+tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true
+# M2 MR2: the shell bytes compared by hash (src/web_ui_tests.rs).
+sha2.workspace = true
+uuid.workspace = true
+# M2 MR7: reading the tar.gz archive in routes/content_tests.rs.
+flate2.workspace = true
 
 [lints]
 workspace = true

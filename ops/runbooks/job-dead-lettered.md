@@ -40,7 +40,10 @@
 1. 原因（`last_error_code` の Runbook）を直す。直すまで同じ仕事を再投入しない。
 2. 仕事をやり直す: その種類を持つコマンドで同じ仕事を投入し直す。`dead` のジョブは `dedup_key` を持たないので（migration `20261027120000`）、
    同じキーで投入すれば**新しいジョブ**になる（同じキーの `queued` / `running` / `succeeded` のジョブがあれば二重にはならない）。
-   種類ごとのコマンドは、ハンドラーが追加されたときにここへ追記する。`[MUTATING — needs approval]`（ロールバック: なし。新しいジョブが `succeeded` になるまで見届ける）
+   種類ごとのコマンドは、ハンドラーが追加されたときにここへ追記する。
+   - `repository.provision`（D4 MR3b）: `forge admin repo reprovision <repo_id>`（`repo_id` は payload の `repo_id`）。
+     原因の調べ方と前提は Runbook `repository-provisioning.md`。
+   `[MUTATING — needs approval]`（ロールバック: なし。新しいジョブが `succeeded` になるまで見届ける）
 3. **してはいけないこと**: `forge.jobs` の `state` / `attempts` / `lease_until` を手で書き換えない。`dead` の行を `queued` に戻さない（手順 2 で新しいジョブを作る）。
    リースの切れていないジョブを `queued` に戻すと、二つの worker が同じジョブを同時に実行する。
 

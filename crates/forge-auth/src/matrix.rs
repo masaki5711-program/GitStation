@@ -8,11 +8,12 @@
 use forge_errors::ErrorCode;
 
 use crate::action::Action;
-use crate::model::{MembershipChange, RefKind, RefUpdate, Role};
+use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role};
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
-    Credential, MembershipScope, Principal, ProjectView, RefProtection, Resource, Scope, Visibility,
+    Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection, ResolvedVia,
+    Resource, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 #[cfg(test)]
 use forge_core::UserId;
@@ -34,10 +35,32 @@ pub(crate) enum Actor {
     DevTokenReadRepository,
     /// Developer with a `write_repository` token.
     DevTokenWriteRepository,
+    /// Developer with a `write_repository` token issued with `is_agent`
+    /// (ADR-0017 §4.0). A push is decided exactly like the human token's
+    /// (rows pin it); agents are denied only the actions kept for people.
+    AgentTokenWriteRepository,
+    /// Developer with a `read_api` token issued with `is_agent`.
+    AgentTokenReadApi,
+    /// Developer with an `api` token issued with `is_agent` (M1 phase 8b
+    /// MR7a).
+    AgentTokenApi,
+    /// Owner with an `api` token issued with `is_agent`.
+    AgentOwnerTokenApi,
+    /// Administrator with an `api` + `admin` token issued with `is_agent`.
+    AgentAdminTokenAdmin,
+    /// Maintainer with an `api` token issued with `is_agent` (M1 phase 8b
+    /// MR8: the role that would otherwise manage members and protections).
+    AgentMaintainerTokenApi,
+    /// Maintainer with an `api` token (M1 phase 8b MR8).
+    MaintainerTokenApi,
     /// Developer with an `api` token.
     DevTokenApi,
     /// Owner with a `read_api` token.
     OwnerTokenReadApi,
+    /// A user without a role, with a `read_api` token (M2 MR7).
+    NonMemberTokenReadApi,
+    /// Guest with a `read_api` token (M2 MR7).
+    GuestTokenReadApi,
     /// Administrator with an `api` token (no `admin` scope).
     AdminTokenApi,
     /// Administrator with an `api` + `admin` token.
@@ -50,6 +73,8 @@ pub(crate) enum Fixture {
     PrivateProject,
     InternalProject,
     DeletedProject,
+    /// An internal project pending deletion (every signed-in user sees it).
+    InternalDeletedProject,
     /// A ref update on a private project; `protected` = minimum push role.
     Ref {
         kind: RefKind,
@@ -63,10 +88,62 @@ pub(crate) enum Fixture {
     Group,
     OwnNamespace,
     ForeignNamespace,
-    /// Transfer to a group where the caller has `target`.
+    /// Moving a private project the caller has the actor's role on to a
+    /// visible group where the caller has `target`.
     Transfer {
         target: Option<Role>,
     },
+    /// Moving a private project to a group the caller cannot see (or that
+    /// does not exist) (D5).
+    TransferHiddenTarget,
+    /// Moving a private project into the caller's own personal namespace.
+    TransferToOwnNamespace,
+    /// Moving a private project into another user's personal namespace.
+    TransferToForeignNamespace,
+    /// Moving a private project to the top level (never allowed).
+    TransferToTopLevel,
+    /// Moving a private project pending deletion to a group the caller
+    /// owns.
+    TransferDeletedSource,
+    /// Moving a group the caller has the actor's role on to a visible group
+    /// where the caller has `target` (D5).
+    GroupTransfer {
+        target: Option<Role>,
+    },
+    /// Moving a group to a group the caller cannot see.
+    GroupTransferHiddenTarget,
+    /// Moving a group to the top level.
+    GroupTransferToTopLevel,
+    /// Moving a group into the caller's own personal namespace (never).
+    GroupTransferToNamespace,
+    /// Renaming a private project the caller has the actor's role on: the
+    /// target is its current parent group (D5 MR5).
+    TransferRename,
+    /// Renaming a group (below its current parent group).
+    GroupTransferRename,
+    /// Renaming a top-level group (it stays at the top level).
+    GroupTransferRenameTopLevel,
+    /// Renaming another user (D5).
+    UserRenameOther,
+    /// Renaming oneself.
+    UserRenameSelf,
+    /// Releasing a `moved` tombstone; the caller's role on its target is
+    /// the actor's; `visible` = the caller can see the target (D5).
+    ReleaseMoved {
+        visible: bool,
+    },
+    /// Releasing a `deleted` tombstone with a parent; the caller's role on
+    /// the parent is the actor's; `recorded` = the caller is the recorded
+    /// owner (`owner_at_write`).
+    ReleaseDeleted {
+        recorded: bool,
+    },
+    /// Releasing a `deleted` tombstone whose recorded owner is the caller,
+    /// while the caller has no role in its parent (whatever the actor).
+    ReleaseDeletedNoRole,
+    /// Releasing a `deleted` tombstone without a parent (a top-level group
+    /// or a user) whose recorded owner is the caller.
+    ReleaseTopLevel,
     ProjectMember(MembershipChange),
     InternalProjectMember(MembershipChange),
     DeletedProjectMember(MembershipChange),
@@ -75,13 +152,35 @@ pub(crate) enum Fixture {
     LastOwnerRemoval,
     /// Removing the last Owner of a group.
     GroupLastOwnerRemoval,
+    /// Demoting the last Owner of a private project to Maintainer (MR8).
+    LastOwnerDemotion,
+    /// Demoting the last Owner of a group to Maintainer (MR8).
+    GroupLastOwnerDemotion,
+    /// Changing (`Some`) or removing (`None`) a user who is no direct
+    /// member of a private project (MR8).
+    MissingMember(Option<Role>),
+    /// The same on a group (MR8 review).
+    GroupMissingMember(Option<Role>),
+    /// Removing (`None`) or demoting (`Some(to)`) the last **direct**
+    /// Owner of a subgroup: not the last Owner — every subgroup inherits
+    /// the top-level group's Owner, which always keeps one (D2 / D4 MR4
+    /// rule), so `removes_last_owner` is `false` (MR8 review).
+    SubgroupLastDirectOwner(Option<Role>),
     /// Changing a protection's minimum push role (None = unprotected).
     ProtectionChange {
         from: Option<Role>,
         to: Option<Role>,
     },
+    /// Adding a Maintainer protection on an internal project (MR8).
+    InternalProtectionChange,
+    /// Adding a Maintainer protection on a project pending deletion (MR8).
+    DeletedProtectionChange,
     /// Making a private project internal.
     MakeInternal,
+    /// Making an internal project private (M1 phase 8b MR7a).
+    MakePrivate,
+    /// Making a private project pending deletion internal.
+    MakeInternalDeleted,
     OwnToken,
     ForeignToken,
     /// Creating an own token with plain scopes.
@@ -90,7 +189,36 @@ pub(crate) enum Fixture {
     OwnAdminTokenRequest,
     /// Creating a token for another user.
     ForeignTokenRequest,
+    /// The caller's own sessions (`own`) or another user's (M2 MR6,
+    /// ADR-0021 §17).
+    Session {
+        own: bool,
+    },
     Instance,
+    /// A path resolved (live) to a private project.
+    ResolvedPrivate,
+    /// A path resolved (live) to an internal project.
+    ResolvedInternal,
+    /// A path resolved (live) to a private project pending deletion.
+    ResolvedDeleted,
+    /// A `moved` tombstone pointing at a private project.
+    MovedPrivate,
+    /// A path resolved (live) to a group.
+    ResolvedGroup,
+    /// A path resolved (live) to a personal namespace.
+    ResolvedUser,
+    /// Nothing at the path.
+    Absent,
+    /// A `deleted` tombstone at the path.
+    DeletedTombstone,
+    /// A namespace of another kind than the route's scope (MR4).
+    KindMismatch,
+    /// The sign-in's admission (M2 MR4, ADR-0021 §3): the ID token's access
+    /// role and the account the identity belongs to.
+    Admission {
+        access_role: bool,
+        account: AdmissionAccount,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,10 +257,22 @@ impl Actor {
             Actor::Admin => session(true, true),
             Actor::DevTokenReadRepository => token(false, &[Scope::ReadRepository]),
             Actor::DevTokenWriteRepository => token(false, &[Scope::WriteRepository]),
+            Actor::AgentTokenWriteRepository => {
+                token(false, &[Scope::WriteRepository]).as_agent(true)
+            }
             Actor::DevTokenApi => token(false, &[Scope::Api]),
-            Actor::OwnerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::AgentTokenApi | Actor::AgentOwnerTokenApi => {
+                token(false, &[Scope::Api]).as_agent(true)
+            }
+            Actor::OwnerTokenReadApi | Actor::NonMemberTokenReadApi | Actor::GuestTokenReadApi => {
+                token(false, &[Scope::ReadApi])
+            }
+            Actor::AgentTokenReadApi => token(false, &[Scope::ReadApi]).as_agent(true),
             Actor::AdminTokenApi => token(true, &[Scope::Api]),
             Actor::AdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]),
+            Actor::AgentAdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]).as_agent(true),
+            Actor::AgentMaintainerTokenApi => token(false, &[Scope::Api]).as_agent(true),
+            Actor::MaintainerTokenApi => token(false, &[Scope::Api]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -145,21 +285,30 @@ impl Actor {
     /// The actor's effective role on the row's project or group.
     pub(crate) fn role(self) -> Option<Role> {
         match self {
-            Actor::Guest => Some(Role::Guest),
+            Actor::Guest | Actor::GuestTokenReadApi => Some(Role::Guest),
             Actor::Reporter => Some(Role::Reporter),
             Actor::Developer
             | Actor::DevTokenReadRepository
             | Actor::DevTokenWriteRepository
+            | Actor::AgentTokenWriteRepository
+            | Actor::AgentTokenReadApi
+            | Actor::AgentTokenApi
             | Actor::DevTokenApi => Some(Role::Developer),
-            Actor::Maintainer => Some(Role::Maintainer),
-            Actor::Owner | Actor::OwnerTokenReadApi => Some(Role::Owner),
+            Actor::Maintainer | Actor::AgentMaintainerTokenApi | Actor::MaintainerTokenApi => {
+                Some(Role::Maintainer)
+            }
+            Actor::Owner | Actor::OwnerTokenReadApi | Actor::AgentOwnerTokenApi => {
+                Some(Role::Owner)
+            }
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
             | Actor::NonMember
+            | Actor::NonMemberTokenReadApi
             | Actor::Admin
             | Actor::AdminTokenApi
-            | Actor::AdminTokenAdmin => None,
+            | Actor::AdminTokenAdmin
+            | Actor::AgentAdminTokenAdmin => None,
         }
     }
 }
@@ -186,6 +335,16 @@ impl Fixture {
             change,
             removes_last_owner: false,
         };
+        let resolved = |via, view| Resource::Resolved { via, view };
+        let transfer = |source, target| Resource::Transfer { source, target };
+        let group_transfer = |target| Resource::GroupTransfer {
+            source_role: role,
+            target,
+        };
+        let hidden = TransferTarget::Group {
+            role: None,
+            visible: false,
+        };
         let branch_ff = |project| Resource::Ref {
             project,
             name: ref_name(RefKind::Branch),
@@ -196,6 +355,10 @@ impl Fixture {
             Fixture::PrivateProject => Resource::Project(private),
             Fixture::InternalProject => Resource::Project(internal),
             Fixture::DeletedProject => Resource::Project(deleted),
+            Fixture::InternalDeletedProject => Resource::Project(ProjectView {
+                visibility: Visibility::Internal,
+                ..deleted
+            }),
             Fixture::Ref {
                 kind,
                 update,
@@ -211,10 +374,69 @@ impl Fixture {
             Fixture::Group => Resource::Group { role },
             Fixture::OwnNamespace => Resource::Namespace { owner: ME },
             Fixture::ForeignNamespace => Resource::Namespace { owner: OTHER },
-            Fixture::Transfer { target } => Resource::Transfer {
-                source: private,
-                target_role: target,
-            },
+            Fixture::Transfer { target } => transfer(
+                private,
+                TransferTarget::Group {
+                    role: target,
+                    visible: true,
+                },
+            ),
+            Fixture::TransferHiddenTarget => transfer(private, hidden),
+            Fixture::TransferToOwnNamespace => {
+                transfer(private, TransferTarget::PersonalNamespace { owner: ME })
+            }
+            Fixture::TransferToForeignNamespace => {
+                transfer(private, TransferTarget::PersonalNamespace { owner: OTHER })
+            }
+            Fixture::TransferToTopLevel => transfer(private, TransferTarget::TopLevel),
+            Fixture::TransferDeletedSource => transfer(
+                deleted,
+                TransferTarget::Group {
+                    role: Some(Role::Owner),
+                    visible: true,
+                },
+            ),
+            Fixture::GroupTransfer { target } => group_transfer(TransferTarget::Group {
+                role: target,
+                visible: true,
+            }),
+            Fixture::GroupTransferHiddenTarget => group_transfer(hidden),
+            Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
+            Fixture::GroupTransferToNamespace => {
+                group_transfer(TransferTarget::PersonalNamespace { owner: ME })
+            }
+            Fixture::TransferRename => {
+                transfer(private, TransferTarget::CurrentParent { top_level: false })
+            }
+            Fixture::GroupTransferRename => {
+                group_transfer(TransferTarget::CurrentParent { top_level: false })
+            }
+            Fixture::GroupTransferRenameTopLevel => {
+                group_transfer(TransferTarget::CurrentParent { top_level: true })
+            }
+            Fixture::UserRenameOther => Resource::UserRename { target_user: OTHER },
+            Fixture::UserRenameSelf => Resource::UserRename { target_user: ME },
+            Fixture::ReleaseMoved { visible } => Resource::Tombstone(TombstoneRelease::Moved {
+                target_owner_role: role,
+                target_visible: visible,
+            }),
+            Fixture::ReleaseDeleted { recorded } => {
+                Resource::Tombstone(TombstoneRelease::Deleted {
+                    recorded_owner: Some(if recorded { ME } else { OTHER }),
+                    caller_parent_role: role,
+                    has_parent: true,
+                })
+            }
+            Fixture::ReleaseDeletedNoRole => Resource::Tombstone(TombstoneRelease::Deleted {
+                recorded_owner: Some(ME),
+                caller_parent_role: None,
+                has_parent: true,
+            }),
+            Fixture::ReleaseTopLevel => Resource::Tombstone(TombstoneRelease::Deleted {
+                recorded_owner: Some(ME),
+                caller_parent_role: None,
+                has_parent: false,
+            }),
             Fixture::ProjectMember(change) => member(MembershipScope::Project(private), change),
             Fixture::InternalProjectMember(change) => {
                 member(MembershipScope::Project(internal), change)
@@ -233,13 +455,65 @@ impl Fixture {
                 change: MembershipChange::Remove { from: Role::Owner },
                 removes_last_owner: true,
             },
+            Fixture::LastOwnerDemotion => Resource::Membership {
+                scope: MembershipScope::Project(private),
+                change: MembershipChange::Change {
+                    from: Role::Owner,
+                    to: Role::Maintainer,
+                },
+                removes_last_owner: true,
+            },
+            Fixture::GroupLastOwnerDemotion => Resource::Membership {
+                scope: MembershipScope::Group { role },
+                change: MembershipChange::Change {
+                    from: Role::Owner,
+                    to: Role::Maintainer,
+                },
+                removes_last_owner: true,
+            },
+            Fixture::MissingMember(to) => member(
+                MembershipScope::Project(private),
+                MembershipChange::Missing { to },
+            ),
+            Fixture::GroupMissingMember(to) => member(
+                MembershipScope::Group { role },
+                MembershipChange::Missing { to },
+            ),
+            Fixture::SubgroupLastDirectOwner(to) => member(
+                MembershipScope::Group { role },
+                match to {
+                    None => MembershipChange::Remove { from: Role::Owner },
+                    Some(to) => MembershipChange::Change {
+                        from: Role::Owner,
+                        to,
+                    },
+                },
+            ),
             Fixture::ProtectionChange { from, to } => Resource::RefProtectionChange {
                 project: private,
                 from,
                 to,
             },
+            Fixture::InternalProtectionChange => Resource::RefProtectionChange {
+                project: internal,
+                from: None,
+                to: Some(Role::Maintainer),
+            },
+            Fixture::DeletedProtectionChange => Resource::RefProtectionChange {
+                project: deleted,
+                from: None,
+                to: Some(Role::Maintainer),
+            },
             Fixture::MakeInternal => Resource::VisibilityChange {
                 project: private,
+                to: Visibility::Internal,
+            },
+            Fixture::MakePrivate => Resource::VisibilityChange {
+                project: internal,
+                to: Visibility::Private,
+            },
+            Fixture::MakeInternalDeleted => Resource::VisibilityChange {
+                project: deleted,
                 to: Visibility::Internal,
             },
             Fixture::OwnToken => Resource::Token { owner: ME },
@@ -256,7 +530,32 @@ impl Fixture {
                 owner: OTHER,
                 scopes: vec![Scope::ReadRepository],
             },
+            Fixture::Session { own } => Resource::Session {
+                owner: if own { ME } else { OTHER },
+            },
             Fixture::Instance => Resource::Instance,
+            Fixture::ResolvedPrivate => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(private))
+            }
+            Fixture::ResolvedInternal => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(internal))
+            }
+            Fixture::ResolvedDeleted => {
+                resolved(ResolvedVia::Live, NamespaceView::Project(deleted))
+            }
+            Fixture::MovedPrivate => resolved(ResolvedVia::Moved, NamespaceView::Project(private)),
+            Fixture::ResolvedGroup => resolved(ResolvedVia::Live, NamespaceView::Group { role }),
+            Fixture::ResolvedUser => resolved(ResolvedVia::Live, NamespaceView::User),
+            Fixture::Absent => Resource::Unresolved(UnresolvedReason::Absent),
+            Fixture::DeletedTombstone => Resource::Unresolved(UnresolvedReason::TombstoneDeleted),
+            Fixture::KindMismatch => Resource::Unresolved(UnresolvedReason::KindMismatch),
+            Fixture::Admission {
+                access_role,
+                account,
+            } => Resource::Admission {
+                access_role,
+                account,
+            },
         }
     }
 }

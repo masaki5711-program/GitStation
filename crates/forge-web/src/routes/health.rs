@@ -14,8 +14,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
 use axum::Json;
+use forge_auth::InstanceCtx;
 use forge_errors::{ErrorCode, ForgeError};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -23,6 +23,7 @@ use tokio::sync::Mutex;
 use crate::app::AppState;
 use crate::context::Ctx;
 use crate::error::ApiError;
+use crate::registry::Dispatched;
 
 /// How long a readiness outcome is reused.
 pub const CACHE_FOR: Duration = Duration::from_secs(1);
@@ -59,17 +60,21 @@ impl ReadinessCache {
 
 /// No version in the public answer (it would help pick known-vulnerable
 /// releases); the version is in `forge --version` and the admin diagnostics.
-pub async fn healthz() -> Json<Value> {
+pub async fn healthz(_state: AppState, _request: Dispatched<InstanceCtx>) -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-pub async fn readyz(State(state): State<AppState>, ctx: Ctx) -> Result<Json<Value>, ApiError> {
+pub async fn readyz(
+    state: AppState,
+    request: Dispatched<InstanceCtx>,
+) -> Result<Json<Value>, ApiError> {
+    let ctx = request.ctx();
     // Holding the lock while probing makes concurrent requests share one
     // check; the request-timeout middleware bounds the wait.
     let mut last = state.readiness.last.lock().await;
     if let (Some(outcome), Some(at)) = (last.outcome, last.at) {
         if at.elapsed() < CACHE_FOR {
-            return answer_cached(outcome, &ctx);
+            return answer_cached(outcome, ctx);
         }
     }
     let fresh = run_probes(&state).await;
@@ -98,7 +103,7 @@ pub async fn readyz(State(state): State<AppState>, ctx: Ctx) -> Result<Json<Valu
         Err((e, _)) if log_now => Err(ctx.fail(e)),
         // The same failure, logged within the last RELOG_EVERY.
         Err((e, _)) => {
-            breadcrumb(&ctx, e.code());
+            breadcrumb(ctx, e.code());
             Err(ctx.fail(e).already_logged())
         }
     }

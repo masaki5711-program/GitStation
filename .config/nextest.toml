@@ -1,0 +1,21 @@
+# cargo-nextest configuration. The `ci` profile is used by .github/workflows/ci.yml:
+#   cargo nextest run --workspace --profile ci -j 4 --no-fail-fast --retries 1
+# Local runs keep the default profile.
+
+[profile.ci]
+fail-fast = false
+retries = 1
+# Print a failing test's output when it fails and again in the final summary.
+failure-output = "immediate-final"
+success-output = "never"
+# A test still running after 2 min is reported as slow; after 10 min it is
+# killed so a hang fails the job instead of eating the whole job timeout.
+slow-timeout = { period = "120s", terminate-after = 5 }
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml. A test that failed and then passed
+# on retry appears as a passed <testcase> with <flakyFailure> children; the
+# CI job lists those in the job summary.
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

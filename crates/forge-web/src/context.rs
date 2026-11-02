@@ -23,6 +23,22 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    /// The context of a request (its id from the request-id middleware).
+    pub(crate) fn of(parts: &Parts) -> Ctx {
+        Ctx {
+            request_id: request_id_of(&parts.extensions),
+            lang: language(parts.headers.get(ACCEPT_LANGUAGE)),
+        }
+    }
+
+    /// [`Ctx::of`] for a whole request.
+    pub(crate) fn of_request(req: &Request) -> Ctx {
+        Ctx {
+            request_id: request_id_of(req.extensions()),
+            lang: language(req.headers().get(ACCEPT_LANGUAGE)),
+        }
+    }
+
     /// Turn a failure into the response error (logged once when rendered).
     pub fn fail(&self, err: ForgeError) -> ApiError {
         ApiError::new(err, self.request_id.clone(), self.lang) // clone: the error owns its id
@@ -41,20 +57,19 @@ pub fn language(header: Option<&HeaderValue>) -> Lang {
         .unwrap_or(Lang::Ja)
 }
 
+fn request_id_of(extensions: &axum::http::Extensions) -> RequestId {
+    extensions
+        .get::<RequestId>()
+        .cloned()
+        // Only reachable if the middleware is missing; still traceable.
+        .unwrap_or_else(RequestId::generate)
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Ctx {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let request_id = parts
-            .extensions
-            .get::<RequestId>()
-            .cloned()
-            // Only reachable if the middleware is missing; still traceable.
-            .unwrap_or_else(RequestId::generate);
-        Ok(Ctx {
-            request_id,
-            lang: language(parts.headers.get(ACCEPT_LANGUAGE)),
-        })
+        Ok(Ctx::of(parts))
     }
 }
 
@@ -67,7 +82,8 @@ pub async fn request_id(mut req: Request, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .and_then(RequestId::parse);
     let method = req.method().clone(); // clone: logged after the request is consumed
-    let path = req.uri().path().to_string();
+                                       // Never the raw path in a log field (ADR-0015 MR1 amendment).
+    let path = forge_core::log_safe_path(req.uri().path());
     req.extensions_mut().insert(id.clone()); // clone: also echoed in the response
     let started = std::time::Instant::now();
     let mut res = next.run(req).await;

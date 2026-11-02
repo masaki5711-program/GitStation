@@ -1,6 +1,7 @@
 //! The SQL of a subscriber step ([`super::run`]): lock the subscriber's
 //! row, read the source event, and move or mark the cursor. Each helper is
-//! one statement on the step's transaction.
+//! one statement on the step's transaction (a waiting claim also sets its
+//! `lock_timeout`).
 
 use forge_core::ids::ProjectId;
 use forge_errors::{ErrorCode, ForgeError};
@@ -16,20 +17,48 @@ pub(super) struct Cursor {
     pub(super) failures: i32,
 }
 
-/// Lock the subscriber's row without waiting. `None`: another worker holds
-/// it (55P03, a normal path); `Some(None)`: disabled.
+/// How [`claim`] meets a row lock held by another transaction.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Wait {
+    /// Not at all (a step: another worker has it).
+    No,
+    /// Up to [`RECOUNT_LOCK_WAIT`] (the recount after a refused COMMIT:
+    /// the server may still be releasing the refused transaction's lock
+    /// after the client has read the error).
+    Bounded,
+}
+
+/// How long the recount waits for the subscriber's row.
+pub(super) const RECOUNT_LOCK_WAIT: &str = "5s";
+
+/// Lock the subscriber's row. `None`: another transaction holds it (55P03,
+/// a normal path; with [`Wait::Bounded`] also after the wait); `Some(None)`:
+/// disabled.
 pub(super) async fn claim(
     conn: &mut PgConnection,
     subscriber: &dyn Subscriber,
+    wait: Wait,
 ) -> Result<Option<Option<Cursor>>, ForgeError> {
     let name = subscriber.name();
-    let row: Option<(i64, String, bool, i32)> = match sqlx::query_as(
-        "SELECT last_seq, ordering, enabled, failures FROM forge.event_subscribers \
-         WHERE name = $1 FOR UPDATE NOWAIT",
-    )
-    .bind(name)
-    .fetch_optional(&mut *conn)
-    .await
+    let sql = match wait {
+        Wait::No => {
+            "SELECT last_seq, ordering, enabled, failures FROM forge.event_subscribers \
+             WHERE name = $1 FOR UPDATE NOWAIT"
+        }
+        Wait::Bounded => {
+            sqlx::query("SELECT pg_catalog.set_config('lock_timeout', $1, true)")
+                .bind(RECOUNT_LOCK_WAIT)
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| query_error("subscribers.lock_timeout", e))?;
+            "SELECT last_seq, ordering, enabled, failures FROM forge.event_subscribers \
+             WHERE name = $1 FOR UPDATE"
+        }
+    };
+    let row: Option<(i64, String, bool, i32)> = match sqlx::query_as(sql)
+        .bind(name)
+        .fetch_optional(&mut *conn)
+        .await
     {
         Ok(row) => row,
         Err(e) if is_lock_not_available(&e) => {

@@ -488,3 +488,691 @@ impl<S> Registry<S> {
 - グループの作成は、ユーザーの作成と同じく、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。親の名前空間は `FOR SHARE` で読み、作成の確定まで動かないようにする。
 - 入れ子の上限（深さ 20、全体の長さ 255）を超える作成は、FG-REPO-0007 の `reason=too_deep` / `path_too_long` にする。
 - グループの名前空間の `owner_id` は `groups.id` で、`group` の監査の行 1 つが、グループ、名前空間、最初の Owner をまとめて覆う。
+
+## Amendment（2026-10-31、手順 D4 MR1: `projects` の表）
+
+- **`projects` に `namespace_id` の列を置かない**。D4 の計画は `projects.namespace_id UNIQUE` を挙げていたが、ユーザー・グループと同じく、
+  プロジェクトのパスは `namespaces` の行（`kind = 'project'`、`owner_id = projects.id`）が持つ。理由:
+  - 1 対 1 は、すでに一意の索引 `namespaces_owner (kind, owner_id)` が守る（D1 の Amendment）。
+  - `namespace_id NOT NULL` の外部キーを足すと、プロジェクトと名前空間がお互いの ID を先に必要とする。1 つのトランザクションで作るには、
+    ID の順序（sequence）を `forge_app` に直接使わせる権限が要り、その権限は doctor の ACL の比較の外にある。
+  - 1 つの `project` の監査の行が、プロジェクトと名前空間をまとめて覆う（グループと同じ形）。
+- `projects.deleted_at` と `purge_after` は、両方あるか両方ないか（CHECK `projects_deletion_pair`。`purge_after >= deleted_at`）。書き手は D5。
+  プロジェクトの DELETE の権限も D5 まで与えない。
+- `project_members` には、`group_members` と同じく、bot を入れないトリガー（`project_members_no_bot`）を DB の裏付けとして付ける。
+- **プロジェクト・名前空間・リポジトリの 1 対 1 対 1 は、DB だけでは守られない**（`namespaces.owner_id` は多態で外部キーがなく、
+  プロジェクトがリポジトリや名前空間を持つことを強制する制約もない）。このため:
+  - D4 MR2 の作成（`projects::create`）は、プロジェクト、名前空間（`kind = 'project'`）、リポジトリ（`provisioning`）を **1 つのトランザクション** で書く。
+  - MR2 は、作成の後に 3 つがそろっていること（どれかが欠けた作成は確定しないこと）を確かめるテストを持つ。
+  - 欠けた組（名前空間のないプロジェクト、プロジェクトのない `kind = 'project'` の名前空間、リポジトリのないプロジェクト）を doctor で検査するかは、
+    削除とパージを入れる D5 で決める。
+
+## Amendment（2026-10-31、手順 D4 MR2: プロジェクトの置き場所と作成）
+
+- **プロジェクトは、個人の名前空間（`kind = 'user'`）かグループ（`kind = 'group'`）の下にだけ置ける**（計画 D4 の回答 1）。
+  プロジェクトの下にプロジェクトは作れない（FG-REPO-0014 `ProjectRequestInvalid`、`reason=parent_not_owner_namespace`）。
+  トップレベルのプロジェクトはない（`NewProject.parent` は必須）ので、予約語の検査は親の下のセグメントとして `PathSegment::parse` だけを使う。
+  グループの下ではサブグループとプロジェクトが同じ兄弟の空間を使う（`namespaces_sibling_key`、FG-REPO-0009 `sibling`）。
+- `projects::create` は、グループと同じく、親の名前空間を `FOR SHARE` で読み、パスのロック（`namespaces::lock_path`）を取り、墓標を INSERT の前と後に確かめる。
+  深さと長さの上限（20、255）を超える作成は FG-REPO-0007 `too_deep` / `path_too_long`。
+- **1 対 1 対 1 は 1 つのトランザクションで書く**（MR1 の Amendment の約束）: プロジェクト、名前空間（`kind = 'project'`、`owner_id = projects.id`）、
+  リポジトリ（`provisioning`、種類は既定 `system`）、作成者の直接の Owner、`repository.provision` のジョブ、`project.created` の監査の行とイベントを、
+  1 つの `ChangeTx` で書く。テスト `project_create_writes_namespace_project_repository_owner_job_and_one_audit_row` が、3 つがそろって存在すること
+  （1 つの結合の問い合わせ）と、全体が 1 つのトランザクション（同じ `txid`）であることを確かめる。拒否された作成は何も残さない（各テストが件数を比べる）。
+- 作成者（`NewProject.creator`）は呼び出し側が渡すプリンシパルで、有効な人間かサービスアカウントに限る。bot はグループの最初の Owner と同じく
+  FG-REPO-0010 `bot_member`、無効なユーザーは FG-REPO-0014 `creator_inactive`。誰がその名前空間に作ってよいかは `authorize()` が決め、このコマンドは決めない
+  （D4 には経路がなく、権限のマトリクスは変わらない）。
+- 可視性の既定は `private`、リポジトリの種類の既定は `system`（回答 5）。
+- **レビュー（security / database）後の追加**:
+  - 親が個人の名前空間のとき、その持ち主はプロジェクトの Owner を継承するので、持ち主のユーザーの行も `FOR SHARE` で読み、bot なら
+    FG-REPO-0010 `bot_member`、有効でなければ FG-REPO-0014 `parent_owner_inactive` で拒否する（すべての種類のユーザーが個人の名前空間を持つため、
+    これがないと管理者が `ci-bot/foo` を作ると bot が Owner になる）。
+  - 作成者は変更の行為者でなければならない（`Actor::User` / `ServiceAccount` はその本人、`UserViaServiceAccount` はその人）。違えば FG-REPO-0014
+    `creator_not_actor`。`Actor::System`（操作者の CLI とワーカー、ADR-0019 §8 と同じ信頼の起点）だけが他のユーザーを作成者に指定できる。
+    経路は認証済みのプリンシパルを渡し、その前に `authorize()` で作成の可否を決める。
+  - **既知の TOCTOU**: `authorize()` の判定（呼び出し側）と、このコマンドが親の名前空間を `FOR SHARE` で読むまでの間に、たとえばグループの Owner が
+    外されても、その作成は通る（判定に使った役割は読み直さない）。影響は「外される直前に始めた 1 回の作成」に限られ、作成者は監査の行に残る。
+    経路を入れる手順で、役割の読み込みと作成を同じトランザクションにするかを決める。
+  - 2 接続の競合のテスト（`projects/tests/race.rs`）: 作成と作成者の無効化（両方の順序を固定）、作成と同じパスの墓標の書き込み。
+    作成者の `FOR SHARE` やパスのロックを外すと赤くなることを、一度ずつ変異で確かめた。
+  - **無効化とプロジェクトの Owner**: `users::disable` は、直接の Owner を失うプロジェクトを数えない（この MR では変えない）。プロジェクトの
+    最後の Owner の方針（回答 2: 継承された Owner がいる間は拒まない）と、それが無効化のガードと doctor（ADR-0019 §10〜12）に与える影響は、
+    D4 MR4（プロジェクトのメンバー）で決めて実装する。
+
+## Amendment（2026-10-31、手順 D4 MR4: プロジェクトのメンバー）
+
+- プロジェクトの直接のメンバーは `projects::{add_member, change_member, remove_member}` で変える。監査の行はプロジェクト（`project` / id、
+  `project_id` あり）に付け、`member.*` のイベント（分類 `maintainer`、ADR-0016 §5）を同じ変更で出す。グループのメンバーの変更は監査だけのまま。
+- 最後の Owner の方針（継承された有効な Owner がいる間は最後の直接の Owner を外せる）と、それが無効化のガードと doctor に与える影響は
+  ADR-0019 の Amendment（D4 MR4）に書く。
+
+## Amendment（2026-10-30、M1 phase 8 MR1: forge-core のパスの解析）
+
+上の決定が開けたままにしていた点を、次のとおり決めた（`forge_core::web_path`、`namespace_path`、`namespace_resolver`）。
+
+- **`.git` の規則は名前空間のセグメントだけに掛かる。** `/-/` の後ろ（と `/-/projects/{id}/…` の後ろ）は ref やファイルの名前なので、
+  `lib.git` のような `.git` で終わるセグメントを受け付ける。形を決めるのは `/-/` より前だけで、後ろの名前が形を変えることはないからである。
+  `.git` の検出は ASCII の大文字小文字を区別しない（`X.GIT` は `x`。名前空間の小文字化と合わせる）。
+- **拒否の `reason`**: FG-WEB-0001 の `reason` は `path_rejected`（文字列の規則）、`unknown_route`（未知の語、トップレベルの予約語、
+  `/-/` の未知の語、`/-` だけ、`-` の後ろに語がない）、`service_unsupported`（`info/refs` の `service` がない、重複、未知）の 3 つ。
+  どれにも `part`（`path` / `namespace` / `tail` / `git` / `query` / `instance` / `word` / `reserved_top_level`）と、`path_rejected` では
+  `rule`（破った最初の規則）を付ける。入力そのものは入れない（ログには `log_safe_path` で出す）。
+  - `service_unsupported` は、phase 9 が `SmartHttpServiceUnsupported`（400）を登録するまでの仮の扱いで、それまでは 404 になる。
+    `service` は、キーも値もデコードせず完全一致で比べる（`git%2Dupload-pack` は未知）。ほかのキーは無視する。POST と他の形はクエリを見ない。
+- **生のパスの上限は 8192 バイト**（`MAX_RAW_PATH_LEN`）。超えたものは区切る前に `path_rejected`（`rule=too_long`）にする。`/` で始まらないもの、
+  `/` だけのものも `path_rejected`。クエリは、どの形でも 2048 バイト（`MAX_QUERY_LEN`）までにし、超えたものは区切る前に
+  `path_rejected`（`part=query`、`rule=too_long`）にする。
+- **HTTP のメソッドは解析では見ない。** 形とメソッドの組（`info/refs` は GET / HEAD、`git-upload-pack` は POST など）は、MR4 のルートの表が決める。
+- **デコードは厳密にする。** `%` の後に 16 進数 2 桁がなければ拒否する（文字として通さない）。制御文字は C0、DEL に加えて C1（U+0080〜U+009F）も拒否する。
+  `/-/` の後ろの `-` だけのセグメントは名前として受け付ける。`%252F` は 1 回だけデコードして `%2F` という名前になる。
+- **見えない書式文字**: `/-/` の後ろのセグメントは、ゼロ幅・bidi の制御・行と段落の区切り・語の結合子・BOM・タグ文字
+  （U+200B〜U+200F、U+2028〜U+202E、U+2060〜U+2064、U+2066〜U+2069、U+FEFF、U+E0000〜U+E007F）を含めば
+  `path_rejected`（`part=tail`、`rule=invisible`）にする。ファイル名や ref の見た目を偽装できないようにするためである。
+- **`-` で始まるセグメント**: `/-/` の後ろのセグメントは `-` で始まってもよい（`--output=x` は正しいファイル名・ref 名である）。このため、
+  **MR4 と phase 9 の要件として**、`TailSegments` から git の引数に届く値は、必ず `--` / `--end-of-options` の後ろに置くか、
+  解決し終えた完全な ref 名か oid にしてから渡す（上の「ref とパスの境目」と同じ規則）。
+- **固定リンクの ID** は、先頭が 0 でない 10 進数で、`i64` の正の値に収まるものだけを受け付ける（それ以外は `path_rejected`、`rule=invalid_id`）。
+  殻は DB を見ないので、存在は確かめない。
+- **解決と認可の入力は 1 回の呼び出しで得る。** `NamespaceResolver::resolve(&LookupPath, viewer: Option<UserId>) -> Resolution` が、
+  パスの解決と、閲覧者の認可の入力の読み込みを同時に行う。解決の後で別の照会をすると、ないパスと見えないパスで照会の回数が変わり、
+  時間の差から存在が分かってしまうからである（判定の順序の 6）。実装は、結果（今のパス・移動・削除・なし、ユーザー・グループ・プロジェクト）にも、
+  閲覧者に見えるかどうかにも関係なく、**同じ照会を同じ回数だけ** 行わなければならない（MR3 は 1 つの文で実装する）。見えるかどうかは `authorize()` が決め、ここでは決めない。
+  `viewer` は匿名なら `None`（公開のプロジェクトや clone も同じ経路を通る）。
+- **解決の型**: `Resolved` は `{ namespace_id, target: ResolvedTarget }` とし、`ResolvedTarget` は `User(UserId)`、
+  `Group { id, viewer_role }`、`Project { id, access: ProjectAccess { visibility, role, pending_deletion } }` にした
+  （種類と ID と認可の入力が食い違えないため。`owner()` で型付きの `NamespaceOwner` を返す）。`Deleted` と `Absent` は何も持たない。
+  `Resolution::Moved` は、ID から組み立てて今のパスへの完全一致で確かめた `current: NamespacePath` も持つ（upload-pack の `302` と
+  SPA の `canonical_path` に使う。見せるのは認可の後）。`resolve_prefix` は、`prefix=true` と一緒に M2 で足す。
+- **ID で指すプロジェクト**（`GET /api/v1/projects/{id}`）には `ProjectAccessLoader::project_access(ProjectId, viewer: Option<UserId>)
+  -> Option<ProjectAccess>` を使う（`None` はない。同じ照会の規則）。forge-core は forge-auth より下にあるので、forge-auth の型は使わず、
+  forge-web（MR4）が forge-auth の文脈の型に変換する。
+- **ログ**: `log_safe_path` は最初の 256 文字だけを残し（切ったときは `…(+残りの文字数)`）、`\` を二重にし、制御文字と、bidi の制御・
+  ゼロ幅などの見えない書式文字を `\u{…}` にする。
+- **テストベクタ**は `tests/fixtures/url-vectors.json`（リポジトリのルート）。`form` は `both`（ブラウザの `new URL()` でも変わらない）、
+  `browser`（`browser_input` を `new URL()` で正規化した形）、`raw`（`curl --path-as-is` でしか送れない）の 3 つで、ラベルは WHATWG の URL 解析で確かめた。
+  `dot_git` が `.git` の許されない場所の印である。
+
+## Amendment（2026-10-30、M1 phase 8 MR2: `prove()` / `Authorized<R>` と `PathResolve` / `WebShell`）
+
+上の「インターフェースの概略」と「新しい Action と変わる Resource の最小の matrix の行」を、forge-auth に実装した（`feat/auth-prove-authorized`）。
+概略から変えた点と、決めた点は次のとおり。
+
+- **`Resource::Resolved` の形**: 概略の `Resolved { kind, view }` は、`Resolved { via: ResolvedVia, view: NamespaceView }` にした。
+  - `NamespaceView` は `User` / `Group { role }` / `Project(ProjectView)` で、**種類は variant そのもの** にした（`kind()` が `user` / `group` / `project` を返す）。
+    `kind` と `view` を別の欄にすると、`kind = group` で `view` がプロジェクト、という食い違いが型の上で作れてしまうため。
+  - `ResolvedVia` は `Live` / `Moved`。`moved` の墓標を通って届いた先が見えないときに、ログの `reason` を `not_visible` ではなく
+    `tombstone_not_visible` にするためだけに使う（コードと応答は同じ FG-REPO-0005）。
+- **`Resource::Unresolved` に理由を持たせた**: `Unresolved(UnresolvedReason)`、`UnresolvedReason` は `Absent` / `TombstoneDeleted`。
+  どちらも同じ FG-REPO-0005 で、違いはログの `reason`（`absent` / `tombstone_deleted`）だけ（「判定の順序」の 6）。
+- **`PathResolve` の判定の順序**（レビュー後）: 認証なし → FG-AUTH-0001、無効 → FG-AUTH-0004、**スコープ（`read_api`）→ FG-AUTH-0002**（パスを見る前。
+  スコープの足りないトークンには、ないパス・見えないパス・見えるパスのどれにも同じ 403 を返す）、`Unresolved` → FG-REPO-0005、`Resolved` は見えるか
+  （`can_see`、管理者は通る）→ FG-REPO-0005、削除の猶予中 → FG-REPO-0006（見えない人には、その前に FG-REPO-0005）。読み取りの役割（Reporter 以上）は
+  求めない。グループと個人の名前空間は、サインインしたすべての人に見える（`GroupRead` と同じ。グループの可視性はまだない）。
+- **`Unresolved` は、公開でないすべての Action で FG-REPO-0005**（レビュー後。認証と無効の検査の後）。見えないプロジェクトと同じ 404 なので、
+  どの Action の経路にないパスが渡っても、存在の手がかり（500 と 404 の違い）にならない。`PathResolve` 以外では、見えないプロジェクトと同じく
+  スコープの検査より前に返す。matrix に `RepoRead` / `RepoPush` × ないパス・削除の墓標 → FG-REPO-0005 の行を足した。
+  `Resolved` は `PathResolve` 専用で、ほかの Action に渡すと既存の規則どおり FG-SYS-0001（`resource_does_not_match_action`）になる
+  （見えないプロジェクトなら、その前に FG-REPO-0005）。
+- **`WebShell`**: `is_public()` が真、`required_scope()` は `None`。無効なアカウントや、スコープのないトークンでも通る（matrix の行）。
+- **`prove()`**: `prove<R: ResourceCtx>(&Principal, Action, R) -> Result<Authorized<R>, ForgeError>` は `authorize()` を呼ぶだけで、
+  規則を持たない。テスト `prove_denies_exactly_like_authorize` が、matrix に出てくるすべての Action × 呼び出し元 × リソースで、許可と拒否
+  （コードと文脈）が `authorize()` と一致することを確かめる。`Authorized<R>` は欄が非公開で、`Clone` / `Default` / 公開のコンストラクタを持たない。
+- **証明の ID と判定の対象を 1 つの値に結びつける**（レビューの HIGH）:
+  - `ResourceCtx` は封印した（非公開のスーパートレイト）。forge-auth の外では実装できないので、`id()` と `resource()` が別の値を読む文脈は作れない。
+  - 文脈の欄は非公開で、コンストラクタは 1 行の値を 1 つ受け取るものだけにした: `ProjectCtx::new(LoadedProject { id, visibility, role, pending_deletion })`、
+    `ResolvedCtx::new(LoadedNamespace { namespace, via, view })`、`UnresolvedCtx::new(UnresolvedReason)`、`InstanceCtx`。読み取りは
+    `view()` / `via()` / `reason()` と `ResourceCtx::id()` だけ。プロジェクト A の view にプロジェクト B の ID を組み合わせる構造体リテラルは書けない。
+    検索の層（MR3 / MR4）は、`LoadedProject` / `LoadedNamespace` を **1 つの問い合わせの結果** から組み立てる。forge-auth は forge-db に依存しない（依存の向き）。
+  - `compile_fail` の doctest は 5 つ（証明のリテラル、`Default`、`Clone`、文脈のリテラル、外部での `ResourceCtx` の実装）。`Clone` を足す、文脈の欄を公開する、
+    封印を外す、の変異で、それぞれ対応する doctest が赤くなることを一度ずつ確かめた。
+  - forge-core の `NamespaceKind` / `Resolution`（MR1）には依存しない。`Resolution` から `LoadedNamespace` / `UnresolvedReason` への変換は、
+    forge-web の dispatcher（MR4）が行う。新しい文脈（グループ、トークンなど）は、封印のため forge-auth に足す。
+- **matrix の行**: `PathResolve` は許可 8（Developer / private、NonMember / internal、Guest / private、Developer / moved private、NonMember / グループ、
+  NonMember / 個人の名前空間、管理者 / private、`read_api` のトークン）、拒否 13（Anonymous、Disabled、NonMember / private、ないパス（Developer と管理者）、
+  削除の墓標、墓標の先が見えない、`read_repository` だけのトークン（見えるパスとないパスの両方で FG-AUTH-0002）、削除の猶予中（Developer は FG-REPO-0006、
+  NonMember は FG-REPO-0005）など）。`WebShell` は許可 3（Anonymous、Disabled、スコープのないトークン）。
+  **`prefix=true` の行は M2 に送る**（計画の回答どおり。そのモードを入れる MR で足す）。
+- `PathResolve` と `WebShell` は、ルートができるまで `app::PLANNED` に入れた（MR4 の dispatcher が登録した時点で外す）。`is_git_operation()` の意味の変更
+  （「git のプロトコルでも行う」）と `route()` の証明への置き換えは、MR4 で行う。
+- **MR4 の必須事項**（レビューの HIGH。型の設計は今は変えない）: Action は証明の実行時の値なので、`WebShell` の証明と `UserCreate` の証明は同じ型になる。
+  そこで MR4 は、(a) **すべての** ハンドラを呼ぶ前に、登録の仕組みが `proof.action() == def.action` を確かめる、(b) ハンドラを登録の外から呼ぶ方法を
+  作らない（`Authorized<R>` は登録の仕組みからだけハンドラに渡す）、(c) 別の Action の証明が拒否されることを確かめる否定のテストを足す。
+  また、MR3 / MR4 の検索は、ないパス・墓標・見えないパスで **同じ形の問い合わせ**（回数と種類）を発行し、時間の差から存在が分からないようにする。
+
+## Amendment（2026-10-30、M1 phase 8 MR3: forge-db の解決の実装）
+
+上の「解決と認可の入力は 1 回の呼び出しで得る」を、forge-db に実装した（`feat/db-namespace-resolve`、`forge_db::resolve`）。決めた点は次のとおり。
+
+- **`NamespaceResolver` と `ProjectAccessLoader` は `Db` に実装する**（認証の `Authenticator` と同じ形。`forge serve` が `Db` を forge-web に渡す）。
+- **1 回の呼び出しは 1 つの文で、結果によらず同じ文を使う。** 文は常にちょうど 1 行を返す（`GROUP BY` のない集約の 1 行に `LEFT JOIN` で
+  今のパス・墓標・行き先・プロジェクトをつなぐ）。今のパス・移動・削除・なし、見える・見えない、サインイン・匿名（`$2` が NULL）のどれでも、
+  読み取りのプールへの往復は 1 回で、文の字面も同じである。途中で返して照会を省く分岐はない（判定の順序の 6）。テスト
+  `every_outcome_runs_the_same_single_statement` が、sqlx の文ごとのイベントを数えて、すべての結果で 1 回・同じ文であることを確かめる
+  （分岐に 2 つ目の照会を足す変異で赤くなることを一度確かめた）。
+  - **一定なのは文の回数と形だけで、文の中の仕事の量は一定ではない**（レビューの MEDIUM）。ないパスは索引を 2 回引くだけで終わり、深いプロジェクトは
+    親の連鎖をたどる。この時間の差は **今は受け入れる残りのリスク** とする。対策は、解決の回数の制限（M2 に送り済み）と、必要なら forge-web での
+    応答時間の下限（一定の時間より早くは返さない）である。
+- **閲覧者のロールは、ロールの読み込み（`roles::load_project_roles` / `load_group_roles`）と同じ連鎖の CTE と畳み込みで計算する**
+  （`roles::chain_cte!`、`chain_role_columns!`、`fold_chain` を共有する）。結果は `native` と一致する（テストで比べる）。連鎖の破損と不明なロールは、
+  匿名の閲覧者でも FG-DB-0018 にする（空のロールとして扱わない）。
+- **`moved` の墓標の今のパス**は、行き先の ID から親をたどってセグメントで組み立て、今のパスへの完全一致（同じ ID の行）で確かめる。
+  `deleted` と同じに扱う（`Resolution::Deleted`）のは、行き先がパージされた（`namespace_id` が NULL）ときだけである（レビューの HIGH: 黙った置き換えをしない）。
+  行き先が残っているのに確かめられないときは、データの破損として報告する: 連鎖が切れている・ループしている → FG-DB-0018（今のパスと同じ）、
+  保存された `full_path` が組み立てたパスと違う → 新しいコード **FG-DB-0021 `NamespaceDataInvalid`**（alert、`reason=moved_path_unconfirmed`、ID だけ）。
+  上の「今のパスを組み立てられない場合は `deleted` と同じに扱う」は、この 2 つの破損には当てはめない（破損は 404 に隠さず alert にする）。
+  確かめたパスは `NamespacePath::parse` で読み、通らなければ FG-DB-0021 `reason=stored_path_invalid`（`rule`。パスそのものはログに出さない。
+  Runbook `namespace-data`）にする。保存された種類・可視性が CHECK の外の値のとき、プロジェクトと名前空間の片方が欠けているときも同じコード
+  （`unknown_*`、`namespace_without_project`、`project_without_namespace`）にする。
+  - 破損した行は `authorize()` より前に 500 になるので、そのパスに何かがあることが分かる。コードが alert で知らせるので、これは受け入れる露出とする。
+- **`ProjectAccess` の型は forge-core の 1 つにした。** D4 の `forge_db::projects::{access, ProjectAccess { visibility, pending_deletion }}` を廃止し、
+  `forge_db::resolve::project_access(&Db, ProjectId, viewer) -> Option<forge_core::ProjectAccess>`（閲覧者のロールを含む、1 つの文）に置き換えた。
+  以前 FG-SYS-0001 `unknown_visibility` だった保存値の誤りは FG-DB-0021 になる。
+- 可視性はここでは判定しない（`authorize()` が決める）。forge-core の `Visibility` は `private` / `internal` の 2 つである。
+
+## Amendment（2026-10-30、M1 phase 8 MR4: forge-web の dispatcher と登録の仕組み）
+
+上の「判定の順序」と「ルートの登録に足すもの」を forge-web に実装した（`feat/web-dispatcher`、`forge_web::registry`、`dispatch`）。決めた点は次のとおり。
+
+- **ハンドラは証明なしでは呼べない（MR2 の必須事項 a〜c）。** ハンドラの型は `Endpoint<S, R>`（`async fn(state, Dispatched<R>)`）にした。
+  `Dispatched<R>` は欄が非公開で、`Clone` / `Default` / 公開のコンストラクタを持たない（`compile_fail` の doctest）。作れるのは
+  `registry.rs` の `admit()` だけで、`admit()` は `proof.action() == def.action` を確かめる。違えば FG-SYS-0001
+  （`reason=proof_action_mismatch`、`route_action`、`proof_action`）。固定のパスのルート（`route()` / `route_with()`）も scoped のルートも、
+  すべてこの 1 か所を通る。`WebShell` の証明で `UserCreate` のルートに入れないことを否定のテストで確かめた
+  （`registry_tests::a_proof_for_another_action_is_refused`）。
+- **既存の `route()` も証明の形にそろえた**（forge-web README の MUST）。登録の仕組みが認証 → ガード → 読み込み（`Loader`。
+  `route()` は `InstanceCtx`）→ `prove(principal, def.action, ctx)` → `admit()` → ハンドラの順に呼ぶ。ハンドラは `authorize()` を呼ばない。
+  公開のルートは資格情報を見ず、匿名として判定する。
+- **dispatcher はルーターの fallback の 1 か所**（`Router::route` は登録の中の 1 か所のまま）。固定のパスに一致しないすべての要求が来て、
+  表にないものは FG-WEB-0001（fail closed）。`/api/…`、未知の `/-/…`、dumb HTTP、まだルートのない `raw` / `archive` / git の形には殻を返さない。
+- **手順 5 の照会は、要求ごとにちょうど 1 回**（必須事項 d）。公開の語と、文字列で拒否したパスは 0 回。解決の前に照会はしない（認証は手順 4）。
+  `Resolution` からの変換は、`Live` → `ResolvedVia::Live`、`Moved` → `ResolvedVia::Moved`（`PathResolve` の `ResolvedCtx`）、
+  プロジェクトのルートでは `LoadedProject` → `ProjectCtx`、`Deleted` → `UnresolvedReason::TombstoneDeleted`、`Absent` → `Absent`。
+  解決した種類と語に RouteDef がない（グループに `raw`、個人の名前空間に語）ときは、新しい **`UnresolvedReason::KindMismatch`**
+  （ログの `reason=kind_mismatch`、応答は同じ FG-REPO-0005）にした。判定は `prove()` が行い、2 つ目の判定点は作らない。matrix に
+  `RepoRead × KindMismatch` の拒否の行を足した。照会は `AppState::lookup_timeout`（`forge serve` は acquire + statement_timeout + 1 秒）で
+  抑え、超えたら FG-WEB-0002（`operation=namespace_resolve`）。
+- **ないもの・墓標・種類違い・見えないものの応答は、request_id を除いてバイト単位で同じ**（必須事項 f）。ステータス、ヘッダ、本文をテストで比べる
+  （`dispatch_tests::every_denial_is_identical_and_costs_one_lookup`、`namespace_tombstone_routes`）。違いはログの `reason` だけ。
+- **`moved` の墓標**: `authorize()` が許可した後でだけ、安全な verb（GET / HEAD）で push でないルートに限り `302`（`Cache-Control: no-store`）で
+  今のパスへ送る。`Location` は検証済みのセグメントから組み立てた相対パス（各セグメントを百分率符号化。`Host` は使わない）で、クエリは捨てる
+  （git の広告だけは、ルートから `service` を付け直す）。それ以外（POST、receive-pack）は FG-REPO-0005（`tombstone_post` / `tombstone_push`）。
+  送るときに `namespace.redirected`（warn、`namespace_id`、`tombstone_id`、`route`）を出す。見えない行き先は、ないパスと同じ 404 で、今のパスは出さない。
+  - **残り（phase 9 で決める）**: `Resource::Project` は `via` を持たないので、プロジェクトのルートで墓標の先が見えないときのログは
+    `reason=not_visible` に `via=moved` と `tombstone_id` を添えた形になる（`tombstone_not_visible` ではない。応答は同じ）。
+- **語ごとのガード**: 登録の仕組みが `is_public_word(verb, route)`（その語の RouteDef がすべて公開のときだけ真）を持つ。製品の公開の語の RouteDef が
+  すべて `WebShell` であることをテストで確かめる。
+  - **公開と非公開が混ざった語は、登録で拒否する**（FG-WEB-0004、`word_mixes_public_and_non_public`。同じ verb の語ごと）。上の判定の順序の 4 と
+    phase 8 のテストの「混ざった語は認証を求める」を、この形に置き換えた。混ざった語を許すと、認証と解決の後にグループの殻を、グループの文脈の
+    `prove()` を通さずに返すことになり（`moved` も無視する）、`raw` / `archive` を登録した時点で、見えないグループの存在が分かってしまうからである。
+    グループの `raw` は「ない」と同じ扱いなので、混ざった語が要る場面はない。非公開の語のルートに `InstanceCtx` のハンドラが来たら、
+    FG-SYS-0001（`reason=instance_context_on_non_public_word`）にする。
+  - **要求のタイムアウト**: `forge serve` は `request_timeout` を、30 秒と「認証の上限（acquire + statement_timeout）+ 照会の上限 + 1 秒」の
+    大きいほうにする。既定値（3 秒 + 15 秒）でも 2 つの合計は 30 秒を超え、外側の FG-WEB-0002 が先に切れて DB の原因（FG-DB-0001）がログから消えるためである。
+- **`scoped()` の登録の規則**（違反は FG-WEB-0004）: 形とスコープ（Home → Namespace、語 → Group / Project、git → ProjectGit、固定リンク → Instance）、
+  `query_key`（`info/refs` だけが `("service", …)` を持つ）、verb（広告は GET / HEAD、POST は upload / receive-pack）、文脈の型
+  （公開は `InstanceCtx`、非公開は今は Project / ProjectGit の `ProjectCtx` だけ。グループと個人の名前空間の文脈は、最初の非公開のルートと一緒に forge-auth に足す）。
+- **この MR で作ったルート**: `GET /api/v1/namespaces/resolve?path=`（`PathResolve`。`{ namespace_id, kind, canonical_path, moved }`、
+  `Cache-Control: private, no-store`、`Vary: Authorization, Cookie`）と、殻（`WebShell`。名前空間のトップ、プロジェクトの
+  `tree` `blob` `blame` `commits` `commit` `compare` `branches` `tags` `settings` `members`、グループの `settings` `members`、固定リンク。GET と HEAD）。
+  `PathResolve` と `WebShell` を `app::PLANNED` から外した。殻は M2 の SPA まで仮の HTML で、どのパスでも同じバイト列、DB も資格情報も見ない。
+  `raw` / `archive`（`RepoRead`）と git のルートはまだ登録しない（FG-WEB-0001）。`GET|HEAD /api/v1/projects/{id}` は MR5。
+- **`path` の引数の誤り**（ない、重複、符号化の誤り、名前として不正）は、FG-WEB-0006 `RequestInvalid`（phase 8b）までは、ないパスと同じ
+  FG-REPO-0005（ログに `lookup=path_param_*`）にする。このときは照会しない（違いは要求の形で、データではない）。
+- **manifest**: `routes.generated.json` の全行に `scope`（固定のパスは `fixed`）と `word`（固定のパスは `fixed`）を、`info/refs` には
+  `query_key: [key, value]` を足した。並びは `(path, scope, verb, query_key)`。OpenAPI には固定のパスだけを出す。
+- **ログ**: dispatcher、405、パニック、タイムアウト、アクセスログのパスは、すべて `log_safe_path` で出す。FG-WEB-0001 の diagnosis に
+  `reason` / `part` / `rule` の読み方を書いた。
+- **`TailSegments` と git（必須事項 e）**: dispatcher は git を起動せず、`TailSegments` を `Dispatched::tail()` で渡すだけ。forge-git の
+  `GitCommand` は、利用者の値を `revision()`（`--end-of-options` の後ろ）か `path()`（`--` の後ろ）でしか受け付けない。forge-web が forge-git に
+  依存した時点で赤くなるテスト（`the_dispatcher_runs_no_git_and_tails_keep_leading_dashes`）を置き、phase 9 で置き場所を示させる。
+- `is_git_operation()` の意味を「git でも行う」に変えた（文書だけ。値は変えない）。
+
+## Amendment（2026-11-01、M1 phase 8 MR5: `GET|HEAD /api/v1/projects/{id}` と解決の API の `project_id`）
+
+ID でプロジェクトを読む API を forge-web に作った（`feat/web-api-project-read`、`forge_web::routes::projects`）。決めた点は次のとおり。
+
+- **ルート**: `GET /api/v1/projects/{id}`（`ProjectRead`）。固定のパスのルートなので、`HEAD` は axum が同じ GET のルート（認証 → 読み込み → `prove()`）で
+  本文なしに答える（解決の API と同じ。manifest と OpenAPI には GET の行だけが出る）。`ProjectRead` を `app::PLANNED` から外した。
+- **読み込みは 1 回の呼び出し・1 つの文**（MR4 の「注入したが未使用」の `ProjectAccessLoader` を使う）。トレイトの形を
+  `ProjectAccessLoader::load_project(ProjectId, viewer) -> Option<ProjectRecord>` に変えた。`ProjectRecord` は forge-core の 1 つの値で、
+  認可の入力（`ProjectAccess`）と、許可の後に見せる詳細（`namespace_id`、今のパス、`display_name`、`description`、リポジトリの種類、`created_at`）を
+  **同じ文の同じ行** から持つ。認可の後に 2 つ目の照会をしない（許可された要求だけ照会が増える形にも、読み込みと表示の間で別のプロジェクトに
+  変わる形にもしない）。forge-db は `resolve::load_project`（`PROJECT_ACCESS_SQL` に名前空間とリポジトリの `LEFT JOIN` を足した 1 つの文）で、
+  D4 の `project_access` はその `access` を返す包みとして残した。
+  - プロジェクトの `full_path` は、親をたどってつないだセグメントとの一致で確かめる（`moved` の墓標の行き先と同じ）。読めない行は FG-DB-0021 の新しい
+    `reason`: `project_path_unconfirmed`、`stored_path_invalid`（`project_id` 付き）、`project_without_repository`、`unknown_repository_kind`
+    （Runbook `namespace-data` に追記）。
+  - 呼び出しは `AppState::lookup_timeout` で抑え、超えたら FG-WEB-0002（`operation=project_load`）。読み込みが別の ID の行を返したら判定せず
+    FG-SYS-0001（`loaded_another_project`）。
+- **ID の読み方**: 生のパスの `{id}` を、固定リンクと同じ規則（`forge_core::parse_positive_id`: 先頭が 0 でない 10 進数、`i64` の正の値。
+  符号・`%31`・範囲外は不可）で読む。規則に合わない ID は、FG-WEB-0006 `RequestInvalid`（phase 8b）までは、ないプロジェクトと同じ FG-REPO-0005
+  （ログに `lookup=id_param_invalid`）にし、照会しない（`path` の引数の誤りと同じ扱い）。
+- **拒否は `authorize()` が決める**（新しい規則はない。matrix の `ProjectRead` の行を、許可 10・拒否 15 に増やした）:
+  ないプロジェクト、見えないプロジェクト、見えない人にとっての削除の猶予中、規則に合わない ID は、request_id を除いて **バイト単位で同じ** 404
+  （テストで比べる）。違いはログの `reason`（`absent` / `not_visible`）と `lookup` だけ。見える人にとっての削除の猶予中は FG-REPO-0006（管理者も）、
+  Guest は FG-AUTH-0003（Guest はメンバーなので存在は秘密ではない。`PathResolve` は通る）。`read_api`（または `api`）のないトークンは、
+  見えるプロジェクトで FG-AUTH-0002、ない・見えないプロジェクトでは同じ 404（可視性の判定がスコープより前）。認証なし・無効は読み込みの前に
+  FG-AUTH-0001 / 0004（照会 0 回）。
+- **応答の形は 1 つの組み立て関数**（計画の「W1 は M3、ProjectView の組み立ては今 1 つに」）: `routes::projects::project_view(proof, record)` が
+  `{ id, namespace_id, path, name, display_name, description, visibility, kind, created_at, role }` を作る。`id`・`visibility`・`role` は証明から、
+  残りは同じ行から読み、行の ID が証明の ID と違えば FG-SYS-0001（`project_details_mismatch`）。`kind` はリポジトリの種類（`spec` / `system`）、
+  `name` は最後のセグメント、`created_at` は UTC の RFC 3339、`role` は呼び出し元の実効ロール（ない人 — 管理者、internal の読み手 — は `null`）。
+  削除の猶予中は `ProjectRead` が拒否するので欄にしない。リポジトリの置き場所・状態などの内部の値は出さない。phase 8b の一覧と書き込みの API も
+  これを使う。`Cache-Control: private, no-store`、`Vary: Authorization, Cookie`（解決の API と同じ）。
+- **許可の後に渡す値**: `Lookup::Found` と `Dispatched` に `project`（`ProjectRecord`）を足した（`canonical_path` / `via_tombstone` と同じく、
+  `authorize()` の後でだけハンドラが読める。ほかのルートでは `None`）。
+- **解決の API の所有者の ID**（MR4 の未決）: `GET /api/v1/namespaces/resolve` は、許可の後でだけ、種類ごとの鍵で所有者の ID を返す
+  （`project_id` / `group_id` / `user_id` のどれか 1 つ）。クライアントは `project_id` で上の API を呼べる。拒否の応答には何も足さない。
+  証明と ID を結びつけるため、forge-auth の `LoadedNamespace` の `view` を `target: LoadedTarget`（`User(UserId)` / `Group { id, role }` /
+  `Project(LoadedProject)`）に置き換え、`view()` と `owner()` を同じ値から導く（種類・ID・認可の入力が食い違えない）。
+- **残り**: OpenAPI の `{id}` の型と応答の schema は utoipa（MR6）で付ける（今は文字列）。リポジトリの状態（`provisioning` / `ready`）は欄にしない
+  （SPA が要る時に足す）。`prefix=true` と解決の回数の制限は M2、応答時間の下限は必要になってから（MR3 の残り）。
+
+## Amendment（2026-11-01、M1 phase 9 MR3: Smart HTTP の fetch のルート）
+
+upload-pack のルートを登録した（`feat/web-smart-http-fetch`、`forge_web::routes::git`、`git_stream`）。決めた点は次のとおり。
+
+- **ルート**（`scoped()`、`RouteScope::ProjectGit`、どれも `RepoRead`。`RepoRead` を `app::PLANNED` から外した）:
+  `GET {path}.git/info/refs?service=git-upload-pack`、同じ `HEAD`（ヘッダだけ。git を起動しない）、`POST {path}.git/git-upload-pack`。
+  receive-pack（`RepoPush`）は MR4 まで FG-WEB-0001 のまま。matrix の `RepoRead` の行に DisabledAdmin、Maintainer、Owner、
+  AdminTokenAdmin、OwnerTokenReadApi を足した（`authorize()` の判定どおり。管理者のトークンも `read_repository` がなければ拒否）。
+- **FG-WEB-0007 `SmartHttpServiceUnsupported`（400）**: 判定の順序の 3 の `service` の誤り（ない・重複・未知）を、FG-WEB-0001 から
+  この番号に移した（`reason=service_unsupported`、`rule` はこれまでどおり）。文字列だけで決めるので、認証と照会の前である。
+  dumb HTTP のクライアントの最初の要求（`service` なしの `info/refs`）もこれになる。dumb HTTP の残りのパス（`.git/HEAD`、
+  `.git/objects/…`）は FG-WEB-0001 のまま。FG-WEB-0006 は phase 8b の `RequestInvalid` のために空けておく。
+- **解決の文がリポジトリの ID と状態も返す**: `RESOLVE_SQL` に `forge.repositories` を `LEFT JOIN`（`project_id` で一意なので行は
+  増えない）し、`ResolvedTarget::Project` に `repository: ProjectRepository { id: RepoId, state }` を足した。文の数と形は、結果に
+  よらず同じまま（存在に依存しない）。認可の入力ではなく、`authorize()` の後で `Dispatched::repository()` からだけ読める。
+  行がない・読めない状態は FG-DB-0021（`project_without_repository` / `unknown_repository_state`）。
+- **FG-REPO-0016 `RepositoryNotReady`（503、info）**: リポジトリが `provisioning` のあいだ、許可された呼び出し元にだけ返す
+  （見えない人には、ないパスと同じ 404 のまま）。
+- **応答**: `Content-Type` は `application/x-git-upload-pack-advertisement` / `-result`、`Cache-Control: private, no-store`、
+  `Vary: Authorization`（Smart HTTP は Cookie を使わない）。git の出力は流しながら返し、クライアントが途中で去れば git を helper ごと
+  止めて FG-GIT-0015 を request_id とともに記録する。git が失敗で終われば、そのエラーを記録して応答を途中で切る（短い応答を黙って
+  正常に見せない）。主体ごとのストリームの枠の鍵は利用者の ID（`user:<id>`）。
+- **要求のタイムアウト**: git の POST（`git-upload-pack` / `git-receive-pack`）は、本文を読み終えてから答えるので、要求のタイムアウト
+  （ヘッダを返すまで）の代わりに `git.http.timeout_ms`（既定 1 時間）を使う。その中で、本文の読み込みに無通信 60 秒・全体 1 時間、
+  大きさ 16 MiB（展開後も）、git のストリームに無通信と全体の時間切れがかかる。広告の GET は従来の要求のタイムアウトのまま。
+- **設定 `git.http.*`**（起動時に検証、違反は FG-SYS-0002）: `fetch_request_max_bytes`（16 MiB、1 GiB まで）、`idle_timeout_ms`（60 秒、
+  `timeout_ms` 以下）、`timeout_ms`（1 時間）、`body_timeout_ms`（5 分、`timeout_ms` 以下）、`want_check_timeout_ms`（30 秒、
+`timeout_ms` 以下）、`max_object_wants`（10 000）、`max_streams`（16。本文の読み込みの枠の数でもある）、
+  `max_streams_per_principal`（4、`max_streams` 以下）、`push_max_bytes`（2 GiB、M1 phase 9 MR4。git の
+  `receive.maxInputSize`）。設定ファイルでは `[git.http]` の表に書く。`forge serve` は `storage.root` を
+  必須にし、git の HOME を保存先の根にして（worker と同じ）、起動の前に git の版（2.38 以上）を確かめる。
+- **`moved` の墓標と upload-pack の POST（上の「git」の規則の変更）**: 広告の GET は、これまでどおり許可の後でだけ `302`
+  （`service` を付け直す）。ただし git（2.45 まで）は、リダイレクトが **認証のない最初の要求** への答えのときだけ、以後の要求の
+  基準の URL を移す。資格情報の helper を使うと、`401` の後の再試行で `302` を受け取るので、git は古いパスへ POST し続ける
+  （E2E で確かめた）。POST を FG-REPO-0005（`tombstone_post`）で拒むと、名前を変えたプロジェクトの clone が、helper を使う利用者
+  全員で失敗する。そこで **`git-upload-pack` の POST に限り、墓標の先のプロジェクトで `authorize(RepoRead)` が許可したときは、その場で
+  答える**（読み取りだけで、新しいパスと同じ判定。`namespace.redirected` を `outcome=served` で記録する。302 は `outcome=redirect`）。
+  receive-pack はリダイレクトも、その場での処理もしない（`tombstone_push`）。ほかの POST は従来どおり `tombstone_post`。
+  資格情報を最初の要求に載せる git（URL に資格情報、git ≥ 2.46 の `http.proactiveAuth`）は、302 に従い `warning: redirecting to`
+  を表示する（E2E `clone_after_rename_follows_302_with_warning` は両方の形を確かめる）。
+- **git の実行の境目（MR4 の必須事項 e の置き換え）**: forge-web は forge-git に依存した。phase 8 の仕掛け
+  （`the_dispatcher_runs_no_git_and_tails_keep_leading_dashes`）を `forge_web_runs_git_only_through_smart_http_api` に置き換えた。
+  forge-web のソースは、汎用のコマンドの組み立て（`command(`、`arg_owned`、`config_override` など）を使わず、forge-git を使うのは
+  `routes/git.rs` と `git_stream.rs` だけで、git のルートは `TailSegments` を持たない（`tail()` を読まない、パスの型に `{*rest}`
+  がない）。git に届く要求の値は、forge-git が検証した `Git-Protocol` と、標準入力に渡す本文・16 進数の oid だけである。
+- **E2E**（実際の git、`crates/forge-cli/tests/smart_http_e2e.rs`、127.0.0.1:0、開発用のデータベース、合成のデータ）: トークンを
+  Basic のパスワードにした clone、資格情報なしの `WWW-Authenticate: Basic`、protocol v2（`GIT_TRACE_PACKET`）と v0 の clone、
+  shallow、`--filter=blob:none`、`api` スコープのトークンの拒否、メンバーでない人への 404（ないパスとバイト単位で同じ）、名前の変更後の
+  302、削除の墓標の 404、dumb HTTP の 404 / 400、参照されていないオブジェクトの拒否（v0 / v2）、切断で git を回収、枠の不足の 503、
+  準備中の 503、本文の上限。
+
+## Amendment（2026-11-01、M1 phase 8b MR6: 引数の誤りは FG-WEB-0006、本文のある固定ルート、一覧のカーソル）
+
+- **引数の形の誤りは FG-WEB-0006 `RequestInvalid`（400）**。MR4 / MR5 では「ないものと同じ FG-REPO-0005」としていたものを切り替えた:
+  `GET /api/v1/projects/{id}` の `{id}` が先頭 0 なしの正の 10 進数でない（`0`、`01`、`+1`、`%31`、`i64` の範囲外）→ `reason=param_invalid
+  param=id rule=not_positive_decimal`、`GET /api/v1/namespaces/resolve` の `path` がない・重複・エスケープの誤り・パスの規則に合わない →
+  `param=path rule=missing|repeated|malformed|invalid`。どれも **文字列だけで、認証の後、照会の前に** 決める。数字が指すはずのものが
+  読めるか・見えないか・ないかに関わらず、request_id を除いて **バイト単位で同じ** 400（テスト `a_malformed_id_is_the_same_400_whatever_it_would_name`、
+  `path_resolve_denials_are_identical_and_cost_one_lookup`）。形の正しい ID のない・見えないは、これまでどおり同じ 404 のまま。
+  形を知らせても存在は漏れない（どの資源にも触れていない）。ログの `lookup=` はなくなり、`param` と `rule` になった。
+- **存在の等しさ（MR4 の must）は本文のあるルートにも及ぶ**: 本文の形の誤りは読み込みの前の 400 で、どの資源にも触れない（テストの読み込み器で
+  照会 0 回を確かめる）。本文が指す資源の存在と可視性は、`BodyLoader` が読んだものを `authorize()` が決める（ないものと見えないものは同じ答え）。
+- **一覧のカーソル**（MR7b で使う。今は forge-core の API とテストだけ）: `forge_core::cursor::CursorKeys::encode(purpose, payload)` /
+  `decode(purpose, cursor)`。形式は `base64url( 版 1 | kid u16 | nonce 96 bit | 暗号文 | タグ )`、AES-256-GCM（ADR-0016 と同じ方式）、
+  関連データは `"forge-cursor" | 版 | kid | purpose`。`purpose` が一覧と呼び出し元を結びつける（`projects.list:user=42` など）ので、
+  別の一覧・別の利用者のカーソルはタグで落ちる。走査したが見えなかった行の ID も、飛ばした数も、カーソルからは読めない。鍵は
+  `api.cursor_keys_file`（ADR-0013 の Amendment）。改ざん・切り詰め・知らない kid・別の purpose・書式の誤りは FG-WEB-0006
+  `reason=cursor_invalid`（`rule=too_long|encoding|truncated|version|kid|tag`）で、**カーソルの値はログに出さない**。タグの照合は定数時間。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: グループと親の文脈、トランザクション内の再判定）
+
+- forge-auth に封印された文脈を足す: `GroupCtx`（`LoadedGroup`: グループの id と呼び出し元の実効ロール、id = `GroupId`）、
+  `UserNamespaceCtx`（`LoadedUserNamespace`: 個人の名前空間と持ち主、id = `NamespaceId`）、`ParentCtx`（`LoadedParent`: 新しい
+  プロジェクトの親 — グループか個人の名前空間、id = 親の `NamespaceId`）、`VisibilityChangeCtx`（`LoadedProject` と要求された
+  可視性、id = `ProjectId`）。どれも 1 行の読み込み結果からだけ作れる。
+- **`Authorized::reconfirm(account, fresh)`**: 証明と同じ呼び出し元（ユーザーと資格情報、トークンのスコープはそのまま）・同じ
+  アクションで、書き込みのトランザクションの中で読み直した文脈 `fresh` と、同じく読み直したアカウント（有効か、管理者か）に対して
+  `prove()` をもう一度行う。`fresh` が証明と別の対象なら `FG-SYS-0001 reason=reconfirm_target_mismatch`。forge-hosting の
+  コマンドはすべてこれで決め、registry の証明は入口の判定として残る（判定点は `authorize()` の 1 つ）。
+- `Authorized::principal()` は公開（読み取りのみ）。コマンドが変更の文脈（actor、トークン）と事実の読み込みをその呼び出し元で行う
+  ため。別の呼び出し元で判定し直す道は作らない。
+- 親がプロジェクトの名前空間である `POST /api/v1/projects` は、存在しない id と同じ `FG-REPO-0005`（`UnresolvedReason::KindMismatch`、
+  `lookup=parent_is_project`）。
+- 他人の個人の名前空間への `POST /api/v1/projects` は `FG-AUTH-0003`（`reason=foreign_namespace`）のまま（レビュー LOW-6、受け入れ）。
+  個人の名前空間は署名済みの全員に見える（解決の API が答える）ので、404 にしても隠せるものがない。
+- 書き込みでは、名前と項目の規則（`FG-REPO-0007`/`0011`/`0014`）は判定の後に調べる。権限を失った呼び出し元には拒否を返し、
+  本文についての手がかりを返さない。拒否・変更なしなど commit しない出口は、すべて明示的に ROLLBACK する（`ChangeTx::settle`）。
+
+## Amendment（2026-11-01、M1 段階 8b MR8: サブグループの最後の直接の Owner）
+
+- メンバーの API（`MemberManage`）の `removes_last_owner` は、プロジェクトと**最上位の**グループについてだけ真になる。サブグループの
+  最後の直接の Owner は外せる・降格できる（D2 のユーザーの決定と D4 MR4 の規則）: 最上位のグループは有効な直接の Owner を必ず 1 人
+  持ち（メンバーの変更は FG-REPO-0010 `last_owner`、無効化は FG-AUTH-0009 `last_owner` で守る）、その Owner はすべてのサブグループに
+  継承されるので、サブグループが有効な Owner を失うことはない。権限の表の `SubgroupLastDirectOwner` の行がこれを固定する（Owner と
+  管理者は許可、Maintainer は自分より上の役割として拒否、エージェントは拒否）。
+
+## Amendment（2026-11-01、手順 D5 MR1: 移管の移動先と墓標の解放の判定）
+
+- `Resource::Transfer` を ADR の形に変える: `Transfer { source: ProjectView, target: TransferTarget }`（これまでの
+  `target_role: Option<Role>` では、移動先がトップレベルか個人の名前空間かを表せず、管理者がプロジェクトをトップレベルへ移せた）。
+  `TransferTarget { Group { role, visible }, PersonalNamespace { owner }, TopLevel }` を forge-auth に置く。
+- 新しい Action `GroupTransfer`、`UserRename`、`NamespaceTombstoneRelease`（スコープは `api`）と Resource `GroupTransfer { source_role, target }`、
+  `UserRename { target_user }`、`Tombstone(TombstoneRelease)` を足す。ルートは D5 MR5 で作るので、それまで `app::PLANNED` に入れる。
+- 判定の規則（`authorize()`、権限の表に許可と拒否の行がある）:
+  - `ProjectTransfer`: 移動元で Owner、かつ移動先のグループで Maintainer 以上。個人の名前空間へは本人か管理者だけ（他人のものは
+    `FG-AUTH-0003 reason=foreign_namespace`）。`TopLevel` は管理者を含めて常に `FG-AUTH-0003 reason=project_to_top_level`。
+  - `GroupTransfer`: 移動元と移動先の両方で Owner。`TopLevel` は管理者だけ。`PersonalNamespace` は管理者を含めて常に拒否
+    （`reason=group_to_personal_namespace`）。
+  - `UserRename`: 管理者だけ（本人も拒否）。
+  - `NamespaceTombstoneRelease`: `moved` は行き先の今の Owner か管理者。削除の墓標は、記録した Owner が親の名前空間で今も Owner のとき
+    だけ（それ以外は管理者。親がなければ管理者だけ）。
+- **見えない移動先は同じ 404**: 移動先のグループが見えないとき、**および存在しないとき**、読み込みは `visible: false`
+  （`LoadedTransferTarget::NotVisible`）で答え、`FG-REPO-0005 reason=target_not_visible` にする。**管理者も同じ**（管理者には
+  すべてのグループが見えるので、管理者の `visible: false` は「ない」の意味であり、親のない移動として通してはいけない）。順序は
+  移動元の可視性 → 移動先の可視性 → スコープ → エージェント → 役割。
+- **ADR の形からの変更（2 点）**:
+  - `TombstoneRelease::Moved` に `target_visible: bool` を足す。見えない行き先への `moved` の墓標の解放は、墓標がないのと同じ
+    `FG-REPO-0005 reason=tombstone_not_visible`（403 にすると private のプロジェクトの古いパスの存在が分かる）。管理者も同じ。
+  - 削除の墓標で、管理者でない呼び出し元が親の名前空間に役割を持たないとき、**および親がない（トップレベルの）墓標のとき**は
+    `FG-REPO-0005 reason=tombstone_not_visible`（ない墓標と同じ 404。削除したトップレベルのパスを探れないようにする）。この判定は
+    スコープとエージェントの検査より前に行うので、エージェントも人と同じ 404 を受け取る。役割はあるが記録した Owner でない、
+    または Owner でないときは `FG-AUTH-0003 reason=not_recorded_owner`。
+  - 無効にされた記録した Owner には専用の規則を置かない。呼び出し元が有効かの検査（`FG-AUTH-0004`）で先に拒否され、その墓標を
+    解放できるのは管理者だけになる（管理者は削除の墓標の判定の先頭で許可される）。
+- 封印された文脈: `TransferCtx`（id = `(ProjectId, Option<NamespaceId>)`、移動先の親の名前空間。`None` はトップレベル）、
+  `GroupTransferCtx`（id = `(GroupId, Option<NamespaceId>)`）、`UserRenameCtx`（id = `UserId`）、`TombstoneCtx`（`LoadedTombstone`、
+  id = `TombstoneId`）。証明は移動元と移動先を一緒に束ねるので、ある移動先への証明で別の場所へは移せない。
+- エージェントの資格情報は D5 のすべての操作（`ProjectTransfer`、`GroupTransfer`、`UserRename`、`NamespaceTombstoneRelease`、
+  `ProjectDelete`、`ProjectRestore`）を拒否される（ADR-0017 の Amendment D5）。
+
+## Amendment（2026-11-02、手順 D5 MR2: 部分木の移動、墓標の解放、`reclaim`）
+
+- **移動は 1 つの手続き**（`forge_db::namespaces::move_subtree`）。プロジェクトの移管・名前の変更（`projects::move_decided`）、グループの
+  移管・名前の変更（`groups::move_decided`）、ユーザーの名前の変更（`users::rename_decided`、ユーザー名と個人の名前空間のパスを一緒に変える）は
+  どれもこれを使う。認可は MR7a と同じく、ロックの後で `decide` の閉包が判定する（forge-db は forge-auth の型を持たない）。
+- **ロックの順**: リソースの行（`FOR UPDATE`）→ 移動先の親（`FOR SHARE`）と呼び手の所属の行 → 部分木の名前空間の行（`FOR NO KEY UPDATE`、
+  id の順。ロックした集合が変わらなくなるまで読み直す。外部キーの検査の `FOR KEY SHARE` とは衝突しない）→ 呼び手のアカウント → 判定 →
+  古いパスと新しいパスのすべての advisory lock（バイト順）。行のロックは常にパスのロックより先（解放も同じ）。交差する 2 つの移動のような
+  避けられないデッドロックは FG-DB-0002 `reason=deadlock`、`retryable=true`（要求ごと再試行してよい）。
+  作成は親を `FOR SHARE` で読むので、移動より先に確定するか（移動が読み直して子を一緒に動かす）、移動の確定を待って新しいパスを読む。
+  さらに作成は、パスのロックの後で `親の full_path || '/' || segment = ロックしたパス` を確かめ、違えば FG-REPO-0009 `reason=parent_moved`。
+- **同じトランザクションで検査する**（何も書かない、FG-REPO-0015 `TransferInvalid`、409）: 部分木が 1000 を超える（`subtree_too_large`）、
+  移動先の種類（`target_kind`: プロジェクトはグループか個人の名前空間の下、グループはグループの下かトップレベル、ユーザーはトップレベル）、
+  変化がない（`same_location`）、個人の名前空間の持ち主が bot（`parent_owner_bot`）か無効（`parent_owner_inactive`）、循環（`cycle`）、
+  深さ 20 超（`too_deep`）、新しいパスが 255 文字超（`path_too_long`）。子孫も含めたすべての新しいパスについて、生きているパスと墓標との
+  衝突は FG-REPO-0009（`sibling` / `tombstoned`）。
+- **書き込み**: 深さを制限した 1 つの再帰の `UPDATE` で部分木を書き換え、節ごとに `moved` の墓標を 1 行書く（`cause` = 動かしたリソース、
+  `owner_at_write` = 操作したユーザー、system なら NULL）。継承のロールが変わる利用者（移動元と移動先の親の連鎖の差、最大 1000 件、
+  超えたら truncated）を監査の details に残す（遷移ごとに user id をまとめ、最初の 400 件まで）。
+- **回数の制限**: 名前空間ごとに 24 時間で 10 回（FG-REPO-0018 `RenameRateLimited`、429）。数えるのは、そのリソース自身の成功した
+  移動の監査の行（`project.moved` / `group.moved` / `user.renamed`。祖先の移動でプロジェクトごとに書く行は除く。索引 `audit_log_moves`）。
+  監査ログは追記のみなので、墓標の解放や `reclaim` で数は減らない。管理者も対象で、運用の CLI（actor `system`、`RateLimit::Exempt`）だけ除外。
+- **Owner の不変条件**: 移動の後で、部分木のプロジェクトが有効な Owner（直接、祖先のグループの直接の Owner、個人の親の持ち主）を失う、
+  またはトップレベルへ移したグループに有効な直接の Owner がいない場合は、FG-REPO-0015 `reason=no_active_owner`（管理者も同じ）。
+  もともと Owner のいなかったプロジェクトは数えない。
+- **削除の権限**: forge_app の DELETE は purge のためだけで、ガード `forge.purge_delete_guard`（マイグレーション 20261102100100）が、
+  `purging` でないリポジトリ、削除待ちでないプロジェクト、削除待ちのプロジェクト以外の名前空間の削除を拒否する（XF001）。
+- **`reclaim`（A → B → A）**: `MoveOptions::reclaim` のとき、新しいパスにある墓標のうち、**そのパスへ移る同じ名前空間を指す** `moved` の墓標だけを、
+  同じトランザクションで解放してから移動する。別の名前空間を指す墓標や `deleted` の墓標は、引き続き FG-REPO-0009 `tombstoned`。
+  「墓標は解放されるまで必ず塞ぐ」の規則は変えない（解放と移動を 1 つの変更にするだけ）。
+- **解放**（`tombstones::release_decided`）: 墓標を読み、行のロック（行き先または親の名前空間 `FOR SHARE`、所属、アカウント）を取ってから
+  パスの advisory lock を取り、墓標を読み直す（なくなっていれば FG-REPO-0005、変わっていれば FG-DB-0002 `reason=tombstone_changed`、
+  `retryable=true`）。forge_app は墓標の表に UPDATE を持たないので行ロックはできない。墓標を消すのは解放と `reclaim` だけで、
+  どちらもパスのロックを取ってから消すので、それで直列になる。
+  `decide` には `TombstoneAccess::Moved { target, target_role }`（行き先がある `moved`）か `Deleted { recorded_owner, caller_parent_role,
+  has_parent }` を渡す。監査の行は墓標の cause のリソースに `namespace_tombstone.released`。
+- MR2 では移動は監査のみ（イベントなし）。グループの移動は最大 1000 のプロジェクトに及び、1 つの変更のイベントの上限（100）を超えるため、
+  移動のイベントの形は MR5 で決める。
+
+### D5 MR3: 削除と復元（`feat/hosting-project-delete-restore`）
+
+- **`DELETE /api/v1/projects/{id}`**（`ProjectDelete`、Owner か管理者、エージェント拒否）: 1 つの変更で `deleted_at = now()`、
+  `purge_after = now() + 猶予`、`deleted_by = 呼び出したユーザー`、`updated_at` を書く（forge-db `projects::delete_decided`、forge-hosting
+  `delete_project`）。応答は `200` で `{id, deleted_at, purge_after}`。猶予は設定 `hosting.deletion_grace_days`（既定 7、1〜365、
+  環境変数 `FORGE_HOSTING_DELETION_GRACE_DAYS`。範囲外は FG-SYS-0002）。
+- **`POST /api/v1/projects/{id}/restore`**（`ProjectRestore`）: ローダーは削除待ちのプロジェクトも読む（どのローダーも隠さず、`authorize()` が
+  決める）。`deleted_at` / `purge_after` / `deleted_by` を消す。リポジトリが `purging` なら `FG-REPO-0019 reason=purging`、削除待ちでなければ
+  `reason=not_deleted`（どちらも 409）。決定（`reconfirm`）の後でだけ答えるので、権限のない呼び出しは状態を知らされない。
+  リポジトリの行を `FOR UPDATE` で読み、さらに **DB が排他を強制する**: マイグレーション 20261102100200 が `forge.repositories_state_guard` を
+  置き換え、リポジトリが `purging` になれるのは、プロジェクトが削除待ちで `purge_after` を過ぎているときだけ（それ以外は XF001、
+  `FG-DB-0009 reason=rejected`）。復元の `FOR UPDATE` を待っていた purge の開始は、復元のコミット後に再評価されて拒否され、purge の開始が先に
+  コミットされていれば復元は `FG-REPO-0019 reason=purging`。**MR4 の purge ジョブへ**: 復元と同じ順（プロジェクトの行、次にリポジトリの行）で
+  ロックし、`deleted_at` / `purge_after` を自分で読み直して、競り負けたときはガードのエラーではなくスキップにする。
+  `deleted_at` と `purge_after` は同じ `clock_timestamp()`（書いた時刻）から作る。
+- **削除待ちの見え方**: そのプロジェクトを見られる呼び出しには 410（`FG-REPO-0006`）、見られない呼び出しには存在しないのと同じ 404
+  （`FG-REPO-0005`）。API も Smart HTTP（clone / fetch / push の広告）も同じ `authorize()` の行で決まる（テストで固定）。
+- **イベント**: `project.deleted` / `project.restored`（integration クラス）。`dedup_key` は `project_deleted:<project_id>:<deleted_at の epoch>` と
+  `project_restored:<project_id>:<取り消す削除の deleted_at の epoch>`。epoch は **マイクロ秒**（列の精度）にした: 秒だと、同じ秒の中の
+  削除 → 復元 → 削除が 2 回目の削除で重複扱い（`Deduped`）になり、利用者に 500 を返すことになる。
+- 墓標は削除では書かない（purge が `deleted` の墓標を書く。MR4）。
+
+### D5 MR4: 完全削除（`feat/repo-purge`）
+
+- **どこで動くか**: `forge worker` の監督下のタスク `purge`（ジョブの待ち行列ではない。監査の封印と同じく周期の単独のタスク）。周期は
+  設定 `hosting.purge_interval_secs`（既定 300、10〜86400、範囲外は FG-SYS-0002）。1 回に最大 20 件、`purge_after` の古い順。
+  20 件すべて完全削除できたら間を置かずに次の回。1 回の持ち時間は 5 分で、それを過ぎたら新しいプロジェクトに手を付けない（残りは
+  次の回、`forge.repo.purge_cut`。停止を待たせる時間を抑える）。`forge serve` では動かさない（背景の処理は worker、ADR-0016 §7）。運用の CLI
+  `forge admin project purge --dry-run | --now` が同じ 1 回分を実行する（`--now` は承認済みの Runbook の手順、猶予は短くしない）。
+- **段 1（開始）**: 1 つのトランザクション。プロジェクトの行 `FOR UPDATE`（復元と同じ順）→ `deleted_at` / `purge_after <= clock_timestamp()` を
+  読み直す → リポジトリの行 `FOR UPDATE` → `purging` と監査のみの `repository.purge_started`（`{project_id, repository_id, from}`）。
+  復元が先に確定していれば（または削除待ちでない、猶予が終わっていない、行が無い）何も書かずに飛ばす（debug のログ、エラーではない）。
+  すでに `purging` なら再開（段 2 へ）。ガード（20261102100200）は DB 側の二重の確かめのまま。
+- **段 2（保存先）**: リポジトリの作成のジョブが `running` なら次の回まで待つ（その実行が開始の前に状態を読んでいれば、削除の後で
+  ディレクトリを作りうる。実行が終われば、次の実行は `purging` を見て何もしない — `outcome=purging`、`MarkReady::Purging`、
+  `reprovision` は `FG-REPO-0014 reason=repository_purging`）。forge-git `StorageRoot::remove_until`: パスはリポジトリの ID から
+  決まるもの（要求のパスは使わない）、ルートからシャードまで本物のディレクトリであることを確かめ、リポジトリのディレクトリを同じ
+  シャードの `.purge-<id>-<uuid>.git` に名前を変えてから（1 回の rename でパスが空く）、`.purge-<id>-*` と `.tmp-<id>-*` をすべて
+  `remove_dir_all` で消す（中のシンボリックリンクはたどらない）。シンボリックリンクやファイルは拒否して残す（FG-REPO-0001）。
+  何も無いのは成功。各手順は締め切り（1 件 120 秒）の中で、超えたら FG-REPO-0003 `reason=deadline`（次の回で残りを消す）。
+- **段 3（行）**: 1 つのトランザクション。プロジェクトの行、リポジトリの行（`purging` でなければ FG-SYS-0001 `not_purging`）、
+  プロジェクトの名前空間の行（`FOR UPDATE`）→ そのパスの advisory lock（行が先、パスが後: 移動・作成・墓標の解放と同じ）→ 削除:
+  メンバー、保護 ref、リポジトリ、名前空間（その名前空間を指す `moved` の墓標は `ON DELETE SET NULL` で行き先を失う = 転送が
+  終わり、パスは塞いだまま。解放は `deleted` の墓標と同じ規則）、`deleted` の墓標（`old_path` = 今のパス、`parent_namespace_id` =
+  親、`owner_at_write` = `deleted_by`、`cause` = プロジェクト）、プロジェクト。監査とイベント `project.purged`（ADR-0016 の D5 MR4）。
+  プロジェクトの名前空間は葉なので、上のグループの移動は名前空間の行を先に取ってからパスのロックを取る。段 3 はその行を待ち、移動が
+  確定させたパスを読む。互いのロックを逆の順で取らない。
+- **失敗**: 1 件の失敗は、その場（タスクの中）で 1 回だけ FG-REPO-0020 RepositoryPurgeStuck（alert、`step` = start / storage / finish、
+  `cause_code`、元のエラーを `source`、`overdue_s`）でログし、次のプロジェクトへ進む。次の回で止まったところから再開する
+  （`purging` は `ready` に戻らない）。一覧の読み取りの失敗だけが回の失敗（監督者がログしてバックオフ）。
+- **同時実行の排除**（fd19f2a のレビューの MEDIUM）: 1 件の段 1〜3 は、プロジェクトのセッションの advisory lock
+  （forge-db `PurgeLock`、`pg_try_advisory_lock(0x46475055, project_id mod 2^31-1)`。2 つの int4 のキーは 1 つの bigint のパスのロックと
+  別の空間、2 つの int4 の他の使い手は class 1718579815）を持って行う。取れなければ `Deferred("in_progress")`（エラーでも alert でもない）。
+  保存先の削除（`StorageRoot::remove_blocking`）はロックを持つ別のタスクで動き、120 秒待っても終わらなければ
+  `Deferred("removal_running")`: タスクは削除が本当に終わってからロックを放す（同じ木に 2 つ目の `remove_dir_all` を始めない）。
+  `storage_removed` は `existed || swept > 0`。作成のジョブの状態の読み取りの失敗は `step=provision_check`。`--now` のまとめは
+  FG-REPO-0021 PurgeBatchIncomplete（warn）で終了コードだけを 0 以外にする（alert は各プロジェクトの FG-REPO-0020 だけ）。
+- **見送り（MR4 の外）**: `forge doctor` の「`purging` のまま古い」検査（今は毎回のログの FG-REPO-0020 で分かる）、
+  `purge_after` の部分索引（M1 の件数では `LIMIT` 付きの全件走査で足りる）。
+
+### D5 MR5: 移動・名前の変更・墓標の解放の API（`feat/web-api-namespace-moves`）
+
+- **ルート**（`app::PLANNED` から外した。どれも本文は厳格な JSON、上限 4 KiB）:
+  - `POST /api/v1/projects/{id}/transfer`（`ProjectTransfer`）本文 `{namespace_id?, path?, reclaim?}`
+  - `POST /api/v1/groups/{id}/transfer`（`GroupTransfer`）本文 `{namespace_id?, top_level?, path?, reclaim?}`
+  - `POST /api/v1/users/{id}/rename`（`UserRename`、管理者だけ）本文 `{username, reclaim?}`
+  - `POST /api/v1/namespaces/tombstones/release`（`NamespaceTombstoneRelease`）本文 `{path}`（墓標は **パスで** 指す。
+    `FG-REPO-0009 reason=tombstoned` を受けた利用者が知っているのはパスだけなので）
+- **移動と名前の変更は 1 つのルート**。`namespace_id` を省くと今の親（名前の変更）、`path` を省くと今の名前。グループを
+  トップレベルへ移すのは `"top_level": true` だけ（項目の書き忘れでトップレベルへ移ることはない。`namespace_id` と同時は
+  FG-WEB-0006）。変化のない要求は FG-REPO-0015 `same_location`。
+- **名前の変更の判定は `authorize()` が持つ**（ADR の「名前だけの変更は、移動先 = 今の親として扱う（role: 自分の実効ロール）」の
+  実装。レビューの指摘で forge-auth に移した）: 移動先が今の親のときは、新しい移動先 **`TransferTarget::CurrentParent { top_level }`**
+  （ローダーと forge-hosting の文脈は `LoadedTransferTarget::CurrentParent { namespace }`）。`ProjectTransfer` ではプロジェクトの
+  Owner だけで許可（親のグループで Developer でも、親が個人の名前空間でも。`top_level: true` はプロジェクトにはなく拒否）、
+  `GroupTransfer` ではグループの Owner だけで許可（サブグループの Owner は親に役割がなくてよい）、`top_level: true`（トップレベルの
+  グループの名前の変更）は管理者だけ（作成と同じ）。ローダーとトランザクションは読んだものを書き写すだけで、方針を持たない。
+  トランザクションでロックした親が証明の親と違えば（間に移動された）、ロックした親をそのまま移動先として判定する
+  （テスト `a_rename_proof_whose_project_moved_meanwhile_is_decided_as_a_move`）。権限の表に `TransferRename`、
+  `GroupTransferRename`、`GroupTransferRenameTopLevel` の許可と拒否の行を足した。
+- **ローダー**: プロジェクト（`GET` と同じ 1 回の読み取り、削除待ちも読む → 410 / 404 は `authorize()` が決める）、今の親
+  （リソースのパスの親を resolver で 1 回。親のパスが解決できない — 間に移動された — ときはリソースから読み直し、3 回続けば
+  存在しないのと同じ FG-REPO-0005 を `authorize()` が答える。`authorize()` より前に 503 を返すと、見えない人にも存在が分かるため）、移動先（`Hosting::parent`。無い・プロジェクトの名前空間・見えないは同じ
+  `NotVisible` = FG-REPO-0005 `target_not_visible`）。ユーザーの名前の変更は id だけで判定する（管理者以外にユーザーの有無を
+  知らせない。無いユーザーは管理者に FG-REPO-0005 `resource=user`）。
+- **墓標の解放のローダー**: forge-db `tombstones::load_by_path`（読み取りのプール、ロックなし）。`moved` の墓標の行き先は、
+  **行き先に役割を持つ人と管理者にだけ見える** とした（`target_visible = target_role.is_some() || 管理者の権限`。ローダーは
+  `Principal::admin_rights`、トランザクションの中は再読した `is_admin` と `admin` スコープ）。役割のない人は、internal の
+  プロジェクトやグループでも 403 ではなく 404（解放はどのみちできない。知ってよい以上を答えない側に倒した）。
+- **再試行**: 移動・解放のトランザクションが FG-DB-0002 `retryable=true`（`deadlock`、`subtree_unstable`、`tombstone_changed`、
+  `serialization`）で巻き戻ったら、最初から判定し直して最大 3 回まで実行する（`forge_hosting::MOVE_ATTEMPTS`）。それでも
+  だめなら新しい **FG-REPO-0022 NamespaceMoveContended**（503、warn、runbook `namespace-redirects`）。何も書かれていない。
+- **答え**: `200` で `{id, kind, namespace_id, old_path, path, tombstones, projects, reclaimed_tombstones}`（`tombstones` は書いた
+  `moved` の墓標の数 = 部分木の節の数。古いパスは解放まで塞がれ、読める人の clone / fetch は 302 で新しいパスへ、push は 404）。
+  解放は `200 {path, kind}`。失敗は既存のコード（FG-REPO-0009 409、FG-REPO-0015 409 `no_active_owner` など、FG-REPO-0018 429、
+  FG-AUTH-0003 403、FG-REPO-0005 404）。**`Retry-After` は付けない**（計画にない。最も古い移動の時刻を答えると移動の履歴が分かる）。
+- **運用の CLI**: `forge admin project move <id> --namespace <ns> --path <seg> [--reclaim]`、`forge admin group move <id>
+  (--namespace <ns> | --top-level) --path <seg> [--reclaim]`、`forge admin user rename <username> <new> [--reclaim]`。
+  actor `system`、`RateLimit::Exempt`（計画の答え: 運用の CLI だけが回数の制限の外）、`authorize()` の外（単一判定点の例外。
+  ADR-0019 の Amendment「D5 MR5: §8 の例外を運用の移動・名前の変更のコマンドへ広げる」に、HTTP から到達できない理由とともに記した）。`*_decided` を呼べるのは forge-hosting だけなので（テスト `decided_callers`）、
+  `Hosting::operator_*` を通す。ロールを読む呼び出し元はいないので、ユーザー id 0（存在しない）でロックする。
+- 権限の表の行（純粋な `authorize()`）は MR1 の行に名前の変更の行を足した。ルートごとの行（Owner / Maintainer / 管理者 / 読み取りのトークン /
+  `admin` のない管理者のトークン / エージェント / 他人 / 削除待ち / 不正な id）は `forge-web/tests/namespace_move_routes.rs`、
+  Owner の降格と移動の競合は `forge-hosting/tests/moves.rs`。
+
+## Amendment（2026-11-01、M2: 画面の資産・ログインの語、予約、`RepoBrowse`、プレビュー用のオリジンを作らないこと）
+
+計画 10（承認 2026-11-01）の M2 の MR1 で決めたこと。ADR-0021（ログインとセッション）と ADR-0022（画面の土台）と組で読む。
+URL の 3 つの形と判定の順序（上の「判定の順序」）は変えない。
+
+### 新しいインスタンスの語（`/-/` の直後）
+
+`forge_core::web_path::InstanceRoute` に足す（今は `projects` だけ）。
+
+| 語 | パス | Action / Resource | 公開 | 入る MR |
+|---|---|---|---|---|
+| `assets` | `GET|HEAD /-/assets/{file}`（1 セグメント） | `WebShell` / `Instance` | 公開。資格情報を見ない | MR2 |
+| `auth` | `GET /-/auth/login`、`GET /-/auth/callback` | `WebLogin` / `Instance` | 公開 | MR4 |
+| `auth` | `POST /-/auth/backchannel-logout` | `OidcBackchannelLogout` / `Instance` | 公開。Cookie も `Authorization` も見ない（判定は JWT の検証の後） | MR5 |
+| `auth` | `POST /-/auth/logout` | `SessionLogout` / `Instance` | **公開でない**。`__Host-gstn_session` だけ、CSRF（本文の `csrf`）と `Origin` の検査。303 で Keycloak へ（ADR-0021 §8） | MR5 |
+
+- **資産の置き場所は `/-/assets/` に決める**。上の「トップレベルの予約語」の節の「静的なファイルは `/assets/…` か `/-/static/…` にだけ置く」
+  を置き換える。トップレベルの `assets` は予約語のまま残す（名前空間に使わせない）。`/-/static` は作らない。
+- `assets` は、その語を持つ RouteDef がすべて `WebShell` なので公開の語になる（「判定の順序」の 4）。ただし殻ではなく、埋め込みの一覧にある
+  ファイルだけを返す。一覧にない名前は FG-WEB-0001（`reason=unknown_route`、`part=instance`。殻は返さない）。
+- `auth` の下の語は固定の 4 つだけ（`login`、`callback`、`backchannel-logout`、`logout`）。それ以外（`/-/auth`、`/-/auth/x`）は FG-WEB-0001。
+  `/-/auth/*` は殻の「どのパスでも同じバイト」の対象ではない（ログインの手順を行う）。DB を見る（callback、backchannel-logout、logout）が、
+  パスの解決はしない。
+- **公開かどうかは `auth` では語の後ろの固定のセグメントごとに決める**（`logout` だけが公開でない）。「判定の順序」の 4 の「1 つでも公開でない
+  RouteDef がある語は認証を求める」をそのまま当てると、ログインの入口まで認証を求めてしまうため。インスタンスの語の RouteDef は
+  `(語, 固定のセグメント, verb)` で 1 つに決まる（`{param}` を持たない）ので、公開の判定のキーをそこまで広げても、名前空間の語の判定
+  （解決の前に語だけで決める）は変わらない。
+- 登録の仕組みの今のテスト（公開の語の RouteDef はすべて `WebShell`）は、「公開の RouteDef の Action は `WebShell`・`WebLogin`・
+  `OidcBackchannelLogout` のどれか」に広げる。この 3 つ以外の Action は公開にできない（テストで固定する）。`SessionLogout` が公開でないことも
+  テストで固定する。
+
+### 予約するインスタンスの語（ルートを作らない）
+
+- **`/-/agent`**（W15、エージェントビルダー。計画 09 §4 で M4 の後）と **`/-/preview`**（W16、MR ごとのプレビューの環境。M4 が前提）を
+  インスタンスの語の予約に足す。M2 ではルートも画面のナビの枠も作らない（計画 08 原則 1）。予約の語への要求は FG-WEB-0001
+  （`reason=unknown_route`、`part=instance`）で、ほかの未知の語と同じ応答にする。
+- 予約は `InstanceRoute` とは別の定数（`RESERVED_INSTANCE_WORDS`）に持ち、テストで「予約の語と `InstanceRoute` の語が重ならない」
+  「予約の語は殻を返さない」ことを確かめる。将来その段階の ADR が Action を決めたときに、予約から `InstanceRoute` へ移す。
+
+### `RepoBrowse`（閲覧の API の Action）
+
+- 上の「ルートの系統と認可」の表は、画面のデータ（ファイル、コミット、ブランチ、blame、比較）を `RepoRead` / `read_repository` としていた。
+  M2 では **新しい Action `RepoBrowse`**（Resource `Project`、スコープ **`read_api`**）にする。
+  - 役割の判定は `RepoRead` と同じ（Reporter 以上、internal のプロジェクトは有効な利用者、削除待ちは拒否、`kind` は問わない）。
+    `authorize()` の中で同じ arm を共有し、判定の規則を 2 つにしない。
+  - 分ける理由: 閲覧の API は JSON の API で、`read_api` のトークン（`gstn browse`、MCP）が使う。`read_repository` は git の取得のスコープで、
+    `read_repository` だけのトークン（CI の clone 用）に API の閲覧まで許すと、スコープの意味がずれる。逆に `read_api` だけのトークンで
+    `git clone` はできないまま。
+  - raw と archive は今のまま `RepoRead` / `read_repository`（中身をそのまま返すもので、git の取得と同じ扱い）。dispatcher で
+    Cookie を受け付けるのは raw と archive の語だけ（Smart HTTP は Cookie を見ない。ADR-0021 §10）。
+- ルート（MR7・MR8）: `GET /api/v1/projects/{id}/repository/{refs,resolve,tree,blob,commits,commits/{oid},compare,blame}`。
+  どれも `RepoBrowse`。ref とパスの境目と `RefNotResolved` は上の「ref とパスの境目」のとおり、認可の後でだけ決める。
+  解決できない ref・パスは新しい **FG-REPO-0023 RepositoryPathNotResolved**（404、info。番号は登録の時の次の空き、MR7 で登録）。
+- 権限の表の行（MR7）: allow = Reporter・Developer・Maintainer・Owner・管理者、internal のプロジェクトの有効な利用者、`read_api` のトークン、
+  セッション。deny = 匿名（private / internal）、Guest（private）、無効な利用者、削除待ち、`read_repository` だけのトークン、
+  `write_repository` だけのトークン。
+
+### プレビュー用のオリジンは M2 では作らない
+
+- 上の「応答の安全」の「プレビュー用のオリジン（M2 で決める）」は、**M2 では作らない** と決める。`web.content_origin` の設定もルートも足さない。
+- SVG・HTML・PDF は **表示せず、ダウンロードだけ** にする（raw は `application/octet-stream` と `Content-Disposition: attachment`、画面は
+  「この形式は画面で表示しません。ダウンロードしてください」と出す）。画像は今の許可リスト（png / jpeg / gif / webp）だけを表示する。
+- 理由: 別のオリジン（DNS、TLS の証明書、署名付きの URL の鍵）を用意する運用の費用に比べて、M2 の利用（コードと仕様書の閲覧）で
+  SVG・HTML・PDF を画面で見る必要が小さい。文書ポータル（M7）で PDF の表示が要るときに、上に書いた前提（署名、60 秒、
+  `authorize(RepoRead)` のやり直し、matrix の行）で改めて決める。
+
+### 変えないもの
+
+- 公開の殻は DB も資格情報も見ず、どのパスにも同じバイトを返す（ADR-0022 §2）。
+- GitHub の形の URL の救済（`resolve?prefix=true`）は上の規則のまま（MR6 で実装。回数の制限は FG-WEB-0010）。
+- サーバーが返すリダイレクトの規則（`web.base_url` か相対パス）。`web.base_url` は ADR-0021 §12 で設定として足す（今の墓標の 302 は相対パス）。
+
+## Amendment（2026-11-01、M2 MR7: 閲覧の API と raw・archive の実装で決めたこと）
+
+上の M2 の Amendment（`RepoBrowse`、raw・archive のヘッダー、プレビュー用のオリジンを作らないこと）を実装したときに決めた点。
+
+| 点 | 決めたこと | 理由 |
+|---|---|---|
+| ref のキャッシュ | `for-each-ref` の結果をリポジトリごとに 5 秒（`BrowseLimits::refs_ttl`）、最大 256 リポジトリ。push の処理が終わるたびに消す（`RefsChanged`）。消した時刻をまたいで読んだ一覧は保存しない（世代の数） | 計画 10 §5 の「数秒のキャッシュ（push で消す）」。push の直後に古い ref を見せない |
+| ref の数の上限 | 一覧は 5 000 件で `truncated`。それを超えるリポジトリの解決は、キャッシュではなく候補の完全な名前だけを `for-each-ref --end-of-options <候補>` で git に聞く | 一覧の大きさを抑えつつ、解決は常に正しくする |
+| `?ref=` の形 | 40 / 64 桁の 16 進数（大文字小文字は問わず、小文字にする）、`refs/heads/…` / `refs/tags/…` の完全な名前、短い名前（ブランチ、次にタグ） | 画面と gstn が同じ値を渡せる。16 進数はコミットとしてだけ扱い、同じ名前のブランチには落とさない |
+| 注釈付きタグ | 1 段だけ剥がす（`%(*objectname)`）。木・blob を指すタグは `FG-REPO-0023 reason=not_a_commit` | 閲覧の対象はコミットだけ |
+| 上限を超える木とファイル | エラーにせず切り詰める（木 5 000 項目、blob 1 MiB、`truncated: true`）。git は上限で止めて回収する | 画面は「切り詰めました」と出せばよく、失敗ではない（計画 10 MR10 の表示） |
+| raw の型の判定 | 4 MiB 以下は全部を読んで判定し、超えるものは `application/octet-stream`（`attachment`）で流す。画像は拡張子と先頭のバイトの両方が合うときだけ。SVG に加えて HTML・XML・PDF の系統（`svgz`、`htm`、`xhtml`、`xht`、`shtml`、`mht`、`mhtml`、`xsl`、`xslt`）もダウンロードだけ | UTF-8 として正しいかは全体を見ないと決まらない。4 MiB を超える画像はダウンロードになる（M2 では受け入れる） |
+| archive の名前 | 中のディレクトリは `<プロジェクトの名前>-<コミットの先頭 12 桁>/`、ファイル名は `<プロジェクトの名前>-<ref（英数字と ._- 以外は ->）>.<拡張子>`。ref の後ろにパスが残れば `path_remainder` | prefix は forge が作る値だけにする（利用者の文字を git の引数に入れない） |
+| tar.gz | `-c tar.tar.gz.command=git archive gzip`（git 2.38 以上の内部の gzip）を毎回付ける | リポジトリの設定の外部コマンドを動かさない |
+| 同時実行の上限 | リポジトリごとに 8（取り込みの git の呼び出し）。超えたら待たずに `FG-GIT-0004 reason=repo_browse`。archive と大きい raw は既存の stream の上限（全体 16、利用者ごと 4）だけ | 1 つのリポジトリへの集中で全体の git の枠を使い切らない。長い stream を枠に入れると閲覧が止まる |
+| 閲覧の API の `ProjectRecord` | `ProjectRecord` に `repository`（id と状態）を足し、`load_project` と一覧の 1 つの文で読む | 閲覧の API はプロジェクトの id で届くので、解決の API と同じく 1 回の読み出しで repository まで分かる |
+
+## Amendment（2026-11-01、M2 MR8: 履歴・差分・比較・blame の API で決めたこと）
+
+MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare`・`blame` を足したときに決めた点。ルートは `routes/history.rs`、git の実行は forge-git の `browse/{history,diff,blame}.rs`。
+
+| 点 | 決めたこと | 理由 |
+|---|---|---|
+| `commits` のカーソル | `v1.<起点のコミット>.<前のページの最後のコミット>.<ここまでに読んだ件数>`。次のページは**カーソルの起点**から `--skip` で読み直し、先頭の 1 件が最後のコミットであることを確かめてから捨てる。合わなければ `FG-WEB-0006 reason=cursor_invalid rule=anchor` | 起点を解決済みのコミット ID に固定するので、並びは push があっても変わらない。キーは「最後のコミット ID」で、件数はそこへ戻る手段。別のパスのカーソルや作り物は推測せず断る。署名はしない（起点は同じリポジトリのコミットで、`?ref=<oid>` で既に誰でも読める） |
+| マージコミットの差分 | 最初の親との差分。ルートコミットは空との差分（`--root`） | `diff-tree` は何も言わないことがある（`-m` なし）。画面のコミットの差分と GitLab の見え方を揃える |
+| 比較 | `from` → `to` の 2 本の木の差分（2 ドット）と、`to` にあって `from` にないコミット（200 件まで）。merge-base は使わない | 単純で予測できる。3 ドットが要るなら MR10 で `merge_base` を足す |
+| 差分の上限 | ファイル 500、パッチの合計 2 MiB（git を止める）、1 ファイル 256 KiB。パッチは**全部か無いか**で、無いときは `omitted`（`too_large` / `total_cap` / `not_utf8`）。バイナリは `binary: true` で `patch: null`。上限で切れた差分は `truncated: true` | 途中で切れたパッチは誤読のもと。切れたことを必ず示す |
+| パッチとファイルの対応 | `diff-tree --raw -z`（パスは NUL 区切りで引用なし）と `-p` を別々に走らせ、`diff --git ` の行で分けて順番に対応させる（型の変更は 2 つ）。数が合わなければ `FG-GIT-0003 reason=diff_chunk_mismatch` | ヘッダーのパスの引用を解釈しない。推測せずに失敗させる |
+| blame | `blame --porcelain -L 1,<上限+1> <コミット> -- <パス>`。10 000 行まで（`truncated`）、NUL か UTF-8 でない行のあるファイルは `binary: true`（行なし）、空のファイルは空。時間切れ 20 秒 | `git blame` は `--end-of-options` を受け付けないので、検証済みの 16 進数の ID を `--` の前の唯一の引数にする。応答は連続する行を 1 つのハンクにまとめる |
+| `commits/{oid}` の `{oid}` | 40 / 64 桁の 16 進数だけ（大文字小文字は問わない）。判定の後で調べ、ref の名前は受け付けない | 画面は `resolve` / `commits` の結果の ID を使う。パスに入る値を厳しくする |
+| コミットの文字 | 名前・件名・本文は UTF-8 として読み、不正なバイトは置き換えの文字（表示用）。ID と位置は決して置き換えない | MR7 の木の名前と違い、問い合わせ直す必要がない |
+| 新しいエラーコード | 足さない（`FG-REPO-0023`、`FG-WEB-0006`、`FG-GIT-0002/0003/0004`） | 失敗の種類は既存のコードで言える。`reason` を目録に足した |
+| コミットの文字（追記） | UTF-8 でない名前・件名・本文・blame のメタデータは置き換えの文字で返し、**呼び出しごとに 1 回** `forge.git.browse.log_lossy`（`repo_id`、`error_code=FG-GIT-0003`、`count`）を warn で記録する。名前・メール中のフィールド区切り（0x1f）でフィールドがずれた記録は、日付の形で見つけて `FG-GIT-0003 reason=log_record_fields` にする（ページ全体の失敗。細工したコミットで履歴が見えなくなる代わりに、ずれた値を見せない） | 黙って置き換えない。ずれた値を推測で読まない |
+| blame のバイナリと上限（追記） | `binary: true` のとき `hunks` / `commits` は空。NUL / UTF-8 でない行が `-L` の上限（`max_blame_lines`+1）より後にあるファイルは検出できず、行は上限で `truncated` になる（バイナリとは言わない） | 上限より先は読まない。許容する |
+| 到達できないオブジェクト（追記） | 署名しないカーソルと `commits/{oid}` は、リポジトリにあるコミットなら ref から届かないもの（削除したブランチの先、gc 前）も読める。MR7 の `?ref=<oid>`・tree・raw と同じ「`RepoBrowse` を持つ者はリポジトリ内の任意のオブジェクトを読める」の範囲で、gc までの間のリポジトリ単位の読み取りとして受け入れる | ref からの到達を調べると 1 回ごとに `merge-base` の呼び出しが要る。権限は変わらない（同じ人が既に読める） |
+
+## Amendment（2026-11-01、M2 MR6: `resolve?prefix=true` と一覧の絞り込みの実装で決めたこと）
+
+- **`prefix=true` の候補**: `path` の先頭から、名前空間のパスとして読める接頭辞をすべて（最大 `MAX_DEPTH` = 20、読めない段で打ち切り）。
+  **候補をすべて** `resolve` に掛ける（早く見つかっても止めない。文の数は要求のセグメントの数だけで決まり、何があるかでは変わらない）。
+  数えるのは **今のパスへの完全一致（`Resolution::Live`）でプロジェクトのもの** だけ（墓標・グループ・個人の名前空間は単独の結果にしない）。
+- **選び方**: ローダーが候補ごとに `authorize(PathResolve, Resolved { Live, Project })` を呼び、許された最長のものを返し、レジストリが
+  もう一度 `prove()` する。拒否は「この接頭辞ではない」として扱い、拒否でない失敗（FG-SYS-0001）は要求の失敗。なければ FG-REPO-0005
+  （`lookup=no_visible_project_prefix`）で、ないパスと本文・状態・ヘッダーが同じ（`request_id` を除いてバイトで比べるテスト）。
+- **応答**: 今までの `Resolution` に `remainder`（残りのセグメントを `/` でつないだもの、なければ欠ける）。`moved` は常に `false`。
+- **回数の制限**: 利用者ごとに 60 回 / 60 秒（`PrefixLimiter`、`route=resolve_prefix`）。解決の前に数える。超えたら FG-WEB-0010、
+  `Retry-After`（エラーの文脈 `retry_after_s` を `error.rs` がヘッダーにする）。`prefix` が `true` / `false` 以外か重複は FG-WEB-0006
+  `param=prefix`。トークンの scope の判定は完全一致の解決と同じく、ローダーの後（`prove()`）。
+- **一覧の絞り込み**（`GET /api/v1/projects?kind=&membership=&state=pending_deletion`、`GET /api/v1/groups?membership=`）:
+  行ごとの `authorize()` の **後** に当てる（SQL では絞らない）。`state=pending_deletion` は削除待ちの行だけを `ProjectRestore` で判定する
+  （復元できるものの一覧。ふつうの一覧は今のまま `ProjectRead` で削除待ちを隠す）。`membership=true` は直接か継承のロールがある行だけ。
+  **カーソルの purpose に絞り込みを入れる**（`projects.list:user=<id>:kind=…:membership=…:state=…`。絞り込みなしは M1 と同じ purpose）。
+  別の絞り込みのカーソルはタグで落ちる（`rule=tag`）。値の誤りは FG-WEB-0006 `rule=invalid_value`、グループの `kind` / `state` は
+  `unknown_parameter`。
+
+
+## Amendment（2026-11-01、ADR-0023: 種類と文書ポータルをやめる）
+
+- 「リポジトリの種類（ADR-0004）」の節（`spec` / `system` はバッジで示し、一覧は `?kind=spec` で絞る）は、置き換えた。リポジトリに種類はなく、バッジも絞り込みもない。
+- `project_view` の `kind`（リポジトリの種類）、`POST /api/v1/projects` の `kind`、`GET /api/v1/projects?kind=` は、後続のコードの MR で取り除く。
+  カーソルの purpose の `kind=…` も同様。名前空間の `kind`（`user` / `group` / `project`）と墓標の `kind` は別のもので、変わらない。
+- 「文書ポータル（§3.7、M7）は別の画面の系統である」は取り下げた。画面の系統は 1 つ。`/docs/…`（M7）の予約は、ポータルのためのものなので使わない（予約語は残してよい）。

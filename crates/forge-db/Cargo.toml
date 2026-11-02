@@ -34,6 +34,8 @@ tempfile.workspace = true
 forge-core = { workspace = true, features = ["test-support"] }
 # C6: captured JSON logs in the job runner tests.
 tracing-subscriber.workspace = true
+# D4: generated protected ref patterns against the database CHECK.
+proptest.workspace = true
 
 [lints]
 workspace = true

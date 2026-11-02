@@ -20,7 +20,7 @@ user_message_ja = "内部エラーが発生しました。問い合わせ番号�
 user_message_en = "An internal error occurred. Contact the administrator with the request ID."
 user_message_id = "Terjadi kesalahan internal. Hubungi administrator dengan menyertakan ID permintaan."
 cause = "A failure that no more specific code describes reached a boundary. Every occurrence is a gap in the registry."
-diagnosis = "Filter logs by error_code=FG-SYS-0001 and the reported request_id; read the `context` and `source` fields and the span chain to find the origin crate and operation."
+diagnosis = "Filter logs by error_code=FG-SYS-0001 and the reported request_id; read the `context` and `source` fields and the span chain to find the origin crate and operation. From the list routes: `reason=lists_unconfigured` (the server was built without the page loaders and cursor keys — `forge serve` always sets them, so this is a test or embedding error), `page_out_of_order` (the page loader returned ids not strictly ascending after the cursor: a loader bug, the page was refused rather than repeat or skip rows), `page_size_out_of_range` (a caller asked forge_db::lists for 0 or more than 10000 rows, or forge_db::users::admin_page for 0 or more than 101). M2 MR6: `purge_batch_out_of_range` (sessions::purge_expired asked for 0 or more than 500 rows), `purge_too_many_owners` (a purge batch touched more owners than one change may audit: unreachable with the batch bound), `session_public_id_unchecked` (sessions::owner got a value that is not 16 lowercase hex: the route must validate first), `resolve_viewer_missing` / `search_viewer_missing` / `token_route_without_user` / `session_route_without_user` (a route that needs a signed-in caller ran without one: a registry bug), `caller_limiter_poisoned` (with `route`: a panic while the rate-limit table was held; the table was emptied and counting goes on), `http_disable_past_guard` (users::disable reported a forced disable to the HTTP route, which never forces)."
 fix = "Fix the underlying failure, then register a specific code for it so this catch-all stops appearing (feedback action)."
 runbook = "internal-error"
 test = "internal_error_is_alerting_500"
@@ -34,7 +34,7 @@ user_message_ja = "サーバーの設定に問題があります。管理者に�
 user_message_en = "The server configuration is invalid. Contact the administrator."
 user_message_id = "Konfigurasi server tidak valid. Hubungi administrator."
 cause = "The configuration file or environment is missing a required value or contains an invalid one; detected at startup or on reload."
-diagnosis = "The log event carries `config_key` and `reason`. `config_key` is a key such as `database.url` (its environment variable is derived: `FORGE_DATABASE_URL`), `config_file` (then see `path`), or an unknown `FORGE_*` variable (a typo). Layers, later wins: config file (`--config` / `FORGE_CONFIG`) → environment → command-line flags. `reason` is one of missing, invalid, empty, zero, above_max (min_connections above write_max_connections or read_max_connections), duplicate (a repeated database.privileged_members entry), unknown_key, unknown_env, renamed (see `renamed_to`; e.g. FORGE_DATABASE_MAX_CONNECTIONS → FORGE_DATABASE_WRITE_MAX_CONNECTIONS), not_unicode, unreadable, parse (see `line` / `column`; the offending text is not logged), password_in_url (use `database.password_file`), query_in_url (the URL is only postgres://user@host[:port]/dbname — TLS, timeouts and options come from the configuration), libpq_env (a PG* variable such as PGPASSWORD or PGSSLROOTCERT is set; `config_key` names it — unset it), unverified_remote (tls_mode require / disable for a non-loopback host without database.tls_allow_unverified = true), not_absolute, insecure_permissions (Unix: the password file must not be readable by group or others; see `mode`), wrong_role (the database login is not the expected role — see `role_check`: for database.url not_member (not a member of forge_ro), superuser (a superuser or BYPASSRLS login), privileged (it can reach forge_owner / forge_seq / forge_purge), role_not_applied / not_read_only (the read-pool session settings did not take effect); for database.migrate_url not_member (not a member of forge_owner), owner_missing (the bootstrap has not run), superuser, not_owner), not_for_this_command (forge serve was given database.migrate_password_file or database.maint_password_file — the server process must not hold those credentials), connection_budget (`needed` connections of the configured pools exceed 80 % of the server's `usable` slots; `server_slots` when none are left). Secret values are never logged."
+diagnosis = "The log event carries `config_key` and `reason`. `config_key` is a key such as `database.url` (its environment variable is derived: `FORGE_DATABASE_URL`), `config_file` (then see `path`), or an unknown `FORGE_*` variable (a typo). Layers, later wins: config file (`--config` / `FORGE_CONFIG`) → environment → command-line flags. `reason` is one of missing, invalid, empty, zero, above_max (min_connections above write_max_connections or read_max_connections; server.max_connections_per_peer above server.max_connections), above_keep_alive_max (server.header_read_timeout_ms or server.body_read_timeout_ms above server.keep_alive_max_ms), below_git_idle_timeout (server.read_idle_timeout_ms below git.http.idle_timeout_ms), duplicate (a repeated database.privileged_members entry), unknown_key, unknown_env, renamed (see `renamed_to`; e.g. FORGE_DATABASE_MAX_CONNECTIONS → FORGE_DATABASE_WRITE_MAX_CONNECTIONS), not_unicode, unreadable, parse (see `line` / `column`; the offending text is not logged), password_in_url (use `database.password_file`), query_in_url (the URL is only postgres://user@host[:port]/dbname — TLS, timeouts and options come from the configuration), libpq_env (a PG* variable such as PGPASSWORD or PGSSLROOTCERT is set; `config_key` names it — unset it), unverified_remote (tls_mode require / disable for a non-loopback host without database.tls_allow_unverified = true), not_absolute, insecure_permissions (Unix: the password file must not be readable by group or others; see `mode`), wrong_role (the database login is not the expected role — see `role_check`: for database.url not_member (not a member of forge_ro), superuser (a superuser or BYPASSRLS login), privileged (it can reach forge_owner / forge_seq / forge_purge), role_not_applied / not_read_only (the read-pool session settings did not take effect); for database.migrate_url not_member (not a member of forge_owner), owner_missing (the bootstrap has not run), superuser, not_owner), not_for_this_command (forge serve was given database.migrate_password_file or database.maint_password_file — the server process must not hold those credentials), connection_budget (`needed` connections of the configured pools exceed 80 % of the server's `usable` slots; `server_slots` when none are left). Secret values are never logged."
 fix = "Correct the value named by `config_key` in the configuration file or environment and restart. Never commit secrets to the config sample."
 runbook = "config-invalid"
 test = "config_invalid_is_alerting_500"
@@ -63,8 +63,8 @@ user_message_ja = "Git の処理基盤が利用できません。管理者に連
 user_message_en = "The Git backend is unavailable. Contact the administrator."
 user_message_id = "Layanan Git tidak tersedia. Hubungi administrator."
 cause = "The configured git binary cannot be executed, or its version is older than the minimum forge requires (2.38, for merge-tree --write-tree)."
-diagnosis = "The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), or `too_old` (with `found` and `minimum`). Run the configured git binary with `version` as the forge service user."
-fix = "Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart."
+diagnosis = "The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), `too_old` (with `found` and `minimum`), `process_tree_failed` (Windows: the Job Object for a stream could not be created or assigned; `source` has the OS error), or `hooks_dir` (Smart HTTP: `<git home>/empty-hooks` is not an empty real directory; `detail` = `not_empty`, `not_a_directory`, `insecure_permissions` (group- or world-writable; with `mode` — it is created 0700), `create_failed`, `unreadable` or `not_absolute_utf8`, with `path`). Run the configured git binary with `version` as the forge service user."
+fix = "Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart. For `hooks_dir`: find out who put files into `empty-hooks` (it must stay empty — no hook runs in Smart HTTP in M1 phase 9), remove them, and record it as an incident (runbook smart-http)."
 runbook = "git-unavailable"
 test = "version_below_2_38_is_git_unavailable"
 
@@ -76,9 +76,9 @@ severity = "warn"
 user_message_ja = "Git の処理が時間内に終わりませんでした。しばらくしてから再度お試しください。"
 user_message_en = "The Git operation did not finish in time. Try again later."
 user_message_id = "Operasi Git tidak selesai tepat waktu. Coba lagi nanti."
-cause = "A git subprocess exceeded its total timeout and was killed and reaped."
-diagnosis = "The log event carries `subcommand`, `timeout_ms` and `kind` (`total`). Many occurrences for one repository point at its size or storage latency; many across repositories point at host load."
-fix = "Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`) for that operation."
+cause = "A git subprocess exceeded its total timeout, or a streaming one (Smart HTTP) moved no byte in either direction for its idle timeout; it was killed (streams: with its process group / Job Object) and reaped."
+diagnosis = "The log event carries `subcommand` and `kind`: `total` (with `timeout_ms`) or `idle` (streams, with `idle_timeout_ms`, `bytes_in`, `bytes_out`, `duration_ms`). `idle` with small byte counts means a stalled client or a proxy buffering the body; `total` for one repository points at its size or storage latency, across repositories at host load. `reap_failed` (`kill_failed`, `wait_failed`, `wait_timeout`, with `reap_error`) on this or any FG-GIT code means forge could not confirm the killed git was reaped: it may still be running and holding repository locks (`pgrep -af git`). `operation=want_check` (with `timeout_ms`, no `subcommand`): the reachability check of an upload-pack request's wants (ADR-0007 option (a)) did not finish within `git.http.want_check_timeout_ms` — many refs or, for non-commit wants, many objects. `operation=fast_forward_check` (M1 phase 9 MR4): telling a fast-forward from a force push for a push's protected branches (or, after the push, for its record) took over 10 s. See runbook smart-http for streams."
+fix = "Check storage latency and host load; for a legitimately large repository raise the git total timeout (`GitConfig::timeout_total`, streams `GitConfig::stream_timeout_total`) for that operation. For idle kills check the reverse proxy's request buffering and timeouts first."
 test = "hung_git_is_killed_after_timeout"
 
 [[error]]
@@ -90,7 +90,7 @@ user_message_ja = "Git の処理に失敗しました。問い合わせ番号を
 user_message_en = "The Git operation failed. Contact the administrator with the request ID."
 user_message_id = "Operasi Git gagal. Hubungi administrator dengan menyertakan ID permintaan."
 cause = "A git subprocess exited with an unexpected non-zero status, or reading its output / waiting on it failed (spawn failure is FG-GIT-0001). Callers map expected non-zero exits, such as a missing ref, to specific codes; this code means the failure was not expected."
-diagnosis = "The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`, URL credentials redacted); when reading or waiting failed there is no `exit_code` and the cause is in `source`. Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`."
+diagnosis = "The log event carries `subcommand`, `exit_code` and the first lines of git's stderr (`stderr`, URL credentials redacted); when reading or waiting failed there is no `exit_code` and the cause is in `source`. Reproduce with the same subcommand against the repository path printed by `forge admin repo-path`. receive-pack (M1 phase 9 MR4): `reason=report_unreadable` (with `detail`, `refs`) — git's answer to a push had no readable report-status; forge forwarded it unchanged and could not tell which refs changed, so nothing was recorded: compare the repository's refs with the push's commands (runbook smart-http). `phase=push_record_kinds` / `push_record_commits`: classifying or listing the commits of an applied push failed; the push was recorded as `force` / without commits (`total_commits_partial`). Browse history (M2 MR8): `reason=log_record_fields` / `log_record_oid` / `log_record_parent` (a `git log -z` record forge cannot read), `commit_record_missing` (`log -1` of a commit that exists returned no matching record), `diff_raw_meta` / `diff_raw_status` / `diff_raw_paths` / `diff_raw_unterminated` / `diff_path_not_utf8` (`diff-tree --raw -z` output that is not the documented shape), `diff_chunk_mismatch` (the patch has a different number of `diff --git` sections than the file list: forge never guesses which patch belongs to which file), `blame_line_without_header` / `blame_metadata_without_header` / `blame_author_time` (`blame --porcelain` output that is not the documented shape); each is a git version or repository problem, not user input — reproduce with the same subcommand (`git log -z`, `git diff-tree -r -M --raw -z`, `git blame --porcelain`) on the commit named by `commit`."
 fix = "Act on git's stderr: repository corruption (`git fsck`), permissions on the storage root, or disk space."
 runbook = "git-process-failed"
 test = "nonzero_exit_is_git_process_failed"
@@ -103,8 +103,8 @@ severity = "warn"
 user_message_ja = "Git の処理が混み合っています。しばらくしてから再度お試しください。"
 user_message_en = "The Git backend is busy. Try again later."
 user_message_id = "Layanan Git sedang sibuk. Coba lagi nanti."
-cause = "Every git subprocess slot was in use for longer than the acquire timeout."
-diagnosis = "Check the git concurrency limit (`GitConfig::max_concurrency`) against the number of concurrent clones/pushes in the access log; long-running operations (large clones) hold slots."
+cause = "Every git subprocess slot was in use for longer than the acquire timeout, or a principal already holds its maximum number of streams."
+diagnosis = "Without `reason`: the captured pool (`GitConfig::max_concurrency`). `reason=streams`: the streaming pool for Smart HTTP (`max_streams`, default 16) — long clones hold slots. `reason=principal_streams`: one principal (user or client address) already has `max_per_principal` (default 4) streams open; refused at once. `reason=body_reads` / `principal_body_reads` (forge-web, M1 phase 9 MR3): every Smart HTTP request-body read slot is taken (sized like the stream pool: `git.http.max_streams` in total, waited for up to `acquire_timeout`, `wait_ms`) or this user already reads `git.http.max_streams_per_principal` bodies (`max`, refused at once) — many slow or stalled uploads at the same time. Compare with the number of concurrent clones/pushes in the access log."
 fix = "Raise the git concurrency limit if the host has CPU and IO headroom, or find the operations that hold slots for long."
 test = "concurrency_limit_reports_git_busy"
 
@@ -159,7 +159,7 @@ user_message_ja = "リポジトリのデータが見つかりません。問い�
 user_message_en = "The repository data is missing. Contact the administrator with the request ID."
 user_message_id = "Data repositori tidak ditemukan. Hubungi administrator dengan menyertakan ID permintaan."
 cause = "The database knows the repository but its directory does not exist under the storage root."
-diagnosis = "The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early."
+diagnosis = "The log event carries `repo_id` and `path`. Check whether the storage volume is mounted and whether a purge job removed the directory early. `forge doctor` (check `repositories.storage`) reports the first ready repository whose directory is missing, with `missing` (how many of the checked ones) and `checked`; it checks at most 10 000 ready repositories per run and says so (`truncated`)."
 fix = "Remount the storage volume or restore the repository from backup; then confirm with `forge admin repo-path <repo_id>` (state `exists`)."
 runbook = "repo-storage"
 test = "missing_repository_dir_is_storage_missing"
@@ -173,7 +173,7 @@ user_message_ja = "リポジトリの保存先の読み書きに失敗しまし�
 user_message_en = "Reading or writing repository storage failed. Contact the administrator."
 user_message_id = "Gagal membaca atau menulis penyimpanan repositori. Hubungi administrator."
 cause = "A file-system operation on the storage root failed: permission denied, disk full, or an I/O error while creating or inspecting a repository directory."
-diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
+diagnosis = "The log event carries `operation` (`inspect`, `create_shard`, `create_temp`, `rename`, `cleanup`), `repo_id` when known, and the OS error in `source`. `reason=deadline` (with `operation`): the provisioning job's deadline ran out during that file-system step (the job retries); `operation=doctor_storage reason=check_timeout`: `forge doctor` `repositories.storage` did not finish its walk over the ready repositories in 60 s (`checked`, `missing`, `other` say how far it got) — a slow or hung storage volume. Check free space (`df -h <root>`), ownership and mode of the storage root, and the kernel log for I/O errors."
 fix = "Free disk space, restore ownership of the storage root to the forge service user, or replace the failing volume."
 runbook = "repo-storage"
 test = "unreadable_or_unwritable_storage_is_storage_io_failed"
@@ -201,7 +201,7 @@ user_message_ja = "指定されたプロジェクトまたはリポジトリが�
 user_message_en = "The project or repository was not found."
 user_message_id = "Proyek atau repositori tidak ditemukan."
 cause = "The resource does not exist, or the caller may not see it. Both cases return the same code so that private resources do not leak their existence (ADR-0010)."
-diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable or a group command on a user id that does not exist; `resource=group`: a member change on an unknown group, or roles::load_group_roles on a group id without a namespace; `resource=namespace`: a group create under an unknown parent, or roles::load_namespace_roles on an unknown namespace id)."
+diagnosis = "The log event carries `action` and `reason`: `not_visible` (the user is not a member of a private project — check memberships, not the URL), `tombstone_not_visible` (the same behind a moved path, `PathResolve`), `absent` / `tombstone_deleted` / `kind_mismatch` (from the web dispatcher and `GET /api/v1/namespaces/resolve`, with `route=`: nothing at the path, a deleted path, or a path of another kind than the route — `raw` on a group; `via=moved` and `tombstone_id=` when a moved path led to an invisible project; `tombstone_post` / `tombstone_push` when a moved path is used for a POST or a push, which are never redirected; a malformed `path` or `{id}` parameter is FG-WEB-0006 since M1 phase 8b, decided before any lookup), `foreign_token` (another user's token id), or, from the lookup layer and the forge-db commands, `absent` with `resource` (`resource=user`: users::disable, a group command or a project create on a user id that does not exist; `resource=group`: a member change on an unknown group, or roles::load_group_roles on a group id without a namespace; `resource=namespace`: a group or project create under an unknown parent, or roles::load_namespace_roles on an unknown namespace id; `resource=project`: roles::load_project_roles or projects::access on a project id without a project namespace / project row)."
 fix = "Check the path; add the user to the project or group if they should see it."
 test = "invisible_private_project_is_not_found"
 
@@ -227,7 +227,7 @@ user_message_ja = "この名前は使えません。小文字の英数字と . _
 user_message_en = "This name cannot be used. Use 1 to 64 lowercase letters, digits, '.', '_' or '-'."
 user_message_id = "Nama ini tidak dapat digunakan. Gunakan 1 sampai 64 huruf kecil, angka, '.', '_' atau '-'."
 cause = "A user, group or project name (a namespace path segment) breaks the rules of ADR-0015: 1 to 64 characters matching ^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$, no '..', not ending in .git / .atom / .wiki, and not a Windows device name (con, prn, aux, nul, com1-9, lpt1-9), also not when only the part before the first dot is one."
-diagnosis = "The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; for a nested group also too_deep, more than 20 levels, and path_too_long, a full path over 255 characters) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database."
+diagnosis = "The log event carries `reason` (empty, too_long, charset, edge, double_dot, reserved_suffix, device_name; for a nested group or a project also too_deep, more than 20 levels, and path_too_long, a full path over 255 characters) and `len`; the name itself is not logged. The same rules are a CHECK of forge.namespaces.segment, so a name the parser accepts is never refused by the database."
 fix = "Choose a name that follows the rules."
 test = "path_segment_rules_match_adr_0015"
 
@@ -253,7 +253,7 @@ user_message_ja = "この名前はすでに使われています。別の名前�
 user_message_en = "This name is already in use. Choose another name."
 user_message_id = "Nama ini sudah digunakan. Pilih nama lain."
 cause = "The path is used by a sibling (user, group or project under the same parent) or blocked by a tombstone of a renamed, moved or deleted namespace (ADR-0015); a tombstone blocks the path until it is released."
-diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created` with the same request_id) before treating it as a conflict."
+diagnosis = "The log event carries `reason`: `sibling` (a namespace with this path exists) or `tombstoned` (forge.namespace_tombstones has the path; the audit log has the rename, transfer or delete that wrote it), or `parent_moved` (a create's parent namespace no longer had the path the create computed when it took the path lock — a concurrent move; retry the create, D5 MR2). A move refuses a new path of any node of its subtree the same way, unless it reclaims its own `moved` tombstones (`reclaim`, ADR-0015 Amendment D5). Showing which of the two is an accepted exposure (ADR-0015). A `sibling` right after a create that failed with FG-DB-0002 `reason=commit_outcome_unknown` usually means the first attempt did commit: look the path up in forge.namespaces and the audit log (`user.created`, `group.created` or `project.created` with the same request_id) before treating it as a conflict."
 fix = "Choose another name, or have the tombstone released by the current owner of its target (or an administrator) when the old path is meant to be reused."
 test = "a_reserved_or_taken_or_tombstoned_username_is_rejected"
 
@@ -265,9 +265,9 @@ severity = "info"
 user_message_ja = "メンバーの変更が、今のメンバーの状態と合いません。画面を更新して確認してください。"
 user_message_en = "The membership change does not fit the current members. Refresh and check."
 user_message_id = "Perubahan anggota tidak sesuai dengan keadaan anggota saat ini. Muat ulang dan periksa."
-cause = "A group membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group). The last-owner rule holds against member changes and concurrent disables of the other owners; disabling the sole active Owner on its own, and disabling the ancestor owners a subgroup relies on, are not refused until step D3."
-diagnosis = "The log event carries `reason` (already_member, not_member, last_owner, bot_member) and `action`; ids only, no names. For last_owner, the event also carries `group_id`; list that group's direct owners with a privileged query on forge.group_members joined to forge.users (state = 'active'): a top-level group needs at least one; a subgroup relies on its ancestors' owners."
-fix = "Refresh and retry; for last_owner, first make another active user an Owner of the group."
+cause = "A group or project membership change conflicts with the current members: the user is already a member, is not a member, would remove or demote the last direct active Owner of a top-level group, would remove or demote the last direct Owner of a project that has no inherited active Owner (an ancestor group's direct Owner or the owner of the personal namespace the project is in; D4 MR4), or no longer has the direct role the caller authorized against (`role_changed`: change_member / remove_member take that role as `from` and re-read it under the lock, so a promotion committed between authorize() and the change is not overridden; D4 review), or is a bot (bots act for a person and are never members, ADR-0017; also when a bot is named as the first Owner of a new group or as the creator of a new project, or a project is to be created in a bot's personal namespace, whose owner would inherit Owner). The last-owner rule holds against member changes and concurrent disables of the other owners. Disabling the sole active Owner of a top-level group, or the only active Owner (direct or inherited) of a project, is refused by users::disable with FG-AUTH-0009 `last_owner` (steps D3, D4 MR4); disabling the ancestor owners a subgroup relies on is not refused (subgroups may be left to inherit)."
+diagnosis = "The log event carries `reason` (already_member, not_member, last_owner, bot_member, role_changed with `expected` and `actual`, the authorized and the stored direct role) and `action`; ids only, no names. For last_owner, the event also carries `group_id` (a group) or `project_id` (a project); list that group's direct owners with a privileged query on forge.group_members joined to forge.users (state = 'active'): a top-level group needs at least one; a subgroup relies on its ancestors' owners. A project needs one active Owner among its direct owners (forge.project_members role = 'owner'), its ancestor groups' direct owners and the owner of its personal parent namespace."
+fix = "Refresh and retry (for role_changed, reload the member's role and authorize again); for last_owner, first make another active user an Owner of the group or project."
 test = "removing_the_last_owner_is_refused_under_concurrency"
 
 [[error]]
@@ -278,10 +278,170 @@ severity = "info"
 user_message_ja = "グループの情報が正しくありません。入力内容を確認してください。"
 user_message_en = "The group details are not valid. Check what was entered."
 user_message_id = "Data grup tidak valid. Periksa kembali isian Anda."
-cause = "A request to create a group broke a rule before anything was written: the display name or description is empty, too long or holds a NUL character, the parent namespace is not a group (groups nest only under groups, ADR-0015 Amendment D2), or the first Owner is not an active user (a bot as first Owner is FG-REPO-0010 `bot_member`)."
-diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, parent_not_group, owner_inactive) and `len` where it applies; values are not logged."
+cause = "A request to create or update a group (forge_db::groups::create / update_decided; `POST /api/v1/groups`, `POST /api/v1/groups/{id}/subgroups`, `PATCH /api/v1/groups/{id}`, M1 phase 8b MR7a) broke a rule before anything was written: the display name or description is empty, too long or holds a NUL character, an update names no field (`empty_update`), the parent namespace is not a group (groups nest only under groups, ADR-0015 Amendment D2), or the first Owner is not an active user (a bot as first Owner is FG-REPO-0010 `bot_member`)."
+diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, empty_update, parent_not_group, owner_inactive) and `len` where it applies; values are not logged."
 fix = "Correct the field named by `reason`; create subgroups below a group, not below a user."
 test = "an_invalid_group_request_is_group_request_invalid"
+
+[[error]]
+code = "FG-REPO-0012"
+name = "RepositoryProvisioningStuck"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリの準備が終わっていません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The repository is not ready yet. Contact the administrator with the request ID."
+user_message_id = "Repositori belum siap. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A repository has stayed in state `provisioning` (forge.repositories, step D4) for longer than 10 minutes, or its provisioning job (`repository.provision`, dedup key `repository_provision:<repo_id>`) is no longer queued or running: it is dead (a permanent failure such as FG-REPO-0004 `adopt_refused`, or its attempts were used up), missing, or it succeeded without the repository being marked ready. The job normally creates the bare directory (`init_bare_or_adopt`) and marks the repository ready within seconds; until then the project exists but cannot be cloned or pushed."
+diagnosis = "Reported by `forge doctor` (check `repositories.provisioning`) with `reason` of the first stuck repository (`job_not_live`: no queued or running provisioning job; `too_old`: the job is still live but the repository waits longer than the threshold), `stuck` and the counts per reason `job_not_live` / `too_old` (the 10 000 oldest provisioning repositories are classified; `truncated` when there are more), and the first one's `repo_id`, `project_id`, `age_ms`, `job_state` and `threshold_ms`. `job_not_live` repositories are listed before `too_old` ones, each oldest first. The job is the end of the repository's key chain: `repository_provision:<repo_id>`, then `repository_provision:<repo_id>:after:<job id>` for each reprovision behind a succeeded job. `job_state` is that job's state: `queued`, `running`, `succeeded` (it succeeded but the repository is not ready: a database restore or a manual change; the doctor line says so in `detail`) or `none` (dead or missing). Look up the jobs with a privileged query on forge.jobs (kind `repository.provision`, dedup_key `repository_provision:<repo_id>` or `repository_provision:<repo_id>:after:%`, newest first): `last_error_code` / `last_error` say why one died; the worker log has `forge.repo.provisioned` for each success and the job failure (FG-DB-0006) with the same origin request id. `too_old` with a queued job usually means no `forge worker` runs (doctor `outbox.sequencer_lag` says whether one was observed)."
+fix = "Follow the runbook: fix the cause the job reported (storage root permissions or space for FG-REPO-0003, a directory at the path for FG-REPO-0004: inspect it, never delete it blindly), make sure a `forge worker` runs, then run `forge admin repo reprovision <repo_id>` (an approved runbook step): it enqueues the job again after a dead or missing job, and after a succeeded one under the key `repository_provision:<repo_id>:after:<job id>`; it changes nothing while a job is queued or running."
+runbook = "repository-provisioning"
+test = "a_repository_stuck_in_provisioning_is_reported_by_doctor"
+
+[[error]]
+code = "FG-REPO-0013"
+name = "ProtectedRefRuleInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "保護ブランチの規則が正しくありません。refs/heads/ か refs/tags/ で始まる 255 バイトまでのパターンで、* は最後の部分に 1 つだけ使えます。"
+user_message_en = "The protected branch rule is not valid. Use a pattern of up to 255 bytes that starts with refs/heads/ or refs/tags/, with at most one '*' in its last part."
+user_message_id = "Aturan branch terlindungi tidak valid. Gunakan pola hingga 255 byte yang diawali refs/heads/ atau refs/tags/, dengan paling banyak satu '*' di bagian terakhirnya."
+cause = "A protected ref rule (forge.protected_refs, ADR-0008) broke a rule before anything was written. The pattern (forge_core RefPattern::parse) is longer than 255 bytes, does not start with refs/heads/ or refs/tags/, has more than one '*' or a '*' outside its last path component, or, with the '*' read as an ordinary character, breaks git's check-ref-format rules (the rules of RefName, including forge's no-leading-'-' rule). Protected ref changes (forge_db::protected_refs, step D4 MR5) also refuse a 101st rule of one project, and a minimum push role of Guest or Reporter (they cannot push anyway, so such a rule would protect nothing)."
+diagnosis = "The log event carries `reason`: too_long (with `len`, in bytes), prefix, wildcard, check_ref_format (with `rule`, the RefName rule that failed: trailing_slash, double_dot, forbidden_character, component_starts_with_dot, ...), too_many_rules (the project already has 100 rules, with `rules`; this cap is enforced by the application only, the database has no limit), or push_min_role (the rule names Guest or Reporter). The pattern itself is not logged. The database CHECKs (protected_refs_pattern_prefix, protected_refs_pattern_length) hold only the prefix and length rules; the rest is the parser's job, so a pattern written without RefPattern::parse can pass the database."
+fix = "Correct the pattern named by `reason`: start it with refs/heads/ or refs/tags/, keep it within 255 bytes, use at most one '*' and only in the last part (refs/heads/release/*), remove unused rules before adding more than 100; use Developer, Maintainer or Owner as the minimum push role."
+test = "a_protected_ref_pattern_breaking_the_rules_is_rejected"
+
+[[error]]
+code = "FG-REPO-0014"
+name = "ProjectRequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "プロジェクトの情報が正しくありません。入力内容を確認してください。"
+user_message_en = "The project details are not valid. Check what was entered."
+user_message_id = "Data proyek tidak valid. Periksa kembali isian Anda."
+cause = "A request to create or update a project (forge_db::projects::create, step D4; update_decided, `POST /api/v1/projects`, `PATCH /api/v1/projects/{id}`, M1 phase 8b MR7a) broke a rule before anything was written: the display name (1 to 255 characters) or the description (at most 2000 characters) is out of range or holds a NUL character, an update names no field (`empty_update`), the parent namespace is a project (projects live only under a personal namespace or a group, ADR-0015 Amendment D4), the parent is a personal namespace whose owner is not active (that owner would inherit Owner of the project), the creator, who becomes the first direct Owner, is not an active user, or the creator is not the acting user of the request (only the operator CLI and the worker, actor `system`, may create a project for another user). A bot as creator, or a bot's personal namespace as parent, is FG-REPO-0010 `bot_member`, as for groups. The path rules are FG-REPO-0007..0009. Also: `forge admin repo reprovision` (step D4 MR3b) was asked to provision a repository that is already `ready` (reason `repository_ready`): there is nothing to provision."
+diagnosis = "The log event carries `reason` (display_name_length, description_length, nul_character, empty_update, parent_not_owner_namespace, parent_owner_inactive, creator_inactive, creator_not_actor; repository_ready from `forge admin repo reprovision`, with `repo_id`) and `len` where it applies; values are not logged."
+fix = "Correct the field named by `reason`; create the project below a user or a group, not below another project nor in the namespace of a disabled user; let an active user create it for themselves (creator_not_actor on a route means the route passed something other than its principal: a bug in that route). For repository_ready: do not reprovision; if its directory is missing, that is FG-REPO-0002 (restore from backup, runbook repo-storage)."
+test = "an_invalid_project_request_is_project_request_invalid"
+
+[[error]]
+code = "FG-REPO-0015"
+name = "TransferInvalid"
+http_status = 409
+severity = "info"
+user_message_ja = "この場所へは移動できません。移動先と名前を確認してください。"
+user_message_en = "This cannot be moved there. Check the destination and the name."
+user_message_id = "Tidak dapat dipindahkan ke sana. Periksa tujuan dan namanya."
+cause = "A namespace move (a project or group transfer or rename, or a user rename; forge_db::projects::move_decided, groups::move_decided, users::rename_decided, step D5 MR2, ADR-0015 Amendment D5) broke a rule of the subtree move before anything was written: the moved namespace has more than 1000 namespaces in its subtree, the new parent is of a kind it may not go under (a project only under a group or a personal namespace, a group only under a group or at the top level, a user only at the top level), the move would change nothing, the new parent is a personal namespace whose owner is a bot or not active (that owner would inherit Owner), the new parent is the moved namespace or one of its descendants, the subtree would end deeper than 20 levels, or a path of the subtree would be longer than 255 characters, or after the move a project of the subtree would have no active Owner left (direct, an ancestor group's direct Owner, or the owner of a personal parent; projects that already had none are not counted) or a group moved to the top level has no direct active Owner — refused for administrators too, the invariant the member commands and users::disable keep. Collisions with an existing path or a tombstone are FG-REPO-0009; the segment's own rules FG-REPO-0007 / 0008."
+diagnosis = "The log event carries `reason` (subtree_too_large with `limit`, target_kind, same_location, parent_owner_bot, parent_owner_inactive, cycle, too_deep with `len` = the deepest new depth, path_too_long with `len` = the longest new path in characters, no_active_owner with `project_id` or `group_id`) and the route's ids; paths and names are not logged. The subtree can be inspected with a privileged recursive query on forge.namespaces from the moved namespace's id (parent_id links, depth, full_path)."
+fix = "Choose another destination or a shorter name; move a large group in parts (move subgroups first); for no_active_owner first make an active user a direct Owner of the project (or group) that would lose it; to place a project under a disabled user's namespace, re-enable the user first."
+test = "a_move_breaking_a_subtree_rule_is_transfer_invalid"
+
+[[error]]
+code = "FG-REPO-0016"
+name = "RepositoryNotReady"
+http_status = 503
+severity = "info"
+user_message_ja = "リポジトリの準備がまだ終わっていません。しばらくしてから再度お試しください。"
+user_message_en = "The repository is not ready yet. Try again in a moment."
+user_message_id = "Repositori belum siap. Coba lagi sebentar lagi."
+cause = "A Smart HTTP request (clone / fetch, M1 phase 9) reached a project whose repository is still in state `provisioning` (forge.repositories, step D4): the project exists and the caller may read it, but the provisioning job has not created the bare directory yet. Decided after authorize() allowed, so it never tells a caller who may not see the project that it exists."
+diagnosis = "The log event carries `repo_id`, `project_id`, `state` and `route`. A new project is normally ready within seconds. If the same repository keeps answering this, its provisioning is stuck: `forge doctor` reports it as FG-REPO-0012 (runbook repository-provisioning)."
+fix = "Wait a few seconds and retry. If it persists, follow FG-REPO-0012's runbook repository-provisioning (make sure a `forge worker` runs, read why the job died)."
+test = "a_provisioning_repository_is_repository_not_ready"
+
+[[error]]
+code = "FG-REPO-0017"
+name = "ProtectedRefPatternTaken"
+http_status = 409
+severity = "info"
+user_message_ja = "同じパターンの保護ブランチの規則がすでにあります。既存の規則を変更してください。"
+user_message_en = "A protected branch rule with this pattern already exists. Change the existing rule instead."
+user_message_id = "Aturan branch terlindungi dengan pola ini sudah ada. Ubah aturan yang sudah ada."
+cause = "A protected ref rule was to be added (forge_db::protected_refs::create / create_decided; `POST /api/v1/projects/{id}/protected-refs`, M1 phase 8b MR8) with a pattern that equals an existing rule of the same project ignoring case (RefPattern::key, non-ASCII case included; the database backstop is the unique index protected_refs_project_pattern on lower(pattern), which folds ASCII letters only). The check runs under the project row lock, so two concurrent adds of equal patterns never both commit. Nothing was written. Until MR8 this was FG-REPO-0013 `duplicate_pattern` (400); it is a conflict with the stored rules, not a malformed request, so clients (gstn) can tell the two apart."
+diagnosis = "The log event carries `reason=duplicate_pattern` (the application check) or `reason=unique_index` (the database backstop) and `project_id`; the pattern itself is not logged. List the project's rules with `GET /api/v1/projects/{id}/protected-refs` (or a privileged query on forge.protected_refs by project_id) and compare ignoring case."
+fix = "Change the minimum push role of the existing rule (`PATCH /api/v1/projects/{id}/protected-refs/{rule_id}`) instead of adding a second one, or delete it first."
+test = "a_duplicate_protected_ref_pattern_is_pattern_taken"
+
+[[error]]
+code = "FG-REPO-0018"
+name = "RenameRateLimited"
+http_status = 429
+severity = "info"
+user_message_ja = "短い期間に名前の変更や移動を繰り返しています。時間をおいてから再度お試しください。"
+user_message_en = "This was renamed or moved too often recently. Try again later."
+user_message_id = "Nama atau lokasi ini terlalu sering diubah akhir-akhir ini. Coba lagi nanti."
+cause = "A namespace (a project, group or user) was renamed or moved 10 times within the last 24 hours (step D5 plan; ADR-0015: every move leaves a tombstone per node, so moves are limited to keep tombstones from piling up). The count is the number of the resource's own succeeded move audit rows within 24 h (forge.audit_log, action project.moved / group.moved / user.renamed on that resource_type / resource_id, without the per-project rows of a moved ancestor, which carry `moved_namespace_id`); the audit log is append-only, so releasing or reclaiming tombstones does not lower it. Administrators are limited too; only the operator CLI (actor system) is exempt."
+diagnosis = "The log event carries `reason=moves_per_day`, `moves`, `limit`, `resource` and `id`. List the recent moves with a privileged query on forge.audit_log (resource_type, resource_id, action IN ('project.moved', 'group.moved', 'user.renamed'), occurred_at > now() - interval '24 hours'; index audit_log_moves)."
+fix = "Wait until the oldest of those moves is 24 hours old. An operator can move it with the operator CLI (exempt) when the move is approved."
+test = "the_eleventh_move_in_a_day_is_rate_limited"
+
+[[error]]
+code = "FG-REPO-0019"
+name = "RestoreUnavailable"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトは復元できません。"
+user_message_en = "This project cannot be restored."
+user_message_id = "Proyek ini tidak dapat dipulihkan."
+cause = "A restore (POST /api/v1/projects/{id}/restore, forge_db::projects::restore_decided, step D5 MR3, ADR-0015 Amendment D5) was decided and allowed, but the project cannot come back: it is not pending deletion (`reason=not_deleted`: it was restored already, or never deleted), or its repository is already being purged (`reason=purging`: the purge job has started, the bare repository is being removed and cannot be recovered). The project row is locked and the repository row read under the same transaction, so the answer is what the purge job will also see."
+diagnosis = "The log event carries `reason` (`not_deleted`, `purging`) and `project_id`. For `purging` the repository's state is `purging` (privileged query: SELECT state FROM forge.repositories WHERE project_id = <id>): the purge task of `forge worker` (D5 MR4) has started and finishes on its next run, or it is stuck (FG-REPO-0020, runbook repository-purge); for `not_deleted` read the audit log: a `project.restored` row for the project after its last `project.deleted` row."
+fix = "`not_deleted`: nothing to do, the project is available. `purging`: the project cannot be restored; create it again under the same path once the purge has finished and the path is released (ADR-0015), or ask the operator to restore the repository from a backup."
+test = "restoring_a_project_that_is_not_deleted_or_is_purging_is_restore_unavailable"
+
+[[error]]
+code = "FG-REPO-0020"
+name = "RepositoryPurgeStuck"
+http_status = 500
+severity = "alert"
+user_message_ja = "削除したプロジェクトの完全削除が終わっていません。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The purge of a deleted project has not finished. Contact the administrator with the request ID."
+user_message_id = "Penghapusan permanen proyek yang dihapus belum selesai. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The purge (step D5 MR4, ADR-0015 Amendment D5: the `purge` task of `forge worker` every `hosting.purge_interval_secs`, or `forge admin project purge --now`) could not finish one project whose grace period is over. The purge has two phases: (1) one transaction moves the repository to `purging` (after that the project can no longer be restored, FG-REPO-0019 reason=purging); (2) the bare directory is removed from the storage root (renamed aside, then deleted, bounded by a deadline) and one transaction deletes the rows (members, protected refs, repository, namespace, project), writes the `deleted` tombstone of the path, the `project.purged` audit row and event. A failure in either phase leaves the project as it was at the end of the last completed step; the next run resumes it (a `purging` repository never goes back to `ready`). `step` says where it failed: `lock` (taking the project's purge lock: the database), `start` (phase 1: the database), `provision_check` (reading the state of the repository's provisioning job), `storage` (the directory: FG-REPO-0001 a symlink or a file where the repository or a leftover should be — possible tampering, FG-REPO-0003 an I/O failure), `finish` (phase 2's transaction). Not failures (no code): a project whose purge lock another purge holds, and a removal slower than the run's 120 s wait (it goes on in the background holding the lock) — both are `forge.repo.purge_deferred` (`reason=in_progress` / `removal_running`)."
+diagnosis = "The log event of the purge task (`task=purge`, or the CLI's) carries `step`, `project_id`, `repo_id`, `cause_code` (the code of the underlying failure, whose own `context` is in `source`) and `overdue_s` (seconds since `purge_after`). The same project failing on every run is stuck; one failure followed by `forge.repo.purged` for that project was transient. Look at the state with privileged queries: SELECT state FROM forge.repositories WHERE project_id = <id>; SELECT deleted_at, purge_after FROM forge.projects WHERE id = <id>. `forge admin repo-path <repo_id>` prints the directory and whether it still exists; leftovers of an interrupted removal are named `.purge-<repo_id>-*.git` (and of an interrupted provisioning `.tmp-<repo_id>-*.git`) in the same shard directory. `cause_code=FG-DB-0009 reason=rejected` in `start` means the database guard refused `purging` (the project is not pending deletion or its grace period is not over: a clock difference, or a restore committed in between — it is skipped on the next run). A purge also waits (`forge.repo.purge_deferred`, not an error) while the repository's provisioning job is running."
+fix = "Follow the runbook: for FG-REPO-0003 free space or fix the permissions of the storage root, for FG-REPO-0001 inspect what is at the path (never delete it blindly: a symlink there may point outside the storage root), for database failures restore database access. Then run `forge admin project purge --dry-run` to see what is due and `forge admin project purge --now` (an approved runbook step) or wait for the next run of the worker: the purge resumes where it stopped and is idempotent (a directory already gone is not an error, the rows and the event are written once)."
+runbook = "repository-purge"
+test = "a_failed_purge_is_repository_purge_stuck_and_retried_next_run"
+
+[[error]]
+code = "FG-REPO-0021"
+name = "PurgeBatchIncomplete"
+http_status = 500
+severity = "warn"
+user_message_ja = "完全削除できなかったプロジェクトがあります。"
+user_message_en = "Some projects could not be purged."
+user_message_id = "Beberapa proyek tidak dapat dihapus permanen."
+cause = "`forge admin project purge --now` (step D5 MR4) ran one batch and at least one project failed. Each failed project was already logged on its own as FG-REPO-0020 RepositoryPurgeStuck (the alert); this summary only makes the command's exit code non-zero and is deliberately not an alert, so one failure never raises two."
+diagnosis = "The context carries `failed` and `purged`; the command's output has one line per project with `failed` and the project's `request_id`. Look up those request ids for the FG-REPO-0020 lines (`step`, `cause_code`)."
+fix = "Follow the runbook repository-purge for each failed project, then run `forge admin project purge --now` again (it resumes where it stopped)."
+runbook = "repository-purge"
+test = "now_fails_when_a_project_could_not_be_purged"
+
+[[error]]
+code = "FG-REPO-0022"
+name = "NamespaceMoveContended"
+http_status = 503
+severity = "warn"
+user_message_ja = "ほかの変更と重なったため、移動または名前の変更を完了できませんでした。少し待ってから再度お試しください。"
+user_message_en = "The move or rename collided with other changes and could not finish. Wait a moment and try again."
+user_message_id = "Pemindahan atau penggantian nama bertabrakan dengan perubahan lain dan tidak dapat diselesaikan. Tunggu sebentar lalu coba lagi."
+cause = "A namespace move, rename or tombstone release through the API (forge_hosting::Hosting::move_project, move_group, rename_user, release_tombstone; step D5 MR5) lost a retryable conflict on every attempt: its transaction was rolled back with FG-DB-0002 `retryable=true` (`deadlock` — two moves whose subtrees and targets cross each other; `subtree_unstable` — namespaces kept being created below the moving subtree while it was being locked; `tombstone_changed` — the tombstone's target was purged meanwhile; `serialization`) and was run again from the start, decided again each time, up to 3 attempts in all (forge_hosting::MOVE_ATTEMPTS). Nothing was written by any attempt. Not a bug by itself: it means heavy concurrent changes on the same part of the namespace tree."
+diagnosis = "The log event carries `command` (project_move, group_move, user_rename, tombstone_release), `attempts` and `last_reason` (the FG-DB-0002 reason of the last conflict); the source is that FG-DB-0002. Look for other moves, creates or purges in the same subtree at that time (forge.audit_log by occurred_at: project.moved, group.moved, user.renamed, project.created, group.created, project.purged) and in pg_locks / pg_stat_activity for long transactions."
+fix = "Retry the request (the client may retry it as is: nothing was written). If it keeps failing, find the competing writer (a script moving many namespaces at once, a purge of the subtree) and let it finish first; move large groups in parts."
+runbook = "namespace-redirects"
+test = "a_move_that_keeps_losing_conflicts_is_namespace_move_contended"
+
+[[error]]
+code = "FG-REPO-0023"
+name = "RepositoryPathNotResolved"
+http_status = 404
+severity = "info"
+user_message_ja = "指定したブランチ・タグ・コミット、またはファイルが見つかりません。名前とパスを確かめてください。"
+user_message_en = "The branch, tag, commit or file was not found. Check the name and the path."
+user_message_id = "Branch, tag, commit, atau berkas tidak ditemukan. Periksa nama dan jalurnya."
+cause = "A repository browse request (the API `GET /api/v1/projects/{id}/repository/{refs,resolve,tree,blob,commits,commits/{oid},compare,blame}` or the content routes `{path}/-/raw/{ref}/{file}` / `{path}/-/archive/{ref}.{zip|tar.gz}`, M2 MR7, ADR-0015 Amendment M2) named something the repository does not have. Decided only after authorize() allowed (RepoBrowse / RepoRead), so it never tells a caller who may not read the project anything about it. `reason`: `ref_not_found` (no 40 / 64-hex commit id, no branch and no tag matches — ADR-0015 order: id, longest branch, longest tag; also an empty repository), `not_a_commit` (the id or the ref names a tree, blob or a tag of one), `path_not_found` (no such entry in that commit's tree), `not_a_tree` / `not_a_blob` (the entry is of the other kind; a submodule is neither), `archive_format` (the archive name does not end in `.zip` or `.tar.gz`), `path_remainder` (an archive name with more than a ref)."
+diagnosis = "The log event carries `reason`, `project_id`, `repo_id`, `route` and, once resolved, `commit`; never the requested ref or path (they are user input). Usually a typo, a deleted branch or a file that does not exist in that commit. To check by hand on the server: `git --git-dir <storage path of repo_id> for-each-ref refs/heads refs/tags` and `git ls-tree <commit> -- <path>`."
+fix = "Nothing to fix on the server: correct the ref or the path (gstn browse refs lists the branches and tags). If an existing branch is reported missing right after a push, wait a few seconds (the ref list is cached for at most 5 s and dropped on every push)."
+test = "an_unknown_ref_or_path_is_repository_path_not_resolved"
 
 # --- AUTH: authentication and authorization (forge-auth) ----------------------
 
@@ -293,9 +453,9 @@ severity = "info"
 user_message_ja = "ログインが必要です。"
 user_message_en = "You need to sign in."
 user_message_id = "Anda perlu masuk terlebih dahulu."
-cause = "The request carried no valid credentials; forge has no anonymous access."
-diagnosis = "The log event carries `action`. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper."
-fix = "Sign in, or configure the git credential helper with a personal access token."
+cause = "The request carried no valid credentials; forge has no anonymous access. Credentials are `Authorization: Bearer <token>`, `Authorization: Basic` whose password is the token (git Smart HTTP and the raw / archive routes only), or the web session cookie `__Host-gstn_session` (the API and raw / archive; ignored on git routes; M2 MR3, ADR-0021)."
+diagnosis = "The log event carries `action`, or (`forge.auth.token_rejected` / `forge.auth.session_rejected`) `reason` and `scheme` (`bearer`, `basic`, `session`) and, when known, `public_id`. Token reasons: malformed, unknown, mismatch, revoked, expired; header reasons: malformed_header, unsupported_scheme, ambiguous (two Authorization headers, two session cookies, or a session cookie together with an Authorization header on the API or raw / archive — neither is tried), basic_not_allowed (Basic on /api/v1: the API takes Bearer only, so a browser never remembers a token as a Basic password; ADR-0019 Amendment M2). Session reasons: session_malformed, session_unknown, session_mismatch, session_revoked (with `revoked_reason`: logout, backchannel, user_disabled, admin, idp_revoked), session_expired (idle or absolute lifetime, web.session_idle_secs / web.session_absolute_secs); the response then clears the cookie. For git clients, a 401 makes git prompt for credentials; repeated 401s from one client usually mean a missing or mistyped token in its credential helper. /api/v1 401s challenge with Bearer only; raw / archive drop the Basic challenge for browser requests (Sec-Fetch-Mode / Sec-Fetch-Dest or the session cookie)."
+fix = "Sign in again (an expired or revoked session), or configure the git credential helper with a personal access token. Send API tokens as `Authorization: Bearer`, not Basic. Send either a token or the session cookie, never both."
 test = "anonymous_is_unauthenticated"
 
 [[error]]
@@ -307,8 +467,8 @@ user_message_ja = "このアクセストークンには、この操作の権限�
 user_message_en = "This access token does not have the scope for this operation."
 user_message_id = "Token akses ini tidak memiliki cakupan (scope) untuk operasi ini."
 cause = "The caller authenticated with a token whose scopes do not include the scope the action requires. Scopes only narrow a role; they never widen it."
-diagnosis = "The log event carries `action`, `required_scope` and `token_scopes`."
-fix = "Create a token with the required scope (for example write_repository for push)."
+diagnosis = "The log event carries `action`, `required_scope` and `token_scopes`, or `reason=session_required` for an action only a web session may perform (`GET /api/v1/session`, ADR-0021 §17), whatever the token's scopes."
+fix = "Create a token with the required scope (for example write_repository for push). For session_required, use the browser session; a token cannot do it."
 test = "token_scope_narrows_role"
 
 [[error]]
@@ -320,8 +480,8 @@ user_message_ja = "この操作を行う権限がありません。"
 user_message_en = "You do not have permission to do this."
 user_message_id = "Anda tidak memiliki izin untuk melakukan ini."
 cause = "The caller can see the resource but their role is below what the action requires (or the action needs an administrator)."
-diagnosis = "The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope."
-fix = "Grant the user the required role on the project or group, if appropriate."
+diagnosis = "The log event carries `action` and either `required_role` / `actual_role` (role too low; `required_role=admin` for administrator-only actions) or `reason` (`above_own_role` for membership and protection changes, `last_owner`, `foreign_namespace`, `token_cannot_mint`, `admin_scope_requires_admin`, `agent_token`: a credential issued for an AI agent on an action kept for people — ProjectVisibilityChange, MemberManage, ProtectedRefManage, ADR-0017 amendments MR7a / MR8, whatever the role). Compare with the permission matrix (`forge-auth` `matrix_rows.rs`). An administrator's token acts as a normal user unless it has the `admin` scope."
+fix = "Grant the user the required role on the project or group, if appropriate. For `agent_token`, a person does the change with their own session or a token issued without is_agent."
 test = "denied_matrix_rows_all_deny"
 
 [[error]]
@@ -333,7 +493,7 @@ user_message_ja = "このアカウントは無効化されています。管理�
 user_message_en = "This account is disabled. Contact the administrator."
 user_message_id = "Akun ini dinonaktifkan. Hubungi administrator."
 cause = "The user exists but is disabled (by an administrator, or locked after repeated failed sign-ins)."
-diagnosis = "The log event carries `action`. The audit log records who disabled the account, or the lockout."
+diagnosis = "The log event carries `action`, or for a personal access token or a web session `reason=owner_disabled` with `user` and `public_id` (tokens::authenticate and sessions::authenticate refuse a disabled owner's credential themselves, ADR-0019; a disable also revokes the user's sessions, `user.disabled` details `revoked_sessions`, ADR-0019 Amendment M2). The audit log records who disabled the account, or the lockout."
 fix = "An administrator re-enables the account if it should be active."
 test = "disabled_account_is_denied"
 
@@ -377,6 +537,155 @@ fix = "An administrator decides which account keeps the identifier: disable or c
 test = "a_taken_employee_number_or_external_id_is_user_identifier_taken"
 
 [[error]]
+code = "FG-AUTH-0008"
+name = "TokenRequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "トークンの発行リクエストが正しくありません。入力を確認してください。"
+user_message_en = "The token request is not valid. Check the input."
+user_message_id = "Permintaan token tidak valid. Periksa input."
+cause = "A personal access token could not be issued because the request breaks a rule of forge_db::tokens::issue (ADR-0019): the expiry is under 1 day or over 365 days, no scope or an unknown scope, a name that is empty, over 100 characters or holds NUL or another control character, the admin scope for a non-admin owner, a bot owner, a disabled owner, or the owner already holds 50 active tokens."
+diagnosis = "The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled or active_limit) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`."
+fix = "Correct the request. For active_limit revoke tokens that are no longer used. For owner_bot / owner_disabled / admin_scope_requires_admin the owner or the scope is the wrong choice; nothing was written."
+test = "expiry_over_365_or_under_1_day_is_token_request_invalid"
+
+[[error]]
+code = "FG-AUTH-0009"
+name = "AdministrationConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "管理者またはグループの Owner がいなくなるため、この操作は拒否されました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "This was refused because it would leave no administrator or group Owner. Contact the administrator with the request ID."
+user_message_id = "Tindakan ini ditolak karena akan membuat tidak ada administrator atau Owner grup. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "An administration command was refused to keep forge manageable (ADR-0019 §10, Amendment D3 MR2). forge_db::users::disable refuses to disable the last active human administrator (bots, service accounts and disabled users do not count) or the last direct active Owner of a top-level group (subgroups inherit their ancestors' Owners and are not checked), or the only active Owner of a project, direct or inherited (D4 MR4; projects pending deletion are not checked); a refused disable writes nothing and revokes no token. forge_db::users::bootstrap_admin (forge admin bootstrap-admin) is refused while an active human administrator exists, and for a user that is not a human or is disabled."
+diagnosis = "The log event carries `reason`: self_disable (M2 MR6: an administrator asked `POST /api/v1/admin/users/{id}/disable` for their own account; over HTTP nobody disables themself — the operator CLI `forge admin user disable` is the path, with the same guard), last_admin (with `user`, the user id being disabled), last_owner (with `user`, `group_id` — the first top-level group that would be left without a direct active Owner — or, when no group is affected, `project_id` — the first project that would be left without an active Owner — and `ownerless_groups` and `ownerless_projects`, how many), admin_exists (with `active_human_admins`), not_human or user_disabled (with `user` when promoting an existing user; `bootstrap-admin --create` refuses before any user exists, so it carries no `user`). Ids only, never names. List the group's direct owners with a privileged query on forge.group_members joined to forge.users (role = 'owner' AND state = 'active'); list the administrators with SELECT id, kind, state FROM forge.users WHERE is_admin."
+fix = "There is no command yet to grant administrator rights or change group members (D3), so the guard cannot be satisfied by adding a successor first. For last_admin / last_owner follow runbook user-offboarding: with approval naming the successor, disable with `forge admin user disable <username> --force`, then at once restore an administrator with `forge admin bootstrap-admin --user <successor>` (or `--create`); top-level groups left without an Owner stay reported by forge doctor (FG-AUTH-0010) until a member-change route exists. For admin_exists: bootstrap-admin is only for a forge without an active human administrator. For not_human / user_disabled: name an active human, or use --create."
+runbook = "user-offboarding"
+test = "disabling_the_last_active_human_admin_is_administration_conflict"
+
+[[error]]
+code = "FG-AUTH-0010"
+name = "AdministrationOrphaned"
+http_status = 500
+severity = "warn"
+user_message_ja = "管理者またはグループの Owner がいない状態です。管理者に連絡してください。"
+user_message_en = "There is no administrator or a group has no Owner. Contact the administrator."
+user_message_id = "Tidak ada administrator atau sebuah grup tidak memiliki Owner. Hubungi administrator."
+cause = "forge doctor (check users.administration) found forge without an active human administrator, a top-level group without a direct active Owner, or a project (not pending deletion) without any active Owner, direct or inherited (forge_db::projects::ownerless, D4 MR4). This is what a forced disable (`forge admin user disable --force`) leaves behind, or a disable / demotion done outside forge-db. Nobody can then administer forge, or manage that group's members, until it is recovered. A forge with no users at all (a new install) is reported as `warn` without this code."
+diagnosis = "The doctor line carries `reason` (no_admin when there is no active human administrator, otherwise ownerless_group), `active_human_admins`, `ownerless_groups` (how many top-level groups have no direct active Owner) and `group_ids` (the first 10 of them); a project finding carries `reason=ownerless_project`, `ownerless_projects` and `project_ids` (the first 10). The audit log shows how it happened: SELECT created_at, actor_label, request_id, details FROM forge.audit_log WHERE action = 'user.disabled' AND details->>'forced' = 'true' ORDER BY id DESC."
+fix = "Follow runbook user-offboarding: as an approved step, run `forge admin bootstrap-admin --user <username>` (or `--create`) to restore an administrator. Top-level groups without an Owner cannot be fixed yet (no member-change command or route exists in D3): record the listed group_ids in the incident record; the finding stays (warn) until a member-change route lands and an active user is made their Owner. Re-run forge doctor after each step."
+runbook = "user-offboarding"
+test = "administration_orphaned_is_reported_for_no_admin_and_an_ownerless_group"
+
+[[error]]
+code = "FG-AUTH-0011"
+name = "LoginStateInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "ログインを完了できませんでした。もう一度ログインしてください。"
+user_message_en = "The sign-in could not be completed. Sign in again."
+user_message_id = "Proses masuk tidak dapat diselesaikan. Silakan masuk lagi."
+cause = "The browser came back to `GET /-/auth/callback` (ADR-0021 §3) without a usable login state: the state cookie `__Host-gstn_oidc` was missing, could not be opened (another key, tampered, truncated), was older than 10 minutes, or its `state` did not equal the query's; or the identity provider answered with `error=` instead of a code; or the token endpoint refused the code (`invalid_grant`: the code was already used — a replayed callback — or expired, or the PKCE verifier did not match). The state cookie is single-use: every callback answer clears it. Nothing was written."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason`: state_cookie_missing, state_cookie_invalid (with `detail` = truncated|version|kid|tag|json), state_expired, state_mismatch, query_missing (no `code` / `state`), idp_error (with `idp_error`, the OAuth error code only — never `error_description`), code_rejected (the token endpoint refused the code, usually `oauth_error=invalid_grant`, with `status`; a refusal of the client itself is FG-AUTH-0015 client_rejected). A burst of state_mismatch / state_cookie_missing from one client is a login-CSRF attempt or a browser that blocks cookies; one code_rejected after a double click is a replayed callback."
+fix = "For a person: start the sign-in again (`/-/auth/login`) and allow cookies for GitStation. If every sign-in fails with state_cookie_invalid, `web.session_key_file` changed between login and callback or differs between processes: use the same key file everywhere. idp_error=access_denied means the person cancelled at the identity provider."
+test = "login_state_failures_are_login_state_invalid"
+
+[[error]]
+code = "FG-AUTH-0012"
+name = "IdTokenInvalid"
+http_status = 401
+severity = "warn"
+user_message_ja = "ログインを完了できませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The sign-in could not be completed. Contact the administrator with the request ID."
+user_message_id = "Proses masuk tidak dapat diselesaikan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The ID token the identity provider returned at the callback failed verification (ADR-0021 §9): its signature, its algorithm (only `auth.oidc.signing_algs`, RS256 by default, ES256 optional; never `none`, HS* or PS*), its key (`kid` required; the JWKS key must pair kty and alg: RS256 = RSA 2048..8192 bit, ES256 = EC P-256 with 32-byte x / y on the curve), `iss` (equal to the discovery issuer and `auth.oidc.issuer`), `aud` (must contain the client id; with several audiences `azp` must be the client id), `exp` / `iat` / `nbf` (60 s clock skew), `nonce` (the login's) or `sub` (1..255 characters). Nothing was written; the person is not signed in."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason`: malformed, alg_not_allowed (with `alg`), kid_missing, unknown_kid (also after the JWKS refetch, or within 60 s of the last refetch), key_invalid (with `detail`: base64, rsa_modulus_size, rsa_exponent, ec_coordinate_length, ec_point, crv, kty, use), key_alg_mismatch (with `alg`, `kty`), signature, issuer, audience, azp, expired, not_yet_valid (iat or nbf in the future beyond the skew), nonce, subject, missing_claim (with `claim`). The token itself is never logged. `signature` / `unknown_kid` right after a key rotation at the identity provider are expected for at most 60 s; constant ones point at a wrong `auth.oidc.issuer`, a wrong realm key or a man in the middle."
+fix = "Follow runbook oidc-login: compare `auth.oidc.issuer` with the discovery document, check the realm's signing keys and algorithm (RS256), the client id and the server clock (`forge doctor` reports the clock skew to the identity provider). For key_alg_mismatch / key_invalid, fix the realm's key configuration."
+runbook = "oidc-login"
+test = "id_token_failures_are_id_token_invalid"
+
+[[error]]
+code = "FG-AUTH-0013"
+name = "LoginNotPermitted"
+http_status = 403
+severity = "info"
+user_message_ja = "このアカウントでは GitStation にログインできません。必要なら管理者に連絡してください。"
+user_message_en = "This account cannot sign in to GitStation. Contact the administrator if you need access."
+user_message_id = "Akun ini tidak dapat masuk ke GitStation. Hubungi administrator jika Anda memerlukan akses."
+cause = "The identity provider signed the person in, but `authorize()` refused the admission (`SessionCreate` on `Resource::Admission`, ADR-0021 §3): the ID token has no access client role (`resource_access.<client_id>.roles` does not contain `auth.oidc.access_role`), or the GitStation account it belongs to is disabled, or it is a bot or service account (those never sign in to the web). No session was issued and no user or identity link was written."
+diagnosis = "The log event `forge.auth.login_failed` carries `reason` (no_access_role, user_disabled, not_human), `action=SessionCreate` and, when the account is known, `user`. A person without the role is the expected case for someone outside the GitStation user group."
+fix = "Grant the person the access role of the GitStation client in Keycloak (or the group that carries it) if they should use GitStation. A disabled account stays disabled until an administrator re-enables it (approved step, runbook user-offboarding). Bots and service accounts use tokens, not the web."
+test = "admission_denials_are_login_not_permitted"
+
+[[error]]
+code = "FG-AUTH-0014"
+name = "IdentityLinkConflict"
+http_status = 409
+severity = "warn"
+user_message_ja = "このアカウントを GitStation の利用者に結び付けられませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "This account could not be linked to a GitStation user. Contact the administrator with the request ID."
+user_message_id = "Akun ini tidak dapat ditautkan ke pengguna GitStation. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "At the first sign-in of an identity (issuer + subject not linked yet), GitStation neither linked it to an existing user nor created one (ADR-0021 §4): an e-mail address alone never links; an employee number links only together with a verified matching e-mail, only to a human non-administrator not yet linked to this issuer, and only with `auth.oidc.auto_link = true`; a new user needs the employee number claim, a verified e-mail and a free username and e-mail. Nothing was written. Also `forge admin user link-identity` when the identity or the user is already linked."
+diagnosis = "The log event `forge.auth.login_failed` (or the CLI's error) carries `reason` only — never the claims: employee_number_missing (the ID token has no `auth.oidc.employee_number_claim`), email_missing, email_unverified (`email_verified` is not true), email_mismatch (the employee number matched a user whose e-mail differs), privileged_account (the employee number belongs to an administrator: linked only by the operator), employee_number_linked (that user is linked to another subject of this issuer), auto_link_disabled (`auth.oidc.auto_link = false` and the employee number belongs to an existing user), username_unavailable (`preferred_username` missing, invalid, reserved, taken or tombstoned), email_taken (another user has the e-mail), employee_number_taken (a concurrent sign-in created a user with it first: retry), claim_invalid (with `detail`: a claim breaks a forge.users rule, e.g. an e-mail above 320 characters); CLI: subject_linked (the identity belongs to another user), already_linked (the user has an identity of this issuer)."
+fix = "Follow runbook oidc-identity-link: find the person by employee number and e-mail in the identity provider and in GitStation, decide whom the identity belongs to, and link it as an approved step with `forge admin user link-identity --user <username> --issuer <issuer> --subject <sub>`; or fix the claim mappers (employee_number, email_verified) in the realm."
+runbook = "oidc-identity-link"
+test = "identity_link_conflicts_name_their_reason"
+
+[[error]]
+code = "FG-AUTH-0015"
+name = "IdentityProviderUnavailable"
+http_status = 503
+severity = "alert"
+user_message_ja = "認証サーバーに接続できないため、今はログインできません。ログイン済みの方はそのまま使えます。しばらくしてからもう一度お試しください。"
+user_message_en = "Sign-in is unavailable because the identity provider cannot be reached. Signed-in users are not affected. Try again later."
+user_message_id = "Proses masuk tidak tersedia karena penyedia identitas tidak dapat dihubungi. Pengguna yang sudah masuk tidak terpengaruh. Coba lagi nanti."
+cause = "A call to the OIDC identity provider (Keycloak) failed (ADR-0021 §11): discovery, JWKS or the token endpoint did not answer in time (connect 2 s, 5 s per call), answered 5xx or an unexpected status, sent a body above 1 MiB or not the expected JSON, failed TLS against `auth.oidc.ca_file`, redirected, or the discovery document named an endpoint outside the issuer's origin; or the token endpoint refused the client itself (OAuth `invalid_client`, `unauthorized_client`, `invalid_request`: a wrong client secret, a disabled or misconfigured client), so no sign-in can succeed until an operator acts; or the 5-minute refresh check of a signed-in session (M2 MR5, call=refresh, 3 s) could not reach the token endpoint (logged as warn, the session goes on). Only new sign-ins fail: sessions already issued, git and the token API keep working (`/readyz` does not look at the identity provider)."
+diagnosis = "The log event carries `call` (discovery, jwks, token, refresh — the 5-minute refresh check of a signed-in session, M2 MR5: logged as warn once per session per 5 minutes and the session goes on) and `reason`: connect_timeout, timeout, connect, tls, status (with `status`), redirect, body_too_large, body (the body broke off), request (any other transport failure), invalid_json (with `detail`), endpoint_origin (with `endpoint`), issuer_mismatch (the discovery document's issuer is not `auth.oidc.issuer`), client_rejected (call=token, with `status` and `oauth_error`: check `auth.oidc.client_id`, the client secret file and the client in Keycloak), backoff (call=jwks: a JWKS fetch failed less than 60 s ago, so no new call was made; the first failure is logged with its own reason). The response body is never logged (it may hold tokens). `forge doctor` checks auth.oidc (discovery, JWKS, the clock skew) from the server."
+fix = "Follow runbook keycloak-unreachable: check that Keycloak is up and reachable from the GitStation host (`forge doctor`, then curl the issuer's `/.well-known/openid-configuration` with the configured CA), the CA file and the network path (forge never uses an environment proxy). Nothing to repair in GitStation; sign-ins resume once the identity provider answers."
+runbook = "keycloak-unreachable"
+test = "idp_timeout_is_identity_provider_unavailable"
+
+[[error]]
+code = "FG-AUTH-0016"
+name = "CsrfRejected"
+http_status = 403
+severity = "info"
+user_message_ja = "この操作は受け付けられませんでした。ページを再読み込みしてから、もう一度実行してください。"
+user_message_en = "This action was not accepted. Reload the page and try again."
+user_message_id = "Tindakan ini tidak diterima. Muat ulang halaman lalu coba lagi."
+cause = "A state-changing request (not GET, HEAD or OPTIONS) failed the cross-site request checks (ADR-0021 §6, M2 MR3). Two checks run independently: (1) any request that carries fetch metadata (Sec-Fetch-Site / -Mode / -Dest) or an Origin header — whatever its credentials, Bearer and anonymous included — must have `Sec-Fetch-Site: same-origin` when present and an `Origin` exactly equal to the origin of web.base_url; (2) a request authenticated by anything but `Authorization: Bearer` on the API or raw / archive (in practice the session cookie `__Host-gstn_session`) must also send `Origin` and the header `X-GitStation-CSRF` with the session's CSRF token (HMAC-SHA256 of the cookie's secret; `GET /api/v1/session` returns it). git Smart HTTP gets check (1) only (git sends neither header)."
+diagnosis = "The log event `forge.auth.csrf_rejected` carries `reason`: token_missing (no X-GitStation-CSRF header), token_mismatch (not this session's token — another session's, an old page's after a new sign-in, or a forged one), origin_missing (a session request without Origin), origin_mismatch (Origin is another origin: another subdomain, http vs https, another port; with `expected_origin`; `base_url=unset` when web.base_url is not configured), fetch_site (Sec-Fetch-Site was same-site, cross-site or none). It also carries `method`, `path` (log-safe) and, for a session, `public_id`. Header values are never logged except the expected origin. A burst of origin_mismatch from one client usually means a page of another site posting to GitStation (an attack or a misconfigured integration); a single token_mismatch after a new sign-in is a stale tab."
+fix = "For a person: reload the page (it fetches the current CSRF token) and repeat the action. For an integration or script: authenticate with `Authorization: Bearer <token>` and do not send browser headers (Origin / Sec-Fetch-*) from another origin. If every browser request fails with origin_mismatch, check that web.base_url is exactly the URL people open (scheme, host and port)."
+test = "csrf_rejections_name_their_reason"
+
+[[error]]
+code = "FG-AUTH-0017"
+name = "LogoutTokenInvalid"
+http_status = 400
+severity = "warn"
+user_message_ja = "ログアウトの通知を受け付けられませんでした。"
+user_message_en = "The logout notification was not accepted."
+user_message_id = "Pemberitahuan keluar tidak diterima."
+cause = "`POST /-/auth/backchannel-logout` (OIDC Back-Channel Logout, ADR-0021 §8, M2 MR5) received a logout token that failed verification: not a form body with one `logout_token` of at most 64 KiB; its signature, algorithm or key (the ID token's rules, ADR-0021 §9); `iss` (not `auth.oidc.issuer`); `aud` (without the client id); `iat` (missing, more than 60 s in the future or more than 2 minutes old); `exp` (when present, passed beyond the 60 s skew); `events` without `http://schemas.openid.net/event/backchannel-logout`; neither `sid` nor `sub`; a `nonce` (a logout token never has one); no `jti`; or a `jti` already accepted in the last 10 minutes (a replay). No session was revoked. The caller is the identity provider's server, never a browser: a person never sees this message."
+diagnosis = "The log event `forge.auth.backchannel_logout_failed` carries `reason`: body (with `detail`: content_type, too_large, form, token_missing), malformed, alg_not_allowed, kid_missing, unknown_kid, key_invalid, key_alg_mismatch, signature, issuer, audience, expired, not_yet_valid, too_old (iat older than 2 minutes: a delayed delivery or a replay), missing_claim (with `claim`: iat, jti, events, sid_or_sub), events, nonce_present, replayed (the jti was seen), replay_table_full (more than 10 000 logouts within 10 minutes). The token itself is never logged. A burst of signature / issuer from one peer is someone probing the endpoint; replayed right after a Keycloak restart can be Keycloak re-sending a delivered logout (harmless: the sessions were revoked the first time); too_old in numbers points at a clock skew (`forge doctor` reports it) or a queue at the identity provider."
+fix = "Follow runbook oidc-login: check that the realm's client `gitstation` sends back-channel logouts to `web.base_url` + `/-/auth/backchannel-logout` with \"Backchannel logout session required\" on, that `auth.oidc.issuer` and the client id match the realm, and the clocks of both servers (`forge doctor`). Probing from elsewhere needs no fix: the endpoint revokes nothing without a valid signed token; block the peer at the network if it persists."
+runbook = "oidc-login"
+test = "logout_token_failures_are_logout_token_invalid"
+
+[[error]]
+code = "FG-AUTH-0018"
+name = "LoginNotConfigured"
+http_status = 503
+severity = "info"
+user_message_ja = "このサーバーではブラウザのログインが設定されていません。gstn と個人アクセストークンを使ってください。"
+user_message_en = "Browser sign-in is not configured on this server. Use gstn and a personal access token."
+user_message_id = "Proses masuk melalui browser belum dikonfigurasi di server ini. Gunakan gstn dan token akses pribadi."
+cause = "`GET /-/auth/login` or `/-/auth/callback` was requested while `auth.oidc` is not configured (ADR-0021 §12). A server without browser sign-in is a valid configuration (git, gstn and the token API work), so this is not FG-SYS-0002; `forge doctor` warns `auth.oidc not configured`."
+diagnosis = "The log event carries `route`. If browser sign-in was expected, the server's configuration has no `[auth.oidc]` (or FORGE_AUTH_OIDC_*) values."
+fix = "Configure `auth.oidc.issuer`, `auth.oidc.client_id`, `auth.oidc.client_secret_file` (and `auth.oidc.ca_file` for an https issuer) together with `web.session_key_file`, then restart (runbook oidc-login). Until then use gstn with a personal access token."
+test = "login_without_oidc_is_login_not_configured"
+
+[[error]]
 code = "FG-GIT-0007"
 name = "ProtectedRefForcePush"
 http_status = 403
@@ -385,7 +694,7 @@ user_message_ja = "保護されたブランチ・タグには強制プッシュ�
 user_message_en = "Force pushes to a protected branch or tag are not allowed."
 user_message_id = "Force push ke branch atau tag yang dilindungi tidak diizinkan."
 cause = "A push would rewrite (non-fast-forward) a protected ref. In M1 no role, including administrators, may force-push a protected ref."
-diagnosis = "The log event carries `action` and `protection` (the protection's minimum push role)."
+diagnosis = "The log event carries `action` and `protection` (the protection's minimum push role). Smart HTTP push (M1 phase 9 MR4, ADR-0008 option B): forge decides it before git runs when the new commit is already in the repository or the ref is an existing tag (then also `refs`, `denied_refs`, `denied_codes`, `first_denied_kind`: the whole push was refused in-band); `reason=git_denied_non_fast_forward` (with `refs`) means git refused it (`receive.denyNonFastForwards`, set for a push touching a protected branch) and forge rewrote git's `non-fast-forward` answer — other refs of that push may have been applied."
 fix = "Push a new commit on top instead, or open a merge request; ask a maintainer to change the protection only if history must really be rewritten."
 test = "force_push_to_protected_is_denied_even_for_admin"
 
@@ -398,7 +707,7 @@ user_message_ja = "この保護されたブランチ・タグにプッシュす�
 user_message_en = "You are not allowed to push to this protected branch or tag."
 user_message_id = "Anda tidak diizinkan melakukan push ke branch atau tag yang dilindungi ini."
 cause = "The ref is protected and the caller's role is below the protection's minimum push role."
-diagnosis = "The log event carries `action`, `protection` / `required_role` (the protection's minimum) and `actual_role`."
+diagnosis = "The log event carries `action`, `protection` / `required_role` (the protection's minimum) and `actual_role`. On a Smart HTTP push also `refs`, `denied_refs`, `denied_codes`: the whole push was refused in-band before git ran (no ref changed)."
 fix = "Push to a feature branch and open a merge request, or ask a maintainer to adjust the protection."
 test = "push_below_protection_min_role_is_denied"
 
@@ -428,6 +737,77 @@ diagnosis = "The log event carries `action`. The rejected ref name is in the pus
 fix = "Push branches under refs/heads/ and tags under refs/tags/ only."
 test = "reserved_ref_namespace_is_rejected_even_for_admins"
 
+# ── M1 phase 9 MR4: pushing over Smart HTTP ───────────────────────
+[[error]]
+code = "FG-GIT-0011"
+name = "AmbiguousRefName"
+http_status = 400
+severity = "info"
+user_message_ja = "オブジェクト ID と区別できない名前のブランチ・タグは作れません。"
+user_message_en = "A branch or tag name that looks like an object ID is not allowed."
+user_message_id = "Nama branch atau tag yang terlihat seperti ID objek tidak diizinkan."
+cause = "A push named a ref whose branch or tag name (for other refs: the name after refs/) is 40 or 64 hexadecimal digits. git resolves such a name as an object id before it looks at refs, so `git checkout <name>` or a merge request against it would silently use a commit instead of the ref."
+diagnosis = "The log event carries `reason=object_id_like` and `len` (40 or 64); the push was refused as a whole before git ran (the refusal is in-band: `ng <ref> FG-GIT-0011 ...`, see `denied_refs`)."
+fix = "Rename the branch or tag (e.g. add a prefix such as `fix-`) and push again."
+test = "a_hex_like_ref_name_is_ambiguous"
+# ── end M1 phase 9 MR4 ─────────────────────────────────────────────────
+
+# ── M1 phase 9 MR2: recording an applied push ─────────────────────────
+[[error]]
+code = "FG-GIT-0012"
+name = "PushRecordFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "プッシュは反映されましたが、その記録を保存できませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The push was applied, but its record could not be saved. Contact the administrator with the request ID."
+user_message_id = "Push sudah diterapkan, tetapi catatannya tidak dapat disimpan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "git updated the refs of a push (outside any database transaction, ADR-0008), but the `repository.pushed` audit row and event could not be written afterwards (reason `record_failed`: forge_db::repositories::record_push failed on every attempt — the database was unreachable or slow, see `cause_code`). The repository is correct; only the audit trail and the integration feed (kanflow, webhooks) miss this push until it is replayed. Also: `forge admin repo record-push --from-log` could not use the log it was given (reason `push_log_invalid` with `field`, `push_log_empty`, `push_log_unreadable`, `push_log_too_large`): the push is still not recorded."
+diagnosis = "The log event carries `reason`, `repo_id`, `refs` (updates in the push), `attempts`, `cause_code` (the code of the last failure: FG-DB-0001 unreachable, FG-DB-0002 query failed or timed out, FG-DB-0010 the record was refused) and the push's `request_id`. The same request id has one earlier `event=forge.git.push_applied` line (info) with the full ref list in `push`: that line is the replay input. Check the database first (forge doctor, runbook db-unavailable). For push_log_*: `field` names the part of the line that did not parse (the value is not logged), with `line`; `field=project_id` / `user_id` (with `push`, the push's position in the file) means the line names a repository of another project or a pusher that does not exist — the replay checks every push against the database before the first write and writes nothing then."
+fix = "Once the database is healthy, replay the push from its log line as an approved runbook step: extract the `forge.git.push_applied` line(s) of the request id into a file and run `forge admin repo record-push --from-log <file>`. The replay is idempotent (the dedup key is built from the logged request id and the updates): a push that was in fact recorded is reported as already recorded. Never write audit rows or events by hand. Since M1 phase 9 MR4 a push logs two `forge.git.push_applied` lines: `stage=minimal` as soon as git exited (kinds from the zero sides, no commits) and `stage=final` (kinds and commits) — replay the `final` one when it exists, else the minimal one (same dedup key). `reason=reconcile_failed` (with `source`, `commands` = every `ref old new` of the push, `cause_code`): git's answer was not readable (or git failed / was killed) and the repository could not be read either, so forge does not know which refs changed — compare `git --git-dir=<path> for-each-ref` with `commands` (read only) and write the push_applied line for the applied ones before replaying."
+runbook = "push-record-failed"
+test = "a_push_that_cannot_be_recorded_is_push_record_failed"
+# ── end M1 phase 9 MR2 ─────────────────────────────────────────────────
+
+[[error]]
+code = "FG-GIT-0013"
+name = "GitRequestTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "Git の要求が大きすぎます。"
+user_message_en = "The Git request is too large."
+user_message_id = "Permintaan Git terlalu besar."
+cause = "A Smart HTTP request body went over a forge limit: the decompressed size of a gzip request body (`Content-Encoding: gzip`), or a body or command-list limit of the route. Decoding stops at the limit, so a compressed bomb never expands past it."
+diagnosis = "The log event carries `limit` (which limit: `gzip_decompressed`, `request_body` — the raw body of an upload-pack request over `git.http.fetch_request_max_bytes`, `command_section` — a push's command list over 1 MiB, `push_body` — a push body, raw or decompressed, over `git.http.push_max_bytes` + 1 MiB; git's own `receive.maxInputSize` refuses an oversized pack in-band as `unpack` error), `max_bytes` and the route context (`service`). `limit=refused_push_drain` appears only as `drain_error` on a refused push (forge stopped reading the body of a push it had refused after 64 MiB). A legitimate client hitting it usually means a fetch negotiation with very many haves/wants (huge ref counts) or a push over the push size limit."
+fix = "Nothing to fix for a hostile or broken client. For a legitimate one, check the repository's ref count; raise the limit (configuration `git.http.*`, M1 phase 9 MR3/MR4) only with that evidence."
+test = "gzip_bomb_stops_at_cap"
+
+[[error]]
+code = "FG-GIT-0014"
+name = "GitProtocolInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "Git のプロトコルとして正しくない要求です。"
+user_message_en = "The request is not valid for the Git protocol."
+user_message_id = "Permintaan tidak valid untuk protokol Git."
+cause = "A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature or an object the request wants (an object no ref reaches: removed by a force push or a deleted branch). git itself never saw the bytes. The want refusals reach the client in-band (HTTP 200 with an `ERR` packet), so git prints `remote error:` with this message and the request id."
+diagnosis = "The log event carries `reason`: `pkt_line` (with `detail`: `length_reserved` for 0001-0003 where not allowed, `length_too_large` over 65520, `non_hex`, `truncated`, `bad_sideband`), `gzip` (the gzip body is corrupt, truncated, or has data after its end), `content_type` (wrong or missing request Content-Type for the service), `content_encoding` (a request Content-Encoding other than gzip or identity), `want_invalid` (an upload-pack `want` line that is not `want <40 or 64 lower-case hex>`), `command_unsupported` (a protocol v2 command other than `ls-refs` / `fetch`, with `command`), `filter_unsupported` (a `filter` naming `sparse`, e.g. `sparse:oid=<blob>`, which would read a blob by id), `too_many_wants` (more non-commit wants than `git.http.max_object_wants`, with `objects`, `max_object_wants`), `want_unreachable` (an upload-pack request wants an object that no ref reaches — ADR-0007 option (a): forge checks every `want` before upload-pack starts and answers with an in-band `ERR` packet; `wants`, `unreachable`, `commits`, `objects` count them, `first_unreachable` is the first such id, `walked` the objects the walk read, `check_ms` the cost of the check), `too_many_commands` (a push with more ref updates than the limit, 1000; `max_commands`), `report_status_required` (a push client without the report-status capability: forge answers refusals in that report), `push_cert` (signed pushes are refused), and for receive-pack (M1 phase 9 MR4, `service=git-receive-pack`): `command_invalid` (with `detail`: `shape`, `object_id` — not the negotiated object format, `unchanged_ref` — old and new equal or both zero, `ref_bytes` — a ref name with control characters, spaces or invalid UTF-8, `capabilities_bytes`, `capabilities_not_first` — capabilities on a later command, `shallow_id`, `special_packet`, `data_after_empty_section` — bytes after git's empty probe request), `capability_unsupported` (with `capability`: a capability forge's receive-pack does not advertise, e.g. `push-options`, `side-band`, an unknown `object-format`), `duplicate_ref` (the same ref twice in one push), `shallow_misplaced` (a `shallow` line after the first command), `git_refused` (git refused a push and its own words — an `unpack` error, an `ng` reason outside git's short ones, a fatal side-band message — were replaced for the client by this code and the request id; the originals are in `git_messages`, e.g. fsck findings such as `missingEmail`). Clients are normally real git; frequent occurrences from one address point at a scanner or a broken proxy that alters bodies."
+fix = "Nothing to fix server-side for a broken or hostile client. A git client that hits `report_status_required` or `push_cert` needs a normal `git push` (no `--signed`). A proxy that rewrites bodies must pass them through unchanged."
+test = "pkt_line_rejects_invalid_lengths"
+
+[[error]]
+code = "FG-GIT-0015"
+name = "GitClientDisconnected"
+http_status = 499
+severity = "info"
+user_message_ja = "接続が途中で切れたため、Git の処理を中止しました。"
+user_message_en = "The connection was closed before the Git operation finished; it was stopped."
+user_message_id = "Koneksi terputus sebelum operasi Git selesai; operasi dihentikan."
+cause = "The client went away (or the request was cancelled) while a streaming git subprocess was running; forge killed git together with its helpers (process group / Job Object) and reaped it. The user never sees this response; the code exists for the log."
+diagnosis = "The log event carries `subcommand`, `reason` (`client_disconnected` when the HTTP layer noticed, `dropped` when the request future was cancelled), `bytes_in`, `bytes_out` and `duration_ms`; `phase=request_body` (no git was started: the client went away while forge read the request body). Logged with the request id and `route`, `project_id`, `repo_id` by forge-web. Many for one client at the same byte counts point at a proxy timeout or a client-side limit; spread across clients, at network trouble."
+fix = "Nothing for an isolated case. For repeated ones, compare `duration_ms` with the proxy's timeouts (reverse proxy read/send timeout) and the client's `http.lowSpeedTime`. A receive-pack is killed this way only while its request body is still arriving (`phase=request_body`, route `receive_pack`, M1 phase 9 MR4): no ref has changed then; once the body is complete receive-pack runs to its end even if the client goes away. See runbook smart-http for a stale `.lock` file."
+runbook = "smart-http"
+test = "client_disconnect_kills_git_and_is_git_client_disconnected"
+
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
 [[error]]
@@ -438,8 +818,8 @@ severity = "info"
 user_message_ja = "指定された URL は存在しません。"
 user_message_en = "The requested URL does not exist."
 user_message_id = "URL yang diminta tidak ada."
-cause = "No registered route matches the request path."
-diagnosis = "The `context` field of the log event contains `method=` and `path=`. Compare with `Git/docs/api/openapi.json` (generated from the route registry)."
+cause = "No registered route matches the request path: no fixed route, and the dispatcher (ADR-0015) refused the raw path by its string rules or found no scoped route for its word and method."
+diagnosis = "The `context` field of the log event contains `method=`, `path=` (the raw path, cut to 256 characters with control and invisible characters escaped — `log_safe_path`), `reason=` and `part=`. `reason=path_rejected`: the path breaks a string rule; `part` says where (`path`, `namespace`, `tail`, `git`, `query`, `instance`) and `rule` which rule (e.g. `empty_segment`, `dot_git_placement`, `malformed_escape`, `invisible`, `too_long`). `reason=unknown_route`: the word is not served — `part=word` (an unknown word after `/-/`), `part=reserved_top_level` (`/api/…` and the other reserved top-level names), `part=instance`, `part=method`, or `part=route` with `route=` (a known word with no route for this method yet, e.g. `raw`, `archive`). (`info/refs` without exactly one known `service` is FG-WEB-0007 since M1 phase 9.) Compare with `Git/docs/authz/routes.generated.json` (scoped routes) and `Git/docs/api/openapi.json` (fixed routes), and replay the path against `tests/fixtures/url-vectors.json`."
 fix = "Use a documented route; for a client, check the API version prefix (/api/v1)."
 test = "unknown_route_is_route_not_found"
 
@@ -452,7 +832,7 @@ user_message_ja = "処理が時間内に終わりませんでした。しばら�
 user_message_en = "The request did not finish in time. Try again later."
 user_message_id = "Permintaan tidak selesai tepat waktu. Coba lagi nanti."
 cause = "A request exceeded the server's request timeout and was cancelled."
-diagnosis = "The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM)."
+diagnosis = "The `context` field of the log event contains `method=`, `path=` and `timeout_ms=`. Find the slow dependency in the same request_id's events (DB, git, LLM). `operation=git_request_body` (with `kind=idle|total`, `bytes_in`; route `upload_pack`): a Smart HTTP request body arrived too slowly (`kind=idle`: `git.http.idle_timeout_ms`; `kind=total`: the whole body within `git.http.body_timeout_ms`, default 5 min); git POSTs are bounded by `git.http.timeout_ms` instead of the request timeout (runbook smart-http). For a push (route `receive_pack`) the command list must arrive within `body_timeout_ms`, the pack within `git.http.timeout_ms`; a pack that stops arriving kills receive-pack (no ref changed, FG-GIT-0015 `phase=request_body` follows). `operation=response_write` (with `kind=idle`, `peer`, `idle_ms`; logged by the connection loop with a connection-level request_id): the client stopped reading a response for `server.write_idle_timeout_ms` (default 60 s) and the connection was closed; the response is lost, a git stream that keeps sending is never idle (runbook connections). `operation=request_read` (with `kind=idle`, `peer`, `idle_ms`): a request body delivered nothing for `server.read_idle_timeout_ms` (default 60 s, never below `git.http.idle_timeout_ms`) while the handler waited for it; the read fails (a handler busy elsewhere is not affected). For a JSON body route (phase 8b) `operation=request_read` carries `bytes_in` and a `kind`: `idle` (the same idle timeout), `total` (with `timeout_ms`: the whole body did not arrive within `server.body_read_timeout_ms`, default 10 s, however steadily it trickled — a slow client or a deliberately slow sender), or `aborted` (the client went away or broke the HTTP framing while sending; the read error is in `source`). In every case nothing was loaded. `operation=protection_load`: a push's protected-ref rules could not be read within the lookup timeout (database slow; the push was refused before git ran). `operation=project_page` / `group_page`: one list page scan (`GET /api/v1/projects` / `/groups`, up to 1001 rows in one statement) did not answer within the lookup timeout — check the database (FG-DB-0001 in the same request_id) and the number of projects / groups; the scan budget is 1000 rows per page (plan option L1, switch to an SQL superset past ~10k)."
 fix = "Fix the slow dependency; raise the request timeout only for routes that legitimately take long."
 test = "slow_handler_is_request_timeout"
 
@@ -511,6 +891,72 @@ fix = "Restore the dependency named by `probe`; if it is healthy but slow, look 
 test = "readyz_probe_is_bounded_by_its_timeout"
 
 [[error]]
+code = "FG-WEB-0006"
+name = "RequestInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "リクエストの形式が正しくありません。API の説明（docs/api/openapi.json）を確認してください。"
+user_message_en = "The request is not valid. Check the API description (docs/api/openapi.json)."
+user_message_id = "Permintaan tidak valid. Periksa deskripsi API (docs/api/openapi.json)."
+cause = "The request's shape is wrong, decided from the request alone (after authentication, before any lookup, so it says nothing about any resource): a JSON body that is not well-formed, has a field the route does not know (bodies are strict: unknown fields are refused), lacks a required field or has a value of the wrong type; a body route called without `Content-Type: application/json`; a path or query parameter that is not syntactically valid (`{id}` not a plain positive decimal, `path=` missing, repeated or malformed); an opaque list cursor that does not verify (tampered, truncated, from another key or another list)."
+diagnosis = "The log event carries `reason`: `json_syntax` (with `line`, `column`), `unknown_field` / `missing_field` (with `field`, the field's name only), `type` (with `line`, `column`: a value of the wrong type; the value is never logged), `content_type` (with `content_type`, the media type as sent, cut to 64 characters), `param_invalid` (with `param` and `rule`, e.g. `param=id rule=not_positive_decimal`, `param=path rule=missing|repeated|malformed|invalid`), `cursor_invalid` (with `rule`: `too_long`, `encoding`, `truncated`, `version`, `kid` (a key id not in `api.cursor_keys_file`: rotated out, or a cursor from another installation), `tag` (tampered, or minted for another list or caller), `expired` (a genuine cursor older than `api.cursor_max_age_s`, default 24 h: a client that resumed a listing too late — not an attack; restart without the cursor)), plus `action` and `route`. History pages (M2 MR8, `GET …/repository/commits`): `cursor_invalid rule=payload` (not a cursor a page handed out: wrong shape, ids that are not full lower-case hex, a skip outside 1..=100000) and `rule=anchor` (a well-formed cursor whose last commit is not where it says in this path's history: it was minted for another path, or forged); `param=limit rule=not_positive_decimal|out_of_range`, `param=oid rule=not_object_id` (`commits/{oid}` wants a full 40 / 64-digit commit id), `param=query rule=unknown_parameter`. Request bodies, parameter values and cursors are never logged. Compare the request with the operation's schema in `Git/docs/api/openapi.json` (`requestBody`, `parameters`). Lists (`GET /api/v1/projects`, `/api/v1/groups`, M1 phase 8b MR7b): `param=limit rule=out_of_range` (not a plain decimal in 1..=100) or `rule=repeated`, `param=cursor rule=repeated|empty`, `param=query rule=unknown_parameter` (only `limit` and `cursor` exist), and `cursor_invalid rule=payload` (the cursor verified but does not hold one positive id — a build mismatch, report it); `rule=tag` also covers a cursor used by another caller or on the other list."
+fix = "Correct the client's request to the documented schema. For `cursor_invalid`: restart the listing without a cursor (a history cursor belongs to the path it was made for; cursors are opaque, bound to one list and one caller, and expire when their key is rotated out). For `content_type`: send `Content-Type: application/json`."
+test = "request_body_validation_is_request_invalid"
+
+[[error]]
+code = "FG-WEB-0009"
+name = "RequestTooLarge"
+http_status = 413
+severity = "info"
+user_message_ja = "リクエストの本文が大きすぎます。"
+user_message_en = "The request body is too large."
+user_message_id = "Isi permintaan terlalu besar."
+cause = "A request body exceeded the route's limit (at most 64 KiB for an API route with a JSON body; never above `body_limit_bytes`, 1 MiB). Refused from `Content-Length` before reading, or as soon as the streamed body passes the limit; nothing was loaded or changed. Smart HTTP bodies have their own limits (FG-GIT-0013)."
+diagnosis = "The log event carries `limit_bytes`, `route`, `action` and `declared` (`true` when `Content-Length` already exceeded the limit, `false` when the body grew past it while streaming). The body is never logged."
+fix = "Send a smaller body (split the change into several requests). The per-route limits are part of the API description (`x-forge-max-body-bytes` in `Git/docs/api/openapi.json`)."
+test = "oversized_request_body_is_request_too_large"
+
+[[error]]
+code = "FG-WEB-0010"
+name = "RateLimited"
+http_status = 429
+severity = "info"
+user_message_ja = "短い間に要求が多すぎます。少し待ってからもう一度お試しください。"
+user_message_en = "Too many requests in a short time. Wait a moment and try again."
+user_message_id = "Terlalu banyak permintaan dalam waktu singkat. Tunggu sebentar lalu coba lagi."
+cause = "A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts and `GET /-/auth/callback` 20 callbacks per peer per minute, each with its own counter (an IPv6 peer counts as its /64), so nobody can flood the identity provider's authorization or token endpoint through GitStation. `GET /api/v1/namespaces/resolve?prefix=true` (M2 MR6, the SPA's rescue of GitHub-shaped URLs, ADR-0015) allows 60 requests per signed-in user per minute (`route=resolve_prefix`; one request resolves every leading prefix of the path), checked after the path is validated and the token scope decided, before any lookup. `GET /api/v1/users?search=` allows 120 searches per signed-in user per minute (`route=user_search`). A refused callback also clears the state cookie, so the user starts the sign-in again. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`."
+diagnosis = "The log event carries `route` (`login`, `callback`, `resolve_prefix` or `user_search`), `limit` and `window_s` (never the address, which is personal data; `resolve_prefix` and `user_search` also `retry_after_s`). The per-caller limits are tested by `prefix_resolution_is_rate_limited_per_caller` and `the_user_search_is_rate_limited_per_caller` (forge-web). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019."
+fix = "Wait `Retry-After` seconds. If a proxy in front of GitStation makes every user one peer, record it in the incident record and decide the client-address source (ADR-0019 open question) before raising the limit."
+test = "login_start_is_rate_limited_per_peer"
+
+[[error]]
+code = "FG-WEB-0007"
+name = "SmartHttpServiceUnsupported"
+http_status = 400
+severity = "info"
+user_message_ja = "Git のサービスの指定が正しくありません。git-upload-pack か git-receive-pack を 1 つだけ指定してください。"
+user_message_en = "The Git service is not supported. Request exactly one of git-upload-pack or git-receive-pack."
+user_message_id = "Layanan Git tidak didukung. Minta tepat satu dari git-upload-pack atau git-receive-pack."
+cause = "A Smart HTTP advertisement request (`GET {path}.git/info/refs`) did not carry exactly one `service` query parameter whose value is `git-upload-pack` or `git-receive-pack` (byte for byte, no decoding, no case folding; ADR-0015 step 3). Decided from the string alone, before authentication and before any lookup, so it says nothing about the path. Dumb HTTP clients (no `service`) get this too: forge serves Smart HTTP only."
+diagnosis = "The log event carries `reason=service_unsupported`, `part=query` and `rule`: `missing` (no `service` key: a dumb-HTTP client or a scanner), `duplicate` (two `service` keys), `unknown` (another value, e.g. `git-upload-archive`, an encoded or upper-case one). `path=` is the raw path cut by `log_safe_path`."
+fix = "Use a git client (git >= 2.0 speaks Smart HTTP); the remote URL is `https://<host>/<namespace>/<project>.git`. Nothing to fix on the server."
+test = "info_refs_needs_exactly_one_known_service"
+
+[[error]]
+code = "FG-WEB-0008"
+name = "ServerBusy"
+http_status = 503
+severity = "warn"
+user_message_ja = "サーバーが混み合っています。しばらくしてから再度お試しください。"
+user_message_en = "The server is busy. Try again later."
+user_message_id = "Server sedang sibuk. Coba lagi nanti."
+cause = "A new connection was refused before any request was read, because the server already holds `server.max_connections` open connections, or `server.max_connections_per_peer` from the same socket peer address. The client gets this 503 with `Retry-After` and the connection is closed. A list request (`GET /api/v1/projects` / `/groups`) is refused the same way (503 with `Retry-After: 1`, the connection stays open) when `api.list_max_concurrent` list scans already run, or `api.list_max_concurrent_per_principal` for the same user."
+diagnosis = "The log event carries `reason` (`connection_limit`: the whole server is full; `peer_limit`: one peer holds its share), `peer` (the socket peer IP; behind a reverse proxy this is the proxy; an IPv6 peer is counted by its /64 prefix, so all addresses of one /64 share the cap, while `peer` in the log is the actual address of the refused connection), `reason=summary` (a line written after the flood stopped or at shutdown: only `suppressed`, the refusals not logged one by one), `limit`, `open` (connections held right now) and `suppressed` (refusals since the previous log line: at most one line per second is written). A refusal is logged once, at the accept loop, with a connection-level request_id (also in the response body). Many `peer_limit` refusals for one `peer`: a client or script opens too many connections, or connections are held open (slow readers are closed by `server.write_idle_timeout_ms`, idle keep-alive by `server.header_read_timeout_ms`, old ones by `server.keep_alive_max_ms`); when `peer` is the reverse proxy, the cap counts all its clients together and is too low for the proxy. `connection_limit` while no peer dominates: real load, or many slow clients. `operation=response_write` on FG-WEB-0002 is the related event for a client that stopped reading. `reason=list_concurrency` (from a list route, with `scope=global|principal` and `max`; request_id of the refused request; logged once per refusal): every list request scans up to 1001 rows whatever `limit` is, so the number running at once is capped. `scope=principal`: one user (script, UI polling) keeps more than `api.list_max_concurrent_per_principal` (default 2) lists running — find the user in the same request_id's events; `scope=global`: `api.list_max_concurrent` (default 16) are running, which usually means the scans are slow — look for `FG-WEB-0002 operation=project_page|group_page` (a slow database or very many projects / groups) before raising the cap."
+fix = "Find the peer holding connections (runbook connections); stop the misbehaving client, or raise `server.max_connections_per_peer` / `server.max_connections` (keep per-peer at most the total) and restart. For a reverse proxy raise the per-peer cap to the proxy's expected concurrency. For `reason=list_concurrency` fix the slow scan or the polling client first (runbook connections); raise `api.list_max_concurrent` / `api.list_max_concurrent_per_principal` (per-user at most the total) only when the database has room, and restart."
+runbook = "connections"
+test = "connections_over_the_per_peer_cap_get_503"
+
+[[error]]
 code = "FG-SYS-0005"
 name = "ServeFailed"
 http_status = 500
@@ -519,7 +965,7 @@ user_message_ja = "サーバーが停止しました。管理者に連絡して�
 user_message_en = "The server stopped. Contact the administrator."
 user_message_id = "Server berhenti. Hubungi administrator."
 cause = "forge serve (or another command that needs the async runtime, such as forge db) could not build its runtime, the connection limiter failed (a programming error), or graceful shutdown exceeded its deadline. Accept errors on the listener are FG-SYS-0007."
-diagnosis = "The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time."
+diagnosis = "The `context` field contains `operation=` (`build_runtime`, `connection_limit`, `shutdown_deadline`; the latter with `grace_ms=`; `push_tasks_pending` with `running`, `wait_ms`: pushes whose receive-pack or record still ran when `forge serve` stopped waiting — check their refs and records by request id, runbook smart-http); the OS error is in `source`. Check file-descriptor limits (`ulimit -n`), memory, and the system log around the time."
 fix = "Address the resource problem (descriptors, memory) and restart; for shutdown_deadline find the long-running requests in the access log."
 runbook = "server-start-failed"
 test = "serve_failures_have_their_own_code"
@@ -579,8 +1025,8 @@ user_message_ja = "データベースの処理に失敗しました。管理者�
 user_message_en = "A database operation failed. Contact the administrator."
 user_message_id = "Operasi basis data gagal. Hubungi administrator."
 cause = "A statement failed on a working connection: it exceeded database.statement_timeout_ms (SQLSTATE 57014) or database.lock_timeout_ms (55P03), lost a serialization race (40001) or a deadlock (40P01), violated a constraint (23xxx), found no row where one must exist, or the server reported another error. (A lost connection is FG-DB-0001.)"
-diagnosis = "The log event carries `query` (a static name of the statement — never its SQL text or parameters), `reason` (statement_timeout, lock_timeout, serialization, deadlock, constraint with `constraint` / `table`, row_not_found, change_timeout (a ChangeTx exceeded its 30 s deadline from begin to commit and was rolled back; see `timeout_ms`), commit_outcome_unknown (COMMIT of a change did not answer within 10 s: the change may or may not be durable — check forge.audit_log for its request_id before retrying), rollback_timeout / a failed `change.rollback` (logged at warn after a dedup hit: the change itself is still Deduped, the connection may be unhealthy), write_on_read_pool (25006 on the read pool: a write was sent to the read-only forge_ro pool — a bug, never retried), permission_denied (42501: the role lacks the privilege — a bug or a missing GRANT, never retried), idle_in_transaction_timeout (25P03: the caller left a transaction idle; the session was ended — a caller bug), server_error, client_error — e.g. a decode error) and `sqlstate`. Row values are never logged: for classes 22 / 23 the server message is dropped. For timeouts, look for long-running or blocking sessions in pg_stat_activity and pg_locks at that time; look up other SQLSTATEs in the PostgreSQL documentation."
-fix = "For timeouts remove the blocking session or fix the slow plan (EXPLAIN); serialization and deadlock are safe to retry; commit_outcome_unknown is never retried blindly — look up the request_id in forge.audit_log first (a change without a dedup_key would be applied twice); for constraint and other states fix the caller named by `query`."
+diagnosis = "The log event carries `query` (a static name of the statement — never its SQL text or parameters), `reason` (statement_timeout, lock_timeout, serialization, deadlock, constraint with `constraint` / `table`, row_not_found, change_timeout (a ChangeTx exceeded its 30 s deadline from begin to commit and was rolled back; see `timeout_ms`), subtree_unstable (a namespace move kept finding new children below its subtree while locking it, D5), tombstone_changed (a tombstone release found the tombstone changed — its target purged — after taking its path lock); deadlock, serialization, subtree_unstable and tombstone_changed carry `retryable=true`: the transaction was rolled back and the whole request may be retried, commit_outcome_unknown (COMMIT of a change did not answer within 10 s: the change may or may not be durable — check forge.audit_log for its request_id before retrying), rollback_timeout / a failed `change.rollback` (logged at warn after a dedup hit: the change itself is still Deduped, the connection may be unhealthy), write_on_read_pool (25006 on the read pool: a write was sent to the read-only forge_ro pool — a bug, never retried), permission_denied (42501: the role lacks the privilege — a bug or a missing GRANT, never retried), idle_in_transaction_timeout (25P03: the caller left a transaction idle; the session was ended — a caller bug), server_error, client_error — e.g. a decode error) and `sqlstate`. Row values are never logged: for classes 22 / 23 the server message is dropped. For timeouts, look for long-running or blocking sessions in pg_stat_activity and pg_locks at that time; look up other SQLSTATEs in the PostgreSQL documentation."
+fix = "For timeouts remove the blocking session or fix the slow plan (EXPLAIN); serialization, deadlock, subtree_unstable and tombstone_changed (`retryable=true`) are safe to retry; commit_outcome_unknown is never retried blindly — look up the request_id in forge.audit_log first (a change without a dedup_key would be applied twice); for constraint and other states fix the caller named by `query`."
 runbook = "db-unavailable"
 test = "a_slow_statement_is_db_query_failed_with_sqlstate_57014"
 
@@ -680,12 +1126,44 @@ severity = "alert"
 user_message_ja = "所属の情報を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
 user_message_en = "The membership data could not be read. Contact the administrator with the request ID."
 user_message_id = "Data keanggotaan tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
-cause = "Loading a user's roles (forge_db::roles, the one role computation of ADR-0010) found membership or namespace rows that the schema and the forge-db commands never write: the parent chain of a namespace is longer than 20 steps (a cycle in namespaces.parent_id, or a depth the CHECK should have refused), or a group_members.role outside the five roles. The data was changed outside forge-db (a manual change, a restored dump, a disabled trigger or constraint). No role is returned, so the request is refused rather than decided on a partial role."
-diagnosis = "The log event carries `reason` (namespace_chain_too_deep or unknown_role), `resource` (group / namespace) and `id` (the group or namespace id the load started from), `user` (the user id whose roles were loaded) and, for unknown_role, `raw` (the stored value). Read the chain read-only: WITH RECURSIVE c(id, parent_id, step) AS (SELECT id, parent_id, 1 FROM forge.namespaces WHERE id = <id> UNION ALL SELECT n.id, n.parent_id, c.step + 1 FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < 25) SELECT * FROM c; a repeated id is a cycle. For unknown_role: SELECT group_id, user_id, role FROM forge.group_members WHERE role NOT IN ('guest','reporter','developer','maintainer','owner'); then check pg_constraint for group_members_role and forge_audit.ddl_audit for who dropped or altered it."
+cause = "Loading a user's roles (forge_db::roles, the one role computation of ADR-0010), or a group or project member change reading the member's direct role (forge_db::groups and forge_db::projects add_member / change_member / remove_member, since D3 MR2 and D4 MR4), found membership or namespace rows that the schema and the forge-db commands never write: the parent chain of a namespace is longer than 20 steps (a cycle in namespaces.parent_id, or a depth the CHECK should have refused), or a group_members.role / project_members.role outside the five roles. The data was changed outside forge-db (a manual change, a restored dump, a disabled trigger or constraint). No role is returned, so the request is refused rather than decided on a partial role."
+diagnosis = "The log event carries `reason` (namespace_chain_too_deep or unknown_role), `resource` (group / namespace / project) and `id` (the group, namespace or project id the load started from), `user` (the user id whose roles were loaded) and, for unknown_role, `raw` (the stored value). Read the chain read-only: WITH RECURSIVE c(id, parent_id, step) AS (SELECT id, parent_id, 1 FROM forge.namespaces WHERE id = <id> UNION ALL SELECT n.id, n.parent_id, c.step + 1 FROM forge.namespaces n JOIN c ON n.id = c.parent_id WHERE c.step < 25) SELECT * FROM c; a repeated id is a cycle. For unknown_role: SELECT group_id, user_id, role FROM forge.group_members WHERE role NOT IN ('guest','reporter','developer','maintainer','owner'); then check pg_constraint for group_members_role and forge_audit.ddl_audit for who dropped or altered it."
 fix = "Restore the rows from the audit log (forge.audit_log group.* / member.* rows) or a backup through an approved runbook step; restore the dropped constraint or trigger. Never patch the rows by hand without approval."
 runbook = "membership-data"
 test = "a_namespace_chain_beyond_the_cap_is_membership_data_invalid"
 # ── end D2 ──────────────────────────────────────────────────────────────
+
+# ── D3: credential data that breaks a schema invariant ─────────────────
+[[error]]
+code = "FG-DB-0019"
+name = "CredentialDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "認証情報を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The credential data could not be read. Contact the administrator with the request ID."
+user_message_id = "Data kredensial tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Authenticating a personal access token (forge_db::tokens) found a tokens row that the schema and the forge-db commands never write: a scope name this build does not know, or a secret_sha256 that is not 32 bytes. The data was changed outside forge-db (a manual change, a restored dump, a disabled constraint) or by a newer build. The token is not accepted: the request is refused rather than decided on partial scopes."
+diagnosis = "The log event carries `reason` (unknown_scope or bad_hash), `token_id` and `public_id` (never a secret or hash) and, for unknown_scope, `raw` (the stored scope). Read read-only on the write role: SELECT id, user_id, public_id, scopes FROM forge.tokens WHERE id = <token_id>; then check pg_constraint for tokens_scopes_known and forge_audit.ddl_audit for who changed the constraint, and forge.audit_log token.* rows for the history."
+fix = "Revoke the token through an approved runbook step (forge admin token revoke) and issue a new one; restore a dropped constraint from the migration. Never edit the row by hand without approval."
+runbook = "credential-data"
+test = "an_unknown_stored_scope_is_credential_data_invalid"
+# ── end D3 ──────────────────────────────────────────────────────────────
+
+# ── D4 MR5: protected ref rules that break a schema invariant ──────────
+[[error]]
+code = "FG-DB-0020"
+name = "ProtectedRefDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "保護ブランチの規則を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The protected branch rules could not be read. Contact the administrator with the request ID."
+user_message_id = "Aturan branch terlindungi tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Reading a project's protected ref rules (forge_db::protected_refs: levels_for, which feeds RefProtection::effective and the push policy snapshot, or a rule change reading the existing rules) found rows that the forge-db commands never write: more than 100 rules in one project (the cap is enforced by the application only), a pattern that RefPattern::parse refuses (the database CHECKs hold only the prefix and the length), or a push_min_role outside developer / maintainer / owner. The data was changed outside forge-db (a manual change, a restored dump, a dropped constraint). No rule is skipped: the push or the rule change is refused rather than decided on a partial rule set (skipping a rule could loosen protection)."
+diagnosis = "The log event carries `reason` (too_many_stored_rules with `project_id`, stored_pattern_invalid or stored_push_min_role_invalid with `protected_ref_id`); the pattern is not logged. Read read-only on the write role: SELECT id, project_id, pattern, push_min_role FROM forge.protected_refs WHERE project_id = <project_id> (or id = <protected_ref_id>) ORDER BY id; check pg_constraint for protected_refs_push_min_role, and forge_audit.ddl_audit and the forge.audit_log protected_ref.* rows for who changed what."
+fix = "Through an approved runbook step, delete the rows that break the rules (forge_db::protected_refs::delete keeps the audit trail) or restore them from the audit log / a backup; restore a dropped constraint from the migration. Never edit the rows by hand without approval."
+runbook = "protected-ref-data"
+test = "a_stored_rule_this_build_cannot_read_is_protected_ref_data_invalid"
+# ── end D4 MR5 ─────────────────────────────────────────────────────────
 
 [[error]]
 code = "FG-DB-0008"
@@ -710,7 +1188,7 @@ severity = "alert"
 user_message_ja = "データの保護の仕組みが働きました。管理者に連絡してください。"
 user_message_en = "A data protection safeguard was triggered. Contact the administrator."
 user_message_id = "Pengaman perlindungan data terpicu. Hubungi administrator."
-cause = "An append-only safeguard of the database (ADR-0018) failed: a guard trigger rejected an UPDATE, DELETE or TRUNCATE of an append-only table (SQLSTATE XF001 — a bug or a manual change), forge doctor found a guard missing or weakened (the audit trigger of a state table, a role attribute, a login holding an extra role, the owner of schema forge_audit or a log table, a guard trigger or event trigger missing, extra, re-pointed or not enabled ALWAYS, a guard function's owner, body or privileges, the bootstrap version), or a membership of a forge role is not one of the fixed ones or of database.privileged_members (or carries ADMIN OPTION), or — once the first schema migration is recorded — a migrated table is missing, owned by someone other than forge_owner or has a rule or row security, a guard trigger or guard function of forge.events / forge.audit_log / forge.event_feed_state differs from the shipped one, a table privilege of the migrated schema differs, or the DDL log has a change that neither a bootstrap run nor a migration explains and nobody acknowledged."
+cause = "An append-only safeguard of the database (ADR-0018) failed: a guard trigger rejected an UPDATE, DELETE or TRUNCATE of an append-only table, a change of a revoked web session's revoked_at / revoked_reason (trigger web_sessions_revocation_final, M2 MR3: a revocation is final), or a forward-only change of forge.repositories (state moves only provisioning -> ready and ready_at is set once, and a repository enters purging only when its project is pending deletion with purge_after passed; trigger repositories_state_forward, steps D4 and D5) (SQLSTATE XF001 — a bug or a manual change), forge doctor found a guard missing or weakened (the audit trigger of a state table, a role attribute, a login holding an extra role, the owner of schema forge_audit or a log table, a guard trigger or event trigger missing, extra, re-pointed or not enabled ALWAYS, a guard function's owner, body or privileges, the bootstrap version), or a membership of a forge role is not one of the fixed ones or of database.privileged_members (or carries ADMIN OPTION), or — once the first schema migration is recorded — a migrated table is missing, owned by someone other than forge_owner or has a rule or row security, a guard trigger or guard function of forge.events / forge.audit_log / forge.event_feed_state differs from the shipped one, a table privilege of the migrated schema differs, or the DDL log has a change that neither a bootstrap run nor a migration explains and nobody acknowledged."
 diagnosis = "The event carries `reason`: rejected (with `query`, `sqlstate=XF001` and `db_message` naming the operation and table), guard_missing (with `guard`: bootstrap_version (`found` / `expected`), role_attributes (`role`), role_separation (`role`, `member_of`), object_owner (`object`: database, schema public, schema forge_audit, a log table, or an extension in forge_audit), log_triggers / event_triggers (`trigger`), audited_trigger (`table`, `detail`: the audit trigger forge.audited_change_present of a state table against tables.toml — table_missing, id_column (not an integer column, `column`), ledger_column (a ledger column the table lacks, `column`), missing, extra (a second trigger on the function), name, not_deferred_constraint, not_always, when, events, arguments, update_of (not every column but unaudited_columns: a column was added without re-creating the trigger)), function_owner / function_body / function_privilege (`function`, `role`), migration_records (`version`: a db.migrate audit row for a version this binary does not ship, a second row for a version, or guarded_changes that differ from the file), db_settings (`role`, or * for a database-wide default, `scope=every_database` for a role-wide setting on a bootstrap role: a session default other than the three login search_paths of the bootstrap), privileges (`object`: the database, a schema, a log table, forge._sqlx_migrations, a table of the migrated schema such as forge.events, or the default privileges of forge_owner / forge_seq / forge_purge — its ACL differs from the shipped one; detail=audited_table_unlisted: a tables.toml audited table that this build's doctor does not list with its exact ACL — a build defect, fix src/bootstrap/schema.rs; `grants` in the log lists what was found)), unexpected_ddl (`count`, `first_id`: rows of forge_audit.ddl_audit_status() with expected = false and no acknowledgement), role_membership_changed (with `unexpected` / `missing` as member->role; role names are in the log only, not in forge doctor output). Run `forge doctor --json` (read-only) and compare the db.bootstrap check with ops/db/bootstrap/; read forge_audit.ddl_audit for the time of the change."
 fix = "rejected: find the caller named by `query` — append-only tables are changed only by their owning functions. guard_missing: re-run 03-database-objects.sql (an approved runbook step; it recreates every guard trigger, event trigger, function and privilege) or 01-cluster-roles.sql for role attributes. role_membership_changed: revoke the unexpected membership, or add role:member to database.privileged_members after review."
 runbook = "append-only-violation"
@@ -724,9 +1202,9 @@ severity = "warn"
 user_message_ja = "変更を保存できませんでした。管理者に連絡してください。"
 user_message_en = "The change could not be saved. Contact the administrator."
 user_message_id = "Perubahan tidak dapat disimpan. Hubungi administrator."
-cause = "A typed command built a change that forge refuses before it reaches the database (ADR-0016 §6): more than 100 events in one change record, an event type that is not a lowercase dotted name, an event from an anonymous actor (events always name who acted), events on a change whose outcome is not succeeded, an event of another project than the audited one, an act-as credential that differs from the request's credential, an integer outside ±2^53−1 in the details of a succeeded change or in a payload (the sealed JSON must read back exactly), or details / payload / dedup_key over their stored bound. This is a bug in the command that built it."
-diagnosis = "The event carries `reason` (too_many_events with `count`, invalid_event_type with `event_type`, anonymous_event, events_on_unsuccessful, event_scope_mismatch, credential_mismatch, unsafe_number with `field` = details | payload, field_too_long with `field` = details | dedup_key | payload, measured as the table CHECKs measure them) and `action` (the audit action of the change). Nothing was written: the transaction was rolled back. Client-supplied values are never a reason: actor_label, user_agent, act_as_claimed, via_assertion_id and effective_scope are cut to their bounds and stripped of control and invisible characters, and the details of an unsuccessful change that do not fit become `{\"details_dropped\": \"too_long\" | \"unsafe_number\"}`, so a refusal is always audited."
-fix = "Fix the command named by `action`: emit one aggregate event instead of many, use a registered event type, give the change a non-anonymous actor, publish events only for a succeeded change and for the audited project, pass large ids as strings, or keep the field within its bound. Build dedup_key from server-side ids only (it is unique instance-wide)."
+cause = "A typed command built a change that forge refuses before it reaches the database (ADR-0016 §6): more than 100 events in one change record, an event from an anonymous actor (events always name who acted), events on a change whose outcome is not succeeded, an event of another project than the audited one, an act-as credential that differs from the request's credential, an integer outside ±2^53−1 in the details of a succeeded change or in a payload (the sealed JSON must read back exactly), details / payload over their stored bound, or a dedup_key that is not `<prefix>:<part>[:<part>…]` (^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$, at most 200 characters; event types are the registered `EventType` enum and cannot be malformed). This is a bug in the command that built it. Also (M1 phase 9 MR2): forge_db::repositories::record_push was given a push record that git cannot have applied (reason `invalid_push_record`, see PushRecord::check) — a bug in the caller."
+diagnosis = "The event carries `reason` (too_many_events with `count`, anonymous_event, events_on_unsuccessful, event_scope_mismatch (an event whose project_id differs from the audit row's: a project event needs an audit row naming the same project, an audit row without a project publishes only instance-wide events, ADR-0016 Amendment D4), audit_scope_mismatch (an audit row on resource `project` whose project_id is not its resource_id: the event scope rule relies on it), credential_mismatch, unsafe_number with `field` = details | payload, field_too_long with `field` = details | payload, measured as the table CHECKs measure them, invalid_dedup_key with `event_type` — or with `prefix` when `DedupKey::new` refused it) and `action` (the audit action of the change). Nothing was written: the transaction was rolled back. Client-supplied values are never a reason: actor_label, user_agent, act_as_claimed, via_assertion_id and effective_scope are cut to their bounds and stripped of control and invisible characters, and the details of an unsuccessful change that do not fit become `{\"details_dropped\": \"too_long\" | \"unsafe_number\"}`, so a refusal is always audited. invalid_push_record carries `rule` (no_updates, too_many_updates, duplicate_ref, mixed_hash_length, unchanged_ref, kind_mismatch, delete_with_commits, too_many_commits, total_commits, object_id): fix the caller that built the record (forge-web's push path) or the replayed log line."
+fix = "Fix the command named by `action`: emit one aggregate event instead of many, give the change a non-anonymous actor, publish events only for a succeeded change and for the audited project, pass large ids as strings, or keep the field within its bound. Build dedup_key with `DedupKey::new` from server-side ids, hashes and fixed words only (it is unique instance-wide)."
 test = "a_change_with_too_many_events_is_rejected_before_writing"
 
 # ── C8: the audit seal (ADR-0018 §4) ─────────────────────────────────────
@@ -754,7 +1232,7 @@ user_message_ja = "変更の記録に失敗したため、変更を取り消し�
 user_message_en = "The change was undone because it could not be recorded. Contact the administrator."
 user_message_id = "Perubahan dibatalkan karena tidak dapat dicatat. Hubungi administrator."
 cause = "A transaction tried to commit a domain event (forge.events) without an audit row (forge.audit_log) in the same transaction, and the deferred constraint trigger refused the commit (SQLSTATE XF002, ADR-0016 §1). Every state change goes through forge-db's ChangeTx, which writes both; reaching this means a write bypassed ChangeTx (a bug or a manual change). Derived events (caused_by_seq set) are written by subscribers through DerivedTx without an audit row; their own checks (also XF002) refuse an event whose lineage does not follow its origin (derived_lineage), whose origin is at the depth limit 8 (derived_depth), whose root already has 100 derived events (derived_fanout), or that commits without a subscriber advancing to its origin in the same transaction (derived_progress). The same XF002 (reason audited_change) refuses an insert, update or delete of a state table (tables.toml kind = audited, trigger forge.audited_change_present) without a succeeded audit row for that resource in the transaction."
-diagnosis = "The event carries `query` (the statement that committed, or the insert when the transaction ran SET CONSTRAINTS IMMEDIATE, or the derived insert for the lineage checks), `reason` (no_audit_row, or derived_lineage / derived_depth / derived_fanout / derived_progress, audited_change or audited_change_config, also in `constraint`; xf002_unknown: a CONSTRAINT name this build does not know — a newer or changed trigger, read `constraint` and `db_message`), `sqlstate=XF002` and `db_message` (names the origin or root seq). Find the writer: the root gate db-write-boundary forbids writes outside forge-db; inside forge-db every insert into forge.events must come from ChangeTx::commit. reason=audited_change: a write to a state table (tables.toml kind = audited; the table is in `table`) had no succeeded audit row for the same resource (resource_type / resource_id as the ledger's audit_resource / audit_id_column name them) in its transaction; inside forge-db every write to that table must come from its typed command through ChangeTx. reason=audited_change_config: the trigger itself does not match the ledger (wrong argument count, or the id column holds a non-integer) — a schema defect, not a bypass; forge doctor reports it as FG-DB-0009 guard=audited_trigger. forge_audit.ddl_audit shows whether the trigger was changed recently."
+diagnosis = "The event carries `query` (the statement that committed, or the insert when the transaction ran SET CONSTRAINTS IMMEDIATE, or the derived insert for the lineage checks), `reason` (no_audit_row, or derived_lineage / derived_depth / derived_fanout / derived_progress, audited_change or audited_change_config, also in `constraint`; xf002_unknown: a CONSTRAINT name this build does not know — a newer or changed trigger, read `constraint` and `db_message`), `sqlstate=XF002` and `db_message` (names the origin or root seq). Find the writer: the root gate db-write-boundary forbids writes outside forge-db; inside forge-db every insert into forge.events must come from ChangeTx::commit. reason=audited_change: a write to a state table (tables.toml kind = audited; the table is in `table`) had no succeeded audit row for the same resource (resource_type / resource_id as the ledger's audit_resource / audit_id_column name them) in its transaction; inside forge-db every write to that table must come from its typed command through ChangeTx. reason=audited_change_config: the trigger itself does not match the ledger (wrong argument count, or the id column holds a non-integer) — a schema defect, not a bypass; forge doctor reports it as FG-DB-0009 guard=audited_trigger. forge_audit.ddl_audit shows whether the trigger was changed recently. A subscriber's refused COMMIT (`subscriber` set, reason derived_*) is counted against its event in a fresh transaction that waits up to 5 s for the subscriber's row; `counted=false` means it was not counted, `not_counted` says why (row_held: another worker held the row past the wait; disabled; moved: the cursor moved meanwhile) — the next step meets the event again."
 fix = "Route the write through ChangeTx (forge-db typed command). Never disable the trigger; the change was rolled back and can be retried once fixed."
 runbook = "append-only-violation"
 test = "an_event_without_an_audit_row_cannot_commit"
@@ -774,3 +1252,112 @@ fix = "Start or repair forge worker and its audit.seal_keys_file; fix the failur
 runbook = "audit-seal-backlog"
 test = "an_old_unsealed_row_is_audit_seal_backlog"
 # ── end C8 ───────────────────────────────────────────────────────────────
+# ── M1 phase 8 MR3: namespace rows the resolver cannot read ────────────
+[[error]]
+code = "FG-DB-0021"
+name = "NamespaceDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "名前空間の情報を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The namespace data could not be read. Contact the administrator with the request ID."
+user_message_id = "Data namespace tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Resolving a path or loading a project's access facts (forge_db::resolve, the NamespaceResolver / ProjectAccessLoader that the web dispatcher uses, ADR-0015) found namespace, tombstone or project rows that the schema and the forge-db commands never write: reason=stored_path_invalid — the current path of a moved tombstone's target, rebuilt from its segments and confirmed against forge.namespaces.full_path, does not pass NamespacePath::parse (a segment outside the naming rules, more than 20 levels or longer than 255 characters: a CHECK was dropped); unknown_namespace_kind / unknown_tombstone_kind / unknown_visibility — a stored kind or visibility outside its CHECK; moved_path_unconfirmed — a moved tombstone's target namespace still exists but its current path, rebuilt from its segments, matches no live path with its id (its stored full_path disagrees with its segments: a subtree rewrite missed a row); only a purged target (namespace_id NULL) makes a moved tombstone deleted; namespace_without_project — a kind = 'project' namespace whose projects row is missing; project_without_namespace — a projects row with no kind = 'project' namespace; loading a project by id only (GET /api/v1/projects/{id}, M1 phase 8 MR5): project_path_unconfirmed — the project namespace's stored full_path disagrees with its segments joined up the parent chain, stored_path_invalid with a project_id — that full_path does not pass NamespacePath::parse, project_without_repository — a projects row with no forge.repositories row. The data was changed outside forge-db (a manual change, a restored dump, a dropped constraint or a purge that left half of the 1:1:1). The request is refused rather than answered from a guess (no redirect to a path that may not be the target's, no access decided on a partial row). Since M1 phase 9 MR3 the path resolution reads the project's repository too (Smart HTTP): project_without_repository and unknown_repository_state (a stored state outside its CHECK) also come from resolving a project path. The list page scans (forge_db::lists, `GET /api/v1/projects` / `/groups`, M1 phase 8b) read each scanned row the same way: a project row gives the same reasons as a project loaded by id; a group row gives group_without_namespace (a groups row without its group namespace), group_path_unconfirmed (its stored full_path disagrees with its segments) or stored_path_invalid — one damaged row fails the whole page, never a silently shorter one."
+diagnosis = "Since M1 phase 8b MR7a also from the group loader (forge_db::groups::load, `GET|PATCH /api/v1/groups/{id}`: group_without_namespace, group_path_unconfirmed, group_parent_not_group, stored_path_invalid, with `group_id`), the project-parent loader (forge_db::resolve::load_parent, `POST /api/v1/projects`: unknown_namespace_kind with `namespace_id` and `raw`) and the project update lock (unknown_visibility with `project_id`). The log event carries `reason` and the ids: `namespace_id` (the resolved or moved-to namespace), `tombstone_id` for a moved tombstone (stored_path_invalid, moved_path_unconfirmed, unknown_tombstone_kind), `project_id`, and for unknown_* `raw` (the stored value, at most 32 characters); for stored_path_invalid `rule` (the NamespacePath::parse reason: charset, too_deep, path_too_long, …) — the path itself is not logged. Read read-only: SELECT id, parent_id, kind, owner_id, segment, full_path, depth FROM forge.namespaces WHERE id = <namespace_id>; for moved_path_unconfirmed walk its parents (the FG-DB-0018 diagnosis query) and compare the joined segments with full_path; SELECT * FROM forge.namespace_tombstones WHERE id = <tombstone_id>; SELECT id, visibility, deleted_at FROM forge.projects WHERE id = <project_id>; SELECT id, project_id, state FROM forge.repositories WHERE project_id = <project_id> (project_without_repository, unknown_repository_state); for project_path_unconfirmed compare the namespace's joined segments with its full_path as for moved_path_unconfirmed; then check pg_constraint for namespaces_segment / namespaces_kind / namespace_tombstones_kind / projects_visibility / repositories_state and forge_audit.ddl_audit for who dropped or altered it, and forge.audit_log for the history of the rows. From a list page the event carries `group_id` (group rows) or `project_id`; read the namespace with SELECT id, parent_id, kind, owner_id, segment, full_path FROM forge.namespaces WHERE kind = 'group' AND owner_id = <group_id>."
+fix = "Restore the rows from the audit log or a backup through an approved runbook step; restore a dropped constraint from the migration. Never patch the rows by hand without approval."
+runbook = "namespace-data"
+test = "a_moved_target_path_that_does_not_parse_is_namespace_data_invalid"
+# ── end M1 phase 8 MR3 ─────────────────────────────────────────────────
+
+# ── M1 gstn core: client-side codes (area CLI; http_status is the nominal class) ──
+[[error]]
+code = "FG-CLI-0001"
+name = "CliUsageInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "コマンドの使い方が正しくありません。`gstn help` を確認してください。"
+user_message_en = "The command was used incorrectly. Check `gstn help`."
+user_message_id = "Perintah digunakan dengan tidak benar. Periksa `gstn help`."
+cause = "A `gstn` command line was rejected before any request was sent: an unknown command, a missing or conflicting argument, a malformed `--field k=v`, an unreadable `--input` file, a path that is not a path on the configured host, or `auth login` without `--with-token` (gstn never prompts, plan 01 §3.11 C-4)."
+diagnosis = "The error is printed on stderr with `reason` in the detail line. Compare with `gstn help --json` (all commands and arguments) and `gstn schema <command>`."
+fix = "Correct the command line; exit code 2."
+test = "cli_usage_errors_exit_2"
+
+[[error]]
+code = "FG-CLI-0002"
+name = "CliNotLoggedIn"
+http_status = 401
+severity = "info"
+user_message_ja = "ログインしていません。`gstn auth login --with-token` を実行してください。"
+user_message_en = "You are not logged in. Run `gstn auth login --with-token`."
+user_message_id = "Anda belum masuk. Jalankan `gstn auth login --with-token`."
+cause = "No token is stored for the configured host (and GSTN_TOKEN is not set), or the credential store holding it could not be read."
+diagnosis = "`gstn auth status --json` shows the host and whether a token exists (never the token). A credential store that exists but fails is reported as a warning on stderr before this error."
+fix = "Issue a token in the GitStation web UI and run `gstn auth login --with-token < token-file`; exit code 3."
+test = "not_logged_in_exits_3"
+
+[[error]]
+code = "FG-CLI-0003"
+name = "CliServerUnreachable"
+http_status = 503
+severity = "warn"
+user_message_ja = "GitStation サーバーに接続できません。しばらくしてからもう一度試してください。"
+user_message_en = "The GitStation server could not be reached. Try again shortly."
+user_message_id = "Server GitStation tidak dapat dihubungi. Coba lagi sebentar lagi."
+cause = "A request failed before an HTTP response was read: DNS, connection refused, timeout (connect or total), or a TLS failure (certificate not trusted, hostname mismatch). Retryable."
+diagnosis = "The detail line carries `reason` (`connect`, `timeout`, `tls`, `other`) and the host. For `tls` the CA bundle is the cause: the system store is used plus `ca_file` in config.toml / `GSTN_CA_FILE`. Check `forge doctor` on the server and the reverse proxy."
+fix = "Fix the network or certificate path; retry. Exit code 6 (`retryable: true` in the JSON error)."
+test = "unreachable_server_exits_6_and_is_retryable"
+
+[[error]]
+code = "FG-CLI-0004"
+name = "CliResponseInvalid"
+http_status = 502
+severity = "warn"
+user_message_ja = "サーバーの応答を解釈できませんでした。サーバーの版を確認してください。"
+user_message_en = "The server response could not be understood. Check the server version."
+user_message_id = "Respons server tidak dapat dipahami. Periksa versi server."
+cause = "The server answered with a body that is not the API v1 shape (not JSON, an error body without `error_code`, an unexpected redirect, a body above the size limit, a repeated pagination cursor) — typically a proxy page or a server of another version."
+diagnosis = "The detail line carries `reason` and the HTTP status. Fetch the same path with `gstn api GET /healthz` and compare with docs/api/openapi.json of the server's version."
+fix = "Point `host` at the GitStation server itself (not a login page or proxy); upgrade gstn or the server to matching versions. Exit code 1."
+test = "non_api_response_is_response_invalid"
+
+[[error]]
+code = "FG-CLI-0005"
+name = "CliConfigInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "gstn の設定が正しくありません。設定ファイルと環境変数を確認してください。"
+user_message_en = "The gstn configuration is invalid. Check the config file and environment."
+user_message_id = "Konfigurasi gstn tidak valid. Periksa file konfigurasi dan variabel lingkungan."
+cause = "config.toml or a GSTN_* variable is unreadable or invalid, no host is configured, the host is not an https URL (http is allowed only for loopback, or with `allow_http = true`), or the CA bundle file is unreadable."
+diagnosis = "The detail line carries `config_key` and `reason` (`missing`, `invalid`, `unreadable`, `insecure_scheme`). The token is never sent over a plain-http host."
+fix = "Set `host` in config.toml (`gstn` prints the path in the detail) or pass `--host`; exit code 2."
+test = "config_without_host_is_config_invalid"
+
+[[error]]
+code = "FG-CLI-0006"
+name = "CliCredentialStoreFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "トークンを保存できませんでした。保存先の権限を確認してください。"
+user_message_en = "The token could not be stored. Check the permissions of the storage location."
+user_message_id = "Token tidak dapat disimpan. Periksa izin lokasi penyimpanan."
+cause = "Neither the OS credential store (Windows Credential Manager, Linux Secret Service) nor the 0600 file fallback accepted the token."
+diagnosis = "The detail line carries `backend` and `reason`. Linux without a Secret Service (no desktop session, headless) falls back to the file; this code means the file failed too (directory not writable, mode could not be set)."
+fix = "Make the config directory writable (GSTN_CONFIG_DIR) or start a Secret Service; exit code 1."
+test = "credential_file_failure_is_credential_store_failed"
+
+# ── end gstn core ──
+
+[[error]]
+code = "FG-CLI-0007"
+name = "CliOutputFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "出力を書き込めませんでした。出力先が閉じられていないか確認してください。"
+user_message_en = "The output could not be written. Check that the output is not closed."
+user_message_id = "Output tidak dapat ditulis. Pastikan tujuan output tidak tertutup."
+cause = "Writing to standard output or standard error failed (a closed pipe, a full disk, a redirected file that cannot be written) after the command ran."
+diagnosis = "The detail line carries `stream` (stdout or stderr) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`."
+fix = "Fix the redirection or the reader of the pipe and run the read-only command again; exit code 1."
+test = "closed_stdout_is_output_failed"

@@ -13,12 +13,19 @@
 //! mid-run, after a grace), and the audit seal (`seal`: looks every 10 s,
 //! seals a minute after the last seal or when more than 1000 rows wait)
 //! and, when any subscriber is registered, the event subscribers
-//! (`subscribers`, C5: woken by the sequencer's NOTIFY or the 5 s poll).
+//! (`subscribers`, C5: woken by the sequencer's NOTIFY or the 5 s poll),
+//! and the purge of projects whose grace period is over (`purge`, D5 MR4:
+//! every `hosting.purge_interval_secs`, at once again after a full batch),
+//! and the purge of web sessions 30 days past their end (`session_purge`,
+//! M2 MR6: every `web.session_purge_interval_secs`, at once again after a
+//! full batch).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
-//! reason=missing`), the database is connected and the schema checked
-//! (ADR-0014): the worker never migrates.
+//! reason=missing`), the storage root is opened (`storage.root` is required
+//! too: the `repository.provision` job creates repositories there, D4 MR3b;
+//! `FG-SYS-0002` / `FG-REPO-0001` before anything runs), the database is
+//! connected and the schema checked (ADR-0014): the worker never migrates.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -36,12 +43,22 @@ use crate::runtime::block_on;
 
 mod backoff;
 mod jobs;
+// ── D4 MR3b: repository provisioning ──
+pub(crate) mod provision;
+// ── end D4 MR3b ──
+// ── D5 MR4: the purge ──
+pub(crate) mod purge;
+// ── end D5 MR4 ──
 mod seal;
+// ── M2 MR6: the session purge ──
+mod session_purge;
+// ── end M2 MR6 ──
 // ── C5: event subscribers ──
 mod subscribers;
 // ── end C5 ──
 mod supervise;
 
+use provision::Storage;
 use supervise::{supervise, Next, Runner};
 
 /// The sequencer's period (ADR-0016 §7).
@@ -56,6 +73,8 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     database.reject_privileged_logins()?;
     // The worker seals the audit log: no keys, no start (ADR-0018 §4).
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
+    // No storage, no start: provisioning would only fail (D4 MR3b).
+    let storage = Storage::open(cfg.storage_root()?)?;
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
@@ -66,7 +85,13 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             let _ = stop.send(true);
         });
         tracing::info!(db_target = %db.target(), "forge.worker.started");
-        let result = run(&db, keys, stopped).await;
+        let purger = purge::Purger::new(&db, storage.root.clone()); // clone: the purge's own handle
+        let purge = Some(PurgeTask {
+            purger,
+            interval: cfg.hosting.purge_interval,
+            session_interval: cfg.web.session_purge_interval,
+        });
+        let result = run(&db, keys, &storage, purge, stopped).await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -90,10 +115,25 @@ enum Task {
     /// Every registered subscriber (forge-db `subscribers::Dispatcher`).
     Subscribers,
     // ── end C5 ──
+    // ── D5 MR4 ──
+    /// The purge of expired projects (`purge::run_purge`).
+    Purge,
+    // ── end D5 MR4 ──
+    /// The purge of ended web sessions (`session_purge`, M2 MR6).
+    SessionPurge,
+}
+
+/// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
+/// M2 MR6: the session purge's `web.session_purge_interval_secs`).
+#[derive(Clone)]
+pub(crate) struct PurgeTask {
+    pub(crate) purger: purge::Purger,
+    pub(crate) interval: Duration,
+    pub(crate) session_interval: Duration,
 }
 
 /// Every task of this worker.
-fn tasks(registry: &Registry) -> Vec<Task> {
+fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
     let mut tasks = vec![
         Task::Sequencer,
         Task::JobRunner,
@@ -105,6 +145,11 @@ fn tasks(registry: &Registry) -> Vec<Task> {
         tasks.push(Task::Subscribers);
     }
     // ── end C5 ──
+    // ── D5 MR4: the purge needs the storage root (not in the loop tests) ──
+    if purge.is_some() {
+        tasks.push(Task::Purge);
+        tasks.push(Task::SessionPurge);
+    }
     tasks
 }
 
@@ -131,6 +176,9 @@ struct Shared {
     /// The subscribers of the `subscribers` task.
     registry: Registry,
     // ── end C5 ──
+    // ── D5 MR4 ──
+    purge: Option<PurgeTask>,
+    // ── end D5 MR4 ──
 }
 
 impl Task {
@@ -141,16 +189,27 @@ impl Task {
             Self::JobReaper => "job_reaper",
             Self::AuditSeal => "audit_seal",
             Self::Subscribers => subscribers::NAME,
+            Self::Purge => purge::NAME,
+            Self::SessionPurge => session_purge::NAME,
         }
     }
 
-    fn period(self) -> Duration {
+    fn period(self, shared: &Shared) -> Duration {
         match self {
             Self::Sequencer => SEQUENCER_PERIOD,
             Self::JobRunner => jobs::JOB_POLL_PERIOD,
             Self::JobReaper => jobs::REAP_PERIOD,
             Self::AuditSeal => seal::SEAL_POLL_PERIOD,
             Self::Subscribers => subscribers::PERIOD,
+            // Without a purge configuration the task is not started (`tasks`).
+            Self::Purge => shared
+                .purge
+                .as_ref()
+                .map_or(MAX_BACKOFF, |purge| purge.interval),
+            Self::SessionPurge => shared
+                .purge
+                .as_ref()
+                .map_or(MAX_BACKOFF, |purge| purge.session_interval),
         }
     }
 
@@ -164,7 +223,7 @@ impl Task {
         let shared = shared.clone(); // clone: pool handles and Arcs, one set per task
         Runner {
             name: self.name(),
-            period: self.period(),
+            period: self.period(&shared),
             run: Box::new(move || {
                 let shared = shared.clone(); // clone: each run future owns its handles
                 Box::pin(async move { self.run(&shared).await })
@@ -183,6 +242,15 @@ impl Task {
             }
             Self::JobReaper => jobs::reap(&shared.jobs).await,
             Self::AuditSeal => seal::run_seal(db, &shared.seal_keys, &shared.seal_draining).await,
+            Self::Purge => match shared.purge.as_ref() {
+                Some(purge) => purge::run_purge(&purge.purger).await,
+                // `tasks` starts it only with a configuration: reaching this is a bug.
+                None => Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("operation", "worker_task")
+                    .with_context("task", self.name())
+                    .with_context("reason", "purge_unconfigured")),
+            },
+            Self::SessionPurge => session_purge::run_session_purge(db).await,
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")
@@ -220,26 +288,52 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
 }
 
 /// Run every task until `shutdown` turns true (see `supervise`), with the
-/// job handlers and subscribers of this build.
+/// job handlers (creating repositories under `storage`), the subscribers of
+/// this build and, when given, the purge (D5 MR4).
 pub(crate) async fn run(
     db: &Db,
     keys: Arc<SealKeys>,
+    storage: &Storage,
+    purge: Option<PurgeTask>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
-    for handler in jobs::handlers() {
+    for handler in jobs::handlers(db, storage)? {
         runner.register(handler)?;
     }
-    run_with(db, runner, registry(), jobs::SHUTDOWN_GRACE, keys, shutdown).await
+    run_all(
+        db,
+        runner,
+        registry(),
+        jobs::SHUTDOWN_GRACE,
+        keys,
+        purge,
+        shutdown,
+    )
+    .await
 }
 
-/// [`run`] with a given job runner, subscribers and shutdown grace (tests).
+/// [`run`] with a given job runner, subscribers and shutdown grace, and no
+/// purge (tests).
+#[cfg(test)]
 pub(crate) async fn run_with(
     db: &Db,
     runner: JobRunner,
     registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ForgeError> {
+    run_all(db, runner, registry, grace, keys, None, shutdown).await
+}
+
+async fn run_all(
+    db: &Db,
+    runner: JobRunner,
+    registry: Registry,
+    grace: Duration,
+    keys: Arc<SealKeys>,
+    purge: Option<PurgeTask>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -255,8 +349,9 @@ pub(crate) async fn run_with(
         seal_keys: keys,
         seal_draining: Arc::new(AtomicBool::new(false)),
         registry,
+        purge,
     };
-    let runners = tasks(&shared.registry)
+    let runners = tasks(&shared.registry, shared.purge.as_ref())
         .into_iter()
         .map(|task| task.runner(&shared))
         .collect();
@@ -266,7 +361,7 @@ pub(crate) async fn run_with(
 #[cfg(test)]
 mod jobs_tests;
 #[cfg(test)]
-mod loop_tests;
+pub(crate) mod loop_tests;
 #[cfg(test)]
 mod seal_tests;
 // ── C5: the subscribers task's tests live in subscribers_tests.rs ──

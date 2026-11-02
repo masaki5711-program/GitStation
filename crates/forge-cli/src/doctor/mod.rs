@@ -5,8 +5,11 @@
 //! (`outbox.unsequenced_count`, `outbox.sequencer_lag`), the audit seal
 //! (`audit.seal_backlog`, `audit.seal_verify`), the job queue
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
-//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), storage root and
-//! the git binary. One line
+//! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
+//! administers forge (`users.administration`), repository provisioning and
+//! storage (`repositories.provisioning`, `repositories.storage`), storage
+//! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
+//! provider (`auth.oidc`, M2 MR4). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
 //! created, migrated or changed: every database check runs on the read
 //! pool, except `audit.seal_verify`, which reads the sealed act-as columns
@@ -26,11 +29,16 @@ use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
+mod oidc;
 mod render;
+// ── D4 MR3b ──
+mod repositories;
+// ── end D4 MR3b ──
 mod seal;
 // ── C5 ──
 mod subscribers;
 // ── end C5 ──
+mod users;
 
 /// The outcome of one check.
 enum Outcome {
@@ -54,7 +62,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 12] = [
+const DB_CHECKS: [&str; 15] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -72,6 +80,12 @@ const DB_CHECKS: [&str; 12] = [
     "subscribers.lag",
     "subscribers.dead_letters",
     // ── end C5 ──
+    // D3 MR2: FG-AUTH-0010.
+    "users.administration",
+    // ── D4 MR3b: FG-REPO-0012, FG-REPO-0002 ──
+    "repositories.provisioning",
+    "repositories.storage",
+    // ── end D4 MR3b ──
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -116,13 +130,17 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
             checks.push(skip(name, "configuration invalid"));
         }
         checks.push(git_check().await);
+        checks.push(web_ui_check());
+        checks.push(skip("auth.oidc", "configuration invalid"));
         return checks;
     };
 
+    // Opened first: `repositories.storage` (a database check) needs it.
+    let storage = cfg.storage_root().and_then(StorageRoot::open);
     match Db::connect(&cfg.database).await {
         Ok(db) => {
             checks.push(ok("database", db.target()));
-            checks.extend(database_checks(&db, &cfg).await);
+            checks.extend(database_checks(&db, &cfg, storage.as_ref().ok()).await);
             db.close().await;
         }
         Err(e) => {
@@ -133,18 +151,35 @@ async fn collect(config_file: Option<&Path>) -> Vec<Check> {
         }
     }
 
-    checks.push(match cfg.storage_root() {
-        Ok(root) => match StorageRoot::open(root) {
-            Ok(opened) => ok("storage", &opened.path().display().to_string()),
-            Err(e) => fail("storage", e),
-        },
+    checks.push(match storage {
+        Ok(opened) => ok("storage", &opened.path().display().to_string()),
         Err(e) => fail("storage", e),
     });
     checks.push(git_check().await);
+    checks.push(web_ui_check());
+    // M2 MR4: the sign-in's provider (needs no database).
+    checks.push(oidc::oidc_check(&cfg).await);
     checks
 }
 
-async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
+/// `web.ui` (ADR-0022 §2): a binary built without `embed-ui` serves the
+/// placeholder shell — the API works, the browser UI does not. Not a
+/// failure (development and tests run so), but never silent.
+fn web_ui_check() -> Check {
+    match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => warn(
+            "web.ui",
+            "placeholder (built without the embed-ui feature: no web UI is served; \
+             release builds use --features embed-ui)",
+        ),
+        forge_web::UiStatus::Embedded { index_sha256 } => ok(
+            "web.ui",
+            &format!("embedded (index.html sha256 {index_sha256})"),
+        ),
+    }
+}
+
+async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> Vec<Check> {
     let bootstrap = match bootstrap::check(db, &cfg.database.privileged_members).await {
         Ok(version) => ok("db.bootstrap", &format!("version {version}, guards intact")),
         Err(e) => fail("db.bootstrap", e),
@@ -174,6 +209,12 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
     // ── C5 ──
     let [subscriber_lag, dead_letters] = subscribers::subscriber_checks(db).await;
     // ── end C5 ──
+    let administration = users::administration_check(db).await;
+    // ── D4 MR3b ──
+    let [provisioning, storage] =
+        repositories::repository_checks(db, root, forge_db::repositories::PROVISIONING_STUCK_AFTER)
+            .await;
+    // ── end D4 MR3b ──
     vec![
         bootstrap,
         connections,
@@ -187,6 +228,9 @@ async fn database_checks(db: &Db, cfg: &Config) -> Vec<Check> {
         depth,
         subscriber_lag,
         dead_letters,
+        administration,
+        provisioning,
+        storage,
     ]
 }
 

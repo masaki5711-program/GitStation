@@ -23,7 +23,7 @@ const TASK: &str = "scripted";
 /// The JSON log lines written on this thread while installed (the tests run
 /// on a current-thread runtime, so the spawned tasks log here too).
 #[derive(Clone, Default)]
-pub(super) struct Captured(Arc<Mutex<Vec<u8>>>);
+pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Captured {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -36,7 +36,7 @@ impl std::io::Write for Captured {
 }
 
 impl Captured {
-    pub(super) fn install(&self) -> tracing::subscriber::DefaultGuard {
+    pub(crate) fn install(&self) -> tracing::subscriber::DefaultGuard {
         let writer = self.clone();
         let subscriber = tracing_subscriber::fmt()
             .json()
@@ -46,7 +46,7 @@ impl Captured {
         tracing::subscriber::set_default(subscriber)
     }
 
-    fn events(&self) -> Vec<Value> {
+    pub(crate) fn events(&self) -> Vec<Value> {
         let bytes = self.0.lock().expect("log buffer").clone();
         String::from_utf8(bytes)
             .expect("utf-8 logs")

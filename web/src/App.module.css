@@ -1,0 +1,9 @@
+.app {
+  min-height: 100vh;
+}
+
+.main {
+  max-width: var(--gs-content-max-width);
+  margin: 0 auto;
+  padding: var(--gs-space-6) var(--gs-space-4);
+}

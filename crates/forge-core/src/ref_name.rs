@@ -45,7 +45,7 @@ impl fmt::Display for RefName {
 
 /// The rules of `git check-ref-format` (without `--allow-onelevel` or
 /// `--refspec-pattern`), returning which rule failed.
-fn check(name: &str) -> Result<(), &'static str> {
+pub(crate) fn check(name: &str) -> Result<(), &'static str> {
     if !name.starts_with("refs/") {
         return Err("not_under_refs");
     }

@@ -1,9 +1,11 @@
 //! What a change must satisfy before anything is written (FG-DB-0010), and
 //! the cleaning of the client-supplied fields.
 
+use forge_core::ids::ProjectId;
+use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{Actor, ChangeContext, ChangeRecord, Outcome, MAX_EVENTS};
+use super::{Actor, AuditEntry, ChangeContext, ChangeRecord, Outcome, MAX_AFFECTED, MAX_EVENTS};
 
 /// Largest integer every reader of the sealed audit JSON represents exactly
 /// (IEEE-754 doubles, RFC 8785 — ADR-0018 §4).
@@ -18,7 +20,10 @@ const MAX_USER_AGENT_CHARS: usize = 256;
 const MAX_ACT_AS_CHARS: usize = 128;
 const MAX_SCOPES: usize = 32;
 const MAX_SCOPE_CHARS: usize = 64;
-pub(crate) const MAX_DEDUP_KEY_CHARS: usize = 200;
+
+/// The audit resource type of projects (tables.toml): such a row's
+/// `project_id` is its `resource_id`.
+const PROJECT_RESOURCE: &str = "project";
 
 fn rejected(reason: &'static str, action: &str) -> ForgeError {
     ForgeError::new(ErrorCode::ChangeRejected)
@@ -26,14 +31,14 @@ fn rejected(reason: &'static str, action: &str) -> ForgeError {
         .with_context("action", action)
 }
 
-/// `^[a-z][a-z_]*(\.[a-z][a-z_]*){1,3}$` (the events.event_type check).
-pub(crate) fn valid_event_type(name: &str) -> bool {
-    let parts: Vec<&str> = name.split('.').collect();
-    (2..=4).contains(&parts.len())
-        && parts.iter().all(|p| {
-            p.starts_with(|c: char| c.is_ascii_lowercase())
-                && p.chars().all(|c| c.is_ascii_lowercase() || c == '_')
-        })
+/// Whether `event`'s dedup key has the documented shape. A [`DedupKey`]
+/// is built well-formed; this repeats the check at every writer so a key
+/// that reached the event another way is refused (`invalid_dedup_key`).
+pub(crate) fn dedup_key_ok(event: &super::DomainEvent) -> bool {
+    event
+        .dedup_key
+        .as_ref()
+        .is_none_or(|k| DedupKey::is_well_formed(k.as_str()))
 }
 
 /// Every number in `value` is an integer within ±2^53−1 or a float.
@@ -117,30 +122,38 @@ pub(super) fn sanitized(ctx: &ChangeContext) -> ChangeContext {
 /// The audit details of a change that did not succeed may carry values from
 /// the refused request; when they do not fit they are replaced by a marker
 /// instead of refusing the change, so the refusal is still audited.
-fn drop_details(record: &mut ChangeRecord, problem: &'static str) {
-    record.audit.details = serde_json::json!({ "details_dropped": problem });
+fn drop_details(entry: &mut AuditEntry, problem: &'static str) {
+    entry.details = serde_json::json!({ "details_dropped": problem });
 }
 
 /// Before `validate`: unsafe numbers in the details of an unsuccessful change.
 pub(super) fn fitted(mut record: ChangeRecord) -> ChangeRecord {
-    if record.audit.outcome != Outcome::Succeeded && !numbers_are_safe(&record.audit.details) {
-        drop_details(&mut record, "unsafe_number");
+    let outcome = record.audit.outcome;
+    for entry in std::iter::once(&mut record.audit).chain(record.affected.iter_mut()) {
+        if outcome != Outcome::Succeeded && !numbers_are_safe(&entry.details) {
+            drop_details(entry, "unsafe_number");
+        }
     }
     record
 }
 
-/// After `validate`, with the stored sizes the database measured.
+/// After `validate`, with the stored sizes the database measured
+/// (`details_bytes` in the order of [`ChangeRecord::audit_rows`]).
 pub(super) fn fit_sizes(
     mut record: ChangeRecord,
-    details_bytes: i32,
+    details_bytes: &[i32],
     payload_bytes: &[i32],
 ) -> Result<ChangeRecord, ForgeError> {
     let action = record.audit.action;
-    if details_bytes > MAX_DETAILS_BYTES {
-        if record.audit.outcome != Outcome::Succeeded {
-            drop_details(&mut record, "too_long");
-        } else {
-            return Err(rejected("field_too_long", action).with_context("field", "details"));
+    let outcome = record.audit.outcome;
+    let rows = std::iter::once(&mut record.audit).chain(record.affected.iter_mut());
+    for (entry, bytes) in rows.zip(details_bytes) {
+        if *bytes > MAX_DETAILS_BYTES {
+            if outcome != Outcome::Succeeded {
+                drop_details(entry, "too_long");
+            } else {
+                return Err(rejected("field_too_long", action).with_context("field", "details"));
+            }
         }
     }
     if payload_bytes.iter().any(|b| *b > MAX_PAYLOAD_BYTES) {
@@ -163,14 +176,38 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
     if !events.is_empty() && record.audit.outcome != Outcome::Succeeded {
         return Err(rejected("events_on_unsuccessful", action));
     }
-    if let Some(e) = events.iter().find(|e| !valid_event_type(e.event_type)) {
-        return Err(rejected("invalid_event_type", action).with_context("event_type", e.event_type));
+    if record.affected.len() > MAX_AFFECTED {
+        return Err(
+            rejected("too_many_audit_rows", action).with_context("count", record.affected.len())
+        );
     }
-    // A change audited for one project publishes events of that project only.
-    if let Some(project) = record.audit.project_id {
-        if events.iter().any(|e| e.project_id != Some(project)) {
-            return Err(rejected("event_scope_mismatch", action));
-        }
+    // Every audit row of a change tells the same story: one outcome.
+    if record
+        .affected
+        .iter()
+        .any(|a| a.outcome != record.audit.outcome)
+    {
+        return Err(rejected("audit_outcome_mismatch", action));
+    }
+    // The event scope rule (ADR-0016 Amendment D4, per event since D5): an
+    // event carries the project of one of its change's audit rows. A
+    // change audited for one project publishes events of that project
+    // only, and a change whose audit rows name no project publishes only
+    // instance-wide events — the feed shows a project event to that
+    // project's readers, so an audit row of the same change must say that
+    // this project changed. That trusts the audit rows' project_id, so an
+    // audit row on a project resource must name that project
+    // (`audit_scope_mismatch`).
+    if record.audit_rows().any(|a| {
+        a.resource_type == PROJECT_RESOURCE && a.project_id.map(ProjectId::get) != a.resource_id
+    }) {
+        return Err(rejected("audit_scope_mismatch", action));
+    }
+    if events
+        .iter()
+        .any(|e| !record.audit_rows().any(|a| a.project_id == e.project_id))
+    {
+        return Err(rejected("event_scope_mismatch", action));
     }
     if let Actor::UserViaServiceAccount { credential_id, .. } = &ctx.actor {
         if ctx.credential_id.is_some_and(|c| c != *credential_id) {
@@ -178,12 +215,13 @@ pub(super) fn validate(ctx: &ChangeContext, record: &ChangeRecord) -> Result<(),
         }
     }
     // Only a succeeded change gets here with unsafe details (see `fitted`).
-    if !numbers_are_safe(&record.audit.details) {
+    if !record.audit_rows().all(|a| numbers_are_safe(&a.details)) {
         return Err(rejected("unsafe_number", action).with_context("field", "details"));
     }
     for e in events {
-        if e.dedup_key.as_deref().map_or(0, |k| k.chars().count()) > MAX_DEDUP_KEY_CHARS {
-            return Err(rejected("field_too_long", action).with_context("field", "dedup_key"));
+        if !dedup_key_ok(e) {
+            return Err(rejected("invalid_dedup_key", action)
+                .with_context("event_type", e.event_type.as_str()));
         }
         if !numbers_are_safe(&e.payload) {
             return Err(rejected("unsafe_number", action).with_context("field", "payload"));

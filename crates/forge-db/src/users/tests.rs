@@ -11,6 +11,10 @@ use crate::audited_tests::{audit, commit};
 use crate::change::Actor;
 use crate::test_support::*;
 
+mod administration;
+mod bootstrap;
+mod guard;
+mod operator_only;
 mod race;
 mod request;
 
@@ -52,6 +56,22 @@ fn tombstone(path: &str, cause_id: i64) -> String {
         "INSERT INTO forge.namespace_tombstones (old_path, kind, cause_type, cause_id) \
          VALUES ('{path}', 'deleted', 'user', {cause_id})"
     )
+}
+
+/// An active user of `kind` named `name` (bots and service accounts have no
+/// email).
+async fn account(t: &FreshDb, name: &str, kind: UserKind, is_admin: bool) -> UserId {
+    let email = format!("{name}@example.test");
+    let new = NewUser {
+        kind,
+        email: (kind == UserKind::Human).then_some(email.clone()),
+        is_admin,
+        ..NewUser::human(name, name, &email)
+    };
+    create(&t.db, &ctx(&format!("req-user-{name}")), &new)
+        .await
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
+        .user_id
 }
 
 async fn create_alice(t: &FreshDb, request: &str) -> Created {
@@ -265,7 +285,18 @@ async fn user_disable_writes_one_audit_row_and_no_event() {
             .fetch_one(&mut su)
             .await
             .expect("details");
-    assert_eq!(details, json!({"kind": "human"}));
+    assert_eq!(
+        details,
+        json!({
+            "kind": "human",
+            "revoked_tokens": 0,
+            "revoked_sessions": 0,
+            "forced": false,
+            "ownerless_groups": 0,
+            "ownerless_projects": 0,
+            "left_without_admin": false,
+        })
+    );
     assert_eq!(rows_of(&mut su, "events").await, 0);
     assert_eq!(
         rows_of(&mut su, "namespaces").await,
@@ -324,5 +355,31 @@ async fn user_create_commits_nothing_when_the_namespace_insert_fails() {
     assert_eq!(rows_of(&mut su, "namespaces").await, 0);
     assert!(audit_rows(&mut su, "req-boom").await.is_empty());
     assert_eq!(rows_of(&mut su, "events").await, 0);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn id_by_username_finds_the_user_and_an_unknown_name_is_not_found() {
+    let t = FreshDb::migrated().await;
+    let created = create(
+        &t.db,
+        &ctx("req-find-1"),
+        &NewUser::human("alice", "Alice", EMAIL),
+    )
+    .await
+    .expect("create");
+    assert_eq!(
+        id_by_username(&t.db, "alice").await.expect("found"),
+        created.user_id
+    );
+    let err = id_by_username(&t.db, "nobody-here")
+        .await
+        .expect_err("unknown");
+    assert_eq!(err.code(), ErrorCode::NotFound, "{err}");
+    assert!(err.to_string().contains("resource=user"), "{err}");
+    assert!(
+        !err.to_string().contains("nobody-here"),
+        "the name stays out: {err}"
+    );
     t.drop_now().await;
 }

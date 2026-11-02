@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use forge_core::ids::{ProjectId, UserId};
-use forge_core::RequestId;
+use forge_core::{DedupKey, EventType, RequestId};
 use forge_errors::ErrorCode;
 use serde_json::json;
 
@@ -21,13 +21,15 @@ fn ctx(actor: Actor) -> ChangeContext {
 
 fn event(n: i64, dedup: Option<&str>) -> DomainEvent {
     DomainEvent {
-        event_type: "repository.created",
+        event_type: EventType::RepositoryCreated,
         schema_version: 1,
         aggregate_type: "repository",
         aggregate_id: n,
         project_id: Some(ProjectId::new(3)),
         payload: json!({ "n": n }),
-        dedup_key: dedup.map(str::to_owned),
+        // Well-formed keys in these tests; the writers' own check is
+        // exercised with `unchecked` malformed ones below.
+        dedup_key: dedup.map(DedupKey::unchecked),
     }
 }
 
@@ -42,6 +44,7 @@ fn record(events: Vec<DomainEvent>) -> ChangeRecord {
             error_code: None,
             details: json!({ "name": "r1" }),
         },
+        affected: Vec::new(),
         events,
     }
 }
@@ -127,13 +130,16 @@ async fn a_change_with_too_many_events_is_rejected_before_writing() {
 #[tokio::test]
 async fn invalid_changes_are_rejected_with_their_reason() {
     let t = FreshDb::migrated().await;
-    let mut bad_type = event(1, None);
-    bad_type.event_type = "Repository Created";
     let mut other_project = event(1, None);
     other_project.project_id = Some(ProjectId::new(99));
     let mut huge_number = event(1, None);
     huge_number.payload = json!({ "n": u64::MAX });
-    let long_key = "k".repeat(201);
+    // Every part within 64 characters, 201 in all: only the total bound
+    // refuses it (`exact_key` below, 200 characters, is accepted).
+    let long_key = format!(
+        "kk:{}",
+        vec!["1".repeat(64); 3].join(":") + ":" + &"1".repeat(3)
+    );
     let act_as = |credential_id: i64| Actor::UserViaServiceAccount {
         user: UserId::new(5),
         via: UserId::new(77),
@@ -157,15 +163,9 @@ async fn invalid_changes_are_rejected_with_their_reason() {
         ),
         (
             ctx(Actor::System),
-            record(vec![bad_type]),
-            "invalid_event_type",
-            None,
-        ),
-        (
-            ctx(Actor::System),
             record(vec![event(1, Some(&long_key))]),
-            "field_too_long",
-            Some("dedup_key"),
+            "invalid_dedup_key",
+            None,
         ),
         (ctx(Actor::System), denied, "events_on_unsuccessful", None),
         (
@@ -208,6 +208,89 @@ async fn invalid_changes_are_rejected_with_their_reason() {
     let mut failed_login = record(vec![]);
     failed_login.audit.outcome = Outcome::Failed;
     tx.commit(failed_login).await.expect("audit only");
+    // A key of exactly 200 characters is stored.
+    let exact_key = format!(
+        "k:{}",
+        vec!["1".repeat(64); 3].join(":") + ":" + &"1".repeat(3)
+    );
+    assert_eq!(exact_key.len(), 200);
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(record(vec![event(1, Some(&exact_key))]))
+        .await
+        .expect("200 characters");
+    t.drop_now().await;
+}
+
+/// The event scope rule (ADR-0016 Amendment D4): an event carries the
+/// project of its change's audit row, in both directions.
+#[tokio::test]
+async fn a_change_whose_audit_row_names_no_project_cannot_publish_a_project_event() {
+    let t = FreshDb::migrated().await;
+    // No project on the audit row, a project event: refused.
+    let mut instance_audit = record(vec![event(1, None)]);
+    instance_audit.audit.project_id = None;
+    // A project on the audit row, an instance-wide event: refused.
+    let mut instance_event = event(2, None);
+    instance_event.project_id = None;
+    for rec in [instance_audit, record(vec![instance_event])] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err("scope");
+        assert_reason(&err, ErrorCode::ChangeRejected, "event_scope_mismatch");
+    }
+    assert_eq!(count(&t, "forge.events").await, 0);
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        0
+    );
+    // Both sides instance-wide, and both on the same project, are fine.
+    let mut instance = record(vec![DomainEvent {
+        project_id: None,
+        ..event(3, None)
+    }]);
+    instance.audit.project_id = None;
+    for rec in [instance, record(vec![event(4, None)])] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        tx.commit(rec).await.expect("same scope");
+    }
+    assert_eq!(count(&t, "forge.events").await, 2);
+    t.drop_now().await;
+}
+
+/// An audit row on a project resource names that project as its
+/// `project_id`, so the event scope rule cannot be steered by the caller.
+#[tokio::test]
+async fn a_project_audit_row_must_name_its_own_project() {
+    let t = FreshDb::migrated().await;
+    let on_project = |project_id: Option<i64>| {
+        let mut rec = record(vec![]);
+        rec.audit.resource_type = "project";
+        rec.audit.resource_id = Some(3);
+        rec.audit.project_id = project_id.map(ProjectId::new);
+        rec
+    };
+    for rec in [on_project(Some(4)), on_project(None)] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err("audit scope");
+        assert_reason(&err, ErrorCode::ChangeRejected, "audit_scope_mismatch");
+    }
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        0
+    );
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(on_project(Some(3)))
+        .await
+        .expect("its own project");
     t.drop_now().await;
 }
 
@@ -631,6 +714,130 @@ async fn an_act_as_change_records_both_people() {
             12,
             "asr-1".to_owned()
         )
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn every_event_type_passes_the_db_check() {
+    let t = FreshDb::migrated().await;
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    let events: Vec<DomainEvent> = EventType::ALL
+        .into_iter()
+        .zip(1..)
+        .map(|(event_type, n)| DomainEvent {
+            event_type,
+            project_id: None,
+            ..event(n, None)
+        })
+        .collect();
+    let mut rec = record(events);
+    rec.audit.project_id = None;
+    let committed = tx.commit(rec).await.expect("every type is stored");
+    let Committed::Recorded { event_ids } = committed else {
+        panic!("not deduplicated: {committed:?}");
+    };
+    assert_eq!(event_ids.len(), EventType::ALL.len());
+    let mut stored: Vec<String> =
+        sqlx::query_scalar("SELECT event_type FROM forge.events ORDER BY id")
+            .fetch_all(&mut t.superuser().await)
+            .await
+            .expect("types");
+    stored.sort();
+    let mut expected: Vec<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+    expected.sort_unstable();
+    assert_eq!(stored, expected);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_malformed_dedup_key_is_change_rejected() {
+    let t = FreshDb::migrated().await;
+    for raw in ["Push:1", "push", "push:a b", "push:1:2:3:4:5", "push:é"] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx
+            .commit(record(vec![event(1, Some(raw))]))
+            .await
+            .expect_err(raw);
+        assert_reason(&err, ErrorCode::ChangeRejected, "invalid_dedup_key");
+    }
+    assert_eq!(count(&t, "forge.events").await, 0);
+    t.drop_now().await;
+}
+
+/// D5 MR2 (ADR-0016 Amendment D5): a change may carry one audit row per
+/// resource it changed (`affected`). Each is written in the transaction;
+/// each project row must name its project; all share one outcome; and the
+/// event scope rule holds per event — an event may name the project of any
+/// of the change's audit rows, never another.
+#[tokio::test]
+async fn per_resource_audit_rows_are_written_and_scope_every_event() {
+    let t = FreshDb::migrated().await;
+    let project_row = |id: i64| AuditEntry {
+        action: "project.moved",
+        outcome: Outcome::Succeeded,
+        resource_type: "project",
+        resource_id: Some(id),
+        project_id: Some(ProjectId::new(id)),
+        error_code: None,
+        details: json!({ "project_id": id }),
+    };
+    let on = |project: i64| DomainEvent {
+        project_id: Some(ProjectId::new(project)),
+        ..event(project, None)
+    };
+    // Primary on project 3, affected on 7 and 8: events of 3, 7 and 8 fit.
+    let mut ok = record(vec![on(3), on(7), on(8)]);
+    ok.affected = vec![project_row(7), project_row(8)];
+    let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+        .await
+        .expect("begin");
+    tx.commit(ok).await.expect("commit");
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE action = 'project.moved'").await,
+        2
+    );
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        3,
+        "one row per resource"
+    );
+    let mut stray = record(vec![on(9)]);
+    stray.affected = vec![project_row(7)];
+    let mut misnamed = record(Vec::new());
+    misnamed.affected = vec![AuditEntry {
+        project_id: Some(ProjectId::new(5)),
+        ..project_row(7)
+    }];
+    let mut mixed = record(Vec::new());
+    mixed.affected = vec![AuditEntry {
+        outcome: Outcome::Failed,
+        ..project_row(7)
+    }];
+    let mut too_big = record(Vec::new());
+    too_big.affected = vec![AuditEntry {
+        details: json!({ "pad": "x".repeat(9000) }),
+        ..project_row(7)
+    }];
+    for (rec, reason) in [
+        (stray, "event_scope_mismatch"),
+        (misnamed, "audit_scope_mismatch"),
+        (mixed, "audit_outcome_mismatch"),
+        (too_big, "field_too_long"),
+    ] {
+        let tx = ChangeTx::begin(&t.db, &ctx(Actor::System))
+            .await
+            .expect("begin");
+        let err = tx.commit(rec).await.expect_err(reason);
+        assert_reason(&err, ErrorCode::ChangeRejected, reason);
+    }
+    assert_eq!(
+        count(&t, "forge.audit_log WHERE request_id = 'req-test-1'").await,
+        3
     );
     t.drop_now().await;
 }

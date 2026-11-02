@@ -82,13 +82,20 @@ impl Captured {
         CaptureGuard
     }
 
-    /// The failure events (they carry error_code).
-    pub(crate) fn failures(&self) -> Vec<Value> {
+    /// Every captured event.
+    pub(crate) fn events(&self) -> Vec<Value> {
         let bytes = self.0.lock().expect("log buffer").clone();
         String::from_utf8(bytes)
             .expect("utf-8 logs")
             .lines()
             .map(|l| serde_json::from_str::<Value>(l).expect("a JSON log line"))
+            .collect()
+    }
+
+    /// The failure events (they carry error_code).
+    pub(crate) fn failures(&self) -> Vec<Value> {
+        self.events()
+            .into_iter()
             .filter(|e| e["fields"]["error_code"].is_string())
             .collect()
     }

@@ -20,8 +20,10 @@ Claude Code はそこで起動します。
 | `crates/forge-web` | HTTP 層（ルートの登録の仕組み、問い合わせ番号、エラーの表示、`forge serve`） |
 | `crates/forge-git` | git の実行（唯一のラッパー）、バージョンの確認、リポジトリの保存先 |
 | `crates/forge-cli` | `forge` コマンド（`explain`、`errors list`。M1 以降 `serve`、`doctor`、`diag`） |
+| `crates/forge-client` | クライアント `gstn`（REST API v1 のクライアントと CLI。利用者向けの手引きは README にある。サーバーのクレートには依存しない、ADR-0020） |
 | `docs/errors/` | エラーカタログ（**自動生成**。手で編集しない） |
 | `docs/adr/` | 設計判断の記録 |
+| `docs/brand/` | ロゴとアイコン（UI ではこのファイルを使う） |
 | `ops/runbooks/` | 障害対応手順（エラーコードと紐づく） |
 | `ops/incidents/` | 障害記録とポストモーテム、障害の記憶 `records.jsonl` |
 
@@ -38,7 +40,7 @@ cargo run -p forge-cli -- explain FG-SYS-0001
 ## ロードマップ
 
 M1 Git の核 → M2 Web UI の基礎 → **M3 MR とレビュー（R1 パイロット）** → M4 CI/CD →
-**M5 ローカル LLM（R2 正式運用）** → M6 Issue とナレッジ → **M7 文書ポータル（R3 全社展開）** → M8 拡張。
+**M5 ローカル LLM（R2 正式運用）** → M6 Issue とナレッジ → ~~M7 文書ポータル~~（2026-11-01 取り下げ。ADR-0023）→ **R3 全社展開**（条件は再検討） → M8 拡張。
 
 計画書（エージェントモデルのリポジトリ `../docs/plan/`）: `01` 全体計画、`02` kanflow 連携と外部 API、
 `03` 仕様駆動開発、`04` CI/CD・コンフリクト・パイプラインの検証。設計判断は `docs/adr/`。

@@ -11,13 +11,72 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::app::{build, AppConfig, AppState};
+use forge_auth::InstanceCtx;
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{LookupPath, ProjectId, ProjectRecord, Resolution};
+
+use crate::app::{build, AppConfig, AppState, Lookups};
 use crate::context::REQUEST_ID_HEADER;
-use crate::registry::{openapi_json, routes_json, Registry, Verb};
+use crate::registry::{openapi_json, routes_json, Dispatched, Registry, Verb};
+
+/// An authenticator that knows no token (these tests insert principals
+/// directly; `tests/token_principal.rs` covers authentication).
+pub(crate) struct NoTokens;
+
+impl forge_core::Authenticator for NoTokens {
+    fn authenticate<'a>(
+        &'a self,
+        _request_id: &'a forge_core::RequestId,
+        _presented: &'a str,
+    ) -> forge_core::authenticator::AuthFuture<'a> {
+        Box::pin(async {
+            Err(forge_errors::ForgeError::new(ErrorCode::Unauthenticated)
+                .with_context("reason", "unknown"))
+        })
+    }
+}
+
+pub(crate) fn no_tokens() -> Arc<dyn forge_core::Authenticator> {
+    Arc::new(NoTokens)
+}
+
+/// Lookups that find nothing (no database; `dispatch_tests.rs` counts
+/// and scripts its own).
+pub(crate) struct NoNamespaces;
+
+impl forge_core::NamespaceResolver for NoNamespaces {
+    fn resolve<'a>(
+        &'a self,
+        _path: &'a LookupPath,
+        _viewer: Option<UserId>,
+    ) -> LookupFuture<'a, Resolution> {
+        Box::pin(async { Ok(Resolution::Absent) })
+    }
+}
+
+impl forge_core::ProjectAccessLoader for NoNamespaces {
+    fn load_project<'a>(
+        &'a self,
+        _project: ProjectId,
+        _viewer: Option<UserId>,
+    ) -> LookupFuture<'a, Option<ProjectRecord>> {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+pub(crate) fn no_lookups() -> Lookups {
+    Lookups {
+        namespaces: Arc::new(NoNamespaces),
+        projects: Arc::new(NoNamespaces),
+    }
+}
 
 fn state() -> AppState {
-    AppState::new("test", Vec::new())
+    AppState::new("test", Vec::new(), no_tokens(), no_lookups())
 }
+
+/// A handler's arguments in these tests (instance routes).
+type Req = Dispatched<InstanceCtx>;
 
 async fn call(router: axum::Router, req: Request<Body>) -> (StatusCode, HeaderMap, Value) {
     let res = router.oneshot(req).await.expect("infallible");
@@ -51,11 +110,11 @@ fn fast_timeout() -> AppConfig {
     }
 }
 
-async fn ok() -> &'static str {
+async fn ok(_: AppState, _: Req) -> &'static str {
     "ok"
 }
 
-async fn never() -> &'static str {
+async fn never(_: AppState, _: Req) -> &'static str {
     std::future::pending::<()>().await;
     "unreachable"
 }
@@ -101,7 +160,7 @@ async fn wrong_method_on_a_registered_path_is_method_not_allowed() {
 
 #[tokio::test]
 async fn error_body_contains_only_code_message_request_id() {
-    let (_, headers, body) = call(app(), req("GET", "/does/not/exist")).await;
+    let (_, headers, body) = call(app(), req("GET", "/api/does/not/exist")).await;
     let keys: Vec<&str> = body
         .as_object()
         .expect("object")
@@ -112,7 +171,7 @@ async fn error_body_contains_only_code_message_request_id() {
     let id = headers.get(&REQUEST_ID_HEADER).expect("header");
     assert_eq!(body["request_id"], id.to_str().expect("ascii"));
     assert!(
-        !body.to_string().contains("/does/not/exist"),
+        !body.to_string().contains("/api/does/not/exist"),
         "no path in the body"
     );
 }
@@ -140,7 +199,7 @@ async fn request_id_is_always_generated_by_the_server() {
 #[tokio::test]
 async fn accept_language_selects_the_message_language() {
     for (tag, expected) in [("id-ID,id;q=0.9", "id"), ("en-US", "en"), ("fr", "ja")] {
-        let r = Request::get("/missing")
+        let r = Request::get("/api/missing")
             .header("accept-language", tag)
             .body(Body::empty())
             .expect("request");
@@ -204,7 +263,7 @@ async fn timeout_response_carries_request_id_and_language() {
 }
 
 #[allow(clippy::panic)]
-async fn boom() -> &'static str {
+async fn boom(_: AppState, _: Req) -> &'static str {
     panic!("boom")
 }
 
@@ -229,7 +288,7 @@ async fn a_panicking_handler_becomes_an_internal_error_with_a_request_id() {
 async fn non_public_route_without_principal_is_unauthenticated_and_handler_not_entered() {
     let entered = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&entered);
-    let handler = move || {
+    let handler = move |_: AppState, _: Req| {
         let flag = Arc::clone(&flag);
         async move {
             flag.store(true, Ordering::SeqCst);
@@ -250,7 +309,7 @@ async fn non_public_route_without_principal_is_unauthenticated_and_handler_not_e
 fn guarded() -> (axum::Router, Arc<AtomicBool>) {
     let entered = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&entered);
-    let handler = move || {
+    let handler = move |_: AppState, _: Req| {
         let flag = Arc::clone(&flag);
         async move {
             flag.store(true, Ordering::SeqCst);
@@ -271,12 +330,25 @@ fn req_as(principal: Principal) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn active_principal_reaches_the_guarded_handler() {
+async fn an_allowed_principal_reaches_the_guarded_handler() {
     let (router, entered) = guarded();
-    let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
-    let res = router.oneshot(req_as(me)).await.expect("infallible");
+    let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
+    let res = router.oneshot(req_as(admin)).await.expect("infallible");
     assert_eq!(res.status(), StatusCode::OK);
     assert!(entered.load(Ordering::SeqCst), "handler must run");
+}
+
+#[tokio::test]
+async fn the_registry_authorizes_before_the_handler() {
+    // authorize() is no longer the handler's job (forge-web README MUST,
+    // ADR-0015 MR4): an active non-administrator is denied UserCreate by
+    // the registry and the handler never runs.
+    let (router, entered) = guarded();
+    let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
+    let (status, _, body) = call(router, req_as(me)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], ErrorCode::Forbidden.id());
+    assert!(!entered.load(Ordering::SeqCst), "handler must not run");
 }
 
 #[tokio::test]
@@ -298,7 +370,7 @@ async fn disabled_account_is_rejected_before_the_handler() {
     assert!(!entered.load(Ordering::SeqCst), "handler must not run");
 }
 
-async fn created() -> (StatusCode, &'static str) {
+async fn created(_: AppState, _: Req) -> (StatusCode, &'static str) {
     (StatusCode::CREATED, "created")
 }
 
@@ -360,14 +432,29 @@ fn every_action_is_routed_or_planned_but_not_both() {
         .map(|d| d.action)
         .collect();
     let planned: BTreeSet<Action> = crate::app::PLANNED.iter().copied().collect();
+    let inner: BTreeSet<Action> = crate::app::DECIDED_IN_ROUTE
+        .iter()
+        .map(|(a, _)| *a)
+        .collect();
     assert!(
         routed.is_disjoint(&planned),
         "{:?}",
         routed.intersection(&planned).collect::<Vec<_>>()
     );
+    assert!(routed.is_disjoint(&inner) && planned.is_disjoint(&inner));
+    // An action decided inside a route names a route that exists.
+    for (action, path) in crate::app::DECIDED_IN_ROUTE {
+        assert!(
+            crate::app::registry()
+                .defs()
+                .iter()
+                .any(|d| d.path == *path),
+            "{action:?} names {path}, which is not routed"
+        );
+    }
     for action in Action::ALL {
         assert!(
-            routed.contains(action) || planned.contains(action),
+            routed.contains(action) || planned.contains(action) || inner.contains(action),
             "{action:?} is neither routed nor planned"
         );
     }
@@ -588,4 +675,41 @@ fn accept_failure_has_its_own_code() {
         forge_errors::Severity::Warn
     );
     assert_eq!(ErrorCode::AcceptFailed.http_status(), 503);
+}
+
+/// M1 phase 9 MR3: only the git POSTs leave the request timeout (for
+/// `git_rpc_timeout`); the advertisement and everything else keep it.
+#[test]
+fn only_git_posts_are_exempt_from_the_request_timeout() {
+    let req = |method: &str, uri: &str| {
+        axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .expect("request")
+    };
+    for (method, uri, exempt) in [
+        ("POST", "/acme/x.git/git-upload-pack", true),
+        ("POST", "/acme/x.git/git-receive-pack", true),
+        ("GET", "/acme/x.git/git-upload-pack", false),
+        (
+            "GET",
+            "/acme/x.git/info/refs?service=git-upload-pack",
+            false,
+        ),
+        (
+            "POST",
+            "/acme/x.git/info/refs?service=git-upload-pack",
+            false,
+        ),
+        ("POST", "/acme/x/-/git-upload-pack", false),
+        ("POST", "/api/v1/namespaces/resolve", false),
+        ("POST", "/acme/x.git.git/git-upload-pack", false),
+    ] {
+        assert_eq!(
+            crate::app::is_git_rpc(&req(method, uri)),
+            exempt,
+            "{method} {uri}"
+        );
+    }
 }

@@ -307,3 +307,10 @@ ADR-0016 の表の台帳（audited / derived、`ro_columns`、守る対象）へ
 | `sealed_at` | `seal_sha256` にも HMAC にも含めない（ガードが決める）。doctor の窓は `sealed_at` の直近 24 時間 | ガードを外せる者は `sealed_at` を古くして封印を窓から外せるが、その範囲は C9 の `audit.seal_reverify`（全件、7 日で一巡）で見つかり、新しい封印の鎖はその封印の `seal_sha256` に結び付いたまま。Runbook とコードに書く |
 | 計算の場所 | 行の正規化とハッシュは `spawn_blocking`（1 回は最大 5,000 行）。呼び出しを取り消しても結果を捨てるだけで副作用はない。コミットの時間切れは結果が分からないが、呼び直しは常に安全（最後に確定した封印の後から始まる） | tokio の worker を CPU の仕事で止めない |
 | 延期 | 鍵のメモリーの消去（`zeroize`）は新しいクレートなので延期（鍵は worker のプロセスの間ずっと持つ）。`cargo deny` / `cargo audit` はこの環境に入っておらず、`deny.toml` もない（`hmac 0.12`・`serde_json_canonicalizer 0.4.1` の確認は CI の導入のときに） | 依存を増やす判断は別に行う |
+
+## Amendment（2026-10-29、手順 D3: トークンのハッシュ）
+
+- `forge.tokens.secret_sha256` は `forge_ro` に GRANT しない（表の台帳の読み取り用の列に載せない）。§1 の「資格情報は載せない」の具体化。
+- トークンによる認証は **書き込みのプール（`forge_app`）で読む**。`forge_app` の `tokens` の権限は SELECT・INSERT と
+  UPDATE(`revoked_at`, `revoked_reason`, `last_used_at`) だけで、DELETE は持たない。`tokens` は `guarded_objects` とスキーマの期待値に載せる。
+- 保存された行を型に戻せないとき（未知のスコープ、ハッシュの長さなど）は `FG-DB-0019` CredentialDataInvalid（Runbook `credential-data`）。詳細は ADR-0019。

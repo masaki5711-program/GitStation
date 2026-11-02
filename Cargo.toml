@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-web", "crates/forge-cli"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "LicenseRef-Proprietary"
 publish = false
 
@@ -15,6 +15,8 @@ forge-core = { path = "crates/forge-core" }
 forge-git = { path = "crates/forge-git" }
 forge-auth = { path = "crates/forge-auth" }
 forge-db = { path = "crates/forge-db" }
+forge-hosting = { path = "crates/forge-hosting" }
+forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }
 url = "2"
@@ -32,6 +34,8 @@ proptest = "1"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query"] }
 serde_json = "1"
 http-body-util = "0.1"
+# D3 MR3: HTTP Basic credentials (already in the lock through sqlx).
+base64 = "0.22"
 tower = { version = "0.5", features = ["util"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "server-graceful", "service"] }
@@ -44,6 +48,51 @@ hmac = "0.12"
 # float_roundtrip feature for the whole workspace.
 serde_json_canonicalizer = "0.4.1"
 # ── end C8 ──
+# ── M1 phase 9 MR1: Smart HTTP transport (forge-git) ──
+# gzip request bodies (git sends `Content-Encoding: gzip`); default backend is
+# miniz_oxide (pure Rust). MIT OR Apache-2.0.
+flate2 = "1"
+# Unix: kill a git subprocess together with its helpers (killpg). Already in
+# the lock through tempfile. Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT.
+rustix = { version = "1", default-features = false, features = ["std", "process"] }
+# Windows (dev machines only): a Job Object with kill-on-close, through a safe
+# wrapper (the workspace forbids unsafe code). MIT.
+win32job = "2"
+# ── end M1 phase 9 MR1 ──
+# ── M1 phase 8b MR6: API request bodies, cursors, OpenAPI ──
+# AES-256-GCM for the opaque keyset cursor (ADR-0016 names AES-256-GCM);
+# RustCrypto, Apache-2.0 OR MIT; >= 0.10.3 (GHSA-423w-p2w9-r7vq fixed).
+# The nonce comes from getrandom (no rand_core OsRng feature).
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+# OpenAPI schemas of request / response bodies from the Rust types; MIT OR
+# Apache-2.0. Only the derive and the model are used (no web framework glue).
+utoipa = { version = "5", default-features = false, features = ["macros"] }
+# M2 MR2 (ADR-0022 §2): forge-web's `embed-ui` embeds web/dist. `debug-embed`
+# embeds in debug builds too (never reads the disk at run time).
+rust-embed = { version = "8.12", default-features = false, features = ["debug-embed"] }
+# ── end M1 phase 8b MR6 ──
+# ── M2 MR3: web sessions (ADR-0021 §7) ──
+# HKDF-SHA256: one key per purpose from web.session_key_file. RustCrypto,
+# MIT OR Apache-2.0; 0.12 is built on the hmac 0.12 / digest 0.10 above.
+hkdf = "0.12"
+# ── end M2 MR3 ──
+# ── M2 MR4: the OIDC sign-in (ADR-0021 §2, §15) ──
+# The HTTP client to the identity provider: rustls with ring and only the
+# roots of auth.oidc.ca_file (no public roots, no system proxy). Same 0.12
+# as forge-client. MIT OR Apache-2.0.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots"] }
+# JWS parsing and claim validation; the signature check is forge-oidc's own
+# ring CryptoProvider (no rust_crypto: it pulls `rsa`, RUSTSEC-2023-0071).
+# Pinned: re-check §15 (cargo deny) before raising it. MIT.
+jsonwebtoken = { version = "=11.1.0", default-features = false }
+# RS256 / ES256 verification (already in the lock through rustls). ISC-style.
+ring = "0.17"
+getrandom = "0.2"
+subtle = "2"
+# `forge doctor auth.oidc`: the provider's HTTP Date for the clock skew
+# (already in the lock through hyper). MIT OR Apache-2.0.
+httpdate = "1"
+# ── end M2 MR4 ──
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

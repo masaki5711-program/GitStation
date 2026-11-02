@@ -683,3 +683,204 @@ PITR やスナップショットへの巻き戻しは送出先との比較で検
 - **台帳の検査**: 台帳の解析は、リソースの列が `unaudited_columns` か `txn_audited_columns` にあること、同じ列が両方に入ることを拒否する。
   `audit_id_column` が整数列であることは、`bootstrap::check` が実際の表に対して確かめる（`FG-DB-0009 guard=audited_trigger`、`detail=id_column`）。
   テストは `every_table_is_in_the_ledger` と `guarded_objects_match_the_ledger`、D1 の表の検査は `users_schema_tests`。
+
+## Amendment（2026-10-29、手順 D3: トークン）
+
+- `token.created` / `token.revoked` は §10 のとおり M1 のイベント（分類 `admin`）として出す。監査の行は所有者のユーザーに付ける
+  （`tables.toml` の `audit_resource = "user"`、`audit_id_column = "user_id"`）。詳細は ADR-0019 §5。
+- トークンが最初のイベントの書き手なので、D3 で `forge-core` に `EventType` の列挙（`ALL`、`as_str`、`visibility_class()`。
+  `DomainEvent.event_type` はこの型にする）と `DedupKey` を入れる。§11 の未決はこう閉じる: `dedup_key` は **サーバー側の ID とハッシュ
+  だけから作る**（利用者の値から作れる構築子を持たない）、形は `^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`・200 文字まで、
+  形の違反は `FG-DB-0010 reason=invalid_dedup_key`。プロジェクトを指さない監査の行の変更がプロジェクトのイベントを出してよいかは、
+  最初のプロジェクトのイベントを入れる D4 で決める。
+- 拒否されたリクエストの監査の集約（§6）は引き続き見送り（ADR-0019「見送り」）。
+
+## Amendment（2026-10-30、手順 D3 MR1b: `EventType` と `DedupKey` の実装）
+
+- **`EventType` に入れるのは、書き手がある種類だけ**（ユーザーの決定 2026-10-30）。今は `repository.created`（D4 で使う。分類 `integration`）、
+  `token.created`・`token.revoked`（分類 `admin`）。§10 の残りの種類（`branch.*`、`tag.created`、`project.*` など）は、その書き手を入れる変更で足す。
+  型で不正な名前を作れなくなったので、書き込みの前の `invalid_event_type` の検査は外した。DB の CHECK は残る（テスト `every_event_type_passes_the_db_check`）。
+- **`DedupKey` の形は Rust の型と書き込みの前の検査で守る**（ユーザーの決定 2026-10-30）。`DedupKey::new` は `&'static str` の接頭辞と、
+  `Id(i64)`・`Hash(&[u8; 32])`・`Word(&'static str)` の部分だけを受け取る。`ChangeTx` と `DerivedTx` は書く前に形をもう一度確かめ、
+  違反は `FG-DB-0010 reason=invalid_dedup_key`。`forge.events.dedup_key` に正規表現の CHECK は **足さない**（長さ 200 の CHECK だけ）。
+  形の検査が `field_too_long field=dedup_key` に代わる。
+- `AuditDetails::event_type()` が、変更の詳細から出すイベントの種類を返す（監査だけの操作は `None`）。
+
+## Amendment（2026-10-31、手順 D4 MR2: イベントの範囲の規則と `project.created`）
+
+- **イベントの範囲の規則**（D3 の Amendment の未決を閉じる）: `ChangeTx` は、変更のすべてのイベントの `project_id` が監査の行の `project_id` と
+  **等しい** ことを求める。つまり、プロジェクトのイベントには同じプロジェクトを指す監査の行が要り、プロジェクトを指さない監査の行の変更は
+  インスタンス全体のイベント（`project_id` なし）だけを出せる。違反は `FG-DB-0010 reason=event_scope_mismatch`（何も書かない）。
+  理由: フィードはプロジェクトのイベントをそのプロジェクトの読み手に見せる（§5）ので、監査の行もどのプロジェクトが変わったかを示さないと、
+  監査とフィードが食い違う。両方向のテスト `a_change_whose_audit_row_names_no_project_cannot_publish_a_project_event`。
+  `DerivedTx`（監査の行のない派生イベント）はこの規則の外である。
+  この規則は監査の行の `project_id` を信頼するので、リソースが `project` の監査の行は `project_id = resource_id` でなければならない
+  （違反は `FG-DB-0010 reason=audit_scope_mismatch`、テスト `a_project_audit_row_must_name_its_own_project`）。
+- **`EventType::ProjectCreated`**（`project.created`、分類 `integration`）を足す。書き手は `projects::create`。ペイロードは
+  `AuditDetails::ProjectCreated` と同じ JSON（`project_id`、`namespace_id`、`parent_namespace_id`、`repository_id`、`kind`、`visibility`、`owner_id`。
+  パスや名前などの個人に関わる値は入れない）。集約は `project` / `projects.id`。重複除去の鍵は付けない（プロジェクトの ID は新しいので、同じ変更は繰り返されない）。
+  `project.visibility_changed` と `protected_ref.*` は計画 D4 のとおり `maintainer` のまま。
+- **重複除去の鍵の接頭辞は `<aggregate>_<verb>`**（例 `repository_provision:<repo_id>`、MR3b の `repository_created:<repo_id>`）。プロジェクトの接頭辞を
+  強制しない（範囲はイベントの `project_id` が示す）。ジョブの重複除去の鍵（`jobs::DedupKey`、種類ごとに一意）も同じ形にし、
+  `forge_core::DedupKey::new` で作ってから渡す（`repositories::provision_job`）。
+- `repository.provision` のジョブは、作成の変更の中で `ChangeTx::enqueue_job` で入れる（初めての本番の呼び出し元）。変更が確定したときだけジョブが存在する。
+  新しいリポジトリの ID で `Deduped` になるのは不整合なので、`FG-SYS-0001 reason=unexpected_job_dedup` で作成全体を失敗させる。
+
+## Amendment（2026-10-30、手順 D4 MR3b: `repository.created` と作成のやり直し）
+
+- **`repository.created`** の書き手は `repositories::mark_ready`（`repository.provision` のジョブのハンドラーが呼ぶ）。一つの `ChangeTx` で、
+  リポジトリの行を `FOR UPDATE` で取り、`state = ready`・`ready_at = now()` にし、監査の行 `repository.created`（リソース `project` /
+  プロジェクトの ID、`project_id` 付き。行者は `system`、`request_id` はジョブの元の要求のもの）と、イベント `repository.created`
+  （分類 `integration`、集約 `repository` / `repositories.id`、`project_id` = そのプロジェクト、ペイロードは `AuditDetails::RepositoryCreated`
+  と同じ `{project_id, repository_id, kind}`、重複除去の鍵 `repository_created:<repo_id>`）を書く。範囲の規則（D4 MR2）を満たす。
+  既に `ready` なら何も書かない（`MarkReady::AlreadyReady`。2 回目のイベントは出ない）。行の鍵で並行する呼び出しは直列になり、
+  重複除去の鍵は最後の安全網である（行が `provisioning` なのに鍵が記録済みなら `FG-SYS-0001 reason=unexpected_dedup`）。
+- **`repository.reprovision_requested`**（監査のみ、イベントなし）: `forge admin repo reprovision <repo_id>` が、`provisioning` のままの
+  リポジトリの作成のジョブをもう一度入れたとき（ジョブと監査の行が一つの変更）。詳細は `{repository_id, job_id}`、リソースは `project`。
+  運用者の復旧の操作で、連携先に知らせることではないので監査だけにした。`ready` のリポジトリは `FG-REPO-0014 reason=repository_ready`
+  で断る（新しいコードは作らない）。同じ鍵の `queued` / `running` / `succeeded` のジョブがあれば何も書かない。
+- 作成のジョブのハンドラーは失敗を自分で記録しない（ジョブの実行器が一度だけ記録する）。成功だけを `forge.repo.provisioned` で 1 行記録する。
+- レビューを受けて次を加えた（同日）。
+  - **鍵の連なり**: `jobs_dedup` は `queued` / `running` / `succeeded` のジョブの鍵を持ち続け、`dead` だけが手放す（C6 の
+    Amendment。これは変えない）。そのため、`provisioning` のままなのに作成のジョブが `succeeded`（DB の復元、手の変更）だと、
+    同じ鍵では入れ直せなかった。`reprovision` は行の鍵の下で鍵の連なりの最後のジョブを読み、`queued` / `running` なら何もしない
+    （`AlreadyLive`。状態を返す）、`dead` / 無いならその鍵で、`succeeded` なら `repository_provision:<repo>:after:<そのジョブの id>`
+    （`DedupKey` で作る）で入れる。監査の詳細は `{repository_id, job_id, holder_job_id, holder_state}`。doctor も同じ SQL
+    （再帰の CTE、等号の検索だけ、最大 16 段）で連なりの最後を見る。
+  - `mark_ready` は `UPDATE` の行数が 1 でなければ `FG-SYS-0001 reason=unexpected_row_count`。`mark_ready_within` は変更の
+    上限を呼び出し側が渡す（作成のジョブは自分の残り時間を渡す）。同時の `mark_ready` 2 回、`mark_ready` と `reprovision` の
+    両方の順序をテストで固定した。
+  - doctor の `repositories.provisioning` は詰まったものを SQL で選ぶ（`job_not_live` を先、それぞれ古い順、古い 10 000 件を分類）。
+    理由ごとの件数 `job_not_live` / `too_old` を `FG-REPO-0012` の context に入れる。
+
+## Amendment（2026-10-31、手順 D4 MR4: プロジェクトの `member.*` のイベント）
+
+- `EventType::{MemberAdded, MemberRoleChanged, MemberRemoved}`（`member.added`・`member.role_changed`・`member.removed`、分類 `maintainer`、§5）を足す。
+  書き手は `projects::{add_member, change_member, remove_member}`。監査の行はプロジェクト（`project` / id、`project_id` あり）、イベントの集約も
+  `project` / id、ペイロードは監査の詳細（`AuditDetails::ProjectMember*`、グループと同じ JSON の形 `{"user_id","role"}` / `{"user_id","from","to"}`）。
+  重複除去の鍵は付けない（メンバーの変更は毎回新しい状態で、吸収すべき再試行ではない）。
+- グループのメンバーの変更（`AuditDetails::Member*`）は監査だけのまま（計画 Q8、`event_type()` は `None`、テスト
+  `project_member_details_have_the_group_shapes_and_publish_maintainer_events`）。
+
+## Amendment（2026-10-31、手順 D4 MR5: `protected_ref.*` のイベント）
+
+- §10 の M1 のイベントに `protected_ref.*` を足す: `EventType::{ProtectedRefCreated, ProtectedRefUpdated, ProtectedRefDeleted}`
+  （`protected_ref.created`・`protected_ref.updated`・`protected_ref.deleted`、分類 `maintainer`、§5）。書き手は `protected_refs::{create, change, delete}`。
+  監査の行とイベントの集約はプロジェクト（`project` / id、`project_id` あり）、ペイロードは監査の詳細（`{"protected_ref_id","pattern","push_min_role"}`、
+  更新は `{"protected_ref_id","pattern","from","to"}`）。パターンは ref の名前の形で、個人に関わる値ではない。重複除去の鍵は付けない。
+
+## Amendment（2026-11-01、M1 段階 9 MR2: `repository.pushed` と push の記録）
+
+- **`repository.pushed`**（`EventType::RepositoryPushed`、分類 `integration`、§5）の書き手は `forge_db::repositories::record_push`
+  だけ（forge-web は `forge_core::PushRecorder` を通して呼ぶ。forge-db に依存しない）。git が ref を更新した後に、状態の表は書かず、
+  監査の行 `repository.pushed`（リソース `project` / そのリポジトリのプロジェクトの ID、`project_id` あり、行者は push した利用者）と
+  イベント `repository.pushed`（集約 `repository` / `repositories.id`、同じ `project_id`）を 1 つの `ChangeTx` で書く。
+- **ペイロード**: `forge_core::push::push_json`。`{project_id, repository_id, total_refs, refs_truncated, created, fast_forward,
+  forced, deleted, total_commits, commits_truncated, replayed_from, refs: [{ref, old, new, kind, total_commits, commits,
+  commits_truncated}]}`。`kind` は `create` / `fast_forward` / `force` / `delete`。種類ごとの件数は一覧に載らなかった分も含む。
+  ref は最大 100 件、コミットは ref ごとに最大 20 件（§5 の上限）。並びは `force`、`delete`、`create`、`fast_forward` の順
+  （それぞれの中は名前順）で、切り詰めても履歴の書き換えと削除が残る（データベースのレビューの MEDIUM）。
+  `replayed_from` は再投入のときだけ `{user_id, credential_id}`、それ以外は `null`。
+  §5 の「64 KiB を超えたら FG-DB-0010 で書き込みを失敗させる」は、push については **失敗させずに切り詰める** に改める:
+  ref の名前は 1024 バイトまで許されるので、100 件 × 20 コミットは 64 KiB に収まらないことがある。書き込みを失敗させると
+  push の記録そのものが失われる（ref は既に更新済み）ので、決まったバイト数の中で組み立て（イベントは 48 KiB、監査の詳細は
+  6 KiB。保存の上限 64 KiB / 8 KiB に jsonb の分の余裕を残す）、収まらない ref はコミットなしで、それも収まらなければそこで
+  一覧を止める。省いたものは必ず `refs_truncated` / `commits_truncated` と総数で示す（黙って切り詰めない）。監査の詳細と
+  ペイロードは同じ形で、予算だけが違う（`AuditDetails::to_value` と `AuditDetails::event_payload`）。
+- **重複除去の鍵**: §6 の `push:<repo_id>:<ref の更新の一覧のハッシュ>` を
+  `repository_pushed:<repo_id>:<sha256(request_id ‖ 名前順の ref の更新) の 16 進 64 文字>` に改める（D4 の `<集約>_<動詞>` の接頭辞、
+  `DedupKey` の `Id` と `Hash`。最長 18 + 1 + 19 + 1 + 64 文字で 200 に収まり、64 文字は部分の上限ちょうどなので切り詰めない）。
+  ハッシュの入力は、領域の札 `forge.repository_pushed.v1`、push の要求の `request_id`、名前順の各更新の（名前、旧、新）で、
+  すべて長さを前に付ける。種類とコミットは旧と新から決まるので入れない。
+  - **request_id を入れる理由（A→B→A）**: ref の更新の一覧だけでは、`main` を A→B、B→A、もう一度 A→B と push したとき、
+    3 回目が 1 回目と同じ鍵になり、別の push なのに `Deduped` で記録されない。要求ごとに違う request_id を入れて 3 件にする
+    （テスト `aba_pushes_are_three_events`）。
+  - **再試行と再投入は 1 件**: 同じ要求の再試行（MR4 の 3 回）と、Runbook `push-record-failed` の再投入
+    （`forge admin repo record-push --from-log`）は、ログの `forge.git.push_applied` の行に残った request_id をそのまま使うので
+    同じ鍵になり、既に記録されていれば `Deduped`（何も書かない）。
+  - **再投入の行者は運用者**（データベースのレビューの MEDIUM）: ファイルは検証されていない入力なので、ログに書かれた
+    利用者を行者にしない。`repositories::replay_push` の監査の行とイベントの行者は `system`、`actor_label` は
+    `forge-cli:<OS のアカウント>`、`request_id` は push の要求のもの。元の push した利用者は `replayed_from: {user_id,
+    credential_id}` に入れる。通常の push（MR4）の行者は push した利用者（`Actor::User`）のまま。
+  - **再投入の照合**: 変更の中で、リポジトリのプロジェクトがログの `project_id` と同じこと、ログの `user_id` の利用者が
+    存在することを確かめ、違えば `FG-GIT-0012 reason=push_log_invalid`（`field` = `project_id` / `user_id`）で何も書かない。
+    CLI は書く前にファイルのすべての push を同じ照合（`repositories::check_replay`）にかける。書き込みは push ごとに 1 つの
+    変更なので、途中で失敗したら同じファイルで再実行する（記録済みのものは `Deduped`）。
+- **`forge.git.push_applied`**: forge-web が git の終了後、記録の前に必ず出すログの行の形は `forge_core::PushApplied`（serde の型、
+  版 `v = 1`、未知の項目は拒否）で定め、書く側（`PushApplied::log`）と読む側（`PushApplied::from_log_line`）が同じ型を使う。
+  記録が書けなければ `FG-GIT-0012` PushRecordFailed（alert、Runbook `push-record-failed`、`PushRecord::failed`）。
+- 矛盾した記録（更新が 0 件か 1000 件超、同じ ref が 2 回、旧 = 新、種類と 0 の側の不一致、コミット付きの削除など）は
+  `FG-DB-0010 reason=invalid_push_record`（`rule`）で、何も書かない。
+
+## Amendment（2026-11-01、M1 段階 9 MR4: `repository.pushed` の書き手が動き始めた）
+
+- Smart HTTP の push（`POST {path}.git/git-receive-pack`、ADR-0008 の M1 段階 9 MR4 の Amendment）が `record_push` を呼ぶ。
+  git の終了後、report-status で `ok` になった ref だけを、種類（旧・新が 0 か、タグ、`rev-list` による祖先の判定）と
+  新しいコミット（作成は push 前のどの ref からも届かないもの、更新は `<new> ^<old>`。ref ごとに 20 件まで、すべて数える）付きで
+  記録する。数えるのは push 全体で 10 秒まで。超えたら件数は数えた分（下限）で、ref ごとの `total_commits_partial`（ログの行
+  `forge.git.push_applied` でも同じ名前、`true` のときだけ書く。MR2 の行も読める）を立て、ペイロードの `commits_truncated` は
+  件数にかかわらず `true` になる（黙って少なく見せない）。
+- 順序: **先に** `forge.git.push_applied`（再投入の入力）をログに出し、それから `record_push` を 30 秒以内に 3 回まで
+  （1 秒、2 秒の間を空けて）試す。`Deduped` は成功。FG-DB-0010（記録が不正）はやり直さない。すべて失敗したら
+  `PushRecord::failed` の FG-GIT-0012（`attempts`、`cause_code`、同じ request_id）。種類や一覧の読み取りに失敗したら
+  `force` / コミットなし（`total_commits_partial`）として記録し、その失敗もログに出す。
+- 記録はクライアントへの応答を閉じてから行う（`git push` は記録を待たない）。`source_ip` は M1 では記録しない
+  （リバースプロキシの背後で信頼できる値がまだない。段階 10 以降）。`credential_id` は使われたトークンの ID、
+  `user_agent` は 512 バイトまで（保存時にさらに 256 文字へ）。
+
+## Amendment（2026-11-01、M1 段階 8b MR7a: `project.visibility_changed` とプロジェクト・グループの更新）
+
+- **`project.visibility_changed`**（`EventType::ProjectVisibilityChanged`、分類 `maintainer`、§5）の書き手は
+  `forge_db::projects::change_visibility_decided`（`PUT /api/v1/projects/{id}/visibility`、Owner）。一つの `ChangeTx` で状態、監査の行
+  （`project`/`projects.id`、`project_id` あり）とイベントを書く。ペイロードは監査の details と同じ `{project_id, from, to}`。重複除去の
+  鍵なし（状態の変化ごとに新しい事実）。同じ可視性への変更は何も書かない。
+- **`project.updated` / `group.updated`** は M1 では監査のみ（段階 8b の計画の回答）。details は `{project_id, fields}` /
+  `{group_id, fields}` で、`fields` は変わった項目の名前（`display_name`、`description`）だけ — 値（自由入力の文字列）は残さない。
+  `project.updated` の監査の行は `project_id` を持つ（イベントの範囲の規則）。値が変わらない更新は何も書かない。
+
+## Amendment（2026-11-02、手順 D5 MR2: 変更ごとに複数の監査の行）
+
+- `ChangeRecord` は、変更の監査の行（`audit`）に加えて、変更した他のリソースごとの監査の行（`affected`、最大 2000）を持てる。部分木の移動は、
+  動かしたリソースの行（`project.moved` / `group.moved` / `user.renamed`）に加え、部分木の中のプロジェクトごとに `project.moved` の行
+  （`project`/`projects.id`、`project_id` あり、details `{project_id, namespace_id, moved_namespace_id}`）を書く。ADR-0015 D1 の
+  「部分木のパスの書き換えは 1 行の監査でまとめる」の注記を閉じる: 各プロジェクトの監査の履歴に移動が残る。
+- 規則: すべての行は同じ outcome（`audit_outcome_mismatch`）。リソースが `project` の行は、どれも `project_id = resource_id`
+  （`audit_scope_mismatch`）。**イベントの範囲の規則はイベントごとに確かめる**: イベントの `project_id` は、その変更のどれかの監査の行の
+  `project_id` と等しい（`event_scope_mismatch`）。大きさの検査（8 KiB）も行ごと。
+- `project.moved`、`group.moved`、`user.renamed`、`namespace_tombstone.released` は MR2 では監査のみ。
+
+### D5 MR3: `project.deleted` / `project.restored`
+
+`EventType::ProjectDeleted` / `ProjectRestored`（integration クラス、§10 の Amendment D5 の表どおり）。ペイロードは監査の details と同じ
+`{project_id, deleted_at, purge_after, deleted_by}`（`deleted_by` は operator CLI の削除では null。restore では取り消す削除の値）。
+`dedup_key` の形は ADR-0015 の D5 MR3 の節。
+
+### D5 MR4: `project.purged`
+
+`EventType::ProjectPurged`（**admin** クラス。手順 D5 の計画の答え「`project.purged` は admin、他の `project.*` は integration」のとおり:
+プロジェクトはもう無いので、Reporter の役割で読める者を `authorize()` が決められない）。`project_id` は付ける（監査の行と同じ）。
+ペイロードは監査の details と同じ `{project_id, repository_id, namespace_id, deleted_at, purge_after, deleted_by, tombstone_id,
+redirects_ended, members_removed, protected_refs_removed, storage_removed}`（id・数・時刻だけ、パスや名前は入れない）。
+`dedup_key` = `project_purged:<project_id>`（プロジェクトの id は再利用されない）。開始の `repository.purge_started` は監査のみ。
+
+### D5 MR5: `project.moved` / `group.moved` / `user.renamed`
+
+MR2 で監査のみにした移動に、**移動したリソースごとに 1 件** のイベントを付けた（MR2 の「形は MR5 で決める」を閉じる）。
+
+| 種類 | クラス | `project_id` | 書き手 |
+|---|---|---|---|
+| `project.moved` | integration（計画の答え「他の `project.*` は integration」） | そのプロジェクト | `projects::move_decided` |
+| `group.moved` | admin（インスタンス全体のイベント。プロジェクトを指さないので Reporter を `authorize()` で決められない、§5） | なし | `groups::move_decided` |
+| `user.renamed` | admin（同上） | なし | `users::rename_decided` |
+
+- **祖先の移動で動いたプロジェクトにはイベントを出さない**（監査の行はプロジェクトごとに残る）。1 つの変更のイベントは最大 100 件、
+  グループの移動は最大 1000 のプロジェクトに及ぶため。連携はプロジェクトを id で識別し（§5）、パスは表示用のスナップショット
+  なので、今のパスは API で読み直す。`namespace_tombstone.released` は監査のみのまま。
+- **ペイロード**は監査の details から継承のロールの変化を除いたもの: `{<project_id|group_id|user_id>, namespace_id,
+  from_parent_id, to_parent_id, renamed, nodes, projects, reclaimed_tombstones}`（`AuditDetails::event_payload`、
+  `MoveSummary::event_value`）。誰が継承のロールを得た・失ったかは監査ログにだけ残す（他の利用者の権限を連携に出さない）。
+  パスや名前は入れない。
+- **`dedup_key`** は `project_moved:<project_id>:<µs epoch>` / `group_moved:<group_id>:<µs epoch>` /
+  `user_renamed:<user_id>:<µs epoch>`。epoch はリソースの行をロックした後に同じ変更の中で読む `clock_timestamp()` の
+  マイクロ秒（MR3 と同じ精度）。同じリソースの移動は行のロックで直列になるので 2 つの移動が同じ鍵になることはなく、同じ変更の
+  繰り返しだけが `Deduped` になる。

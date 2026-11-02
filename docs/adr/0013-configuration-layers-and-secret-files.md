@@ -51,3 +51,14 @@ DB の接続先、プールの大きさ、各種タイムアウトなど、設�
 
 ### Risks
 - 新しいキーを `KEYS` に足し忘れる → 環境変数の名前がキーから導かれていることをテストで確かめる。未知のキーは失敗になるので、足し忘れればすぐに分かる
+
+## Amendment（2026-11-01、M1 phase 8b MR6: 一覧のカーソルの鍵ファイル）
+
+- 新しいキー `api.cursor_keys_file`（`FORGE_API_CURSOR_KEYS_FILE`）。`FORGE_API_` を設定の名前空間に足した（その下の未知の変数は失敗）。
+- 中身は秘密のファイル（絶対パス、Unix では所有者だけが読める、64 KiB まで。`audit.seal_keys_file` と同じ読み方）で、1 行に 1 つ
+  `<kid> <hex>`（kid は 1 〜 65535、鍵は AES-256 の 32 バイトを 64 桁の 16 進数）。空行と `#` の行は無視する。
+- いちばん大きい kid が新しいカーソルを暗号化し、並んでいる鍵はすべて復号に使う。入れ替えの手順: 新しい kid の鍵を足す → 古いカーソルが
+  使われなくなるまで待つ → 古い鍵を消す（消した鍵のカーソルは FG-WEB-0006 `reason=cursor_invalid rule=kid`。一覧を最初からやり直せばよい）。
+- 誤りは FG-SYS-0002 `config_key=api.cursor_keys_file` と `reason`（`empty`、`invalid`、`invalid_key_id`、`invalid_key`、`duplicate`、
+  `not_absolute`、`insecure_permissions`、`unreadable`、`missing`）と `line`。行の中身は出さない。鍵は `Debug` でも出さない。
+- 読み込みの時点ではパスだけを確かめ、ファイルは一覧のルートが要るとき（MR7b で `forge serve` に配線する）に読む。

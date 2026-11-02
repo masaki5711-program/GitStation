@@ -20,8 +20,8 @@ The configured git binary cannot be executed, or its version is older than the m
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), or `too_old` (with `found` and `minimum`). Run the configured git binary with `version` as the forge service user.
+The log event carries `reason`: `spawn_failed` (with `git_bin`), `unparseable_version` (with the first characters of the output in `output`), `too_old` (with `found` and `minimum`), `process_tree_failed` (Windows: the Job Object for a stream could not be created or assigned; `source` has the OS error), or `hooks_dir` (Smart HTTP: `<git home>/empty-hooks` is not an empty real directory; `detail` = `not_empty`, `not_a_directory`, `insecure_permissions` (group- or world-writable; with `mode` — it is created 0700), `create_failed`, `unreadable` or `not_absolute_utf8`, with `path`). Run the configured git binary with `version` as the forge service user.
 
 ## 対処 (fix)
 
-Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart.
+Install git >= 2.38 on the server (Debian 12 / RHEL 9 / Ubuntu 24.04 ship a new enough version) or point the configured git binary at it, then restart. For `hooks_dir`: find out who put files into `empty-hooks` (it must stay empty — no hook runs in Smart HTTP in M1 phase 9), remove them, and record it as an incident (runbook smart-http).

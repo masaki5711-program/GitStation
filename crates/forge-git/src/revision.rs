@@ -19,6 +19,13 @@ impl Revision {
         }
     }
 
+    /// `^<id>`: the commits reachable from this id are left out (a range's
+    /// lower end). Only a validated object id gets the `^`, so the operand
+    /// stays a revision after `--end-of-options`.
+    pub fn excluding(&self) -> Self {
+        Self(format!("^{}", self.0))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

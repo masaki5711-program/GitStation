@@ -64,11 +64,17 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    jobs.queue_depth",
         "ok    subscribers.lag",
         "ok    subscribers.dead_letters",
+        // D3 MR2: no users yet is not orphaned, but it is not hidden either.
+        "warn  users.administration no users yet",
+        // D4 MR3b: nothing provisioning, no ready repository to look for.
+        "ok    repositories.provisioning 0 provisioning, none stuck",
+        "ok    repositories.storage 0 ready repositories have their directory",
         "ok    storage",
         "ok    git",
     ] {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
+    assert!(text.contains("forge admin bootstrap-admin"), "{text}");
     // No worker has run against this database: ok, but not hidden.
     assert!(text.contains("worker not observed"), "{text}");
     // Read-only: doctor applied nothing (the status still lists exactly the
@@ -299,6 +305,114 @@ fn doctor_reports_a_stale_sequencer_with_a_backlog_as_outbox_sequencer_lag() {
     rt.block_on(t.drop_now());
 }
 
+// ── D3 MR2: users.administration (FG-AUTH-0010) ─────────────────────────
+#[test]
+fn doctor_reports_an_orphaned_administration() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    // Users exist, none of them an active human administrator.
+    rt.block_on(async {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            forge_core::RequestId::parse("req-doctor-user").expect("request id"),
+        );
+        forge_db::users::create(
+            &t.db,
+            &ctx,
+            &forge_db::users::NewUser::human("bob", "Bob", "bob@example.test"),
+        )
+        .await
+        .expect("bob");
+    });
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("FAIL  users.administration"))
+        .unwrap_or_else(|| panic!("no administration failure in:\n{text}"));
+    for part in [
+        "FG-AUTH-0010",
+        "reason=no_admin",
+        "active_human_admins=0",
+        "ownerless_groups=0",
+    ] {
+        assert!(line.contains(part), "missing {part:?} in {line:?}");
+    }
+    assert!(!text.contains("bob"), "names stay out:\n{text}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("[FG-AUTH-0010]"), "{err}");
+    rt.block_on(t.drop_now());
+}
+
+// ── D4 MR4: a project without any active Owner (FG-AUTH-0010 ownerless_project) ──
+#[test]
+fn doctor_reports_an_ownerless_project() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    // An administrator exists; carol's only project loses its Owner when
+    // carol is disabled past the guard.
+    let project = rt.block_on(async {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            forge_core::RequestId::parse("req-doctor-project").expect("request id"),
+        );
+        let mut alice = forge_db::users::NewUser::human("alice", "Alice", "alice@example.test");
+        alice.is_admin = true;
+        forge_db::users::create(&t.db, &ctx, &alice)
+            .await
+            .expect("alice");
+        let carol = forge_db::users::create(
+            &t.db,
+            &ctx,
+            &forge_db::users::NewUser::human("carol", "Carol", "carol@example.test"),
+        )
+        .await
+        .expect("carol");
+        let created = forge_db::projects::create(
+            &t.db,
+            &ctx,
+            &forge_db::projects::NewProject::new("tool", carol.namespace_id, "Tool", carol.user_id),
+        )
+        .await
+        .expect("project");
+        let _ = forge_db::users::disable_with(
+            &t.db,
+            &ctx,
+            carol.user_id,
+            forge_db::users::Guard::Force,
+        )
+        .await
+        .expect("forced disable");
+        created.project_id
+    });
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("FAIL  users.administration"))
+        .unwrap_or_else(|| panic!("no administration failure in:\n{text}"));
+    for part in [
+        "FG-AUTH-0010".to_owned(),
+        "reason=ownerless_project".to_owned(),
+        "ownerless_projects=1".to_owned(),
+        format!("project_ids={}", project.get()),
+    ] {
+        assert!(line.contains(&part), "missing {part:?} in {line:?}");
+    }
+    assert!(!text.contains("carol"), "names stay out:\n{text}");
+    rt.block_on(t.drop_now());
+}
+
 #[test]
 fn worker_refuses_a_configuration_with_the_migration_password() {
     let pw = PasswordFile::new("x");
@@ -328,9 +442,21 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
     let keys_dir = tempfile::tempdir().expect("keys dir");
     let keys = keys_dir.path().join("audit_seal_keys");
     std::fs::write(&keys, format!("1 {}\n", "42".repeat(32))).expect("keys");
+    // Not readable by others, or the worker refuses it (`insecure_permissions`).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
     app_only.push((
         "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
         keys.to_string_lossy().into_owned(),
+    ));
+    // ...and its storage root (D4 MR3b: the provisioning job writes there).
+    let storage = tempfile::tempdir().expect("storage root");
+    app_only.push((
+        "FORGE_STORAGE_ROOT".to_owned(),
+        storage.path().to_string_lossy().into_owned(),
     ));
     let out = forge_bounded(&["worker"], &app_only);
     let err = String::from_utf8_lossy(&out.stderr);
@@ -342,6 +468,36 @@ fn worker_refuses_a_database_with_pending_migrations_and_never_migrates() {
     let text = stdout(&status);
     assert!(text.contains("applied    -"), "{text}");
     rt.block_on(t.drop_now());
+}
+
+#[test]
+fn worker_refuses_to_start_without_a_storage_root() {
+    // D4 MR3b: checked after the seal keys, before the database is touched
+    // (the database URL points nowhere).
+    let keys_dir = tempfile::tempdir().expect("keys dir");
+    let keys = keys_dir.path().join("audit_seal_keys");
+    std::fs::write(&keys, format!("1 {}\n", "42".repeat(32))).expect("keys");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
+    let vars = vec![
+        (
+            "FORGE_AUDIT_SEAL_KEYS_FILE".to_owned(),
+            keys.to_string_lossy().into_owned(),
+        ),
+        (
+            "FORGE_DATABASE_URL".to_owned(),
+            "postgres://forge_app@127.0.0.1:1/none".to_owned(),
+        ),
+    ];
+    let out = forge_bounded(&["worker"], &vars);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    for part in ["FG-SYS-0002", "storage.root", "reason=missing"] {
+        assert!(err.contains(part), "missing {part:?} in {err}");
+    }
 }
 
 /// `forge` that must exit by itself: killed (and the test failed) after 60 s
@@ -399,6 +555,30 @@ fn doctor_reports_each_check_and_exits_1_on_failure() {
         assert!(text.contains(line), "missing {line:?} in:\n{text}");
     }
     assert!(text.contains("FG-SYS-0002"), "{text}");
+    // ADR-0022 §2: the UI the binary serves is reported, never silent.
+    let ui = match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => "warn  web.ui         placeholder".to_owned(),
+        forge_web::UiStatus::Embedded { index_sha256 } => {
+            format!("ok    web.ui         embedded (index.html sha256 {index_sha256})")
+        }
+    };
+    assert!(text.contains(&ui), "missing {ui:?} in:\n{text}");
+}
+
+#[test]
+fn doctor_reports_the_web_ui_in_json_even_without_a_configuration() {
+    let out = forge(&["doctor", "--json"], &[("FORGE_DATABASE_URLL", "x")]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    let checks = v["checks"].as_array().expect("checks");
+    let ui = checks
+        .iter()
+        .find(|c| c["name"] == "web.ui")
+        .expect("a web.ui check");
+    let expected = match forge_web::ui::status() {
+        forge_web::UiStatus::Placeholder => "warn",
+        forge_web::UiStatus::Embedded { .. } => "ok",
+    };
+    assert_eq!(ui["status"], expected, "{ui}");
 }
 
 #[test]

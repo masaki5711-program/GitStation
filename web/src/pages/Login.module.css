@@ -1,0 +1,20 @@
+.card {
+  max-width: 32rem;
+  margin: var(--gs-space-8) auto;
+  padding: var(--gs-space-6);
+  border: 1px solid var(--gs-color-border);
+  border-top: 4px solid var(--gs-brand-teal);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.title {
+  margin: 0 0 var(--gs-space-3);
+  font-size: var(--gs-font-size-xl);
+  color: var(--gs-brand-navy);
+}
+
+.lead {
+  margin: 0 0 var(--gs-space-6);
+  color: var(--gs-color-text-muted);
+}

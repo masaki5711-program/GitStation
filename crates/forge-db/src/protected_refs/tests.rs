@@ -1,0 +1,863 @@
+//! Protected ref rules against a migrated database (D4 MR5). Inspection uses
+//! a superuser connection.
+
+use forge_core::{EventType, RequestId, VisibilityClass};
+use serde_json::json;
+
+use super::*;
+use crate::audited_tests::{audit, commit as commit_sql};
+use crate::change::Actor;
+use crate::projects::{self, CreatedProject, NewProject};
+use crate::test_support::*;
+use crate::users::{self, NewUser};
+
+fn ctx(request: &str) -> ChangeContext {
+    ChangeContext::new(
+        Actor::System,
+        RequestId::parse(request).expect("request id"),
+    )
+}
+
+fn pattern(raw: &str) -> RefPattern {
+    RefPattern::parse(raw).unwrap_or_else(|e| panic!("{raw}: {e}"))
+}
+
+fn ref_name(raw: &str) -> RefName {
+    RefName::parse(raw).unwrap_or_else(|e| panic!("{raw}: {e}"))
+}
+
+/// `alice/<segment>`, created by alice.
+async fn project_of_alice(t: &FreshDb, segments: &[&str]) -> Vec<CreatedProject> {
+    let alice = users::create(
+        &t.db,
+        &ctx("req-user-alice"),
+        &NewUser::human("alice", "alice", "alice@example.test"),
+    )
+    .await
+    .expect("alice");
+    let mut out = Vec::new();
+    for segment in segments {
+        let created = projects::create(
+            &t.db,
+            &ctx(&format!("req-project-{segment}")),
+            &NewProject::new(segment, alice.namespace_id, segment, alice.user_id),
+        )
+        .await
+        .expect("project");
+        out.push(created);
+    }
+    out
+}
+
+async fn web(t: &FreshDb) -> ProjectId {
+    project_of_alice(t, &["web"]).await[0].project_id
+}
+
+async fn create_ok(t: &FreshDb, p: ProjectId, raw: &str, role: Role) -> ProtectedRefId {
+    let request = format!("req-rule-{}", raw.len());
+    create(&t.db, &ctx(&request), p, &pattern(raw), role)
+        .await
+        .unwrap_or_else(|e| panic!("{raw}: {e}"))
+}
+
+async fn rule_count(t: &FreshDb, p: ProjectId) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM forge.protected_refs WHERE project_id = $1")
+        .bind(p.get())
+        .fetch_one(&mut t.superuser().await)
+        .await
+        .expect("count")
+}
+
+/// (action, resource_type, resource_id, project_id) of a request's audit rows.
+async fn audit_rows(t: &FreshDb, request: &str) -> Vec<(String, String, i64, i64)> {
+    sqlx::query_as(
+        "SELECT action, resource_type, resource_id, project_id FROM forge.audit_log \
+         WHERE request_id = $1 ORDER BY id",
+    )
+    .bind(request)
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("audit rows")
+}
+
+/// (event_type, aggregate_type, aggregate_id, project_id, payload, has a
+/// dedup key) of a request's events.
+type EventRow = (String, String, i64, i64, serde_json::Value, bool);
+
+async fn events_of(t: &FreshDb, request: &str) -> Vec<EventRow> {
+    sqlx::query_as(
+        "SELECT event_type, aggregate_type, aggregate_id, project_id, payload, \
+           dedup_key IS NOT NULL FROM forge.events WHERE request_id = $1 ORDER BY id",
+    )
+    .bind(request)
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("events")
+}
+
+#[tokio::test]
+async fn protected_ref_change_writes_one_audit_row_and_one_maintainer_event() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let rule = create(
+        &t.db,
+        &ctx("req-create"),
+        p,
+        &pattern("refs/heads/release/*"),
+        Role::Maintainer,
+    )
+    .await
+    .expect("create");
+    let changed = change(&t.db, &ctx("req-change"), p, rule, Role::Owner)
+        .await
+        .expect("change");
+    assert_eq!(
+        changed,
+        RuleChange::Changed {
+            from: Role::Maintainer
+        }
+    );
+    let same = change(&t.db, &ctx("req-same"), p, rule, Role::Owner)
+        .await
+        .expect("same");
+    assert_eq!(same, RuleChange::Unchanged);
+    delete(&t.db, &ctx("req-delete"), p, rule)
+        .await
+        .expect("delete");
+    let id = rule.get();
+    for (request, action, details) in [
+        (
+            "req-create",
+            "protected_ref.created",
+            json!({"protected_ref_id": id, "pattern": "refs/heads/release/*",
+                   "push_min_role": "maintainer"}),
+        ),
+        (
+            "req-change",
+            "protected_ref.updated",
+            json!({"protected_ref_id": id, "pattern": "refs/heads/release/*",
+                   "from": "maintainer", "to": "owner"}),
+        ),
+        (
+            "req-delete",
+            "protected_ref.deleted",
+            json!({"protected_ref_id": id, "pattern": "refs/heads/release/*",
+                   "push_min_role": "owner", "stored_invalid": false}),
+        ),
+    ] {
+        assert_eq!(
+            audit_rows(&t, request).await,
+            vec![(action.to_owned(), "project".to_owned(), p.get(), p.get())],
+            "{request}"
+        );
+        let stored: serde_json::Value =
+            sqlx::query_scalar("SELECT details FROM forge.audit_log WHERE request_id = $1")
+                .bind(request)
+                .fetch_one(&mut t.superuser().await)
+                .await
+                .expect("details");
+        assert_eq!(stored, details, "{request}");
+        assert_eq!(
+            events_of(&t, request).await,
+            vec![(
+                action.to_owned(),
+                "project".to_owned(),
+                p.get(),
+                p.get(),
+                details,
+                false
+            )],
+            "{request}"
+        );
+        let class = EventType::parse(action).map(EventType::visibility_class);
+        assert_eq!(class, Some(VisibilityClass::Maintainer), "{action}");
+    }
+    // Unchanged wrote nothing.
+    assert!(audit_rows(&t, "req-same").await.is_empty());
+    assert!(events_of(&t, "req-same").await.is_empty());
+    assert_eq!(rule_count(&t, p).await, 0);
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn levels_for_returns_every_matching_rule_case_insensitively() {
+    let t = FreshDb::migrated().await;
+    let projects = project_of_alice(&t, &["web", "api"]).await;
+    let (p, other) = (projects[0].project_id, projects[1].project_id);
+    create_ok(&t, p, "refs/heads/main", Role::Developer).await;
+    create_ok(&t, p, "refs/heads/*", Role::Maintainer).await;
+    create_ok(&t, p, "refs/tags/v*", Role::Owner).await;
+    // Non-ASCII: a word-final capital sigma, and the dotted capital I.
+    create_ok(&t, p, "refs/heads/ΟΔΟΣ", Role::Owner).await;
+    create_ok(&t, p, "refs/heads/İnfo", Role::Owner).await;
+    // Another project's rule never applies here.
+    create_ok(&t, other, "refs/heads/MAIN", Role::Owner).await;
+    let levels = |raw: &'static str| {
+        let db = &t.db;
+        async move {
+            levels_for(db, p, &ref_name(raw))
+                .await
+                .unwrap_or_else(|e| panic!("{raw}: {e}"))
+        }
+    };
+    // Every matching rule, in rule order (the exact rule and the wildcard).
+    assert_eq!(
+        levels("refs/heads/main").await,
+        [Role::Developer, Role::Maintainer]
+    );
+    assert_eq!(
+        levels("refs/heads/MAIN").await,
+        [Role::Developer, Role::Maintainer]
+    );
+    assert_eq!(levels("refs/heads/feature/x").await, [Role::Maintainer]);
+    assert_eq!(levels("refs/tags/V1.0").await, [Role::Owner]);
+    assert!(levels("refs/tags/release").await.is_empty());
+    assert!(levels("refs/notes/main").await.is_empty());
+    // Σ, σ and the final ς fold to one letter wherever they stand.
+    for raw in ["refs/heads/οδος", "refs/heads/ΟΔΟΣ", "refs/heads/οδοσ"] {
+        assert_eq!(levels(raw).await, [Role::Maintainer, Role::Owner], "{raw}");
+    }
+    // İ folds to i + U+0307: that spelling matches, a plain i does not.
+    assert_eq!(
+        levels("refs/heads/i\u{307}nfo").await,
+        [Role::Maintainer, Role::Owner]
+    );
+    assert_eq!(levels("refs/heads/info").await, [Role::Maintainer]);
+    // A project without rules protects nothing.
+    assert!(
+        levels_for(&t.db, ProjectId::new(9_999), &ref_name("refs/heads/main"))
+            .await
+            .expect("no rules")
+            .is_empty()
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn a_duplicate_protected_ref_pattern_is_pattern_taken() {
+    let t = FreshDb::migrated().await;
+    let projects = project_of_alice(&t, &["web", "api"]).await;
+    let (p, other) = (projects[0].project_id, projects[1].project_id);
+    for (first, second) in [
+        // ASCII: the unique index would also catch it.
+        ("refs/heads/main", "refs/heads/MAIN"),
+        // Non-ASCII: only RefPattern::key() sees these (lower() under
+        // COLLATE "C" folds ASCII only).
+        ("refs/heads/ärger", "refs/heads/ÄRGER"),
+        ("refs/heads/οδος", "refs/heads/ΟΔΟΣ"),
+        ("refs/tags/İ*", "refs/tags/i\u{307}*"),
+    ] {
+        create_ok(&t, p, first, Role::Developer).await;
+        let request = format!("req-dup-{}", second.len());
+        let err = create(&t.db, &ctx(&request), p, &pattern(second), Role::Owner)
+            .await
+            .expect_err(second);
+        // A conflict with the stored rules, not a malformed request (MR8).
+        assert_reason(
+            &err,
+            ErrorCode::ProtectedRefPatternTaken,
+            "duplicate_pattern",
+        );
+        assert_eq!(err.code().http_status(), 409);
+        assert!(
+            !err.to_string().contains(second),
+            "the pattern is not logged"
+        );
+        assert!(audit_rows(&t, &request).await.is_empty(), "{second}");
+    }
+    assert_eq!(rule_count(&t, p).await, 4);
+    // The same pattern in another project is fine.
+    create_ok(&t, other, "refs/heads/MAIN", Role::Owner).await;
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn more_than_100_rules_is_rejected() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    for n in 0..MAX_RULES {
+        create(
+            &t.db,
+            &ctx(&format!("req-rule-{n}")),
+            p,
+            &pattern(&format!("refs/heads/r{n}")),
+            Role::Developer,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("rule {n}: {e}"));
+    }
+    let err = create(
+        &t.db,
+        &ctx("req-rule-101"),
+        p,
+        &pattern("refs/heads/one-too-many"),
+        Role::Developer,
+    )
+    .await
+    .expect_err("the 101st rule");
+    assert_reason(&err, ErrorCode::ProtectedRefRuleInvalid, "too_many_rules");
+    assert!(audit_rows(&t, "req-rule-101").await.is_empty());
+    assert_eq!(rule_count(&t, p).await, 100);
+    // levels_for reads all 100, and so does the snapshot.
+    assert_eq!(
+        levels_for(&t.db, p, &ref_name("refs/heads/r99"))
+            .await
+            .expect("levels"),
+        [Role::Developer]
+    );
+    let snapshot = rules_for(&t.db, p).await.expect("snapshot");
+    assert_eq!(snapshot.len(), 100);
+    assert_eq!(
+        snapshot.levels(&ref_name("refs/heads/r99")),
+        [Role::Developer]
+    );
+    // A 101st row written outside forge-db: levels_for refuses rather than
+    // deciding on a partial rule set.
+    commit_sql(
+        &t,
+        &[
+            audit("project", p.get(), "succeeded"),
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({}, 'refs/heads/smuggled', 'owner')",
+                p.get()
+            ),
+        ],
+    )
+    .await
+    .expect("smuggle a rule");
+    let err = levels_for(&t.db, p, &ref_name("refs/heads/main"))
+        .await
+        .expect_err("over the cap");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "too_many_stored_rules",
+    );
+    // The snapshot refuses the 101st row too (never the first 100 of them).
+    let err = rules_for(&t.db, p).await.expect_err("over the cap");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "too_many_stored_rules",
+    );
+    assert!(err.to_string().contains(&format!("project_id={}", p.get())));
+    // A create reads the same rules: the broken cap is FG-DB-0020, not
+    // too_many_rules (D4 review).
+    let err = create(
+        &t.db,
+        &ctx("req-rule-102"),
+        p,
+        &pattern("refs/heads/after-smuggle"),
+        Role::Developer,
+    )
+    .await
+    .expect_err("over the stored cap");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "too_many_stored_rules",
+    );
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn invalid_rule_requests_and_unknown_rules_are_refused() {
+    let t = FreshDb::migrated().await;
+    let projects = project_of_alice(&t, &["web", "api"]).await;
+    let (p, other) = (projects[0].project_id, projects[1].project_id);
+    for role in [Role::Guest, Role::Reporter] {
+        let err = create(&t.db, &ctx("req-guest"), p, &pattern("refs/heads/x"), role)
+            .await
+            .expect_err("guest / reporter protect nothing");
+        assert_reason(&err, ErrorCode::ProtectedRefRuleInvalid, "push_min_role");
+    }
+    let rule = create_ok(&t, p, "refs/heads/main", Role::Developer).await;
+    let err = change(&t.db, &ctx("req-to-guest"), p, rule, Role::Guest)
+        .await
+        .expect_err("guest");
+    assert_reason(&err, ErrorCode::ProtectedRefRuleInvalid, "push_min_role");
+    // A rule is addressed within its project.
+    for err in [
+        change(&t.db, &ctx("req-other"), other, rule, Role::Owner)
+            .await
+            .expect_err("another project's rule"),
+        delete(&t.db, &ctx("req-other-del"), other, rule)
+            .await
+            .expect_err("another project's rule"),
+        delete(&t.db, &ctx("req-absent"), p, ProtectedRefId::new(9_999))
+            .await
+            .expect_err("absent"),
+    ] {
+        assert_reason(&err, ErrorCode::NotFound, "absent");
+        assert!(err.to_string().contains("resource=protected_ref"), "{err}");
+    }
+    let err = create(
+        &t.db,
+        &ctx("req-noproject"),
+        ProjectId::new(9_999),
+        &pattern("refs/heads/main"),
+        Role::Owner,
+    )
+    .await
+    .expect_err("unknown project");
+    assert_reason(&err, ErrorCode::NotFound, "absent");
+    assert!(err.to_string().contains("resource=project"), "{err}");
+    assert_eq!(rule_count(&t, p).await, 1);
+    t.drop_now().await;
+}
+
+/// Two creates of one project at once: the project lock serializes them, so
+/// two patterns equal ignoring non-ASCII case (which the unique index cannot
+/// see) never both commit.
+#[tokio::test]
+async fn two_concurrent_duplicate_creates_make_one_rule() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let (a, b) = (pattern("refs/heads/ärger"), pattern("refs/heads/ÄRGER"));
+    let (ctx_a, ctx_b) = (ctx("req-a"), ctx("req-b"));
+    let (ra, rb) = tokio::join!(
+        create(&t.db, &ctx_a, p, &a, Role::Developer),
+        create(&t.db, &ctx_b, p, &b, Role::Developer),
+    );
+    let refused: Vec<_> = [ra, rb].into_iter().filter_map(Result::err).collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_reason(
+        &refused[0],
+        ErrorCode::ProtectedRefPatternTaken,
+        "duplicate_pattern",
+    );
+    assert_eq!(rule_count(&t, p).await, 1);
+    t.drop_now().await;
+}
+
+/// A stored pattern or role the parser refuses (written outside forge-db,
+/// past the database CHECKs that hold only the prefix and the length) is
+/// `FG-DB-0020`: never skipped, never matched loosely.
+#[tokio::test]
+async fn a_stored_rule_this_build_cannot_read_is_protected_ref_data_invalid() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let rule = create_ok(&t, p, "refs/heads/main", Role::Maintainer).await;
+    // A pattern with two wildcards passes the CHECKs (prefix, length).
+    commit_sql(
+        &t,
+        &[
+            audit("project", p.get(), "succeeded"),
+            format!(
+                "UPDATE forge.protected_refs SET pattern = 'refs/heads/*/*' WHERE id = {}",
+                rule.get()
+            ),
+        ],
+    )
+    .await
+    .expect("tamper the pattern");
+    let main = ref_name("refs/heads/main");
+    for err in [
+        levels_for(&t.db, p, &main).await.expect_err("levels"),
+        rules_for(&t.db, p).await.expect_err("snapshot"),
+        create(
+            &t.db,
+            &ctx("req-next"),
+            p,
+            &pattern("refs/heads/x"),
+            Role::Owner,
+        )
+        .await
+        .expect_err("create reads the rules"),
+        change(&t.db, &ctx("req-change"), p, rule, Role::Owner)
+            .await
+            .expect_err("change"),
+    ] {
+        assert_reason(
+            &err,
+            ErrorCode::ProtectedRefDataInvalid,
+            "stored_pattern_invalid",
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!("protected_ref_id={}", rule.get())),
+            "{text}"
+        );
+        assert!(
+            !text.contains("refs/heads/*/*"),
+            "the pattern is not logged: {text}"
+        );
+    }
+    // A role outside the three, with the CHECK dropped (this database is
+    // dropped after the test).
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.protected_refs DROP CONSTRAINT protected_refs_push_min_role; \
+         ALTER TABLE forge.protected_refs DISABLE TRIGGER USER; \
+         UPDATE forge.protected_refs SET pattern = 'refs/heads/main', push_min_role = 'guest' \
+           WHERE id = {}; \
+         ALTER TABLE forge.protected_refs ENABLE TRIGGER USER",
+        rule.get()
+    ))
+    .await;
+    let err = levels_for(&t.db, p, &main).await.expect_err("levels");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "stored_push_min_role_invalid",
+    );
+    let err = rules_for(&t.db, p).await.expect_err("snapshot");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefDataInvalid,
+        "stored_push_min_role_invalid",
+    );
+    t.drop_now().await;
+}
+
+/// The runbook's fix for FG-DB-0020 is to delete the row: `delete` must not
+/// parse it (D4 review HIGH). The audit row keeps the stored text, bounded
+/// and marked `stored_invalid`; `levels_for` works again afterwards.
+#[tokio::test]
+async fn a_rule_this_build_cannot_read_can_still_be_deleted() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let bad_pattern = create_ok(&t, p, "refs/heads/main", Role::Maintainer).await;
+    let bad_role = create_ok(&t, p, "refs/heads/dev", Role::Developer).await;
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.protected_refs DROP CONSTRAINT protected_refs_push_min_role; \
+         ALTER TABLE forge.protected_refs DISABLE TRIGGER USER; \
+         UPDATE forge.protected_refs SET pattern = 'refs/heads/*/*' WHERE id = {}; \
+         UPDATE forge.protected_refs SET push_min_role = 'emperor' WHERE id = {}; \
+         ALTER TABLE forge.protected_refs ENABLE TRIGGER USER",
+        bad_pattern.get(),
+        bad_role.get()
+    ))
+    .await;
+    let main = ref_name("refs/heads/main");
+    let err = levels_for(&t.db, p, &main)
+        .await
+        .expect_err("unreadable rules");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefDataInvalid);
+    delete(&t.db, &ctx("req-del-pattern"), p, bad_pattern)
+        .await
+        .expect("an unreadable pattern can be deleted");
+    delete(&t.db, &ctx("req-del-role"), p, bad_role)
+        .await
+        .expect("an unreadable role can be deleted");
+    for (request, rule, details) in [
+        (
+            "req-del-pattern",
+            bad_pattern,
+            json!({"protected_ref_id": bad_pattern.get(), "pattern": "refs/heads/*/*",
+                   "push_min_role": "maintainer", "stored_invalid": true}),
+        ),
+        (
+            "req-del-role",
+            bad_role,
+            json!({"protected_ref_id": bad_role.get(), "pattern": "refs/heads/dev",
+                   "push_min_role": "emperor", "stored_invalid": true}),
+        ),
+    ] {
+        assert_eq!(
+            audit_rows(&t, request).await,
+            vec![(
+                "protected_ref.deleted".to_owned(),
+                "project".to_owned(),
+                p.get(),
+                p.get()
+            )],
+            "{rule:?}"
+        );
+        let events = events_of(&t, request).await;
+        assert_eq!(events.len(), 1, "{request}");
+        assert_eq!(events[0].4, details, "{request}");
+    }
+    assert!(levels_for(&t.db, p, &main)
+        .await
+        .expect("readable again")
+        .is_empty());
+    assert_eq!(rule_count(&t, p).await, 0);
+    t.drop_now().await;
+}
+
+/// The pattern and ref vocabulary of forge-web's
+/// `adding_a_rule_never_loosens_protection` (wildcards over all branches,
+/// a literal `main`, `MA*` in another case, tags), generated: a prefix and
+/// a short tail over those letters, `*`, `/`, `-` and digits.
+fn rule_pattern() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    let tail = proptest::collection::vec(
+        prop::sample::select(vec!['m', 'a', 'i', 'n', 'M', 'A', 'v', '1', '*', '/', '-']),
+        0..6,
+    );
+    (
+        prop::sample::select(vec!["refs/heads/", "refs/tags/"]),
+        tail,
+    )
+        .prop_map(|(p, cs)| format!("{p}{}", cs.into_iter().collect::<String>()))
+}
+
+fn rule_ref() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    let tail = proptest::collection::vec(
+        prop::sample::select(vec!['m', 'a', 'i', 'n', 'M', 'A', 'v', '1', '/', '-']),
+        1..7,
+    );
+    (
+        prop::sample::select(vec!["refs/heads/", "refs/tags/"]),
+        tail,
+    )
+        .prop_map(|(p, cs)| format!("{p}{}", cs.into_iter().collect::<String>()))
+}
+
+fn push_role() -> impl proptest::strategy::Strategy<Value = Role> {
+    proptest::sample::select(vec![Role::Developer, Role::Maintainer, Role::Owner])
+}
+
+/// Property test (M1 phase 9 MR2): the snapshot a push loads once
+/// (`rules_for`) answers every ref exactly as `levels_for` does — the same
+/// roles, in the same order — so moving the push path to the snapshot can
+/// never drop a matching rule. Rule sets and refs come from a deterministic
+/// proptest runner; the rules are created through `create` (so only rules
+/// the commands accept), the refs are checked against both.
+#[tokio::test]
+async fn rules_for_matches_levels_for() {
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+    let t = FreshDb::migrated().await;
+    let segments: Vec<String> = (0..6).map(|n| format!("p{n}")).collect();
+    let segment_refs: Vec<&str> = segments.iter().map(String::as_str).collect();
+    let projects = project_of_alice(&t, &segment_refs).await;
+    let mut runner = TestRunner::deterministic();
+    let rules = proptest::collection::vec((rule_pattern(), push_role()), 0..14);
+    let refs = proptest::collection::vec(rule_ref(), 40);
+    let (mut compared, mut protected) = (0, 0);
+    for (n, created) in projects.iter().enumerate() {
+        let p = created.project_id;
+        let set = rules.new_tree(&mut runner).expect("rules").current();
+        for (k, (raw, role)) in set.iter().enumerate() {
+            let Ok(parsed) = RefPattern::parse(raw) else {
+                continue;
+            };
+            match create(&t.db, &ctx(&format!("req-prop-{n}-{k}")), p, &parsed, *role).await {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::ProtectedRefPatternTaken => {} // duplicate
+                Err(e) => panic!("{raw}: {e}"),
+            }
+        }
+        let snapshot = rules_for(&t.db, p).await.expect("snapshot");
+        let mut names = refs.new_tree(&mut runner).expect("refs").current();
+        names.extend(["refs/heads/main", "refs/heads/MAIN", "refs/tags/v1"].map(str::to_owned));
+        for raw in &names {
+            let Ok(name) = RefName::parse(raw) else {
+                continue;
+            };
+            let direct = levels_for(&t.db, p, &name).await.expect("levels");
+            assert_eq!(snapshot.levels(&name), direct, "{raw} in project {n}");
+            compared += 1;
+            if !direct.is_empty() {
+                protected += 1;
+            }
+        }
+    }
+    // The generators reach both protected and unprotected refs.
+    assert!(compared > 100, "{compared}");
+    assert!(
+        protected > 0 && protected < compared,
+        "{protected}/{compared}"
+    );
+    t.drop_now().await;
+}
+
+// ── M1 phase 8b MR8: the commands decided inside their transaction ──
+
+fn deny() -> ForgeError {
+    ForgeError::new(ErrorCode::Forbidden).with_context("reason", "test_denied")
+}
+
+async fn alice(t: &FreshDb) -> forge_core::UserId {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM forge.users WHERE username = 'alice'")
+        .fetch_one(&mut t.superuser().await)
+        .await
+        .map(forge_core::UserId::new)
+        .expect("alice")
+}
+
+#[tokio::test]
+async fn decided_protection_commands_hand_the_locked_rule_to_decide() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let viewer = alice(&t).await;
+    let main = pattern("refs/heads/main");
+    let (rule, seen) = create_decided(
+        &t.db,
+        &ctx("req-create"),
+        p,
+        viewer,
+        &main,
+        Role::Maintainer,
+        |f: &ProtectionFacts| Ok(*f),
+    )
+    .await
+    .expect("create");
+    assert_eq!(seen.rule, RuleState::New);
+    assert_eq!(seen.project.project, p);
+    assert_eq!(seen.project.access.role, Some(Role::Owner));
+    // The duplicate is a 409 after the decision.
+    let err = create_decided(
+        &t.db,
+        &ctx("req-dup"),
+        p,
+        viewer,
+        &pattern("refs/heads/MAIN"),
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("taken");
+    assert_reason(
+        &err,
+        ErrorCode::ProtectedRefPatternTaken,
+        "duplicate_pattern",
+    );
+    assert_eq!(
+        rule_state(&t.db, p, rule).await.expect("state"),
+        RuleState::Level(Role::Maintainer)
+    );
+    let (changed, seen) = change_decided(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        rule,
+        viewer,
+        Role::Owner,
+        |f| Ok(*f),
+    )
+    .await
+    .expect("change");
+    assert_eq!(seen.rule, RuleState::Level(Role::Maintainer));
+    assert_eq!(
+        changed,
+        RuleChange::Changed {
+            from: Role::Maintainer
+        }
+    );
+    let (same, ()) = change_decided(
+        &t.db,
+        &ctx("req-same"),
+        p,
+        rule,
+        viewer,
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect("unchanged");
+    assert_eq!(same, RuleChange::Unchanged);
+    let err = delete_decided(&t.db, &ctx("req-denied"), p, rule, viewer, |_| {
+        Err::<(), _>(deny())
+    })
+    .await
+    .expect_err("denied");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    let listed = list(&t.db, p).await.expect("list");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (
+            listed[0].id,
+            listed[0].push_min_role,
+            listed[0].pattern.as_str()
+        ),
+        (rule, Role::Owner, "refs/heads/main")
+    );
+    assert!(listed[0].created_at.ends_with('Z'));
+    delete_decided(&t.db, &ctx("req-delete"), p, rule, viewer, |f| {
+        assert_eq!(f.rule, RuleState::Level(Role::Owner));
+        Ok(())
+    })
+    .await
+    .expect("delete");
+    // An absent rule: decided first (as from = to = None), then 404.
+    for err in [
+        change_decided(
+            &t.db,
+            &ctx("req-gone-1"),
+            p,
+            rule,
+            viewer,
+            Role::Owner,
+            |f| {
+                assert_eq!(f.rule, RuleState::Absent);
+                Ok(())
+            },
+        )
+        .await
+        .map(drop)
+        .expect_err("gone"),
+        delete_decided(&t.db, &ctx("req-gone-2"), p, rule, viewer, |_| Ok(()))
+            .await
+            .expect_err("gone"),
+    ] {
+        assert_eq!(err.code(), ErrorCode::NotFound);
+    }
+    assert_eq!(
+        rule_state(&t.db, p, rule).await.expect("state"),
+        RuleState::Absent
+    );
+    for request in ["req-create", "req-change", "req-delete"] {
+        assert_eq!(audit_rows(&t, request).await.len(), 1, "{request}");
+        assert_eq!(events_of(&t, request).await.len(), 1, "{request}");
+    }
+    for request in [
+        "req-dup",
+        "req-same",
+        "req-denied",
+        "req-gone-1",
+        "req-gone-2",
+    ] {
+        assert!(audit_rows(&t, request).await.is_empty(), "{request}");
+    }
+    t.drop_now().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_rule_is_decided_as_owner_level_and_can_be_deleted() {
+    let t = FreshDb::migrated().await;
+    let p = web(&t).await;
+    let viewer = alice(&t).await;
+    let bad = create_ok(&t, p, "refs/heads/main", Role::Maintainer).await;
+    t.exec_superuser(&format!(
+        "ALTER TABLE forge.protected_refs DISABLE TRIGGER USER; \
+         UPDATE forge.protected_refs SET pattern = 'refs/heads/*/*' WHERE id = {}; \
+         ALTER TABLE forge.protected_refs ENABLE TRIGGER USER",
+        bad.get()
+    ))
+    .await;
+    assert_eq!(
+        rule_state(&t.db, p, bad).await.expect("state"),
+        RuleState::Unreadable
+    );
+    assert_eq!(
+        list(&t.db, p).await.expect_err("unreadable").code(),
+        ErrorCode::ProtectedRefDataInvalid
+    );
+    let err = change_decided(
+        &t.db,
+        &ctx("req-change"),
+        p,
+        bad,
+        viewer,
+        Role::Owner,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("unreadable");
+    assert_eq!(err.code(), ErrorCode::ProtectedRefDataInvalid);
+    delete_decided(&t.db, &ctx("req-delete"), p, bad, viewer, |f| {
+        assert_eq!(f.rule, RuleState::Unreadable);
+        Ok(())
+    })
+    .await
+    .expect("deleted");
+    assert_eq!(
+        events_of(&t, "req-delete").await[0].4["stored_invalid"],
+        true
+    );
+    t.drop_now().await;
+}

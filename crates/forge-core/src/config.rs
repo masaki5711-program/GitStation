@@ -14,17 +14,30 @@ use std::time::Duration;
 
 use forge_errors::{ErrorCode, ForgeError};
 
+mod api;
 mod audit;
+mod auth;
 mod database;
+mod git_http;
+mod hosting;
 mod keys;
 mod secret;
+mod server_limits;
 mod tls;
+mod web;
 
+pub use api::ApiConfig;
+pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
+pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
+pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
+pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
 pub use secret::{DatabaseUrl, Secret};
+pub use server_limits::ServerLimitsConfig;
 pub use tls::TlsMode;
+pub use web::{BaseUrl, WebConfig};
 
 /// Environment prefixes owned by the configuration: an unknown variable
 /// under one of them is a typo. Other `FORGE_*` variables (for example the
@@ -33,7 +46,13 @@ const NAMESPACES: &[&str] = &[
     "FORGE_SERVER_",
     "FORGE_STORAGE_",
     "FORGE_DATABASE_",
+    "FORGE_API_",
     "FORGE_AUDIT_",
+    "FORGE_GIT_",
+    "FORGE_HOSTING_",
+    // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
+    "FORGE_WEB_",
+    "FORGE_AUTH_",
 ];
 
 /// Variables that used to be configuration: setting one fails instead of
@@ -112,10 +131,33 @@ pub struct Config {
     pub server: ServerConfig,
     pub storage: StorageConfig,
     pub database: DatabaseConfig,
+    /// `api.*` (the cursor keys, M1 phase 8b MR6).
+    pub api: ApiConfig,
     pub audit: AuditConfig,
+    /// `git.http.*` (Smart HTTP limits, M1 phase 9 MR3).
+    pub git_http: GitHttpConfig,
+    /// `hosting.*` (the deletion grace period, D5 MR3; the purge period, D5 MR4).
+    pub hosting: HostingConfig,
+    /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
+    pub web: WebConfig,
+    /// `auth.oidc.*` (the browser sign-in, M2 MR4).
+    pub auth: AuthConfig,
 }
 
 impl Config {
+    /// Rules across sections: a server read-idle timeout shorter than the
+    /// git idle timeout would cut a slow Smart HTTP body before git's own
+    /// (documented) idle limit.
+    fn validate_across(self) -> Result<Self, ForgeError> {
+        if self.server.limits.read_idle_timeout < self.git_http.idle_timeout {
+            return Err(invalid(
+                "server.read_idle_timeout_ms",
+                "below_git_idle_timeout",
+            ));
+        }
+        Ok(self)
+    }
+
     /// The storage root; required by commands that touch repositories.
     pub fn storage_root(&self) -> Result<&Path, ForgeError> {
         self.storage
@@ -129,6 +171,8 @@ impl Config {
 pub struct ServerConfig {
     /// `host:port`, validated at load time.
     pub bind: String,
+    /// `server.*` connection limits (M1 phase 9 MR0).
+    pub limits: ServerLimitsConfig,
 }
 
 #[derive(Debug)]
@@ -178,26 +222,46 @@ fn read_file(path: &Path) -> Result<BTreeMap<&'static str, String>, ForgeError> 
         let Some(body) = body.as_table() else {
             return Err(invalid(section, "unknown_key"));
         };
-        for (name, value) in body {
-            let full = format!("{section}.{name}");
-            let Some(k) = KEYS.iter().find(|k| k.key == full) else {
-                return Err(invalid(&full, "unknown_key"));
-            };
-            let text = match value {
-                toml::Value::String(s) => s.as_str().into(),
-                toml::Value::Integer(i) if k.kind == Kind::Number => i.to_string(),
-                toml::Value::Boolean(b) if k.kind == Kind::Bool => b.to_string(),
-                toml::Value::Integer(_)
-                | toml::Value::Float(_)
-                | toml::Value::Boolean(_)
-                | toml::Value::Datetime(_)
-                | toml::Value::Array(_)
-                | toml::Value::Table(_) => return Err(invalid(k.key, "invalid")),
-            };
-            values.insert(k.key, text);
-        }
+        flatten(section, body, &mut values)?;
     }
     Ok(values)
+}
+
+/// `[section] key = value` and `[section.sub] key = value` (`git.http.*`)
+/// into `section[.sub].key → text`. A table is accepted only where some key
+/// continues below it.
+fn flatten(
+    prefix: &str,
+    body: &toml::Table,
+    values: &mut BTreeMap<&'static str, String>,
+) -> Result<(), ForgeError> {
+    for (name, value) in body {
+        let full = format!("{prefix}.{name}");
+        if let toml::Value::Table(sub) = value {
+            let below = format!("{full}.");
+            if !KEYS.iter().any(|k| k.key.starts_with(&below)) {
+                return Err(invalid(&full, "unknown_key"));
+            }
+            flatten(&full, sub, values)?;
+            continue;
+        }
+        let Some(k) = KEYS.iter().find(|k| k.key == full) else {
+            return Err(invalid(&full, "unknown_key"));
+        };
+        let text = match value {
+            toml::Value::String(s) => s.as_str().into(),
+            toml::Value::Integer(i) if k.kind == Kind::Number => i.to_string(),
+            toml::Value::Boolean(b) if k.kind == Kind::Bool => b.to_string(),
+            toml::Value::Integer(_)
+            | toml::Value::Float(_)
+            | toml::Value::Boolean(_)
+            | toml::Value::Datetime(_)
+            | toml::Value::Array(_)
+            | toml::Value::Table(_) => return Err(invalid(k.key, "invalid")),
+        };
+        values.insert(k.key, text);
+    }
+    Ok(())
 }
 
 /// 1-based line and column of a byte offset.
@@ -258,9 +322,10 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         return Err(invalid("database.min_connections", "above_max"));
     }
 
-    Ok(Config {
+    Config {
         server: ServerConfig {
             bind: bind.to_owned(),
+            limits: server_limits(get)?,
         },
         storage: StorageConfig {
             root: text("storage.root")?.map(PathBuf::from),
@@ -294,8 +359,100 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
                 600_000,
             )?,
         },
+        api: ApiConfig::new(
+            password_path("api.cursor_keys_file")?,
+            positive(
+                get,
+                "api.list_max_concurrent",
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT,
+            )?,
+            positive(
+                get,
+                "api.list_max_concurrent_per_principal",
+                ApiConfig::DEFAULT_LIST_MAX_CONCURRENT_PER_PRINCIPAL,
+            )?,
+            Duration::from_secs(u64::from(positive(
+                get,
+                "api.cursor_max_age_s",
+                ApiConfig::DEFAULT_CURSOR_MAX_AGE_S,
+            )?)),
+        )?,
         audit: AuditConfig::new(password_path("audit.seal_keys_file")?),
-    })
+        git_http: git_http(get)?,
+        hosting: HostingConfig::load(get)?,
+        web: WebConfig::load(
+            get,
+            text("web.base_url")?,
+            password_path("web.session_key_file")?,
+        )?,
+        auth: AuthConfig::load(get)?,
+    }
+    .validate_across()
+}
+
+/// `server.*` connection limits, defaults from [`ServerLimitsConfig::DEFAULT`].
+fn server_limits<'a>(
+    get: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> Result<ServerLimitsConfig, ForgeError> {
+    let d = ServerLimitsConfig::DEFAULT;
+    let ms = |t: Duration| u32::try_from(t.as_millis()).unwrap_or(u32::MAX);
+    ServerLimitsConfig {
+        max_connections: positive(get, "server.max_connections", d.max_connections)?,
+        max_connections_per_peer: positive(
+            get,
+            "server.max_connections_per_peer",
+            d.max_connections_per_peer,
+        )?,
+        header_read_timeout: millis(
+            get,
+            "server.header_read_timeout_ms",
+            ms(d.header_read_timeout),
+        )?,
+        keep_alive_max: millis(get, "server.keep_alive_max_ms", ms(d.keep_alive_max))?,
+        keep_alive_max_requests: positive(
+            get,
+            "server.keep_alive_max_requests",
+            d.keep_alive_max_requests,
+        )?,
+        write_idle_timeout: millis(
+            get,
+            "server.write_idle_timeout_ms",
+            ms(d.write_idle_timeout),
+        )?,
+        read_idle_timeout: millis(get, "server.read_idle_timeout_ms", ms(d.read_idle_timeout))?,
+        body_read_timeout: millis(get, "server.body_read_timeout_ms", ms(d.body_read_timeout))?,
+    }
+    .validate()
+}
+
+/// `git.http.*`, defaults from [`GitHttpConfig::DEFAULT`].
+fn git_http<'a>(get: impl Fn(&str) -> Option<&'a str> + Copy) -> Result<GitHttpConfig, ForgeError> {
+    let d = GitHttpConfig::DEFAULT;
+    let ms = |t: Duration| u32::try_from(t.as_millis()).unwrap_or(u32::MAX);
+    GitHttpConfig {
+        fetch_request_max_bytes: positive(
+            get,
+            "git.http.fetch_request_max_bytes",
+            d.fetch_request_max_bytes,
+        )?,
+        idle_timeout: millis(get, "git.http.idle_timeout_ms", ms(d.idle_timeout))?,
+        timeout: millis(get, "git.http.timeout_ms", ms(d.timeout))?,
+        body_timeout: millis(get, "git.http.body_timeout_ms", ms(d.body_timeout))?,
+        max_object_wants: positive(get, "git.http.max_object_wants", d.max_object_wants)?,
+        want_check_timeout: millis(
+            get,
+            "git.http.want_check_timeout_ms",
+            ms(d.want_check_timeout),
+        )?,
+        max_streams: positive(get, "git.http.max_streams", d.max_streams)?,
+        max_streams_per_principal: positive(
+            get,
+            "git.http.max_streams_per_principal",
+            d.max_streams_per_principal,
+        )?,
+        push_max_bytes: positive(get, "git.http.push_max_bytes", d.push_max_bytes)?,
+    }
+    .validate()
 }
 
 /// `host:port` with a non-empty host and a numeric port (`[::1]:8080` too).

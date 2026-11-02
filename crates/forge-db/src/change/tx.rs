@@ -9,12 +9,13 @@
 
 use std::time::{Duration, Instant};
 
+use forge_core::DedupKey;
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::{PgConnection, Postgres};
 use sqlx::Transaction;
 
 use super::validate::{fit_sizes, fitted, sanitized, validate};
-use super::{ChangeContext, ChangeRecord, Committed, DomainEvent};
+use super::{AuditEntry, ChangeContext, ChangeRecord, Committed, DomainEvent};
 use crate::jobs::{enqueue_on, Enqueued, NewJob};
 use crate::{query_error, Db};
 
@@ -98,8 +99,8 @@ impl ChangeTx {
 
     /// Enqueue a job inside the change (ADR-0016 §7): it exists only if the
     /// change commits, and the insert counts against the change's deadline.
-    // First production caller: repository provisioning (step D4).
-    #[cfg_attr(not(test), expect(dead_code))]
+    // First production caller: `projects::create` (repository provisioning,
+    // step D4).
     pub(crate) async fn enqueue_job(&mut self, job: &NewJob) -> Result<Enqueued, ForgeError> {
         let (deadline, timeout) = (self.deadline, self.timeout);
         bounded(deadline, timeout, enqueue_on(&mut self.tx, job)).await
@@ -125,12 +126,13 @@ impl ChangeTx {
                 .iter()
                 .map(|e| e.payload.to_string())
                 .collect();
-            let details = record.audit.details.to_string();
+            let details: Vec<String> = record.audit_rows().map(|a| a.details.to_string()).collect();
             let (details_bytes, payload_bytes) = stored_sizes(&mut tx, &details, &payloads).await?;
-            let record = fit_sizes(record, details_bytes, &payload_bytes)?;
+            let record = fit_sizes(record, &details_bytes, &payload_bytes)?;
             // The details may have been replaced by a marker (≤ 8 KiB either way).
-            let details = record.audit.details.to_string();
-            insert_audit(&mut tx, &ctx, &record, &details).await?;
+            for audit in record.audit_rows() {
+                insert_audit(&mut tx, &ctx, audit, &audit.details.to_string()).await?;
+            }
             let mut ids = Vec::with_capacity(record.events.len());
             for (event, payload) in record.events.iter().zip(&payloads) {
                 match insert_event(&mut tx, &ctx, event, payload).await? {
@@ -146,26 +148,7 @@ impl ChangeTx {
             // Nothing of this change may stay. Dropping the transaction rolls
             // back too, so the change is still Deduped; a slow or failed
             // ROLLBACK points at a sick connection and is logged as such.
-            let failure = match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
-                Ok(Ok(())) => None,
-                Ok(Err(e)) => Some(query_error("change.rollback", e)),
-                Err(_) => Some(
-                    ForgeError::new(ErrorCode::DbQueryFailed)
-                        .with_context("query", "change.rollback")
-                        .with_context("reason", "rollback_timeout")
-                        .with_context("timeout_ms", ROLLBACK_TIMEOUT.as_millis()),
-                ),
-            };
-            if let Some(e) = failure {
-                tracing::warn!(
-                    target: "forge_db",
-                    request_id = %ctx.request_id,
-                    error_code = e.code().id(),
-                    action,
-                    error = %e,
-                    "rollback of a deduped change failed; the connection rolls back on release"
-                );
-            }
+            explicit_rollback(tx, &ctx, action).await;
             return Ok(Committed::Deduped);
         };
         match tokio::time::timeout(commit_timeout, tx.commit()).await {
@@ -176,6 +159,80 @@ impl ChangeTx {
                 .with_context("reason", "commit_outcome_unknown")
                 .with_context("timeout_ms", commit_timeout.as_millis())
                 .with_context("action", action)),
+        }
+    }
+}
+
+/// ROLLBACK now, bounded by [`ROLLBACK_TIMEOUT`]. Never left to `Drop`:
+/// sqlx 0.8 sends a dropped transaction's ROLLBACK from the task that
+/// returns the connection to the pool, so under load its row and advisory
+/// locks outlive the change (handoff D4: the seal job's `Busy`). A slow or
+/// failed ROLLBACK is logged (the connection still rolls back on release);
+/// the change's own outcome is unaffected.
+async fn explicit_rollback(tx: Transaction<'static, Postgres>, ctx: &ChangeContext, action: &str) {
+    let failure = match tokio::time::timeout(ROLLBACK_TIMEOUT, tx.rollback()).await {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(query_error("change.rollback", e)),
+        Err(_) => Some(
+            ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("query", "change.rollback")
+                .with_context("reason", "rollback_timeout")
+                .with_context("timeout_ms", ROLLBACK_TIMEOUT.as_millis()),
+        ),
+    };
+    if let Some(e) = failure {
+        tracing::warn!(
+            target: "forge_db",
+            request_id = %ctx.request_id,
+            error_code = e.code().id(),
+            action,
+            error = %e,
+            "rollback of a change failed; the connection rolls back on release"
+        );
+    }
+}
+
+/// How a change that ran its steps ends ([`ChangeTx::settle`]).
+pub(crate) enum Settle<T> {
+    /// Write the record and commit; the change was not deduplicated.
+    Commit(ChangeRecord, T),
+    /// Nothing to write (an unchanged update, an already-done state):
+    /// roll back explicitly.
+    Discard(T),
+}
+
+impl ChangeTx {
+    /// Roll the change back now (every exit that does not commit:
+    /// a denial, an error after `BEGIN`, an unchanged update), so its locks
+    /// are released before the caller answers. `action` names the change
+    /// in the log of a failed ROLLBACK.
+    pub(crate) async fn rollback(self, action: &str) {
+        explicit_rollback(self.tx, &self.ctx, action).await;
+    }
+
+    /// End a change whose steps returned `outcome`: commit a
+    /// [`Settle::Commit`] (its audit row must be recorded,
+    /// `require_recorded`), roll back explicitly on [`Settle::Discard`] and
+    /// on an error (which is returned unchanged).
+    pub(crate) async fn settle<T>(
+        self,
+        action: &'static str,
+        outcome: Result<Settle<T>, ForgeError>,
+    ) -> Result<T, ForgeError> {
+        match outcome {
+            Ok(Settle::Commit(record, value)) => {
+                let recorded = record.audit.action;
+                self.commit(record).await?.require_recorded(recorded)?;
+                Ok(value)
+            }
+            Ok(Settle::Discard(value)) => {
+                self.rollback(action).await;
+                Ok(value)
+            }
+            Err(e) => {
+                self.rollback(action).await;
+                Err(e)
+            }
         }
     }
 }
@@ -196,15 +253,18 @@ async fn bounded<T>(
     }
 }
 
-/// The stored sizes of the details and payloads, measured as the table
-/// CHECKs measure them.
+/// The stored sizes of the details (one per audit row) and payloads,
+/// measured as the table CHECKs measure them.
 async fn stored_sizes(
     conn: &mut PgConnection,
-    details: &str,
+    details: &[String],
     payloads: &[String],
-) -> Result<(i32, Vec<i32>), ForgeError> {
+) -> Result<(Vec<i32>, Vec<i32>), ForgeError> {
     sqlx::query_as(
-        "SELECT pg_catalog.pg_column_size($1::jsonb), ARRAY(SELECT          pg_catalog.pg_column_size(p.v::jsonb) FROM unnest($2::text[]) WITH ORDINALITY          AS p(v, n) ORDER BY p.n)",
+        "SELECT ARRAY(SELECT pg_catalog.pg_column_size(d.v::jsonb) FROM unnest($1::text[]) \
+         WITH ORDINALITY AS d(v, n) ORDER BY d.n), ARRAY(SELECT \
+         pg_catalog.pg_column_size(p.v::jsonb) FROM unnest($2::text[]) WITH ORDINALITY \
+         AS p(v, n) ORDER BY p.n)",
     )
     .bind(details)
     .bind(payloads)
@@ -216,10 +276,9 @@ async fn stored_sizes(
 async fn insert_audit(
     conn: &mut PgConnection,
     ctx: &ChangeContext,
-    record: &ChangeRecord,
+    audit: &AuditEntry,
     details: &str,
 ) -> Result<(), ForgeError> {
-    let audit = &record.audit;
     let (credential, claimed, key_id, assertion) = match &ctx.actor {
         super::Actor::UserViaServiceAccount {
             credential_id,
@@ -285,7 +344,7 @@ async fn insert_event(
          $12::jsonb) ON CONFLICT (dedup_key) DO NOTHING RETURNING event_id::text",
     )
     .bind(id.to_string())
-    .bind(event.event_type)
+    .bind(event.event_type.as_str())
     .bind(event.schema_version)
     .bind(event.aggregate_type)
     .bind(event.aggregate_id)
@@ -294,7 +353,7 @@ async fn insert_event(
     .bind(ctx.actor.user())
     .bind(ctx.actor.via())
     .bind(ctx.request_id.as_str())
-    .bind(event.dedup_key.as_deref())
+    .bind(event.dedup_key.as_ref().map(DedupKey::as_str))
     .bind(payload)
     .fetch_optional(&mut *conn)
     .await

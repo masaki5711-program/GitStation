@@ -1,0 +1,43 @@
+# cargo-deny configuration (CI job `supply-chain`; run locally with `cargo deny check`).
+# Licenses: the allow-list is what Cargo.lock uses today (checked with
+# `cargo deny list -l license` on 2026-10-31). A new license fails CI and
+# must be reviewed before it is added here.
+
+[graph]
+all-features = false
+
+[advisories]
+# No ignores. cargo-audit (.cargo/audit.toml) waives RUSTSEC-2023-0071 (rsa)
+# because it reads Cargo.lock, where sqlx-mysql still lists rsa; cargo-deny
+# walks the resolved feature graph, where rsa does not exist, so the waiver
+# is not needed here (adding it only yields "advisory was not encountered").
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
+[licenses.private]
+# The forge crates (LicenseRef-Proprietary, publish = false).
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

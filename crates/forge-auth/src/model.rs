@@ -5,47 +5,10 @@
 //! Inputs fail closed: a `Principal` cannot be built without stating how it
 //! authenticated and whether the account is active.
 
-// Role and Visibility live in forge-core (step D2: forge-db stores and loads
+// Role, Visibility (D2) and Scope (D3) live in forge-core (forge-db stores and loads
 // them); re-exported here so the authorization API is unchanged.
 use forge_core::{RefName, UserId};
-pub use forge_core::{Role, Visibility};
-
-/// What a token may be used for. Scopes only narrow a role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Scope {
-    /// git clone / fetch.
-    ReadRepository,
-    /// git push (implies `ReadRepository`).
-    WriteRepository,
-    /// REST API reads.
-    ReadApi,
-    /// REST API reads and writes (implies `ReadApi`).
-    Api,
-    /// Lets an administrator's token use administrator rights. Without it a
-    /// token of an administrator acts as a normal user.
-    Admin,
-}
-
-impl Scope {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Scope::ReadRepository => "read_repository",
-            Scope::WriteRepository => "write_repository",
-            Scope::ReadApi => "read_api",
-            Scope::Api => "api",
-            Scope::Admin => "admin",
-        }
-    }
-
-    /// Whether holding `self` satisfies a requirement of `required`.
-    pub fn satisfies(self, required: Scope) -> bool {
-        self == required
-            || matches!(
-                (self, required),
-                (Scope::WriteRepository, Scope::ReadRepository) | (Scope::Api, Scope::ReadApi)
-            )
-    }
-}
+pub use forge_core::{Role, Scope, Visibility};
 
 /// How the caller authenticated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +27,9 @@ pub struct Principal {
     is_admin: bool,
     active: bool,
     credential: Credential,
+    /// The credential was issued for an AI agent (ADR-0017 §4.0; an
+    /// authorization input since M1 phase 8b MR7a).
+    agent: bool,
 }
 
 impl Principal {
@@ -74,6 +40,7 @@ impl Principal {
             is_admin: false,
             active: false,
             credential: Credential::Session,
+            agent: false,
         }
     }
 
@@ -89,7 +56,23 @@ impl Principal {
             is_admin,
             active,
             credential,
+            agent: false,
         }
+    }
+
+    /// The same caller, with a credential issued for an AI agent
+    /// (`tokens.is_agent`, ADR-0017 §4.0). Agents are denied the actions
+    /// ADR-0017 keeps for people (`ProjectVisibilityChange` since M1 phase
+    /// 8b MR7a; `ProtectedRefManage` and `MemberManage` since MR8).
+    #[must_use]
+    pub fn as_agent(mut self, agent: bool) -> Self {
+        self.agent = agent;
+        self
+    }
+
+    /// The credential was issued for an AI agent.
+    pub fn is_agent(&self) -> bool {
+        self.agent
     }
 
     pub fn user(&self) -> Option<UserId> {
@@ -202,8 +185,9 @@ pub enum MembershipScope {
 
 /// What is done to one membership.
 ///
-/// `from` is the member's current **effective** role, loaded from the
-/// database — never taken from the request. `Add` is only for a user who is
+/// `from` is the member's current **direct** role in the project or group
+/// (the membership the change acts on), loaded from the database inside the
+/// write transaction — never taken from the request (M1 phase 8b MR8). `Add` is only for a user who is
 /// not a member yet (an existing member is a `Change`, never an upsert).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MembershipChange {
@@ -213,6 +197,13 @@ pub enum MembershipChange {
     Change { from: Role, to: Role },
     /// Remove a member whose current role is `from`.
     Remove { from: Role },
+    /// Change (`to`) or remove (`to: None`) a user who is **not** a direct
+    /// member (M1 phase 8b MR8): decided like the least change that names
+    /// `to` (the caller needs Maintainer, and `to` must be at or below the
+    /// caller's role), so only a caller who may manage members learns that
+    /// the user is not one — the command then answers `FG-REPO-0010
+    /// not_member`.
+    Missing { to: Option<Role> },
 }
 
 /// What the action acts on.
@@ -239,12 +230,27 @@ pub enum Resource {
         update: RefUpdate,
         protection: Option<RefProtection>,
     },
-    /// Moving a project: the caller's role on the source project and on the
-    /// target group.
+    /// Moving or renaming a project (`ProjectTransfer`, ADR-0015): the
+    /// project as seen by the caller and where it goes. A rename is a move
+    /// to the current parent.
     Transfer {
         source: ProjectView,
-        target_role: Option<Role>,
+        target: TransferTarget,
     },
+    /// Moving or renaming a group (`GroupTransfer`, ADR-0015): the caller's
+    /// effective role on the group and where it goes.
+    GroupTransfer {
+        source_role: Option<Role>,
+        target: TransferTarget,
+    },
+    /// Changing a user's username and personal namespace path
+    /// (`UserRename`, ADR-0015).
+    UserRename {
+        target_user: UserId,
+    },
+    /// Releasing a namespace tombstone (`NamespaceTombstoneRelease`,
+    /// ADR-0015).
+    Tombstone(TombstoneRelease),
     /// Changing one membership. `removes_last_owner` is computed by the
     /// lookup layer: the change would leave the project or group without an
     /// Owner.
@@ -270,9 +276,176 @@ pub enum Resource {
     Token {
         owner: UserId,
     },
+    /// The web sessions of `owner` (`SessionList` / `SessionRevoke` on the
+    /// user's own route, `AdminSessionList` / `AdminSessionRevoke` on the
+    /// administration's; M2 MR6, ADR-0021 §17).
+    Session {
+        owner: UserId,
+    },
     /// A token about to be created for `owner` with these scopes.
     TokenRequest {
         owner: UserId,
         scopes: Vec<Scope>,
+    },
+    /// The admission of a person the IdP signed in (`SessionCreate`,
+    /// ADR-0021 §3): whether the ID token carries the access role, and the
+    /// account the identity is (or will be) linked to.
+    Admission {
+        access_role: bool,
+        account: AdmissionAccount,
+    },
+    /// A path that resolved to nothing (`PathResolve`): `FG-REPO-0005` for
+    /// every signed-in, active caller.
+    Unresolved(UnresolvedReason),
+    /// A path that resolved to a namespace (`PathResolve`), decided by
+    /// whether the caller can see it — not by a read role (ADR-0015).
+    Resolved {
+        via: ResolvedVia,
+        view: NamespaceView,
+    },
+}
+
+/// The account a signed-in identity belongs to, as the login's linking step
+/// found it (ADR-0021 §3, §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionAccount {
+    /// No user yet: the sign-in creates one.
+    New,
+    /// An active human.
+    Active,
+    /// A disabled user.
+    Disabled,
+    /// A bot or service account (never signs in to the web).
+    NotHuman,
+}
+
+impl AdmissionAccount {
+    pub const ALL: &'static [AdmissionAccount] = &[
+        AdmissionAccount::New,
+        AdmissionAccount::Active,
+        AdmissionAccount::Disabled,
+        AdmissionAccount::NotHuman,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+            Self::NotHuman => "not_human",
+        }
+    }
+}
+
+/// Why a path resolved to nothing a route can act on. All are answered
+/// with the same `FG-REPO-0005`; the difference reaches only the log's
+/// `reason` (ADR-0015 "判定の順序" step 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnresolvedReason {
+    /// No namespace and no tombstone at the path.
+    Absent,
+    /// A `deleted` tombstone, or a `moved` one whose target is gone.
+    TombstoneDeleted,
+    /// The path names a namespace of another kind than the route's scope
+    /// (`raw` on a group, M1 phase 8 MR4): treated as absent (step 5).
+    KindMismatch,
+}
+
+impl UnresolvedReason {
+    /// Every reason.
+    pub const ALL: &'static [UnresolvedReason] = &[
+        UnresolvedReason::Absent,
+        UnresolvedReason::TombstoneDeleted,
+        UnresolvedReason::KindMismatch,
+    ];
+
+    /// The log `reason`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UnresolvedReason::Absent => "absent",
+            UnresolvedReason::TombstoneDeleted => "tombstone_deleted",
+            UnresolvedReason::KindMismatch => "kind_mismatch",
+        }
+    }
+}
+
+/// How a path reached the namespace it resolved to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedVia {
+    /// The path is the namespace's current path.
+    Live,
+    /// The path is a `moved` tombstone pointing at the namespace (an
+    /// invisible target is logged as `tombstone_not_visible`).
+    Moved,
+}
+
+/// The namespace a path resolved to, as seen by the caller. The kind is the
+/// variant, so a kind and a view can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamespaceView {
+    /// A personal namespace: visible to every signed-in user.
+    User,
+    /// A group: visible to every signed-in user (as for `GroupRead`); `role`
+    /// is the caller's effective role on it.
+    Group { role: Option<Role> },
+    /// A project: visible to its members (Guest included), to every
+    /// signed-in user when internal, and to administrators.
+    Project(ProjectView),
+}
+
+impl NamespaceView {
+    /// `user` / `group` / `project` (the `namespaces.kind` values).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            NamespaceView::User => "user",
+            NamespaceView::Group { .. } => "group",
+            NamespaceView::Project(_) => "project",
+        }
+    }
+}
+
+/// Where a project or group moves to (ADR-0015 "移管は両側で判定する").
+/// Built by the lookup layer for the caller; a rename (the parent stays
+/// the same) is [`TransferTarget::CurrentParent`], decided here (D5 MR5
+/// review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferTarget {
+    /// A group, with the caller's effective role on it. `visible` is false
+    /// when the caller cannot see the target — and for a target that does
+    /// not exist, so both get the same `FG-REPO-0005`.
+    Group { role: Option<Role>, visible: bool },
+    /// A user's personal namespace.
+    PersonalNamespace { owner: UserId },
+    /// No parent: the top level. Never for a project; a group only by an
+    /// administrator.
+    TopLevel,
+    /// The parent the resource already has: a rename (ADR-0015 "名前だけの
+    /// 変更は、移動先 = 今の親として扱う"). Decided on the caller's role on
+    /// the resource alone — nobody gains a role, so the parent's role is
+    /// not needed — except at the top level (`top_level`: a top-level
+    /// group's rename), which stays an administrator's, like its creation.
+    CurrentParent { top_level: bool },
+}
+
+/// A tombstone about to be released (ADR-0015 "解放"), with the facts the
+/// decision needs as loaded for the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TombstoneRelease {
+    /// A `moved` tombstone whose target still exists: its **current**
+    /// Owner (or an administrator) releases it. `target_visible` is false
+    /// when the caller cannot see the target (the same 404 as no
+    /// tombstone).
+    Moved {
+        target_owner_role: Option<Role>,
+        target_visible: bool,
+    },
+    /// A `deleted` tombstone (or a `moved` one whose target is gone): the
+    /// recorded owner (`owner_at_write`) releases it only while active and
+    /// still Owner of the parent namespace (`caller_parent_role`);
+    /// otherwise, and always without a parent, administrators only.
+    Deleted {
+        recorded_owner: Option<UserId>,
+        caller_parent_role: Option<Role>,
+        has_parent: bool,
     },
 }
