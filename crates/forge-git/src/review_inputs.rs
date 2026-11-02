@@ -242,6 +242,73 @@ impl Git {
         Ok(Some(rows))
     }
 
+    /// Which of `ids` are not in the repository — one `cat-file
+    /// --batch-check` (the ids on stdin). R5 round 3: a pruned cut tip.
+    pub async fn missing_objects(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        ids: &[ObjectId],
+        timeout: Duration,
+    ) -> Result<std::collections::BTreeSet<ObjectId>, ForgeError> {
+        let mut missing = std::collections::BTreeSet::new();
+        if ids.is_empty() {
+            return Ok(missing);
+        }
+        let repo = Self::repo_dir(storage, id)?;
+        let mut input = String::with_capacity(ids.len() * 65);
+        for oid in ids {
+            input.push_str(Revision::object_id(oid.as_str())?.as_str());
+            input.push('\n');
+        }
+        let output = self
+            .command("cat-file")
+            .arg("--batch-check")
+            .repo(&repo)
+            .stdin(input.into_bytes())
+            .timeout(timeout)
+            .output()
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut parts = line.split_ascii_whitespace();
+            if let (Some(raw), Some("missing")) = (parts.next(), parts.next()) {
+                missing.insert(
+                    ObjectId::parse(raw)
+                        .map_err(|_| unexpected("cat-file", "unexpected_output"))?,
+                );
+            }
+        }
+        Ok(missing)
+    }
+
+    /// The objects every ref of the repository points at (hidden refs
+    /// included) — one `for-each-ref`.
+    pub async fn referenced_objects(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        timeout: Duration,
+    ) -> Result<std::collections::BTreeSet<ObjectId>, ForgeError> {
+        let repo = Self::repo_dir(storage, id)?;
+        let output = self
+            .command("for-each-ref")
+            .arg("--format=%(objectname)")
+            .repo(&repo)
+            .timeout(timeout)
+            .output()
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                ObjectId::parse(l.trim())
+                    .map_err(|_| unexpected("for-each-ref", "unexpected_output"))
+            })
+            .collect()
+    }
+
     /// The CODEOWNERS file of `commit` (module docs), at most `max_bytes`.
     pub async fn codeowners_file(
         &self,

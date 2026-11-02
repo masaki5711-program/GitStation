@@ -1138,3 +1138,122 @@ async fn the_approval_state_reports_a_conflict() {
     assert!(w.state().await.conflict);
     w.t.drop_now().await;
 }
+
+impl World {
+    /// One push record of `updates`, each `(ref, old, new)` with `new` all
+    /// zeros for a delete.
+    async fn record_push_raw(
+        &self,
+        who: UserId,
+        updates: &[(String, String, String)],
+        request_id: &str,
+    ) {
+        let zero = "0".repeat(40);
+        let push = PushRecord {
+            repository_id: self.repo,
+            updates: updates
+                .iter()
+                .map(|(name, old, new)| {
+                    let delete = *new == zero;
+                    PushedRef {
+                        name: RefName::parse(name).expect("ref"),
+                        old: oid(old),
+                        new: oid(new),
+                        kind: if delete {
+                            PushUpdateKind::Delete
+                        } else {
+                            PushUpdateKind::Create
+                        },
+                        commits: Vec::new(),
+                        total_commits: 0,
+                        total_commits_partial: false,
+                    }
+                })
+                .collect(),
+        };
+        let ctx = ChangeContext::new(Actor::User(who), RequestId::parse(request_id).expect("id"));
+        let recorded = repositories::record_push(&self.t.db, &ctx, &push)
+            .await
+            .expect("push record");
+        assert_eq!(recorded, forge_core::PushRecorded::Recorded);
+    }
+}
+
+/// R5 round 3 (HIGH): deleting 101 branches in one push leaves the record's
+/// ref list cut with nothing to keep (deletions reach nothing); it must not
+/// make every merge request's committers unknown.
+#[tokio::test]
+async fn deleting_many_branches_does_not_block_approvals() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let zero = "0".repeat(40);
+    let deletes: Vec<(String, String, String)> = (0..101)
+        .map(|n| {
+            (
+                format!("refs/heads/old{n:03}"),
+                w.base.clone(),
+                zero.clone(),
+            )
+        })
+        .collect();
+    w.record_push_raw(w.dave, &deletes, "req-push-deletes")
+        .await;
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    w.t.drop_now().await;
+}
+
+/// R5 round 3 (HIGH): twelve pushes of 1 000 tags each (unlisted rows past
+/// 10 000) on commits of the target must not block approvals.
+#[tokio::test]
+async fn many_tags_do_not_block_approvals() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let zero = "0".repeat(40);
+    for p in 0..12 {
+        let tags: Vec<(String, String, String)> = (0..1000)
+            .map(|n| (format!("refs/tags/v{p}.{n}"), zero.clone(), w.base.clone()))
+            .collect();
+        w.record_push_raw(w.dave, &tags, &format!("req-push-tags-{p}"))
+            .await;
+    }
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    w.t.drop_now().await;
+}
+
+/// R5 round 3 (MEDIUM): a cut push whose tip is no longer in the repository
+/// (pruned) and that no ref points at reaches nothing; it no longer makes
+/// every evaluation fail.
+#[tokio::test]
+async fn a_pruned_cut_tip_no_ref_points_at_is_dropped() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let gone = "e".repeat(40);
+    w.record_push_listing(
+        w.dave,
+        "gone",
+        (None, &gone),
+        (&[gone.as_str()], 25),
+        "req-push-gone",
+    )
+    .await;
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    w.t.drop_now().await;
+}
