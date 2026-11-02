@@ -60,7 +60,7 @@ jobs:
     # reset the forge_* login roles: the target must be loopback.
     services:
       postgres:
-        image: postgres:16
+        image: timescale/timescaledb:2.28.1-pg16 # same as ops/dev/compose.yml
         env:
           POSTGRES_USER: forge_dev
           POSTGRES_PASSWORD: forge_dev
