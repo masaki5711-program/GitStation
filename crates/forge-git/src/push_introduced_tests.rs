@@ -230,11 +230,16 @@ async fn the_snapshot_reads_hidden_refs_and_skips_symbolic_refs() {
         None,
     );
     let before = snapshot(&f).await;
-    let mut tips: Vec<&str> = before.tips().iter().map(String::as_str).collect();
-    tips.sort_unstable();
-    let mut want = vec![base.as_str(), pinned.as_str()];
+    let tips: Vec<String> = before.tip_hexes().collect();
+    let mut want = vec![base.clone(), pinned.clone()];
     want.sort_unstable();
-    assert_eq!(tips, want, "each commit once, the symbolic ref left out");
+    assert_eq!(
+        tips, want,
+        "each commit once, sorted, the symbolic ref left out"
+    );
+    assert_eq!(before.len(), 2);
+    // The symbolic ref dangles (bob is not there yet): git lists it not at all.
+    assert_eq!(before.refs, 3, "main, the pin, the tag");
     let b1 = commit(&f.path, "1", Some(&pinned));
     plumb(&f.path, &["update-ref", "refs/heads/bob", &b1], None);
     // `alias` now resolves to b1; the snapshot never read it.
@@ -259,4 +264,21 @@ fn snapshot_lines_contribute_commits_only() {
         "symbolic"
     );
     assert_eq!(snapshot_tip("garbage"), None);
+}
+
+#[test]
+fn snapshot_tips_round_trip_as_sorted_unique_bytes() {
+    let mut s = RefSnapshot::default();
+    let b = "b".repeat(40);
+    let a = "0123456789abcdef0123456789abcdef01234567".to_owned();
+    for tip in [&b, &a, &b] {
+        s.add(tip);
+    }
+    s.seal();
+    assert_eq!(s.tip_hexes().collect::<Vec<_>>(), [a, b]);
+    let mut wide = RefSnapshot::default();
+    let long = "fe".repeat(32);
+    wide.add(&long);
+    wide.seal();
+    assert_eq!(wide.tip_hexes().collect::<Vec<_>>(), [long]);
 }

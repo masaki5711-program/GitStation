@@ -279,8 +279,10 @@ admitted proof.
   taken before receive-pack started and written as `push_commits` rows in
   the same record; every listing logs `forge.git.push_commits_listed`
   (`refs`, `listed`, `snapshot_ms`, `listing_ms`), an incomplete one
-  (`cap` 50 000, `deadline`, `snapshot_failed`, `git_failed`) one
-  `FG-GIT-0016` warn. git's probe request
+  (`cap` 20 000, `deadline`, `snapshot_failed`, `git_failed`) one
+  `FG-GIT-0016` warn. The final record attempt sends no commits (the audit
+  row survives a store slowed by the rows: `reason=record_fallback`); the
+  attempts before it end 10 s early to keep that time. git's probe request
   (`0000`) is answered without git. The token id that authenticated the
   request is kept as a request extension (`Dispatched::credential_id`) for
   the record.

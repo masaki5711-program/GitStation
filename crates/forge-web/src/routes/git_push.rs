@@ -108,6 +108,9 @@ pub const INTRODUCED_TIMEOUT: Duration = Duration::from_secs(30);
 /// Recording an applied push: attempts and their common budget.
 pub const RECORD_ATTEMPTS: u32 = 3;
 pub const RECORD_BUDGET: Duration = forge_core::PUSH_RECORD_BUDGET;
+/// The part of [`RECORD_BUDGET`] kept for the final attempt: the attempts
+/// before it end that much early (R5 review round 6).
+pub const RECORD_FINAL_RESERVE: Duration = Duration::from_secs(10);
 /// Waits between record attempts.
 const RECORD_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 /// Chunks of git's answer queued for the client.
@@ -969,7 +972,16 @@ impl Receiver {
     /// range holds an unlisted commit have unknown committers).
     async fn introduced(&mut self, record: &PushRecord) -> forge_core::PushedCommits {
         let before = std::mem::replace(&mut self.before, Ok(RefSnapshot::default()));
-        let refs = before.as_ref().map_or(0, |b| b.refs);
+        // The refs the snapshot read (a failed one says how far it got).
+        let refs = match &before {
+            Ok(b) => b.refs,
+            Err(e) => e
+                .context()
+                .iter()
+                .find(|(k, _)| *k == "refs")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0),
+        };
         let queries: Vec<CommitQuery> = record
             .updates
             .iter()
@@ -1182,6 +1194,7 @@ impl Receiver {
     /// `FG-GIT-0012` when every attempt failed.
     async fn record(&self, record: &PushRecord, commits: &forge_core::PushedCommits) {
         let deadline = Instant::now() + RECORD_BUDGET;
+        let unknown = forge_core::PushedCommits::unknown();
         let mut attempts = 0;
         let mut last = None;
         while attempts < RECORD_ATTEMPTS {
@@ -1190,27 +1203,55 @@ impl Receiver {
                     .get(attempts as usize - 1)
                     .copied()
                     .unwrap_or(Duration::from_secs(2));
+                // Before the final attempt the wait never eats its reserve.
+                let wait = if attempts + 1 >= RECORD_ATTEMPTS {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    wait.min(left.saturating_sub(RECORD_FINAL_RESERVE))
+                } else {
+                    wait
+                };
                 if Instant::now() + wait >= deadline {
                     break;
                 }
                 tokio::time::sleep(wait).await;
             }
             attempts += 1;
-            let left = deadline.saturating_duration_since(Instant::now());
+            let plan = attempt_plan(attempts, deadline.saturating_duration_since(Instant::now()));
+            if plan.timeout.is_zero() {
+                // No time left for a non-final attempt: straight to the final one.
+                continue;
+            }
+            let sent = if plan.with_commits { commits } else { &unknown };
             let outcome = match tokio::time::timeout(
-                left,
+                plan.timeout,
                 self.recorder
-                    .record_push_with_commits(&self.pusher, record, commits),
+                    .record_push_with_commits(&self.pusher, record, sent),
             )
             .await
             {
                 Ok(outcome) => outcome,
                 Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
                     .with_context("reason", "record_budget_exhausted")
-                    .with_context("timeout_ms", RECORD_BUDGET.as_millis())),
+                    .with_context("timeout_ms", plan.timeout.as_millis())),
             };
             match outcome {
                 Ok(recorded) => {
+                    // Deduped: an earlier attempt committed after all (its
+                    // rows with it), nothing was dropped.
+                    let dropped = !plan.with_commits
+                        && !commits.commits.is_empty()
+                        && recorded == PushRecorded::Recorded;
+                    if dropped {
+                        // The audit row is kept; the listed commits are not.
+                        self.log.failure(
+                            ForgeError::new(ErrorCode::PushCommitsIncomplete)
+                                .with_context("reason", "record_fallback")
+                                .with_context("listed", 0)
+                                .with_context("dropped", commits.commits.len())
+                                .with_context("attempts", attempts)
+                                .with_context("phase", "push_record"),
+                        );
+                    }
                     tracing::info!(
                         target: "forge_web::git",
                         request_id = %self.log.request_id,
@@ -1218,6 +1259,7 @@ impl Receiver {
                         refs = record.updates.len(),
                         attempts,
                         deduped = recorded == PushRecorded::Deduped,
+                        push_commits_dropped = dropped,
                         "forge.git.push_recorded"
                     );
                     return;
@@ -1235,6 +1277,31 @@ impl Receiver {
                 .with_context("reason", "record_budget_exhausted")
         });
         self.log.failure(record.failed(cause, attempts));
+    }
+}
+
+/// One record attempt's plan (R5 review round 6): the final attempt sends
+/// no commits (`PushedCommits::unknown`: no `push_commits` rows, the push
+/// marked incomplete) so the audit row is written even when the rows are
+/// what made the store too slow; the attempts before it end
+/// [`RECORD_FINAL_RESERVE`] early so the final one keeps that time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AttemptPlan {
+    with_commits: bool,
+    timeout: Duration,
+}
+
+fn attempt_plan(attempt: u32, left: Duration) -> AttemptPlan {
+    if attempt >= RECORD_ATTEMPTS {
+        AttemptPlan {
+            with_commits: false,
+            timeout: left,
+        }
+    } else {
+        AttemptPlan {
+            with_commits: true,
+            timeout: left.saturating_sub(RECORD_FINAL_RESERVE),
+        }
     }
 }
 

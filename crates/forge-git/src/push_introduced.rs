@@ -18,7 +18,6 @@
 //! Object ids reach git only on stdin, validated; `--end-of-options` ends
 //! the options defensively.
 
-use std::collections::HashSet;
 use std::time::Duration;
 
 use forge_core::{ObjectId, RepoId};
@@ -42,20 +41,73 @@ pub struct Introduced {
     pub reason: Option<&'static str>,
 }
 
+/// One tip as raw bytes: a SHA-1 id in the first 20 bytes (zero-padded),
+/// a SHA-256 id in all 32 (the repository's format decides; one format per
+/// repository).
+type Tip = [u8; 32];
+
 /// The ref tips before a push: every ref's commit (tags peeled), each
-/// commit once.
+/// commit once — sorted raw bytes, 32 per tip (review round 6: no string
+/// and no hash set per ref; a million refs hold at most 32 MB).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RefSnapshot {
-    tips: Vec<String>,
+    tips: Vec<Tip>,
+    /// Hex digits per id (40 or 64; 0 while empty).
+    width: usize,
     /// The refs read (symbolic refs and refs to trees or blobs included).
     pub refs: usize,
 }
 
 impl RefSnapshot {
-    /// The distinct commits the refs pointed at.
-    pub fn tips(&self) -> &[String] {
-        &self.tips
+    /// The number of distinct commits the refs pointed at.
+    pub fn len(&self) -> usize {
+        self.tips.len()
     }
+
+    /// No ref pointed at a commit.
+    pub fn is_empty(&self) -> bool {
+        self.tips.is_empty()
+    }
+
+    /// The distinct commits as hex, sorted.
+    pub fn tip_hexes(&self) -> impl Iterator<Item = String> + '_ {
+        self.tips.iter().map(|t| hex(t, self.width))
+    }
+
+    fn add(&mut self, tip: &str) {
+        let mut raw = [0u8; 32];
+        for (i, pair) in tip.as_bytes().chunks(2).enumerate() {
+            if let (Some(slot), [hi, lo]) = (raw.get_mut(i), pair) {
+                *slot = (nibble(*hi) << 4) | nibble(*lo);
+            }
+        }
+        self.width = tip.len();
+        self.tips.push(raw);
+    }
+
+    fn seal(&mut self) {
+        self.tips.sort_unstable();
+        self.tips.dedup();
+    }
+}
+
+fn nibble(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        // Unreachable for a validated id (`is_object_id`).
+        _ => 0,
+    }
+}
+
+fn hex(raw: &Tip, width: usize) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(width);
+    for b in raw.iter().take(width / 2) {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 0x0f)]));
+    }
+    out
 }
 
 /// The most refs a snapshot reads; past it the snapshot fails
@@ -115,7 +167,6 @@ impl Git {
             );
         };
         let mut lines = BufReader::new(stdout).lines();
-        let mut seen = HashSet::new();
         let mut snapshot = RefSnapshot::default();
         let read = async {
             while let Some(line) = lines.next_line().await? {
@@ -124,9 +175,7 @@ impl Git {
                     return Ok(false);
                 }
                 if let Some(tip) = snapshot_tip(&line) {
-                    if seen.insert(tip.to_owned()) {
-                        snapshot.tips.push(tip.to_owned());
-                    }
+                    snapshot.add(tip);
                 }
             }
             Ok::<bool, std::io::Error>(true)
@@ -136,26 +185,30 @@ impl Git {
         match read {
             Ok(Ok(true)) => {
                 stream.finish().await?;
+                snapshot.seal();
                 Ok(snapshot)
             }
             Ok(Ok(false)) => {
                 stream.stop_early().await?;
                 Err(ForgeError::new(ErrorCode::Internal)
                     .with_context("reason", "ref_snapshot_too_large")
-                    .with_context("max_refs", MAX_SNAPSHOT_REFS))
+                    .with_context("max_refs", MAX_SNAPSHOT_REFS)
+                    .with_context("refs", snapshot.refs))
             }
             Ok(Err(e)) => {
                 stream.stop_early().await?;
                 Err(ForgeError::new(ErrorCode::GitProcessFailed)
                     .with_context("subcommand", "for-each-ref")
                     .with_context("reason", "stream_io_failed")
+                    .with_context("refs", snapshot.refs)
                     .with_source(e))
             }
             Err(_) => {
                 stream.stop_early().await?;
                 Err(ForgeError::new(ErrorCode::GitTimeout)
                     .with_context("subcommand", "for-each-ref")
-                    .with_context("timeout_ms", timeout.as_millis()))
+                    .with_context("timeout_ms", timeout.as_millis())
+                    .with_context("refs", snapshot.refs))
             }
         }
     }
@@ -212,9 +265,9 @@ impl Git {
         }
         // Everything reachable before the push: the snapshot's tips and the
         // old ids (tips of the snapshot too unless the ref moved between).
-        for tip in before.tips() {
+        for tip in before.tip_hexes() {
             stdin.push('^');
-            stdin.push_str(tip);
+            stdin.push_str(&tip);
             stdin.push('\n');
         }
         for u in updates {

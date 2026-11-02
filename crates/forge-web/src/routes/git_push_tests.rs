@@ -355,8 +355,9 @@ async fn an_incomplete_listing_logs_one_warn_with_its_reason() {
         seen: Mutex::new(Vec::new()),
     });
     let mut r = receiver(dir.path(), Arc::clone(&flaky) as Arc<dyn PushRecorder>);
-    r.before =
-        Err(ForgeError::new(ErrorCode::GitTimeout).with_context("subcommand", "for-each-ref"));
+    r.before = Err(ForgeError::new(ErrorCode::GitTimeout)
+        .with_context("subcommand", "for-each-ref")
+        .with_context("refs", 1234));
     r.snapshot_ms = 7;
     let (buf, _guard) = capture();
     let commits = r.introduced(&record()).await;
@@ -375,7 +376,7 @@ async fn an_incomplete_listing_logs_one_warn_with_its_reason() {
         "reason=snapshot_failed".to_owned(),
         format!("cause_code={}", ErrorCode::GitTimeout.id()),
         "listed=0".to_owned(),
-        "refs=0".to_owned(),
+        "refs=1234".to_owned(),
     ] {
         assert!(text.contains(&want), "{want}: {text}");
     }
@@ -388,4 +389,97 @@ async fn an_incomplete_listing_logs_one_warn_with_its_reason() {
     assert_eq!(listed[0]["complete"], false);
     assert!(listed[0]["listing_ms"].is_u64());
     assert!(listed[0]["refs"].is_u64());
+}
+
+/// Records what each attempt was sent; the first call stalls for `stall`.
+struct Slow {
+    stall: Duration,
+    sent: Mutex<Vec<(usize, bool)>>,
+}
+
+impl PushRecorder for Slow {
+    fn record_push<'a>(
+        &'a self,
+        _: &'a Pusher,
+        _: &'a PushRecord,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async move { Ok(PushRecorded::Recorded) })
+    }
+
+    fn record_push_with_commits<'a>(
+        &'a self,
+        _: &'a Pusher,
+        _: &'a PushRecord,
+        commits: &'a forge_core::PushedCommits,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async move {
+            let first = {
+                let mut sent = self.sent.lock().expect("lock");
+                sent.push((commits.commits.len(), commits.complete));
+                sent.len() == 1
+            };
+            if first {
+                tokio::time::sleep(self.stall).await;
+            }
+            Ok(PushRecorded::Recorded)
+        })
+    }
+}
+
+/// R5 review round 6: the attempts before the final one carry the listed
+/// commits and end RECORD_FINAL_RESERVE early; the final one carries none.
+#[test]
+fn the_final_record_attempt_sends_no_commits() {
+    let left = Duration::from_secs(30);
+    for attempt in 1..RECORD_ATTEMPTS {
+        let plan = attempt_plan(attempt, left);
+        assert!(plan.with_commits);
+        assert_eq!(plan.timeout, left - RECORD_FINAL_RESERVE);
+    }
+    let last = attempt_plan(RECORD_ATTEMPTS, left);
+    assert!(!last.with_commits);
+    assert_eq!(last.timeout, left);
+    assert_eq!(
+        attempt_plan(1, Duration::from_secs(5)).timeout,
+        Duration::ZERO,
+        "no time for a non-final attempt"
+    );
+}
+
+/// R5 review round 6: a first attempt stalled by the rows (DB under load)
+/// times out early; the final attempt, without the rows, still writes the
+/// audit row, and the dropped rows are said once (FG-GIT-0016).
+#[tokio::test(start_paused = true)]
+async fn a_stalled_record_keeps_the_audit_row_without_the_commits() {
+    let dir = tempfile::tempdir().expect("dir");
+    let slow = Arc::new(Slow {
+        stall: Duration::from_secs(120),
+        sent: Mutex::new(Vec::new()),
+    });
+    let r = receiver(dir.path(), Arc::clone(&slow) as Arc<dyn PushRecorder>);
+    let commits = forge_core::PushedCommits {
+        commits: vec![ObjectId::parse(&"b".repeat(40)).expect("oid")],
+        complete: true,
+    };
+    let (buf, _guard) = capture();
+    r.record(&record(), &commits).await;
+    let sent = slow.sent.lock().expect("lock").clone();
+    assert_eq!(sent.first(), Some(&(1, true)), "{sent:?}");
+    assert_eq!(sent.last(), Some(&(0, false)), "the final attempt: unknown");
+    let events = buf.events();
+    assert!(
+        events
+            .iter()
+            .all(|e| e["error_code"] != ErrorCode::PushRecordFailed.id()),
+        "{events:?}"
+    );
+    let dropped: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["error_code"] == ErrorCode::PushCommitsIncomplete.id())
+        .collect();
+    assert_eq!(dropped.len(), 1, "{events:?}");
+    assert!(dropped[0].to_string().contains("reason=record_fallback"));
+    assert!(events
+        .iter()
+        .any(|e| e["message"] == "forge.git.push_recorded" && e["push_commits_dropped"] == true));
 }
