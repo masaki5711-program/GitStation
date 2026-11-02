@@ -9,6 +9,7 @@ use super::{
     MergeRequestFacts,
 };
 use crate::change::{ChangeContext, ChangeTx, Settle};
+use crate::review::mergeability::request_check_on;
 use crate::review::{Row, StoredMergeRequest, COLUMNS};
 use crate::Db;
 
@@ -68,7 +69,9 @@ fn edits(current: &StoredMergeRequest, patch: &MergeRequestPatch) -> Vec<MergeRe
 /// open one, `FG-WEB-0006` when a CHECK refuses a value (a target equal to
 /// the source). One audit row and event per transition (`updated`,
 /// `draft_changed`), or [`EditOutcome::Unchanged`] (nothing written); the
-/// row as it stands after the transaction either way.
+/// row as it stands after the transaction either way. A retarget also
+/// requests a mergeability check (M3 R2: `unchecked`, the job enqueued in
+/// this transaction).
 pub async fn edit_mr_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -149,6 +152,13 @@ pub async fn edit_mr_decided<P>(
             .map(|c| c.transition().event_type())
             .collect();
         let record = record(project, changes, stored.revision)?;
+        if retargets {
+            // M3 R2 (ADR-0024 §3): the old status is about another target;
+            // `unchecked` now, checked again by the job.
+            let origin = ctx.request_id.clone(); // clone: the job keeps its origin request
+            tx.step(|c| async move { request_check_on(c, id, project, origin, None).await })
+                .await?;
+        }
         Ok(Settle::Commit(
             record,
             (EditOutcome::Changed(types), stored, decided),

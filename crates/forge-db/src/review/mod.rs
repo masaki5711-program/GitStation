@@ -6,7 +6,9 @@
 //! (`versions.rs`: the version job's [`record_mr_version`]), their hidden
 //! refs (`version_refs.rs`: the per merge request lock [`lock_version_refs`] and the
 //! administrator's [`purge_mr_version_refs_decided`]) and the
-//! `merge-request-refresh` subscriber (`refresh.rs`).
+//! `merge-request-refresh` subscriber (`refresh.rs`); M3 R2: the
+//! mergeability status and its job's SQL (`mergeability.rs`), the bases of
+//! a version ([`record_version_bases`]).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -31,18 +33,25 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::{read_query_error, Db};
 
 mod commands;
+pub mod mergeability;
 mod refresh;
 mod version_refs;
 pub mod versions;
 
+pub use mergeability::{
+    begin_check, mergeability, mergeability_job, mergeability_payload, mergeability_written,
+    record_check, request_check, CheckResult, CheckStart, CheckSubject, MergeabilityRequest,
+    Recorded, StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT,
+};
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use version_refs::{
     lock_version_refs, purge_mr_version_refs_decided, versions_snapshot, PurgeOutcome, RefsLock,
     VersionsSnapshot, REFS_LOCK_HOLD, REFS_LOCK_WAIT,
 };
 pub use versions::{
-    list_versions, record_mr_version, refresh_job, refresh_payload, refresh_target, RefreshRequest,
-    RefreshTarget, RefreshTrigger, StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+    list_versions, read_versions, record_mr_version, record_version_bases, refresh_job,
+    refresh_payload, refresh_target, RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion,
+    VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
 };
 
 pub use commands::{
@@ -201,6 +210,8 @@ pub async fn list(
     rows.into_iter().map(Row::parse).collect()
 }
 
+#[cfg(test)]
+mod mergeability_tests;
 #[cfg(test)]
 mod race_tests;
 #[cfg(test)]

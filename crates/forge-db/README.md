@@ -284,6 +284,24 @@ connection, mapping driver errors to registered codes, migrations
   `repository.pushed` for the open merge requests from the moved branches, or every open one
   when `refs_truncated`. The project purge deletes the versions. Tests
   `review/version_tests.rs`.
+- **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
+  `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
+  can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked
+  head / target pair, capped `conflicts`, `last_decided`; migration 20261108100000).
+  `request_check_on` (in the caller's transaction: `unchecked`, `check_seq + 1`, job
+  `merge_request.mergeability` deduplicated by `mr_mergeability:<id>:<seq>`) — called by the
+  edit command on a retarget, by the subscriber for the open merge requests targeting a
+  pushed or deleted branch (at most `MergeRequestRefresh::new(fanout)`, the rest
+  `defer_checks_on` + warn `forge.review.mergeability_deferred`), and by `request_check`
+  (the version job). `begin_check` (a stale seq is `Superseded`; else `checking`),
+  `record_check` (stored only while the seq is the latest; a can ⇄ cannot difference from
+  `last_decided` writes `merge_request.conflict_detected` / `conflict_resolved` with an
+  audit row, dedup `<prefix>:<id>:<seq>`; anything else commits through
+  `Settle::CommitDerived`, a derived-only commit), `mergeability` (read pool) /
+  `mergeability_written`. `record_version_bases` sets a version's `base_sha` /
+  `merge_base_sha` once (audit-only `merge_request.version_bases_recorded`);
+  `read_versions` (read pool). The project purge deletes the rows. Tests
+  `review/mergeability_tests.rs`.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

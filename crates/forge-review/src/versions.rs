@@ -22,6 +22,13 @@
 //! source branch pointed at only between two runs (pushed, then
 //! force-pushed away before the job read the tip) gets no version.
 //!
+//! 5. M3 R2 (ADR-0024 §1, §3), for an open merge request: the head
+//!    version's `base_sha` (the target's tip now) and `merge_base_sha` are
+//!    recorded once ([`forge_db::review::record_version_bases`], audit
+//!    only; a version recorded earlier keeps its bases), and a
+//!    mergeability check is requested unless the stored status already
+//!    answers this exact (head, target tip) pair.
+//!
 //! Every step is idempotent: a rerun finds the head already recorded
 //! (nothing written, no second event) and the refs already in place (git
 //! does not run). A ref that already holds the wanted value is success, not
@@ -34,15 +41,18 @@
 //!
 //! Browse caches: the sync calls `Browser::invalidate` for the repository
 //! when it holds one (`forge serve`: the purge). The worker holds no
-//! browser — its process has no browse cache, and the hidden refs are in
-//! neither the browse ref list (`refs/heads/`, `refs/tags/`) nor the reach
-//! check (`--branches --tags`), so no other process's cache depends on them.
+//! browser — its process has no browse cache. The hidden refs are not in
+//! the browse ref list; since M3 R2 a merge request's view reaches its own
+//! version refs (`ReachRoots::merge_request`), so `forge serve` may answer
+//! "not found" for a version the worker wrote within the last
+//! `refs_ttl` (5 s) — never the reverse: a purge (in `forge serve`)
+//! invalidates its own caches.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use forge_core::ids::MergeRequestId;
-use forge_core::{ObjectId, RefName, RepoId, RequestId};
+use forge_core::{MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::review::{self, RefreshRequest, RefsLock, VersionOutcome, VersionsSnapshot};
 use forge_db::Db;
@@ -170,6 +180,21 @@ impl VersionRefs {
         let timeout = git_budget(deadline, "branch_tip")?;
         self.git
             .read_ref(&self.storage, repo, branch, timeout)
+            .await
+    }
+
+    /// The merge base of `a` and `b` in `repo` (`None`: no common
+    /// history), the git call bounded by `deadline` too.
+    pub async fn merge_base(
+        &self,
+        repo: RepoId,
+        a: &ObjectId,
+        b: &ObjectId,
+        deadline: Deadline,
+    ) -> Result<Option<ObjectId>, ForgeError> {
+        let timeout = git_budget(deadline, "merge_base")?;
+        self.git
+            .merge_base(&self.storage, repo, a, b, timeout)
             .await
     }
 
@@ -304,6 +329,8 @@ pub struct RefreshReport {
     pub outcome: &'static str,
     pub version: Option<i64>,
     pub refs: Option<SyncReport>,
+    /// The mergeability check this run requested (its `check_seq`).
+    pub check_requested: Option<i64>,
 }
 
 fn outcome_name(outcome: &VersionOutcome) -> (&'static str, Option<i64>) {
@@ -350,6 +377,7 @@ async fn refresh_locked(
             outcome: "gone",
             version: None,
             refs: None,
+            check_requested: None,
         });
     };
     if !target.repository_ready {
@@ -390,6 +418,11 @@ async fn refresh_locked(
     // Also for a closed one: refs of versions recorded by an earlier
     // attempt that stopped before its sync are written now.
     let synced = refs.sync_locked(lock, repo, request_id).await?;
+    let check_requested = if stored.state == forge_core::MergeRequestState::Open {
+        after_version(db, refs, lock, mr, repo, request_id).await?
+    } else {
+        None
+    };
     tracing::info!(
         target: "forge_review",
         event = "forge.review.version_refreshed",
@@ -400,6 +433,7 @@ async fn refresh_locked(
         outcome,
         version,
         ref_changes = synced.map_or(0, |s| s.changes),
+        check_requested,
         duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "merge request versions refreshed"
     );
@@ -407,7 +441,74 @@ async fn refresh_locked(
         outcome,
         version,
         refs: synced,
+        check_requested,
     })
+}
+
+/// Step 5 (module docs): the head version's bases, then a mergeability
+/// check unless the stored status answers (head, target tip) already. The
+/// check's seq when one was requested.
+async fn after_version(
+    db: &Db,
+    refs: &VersionRefs,
+    lock: &RefsLock,
+    mr: MergeRequestId,
+    repo: RepoId,
+    request_id: &RequestId,
+) -> Result<Option<i64>, ForgeError> {
+    let Some(now) = review::refresh_target(db, mr).await? else {
+        return Ok(None);
+    };
+    let current = &now.merge_request;
+    if current.state != forge_core::MergeRequestState::Open {
+        return Ok(None);
+    }
+    let Some(head) = current
+        .head_sha
+        .as_deref()
+        .map(ObjectId::parse)
+        .transpose()?
+    else {
+        return Ok(None);
+    };
+    let tip = refs
+        .branch_tip(repo, &current.target_branch, lock.deadline())
+        .await?;
+    if let Some(tip) = &tip {
+        let versions = review::list_versions(db, mr).await?;
+        let unrecorded = versions
+            .iter()
+            .find(|v| v.head_sha == head)
+            .filter(|v| v.base_sha.is_none() && v.merge_base_sha.is_none());
+        if let Some(version) = unrecorded {
+            let merge_base = refs.merge_base(repo, tip, &head, lock.deadline()).await?;
+            let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
+            ctx.actor_label = Some(ACTOR_LABEL.to_owned());
+            review::record_version_bases(
+                db,
+                &ctx,
+                mr,
+                version.version_no,
+                tip,
+                merge_base.as_ref(),
+            )
+            .await?;
+        }
+    }
+    let stored = review::mergeability_written(db, mr).await?;
+    let answered = stored.is_some_and(|s| {
+        let finished = match s.status {
+            MergeabilityStatus::CanBeMerged
+            | MergeabilityStatus::CannotBeMerged
+            | MergeabilityStatus::CheckFailed => true,
+            MergeabilityStatus::Unchecked | MergeabilityStatus::Checking => false,
+        };
+        finished && s.checked_head_sha.as_ref() == Some(&head) && s.checked_target_sha == tip
+    });
+    if answered {
+        return Ok(None);
+    }
+    review::request_check(db, mr, request_id.clone()).await // clone: the job keeps its origin
 }
 
 #[cfg(test)]

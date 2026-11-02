@@ -351,6 +351,51 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     .expect("push");
                 assert_eq!(done, VersionOutcome::Added { version: 1 });
             }
+            // M3 R2: the mergeability job (actor system) records a flip;
+            // the first decision (can) is set up under another request.
+            MergeRequestTransition::ConflictDetect | MergeRequestTransition::ConflictResolve => {
+                let (setup, now) = if *transition == MergeRequestTransition::ConflictDetect {
+                    (
+                        Some(forge_core::MergeabilityStatus::CanBeMerged),
+                        forge_core::MergeabilityStatus::CannotBeMerged,
+                    )
+                } else {
+                    // After the detect arm the last decision is "cannot".
+                    (None, forge_core::MergeabilityStatus::CanBeMerged)
+                };
+                let oid = |c: char| forge_core::ObjectId::parse(&c.to_string().repeat(40));
+                let check = |status| CheckResult {
+                    status,
+                    reason: None,
+                    head: oid('a').ok(),
+                    target: oid('b').ok(),
+                    conflicts: Vec::new(),
+                    conflicts_truncated: false,
+                };
+                let origin = RequestId::parse("req-setup").expect("id");
+                if let Some(first) = setup {
+                    let seq = request_check(&t.db, drafted.id, origin.clone())
+                        .await
+                        .expect("request")
+                        .expect("open");
+                    record_check(&t.db, &system("req-setup"), drafted.id, seq, &check(first))
+                        .await
+                        .expect("setup");
+                }
+                let seq = request_check(&t.db, drafted.id, origin)
+                    .await
+                    .expect("request")
+                    .expect("open");
+                let done = record_check(&t.db, &system(&request), drafted.id, seq, &check(now))
+                    .await
+                    .expect("flip");
+                assert_eq!(
+                    done,
+                    Recorded::Stored {
+                        flip: Some(transition.event_type())
+                    }
+                );
+            }
         }
         let events = events_of(&t, &request).await;
         let types: Vec<&str> = events.iter().map(|e| e.0.as_str()).collect();

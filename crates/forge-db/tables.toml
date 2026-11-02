@@ -266,6 +266,13 @@ unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 R1b ──
 
+# ── M3 R2: mergeability of a merge request (ADR-0024 §3), derived from git ──
+[tables.merge_request_mergeability]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 R2 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

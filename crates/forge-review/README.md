@@ -61,6 +61,16 @@ merge request in place (ADR-0024 §1).
   it holds one); `Review::with_version_refs` and `purge_version_refs(request, proof, repo,
   versions) -> PurgeOutcome` (`src/purge.rs`) (`MergeRequestVersionRefsPurge`, a human administrator's
   session; log `forge.review.version_refs_purged`).
+- M3 R2 (mergeability, ADR-0024 §3): `check(&Db, &Mergeability, MergeabilityRequest,
+  &RequestId) -> CheckReport` (`src/mergeability.rs`, the body of the job
+  `merge_request.mergeability`: the recorded head against the target's tip — `no_version`,
+  `target_missing`, `unrelated_histories` are `check_failed`; `merge-tree --write-tree`
+  decides can / cannot with at most 100 paths / 16 KiB stored; a git failure is stored as
+  `check_failed reason=git_timeout|git_busy|git_failed` and returned for the retry; log
+  `forge.review.mergeability_checked` with the paths). The version job now also records the
+  head version's bases once and requests a check unless the stored status answers the
+  current (head, target tip) pair (`RefreshReport::check_requested`). Reads
+  `Review::versions(mr)` and `Review::mergeability(mr)` (never enqueue).
 
 **Error codes owned**: FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index

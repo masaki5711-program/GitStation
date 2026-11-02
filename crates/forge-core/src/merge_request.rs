@@ -7,8 +7,9 @@
 //! lists them with that type, and forge-db's tests drive each one against
 //! the database and count the events (`every_merge_request_transition_emits_exactly_one_event`).
 //! R1a writes `opened`, `updated`, `draft_changed`, `closed` and
-//! `reopened`; R1b `pushed` (the version job); `merged` and the rest join
-//! with their writers.
+//! `reopened`; R1b `pushed` (the version job); R2 `conflict_detected` /
+//! `conflict_resolved` (the mergeability job, [`MergeabilityStatus`]);
+//! `merged` and the rest join with their writers.
 
 use crate::event_type::EventType;
 use crate::ids::{MergeRequestId, UserId};
@@ -79,6 +80,10 @@ pub enum MergeRequestTransition {
     Edit,
     /// A version was added (M3 R1b).
     Push,
+    /// The mergeability check flipped can -> cannot be merged (M3 R2).
+    ConflictDetect,
+    /// The mergeability check flipped cannot -> can be merged (M3 R2).
+    ConflictResolve,
 }
 
 impl MergeRequestTransition {
@@ -90,6 +95,8 @@ impl MergeRequestTransition {
         Self::DraftToggle,
         Self::Edit,
         Self::Push,
+        Self::ConflictDetect,
+        Self::ConflictResolve,
     ];
 
     /// The one event the transition publishes.
@@ -101,6 +108,8 @@ impl MergeRequestTransition {
             Self::DraftToggle => EventType::MergeRequestDraftChanged,
             Self::Edit => EventType::MergeRequestUpdated,
             Self::Push => EventType::MergeRequestPushed,
+            Self::ConflictDetect => EventType::MergeRequestConflictDetected,
+            Self::ConflictResolve => EventType::MergeRequestConflictResolved,
         }
     }
 }
@@ -156,6 +165,28 @@ pub enum MergeRequestChange {
         previous_head: Option<ObjectId>,
         pushed_by: Option<UserId>,
     },
+    /// `merge_request.conflict_detected` (M3 R2): check `check_seq` found
+    /// `head_sha` conflicting with the target at `target_sha` after the
+    /// last decided check had found it mergeable. `conflict_files`: how
+    /// many paths the check listed (`files_truncated`: more exist); the
+    /// paths themselves stay in the logs and the status, never in events.
+    ConflictDetected {
+        merge_request: MergeRequestId,
+        iid: i64,
+        check_seq: i64,
+        head_sha: ObjectId,
+        target_sha: ObjectId,
+        conflict_files: usize,
+        files_truncated: bool,
+    },
+    /// `merge_request.conflict_resolved` (M3 R2): the reverse flip.
+    ConflictResolved {
+        merge_request: MergeRequestId,
+        iid: i64,
+        check_seq: i64,
+        head_sha: ObjectId,
+        target_sha: ObjectId,
+    },
 }
 
 impl MergeRequestChange {
@@ -168,6 +199,8 @@ impl MergeRequestChange {
             Self::Closed { .. } => MergeRequestTransition::Close,
             Self::Reopened { .. } => MergeRequestTransition::Reopen,
             Self::Pushed { .. } => MergeRequestTransition::Push,
+            Self::ConflictDetected { .. } => MergeRequestTransition::ConflictDetect,
+            Self::ConflictResolved { .. } => MergeRequestTransition::ConflictResolve,
         }
     }
 
@@ -179,7 +212,9 @@ impl MergeRequestChange {
             | Self::DraftChanged { merge_request, .. }
             | Self::Closed { merge_request, .. }
             | Self::Reopened { merge_request, .. }
-            | Self::Pushed { merge_request, .. } => *merge_request,
+            | Self::Pushed { merge_request, .. }
+            | Self::ConflictDetected { merge_request, .. }
+            | Self::ConflictResolved { merge_request, .. } => *merge_request,
         }
     }
 
@@ -191,7 +226,8 @@ impl MergeRequestChange {
     /// The fixed prefix of the event's dedup key
     /// (`<prefix>:<merge_request_id>:<revision>`, server ids only;
     /// `merge_request_pushed:<merge_request_id>:<head_sha>` for a push,
-    /// ADR-0024 §6).
+    /// ADR-0024 §6; `<prefix>:<merge_request_id>:<check_seq>` for a
+    /// conflict flip, M3 R2).
     pub fn dedup_prefix(&self) -> &'static str {
         match self {
             Self::Opened { .. } => "merge_request_opened",
@@ -200,6 +236,8 @@ impl MergeRequestChange {
             Self::Closed { .. } => "merge_request_closed",
             Self::Reopened { .. } => "merge_request_reopened",
             Self::Pushed { .. } => "merge_request_pushed",
+            Self::ConflictDetected { .. } => "merge_request_conflict_detected",
+            Self::ConflictResolved { .. } => "merge_request_conflict_resolved",
         }
     }
 
@@ -207,7 +245,10 @@ impl MergeRequestChange {
     /// Updated `{"merge_request_id","iid","fields","target_branch"}` (`target_branch`:
     /// `{"from","to"}` or `null`), DraftChanged `{"merge_request_id","iid","draft"}`,
     /// Closed / Reopened `{"merge_request_id","iid"}`, Pushed
-    /// `{"merge_request_id","iid","version","head_sha","previous_head","pushed_by"}`.
+    /// `{"merge_request_id","iid","version","head_sha","previous_head","pushed_by"}`,
+    /// ConflictDetected `{"merge_request_id","iid","check_seq","head_sha","target_sha",
+    /// "conflict_files","files_truncated"}`, ConflictResolved
+    /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -269,6 +310,36 @@ impl MergeRequestChange {
                 "previous_head": previous_head.as_ref().map(ObjectId::as_str),
                 "pushed_by": pushed_by.map(UserId::get),
             }),
+            Self::ConflictDetected {
+                merge_request,
+                iid,
+                check_seq,
+                head_sha,
+                target_sha,
+                conflict_files,
+                files_truncated,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "check_seq": check_seq,
+                "head_sha": head_sha.as_str(),
+                "target_sha": target_sha.as_str(),
+                "conflict_files": conflict_files,
+                "files_truncated": files_truncated,
+            }),
+            Self::ConflictResolved {
+                merge_request,
+                iid,
+                check_seq,
+                head_sha,
+                target_sha,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "check_seq": check_seq,
+                "head_sha": head_sha.as_str(),
+                "target_sha": target_sha.as_str(),
+            }),
         }
     }
 }
@@ -305,6 +376,17 @@ pub enum MergeRequestVersionChange {
         iid: i64,
         versions: Vec<i64>,
     },
+    /// `merge_request.version_bases_recorded` (M3 R2, ADR-0024 §1): the
+    /// version job recorded version `version`'s `base_sha` (the target's
+    /// tip when the version was recorded) and `merge_base_sha` (`None`:
+    /// no common history). Set once (the versions guard).
+    BasesRecorded {
+        merge_request: MergeRequestId,
+        iid: i64,
+        version: i64,
+        base_sha: ObjectId,
+        merge_base_sha: Option<ObjectId>,
+    },
 }
 
 impl MergeRequestVersionChange {
@@ -312,7 +394,8 @@ impl MergeRequestVersionChange {
         match self {
             Self::HeadRestored { merge_request, .. }
             | Self::PurgedHeadPushed { merge_request, .. }
-            | Self::VersionRefsPurged { merge_request, .. } => *merge_request,
+            | Self::VersionRefsPurged { merge_request, .. }
+            | Self::BasesRecorded { merge_request, .. } => *merge_request,
         }
     }
 
@@ -322,12 +405,14 @@ impl MergeRequestVersionChange {
             Self::HeadRestored { .. } => "merge_request.head_restored",
             Self::PurgedHeadPushed { .. } => "merge_request.purged_head_pushed",
             Self::VersionRefsPurged { .. } => "merge_request.version_refs_purged",
+            Self::BasesRecorded { .. } => "merge_request.version_bases_recorded",
         }
     }
 
     /// HeadRestored `{"merge_request_id","iid","version","head_sha","previous_head"}`,
     /// PurgedHeadPushed `{"merge_request_id","iid","version","head_sha"}`,
-    /// VersionRefsPurged `{"merge_request_id","iid","versions"}`.
+    /// VersionRefsPurged `{"merge_request_id","iid","versions"}`,
+    /// BasesRecorded `{"merge_request_id","iid","version","base_sha","merge_base_sha"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::HeadRestored {
@@ -363,6 +448,72 @@ impl MergeRequestVersionChange {
                 "iid": iid,
                 "versions": versions,
             }),
+            Self::BasesRecorded {
+                merge_request,
+                iid,
+                version,
+                base_sha,
+                merge_base_sha,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "version": version,
+                "base_sha": base_sha.as_str(),
+                "merge_base_sha": merge_base_sha.as_ref().map(ObjectId::as_str),
+            }),
+        }
+    }
+}
+
+/// What the mergeability check last said about a merge request (M3 R2,
+/// ADR-0024 §3; the CHECK of `forge.merge_request_mergeability.status`).
+/// Only "can" and "cannot" are decisions: `unchecked`, `checking` and
+/// `check_failed` all mean "unknown" (the merge stops on
+/// `mergeability_unknown`, ADR-0024 §7), never "mergeable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MergeabilityStatus {
+    /// No check for the current head and target yet (new, retargeted, the
+    /// target moved, or deferred past the fan-out cap).
+    Unchecked,
+    /// The job is computing it.
+    Checking,
+    CanBeMerged,
+    /// A conflict (the reason is `conflict`).
+    CannotBeMerged,
+    /// The check could not decide (`reason`: `target_missing`,
+    /// `unrelated_histories`, `no_version`, or the FG-GIT failure).
+    CheckFailed,
+}
+
+impl MergeabilityStatus {
+    pub const ALL: &'static [MergeabilityStatus] = &[
+        Self::Unchecked,
+        Self::Checking,
+        Self::CanBeMerged,
+        Self::CannotBeMerged,
+        Self::CheckFailed,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unchecked => "unchecked",
+            Self::Checking => "checking",
+            Self::CanBeMerged => "can_be_merged",
+            Self::CannotBeMerged => "cannot_be_merged",
+            Self::CheckFailed => "check_failed",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|s| s.as_str() == raw)
+    }
+
+    /// `can_be_merged` / `cannot_be_merged`: a decision (the only states a
+    /// conflict event compares).
+    pub fn is_decided(self) -> bool {
+        match self {
+            Self::CanBeMerged | Self::CannotBeMerged => true,
+            Self::Unchecked | Self::Checking | Self::CheckFailed => false,
         }
     }
 }

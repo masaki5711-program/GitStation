@@ -13,6 +13,9 @@ fn version(n: i64, head: char, purged: bool) -> StoredVersion {
         head_sha: oid(head),
         pushed_by: None,
         refs_purged: purged,
+        base_sha: None,
+        merge_base_sha: None,
+        created_at: "2026-11-02T00:00:00Z".to_owned(),
     }
 }
 

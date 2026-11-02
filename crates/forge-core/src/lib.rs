@@ -43,7 +43,7 @@ pub use ids::{
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use merge_request::{
     MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
-    MergeRequestVersionChange,
+    MergeRequestVersionChange, MergeabilityStatus,
 };
 pub use move_details::{MoveSummary, RoleChange, TombstoneKind};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};

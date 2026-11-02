@@ -377,6 +377,7 @@ pub async fn create_decided<P>(
         Ok(match finish_create(&mut tx, &new, &segment).await? {
             Settle::Commit(record, created) => Settle::Commit(record, (created, decided)),
             Settle::Discard(created) => Settle::Discard((created, decided)),
+            Settle::CommitDerived(created) => Settle::CommitDerived((created, decided)),
         })
     }
     .await;

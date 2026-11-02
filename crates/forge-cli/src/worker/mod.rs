@@ -31,7 +31,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::{Config, SealKeys};
+use forge_core::config::{Config, ReviewConfig, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
@@ -94,7 +94,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             interval: cfg.hosting.purge_interval,
             session_interval: cfg.web.session_purge_interval,
         });
-        let result = run(&db, keys, &storage, purge, stopped).await;
+        let result = run(&db, keys, &storage, purge, &cfg.review, stopped).await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -159,11 +159,14 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
 // ── C5: the registered subscribers ──
 /// The subscribers this worker runs: `merge-request-refresh` (M3 R1b, the
 /// first in production: enqueues the version job on `repository.pushed`;
-/// registered at the head on the first start, ADR-0016 §1). The others
-/// (`notify`, `webhook-dispatch`, `work-item-sync`, …) join with their
-/// features.
-fn registry() -> Result<Registry, ForgeError> {
-    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh))
+/// registered at the head on the first start, ADR-0016 §1; M3 R2: it also
+/// enqueues the mergeability checks of a target push, at most
+/// `review.mergeability_fanout_max`). The others (`notify`,
+/// `webhook-dispatch`, `work-item-sync`, …) join with their features.
+fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
+    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh::new(
+        review.mergeability_fanout_max,
+    )))
 }
 // ── end C5 ──
 
@@ -301,6 +304,7 @@ pub(crate) async fn run(
     keys: Arc<SealKeys>,
     storage: &Storage,
     purge: Option<PurgeTask>,
+    review: &ReviewConfig,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
@@ -310,7 +314,7 @@ pub(crate) async fn run(
     run_all(
         db,
         runner,
-        registry()?,
+        registry(review)?,
         jobs::SHUTDOWN_GRACE,
         keys,
         purge,

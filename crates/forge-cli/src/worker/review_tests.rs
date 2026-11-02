@@ -29,7 +29,7 @@ use crate::worker::jobs::handlers;
 use crate::worker::provision::tests::{project, storage};
 use crate::worker::registry;
 
-fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
+pub(super) fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
     use std::io::Write as _;
     let mut child = Command::new("git")
         .arg("--git-dir")
@@ -70,7 +70,7 @@ fn commit(repo: &Path, content: &str) -> String {
     plumb(repo, &["commit-tree", &tree, "-m", "synthetic"], None)
 }
 
-fn hidden(repo: &Path) -> String {
+pub(super) fn hidden(repo: &Path) -> String {
     plumb(
         repo,
         &[
@@ -85,7 +85,7 @@ fn hidden(repo: &Path) -> String {
 /// Run every step the worker would until nothing is left: number the
 /// events, let each subscriber handle what waits for it, run every ready
 /// job. A job that fails fails the test (nothing here should retry).
-async fn drain(t: &FreshDb, runner: &JobRunner, registry: &Registry) {
+pub(super) async fn drain(t: &FreshDb, runner: &JobRunner, registry: &Registry) {
     loop {
         let mut progressed = false;
         let assigned = sequencer::run_once(&t.db, BatchSize::MAX, AuditSequencing::Skip)
@@ -173,7 +173,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
     for handler in handlers(&t.db, &storage).expect("handlers") {
         runner.register(handler).expect("register");
     }
-    let registry = registry().expect("registry");
+    let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
     for subscriber in registry.iter() {
         register(&t.db, subscriber.as_ref(), Start::Head)
             .await
@@ -320,7 +320,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
 /// refresh subscriber, so the worker starts its `subscribers` task.
 #[test]
 fn the_production_registry_starts_the_subscribers_task() {
-    let registry = registry().expect("registry");
+    let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(names, [REFRESH_SUBSCRIBER]);
     let tasks = crate::worker::tasks(&registry, None);

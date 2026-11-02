@@ -48,26 +48,55 @@ pub struct StoredVersion {
     pub pushed_by: Option<UserId>,
     /// Its refs were purged (secret removal): never written again.
     pub refs_purged: bool,
+    /// The target's tip when the version was recorded (M3 R2; `None`
+    /// until the version job recorded it, or when the target was missing).
+    pub base_sha: Option<ObjectId>,
+    /// The merge base of the head and `base_sha` (`None`: not recorded, or
+    /// no common history). A version's diff is `merge_base_sha..head_sha`.
+    pub merge_base_sha: Option<ObjectId>,
+    /// UTC, RFC 3339.
+    pub created_at: String,
 }
 
-/// `(version_no, head_sha, pushed_by, refs_purged)`.
-type VersionRow = (i64, String, Option<i64>, bool);
+/// `(version_no, head_sha, pushed_by, refs_purged, base_sha, merge_base_sha,
+/// created_at)`.
+type VersionRow = (
+    i64,
+    String,
+    Option<i64>,
+    bool,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 pub(super) const VERSION_COLUMNS: &str =
-    "version_no, head_sha, pushed_by, refs_purged_at IS NOT NULL";
+    "version_no, head_sha, pushed_by, refs_purged_at IS NOT NULL, base_sha, merge_base_sha, \
+     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')";
 
 fn stored_version(row: VersionRow, mr: MergeRequestId) -> Result<StoredVersion, ForgeError> {
-    let (version_no, head, pushed_by, refs_purged) = row;
-    let head_sha = ObjectId::parse(&head).map_err(|_| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "stored_head_sha_invalid")
-            .with_context("merge_request_id", mr.get())
-    })?;
+    let (version_no, head, pushed_by, refs_purged, base, merge_base, created_at) = row;
+    let oid = |raw: &str, reason: &'static str| {
+        ObjectId::parse(raw).map_err(|_| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", reason)
+                .with_context("merge_request_id", mr.get())
+        })
+    };
     Ok(StoredVersion {
         version_no,
-        head_sha,
+        head_sha: oid(&head, "stored_head_sha_invalid")?,
         pushed_by: pushed_by.map(UserId::new),
         refs_purged,
+        base_sha: base
+            .as_deref()
+            .map(|b| oid(b, "stored_base_sha_invalid"))
+            .transpose()?,
+        merge_base_sha: merge_base
+            .as_deref()
+            .map(|b| oid(b, "stored_merge_base_sha_invalid"))
+            .transpose()?,
+        created_at,
     })
 }
 
@@ -103,6 +132,24 @@ pub async fn list_versions(db: &Db, mr: MergeRequestId) -> Result<Vec<StoredVers
         versions_on(&mut conn, mr, "", QUERY).await
     })
     .await
+}
+
+/// Every version of `mr`, oldest first, on the read pool (the API). One
+/// bounded statement.
+pub async fn read_versions(db: &Db, mr: MergeRequestId) -> Result<Vec<StoredVersion>, ForgeError> {
+    const QUERY: &str = "review.versions_read";
+    let rows: Vec<VersionRow> = db
+        .within(QUERY, async {
+            sqlx::query_as(&format!(
+                "SELECT {VERSION_COLUMNS} FROM forge.merge_request_versions                  WHERE merge_request_id = $1 ORDER BY version_no"
+            ))
+            .bind(mr.get())
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| crate::read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter().map(|r| stored_version(r, mr)).collect()
 }
 
 /// What the version job works on.
@@ -431,4 +478,61 @@ async fn move_head(
         .map_err(|e| query_error("review.version_head", e))
     })
     .await
+}
+
+/// Record version `version`'s bases (M3 R2, ADR-0024 §1): `base` the
+/// target's tip and `merge_base` the merge base at the time the version job
+/// recorded it. Set once, together: a version whose `base_sha` is already
+/// set is left alone (`Ok(false)`, nothing written), so an older version
+/// keeps its bases when the target moves later. One audit-only
+/// `merge_request.version_bases_recorded` row (actor `ctx`: the worker's
+/// `system`). `Ok(false)` also when the version does not exist.
+pub async fn record_version_bases(
+    db: &Db,
+    ctx: &ChangeContext,
+    mr: MergeRequestId,
+    version: i64,
+    base: &ObjectId,
+    merge_base: Option<&ObjectId>,
+) -> Result<bool, ForgeError> {
+    const ACTION: &str = "merge_request.version_bases_recorded";
+    let mut tx = ChangeTx::begin(db, ctx).await?;
+    let outcome = async {
+        let written: Option<(i64, i64)> = tx
+            .step(|c| async move {
+                sqlx::query_as(
+                    "UPDATE forge.merge_request_versions v SET base_sha = $3, merge_base_sha = $4 \
+                     FROM forge.merge_requests m WHERE v.merge_request_id = $1 \
+                     AND v.version_no = $2 AND v.base_sha IS NULL AND v.merge_base_sha IS NULL \
+                     AND m.id = v.merge_request_id RETURNING m.project_id, m.iid",
+                )
+                .bind(mr.get())
+                .bind(version)
+                .bind(base.as_str())
+                .bind(merge_base.map(ObjectId::as_str))
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error("review.version_bases", e))
+            })
+            .await?;
+        let Some((project, iid)) = written else {
+            return Ok(crate::change::Settle::Discard(false));
+        };
+        let project = ProjectId::new(project);
+        let details = AuditDetails::MergeRequestVersion(MergeRequestVersionChange::BasesRecorded {
+            merge_request: mr,
+            iid,
+            version,
+            base_sha: base.clone(), // clone: the details own their values
+            merge_base_sha: merge_base.cloned(), // clone: as above
+        });
+        let record = ChangeRecord {
+            audit: audit_entry(project, &details),
+            affected: Vec::new(),
+            events: Vec::new(),
+        };
+        Ok(crate::change::Settle::Commit(record, true))
+    }
+    .await;
+    tx.settle(ACTION, outcome).await
 }
