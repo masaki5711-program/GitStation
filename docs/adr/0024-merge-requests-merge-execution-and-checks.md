@@ -606,6 +606,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
 | 仮（登録の順に決める） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
 | FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
 
 - 再利用: 権限の拒否は FG-AUTH-0003（エージェントは `reason=agent_token`、サービスアカウントは `service_account`、ボットは `bot`、ジョブの時点で失効した
@@ -796,3 +797,36 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 
 R4 へ: マージの要求で確かめ直しを積む・ロックの下での `merge-tree` の再計算（この表の状態は表示と早めの拒否だけ）、
 上限を超えて `unchecked` のままの MR の扱い。O3 へ: 判定のたびにできる参照されない木の、猶予つきの prune。
+
+### R2 の独立レビューで決めたこと（2026-11-02）
+
+独立レビュー（git-protocol・database・security・rust・silent-failure・pr-test）の HIGH 1 件と MEDIUM / LOW への対応。上の R2 の節と
+違えたところは **改訂** と書いた。
+
+- **`checking` のまま残らない（HIGH）**: `begin_check` の後にジョブが時間切れ・worker の停止・恒久的な失敗・デッドレターで終わると、
+  行が `checking` のまま残りえた。(a) ジョブが最終的に失敗する経路（恒久的な失敗、または最後の試行の失敗）で、その seq がまだ最新なら
+  `check_failed reason=job_failed` を書く（`forge_review::mergeability::fail`、`forge_db::review::fail_check`）。(b) worker の新しい
+  タスク `mergeability_sweep`（30 秒ごと）が、ジョブの時間切れ + リースの猶予（`STALE_AFTER`）より長く `checking` で、生きている
+  （queued / running の）ジョブが無い行を `check_failed reason=job_stale` にする（`reap_stale_checks`）。どちらも **新しいコード
+  FG-REVIEW-0003** MergeabilityNotChecked（warn、runbook `merge-request-mergeability`）でログに出す（**改訂**: 上の「新しいエラー
+  コードなし」。R2 は 409 を返さないが、決まらない判定をログと doctor で見分けるコードが要った。HTTP では返さない）。`forge doctor` に
+  `review.mergeability`（古い `checking`・ジョブの無い `unchecked` の件数、FG-REVIEW-0003 `reason=undecided`）を足した。
+- **古い決定を見せない（MEDIUM）**: 状態は `checked_head_sha` / `checked_target_sha` の組についての答えでしかない。新しい版を記録する
+  トランザクションで、決まっていた状態を `unchecked` に下げる（`downgrade_on`。`checking` の行は seq を残し、その結果は head が
+  違うので `record_check` が `Superseded` にする）。`GET …/mergeability` は、組が今の head と target の生きた先端（名前で ref の一覧から
+  読む。到達の確認も呼び出し元の上限も使わない）と違えば `unchecked` と `stale: true` を返し、古い理由と衝突の一覧を出さない。
+  **R4 のマージは、この表の状態を信じず、ロックの下で `checked_head` / `checked_target` を生きた先端と照らし直す**（さらに
+  `merge-tree` を計算し直す。§4）。`record_check` は、MR が閉じた・head が `begin_check` の時と違う結果も書かない。
+- **扇の上限の飢え（MEDIUM）**: 上限を超えて `unchecked` にした MR は、`mergeability_sweep` が生きているジョブの無い `unchecked` の
+  開いている MR を、最後の確認が古い順（`checked_at` が無いものが先）に 1 回 50 件ずつ確かめ直す（**改訂**: 上の「次の push・target
+  の変更・再オープンで確かめ直す」だけではない）。`defer_checks_on` は 1 回 5 000 件まで（`ORDER BY id` でロックの順を固定）。それも
+  超えた分は状態を変えず（読む側の古さの規則が守る）、error で FG-REVIEW-0003 `reason=fanout_deferred` を 1 回出す。
+- **答えになる `check_failed`（MEDIUM）**: 版のジョブが「保存済みの状態が今の組に答えている」とみなすのは、決定（can / cannot）と、
+  同じ組でやり直しても同じになる理由（`target_missing`・`unrelated_histories`・`no_version`。`CheckReason::is_deterministic`）の
+  `check_failed` だけ。`git_timeout` / `git_busy` / `git_failed` / `job_failed` / `job_stale` は確かめ直す。理由は `CheckReason` の enum。
+- **参照されないオブジェクト（MEDIUM）**: 判定の木・blob を消す仕組みはまだ無い（O3 で入れる予定）。runbook
+  `merge-request-mergeability` にディスクの増加、承認つきの手での `git prune --expire=<猶予>`、秘密の除去の後も判定が書いた blob が残る
+  ことを書き、計画 11 §9 に「O3 がマージされるまで M3 を完了にしない」を足した。
+- **小さな修正（LOW）**: 確かめ直しの要求で衝突の一覧を空にする（`checked_*` は最後に終わった確認として残す）、確認した head の版を
+  Purge したら状態を `unchecked` に戻し一覧を空にする、ログには保存した（上限つきの）パスと全体の件数だけを出す、`merge-tree` の
+  出力が一覧の終わりの後で切れたときは一覧を切れたとしない、`enqueue_on` が重複で入れなかったら warn、決まらない結果は warn で出す。
