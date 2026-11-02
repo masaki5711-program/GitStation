@@ -22,3 +22,26 @@ pub(super) async fn mergeability_check(db: &Db) -> Check {
         Err(e) => fail(NAME, e),
     }
 }
+
+const MERGES: &str = "review.merges";
+
+/// How much later than its bound an attempt counts as overdue: two
+/// reconciliation periods of `forge serve` (one may be in progress).
+const MERGE_MARGIN: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// `review.merges` (M3 R4 review round 1, FG-REVIEW-0009, runbook
+/// merge-execution): no live merge attempt past the reconciliation's bound
+/// (a count means `forge serve`'s reconciliation is not running or fails
+/// every pass), and no `failed` attempt of the last 7 days waiting for a
+/// person.
+pub(super) async fn merges_check(db: &Db) -> Check {
+    let t = forge_review::MergeTimeouts::default();
+    match forge_db::review::merges::health(db, t.idle, t.executing_after(), MERGE_MARGIN).await {
+        Ok(Some(h)) => match h.check() {
+            Ok(()) => ok(MERGES, "no merge attempt overdue or failed"),
+            Err(e) => fail(MERGES, e),
+        },
+        Ok(None) => skip(MERGES, "schema not migrated"),
+        Err(e) => fail(MERGES, e),
+    }
+}

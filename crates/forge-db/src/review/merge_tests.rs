@@ -679,3 +679,42 @@ async fn the_reconciliation_scan_rotates_attempts_it_could_not_settle() {
     assert_eq!(scan().await.expect("scan")[0].id, second.id);
     w.t.drop_now().await;
 }
+
+/// Review round 1: `forge doctor review.merges` sees a live attempt past
+/// the reconciliation's bound (the reconciliation is not running) and a
+/// recent `failed` one (a person decides).
+#[tokio::test]
+async fn doctor_sees_overdue_and_failed_merge_attempts() {
+    let w = world().await;
+    let attempt = request(&w, "req-merge").await.expect("merge");
+    let long = Duration::from_secs(3600);
+    let fine = merges::health(&w.t.db, long, long, long)
+        .await
+        .expect("health")
+        .expect("migrated");
+    assert!(fine.check().is_ok(), "{fine:?}");
+    let overdue = merges::health(&w.t.db, Duration::ZERO, Duration::ZERO, Duration::ZERO)
+        .await
+        .expect("health")
+        .expect("migrated");
+    assert_eq!(overdue.overdue, 1);
+    let err = overdue.check().expect_err("overdue");
+    assert_code(&err, ErrorCode::MergeExecutionFailed);
+    assert!(end_merge(
+        &w.t.db,
+        attempt.id,
+        &[MergeState::Queued],
+        MergeState::Failed,
+        "ref_state_unknown",
+        Some(ErrorCode::MergeExecutionFailed)
+    )
+    .await
+    .expect("end"));
+    let failed = merges::health(&w.t.db, long, long, long)
+        .await
+        .expect("health")
+        .expect("migrated");
+    assert_eq!((failed.overdue, failed.failed_recent), (0, 1));
+    assert!(failed.check().is_err());
+    w.t.drop_now().await;
+}

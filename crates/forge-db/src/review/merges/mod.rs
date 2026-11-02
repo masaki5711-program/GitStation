@@ -39,11 +39,13 @@ use crate::jobs::{self, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::{query_error, read_query_error, Db};
 
 mod credential;
+mod health;
 mod job;
 mod lock;
 mod request;
 
 pub use credential::{CredentialFacts, CredentialState};
+pub use health::{health, MergesHealth};
 pub use job::{
     end_merge, executing_elapsed, fence_merge, finish_merge, mark_reconcile_seen,
     merge_gate_decided, record_source_deleted, set_source_outcome, stuck_merges, GateOutcome,

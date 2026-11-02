@@ -65,7 +65,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 16] = [
+const DB_CHECKS: [&str; 17] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -91,6 +91,8 @@ const DB_CHECKS: [&str; 16] = [
     // ── end D4 MR3b ──
     // M3 R2: FG-REVIEW-0003.
     "review.mergeability",
+    // M3 R4: FG-REVIEW-0009 (the reconciliation keeps up).
+    "review.merges",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -221,6 +223,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
             .await;
     // ── end D4 MR3b ──
     let mergeability = review::mergeability_check(db).await;
+    let merges = review::merges_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -238,6 +241,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         provisioning,
         storage,
         mergeability,
+        merges,
     ]
 }
 
