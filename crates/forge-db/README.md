@@ -247,6 +247,23 @@ connection, mapping driver errors to registered codes, migrations
   the `push_min_role` of every rule whose pattern matches the ref ignoring case, in rule
   id order — feed it to `forge_auth::RefProtection::effective` (strictest wins); the
   push policy snapshot is built from it. One bounded read (≤ 101 rows) on the read pool.
+- `review` (M3 R1a, ADR-0024; the SQL of forge-review, plan 11 §11.2): reads
+  `get(&Db, ProjectId, iid) -> Option<StoredMergeRequest>` and `list(&Db, ProjectId,
+  Option<MergeRequestState>, before, limit)` (newest first, `MAX_PAGE` = 100, read pool);
+  commands `open_mr_decided` / `edit_mr_decided` / `close_mr_decided` / `reopen_mr_decided`
+  (named with `_mr_` so forge-hosting's `decided_callers.rs` needles never match; only
+  forge-review calls them, `only_forge_review_calls_the_review_commands`). Each locks the
+  project row, the merge request row, then the caller's roles and account, and calls
+  `decide` (`MergeRequestFacts { account, project, merge_request }`) before writing. Open
+  refuses a second open merge request for the same (project, source, target) under the
+  project lock (FG-REVIEW-0001 `open_exists`; the partial unique index
+  `merge_requests_one_open` answers `unique_index`), draws the iid from
+  `merge_request_counters` (`INSERT … ON CONFLICT DO UPDATE`, never `max(iid)+1`: the purge
+  deletes rows), then inserts. Edit (`MergeRequestPatch`: title, description, draft, target)
+  returns `EditOutcome::Changed(events)` or `Unchanged`; close / reopen `StateOutcome`.
+  Every change writes one `merge_request.*` audit row (resource `project`) and one event
+  (aggregate `merge_request`, integration class) per transition, deduplicated by
+  `<prefix>:<merge_request_id>:<revision>` (`revision` counts the row's changes).
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events
@@ -447,7 +464,16 @@ bots (trigger `project_members_no_bot`), DELETE allowed. `protected_refs`: CHECK
 the rest of `RefPattern::parse` is not in the database — `push_min_role` developer |
 maintainer | owner, unique index `protected_refs_project_pattern` on
 (project_id, lower(pattern)) (`pattern` is `COLLATE "C"`: ASCII case folding);
-tests `src/projects_schema_tests.rs`;
+tests `src/projects_schema_tests.rs`; (M3 R1a, `20261106100000`) `forge.merge_requests`
+and `forge.merge_request_counters` (audited on the project, resource `project` /
+`project_id`; `updated_at` unaudited; forge_app may DELETE for the purge): `iid` unique per
+project, both branches `refs/heads/*` and different (CHECKs), `state` open | merged |
+closed, `closed_at` / `closed_by` exactly while closed, `head_sha` NULL until R1b, the
+partial unique index `merge_requests_one_open`, and the guard trigger
+`merge_requests_state_forward` (`merge_requests_state_guard`, XF001, enabled ALWAYS,
+compared by doctor): `merged` is final, `closed` is reopened before it is merged, and the
+project, iid, author and source branch never change. `merge_request_versions` arrives with
+R1b. The purge deletes both tables' rows (`project.purged` counts `merge_requests_removed`);
 the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table
 (`guarded`, `kind`, `ro_columns`); rules for new migrations are in

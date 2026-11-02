@@ -49,6 +49,22 @@ lands (M1 phase 5).
   Option<ProtectedRefId>)`): the member (rule) is part of the id, so a proof
   for one cannot act on another; `from` is the member's **direct** role (the
   rule's stored level) as loaded, never the request's.
+- Merge requests (M3 R1a, ADR-0024 §12): `MergeRequestCreate` (Developer, for
+  oneself), `MergeRequestRead` / `MergeRequestList` (`read_api`, as `RepoBrowse`),
+  `MergeRequestUpdate` / `MergeRequestClose` / `MergeRequestReopen` (`api`; the
+  author while still reading the project, or Developer). `Resource::MergeRequest
+  { project, author, state, draft, source_branch, target_branch, edit:
+  MergeRequestEdit { target_branch, draft } }`; context `MergeRequestCtx::new /
+  edited(LoadedProject, LoadedMergeRequest { iid, author, state, draft,
+  source_branch, target_branch }[, edit])` (`Id = (ProjectId, Option<i64>)`:
+  the iid, `None` for a create). Every arm refuses branches outside
+  `refs/heads/*` (`not_a_branch`) and source = target (`source_equals_target`);
+  a merged one is never closed or reopened (`merged`); a new target or draft
+  flag needs it open (`not_open`); another's draft flag needs Maintainer
+  (`foreign_draft`). An invisible project is `FG-REPO-0005` like a missing iid.
+  Fixtures in `matrix_review.rs`; tests `merge_request_tests.rs`.
+  ADR-0024's `AccountKind` and `target_protection` arrive with the people-only
+  actions and `MergeRequestMerge` (R4 / R5): R1a's actions do not need them.
 - Agents (`Principal::as_agent`, ADR-0017 amendments MR7a / MR8) are refused
   `ProjectVisibilityChange`, `MemberManage` and `ProtectedRefManage`
   (`FG-AUTH-0003 reason=agent_token`, after visibility and scope, whatever the
