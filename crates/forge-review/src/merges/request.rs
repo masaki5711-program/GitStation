@@ -151,6 +151,25 @@ impl Review {
         }
         let target_tip = tips.pop().flatten();
         let source_tip = tips.pop().flatten();
+        // M3 R5: the approval evaluation's git facts at the requested head
+        // into the live target tip (the target's CODEOWNERS, never the
+        // merge request's own).
+        let asker = crate::approvals::Asker {
+            request_id: &request.request_id,
+            project,
+            repo: crate::ready(project, repo)?,
+        };
+        let approval_git = self
+            .review_git()?
+            .facts(
+                &self.db,
+                asker,
+                &current,
+                &ask.sha,
+                target_tip.as_ref(),
+                crate::approvals::READ_TIMEOUT,
+            )
+            .await?;
         let ctx = change_context(request, proof.principal(), user);
         let new = NewMerge {
             method,
@@ -206,6 +225,9 @@ impl Review {
                     method,
                     // Computed by the job under the lock.
                     ff_possible: None,
+                    approvals: approval_git
+                        .clone()
+                        .inputs(stored, sha, gate.approvals.clone()), // clone: the evaluation owns its inputs
                 };
                 evaluate_merge(&facts).map(drop).map_err(|reasons| {
                     if reasons.contains(&BlockReason::MergeabilityUnknown)
@@ -249,7 +271,7 @@ impl Review {
 }
 
 /// The lookup answered "no such branch" (`FG-REPO-0023 reason=ref_not_found`).
-fn is_ref_not_found(e: &ForgeError) -> bool {
+pub(crate) fn is_ref_not_found(e: &ForgeError) -> bool {
     e.context()
         .iter()
         .any(|(k, v)| *k == "reason" && v == "ref_not_found")

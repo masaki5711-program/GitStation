@@ -23,6 +23,7 @@ use forge_db::test_support::FreshDb;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
+use forge_review::approvals::ReviewGit;
 use forge_review::{
     check, refresh, CredentialRef, MergeAsk, MergeSettings, MergeTimeouts, Mergeability, Merger,
     NewFields, Review, StoredMerge, StoredMergeRequest, VersionRefs,
@@ -126,7 +127,8 @@ async fn world() -> World {
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &head], None);
     let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
-    let review = Review::new(t.db.clone(), Arc::new(browser.clone()));
+    let review = Review::new(t.db.clone(), Arc::new(browser.clone()))
+        .with_review_git(ReviewGit::new(git.clone(), storage.clone()));
     let merger =
         Merger::new(t.db.clone(), git.clone(), storage.clone()).with_browser(browser.clone());
     let proof = open_proof(

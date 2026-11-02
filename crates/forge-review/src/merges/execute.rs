@@ -87,11 +87,14 @@ pub(super) struct Decided {
     pub(super) scopes: Vec<String>,
 }
 
-/// The live tips the gate compares the attempt with.
-#[derive(Debug, Clone, Default)]
+/// The live tips the gate compares the attempt with, and the git facts of
+/// the approval evaluation at the attempt's head into that target tip (M3
+/// R5: read under the lock, ADR-0024 §4.2 step 4 / §9).
+#[derive(Debug, Clone)]
 pub(super) struct Tips {
     pub(super) source: Option<ObjectId>,
     pub(super) target: Option<ObjectId>,
+    pub(super) approvals: crate::approvals::GitFacts,
 }
 
 fn not_prepared(attempt: &StoredMerge) -> ForgeError {
@@ -161,6 +164,10 @@ pub(super) fn decide(
             return Err(head_changed("source_moved", head, tip.as_str()));
         }
     }
+    let approvals = tips
+        .approvals
+        .clone() // clone: each gate evaluates its own inputs
+        .inputs(stored, &attempt.head_sha, gate.approvals.clone()); // clone: as above
     let facts = MergeFacts {
         state: stored.state,
         draft: stored.draft,
@@ -169,6 +176,7 @@ pub(super) fn decide(
         mergeable,
         method: attempt.method,
         ff_possible,
+        approvals,
     };
     let clearance = evaluate_merge(&facts).map_err(|reasons| blocked(&reasons))?;
     let scopes = match &gate.credential.credential {
@@ -222,10 +230,13 @@ impl Merger {
         Ok(want.min(left))
     }
 
-    /// The tips of the source and the target branch (under the lock).
+    /// The tips of the source and the target branch, and the approval
+    /// evaluation's git facts at `attempt`'s head (under the lock; every
+    /// git call bounded by what is left of the lock's hold).
     async fn tips(
         &self,
         lock: &MergeLock,
+        attempt: &StoredMerge,
         repo: RepoId,
         mr: &StoredMergeRequest,
     ) -> Result<Tips, ForgeError> {
@@ -234,9 +245,31 @@ impl Merger {
             let name = name.clone(); // clone: each read owns its name
             async move { self.git.read_ref(&self.storage, repo, &name, timeout).await }
         };
+        let source = read(&mr.source_branch).await?;
+        let target = read(&mr.target_branch).await?;
+        let review_git = crate::approvals::ReviewGit::new(
+            self.git.clone(),     // clone: Arc handles
+            self.storage.clone(), // clone: the root path
+        );
+        let asker = crate::approvals::Asker {
+            request_id: &attempt.request_id,
+            project: attempt.project_id,
+            repo,
+        };
+        let approvals = review_git
+            .facts(
+                &self.db,
+                asker,
+                mr,
+                &attempt.head_sha,
+                target.as_ref(),
+                self.bounded(self.timeouts.read, lock)?,
+            )
+            .await?;
         Ok(Tips {
-            source: read(&mr.source_branch).await?,
-            target: read(&mr.target_branch).await?,
+            source,
+            target,
+            approvals,
         })
     }
 
@@ -332,7 +365,7 @@ impl Merger {
             MergeState::Prepared => {
                 // A run stopped after tx1b: decide again (nothing moves without
                 // both proofs), then the fence.
-                let tips = self.tips(lock, subject.repo, &subject.mr).await?;
+                let tips = self.tips(lock, &attempt, subject.repo, &subject.mr).await?;
                 let gate = self
                     .gate_facts(&attempt, &tips, Some(Mergeable::Clean), ff_known(&attempt))
                     .await;
@@ -421,7 +454,7 @@ impl Merger {
         attempt: &StoredMerge,
         subject: &Subject,
     ) -> Result<MergeReport, ForgeError> {
-        let tips = self.tips(lock, subject.repo, &subject.mr).await?;
+        let tips = self.tips(lock, attempt, subject.repo, &subject.mr).await?;
         // tx1a: decide before any object is written.
         let first = merges::merge_gate_decided(
             &self.db,
@@ -716,7 +749,7 @@ impl Merger {
                 MergeState::Executing,
             ));
         }
-        let tips = self.tips(lock, subject.repo, &subject.mr).await?;
+        let tips = self.tips(lock, attempt, subject.repo, &subject.mr).await?;
         let decided = match self
             .gate_facts(attempt, &tips, Some(Mergeable::Clean), ff_known(attempt))
             .await

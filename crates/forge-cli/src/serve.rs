@@ -119,7 +119,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 )
                 // M3 R3: inline positions and `outdated` read the versions'
                 // diffs through the same browse API (reach checks, limits).
-                .with_diffs(Arc::new(smart_http.browse.clone())), // clone: shares the caches
+                .with_diffs(Arc::new(smart_http.browse.clone())) // clone: shares the caches
+                // M3 R5: the approval evaluation's git reads (changed paths,
+                // the range, the target's CODEOWNERS).
+                .with_review_git(forge_review::approvals::ReviewGit::new(
+                    smart_http.git.clone(),     // clone: Arc handles
+                    smart_http.storage.clone(), // clone: the root path
+                )),
             )
             .with_smart_http(smart_http)
             .with_lists(

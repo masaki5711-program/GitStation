@@ -234,7 +234,12 @@ async fn world() -> World {
     )
     .with_smart_http(smart)
     .with_review(
-        Review::new(t.db.clone(), Arc::new(browser.clone())).with_version_refs(refs.clone()),
+        Review::new(t.db.clone(), Arc::new(browser.clone()))
+            .with_version_refs(refs.clone())
+            .with_review_git(forge_review::approvals::ReviewGit::new(
+                git.clone(),
+                storage.clone(),
+            )),
     );
     let router = forge_web::app(state, AppConfig::default()).expect("router");
     let merger =

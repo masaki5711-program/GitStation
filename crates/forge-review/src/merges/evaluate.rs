@@ -6,17 +6,21 @@
 //!
 //! M3 R4 knows the reasons its inputs exist for: `not_open`, `draft`,
 //! `merge_in_progress`, `source_branch_missing`, `mergeability_unknown`,
-//! `conflict`, `ff_not_possible`. Approvals and CODEOWNERS (R5), required
-//! checks and unresolved discussions (R6) join with their inputs (each a
-//! new variant: the matches below are exhaustive).
+//! `conflict`, `ff_not_possible`. M3 R5 adds the approvals
+//! (`approvals_missing`, `codeowner_approval_missing`,
+//! `codeowners_invalid`, `config_change_needs_maintainer_approval`,
+//! `changed_paths_unknown`; decided by [`crate::approvals::evaluate`] on
+//! [`MergeFacts::approvals`]). Required checks and unresolved discussions
+//! (R6) join with their inputs (each a new variant: the matches below are
+//! exhaustive).
 
 use forge_core::{CheckReason, MergeMethod, MergeRequestState, MergeabilityStatus, ObjectId};
 use forge_db::review::StoredMergeability;
 use forge_errors::{ErrorCode, ForgeError};
 
 /// What blocks a merge (ADR-0024 §7). The names go into the logs and the
-/// API unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// API unchanged; the details of the approval reasons go into `details`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockReason {
     NotOpen,
     Draft,
@@ -28,10 +32,36 @@ pub enum BlockReason {
     /// `fast_forward` and the target is at the head already (review round
     /// 1): nothing would move.
     NothingToMerge,
+    /// An applicable approval rule has fewer counted approvals than it
+    /// needs (M3 R5).
+    ApprovalsMissing {
+        rule: String,
+        required: u32,
+        counted: u32,
+    },
+    /// A changed path's CODEOWNERS rule has no counted approval by one of
+    /// its owners (M3 R5).
+    CodeownerApprovalMissing {
+        pattern: String,
+        owners: Vec<String>,
+    },
+    /// The target's CODEOWNERS file cannot be used (FG-REVIEW-0014).
+    CodeownersInvalid {
+        line: u32,
+        reason: &'static str,
+    },
+    /// A configuration path changed and no Maintainer (or higher) gave a
+    /// counted approval (ADR-0024 §8.7, ADR-0017 §2.7).
+    ConfigChangeNeedsMaintainerApproval,
+    /// The changed paths could not be read in full (ADR-0024 §9):
+    /// CODEOWNERS and the configuration rule cannot be decided.
+    ChangedPathsUnknown {
+        reason: &'static str,
+    },
 }
 
 impl BlockReason {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::NotOpen => "not_open",
             Self::Draft => "draft",
@@ -41,6 +71,40 @@ impl BlockReason {
             Self::Conflict => "conflict",
             Self::FfNotPossible => "ff_not_possible",
             Self::NothingToMerge => "nothing_to_merge",
+            Self::ApprovalsMissing { .. } => "approvals_missing",
+            Self::CodeownerApprovalMissing { .. } => "codeowner_approval_missing",
+            Self::CodeownersInvalid { .. } => "codeowners_invalid",
+            Self::ConfigChangeNeedsMaintainerApproval => "config_change_needs_maintainer_approval",
+            Self::ChangedPathsUnknown { .. } => "changed_paths_unknown",
+        }
+    }
+
+    /// The reason's detail for the logs and the API (`None` for the plain
+    /// ones): `rule=<name> required=<n> counted=<n>`, `pattern=<p>
+    /// owners=<@a,@b>`, `line=<n> reason=<r>`, `reason=<r>`.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ApprovalsMissing {
+                rule,
+                required,
+                counted,
+            } => Some(format!("rule={rule} required={required} counted={counted}")),
+            Self::CodeownerApprovalMissing { pattern, owners } => {
+                Some(format!("pattern={pattern} owners={}", owners.join(",")))
+            }
+            Self::CodeownersInvalid { line, reason } => {
+                Some(format!("line={line} reason={reason}"))
+            }
+            Self::ChangedPathsUnknown { reason } => Some(format!("reason={reason}")),
+            Self::NotOpen
+            | Self::Draft
+            | Self::MergeInProgress
+            | Self::SourceBranchMissing
+            | Self::MergeabilityUnknown
+            | Self::Conflict
+            | Self::FfNotPossible
+            | Self::NothingToMerge
+            | Self::ConfigChangeNeedsMaintainerApproval => None,
         }
     }
 }
@@ -70,6 +134,9 @@ pub struct MergeFacts {
     /// For `fast_forward`: whether the target's tip is an ancestor of the
     /// head (`None`: not computed yet; the job computes it).
     pub ff_possible: Option<bool>,
+    /// M3 R5: the approvals, the rules, CODEOWNERS, the changed paths and
+    /// the committers, as read for this decision.
+    pub approvals: crate::approvals::ApprovalInputs,
 }
 
 /// The proof that `evaluate_merge()` found nothing blocking. No public
@@ -115,6 +182,7 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
     if ff == Some(false) {
         reasons.push(BlockReason::FfNotPossible);
     }
+    reasons.extend(crate::approvals::evaluate(&facts.approvals).blocks);
     if reasons.is_empty() {
         Ok(MergeClearance {
             method: facts.method,
@@ -127,9 +195,18 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
 /// `FG-REVIEW-0007` MergeBlocked with `reasons` (comma-separated names).
 pub fn blocked(reasons: &[BlockReason]) -> ForgeError {
     let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();
-    ForgeError::new(ErrorCode::MergeBlocked)
+    let details: Vec<String> = reasons
+        .iter()
+        .filter_map(|r| r.detail().map(|d| format!("{}:{d}", r.as_str())))
+        .collect();
+    let e = ForgeError::new(ErrorCode::MergeBlocked)
         .with_context("reason", names.first().copied().unwrap_or("blocked"))
-        .with_context("reasons", names.join(","))
+        .with_context("reasons", names.join(","));
+    if details.is_empty() {
+        e
+    } else {
+        e.with_context("details", details.join(";"))
+    }
 }
 
 /// The stored mergeability as a decision for (`head`, `target_tip`): only a
@@ -174,6 +251,7 @@ mod tests {
             mergeable: Some(Mergeable::Clean),
             method: MergeMethod::MergeCommit,
             ff_possible: None,
+            approvals: crate::approvals::ApprovalInputs::nothing_required(),
         }
     }
 
@@ -201,6 +279,7 @@ mod tests {
             mergeable: Some(Mergeable::Unknown),
             method: MergeMethod::FastForward,
             ff_possible: Some(false),
+            approvals: crate::approvals::ApprovalInputs::nothing_required(),
         };
         let reasons = evaluate_merge(&facts).expect_err("blocked");
         let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();

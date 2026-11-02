@@ -43,6 +43,7 @@ use forge_errors::{ErrorCode, ForgeError};
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
 
 mod after_version;
+pub mod approvals;
 pub mod discussions;
 mod fields;
 pub mod mergeability;
@@ -147,6 +148,9 @@ pub struct Review {
     /// M3 R4: the merge methods allowed and the defaults (ADR-0024 §4.1;
     /// the defaults for every project until R6 adds the setting).
     merge_settings: merges::MergeSettings,
+    /// M3 R5: where the approval evaluation reads git (`None`: approving
+    /// and merging are `FG-SYS-0001 reason=review_git_unconfigured`).
+    review_git: Option<approvals::ReviewGit>,
 }
 
 impl std::fmt::Debug for Review {
@@ -254,6 +258,7 @@ impl Review {
             diffs: None,
             outdated_budget: outdated::OUTDATED_BUDGET,
             merge_settings: merges::MergeSettings::default(),
+            review_git: None,
         }
     }
 
