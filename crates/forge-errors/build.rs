@@ -34,8 +34,9 @@ struct Entry {
     retired: bool,
 }
 
-const AREAS: [&str; 10] = [
-    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI",
+// M3 R1a (ADR-0024, plan 11 §11.4): REVIEW for merge requests.
+const AREAS: [&str; 11] = [
+    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI", "REVIEW",
 ];
 
 fn main() {

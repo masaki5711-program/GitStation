@@ -1361,3 +1361,17 @@ cause = "Writing to standard output or standard error failed (a closed pipe, a f
 diagnosis = "The detail line carries `stream` (stdout or stderr) and the OS error kind. A command that changes state (`auth login`, `auth logout`, `api` with a body) has already done its work when this code appears: check with `gstn auth status`."
 fix = "Fix the redirection or the reader of the pipe and run the read-only command again; exit code 1."
 test = "closed_stdout_is_output_failed"
+
+# ── M3 R1a: merge requests (area REVIEW, ADR-0024; numbers in registration order, plan 11 §11.4) ──
+[[error]]
+code = "FG-REVIEW-0001"
+name = "DuplicateOpenMergeRequest"
+http_status = 409
+severity = "info"
+user_message_ja = "同じブランチどうしの開いているマージリクエストがすでにあります。既存のマージリクエストを使ってください。"
+user_message_en = "An open merge request for the same source and target branches already exists. Use the existing merge request."
+user_message_id = "Merge request terbuka untuk branch sumber dan tujuan yang sama sudah ada. Gunakan merge request yang sudah ada."
+cause = "A merge request was to be opened (`POST /api/v1/projects/{id}/merge-requests`), reopened (`POST …/merge-requests/{iid}/reopen`) or retargeted (`PATCH …/merge-requests/{iid}` with `target_branch`) while another merge request of the same project with the same source and target branch is open (ADR-0024 §1: at most one open merge request per (project, source, target)). forge_db::review checks it under the project row lock; the partial unique index merge_requests_one_open is the database backstop. Nothing was written."
+diagnosis = "The log event carries `reason=open_exists` (the check under the lock, with `existing_iid`) or `reason=unique_index` (the backstop), `project_id` and `action` (`merge_request.opened` / `merge_request.reopened` / `merge_request.updated`); branch names are not logged. List the open merge requests with `GET /api/v1/projects/{id}/merge-requests?state=open` (`gstn mr list --project ID`)."
+fix = "Use (or close) the existing open merge request for those branches; then open or reopen the other one."
+test = "a_second_open_merge_request_for_the_same_branches_is_refused"
