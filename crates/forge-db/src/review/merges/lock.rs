@@ -46,11 +46,39 @@ impl std::fmt::Debug for MergeLock {
     }
 }
 
-/// Take the merge lock of `repo`, waiting at most `wait` (`FG-DB-0002`
-/// when another merge holds it longer: retry later).
+/// The `reason` of a busy merge lock (another merge holds it past the
+/// wait: `55P03`, or our own bound around the wait).
+pub const MERGE_LOCK_BUSY: &str = "merge_lock_busy";
+
+/// Whether `e` is the merge lock being held by another merge — the only
+/// failure the reconciliation may skip silently (review round 1).
+pub fn is_lock_busy(e: &ForgeError) -> bool {
+    e.code() == ErrorCode::DbQueryFailed
+        && e.context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == MERGE_LOCK_BUSY)
+}
+
+fn busy(repo: RepoId, wait: Duration) -> ForgeError {
+    ForgeError::new(ErrorCode::DbQueryFailed)
+        .with_context("reason", MERGE_LOCK_BUSY)
+        .with_context("retryable", true)
+        .with_context("repo_id", repo.get())
+        .with_context("wait_ms", wait.as_millis())
+}
+
+/// Slack above the lock wait for the statements around it.
+const SLACK: Duration = Duration::from_secs(5);
+
+/// Take the merge lock of `repo`, waiting at most `wait`: another merge
+/// holding it longer is `FG-DB-0002 reason=merge_lock_busy` (retry later,
+/// [`is_lock_busy`]); any other failure keeps its own code and reason. The
+/// lock transaction's `statement_timeout` is raised above the wait, and the
+/// whole acquisition is bounded by our own timeout (`wait` + 2 × slack).
 pub async fn lock_merges(db: &Db, repo: RepoId, wait: Duration) -> Result<MergeLock, ForgeError> {
     const QUERY: &str = "review.merge_lock";
-    db.within(QUERY, async {
+    let bound = wait.saturating_add(SLACK.saturating_mul(2));
+    let taking = async {
         let mut tx = db
             .write_pool()
             .begin()
@@ -58,6 +86,10 @@ pub async fn lock_merges(db: &Db, repo: RepoId, wait: Duration) -> Result<MergeL
             .map_err(|e| query_error(QUERY, e))?;
         for setting in [
             format!("SET LOCAL lock_timeout = '{}ms'", wait.as_millis()),
+            format!(
+                "SET LOCAL statement_timeout = '{}ms'",
+                wait.saturating_add(SLACK).as_millis()
+            ),
             format!(
                 "SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
                 IDLE_LIMIT.as_millis()
@@ -72,14 +104,27 @@ pub async fn lock_merges(db: &Db, repo: RepoId, wait: Duration) -> Result<MergeL
             .bind(repo.get())
             .execute(&mut *tx)
             .await
-            .map_err(|e| query_error(QUERY, e).with_context("repo_id", repo.get()))?;
+            .map_err(|e| {
+                let lock_timeout = e
+                    .as_database_error()
+                    .and_then(|d| d.code())
+                    .is_some_and(|c| c == "55P03");
+                if lock_timeout {
+                    busy(repo, wait)
+                } else {
+                    query_error(QUERY, e).with_context("repo_id", repo.get())
+                }
+            })?;
         Ok(MergeLock {
             tx,
             repo,
             taken: tokio::time::Instant::now(),
         })
-    })
-    .await
+    };
+    match tokio::time::timeout(bound, taking).await {
+        Ok(taken) => taken,
+        Err(_) => Err(busy(repo, wait).with_context("detail", "client_bound")),
+    }
 }
 
 impl MergeLock {
@@ -106,7 +151,9 @@ impl MergeLock {
         let left = self.left();
         let probe = sqlx::query_scalar::<_, bool>(
             "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks WHERE locktype = 'advisory' \
-             AND pid = pg_catalog.pg_backend_pid() AND granted \
+             AND pid = pg_catalog.pg_backend_pid() AND granted AND objsubid = 1 \
+             AND database = (SELECT oid FROM pg_catalog.pg_database \
+                 WHERE datname = pg_catalog.current_database()) \
              AND ((classid::bigint << 32) | objid::bigint) \
                  = hashtextextended('merge:' || $1::text, 0))",
         )

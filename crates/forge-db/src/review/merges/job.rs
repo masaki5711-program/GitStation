@@ -276,6 +276,12 @@ pub enum MergeFinished {
     /// The attempt is no longer `executing` (and not `applied`): nothing
     /// written (the caller reports it, FG-REVIEW-0009 record_failed).
     NotExecuting(MergeState),
+    /// The ref moved but the merge request is no longer open (a broken
+    /// invariant: every transition of an open merge request refuses a live
+    /// merge). The attempt was set `failed` (FG-REVIEW-0009
+    /// `merge_request_not_open`) in this transaction — never left
+    /// `executing` — for a person (runbook merge-execution).
+    MergeRequestNotOpen(MergeRequestState),
 }
 
 fn merged_key(prefix: &'static str, merge_id: i64) -> Result<DedupKey, ForgeError> {
@@ -383,10 +389,23 @@ pub async fn finish_merge(
             }
         }
         if current.state != MergeRequestState::Open {
-            return Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "merge_finish_not_open")
-                .with_context("merge_request_id", mr.get())
-                .with_context("state", current.state.as_str()));
+            tx.step(|c| async move {
+                sqlx::query(
+                    "UPDATE forge.merge_request_merges SET state = 'failed', \
+                     reason = 'merge_request_not_open', error_code = $2, \
+                     finished_at = now(), updated_at = now() \
+                     WHERE id = $1 AND state = 'executing'",
+                )
+                .bind(merge_id)
+                .bind(ErrorCode::MergeExecutionFailed.id())
+                .execute(c)
+                .await
+                .map_err(|e| query_error("review.merge_not_open", e))
+            })
+            .await?;
+            return Ok(Settle::CommitDerived(MergeFinished::MergeRequestNotOpen(
+                current.state,
+            )));
         }
         let (Some(expected_old), Some(new_sha)) =
             (locked.expected_old.clone(), locked.new_sha.clone())
@@ -557,8 +576,28 @@ pub async fn set_source_outcome(
     .await
 }
 
-/// The attempts the reconciliation looks at (ADR-0024 §4.2 照合), oldest
-/// first, at most `limit`: `queued` / `prepared` not updated for
+/// Record that the reconciliation looked at live attempt `merge_id` without
+/// settling it (busy lock, an error it logged): the next scan takes the
+/// attempts it has not looked at for longest first (review round 1:
+/// no head-of-line blocking).
+pub async fn mark_reconcile_seen(db: &Db, merge_id: i64) -> Result<(), ForgeError> {
+    const QUERY: &str = "review.merge_reconcile_seen";
+    db.within(QUERY, async {
+        sqlx::query(
+            "UPDATE forge.merge_request_merges SET reconcile_seen_at = now() \
+             WHERE id = $1 AND state IN ('queued', 'prepared', 'executing')",
+        )
+        .bind(merge_id)
+        .execute(db.write_pool())
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        Ok(())
+    })
+    .await
+}
+
+/// The attempts the reconciliation looks at (ADR-0024 §4.2 照合), never
+/// looked at (or looked at longest ago) first, at most `limit`: `queued` / `prepared` not updated for
 /// `idle_after`, and `executing` for longer than `executing_after` (before
 /// that, the worker's `update-ref` may still run).
 pub async fn stuck_merges(
@@ -575,7 +614,7 @@ pub async fn stuck_merges(
                  (state IN ('queued', 'prepared') \
                   AND updated_at < now() - make_interval(secs => $1)) \
                  OR (state = 'executing' AND executing_at < now() - make_interval(secs => $2)) \
-                 ORDER BY id LIMIT $3",
+                 ORDER BY reconcile_seen_at NULLS FIRST, id LIMIT $3",
                 columns()
             ))
             .bind(idle_after.as_secs_f64())

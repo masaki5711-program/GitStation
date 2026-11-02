@@ -257,6 +257,9 @@ pub async fn purge_mr_version_refs_decided<P>(
         let facts = facts(&mut tx, project, Some(iid), viewer).await?;
         let decided = decide(&facts)?;
         let current = facts.merge_request.ok_or_else(absent)?;
+        // M3 R4 review: a merge in progress keeps its versions' refs until it
+        // ends (FG-REVIEW-0011): the merge reads the head they hold.
+        crate::review::merges::refuse_live_merge(&mut tx, current.id, ACTION).await?;
         let id = current.id;
         let stored = tx
             .step(|c| async move { versions_on(c, id, "FOR UPDATE", ACTION).await })

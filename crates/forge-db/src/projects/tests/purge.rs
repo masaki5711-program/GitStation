@@ -171,13 +171,13 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                  WHERE d.project_id = {id}",
                 b = bob.user_id.get()
             ),
-            // M3 R4: a finished merge attempt goes with them.
+            // M3 R4: a merge attempt goes with them (it starts queued).
             format!(
                 "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, \
-                 state, requested_by, credential_kind, credential_id, request_id, head_sha, \
-                 target_branch, delete_source_branch, reason, finished_at) SELECT id, \
-                 project_id, 'squash', 'superseded', {b}, 'session', 1, 'req-merge', \
-                 repeat('a', 40), 'refs/heads/main', false, 'synthetic', now() \
+                 requested_by, credential_kind, credential_id, request_id, head_sha, \
+                 target_branch, delete_source_branch) SELECT id, \
+                 project_id, 'squash', {b}, 'session', 1, 'req-merge', \
+                 repeat('a', 40), 'refs/heads/main', false \
                  FROM forge.merge_requests WHERE project_id = {id} AND iid = 1",
                 b = bob.user_id.get()
             ),

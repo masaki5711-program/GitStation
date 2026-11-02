@@ -989,10 +989,20 @@ async fn an_executing_merge_whose_ref_state_is_unknown_is_failed() {
 async fn a_retry_records_a_landed_merge_and_finishes_the_source_deletion() {
     let mut w = world().await;
     w.checked().await;
+    // The browse cache holds the old tip (review round 1: the resume path
+    // invalidates it).
+    assert_eq!(
+        w.browsed_tip("main").await.as_deref(),
+        Some(w.base.as_str())
+    );
     let (attempt, new_sha) = stuck_executing_with(&mut w, Some("new"), true).await;
     let report = w.merger.execute(attempt.id).await.expect("retry");
     assert_eq!(report.outcome, "applied");
     assert_eq!(w.tip("main").as_deref(), Some(new_sha.as_str()));
+    assert_eq!(
+        w.browsed_tip("main").await.as_deref(),
+        Some(new_sha.as_str())
+    );
     let done = w.attempt(attempt.id).await;
     assert_eq!(done.state, MergeState::Applied);
     assert_eq!(
@@ -1037,5 +1047,207 @@ async fn a_retry_after_the_fence_moves_the_ref_once() {
     let report = w.merger.execute(attempt.id).await.expect("retry");
     assert_eq!(report.outcome, "applied");
     assert_eq!(w.events("merge_request.merged").await.len(), 1);
+    w.t.drop_now().await;
+}
+
+/// Review round 1 (security): the default commit message is frozen when the
+/// merge is requested — a description edited while the merge is queued
+/// (title and description edits are allowed then) never reaches the commit.
+#[tokio::test]
+async fn the_commit_message_is_frozen_when_the_merge_is_requested() {
+    let mut w = world().await;
+    w.checked().await;
+    let attempt = w.ask(None, false).await.expect("queued");
+    assert!(attempt
+        .message
+        .as_deref()
+        .is_some_and(|m| m.contains("Synthetic description.")));
+    let edit = forge_db::review::MergeRequestPatch {
+        description: Some("Injected later.".to_owned()),
+        title: Some("Renamed later".to_owned()),
+        ..forge_db::review::MergeRequestPatch::default()
+    };
+    let (_, _, ()) = forge_db::review::edit_mr_decided(
+        &w.t.db,
+        &system("req-edit"),
+        w.project,
+        w.mr.iid,
+        w.dev,
+        &edit,
+        |_| Ok(()),
+    )
+    .await
+    .expect("edit while queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    let tip = w.tip("main").expect("main");
+    let raw = plumb(&w.path, &["cat-file", "commit", &tip], None);
+    assert!(raw.contains("Synthetic description."), "{raw}");
+    assert!(raw.contains("Add the feature"), "{raw}");
+    assert!(!raw.contains("Injected later."), "{raw}");
+    assert!(!raw.contains("Renamed later"), "{raw}");
+    w.t.drop_now().await;
+}
+
+/// What changes between the request and the job, each in a world of its own.
+#[derive(Debug, Clone, Copy)]
+enum Change {
+    Removed,
+    Demoted,
+    Disabled,
+    BecameBot,
+    SessionRevoked,
+}
+
+/// Review round 1 / ADR-0024 §5: the job decides on the requester as the
+/// database says now — removed from the project, demoted to Reporter,
+/// disabled, turned into a bot account, or the session revoked — each is
+/// refused at job time; the attempt is superseded and the ref never moves.
+#[tokio::test]
+async fn the_job_decides_on_the_requester_as_they_are_now() {
+    for change in [
+        Change::Removed,
+        Change::Demoted,
+        Change::Disabled,
+        Change::BecameBot,
+        Change::SessionRevoked,
+    ] {
+        let mut w = world().await;
+        w.checked().await;
+        let sid = w.session_of(w.dev).await;
+        let proof = w.proof(&session(w.dev)).await.expect("proof");
+        let attempt = w
+            .review
+            .request_merge(
+                &request("req-merge"),
+                CredentialRef::Session(sid),
+                &proof,
+                ready(w.repo),
+                &MergeAsk {
+                    sha: oid(&w.head),
+                    method: None,
+                    delete_source_branch: None,
+                    message: None,
+                },
+            )
+            .await
+            .expect("queued");
+        match change {
+            Change::Removed => forge_db::projects::remove_member(
+                &w.t.db,
+                &system("req-change"),
+                w.project,
+                w.dev,
+                Role::Developer,
+            )
+            .await
+            .expect("removed"),
+            Change::Demoted => {
+                let _changed = forge_db::projects::change_member(
+                    &w.t.db,
+                    &system("req-change"),
+                    w.project,
+                    w.dev,
+                    Role::Developer,
+                    Role::Reporter,
+                )
+                .await
+                .expect("demoted");
+            }
+            Change::Disabled => {
+                let _disabled = forge_db::users::disable(&w.t.db, &system("req-change"), w.dev)
+                    .await
+                    .expect("disabled");
+            }
+            Change::BecameBot => {
+                w.t.commit_audited(
+                    ("user", w.dev.get()),
+                    &[format!(
+                        "UPDATE forge.users SET kind = 'bot' WHERE id = {}",
+                        w.dev.get()
+                    )],
+                )
+                .await;
+            }
+            Change::SessionRevoked => {
+                let _revoked = forge_db::sessions::revoke(
+                    &w.t.db,
+                    &system("req-change"),
+                    sid,
+                    forge_core::SessionRevokeReason::Admin,
+                )
+                .await
+                .expect("revoked");
+            }
+        }
+        let report = w.merger.execute(attempt.id).await.expect("decided");
+        assert_eq!(report.outcome, "superseded", "{change:?}");
+        assert!(
+            report.error_code.is_some_and(|c| c.http_status() < 500),
+            "{change:?}: {report:?}"
+        );
+        assert_eq!(w.attempt(attempt.id).await.state, MergeState::Superseded);
+        assert_eq!(
+            w.tip("main").as_deref(),
+            Some(w.base.as_str()),
+            "{change:?}"
+        );
+        w.t.drop_now().await;
+    }
+}
+
+/// Review round 1: a busy merge lock is the only failure the
+/// reconciliation skips; the attempt keeps its state and goes to the back
+/// of the scan, and the next pass settles it.
+#[tokio::test]
+async fn the_reconciliation_skips_only_a_busy_lock_and_settles_later() {
+    let rid = RequestId::parse("req-reconcile").expect("id");
+    let mut w = world().await;
+    w.checked().await;
+    let (attempt, new_sha) = stuck_executing(&mut w, Some("new")).await;
+    let reconciler = w
+        .merger
+        .clone()
+        .with_timeouts(MergeTimeouts {
+            update_ref: Duration::ZERO,
+            grace: Duration::from_nanos(1),
+            idle: Duration::ZERO,
+            ..MergeTimeouts::default()
+        })
+        .expect("timeouts");
+    let held = merges::lock_merges(&w.t.db, w.repo, Duration::from_secs(5))
+        .await
+        .expect("a merge holds the lock");
+    let report = reconciler.reconcile(&rid).await.expect("reconcile");
+    assert_eq!((report.looked, report.skipped), (1, 1), "{report:?}");
+    assert_eq!(w.attempt(attempt.id).await.state, MergeState::Executing);
+    held.release().await;
+    let report = reconciler.reconcile(&rid).await.expect("reconcile");
+    assert_eq!(report.applied, 1, "{report:?}");
+    assert_eq!(w.tip("main").as_deref(), Some(new_sha.as_str()));
+    w.t.drop_now().await;
+}
+
+/// Review round 1 (LOW): a fast-forward whose target is at the head already
+/// has nothing to merge (MergeBlocked `nothing_to_merge`), never a record
+/// of an unchanged ref.
+#[tokio::test]
+async fn a_fast_forward_of_a_target_already_at_the_head_has_nothing_to_merge() {
+    let mut w = world().await;
+    w.checked().await;
+    let settings = MergeSettings::allowing(&[MergeMethod::FastForward]).expect("settings");
+    w.review = w.review.clone().with_merge_settings(settings.clone());
+    w.merger = w.merger.clone().with_settings(settings);
+    let attempt = w
+        .ask(Some(MergeMethod::FastForward), false)
+        .await
+        .expect("queued");
+    plumb(&w.path, &["update-ref", "refs/heads/main", &w.head], None);
+    let report = w.merger.execute(attempt.id).await.expect("decided");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
+    assert!(w.events("repository.pushed").await.is_empty());
     w.t.drop_now().await;
 }

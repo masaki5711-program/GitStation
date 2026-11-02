@@ -27,6 +27,9 @@ use super::Merger;
 /// The wait for a repository's lock during a reconciliation (a busy one is
 /// skipped until the next run).
 const LOCK_WAIT: Duration = Duration::from_secs(2);
+/// The most one pass works (the rest keep their place for the next pass;
+/// `forge serve` bounds the pass with its own timeout too).
+pub const PASS_BUDGET: Duration = Duration::from_secs(45);
 
 /// What one run did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -53,22 +56,41 @@ impl Merger {
             looked: stuck.len(),
             ..ReconcileReport::default()
         };
+        let deadline = tokio::time::Instant::now() + PASS_BUDGET;
         for listed in &stuck {
+            if tokio::time::Instant::now() >= deadline {
+                // The rest waits for the next pass (they keep their place).
+                report.skipped += 1;
+                continue;
+            }
             match self.reconcile_one(listed).await {
                 Ok(Settled::Applied) => report.applied += 1,
                 Ok(Settled::Superseded) => report.superseded += 1,
                 Ok(Settled::Failed) => report.failed += 1,
                 Ok(Settled::Skipped) => report.skipped += 1,
+                Ok(Settled::Busy) => {
+                    report.skipped += 1;
+                    self.seen(listed, request_id).await;
+                }
                 Err(e) => {
+                    // Logged once here, with its code; the attempt goes to the
+                    // back of the next scan (no head-of-line blocking).
                     report.skipped += 1;
                     telemetry::log_failure(
                         &e.with_context("merge_id", listed.id)
                             .with_context("operation", "merge_reconcile"),
                         request_id,
                     );
+                    self.seen(listed, request_id).await;
                 }
             }
         }
+        tracing::debug!(
+            target: "forge_review",
+            event = "forge.review.merge_reconcile_pass",
+            request_id = %request_id,
+            looked = report.looked,
+        );
         if report.looked > 0 {
             tracing::info!(
                 target: "forge_review",
@@ -84,6 +106,18 @@ impl Merger {
         Ok(report)
     }
 
+    /// Move `listed` to the back of the next scan (a failure to do so is
+    /// logged: the attempt only keeps its place).
+    async fn seen(&self, listed: &StoredMerge, request_id: &RequestId) {
+        if let Err(e) = merges::mark_reconcile_seen(&self.db, listed.id).await {
+            telemetry::log_failure(
+                &e.with_context("merge_id", listed.id)
+                    .with_context("operation", "merge_reconcile_seen"),
+                request_id,
+            );
+        }
+    }
+
     async fn reconcile_one(&self, listed: &StoredMerge) -> Result<Settled, ForgeError> {
         let Some(subject) = self.subject(listed).await? else {
             // The merge request is gone (purged with its attempts): nothing to settle.
@@ -91,19 +125,31 @@ impl Merger {
         };
         let lock = match merges::lock_merges(&self.db, subject.repo, LOCK_WAIT).await {
             Ok(lock) => lock,
-            Err(e) if e.code() == ErrorCode::DbQueryFailed => return Ok(Settled::Skipped),
+            // Another merge of the repository runs: the only skip (review
+            // round 1); every other failure is returned and logged.
+            Err(e) if merges::is_lock_busy(&e) => return Ok(Settled::Busy),
             Err(e) => return Err(e),
         };
         let settled = self.reconcile_locked(listed.id, &subject).await;
         lock.release().await;
         if matches!(settled, Ok(Settled::Applied)) {
             // The job stopped before the source deletion (ADR-0024 §4.2
-            // step 10 comes after the record): do it now.
-            if let Some(done) = merges::merge_attempt(&self.db, listed.id)
-                .await?
-                .filter(wants_source_deletion)
-            {
-                self.delete_source(&done, &subject).await;
+            // step 10 comes after the record): do it now. A failure to read
+            // the attempt keeps the merge applied and is logged.
+            match merges::merge_attempt(&self.db, listed.id).await {
+                Ok(Some(done)) if wants_source_deletion(&done) => {
+                    self.delete_source(&done, &subject).await;
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.merge_source_unchecked",
+                    error_code = e.code().id(),
+                    request_id = %listed.request_id,
+                    merge_id = listed.id,
+                    error = %e,
+                    "the merge is recorded; its source deletion is left to the job's retry"
+                ),
             }
         }
         settled
@@ -172,11 +218,13 @@ impl Merger {
             None => false,
         };
         if landed {
+            // The ref moved under a run that stopped: drop the browse caches.
+            self.invalidate(subject.repo);
             self.record(attempt, subject, &[]).await?;
             return Ok(Settled::Applied);
         }
         if tip.as_ref() == Some(old) {
-            merges::end_merge(
+            let ended = merges::end_merge(
                 &self.db,
                 attempt.id,
                 &[MergeState::Executing],
@@ -185,13 +233,17 @@ impl Merger {
                 None,
             )
             .await?;
-            return Ok(Settled::Superseded);
+            return Ok(if ended {
+                Settled::Superseded
+            } else {
+                Settled::Skipped
+            });
         }
         let e = execution_failed("ref_state_unknown", attempt, subject.repo).with_context(
             "actual",
             tip.as_ref().map_or("", ObjectId::as_str).to_owned(),
         );
-        merges::end_merge(
+        let ended = merges::end_merge(
             &self.db,
             attempt.id,
             &[MergeState::Executing],
@@ -200,6 +252,10 @@ impl Merger {
             Some(ErrorCode::MergeExecutionFailed),
         )
         .await?;
+        if !ended {
+            // Someone else settled it first: no alert for this one.
+            return Ok(Settled::Skipped);
+        }
         telemetry::log_failure(&e, &attempt.request_id);
         Ok(Settled::Failed)
     }
@@ -210,5 +266,8 @@ enum Settled {
     Applied,
     Superseded,
     Failed,
+    /// Nothing to do (settled meanwhile, or gone).
     Skipped,
+    /// Its repository's merge lock was busy: next pass.
+    Busy,
 }

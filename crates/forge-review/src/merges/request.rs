@@ -163,8 +163,13 @@ impl Review {
         };
         let sha = &ask.sha;
         let wanted_check = std::sync::atomic::AtomicBool::new(false);
-        let decided =
-            merges::request_merge_mr_decided(&self.db, &ctx, (project, iid), user, &new, |gate| {
+        let decided = merges::request_merge_mr_decided(
+            &self.db,
+            &ctx,
+            (project, iid),
+            user,
+            &new,
+            |gate| {
                 let mr = locked(&gate.facts)?;
                 let protection =
                     RefProtection::effective(gate.protection.levels(&mr.target_branch));
@@ -210,8 +215,13 @@ impl Review {
                     }
                     blocked(&reasons)
                 })
-            })
-            .await;
+            },
+            // Review round 1: the default message is frozen at the request
+            // from the row as locked (a later title / description edit never
+            // reaches the commit).
+            |mr| default_message(method, mr),
+        )
+        .await;
         if wanted_check.load(std::sync::atomic::Ordering::Relaxed)
             && current.state == forge_core::MergeRequestState::Open
         {
@@ -243,4 +253,41 @@ fn is_ref_not_found(e: &ForgeError) -> bool {
     e.context()
         .iter()
         .any(|(k, v)| *k == "reason" && v == "ref_not_found")
+}
+
+/// The default message of a merge (ADR-0024 §4.1: from the merge request's
+/// title and description, never from the client's identity), cut to
+/// [`MAX_MESSAGE_BYTES`] on a character boundary.
+pub(super) fn default_message(
+    method: MergeMethod,
+    mr: &forge_db::review::StoredMergeRequest,
+) -> String {
+    let source = mr
+        .source_branch
+        .branch()
+        .unwrap_or(mr.source_branch.as_str());
+    let target = mr
+        .target_branch
+        .branch()
+        .unwrap_or(mr.target_branch.as_str());
+    let mut text = match method {
+        MergeMethod::MergeCommit => format!(
+            "Merge branch '{source}' into '{target}'\n\n{}\n\nMerge request !{}\n",
+            mr.title, mr.iid
+        ),
+        MergeMethod::Squash | MergeMethod::FastForward => format!("{}\n", mr.title),
+    };
+    if !mr.description.trim().is_empty() {
+        text.push('\n');
+        text.push_str(mr.description.trim_end());
+        text.push('\n');
+    }
+    if text.len() > forge_git::commit::MAX_MESSAGE_BYTES {
+        let mut end = forge_git::commit::MAX_MESSAGE_BYTES;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    text
 }

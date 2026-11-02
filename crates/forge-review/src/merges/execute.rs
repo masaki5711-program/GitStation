@@ -8,6 +8,8 @@
 //! or the database unavailable before the ref moved) or that needs the
 //! alert (`FG-REVIEW-0009`) is returned: the job runner logs it once.
 
+use std::time::Duration;
+
 use forge_auth::{prove, Action, Authorized, MergeRequestCtx, RefProtection};
 use forge_core::{
     MergeMethod, MergeState, ObjectId, PushRecord, PushUpdateKind, PushedRef, RefName, RepoId,
@@ -18,7 +20,7 @@ use forge_db::review::merges::{
 };
 use forge_db::review::{self, StoredMergeRequest};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::commit::{CommitIdentity, NewCommit, MAX_MESSAGE_BYTES};
+use forge_git::commit::{CommitIdentity, NewCommit};
 use forge_git::mergeability::{MergeTree, MergeTreeLimits};
 use forge_git::{CommitQuery, RefChange};
 
@@ -183,40 +185,6 @@ pub(super) fn decide(
     })
 }
 
-/// The default message of a merge (ADR-0024 §4.1: from the merge request's
-/// title and description, never from the client's identity), cut to
-/// [`MAX_MESSAGE_BYTES`] on a character boundary.
-fn default_message(method: MergeMethod, mr: &StoredMergeRequest) -> String {
-    let source = mr
-        .source_branch
-        .branch()
-        .unwrap_or(mr.source_branch.as_str());
-    let target = mr
-        .target_branch
-        .branch()
-        .unwrap_or(mr.target_branch.as_str());
-    let mut text = match method {
-        MergeMethod::MergeCommit => format!(
-            "Merge branch '{source}' into '{target}'\n\n{}\n\nMerge request !{}\n",
-            mr.title, mr.iid
-        ),
-        MergeMethod::Squash | MergeMethod::FastForward => format!("{}\n", mr.title),
-    };
-    if !mr.description.trim().is_empty() {
-        text.push('\n');
-        text.push_str(mr.description.trim_end());
-        text.push('\n');
-    }
-    if text.len() > MAX_MESSAGE_BYTES {
-        let mut end = MAX_MESSAGE_BYTES;
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        text.truncate(end);
-    }
-    text
-}
-
 impl Merger {
     /// The attempt's merge request and repository; `None`: the merge
     /// request is gone (purged).
@@ -238,15 +206,33 @@ impl Merger {
         }))
     }
 
-    /// The tips of the source and the target branch.
-    async fn tips(&self, repo: RepoId, mr: &StoredMergeRequest) -> Result<Tips, ForgeError> {
+    /// `want`, cut to what is left of the merge lock's hold (review round 1:
+    /// no git call under the lock outlives it); `FG-DB-0002
+    /// reason=merge_lock_lost detail=hold_exceeded` (retryable) when nothing
+    /// is left — git is not started.
+    fn bounded(&self, want: Duration, lock: &MergeLock) -> Result<Duration, ForgeError> {
+        let left = lock.left();
+        if left.is_zero() {
+            return Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("reason", "merge_lock_lost")
+                .with_context("detail", "hold_exceeded")
+                .with_context("retryable", true)
+                .with_context("repo_id", lock.repo().get()));
+        }
+        Ok(want.min(left))
+    }
+
+    /// The tips of the source and the target branch (under the lock).
+    async fn tips(
+        &self,
+        lock: &MergeLock,
+        repo: RepoId,
+        mr: &StoredMergeRequest,
+    ) -> Result<Tips, ForgeError> {
+        let timeout = self.bounded(self.timeouts.read, lock)?;
         let read = |name: &RefName| {
             let name = name.clone(); // clone: each read owns its name
-            async move {
-                self.git
-                    .read_ref(&self.storage, repo, &name, self.timeouts.read)
-                    .await
-            }
+            async move { self.git.read_ref(&self.storage, repo, &name, timeout).await }
         };
         Ok(Tips {
             source: read(&mr.source_branch).await?,
@@ -346,14 +332,9 @@ impl Merger {
             MergeState::Prepared => {
                 // A run stopped after tx1b: decide again (nothing moves without
                 // both proofs), then the fence.
-                let tips = self.tips(subject.repo, &subject.mr).await?;
+                let tips = self.tips(lock, subject.repo, &subject.mr).await?;
                 let gate = self
-                    .gate_facts(
-                        &attempt,
-                        &tips,
-                        Some(Mergeable::Clean),
-                        ff_known(&attempt, subject),
-                    )
+                    .gate_facts(&attempt, &tips, Some(Mergeable::Clean), ff_known(&attempt))
                     .await;
                 match gate {
                     Ok(decided) => self.apply(lock, &attempt, subject, &decided).await,
@@ -440,7 +421,7 @@ impl Merger {
         attempt: &StoredMerge,
         subject: &Subject,
     ) -> Result<MergeReport, ForgeError> {
-        let tips = self.tips(subject.repo, &subject.mr).await?;
+        let tips = self.tips(lock, subject.repo, &subject.mr).await?;
         // tx1a: decide before any object is written.
         let first = merges::merge_gate_decided(
             &self.db,
@@ -463,6 +444,12 @@ impl Merger {
         // The objects, outside any transaction (the lock is held).
         let (new_sha, mergeable, ff) = match attempt.method {
             MergeMethod::FastForward => {
+                if target_tip == attempt.head_sha {
+                    // The target is at the head already: nothing to merge
+                    // (an update-ref to itself would record no change).
+                    let refusal = blocked(&[super::BlockReason::NothingToMerge]);
+                    return self.refused(attempt, &[MergeState::Queued], refusal).await;
+                }
                 let ff = self
                     .git
                     .is_ancestor(
@@ -470,7 +457,7 @@ impl Merger {
                         subject.repo,
                         &target_tip,
                         &attempt.head_sha,
-                        self.timeouts.read,
+                        self.bounded(self.timeouts.read, lock)?,
                     )
                     .await?;
                 (attempt.head_sha.clone(), Mergeable::Clean, Some(ff)) // clone: the target moves to the head
@@ -504,9 +491,18 @@ impl Merger {
                         return self.refused(attempt, &[MergeState::Queued], refusal).await;
                     }
                     MergeTree::Clean { tree } => {
-                        let commit = self
-                            .write_commit(attempt, subject, &tree, &target_tip)
-                            .await?;
+                        let timeout = self.bounded(self.timeouts.commit, lock)?;
+                        let commit = match self
+                            .write_commit(attempt, subject, &tree, &target_tip, timeout)
+                            .await
+                        {
+                            Ok(commit) => commit,
+                            // An identity git would misread (FG-REVIEW-0012).
+                            Err(e) if is_refusal(&e) => {
+                                return self.refused(attempt, &[MergeState::Queued], e).await
+                            }
+                            Err(e) => return Err(e),
+                        };
                         (commit, Mergeable::Clean, None)
                     }
                 }
@@ -521,7 +517,7 @@ impl Merger {
                     subject.repo,
                     &target_tip,
                     &new_sha,
-                    self.timeouts.read,
+                    self.bounded(self.timeouts.read, lock)?,
                 )
                 .await?
         {
@@ -589,6 +585,7 @@ impl Merger {
         subject: &Subject,
         tree: &ObjectId,
         target_tip: &ObjectId,
+        timeout: Duration,
     ) -> Result<ObjectId, ForgeError> {
         let merger = self.identity(attempt.requested_by).await?;
         let (author, parents) = match attempt.method {
@@ -610,9 +607,11 @@ impl Merger {
                 identity_fallback = true,
             );
         }
+        // Frozen at the request (review round 1); an attempt stored without
+        // one (none since 20261110100100's request change) gets the default.
         let message = match &attempt.message {
             Some(m) => m.clone(), // clone: the commit owns its message
-            None => default_message(attempt.method, &subject.mr),
+            None => super::request::default_message(attempt.method, &subject.mr),
         };
         self.git
             .commit_tree(
@@ -625,7 +624,7 @@ impl Merger {
                     author: &author,
                     committer: &merger,
                 },
-                self.timeouts.commit,
+                timeout,
             )
             .await
     }
@@ -680,7 +679,7 @@ impl Merger {
                 now.map_or(MergeState::Superseded, |a| a.state),
             ));
         }
-        self.update_ref(attempt, subject, &decided.scopes).await
+        self.update_ref(lock, attempt, subject, decided).await
     }
 
     /// From `executing` (a run that stopped after the fence): settle by
@@ -701,10 +700,12 @@ impl Merger {
                 &self.storage,
                 subject.repo,
                 &attempt.target_branch,
-                self.timeouts.read,
+                self.bounded(self.timeouts.read, lock)?,
             )
             .await?;
         if tip.as_ref() == Some(new) {
+            // Moved by the stopped run: the cache may still hold the old tip.
+            self.invalidate(subject.repo);
             return self.record(attempt, subject, &[]).await;
         }
         if tip.as_ref() != Some(old) {
@@ -715,14 +716,9 @@ impl Merger {
                 MergeState::Executing,
             ));
         }
-        let tips = self.tips(subject.repo, &subject.mr).await?;
+        let tips = self.tips(lock, subject.repo, &subject.mr).await?;
         let decided = match self
-            .gate_facts(
-                attempt,
-                &tips,
-                Some(Mergeable::Clean),
-                ff_known(attempt, subject),
-            )
+            .gate_facts(attempt, &tips, Some(Mergeable::Clean), ff_known(attempt))
             .await
         {
             Ok(d) => d,
@@ -736,16 +732,27 @@ impl Merger {
             log_retry(attempt, "lock_lost", &e);
             return Err(e);
         }
-        self.update_ref(attempt, subject, &decided.scopes).await
+        self.update_ref(lock, attempt, subject, &decided).await
     }
 
-    /// (c) the window, then step 7 (compare-and-swap) and step 9.
+    /// (c) the window, then step 7 (compare-and-swap) and step 9. Takes both
+    /// proofs (`decided`: the `Authorized` proof and the `MergeClearance`),
+    /// so no path moves the ref without them (ADR-0024 §7).
     async fn update_ref(
         &self,
+        lock: &MergeLock,
         attempt: &StoredMerge,
         subject: &Subject,
-        scopes: &[String],
+        decided: &Decided,
     ) -> Result<MergeReport, ForgeError> {
+        if decided.proof.ctx().merge_request().iid != Some(subject.mr.iid)
+            || decided.clearance.method() != attempt.method
+        {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "merge_proof_mismatch")
+                .with_context("merge_id", attempt.id));
+        }
+        let scopes = decided.scopes.as_slice();
         let (Some(old), Some(new)) = (&attempt.expected_old, &attempt.new_sha) else {
             return Err(not_prepared(attempt));
         };
@@ -772,6 +779,7 @@ impl Merger {
                 MergeState::Executing,
             ));
         }
+        let timeout = self.bounded(self.timeouts.update_ref, lock)?;
         if let Some(hook) = &self.before_update_ref {
             hook();
         }
@@ -782,12 +790,7 @@ impl Merger {
         };
         let moved = self
             .git
-            .update_refs(
-                &self.storage,
-                subject.repo,
-                &[change],
-                self.timeouts.update_ref,
-            )
+            .update_refs(&self.storage, subject.repo, &[change], timeout)
             .await;
         // Every outcome may have changed the ref: drop the browse caches.
         self.invalidate(subject.repo);
@@ -899,6 +902,14 @@ impl Merger {
                 Err(execution_failed("record_failed", attempt, subject.repo)
                     .with_context("state", state.as_str()))
             }
+            // The attempt is `failed` now (forge-db, same transaction): the
+            // alert reaches a person (runbook merge-execution).
+            Ok(MergeFinished::MergeRequestNotOpen(state)) => {
+                Err(
+                    execution_failed("merge_request_not_open", attempt, subject.repo)
+                        .with_context("merge_request_state", state.as_str()),
+                )
+            }
             Err(e) => Err(execution_failed("record_failed", attempt, subject.repo)
                 .with_context("cause_code", e.code().id())
                 .with_source(e)),
@@ -931,14 +942,29 @@ impl Merger {
             .await
             .map(|mut all| all.pop());
         let (commits, total, partial) = match listed {
-            Ok(Some(Ok(list))) => (
-                list.commits
+            Ok(Some(Ok(list))) => {
+                let commits: Vec<ObjectId> = list
+                    .commits
                     .iter()
                     .filter_map(|c| ObjectId::parse(c).ok())
-                    .collect::<Vec<_>>(),
-                list.total,
-                list.partial,
-            ),
+                    .collect();
+                let dropped = list.commits.len() - commits.len();
+                if dropped > 0 {
+                    // git printed something that is no object id: the list is
+                    // recorded without it, and says it is incomplete.
+                    tracing::warn!(
+                        target: "forge_review",
+                        event = "forge.review.merge_commits_unlisted",
+                        error_code = ErrorCode::GitProcessFailed.id(),
+                        request_id = %attempt.request_id,
+                        merge_id = attempt.id,
+                        dropped,
+                        "commit ids the record could not read were left out"
+                    );
+                }
+                let partial = list.partial || dropped > 0;
+                (commits, list.total, partial)
+            }
             Ok(Some(Err(e))) | Err(e) => {
                 tracing::warn!(
                     target: "forge_review",
@@ -978,7 +1004,7 @@ pub(super) fn wants_source_deletion(attempt: &StoredMerge) -> bool {
 
 /// Whether a fast-forward is known possible for a prepared attempt: its
 /// `new_sha` is the head itself (a merge commit or squash never needs it).
-fn ff_known(attempt: &StoredMerge, _subject: &Subject) -> Option<bool> {
+fn ff_known(attempt: &StoredMerge) -> Option<bool> {
     match attempt.method {
         MergeMethod::FastForward => Some(attempt.new_sha.as_ref() == Some(&attempt.head_sha)),
         MergeMethod::MergeCommit | MergeMethod::Squash => None,

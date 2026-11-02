@@ -99,11 +99,12 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
          forge.merge_request_notes FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_notes_guard()",
     ),
-    // ── M3 R4: a merge attempt only moves forward (20261110100000) ──
+    // ── M3 R4: a merge attempt starts queued and only moves forward
+    // (20261110100000, INSERT too since 20261110100100) ──
     (
         "merge_request_merges",
         "merge_request_merges_forward",
-        "CREATE TRIGGER merge_request_merges_forward BEFORE UPDATE ON \
+        "CREATE TRIGGER merge_request_merges_forward BEFORE INSERT OR UPDATE ON \
          forge.merge_request_merges FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_merges_guard()",
     ),

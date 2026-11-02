@@ -121,6 +121,10 @@ pub(crate) async fn refuse_live_merge(
 /// MergeInProgress, else the `queued` attempt and its job are written in
 /// one derived-only commit (the merge request row is not changed: the
 /// merge is audited when it lands). Returns the attempt.
+///
+/// The commit message is frozen here (review round 1): `new.message`, or
+/// `default_message` of the merge request as locked — a title or
+/// description edited while the merge is queued never reaches the commit.
 pub async fn request_merge_mr_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -128,6 +132,7 @@ pub async fn request_merge_mr_decided<P>(
     viewer: UserId,
     new: &NewMerge,
     decide: impl FnOnce(&MergeGate) -> Result<P, ForgeError>,
+    default_message: impl FnOnce(&crate::review::StoredMergeRequest) -> String,
 ) -> Result<(StoredMerge, P), ForgeError> {
     const ACTION: &str = "merge_request.merge_requested";
     let mut tx = ChangeTx::begin(db, ctx).await?;
@@ -141,6 +146,10 @@ pub async fn request_merge_mr_decided<P>(
             return Err(in_progress(mr.id, Some(live.id), ACTION)
                 .with_context("state", live.state.as_str()));
         }
+        let message = new
+            .message
+            .clone() // clone: the step owns its message
+            .unwrap_or_else(|| default_message(&mr));
         let new = new.clone(); // clone: moved into the step
         let request_id = ctx.request_id.as_str().to_owned();
         let row: MergeRow = tx
@@ -161,7 +170,7 @@ pub async fn request_merge_mr_decided<P>(
                 .bind(request_id)
                 .bind(new.head_sha.as_str())
                 .bind(mr.target_branch.as_str())
-                .bind(new.message.as_deref())
+                .bind(message)
                 .bind(new.delete_source_branch)
                 .fetch_one(c)
                 .await

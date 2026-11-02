@@ -99,6 +99,7 @@ async fn request(w: &World, req: &str) -> Result<merges::StoredMerge, ForgeError
         w.alice,
         &ask(CredentialRef::Session(1)),
         |_| Ok(()),
+        |_| "synthetic".to_owned(),
     )
     .await
     .map(|(m, ())| m)
@@ -438,6 +439,7 @@ async fn a_merge_execute_token_is_stored_and_read_again_with_its_revocation() {
                 alice,
                 &ask(CredentialRef::Token(id)),
                 |g| Ok(g.credential.clone()),
+                |_| "synthetic".to_owned(),
             )
             .await;
             attempt
@@ -471,5 +473,209 @@ async fn a_merge_execute_token_is_stored_and_read_again_with_its_revocation() {
         after.credential,
         CredentialState::Token { usable: false, .. }
     ));
+    w.t.drop_now().await;
+}
+
+/// Review round 1: a busy merge lock is told apart from every other
+/// failure (`merge_lock_busy`): the reconciliation skips only that.
+#[tokio::test]
+async fn a_busy_merge_lock_is_merge_lock_busy_and_nothing_else_is() {
+    let w = world().await;
+    let repo = w.web.repository_id;
+    let held = lock_merges(&w.t.db, repo, Duration::from_secs(5))
+        .await
+        .expect("lock");
+    let err = lock_merges(&w.t.db, repo, Duration::from_millis(200))
+        .await
+        .expect_err("busy");
+    assert!(merges::is_lock_busy(&err), "{err:?}");
+    held.release().await;
+    // Any other database failure is not "busy".
+    let other = ForgeError::new(ErrorCode::DbQueryFailed).with_context("reason", "lock_timeout");
+    assert!(!merges::is_lock_busy(&other));
+    assert!(!merges::is_lock_busy(&ForgeError::new(
+        ErrorCode::DbUnavailable
+    )));
+    w.t.drop_now().await;
+}
+
+/// Review round 1: an attempt starts `queued` (the guard refuses any other
+/// INSERT), and an `applied` one changes only its `source_outcome`.
+#[tokio::test]
+async fn the_guard_starts_attempts_queued_and_freezes_applied_ones() {
+    let w = world().await;
+    let mut su = w.t.superuser().await;
+    let err = sqlx::query(
+        "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, state, \
+         requested_by, credential_kind, credential_id, request_id, head_sha, target_branch, \
+         delete_source_branch, executing_at, expected_old, new_sha) VALUES ($1, $2, 'squash', \
+         'executing', $3, 'session', 1, 'req-x', repeat('a', 40), 'refs/heads/main', true, \
+         now(), repeat('b', 40), repeat('c', 40))",
+    )
+    .bind(w.mr.id.get())
+    .bind(w.web.project_id.get())
+    .bind(w.alice.get())
+    .execute(&mut su)
+    .await
+    .expect_err("starts queued");
+    assert_eq!(
+        err.as_database_error().and_then(|d| d.code()).as_deref(),
+        Some("XF001")
+    );
+    let attempt = request(&w, "req-merge").await.expect("merge");
+    let step = GateStep::Prepare {
+        expected_old: oid('b'),
+        new_sha: oid('c'),
+    };
+    merge_gate_decided(&w.t.db, &system("req-gate"), attempt.id, step, |_| Ok(()))
+        .await
+        .expect("prepare");
+    assert!(fence_merge(&w.t.db, attempt.id).await.expect("fence"));
+    sqlx::query(
+        "UPDATE forge.merge_request_merges SET state = 'applied', finished_at = now() \
+         WHERE id = $1",
+    )
+    .bind(attempt.id)
+    .execute(&mut su)
+    .await
+    .expect("applied");
+    let err = sqlx::query("UPDATE forge.merge_request_merges SET reason = 'x' WHERE id = $1")
+        .bind(attempt.id)
+        .execute(&mut su)
+        .await
+        .expect_err("frozen");
+    assert_eq!(
+        err.as_database_error().and_then(|d| d.code()).as_deref(),
+        Some("XF001")
+    );
+    sqlx::query("UPDATE forge.merge_request_merges SET updated_at = now() WHERE id = $1")
+        .bind(attempt.id)
+        .execute(&mut su)
+        .await
+        .expect("updated_at may move");
+    w.t.drop_now().await;
+}
+
+/// Review round 1: the ref moved but the merge request is not open (a
+/// broken invariant): tx2 sets the attempt `failed` (FG-REVIEW-0009
+/// merge_request_not_open) instead of leaving it `executing`.
+#[tokio::test]
+async fn a_merge_whose_merge_request_is_no_longer_open_is_failed_not_left_executing() {
+    let w = world().await;
+    let attempt = request(&w, "req-merge").await.expect("merge");
+    let step = GateStep::Prepare {
+        expected_old: oid('b'),
+        new_sha: oid('c'),
+    };
+    merge_gate_decided(&w.t.db, &system("req-gate"), attempt.id, step, |_| Ok(()))
+        .await
+        .expect("prepare");
+    assert!(fence_merge(&w.t.db, attempt.id).await.expect("fence"));
+    // Closed behind the commands' back (they refuse a live merge).
+    w.t.commit_audited(
+        ("project", w.web.project_id.get()),
+        &[format!(
+            "UPDATE forge.merge_requests SET state = 'closed', closed_at = now(), \
+             closed_by = {}, revision = revision + 1 WHERE id = {}",
+            w.alice.get(),
+            w.mr.id.get()
+        )],
+    )
+    .await;
+    let attempt = merge_attempt(&w.t.db, attempt.id)
+        .await
+        .expect("read")
+        .expect("row");
+    let push = forge_core::PushRecord {
+        repository_id: w.web.repository_id,
+        updates: vec![forge_core::PushedRef {
+            name: RefName::parse("refs/heads/main").expect("ref"),
+            old: oid('b'),
+            new: oid('c'),
+            kind: forge_core::PushUpdateKind::FastForward,
+            commits: Vec::new(),
+            total_commits: 0,
+            total_commits_partial: true,
+        }],
+    };
+    let done = merges::finish_merge(&w.t.db, &as_user(w.alice, "req-finish"), &attempt, &push)
+        .await
+        .expect("finish");
+    assert_eq!(
+        done,
+        merges::MergeFinished::MergeRequestNotOpen(forge_core::MergeRequestState::Closed)
+    );
+    let after = merge_attempt(&w.t.db, attempt.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(after.state, MergeState::Failed);
+    assert_eq!(after.reason.as_deref(), Some("merge_request_not_open"));
+    assert_eq!(after.error_code.as_deref(), Some("FG-REVIEW-0009"));
+    w.t.drop_now().await;
+}
+
+/// Review round 1: every change of an open merge request that could change
+/// what a queued merge reads waits for it — close, retarget, draft (above)
+/// and the purge of its version refs (FG-REVIEW-0011).
+#[tokio::test]
+async fn a_live_merge_refuses_the_purge_of_its_version_refs() {
+    let w = world().await;
+    let _attempt = request(&w, "req-merge").await.expect("merge");
+    let err = purge_mr_version_refs_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-purge"),
+        w.web.project_id,
+        w.mr.iid,
+        w.alice,
+        None,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("purge waits");
+    assert_code(&err, ErrorCode::MergeInProgress);
+    w.t.drop_now().await;
+}
+
+/// The reconciliation's scan takes attempts it has not looked at first: one
+/// it could not settle (`mark_reconcile_seen`) goes to the back.
+#[tokio::test]
+async fn the_reconciliation_scan_rotates_attempts_it_could_not_settle() {
+    let w = world().await;
+    let first = request(&w, "req-merge-1").await.expect("merge");
+    let new = NewMergeRequest {
+        title: "Merge other".to_owned(),
+        description: String::new(),
+        source_branch: RefName::parse("refs/heads/other").expect("ref"),
+        target_branch: RefName::parse("refs/heads/main").expect("ref"),
+        draft: false,
+    };
+    let (other, ()) = open_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-open-2"),
+        w.web.project_id,
+        w.alice,
+        &new,
+        |_| Ok(()),
+    )
+    .await
+    .expect("open");
+    let (second, ()) = request_merge_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-merge-2"),
+        (w.web.project_id, other.iid),
+        w.alice,
+        &ask(CredentialRef::Session(1)),
+        |_| Ok(()),
+        |_| "synthetic".to_owned(),
+    )
+    .await
+    .expect("merge");
+    let scan = || stuck_merges(&w.t.db, Duration::ZERO, Duration::ZERO, 1);
+    assert_eq!(scan().await.expect("scan")[0].id, first.id);
+    merges::mark_reconcile_seen(&w.t.db, first.id)
+        .await
+        .expect("seen");
+    assert_eq!(scan().await.expect("scan")[0].id, second.id);
     w.t.drop_now().await;
 }

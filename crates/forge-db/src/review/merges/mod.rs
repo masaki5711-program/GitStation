@@ -45,11 +45,13 @@ mod request;
 
 pub use credential::{CredentialFacts, CredentialState};
 pub use job::{
-    end_merge, executing_elapsed, fence_merge, finish_merge, merge_gate_decided,
-    record_source_deleted, set_source_outcome, stuck_merges, GateOutcome, GateStep, MergeFinished,
-    SourceDeletion,
+    end_merge, executing_elapsed, fence_merge, finish_merge, mark_reconcile_seen,
+    merge_gate_decided, record_source_deleted, set_source_outcome, stuck_merges, GateOutcome,
+    GateStep, MergeFinished, SourceDeletion,
 };
-pub use lock::{lock_merges, MergeLock, MERGE_LOCK_HOLD, MERGE_LOCK_WAIT};
+pub use lock::{
+    is_lock_busy, lock_merges, MergeLock, MERGE_LOCK_BUSY, MERGE_LOCK_HOLD, MERGE_LOCK_WAIT,
+};
 pub(crate) use request::refuse_live_merge;
 pub use request::{request_merge_mr_decided, MergeGate, NewMerge};
 

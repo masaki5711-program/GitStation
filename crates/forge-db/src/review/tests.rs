@@ -434,6 +434,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     alice,
                     &ask,
                     |_| Ok(()),
+                    |_| "synthetic".to_owned(),
                 )
                 .await
                 .expect("ask");

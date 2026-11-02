@@ -25,6 +25,9 @@ pub enum BlockReason {
     MergeabilityUnknown,
     Conflict,
     FfNotPossible,
+    /// `fast_forward` and the target is at the head already (review round
+    /// 1): nothing would move.
+    NothingToMerge,
 }
 
 impl BlockReason {
@@ -37,6 +40,7 @@ impl BlockReason {
             Self::MergeabilityUnknown => "mergeability_unknown",
             Self::Conflict => "conflict",
             Self::FfNotPossible => "ff_not_possible",
+            Self::NothingToMerge => "nothing_to_merge",
         }
     }
 }
