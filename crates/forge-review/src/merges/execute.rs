@@ -263,7 +263,12 @@ impl Merger {
                 mr,
                 &attempt.head_sha,
                 target.as_ref(),
-                self.bounded(self.timeouts.read, lock)?,
+                // One deadline for every read: what is left of the lock's
+                // hold (R5 review).
+                &mut crate::approvals::Budget::until(
+                    std::time::Instant::now() + self.bounded(lock.left(), lock)?,
+                    crate::approvals::JOB_CALLS,
+                ),
             )
             .await?;
         Ok(Tips {

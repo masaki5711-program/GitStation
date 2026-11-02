@@ -1,23 +1,27 @@
 //! Who pushed a merge request's commits (ADR-0024 §8.3; the exact query is
-//! fixed here in R5): the actors of the `repository.pushed` records whose
-//! ref updates carried a commit of `merge_base..head`.
+//! fixed here in R5, tightened by the R5 review): the actors of the
+//! `repository.pushed` records whose ref updates carried a commit of the
+//! range — the commits the merge brings, `head ^<target tip>`.
 //!
 //! 1. The range `R` is read with git (at most [`MAX_RANGE_COMMITS`]; more is
-//!    `range_too_long`).
+//!    `range_too_long`), with its bottoms.
 //! 2. A ref update **names** a range commit when its `new` is in `R` or it
 //!    lists one as a new commit: its pusher is a committer (this covers the
 //!    pushes before the merge request was opened, the pushes to other
 //!    branches, and a reviewer pushing the branch under another name).
-//! 3. A range commit no record names was introduced by a push whose commit
-//!    list was cut (more than 20 new commits) — or by a push with no record
-//!    at all. For each such commit, the cut ref updates whose `new` reaches
-//!    it (git, at most [`MAX_PARTIAL_CHECKS`] updates) are its possible
-//!    introducers: all their pushers are committers. A commit no update
-//!    reaches, a record whose ref list was cut, a pusher that cannot be
-//!    read, or a failed or capped read: **unknown** (no approval counts —
-//!    never assumed "no committer"). Records past the audit retention are
-//!    gone, so an old range ends here too (`committers_unknown`, runbook
-//!    merge-blocked).
+//! 3. A ref update whose commit list was **cut** (more than 20 new commits)
+//!    may have introduced any range commit its `new` reaches. **Every** cut
+//!    update whose `new` reaches the range makes its pusher a committer —
+//!    even when the commits it reaches are named by another record (R5
+//!    review HIGH: Bob pushes B1..B21 in one push, B1 drops off the list;
+//!    Alice creating `feature` at B1 must not make Bob's approval count).
+//!    Reaching is asked of git (`merge-base --is-ancestor <bottom> <new>`);
+//!    more than [`MAX_PARTIAL_CHECKS`] reaching updates, or an answer git
+//!    could not give, is unknown.
+//! 4. A range commit no record names must be reached by a cut update (its
+//!    possible introducer); otherwise — no record at all (retention, a
+//!    failed record, a hand-moved ref), or a record whose ref list was cut —
+//!    **unknown** (no approval counts — never assumed "no committer").
 //!
 //! The commit e-mail is never used (ADR-0021).
 
@@ -30,34 +34,63 @@ use super::evaluate::Committers;
 
 /// The longest range evaluated.
 pub const MAX_RANGE_COMMITS: usize = 1_000;
-/// The most cut ref updates checked with git for one evaluation.
+/// The most cut ref updates that may reach the range.
 pub const MAX_PARTIAL_CHECKS: usize = 16;
 
-/// The committers of `range` from `coverage` (steps 2 and 3). `reach`
-/// answers step 3: for the index of a cut ref update in
-/// `coverage.entries`, the range commits its `new` reaches (`None`: could
-/// not be read). It is asked only when step 2 leaves a commit unnamed.
+/// Whether a cut ref update's `new` reaches the range (git's answer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reach {
+    /// It reaches no range commit.
+    No,
+    /// It reaches the range; the range commits it reaches when they were
+    /// read (`None`: not read — only needed for step 4).
+    Yes(Option<BTreeSet<ObjectId>>),
+    /// git could not tell (failed, timed out, over the budget).
+    Unknown,
+}
+
+/// The indexes of the cut ref updates (with a `new`) of `coverage`: the
+/// updates step 3 must ask git about.
+pub fn cut_entries(coverage: &PushCoverage) -> Vec<usize> {
+    coverage
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.commits_truncated && e.new.is_some())
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// The range commits no record names (step 4 needs them).
+pub fn unnamed(range: &[ObjectId], coverage: &PushCoverage) -> Vec<ObjectId> {
+    let named: BTreeSet<&ObjectId> = coverage
+        .entries
+        .iter()
+        .flat_map(|e| e.new.iter().chain(e.commits.iter()))
+        .collect();
+    range
+        .iter()
+        .filter(|c| !named.contains(c))
+        .cloned() // clone: the caller owns the list
+        .collect()
+}
+
+/// The committers of `range` from `coverage` and git's answers `reach` for
+/// every index of [`cut_entries`] (module docs).
 pub fn committers_of(
     range: &[ObjectId],
     coverage: &PushCoverage,
-    reach: &BTreeMap<usize, Option<BTreeSet<ObjectId>>>,
+    reach: &BTreeMap<usize, Reach>,
 ) -> Committers {
     if coverage.over_cap {
         return Committers::Unknown("push_records_over_cap");
     }
     let range_set: BTreeSet<&ObjectId> = range.iter().collect();
     let mut pushers: BTreeMap<forge_core::ids::UserId, i64> = BTreeMap::new();
-    let mut named: BTreeSet<&ObjectId> = BTreeSet::new();
+    // Step 2.
     for entry in &coverage.entries {
-        let mut hit = false;
-        if let Some(new) = entry.new.as_ref().filter(|n| range_set.contains(n)) {
-            named.insert(new);
-            hit = true;
-        }
-        for c in entry.commits.iter().filter(|c| range_set.contains(c)) {
-            named.insert(c);
-            hit = true;
-        }
+        let hit = entry.new.as_ref().is_some_and(|n| range_set.contains(n))
+            || entry.commits.iter().any(|c| range_set.contains(c));
         if hit {
             let Some(pusher) = entry.pusher else {
                 return Committers::Unknown("push_actor_unknown");
@@ -65,60 +98,50 @@ pub fn committers_of(
             pushers.entry(pusher).or_insert(entry.audit_id);
         }
     }
-    let unnamed: Vec<&ObjectId> = range.iter().filter(|c| !named.contains(c)).collect();
-    if unnamed.is_empty() {
+    // Step 3.
+    let mut reached: Vec<&Option<BTreeSet<ObjectId>>> = Vec::new();
+    let mut reaching = 0;
+    for index in cut_entries(coverage) {
+        let Some(entry) = coverage.entries.get(index) else {
+            continue;
+        };
+        match reach.get(&index) {
+            Some(Reach::No) => {}
+            Some(Reach::Yes(set)) => {
+                reaching += 1;
+                let Some(pusher) = entry.pusher else {
+                    return Committers::Unknown("push_actor_unknown");
+                };
+                pushers.entry(pusher).or_insert(entry.audit_id);
+                reached.push(set);
+            }
+            Some(Reach::Unknown) | None => return Committers::Unknown("push_reach_unknown"),
+        }
+    }
+    if reaching > MAX_PARTIAL_CHECKS {
+        return Committers::Unknown("too_many_partial_pushes");
+    }
+    // Step 4.
+    let missing = unnamed(range, coverage);
+    if missing.is_empty() {
         return Committers::Known(pushers);
     }
     if coverage.refs_truncated {
         return Committers::Unknown("push_record_truncated");
     }
-    for commit in unnamed {
-        let mut reached = false;
-        for (index, entry) in coverage.entries.iter().enumerate() {
-            if !entry.commits_truncated || entry.new.is_none() {
-                continue;
-            }
-            match reach.get(&index) {
-                Some(Some(set)) if set.contains(commit) => {
-                    let Some(pusher) = entry.pusher else {
-                        return Committers::Unknown("push_actor_unknown");
-                    };
-                    pushers.entry(pusher).or_insert(entry.audit_id);
-                    reached = true;
-                }
-                Some(Some(_)) => {}
-                Some(None) | None => return Committers::Unknown("push_reach_unknown"),
+    for commit in &missing {
+        let mut found = false;
+        for set in &reached {
+            match set {
+                Some(set) => found |= set.contains(commit),
+                None => return Committers::Unknown("push_reach_unknown"),
             }
         }
-        if !reached {
+        if !found {
             return Committers::Unknown("push_record_missing");
         }
     }
     Committers::Known(pushers)
-}
-
-/// The indexes of the cut ref updates step 3 needs `reach` for (`None`:
-/// more than [`MAX_PARTIAL_CHECKS`]), or an empty list when step 2 names
-/// every commit.
-pub fn partial_entries(range: &[ObjectId], coverage: &PushCoverage) -> Option<Vec<usize>> {
-    let range_set: BTreeSet<&ObjectId> = range.iter().collect();
-    let named: BTreeSet<&ObjectId> = coverage
-        .entries
-        .iter()
-        .flat_map(|e| e.new.iter().chain(e.commits.iter()))
-        .filter(|c| range_set.contains(c))
-        .collect();
-    if range.iter().all(|c| named.contains(c)) {
-        return Some(Vec::new());
-    }
-    let partial: Vec<usize> = coverage
-        .entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.commits_truncated && e.new.is_some())
-        .map(|(i, _)| i)
-        .collect();
-    (partial.len() <= MAX_PARTIAL_CHECKS).then_some(partial)
 }
 
 #[cfg(test)]
@@ -150,9 +173,8 @@ mod tests {
     }
 
     /// The pushes before the merge request existed and to other branches
-    /// count (ADR-0024 §8.3: `committers_include_pushes_before_mr_creation`,
-    /// `committers_include_pushes_to_other_branches`): any record naming a
-    /// range commit, whatever ref it updated and whenever.
+    /// count (ADR-0024 §8.3): any record naming a range commit, whatever ref
+    /// it updated and whenever.
     #[test]
     fn committers_include_pushes_before_mr_creation() {
         let range = [oid('b'), oid('a')];
@@ -189,8 +211,37 @@ mod tests {
         );
     }
 
-    /// A cut list: the cut updates reaching the unnamed commit are its
-    /// possible introducers.
+    /// R5 review HIGH: Bob pushes B1..B21 to `bob` in one push (B1 drops off
+    /// the 20-entry list); Alice creates `feature` at B1. B1 is "named" by
+    /// Alice's record, but Bob's cut push reaches it: Bob is a committer.
+    #[test]
+    fn a_cut_push_reaching_a_named_commit_still_makes_a_committer() {
+        // `a` = B1 (the range is just B1: feature at B1).
+        let range = [oid('a')];
+        let coverage = PushCoverage {
+            entries: vec![
+                // Bob: new = B21 (`e`), the list holds B2..B21, not B1.
+                entry(10, 2, 'e', &['e', 'd'], true),
+                // Alice: create `feature` at B1.
+                entry(11, 1, 'a', &[], false),
+            ],
+            ..PushCoverage::default()
+        };
+        assert_eq!(cut_entries(&coverage), vec![0]);
+        let reach = BTreeMap::from([(0, Reach::Yes(None))]);
+        assert_eq!(known(&committers_of(&range, &coverage, &reach)), [1, 2]);
+        // Without git's answer: unknown, never "Alice only".
+        assert_eq!(
+            committers_of(&range, &coverage, &BTreeMap::new()),
+            Committers::Unknown("push_reach_unknown")
+        );
+        // A cut push that does not reach the range adds nobody.
+        let reach = BTreeMap::from([(0, Reach::No)]);
+        assert_eq!(known(&committers_of(&range, &coverage, &reach)), [1]);
+    }
+
+    /// An unnamed commit: the cut updates reaching it are its possible
+    /// introducers; git's answer decides, an unread set is unknown.
     #[test]
     fn a_cut_commit_list_is_resolved_with_git_or_fails_closed() {
         let range = [oid('c'), oid('b'), oid('a')];
@@ -201,18 +252,27 @@ mod tests {
             ],
             ..PushCoverage::default()
         };
-        assert_eq!(partial_entries(&range, &coverage), Some(vec![0, 1]));
+        assert_eq!(cut_entries(&coverage), vec![0, 1]);
+        assert_eq!(unnamed(&range, &coverage), vec![oid('b'), oid('a')]);
         let reach = BTreeMap::from([
-            (0, Some(BTreeSet::from([oid('a'), oid('b'), oid('c')]))),
-            (1, Some(BTreeSet::new())),
+            (
+                0,
+                Reach::Yes(Some(BTreeSet::from([oid('a'), oid('b'), oid('c')]))),
+            ),
+            (1, Reach::No),
         ]);
         assert_eq!(known(&committers_of(&range, &coverage, &reach)), [1]);
-        let unread = BTreeMap::from([(0, None), (1, Some(BTreeSet::new()))]);
+        let unread = BTreeMap::from([(0, Reach::Yes(None)), (1, Reach::No)]);
         assert_eq!(
             committers_of(&range, &coverage, &unread),
             Committers::Unknown("push_reach_unknown")
         );
-        let nobody = BTreeMap::from([(0, Some(BTreeSet::new())), (1, Some(BTreeSet::new()))]);
+        let failed = BTreeMap::from([(0, Reach::Unknown), (1, Reach::No)]);
+        assert_eq!(
+            committers_of(&range, &coverage, &failed),
+            Committers::Unknown("push_reach_unknown")
+        );
+        let nobody = BTreeMap::from([(0, Reach::No), (1, Reach::No)]);
         assert_eq!(
             committers_of(&range, &coverage, &nobody),
             Committers::Unknown("push_record_missing")

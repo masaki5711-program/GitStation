@@ -63,11 +63,14 @@ pub enum OwnerRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodeownersFact {
     Absent,
-    /// Parsed, every owner resolved.
+    /// Parsed, every owner resolved, and matched against the changed paths
+    /// (`matched`: line → how many changed paths it owns; computed by the
+    /// loader within a time budget, R5 review).
     Valid {
         path: &'static str,
         file: Codeowners,
         owners: BTreeMap<Owner, OwnerRef>,
+        matched: BTreeMap<u32, usize>,
     },
     Invalid(CodeownersError),
 }
@@ -150,8 +153,11 @@ pub struct ApprovalReport {
 /// protected paths and the files `.forge-ci.yml` includes have no input in
 /// M3 (both M4): until then they are empty sets
 /// (`is_config_path_holds_no_protected_paths_or_ci_includes_until_m4`).
+/// ASCII case is ignored (R5 review: `.Forge/ci.yml` on a case-insensitive
+/// checkout is the same file).
 pub fn is_config_path(path: &str) -> bool {
-    path.starts_with(".forge/") || path == ".forge-ci.yml" || path == "CODEOWNERS"
+    let path = path.to_ascii_lowercase();
+    path.starts_with(".forge/") || path == ".forge-ci.yml" || path == "codeowners"
 }
 
 fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReason>, Option<i64>) {
@@ -236,16 +242,23 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
     // CODEOWNERS.
     let mut codeowners = Vec::new();
     let mut invalid = None;
-    if let (CodeownersFact::Valid { file, owners, .. }, ChangedPathsFact::Known(paths)) =
-        (&inputs.codeowners, &inputs.changed)
+    if let (
+        CodeownersFact::Valid {
+            file,
+            owners,
+            matched,
+            ..
+        },
+        ChangedPathsFact::Known(_),
+    ) = (&inputs.codeowners, &inputs.changed)
     {
-        let mut by_line: BTreeMap<u32, (usize, &super::codeowners::Rule)> = BTreeMap::new();
-        for path in paths {
-            if let Some(rule) = file.rule_for(path) {
-                by_line.entry(rule.line).or_insert((0, rule)).0 += 1;
-            }
-        }
-        for (count, rule) in by_line.into_values() {
+        let by_line = matched.iter().filter_map(|(line, count)| {
+            file.rules
+                .iter()
+                .find(|r| r.line == *line)
+                .map(|r| (*count, r))
+        });
+        for (count, rule) in by_line {
             let satisfied = valid.iter().any(|a| owns(&rule.owners, owners, a));
             let names: Vec<String> = rule.owners.iter().map(Owner::display).collect();
             if !satisfied {

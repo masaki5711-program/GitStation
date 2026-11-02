@@ -10,7 +10,7 @@
 //!   [`ChangedPaths::TooMany`]; a path that is not UTF-8 is
 //!   [`ChangedPaths::NonUtf8`] (a glob cannot be matched against it: the
 //!   caller fails closed).
-//! - [`Git::range_commits`]: `rev-list -n <cap+1> --end-of-options
+//! - [`Git::range_commits`]: `rev-list --parents -n <cap+1> --end-of-options
 //!   <head> [^<base>]` — the commits of the range, or `None` when there are
 //!   more than the cap.
 //! - [`Git::codeowners_file`]: the CODEOWNERS file of a commit
@@ -39,6 +39,15 @@ pub enum ChangedPaths {
     TooMany,
     /// A changed path is not UTF-8.
     NonUtf8,
+}
+
+/// The commits of a range and its bottoms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRange {
+    /// Newest first.
+    pub commits: Vec<ObjectId>,
+    /// The commits none of whose parents is in the range.
+    pub bottoms: Vec<ObjectId>,
 }
 
 /// A CODEOWNERS file as read from a commit.
@@ -118,8 +127,10 @@ impl Git {
     }
 
     /// The commits reachable from `head` and not from `base` (`None`: the
-    /// whole history of `head`), newest first; `None` when there are more
-    /// than `cap`.
+    /// whole history of `head`), newest first, with the range's bottoms
+    /// (its commits none of whose parents is in the range: a commit reaches
+    /// the range exactly when it reaches a bottom); `None` when there are
+    /// more than `cap`.
     pub async fn range_commits(
         &self,
         storage: &StorageRoot,
@@ -128,10 +139,11 @@ impl Git {
         head: &ObjectId,
         cap: usize,
         timeout: Duration,
-    ) -> Result<Option<Vec<ObjectId>>, ForgeError> {
+    ) -> Result<Option<CommitRange>, ForgeError> {
         let repo = Self::repo_dir(storage, id)?;
         let mut command = self
             .command("rev-list")
+            .arg("--parents")
             .arg("-n")
             .arg_owned(cap.saturating_add(1).to_string())
             .revision(Revision::object_id(head.as_str())?);
@@ -144,20 +156,30 @@ impl Git {
             .output()
             .await
             .map_err(|e| e.with_context("repo_id", id.get()))?;
-        let mut commits = Vec::new();
+        let mut rows: Vec<(ObjectId, Vec<ObjectId>)> = Vec::new();
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let line = line.trim();
-            if line.is_empty() {
+            let mut ids = line.split_ascii_whitespace().map(|raw| {
+                ObjectId::parse(raw).map_err(|_| unexpected("rev-list", "unexpected_output"))
+            });
+            let Some(commit) = ids.next() else {
                 continue;
-            }
-            commits.push(
-                ObjectId::parse(line).map_err(|_| unexpected("rev-list", "unexpected_output"))?,
-            );
+            };
+            let parents = ids.collect::<Result<Vec<_>, _>>()?;
+            rows.push((commit?, parents));
         }
-        if commits.len() > cap {
+        if rows.len() > cap {
             return Ok(None);
         }
-        Ok(Some(commits))
+        let set: std::collections::BTreeSet<&ObjectId> = rows.iter().map(|(c, _)| c).collect();
+        let bottoms = rows
+            .iter()
+            .filter(|(_, parents)| !parents.iter().any(|p| set.contains(p)))
+            .map(|(c, _)| c.clone()) // clone: the range owns its ids
+            .collect();
+        Ok(Some(CommitRange {
+            commits: rows.into_iter().map(|(c, _)| c).collect(),
+            bottoms,
+        }))
     }
 
     /// The CODEOWNERS file of `commit` (module docs), at most `max_bytes`.

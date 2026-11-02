@@ -10,7 +10,7 @@ use forge_db::review::{
 };
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{evaluate, ApprovalReport, Asker, ReviewGit, READ_TIMEOUT};
+use super::{evaluate, ApprovalReport, Asker, Budget, ReviewGit, REQUEST_BUDGET, STATE_BUDGET};
 use crate::merges::request_head_changed;
 use crate::{
     account, caller, change_context, loaded, locked, ready, require, shape_mismatch, Review,
@@ -109,6 +109,7 @@ impl Review {
         user: UserId,
         mr: &review::StoredMergeRequest,
         head: &ObjectId,
+        budget: (std::time::Duration, usize),
     ) -> Result<super::GitFacts, ForgeError> {
         let git = self.review_git()?;
         let tip = self.target_tip(mr.project_id, repo, user, mr).await?;
@@ -117,8 +118,15 @@ impl Review {
             project: mr.project_id,
             repo: ready(mr.project_id, repo)?,
         };
-        git.facts(&self.db, asker, mr, head, tip.as_ref(), READ_TIMEOUT)
-            .await
+        git.facts(
+            &self.db,
+            asker,
+            mr,
+            head,
+            tip.as_ref(),
+            &mut Budget::new(budget),
+        )
+        .await
     }
 
     /// `POST …/merge-requests/{iid}/approve` (`MergeRequestApprove`): approve
@@ -148,7 +156,14 @@ impl Review {
                 .with_context("merge_request_id", current.id.get()));
         }
         let git = self
-            .git_facts(&request.request_id, repo, user, &current, sha)
+            .git_facts(
+                &request.request_id,
+                repo,
+                user,
+                &current,
+                sha,
+                REQUEST_BUDGET,
+            )
             .await?;
         let ctx = change_context(request, proof.principal(), user);
         let (outcome, approval, ()) = review::approve_mr_decided(
@@ -249,7 +264,7 @@ impl Review {
             });
         };
         let git = self
-            .git_facts(request_id, repo, user, &current, &head)
+            .git_facts(request_id, repo, user, &current, &head, STATE_BUDGET)
             .await?;
         let facts = review::approval_facts(&self.db, project, current.id).await?;
         let report = evaluate(&git.inputs(&current, &head, facts));

@@ -167,7 +167,7 @@ impl Review {
                 &current,
                 &ask.sha,
                 target_tip.as_ref(),
-                crate::approvals::READ_TIMEOUT,
+                &mut crate::approvals::Budget::new(crate::approvals::REQUEST_BUDGET),
             )
             .await?;
         let ctx = change_context(request, proof.principal(), user);

@@ -198,11 +198,16 @@ fn committers_do_not_count_and_unknown_committers_fail_closed() {
     );
 }
 
-fn owned(text: &str, owners: &[(&str, OwnerRef)]) -> CodeownersFact {
+fn owned(text: &str, owners: &[(&str, OwnerRef)], paths: &ChangedPathsFact) -> CodeownersFact {
     let file = parse(text.as_bytes()).expect("valid");
+    let matched = match paths {
+        ChangedPathsFact::Known(p) => file.owned_lines(p, None).expect("no deadline"),
+        ChangedPathsFact::Unknown(_) => BTreeMap::new(),
+    };
     CodeownersFact::Valid {
         path: "CODEOWNERS",
         file,
+        matched,
         owners: owners
             .iter()
             .map(|(name, r)| {
@@ -228,6 +233,7 @@ fn codeowners_need_an_owner_per_changed_rule() {
             ("bob", OwnerRef::User(BOB)),
             ("org/writers", OwnerRef::Group(GroupId::new(9))),
         ],
+        &i.changed,
     );
     let report = evaluate(&i);
     assert_eq!(
@@ -290,6 +296,10 @@ fn is_config_path_holds_no_protected_paths_or_ci_includes_until_m4() {
         ".forge/CODEOWNERS",
         ".forge-ci.yml",
         "CODEOWNERS",
+        // R5 review: ASCII case is ignored.
+        ".Forge/ci.yml",
+        "codeowners",
+        ".FORGE-CI.YML",
     ] {
         assert!(is_config_path(path), "{path}");
     }
@@ -310,7 +320,7 @@ fn is_config_path_holds_no_protected_paths_or_ci_includes_until_m4() {
 fn unknown_changed_paths_block_and_never_mean_no_owners() {
     let mut i = inputs(vec![approver(BOB, Role::Developer)], Vec::new());
     i.changed = ChangedPathsFact::Unknown("too_many_paths");
-    i.codeowners = owned("* @bob\n", &[("bob", OwnerRef::User(BOB))]);
+    i.codeowners = owned("* @bob\n", &[("bob", OwnerRef::User(BOB))], &i.changed);
     assert_eq!(
         evaluate(&i).blocks,
         vec![BlockReason::ChangedPathsUnknown {

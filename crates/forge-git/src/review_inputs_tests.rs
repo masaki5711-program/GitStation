@@ -159,13 +159,19 @@ async fn range_commits_are_capped() {
         .range_commits(&f.root, f.id, Some(&base), &two, 10, T)
         .await
         .expect("rev-list");
-    assert_eq!(range, Some(vec![two.clone(), one.clone()]));
+    let range = range.expect("in cap");
+    assert_eq!(range.commits, vec![two.clone(), one.clone()]);
+    assert_eq!(
+        range.bottoms,
+        vec![one.clone()],
+        "the oldest commit of the range"
+    );
     let all = f
         .git
         .range_commits(&f.root, f.id, None, &two, 10, T)
         .await
         .expect("rev-list");
-    assert_eq!(all.map(|c| c.len()), Some(3));
+    assert_eq!(all.map(|c| c.commits.len()), Some(3));
     let over = f
         .git
         .range_commits(&f.root, f.id, Some(&base), &two, 1, T)

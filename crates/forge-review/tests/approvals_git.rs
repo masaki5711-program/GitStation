@@ -80,6 +80,17 @@ fn commit(repo: &Path, files: &[(&str, &str)], parent: Option<&str>) -> String {
     plumb(repo, &args, None)
 }
 
+/// A merge commit of `parents` whose tree holds `files`.
+fn merge_commit(repo: &Path, files: &[(&str, &str)], parents: &[&str]) -> String {
+    let single = commit(repo, files, None);
+    let tree = plumb(repo, &["rev-parse", &format!("{single}^{{tree}}")], None);
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", "merge"];
+    for p in parents {
+        args.extend(["-p", p]);
+    }
+    plumb(repo, &args, None)
+}
+
 fn oid(raw: &str) -> ObjectId {
     ObjectId::parse(raw).expect("oid")
 }
@@ -245,6 +256,20 @@ impl World {
         new: &str,
         request_id: &str,
     ) {
+        self.record_push_listing(who, branch_name, (old, new), (&[new], 1), request_id)
+            .await;
+    }
+
+    /// A push record listing `listed` of `total` new commits (more than
+    /// listed: the record's list is cut, as for a push of 21+ commits).
+    async fn record_push_listing(
+        &self,
+        who: UserId,
+        branch_name: &str,
+        (old, new): (Option<&str>, &str),
+        (listed, total): (&[&str], u64),
+        request_id: &str,
+    ) {
         let zero = "0".repeat(40);
         let push = PushRecord {
             repository_id: self.repo,
@@ -257,8 +282,8 @@ impl World {
                 } else {
                     PushUpdateKind::Create
                 },
-                commits: vec![oid(new)],
-                total_commits: 1,
+                commits: listed.iter().map(|c| oid(c)).collect(),
+                total_commits: total,
                 total_commits_partial: false,
             }],
         };
@@ -696,5 +721,262 @@ async fn an_agent_token_cannot_approve() {
         .await
         .expect_err("agent");
     assert_eq!(e.code(), ErrorCode::Forbidden);
+    w.t.drop_now().await;
+}
+
+/// R5 review HIGH: rita (playing Bob) pushes 21 commits in one push whose
+/// list holds only the 20 newest; the oldest is the merge request's head,
+/// which dave's own record names. Rita's cut push reaches it, so she is a
+/// committer and her approval does not count.
+#[tokio::test]
+async fn a_cut_push_reaching_the_range_makes_its_pusher_a_committer() {
+    let w = world(
+        &[(
+            "README.md",
+            "base
+",
+        )],
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            (
+                "f.txt", "f
+",
+            ),
+        ],
+    )
+    .await;
+    let mut chain = vec![w.head.clone()];
+    for n in 2..=21 {
+        let parent = chain.last().expect("parent").clone();
+        chain.push(commit(
+            &w.path,
+            &[
+                (
+                    "README.md",
+                    "base
+",
+                ),
+                (
+                    "f.txt",
+                    &format!(
+                        "f{n}
+"
+                    ),
+                ),
+            ],
+            Some(&parent),
+        ));
+    }
+    let tip = chain.last().expect("tip").clone();
+    plumb(&w.path, &["update-ref", "refs/heads/bob", &tip], None);
+    let listed: Vec<&str> = chain.iter().rev().take(20).map(String::as_str).collect();
+    w.record_push_listing(w.rita, "bob", (None, &tip), (&listed, 21), "req-push-bob")
+        .await;
+    w.rule(1, &[]).await;
+    let answer = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        answer.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::Committer)
+        }
+    );
+    w.approve(w.mara).await.expect("approve");
+    w.ask().await.expect("mara counts");
+    w.t.drop_now().await;
+}
+
+/// R5 review MEDIUM: a criss-cross history has two merge bases; the paths
+/// the merge changes are the target tip against the trial merge's tree,
+/// so a path already on the target (b.txt) needs none of its owners.
+#[tokio::test]
+async fn criss_cross_histories_count_only_what_the_merge_changes() {
+    let codeowners = (
+        "CODEOWNERS",
+        "b.txt @mara
+c.txt @rita
+",
+    );
+    let mut w = world(
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            codeowners,
+        ],
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            codeowners,
+            (
+                "f.txt", "f
+",
+            ),
+        ],
+    )
+    .await;
+    let base = w.base.clone();
+    let m1 = commit(
+        &w.path,
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            codeowners,
+            (
+                "a.txt", "a
+",
+            ),
+        ],
+        Some(&base),
+    );
+    let f1 = commit(
+        &w.path,
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            codeowners,
+            (
+                "b.txt", "b
+",
+            ),
+        ],
+        Some(&base),
+    );
+    let both = [
+        (
+            "README.md",
+            "base
+",
+        ),
+        codeowners,
+        (
+            "a.txt", "a
+",
+        ),
+        (
+            "b.txt", "b
+",
+        ),
+    ];
+    let m2 = merge_commit(&w.path, &both, &[&m1, &f1]);
+    let f2_files = [
+        (
+            "README.md",
+            "base
+",
+        ),
+        codeowners,
+        (
+            "a.txt", "a
+",
+        ),
+        (
+            "b.txt", "b
+",
+        ),
+        (
+            "c.txt", "c
+",
+        ),
+    ];
+    let f2 = merge_commit(&w.path, &f2_files, &[&f1, &m1]);
+    let bases = plumb(&w.path, &["merge-base", "--all", &m2, &f2], None);
+    assert_eq!(bases.lines().count(), 2, "criss-cross: {bases}");
+    plumb(&w.path, &["update-ref", "refs/heads/main", &m2], None);
+    plumb(&w.path, &["update-ref", "refs/heads/feature", &f2], None);
+    w.record_push(w.dave, "feature", None, &f2, "req-push-f2")
+        .await;
+    w.head = f2;
+    w.checked().await;
+    // dave wrote c.txt; rita (its owner) approves; nobody owning b.txt.
+    w.approve(w.rita).await.expect("approve");
+    let state = w
+        .review
+        .approval_state(
+            &RequestId::parse("req-state").expect("id"),
+            &w.mr_proof(&session(w.rita), Action::MergeRequestRead)
+                .await
+                .expect("proof"),
+            ready(w.repo),
+        )
+        .await
+        .expect("state");
+    let report = state.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    assert_eq!(
+        report.codeowners.len(),
+        1,
+        "c.txt only: {:?}",
+        report.codeowners
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 review MEDIUM: a rule naming a missing user and one naming a disabled
+/// user get the same answer (no existence oracle); a CODEOWNERS owner that
+/// is disabled is `unknown_owner` like a missing one.
+#[tokio::test]
+async fn missing_and_disabled_accounts_answer_alike() {
+    let w = world(
+        &[("README.md", "base\n"), ("CODEOWNERS", "* @mara\n")],
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "* @mara\n"),
+            ("f.txt", "f\n"),
+        ],
+    )
+    .await;
+    let principal = session(w.owner);
+    let project = loaded(&w.t, &principal, w.project).await;
+    let proof = prove(
+        &principal,
+        Action::ApprovalRuleManage,
+        ProjectCtx::new(project),
+    )
+    .expect("proof");
+    let ask = |user: &str| RuleAsk {
+        name: "review".to_owned(),
+        target_pattern: None,
+        required_approvals: 1,
+        users: vec![user.to_owned()],
+        groups: Vec::new(),
+    };
+    let missing = w
+        .review
+        .put_approval_rule(&request("req-rule-ghost"), &proof, &ask("ghost"))
+        .await
+        .expect_err("missing");
+    let _disabled = forge_db::users::disable(&w.t.db, &system("req-disable"), w.mara)
+        .await
+        .expect("disable");
+    let disabled = w
+        .review
+        .put_approval_rule(&request("req-rule-mara"), &proof, &ask("mara"))
+        .await
+        .expect_err("disabled");
+    assert_eq!(missing.code(), ErrorCode::RequestInvalid);
+    assert_eq!(missing.context(), disabled.context(), "the same answer");
+    w.approve(w.rita).await.expect("approve");
+    let blocked = w.ask().await.expect_err("blocked");
+    assert!(
+        detail(&blocked).contains("reason=unknown_owner"),
+        "{}",
+        detail(&blocked)
+    );
     w.t.drop_now().await;
 }
