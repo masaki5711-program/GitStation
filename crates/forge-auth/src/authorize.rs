@@ -626,6 +626,24 @@ pub fn authorize(
             Ok(())
         }
 
+        // Removing version refs (secret removal, M3 R1b, ADR-0024 §2): a
+        // person (a token was refused above as session-only; agents and
+        // service accounts hold only tokens) with administrator rights.
+        // Whether the merge request's state allows it is the command's
+        // (FG-REVIEW-0002), not a permission.
+        (
+            Action::MergeRequestVersionRefsPurge,
+            Resource::MergeRequest {
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            people_only()?;
+            admin_only()?;
+            branches(source_branch, target_branch).map_err(refused)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -681,6 +699,7 @@ pub fn authorize(
             | Action::MergeRequestUpdate
             | Action::MergeRequestClose
             | Action::MergeRequestReopen
+            | Action::MergeRequestVersionRefsPurge
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

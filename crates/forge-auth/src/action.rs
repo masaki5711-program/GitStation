@@ -80,6 +80,13 @@ actions! {
     MergeRequestClose,
     /// `POST …/merge-requests/{iid}/reopen`: as close; a merged one never.
     MergeRequestReopen,
+    /// `POST …/merge-requests/{iid}/version-refs/purge` (M3 R1b, ADR-0024
+    /// §2): remove the hidden version refs (secret removal). A human
+    /// administrator's web session only: every token — an `admin`-scoped
+    /// one included — is `FG-AUTH-0002 reason=session_required`; agents and
+    /// service accounts hold only tokens (the sign-in admits people only,
+    /// `not_human`), so they never reach it.
+    MergeRequestVersionRefsPurge,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -204,6 +211,7 @@ impl Action {
                 | Action::TokenCreate
                 | Action::SessionList
                 | Action::SessionRevoke
+                | Action::MergeRequestVersionRefsPurge
         )
     }
 
@@ -230,6 +238,7 @@ impl Action {
             | Action::SessionCreate
             | Action::SessionContinue
             | Action::SessionLogout
+            | Action::MergeRequestVersionRefsPurge
             | Action::OidcBackchannelLogout => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
