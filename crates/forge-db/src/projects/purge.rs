@@ -450,6 +450,44 @@ async fn finish_steps(
     // mergeability rows before them too; M3 R3: the notes, then the
     // discussions (they reference the versions and the merge requests);
     // M3 R4: the merge attempts (derived; they reference the merge requests).
+    // M3 R5: the approvals (they reference the merge requests), then the
+    // approval rules' approvers before the rules; the push records'
+    // unlisted ref updates (re-review round 2).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.push_commits WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_commits",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.push_unlisted_refs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_unlisted_refs",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_approvals WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_approvals",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.approval_rule_approvers WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.approval_rule_approvers",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.approval_rules WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.approval_rules",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_merges WHERE project_id = $1",

@@ -201,6 +201,12 @@ admitted proof.
   `MergeStatusBody { iid, merge }`). The registry documents `202` (`responds_accepted`). The
   merge job runs in `forge serve` (forge-cli `serve_merges.rs`). Tests
   `tests/merge_request_merge_routes.rs`.
+  M3 R5 (`routes/merge_requests/approvals.rs`): `POST …/{iid}/approve`
+  (`MergeRequestApprove`, body `{ sha }`, `ApprovalAnswerBody`), `POST …/{iid}/unapprove`
+  (`MergeRequestUnapprove`), `GET …/{iid}/approvals` (`MergeRequestRead`,
+  `ApprovalStateBody` with `blocked_by`), `GET /api/v1/projects/{id}/approval-rules`
+  (`ProjectRead`), `PUT|DELETE …/approval-rules/{name}` (`ApprovalRuleManage`). Tests in
+  `tests/merge_request_merge_routes.rs`.
   M3 R3 (`routes/merge_requests/discussions.rs`): `GET …/{iid}/discussions`
   (`MergeRequestRead`; `DiscussionsBody`, each thread with `outdated`), `POST
   …/{iid}/discussions` (`StartDiscussion { body, position? { version, path, side, line } }`)
@@ -268,7 +274,15 @@ admitted proof.
   in its own task (a disconnect cannot kill it mid ref-update); after it
   exits the applied refs' kinds and commits are read (10 s each),
   `forge.git.push_applied` is logged, then `PushRecorder::record_push` is
-  tried 3 times within 30 s, else `FG-GIT-0012`. git's probe request
+  tried 3 times within 30 s, else `FG-GIT-0012`. The commits the push
+  introduced (M3 R5, ADR-0024 §8.3) are listed against the ref snapshot
+  taken before receive-pack started and written as `push_commits` rows in
+  the same record; every listing logs `forge.git.push_commits_listed`
+  (`refs`, `listed`, `snapshot_ms`, `listing_ms`), an incomplete one
+  (`cap` 20 000, `deadline`, `snapshot_failed`, `git_failed`) one
+  `FG-GIT-0016` warn. The final record attempt sends no commits (the audit
+  row survives a store slowed by the rows: `reason=record_fallback`); the
+  attempts before it end 10 s early to keep that time. git's probe request
   (`0000`) is answered without git. The token id that authenticated the
   request is kept as a request extension (`Dispatched::credential_id`) for
   the record.
@@ -387,7 +401,9 @@ FG-WEB-0003 MethodNotAllowed, FG-WEB-0004 RouteRegistryInvalid, FG-WEB-0007
 SmartHttpServiceUnsupported (raised by forge-core's parser), FG-REPO-0016
 RepositoryNotReady (Smart HTTP), FG-SYS-0004
 ServerBindFailed, FG-SYS-0005 ServeFailed, FG-SYS-0006 SignalHandlerUnavailable,
-FG-SYS-0007 AcceptFailed (runbook `server-start-failed`).
+FG-SYS-0007 AcceptFailed (runbook `server-start-failed`), FG-GIT-0016
+PushCommitsIncomplete (warn, M3 R5 round 5: the push's introduced-commit listing; runbook
+`merge-blocked`).
 
 **Commands** (in `Git/`)
 

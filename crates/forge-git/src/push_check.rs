@@ -250,7 +250,7 @@ impl Git {
 
     /// `id -> whether it peels to a commit` (`cat-file --batch-check` of
     /// `<id>^{commit}`, one answer line per input line, in order).
-    async fn peels_to_commit(
+    pub(crate) async fn peels_to_commit(
         &self,
         repo: &Path,
         ids: &[&str],

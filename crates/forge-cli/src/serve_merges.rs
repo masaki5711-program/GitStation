@@ -147,6 +147,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::GitRequestTooLarge
         | ErrorCode::GitProtocolInvalid
         | ErrorCode::GitClientDisconnected
+        | ErrorCode::PushCommitsIncomplete
         | ErrorCode::RouteNotFound
         | ErrorCode::RequestTimeout
         | ErrorCode::ServerBindFailed
@@ -195,7 +196,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::HeadChanged
         | ErrorCode::MergeMethodNotAllowed
         | ErrorCode::MergeInProgress
-        | ErrorCode::MergeIdentityInvalid => false,
+        | ErrorCode::MergeIdentityInvalid
+        | ErrorCode::SelfApprovalRefused
+        | ErrorCode::CodeownersInvalid
+        | ErrorCode::ApprovalLimitReached => false,
     }
 }
 

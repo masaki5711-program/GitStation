@@ -598,9 +598,15 @@ async fn a_merge_whose_merge_request_is_no_longer_open_is_failed_not_left_execut
             total_commits_partial: true,
         }],
     };
-    let done = merges::finish_merge(&w.t.db, &as_user(w.alice, "req-finish"), &attempt, &push)
-        .await
-        .expect("finish");
+    let done = merges::finish_merge(
+        &w.t.db,
+        &as_user(w.alice, "req-finish"),
+        &attempt,
+        &push,
+        Some(&[]),
+    )
+    .await
+    .expect("finish");
     assert_eq!(
         done,
         merges::MergeFinished::MergeRequestNotOpen(forge_core::MergeRequestState::Closed)

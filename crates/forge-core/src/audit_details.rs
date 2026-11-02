@@ -1,6 +1,7 @@
 //! Typed `audit_log.details` (ADR-0016 §9). Variants carry no personal data
 //! (no email, employee number, external id, display name, IP).
 
+use crate::approval::ApprovalRuleChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
@@ -291,6 +292,9 @@ pub enum AuditDetails {
     /// `merge_request.head_restored` / `.version_refs_purged` (M3 R1b):
     /// audit-only, on the project. Shapes: [`MergeRequestVersionChange::to_value`].
     MergeRequestVersion(MergeRequestVersionChange),
+    /// `approval_rule.put` / `approval_rule.removed` (M3 R5, ADR-0024 §8.6):
+    /// audit-only, on the project. Shapes: [`ApprovalRuleChange::to_value`].
+    ApprovalRule(ApprovalRuleChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -441,6 +445,7 @@ impl AuditDetails {
             Self::UserIdentityLinked { .. } => "user.identity_linked",
             Self::MergeRequest(change) => change.action(),
             Self::MergeRequestVersion(change) => change.action(),
+            Self::ApprovalRule(change) => change.action(),
         }
     }
 
@@ -487,7 +492,7 @@ impl AuditDetails {
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
             Self::MergeRequest(change) => Some(change.transition().event_type()),
-            Self::MergeRequestVersion(_) => None,
+            Self::MergeRequestVersion(_) | Self::ApprovalRule(_) => None,
             // ADR-0021 §5: sessions are audit rows, never domain events.
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
@@ -840,6 +845,7 @@ impl AuditDetails {
             }),
             Self::MergeRequest(change) => change.to_value(),
             Self::MergeRequestVersion(change) => change.to_value(),
+            Self::ApprovalRule(change) => change.to_value(),
         }
     }
 
@@ -908,7 +914,8 @@ impl AuditDetails {
             | Self::UserCreatedOnLogin { .. }
             | Self::UserIdentityLinked { .. }
             | Self::MergeRequest(_)
-            | Self::MergeRequestVersion(_) => self.to_value(),
+            | Self::MergeRequestVersion(_)
+            | Self::ApprovalRule(_) => self.to_value(),
         }
     }
 }

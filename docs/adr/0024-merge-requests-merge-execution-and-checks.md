@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011**、R4 のレビューの MergeIdentityInvalid が **FG-REVIEW-0012**、R5 で登録した SelfApprovalRefused / CodeownersInvalid / ApprovalLimitReached が **FG-REVIEW-0013〜0015** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -598,8 +598,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | FG-REVIEW-0008（R4 で登録） | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
 | FG-REVIEW-0009（R4 で登録） | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（R4 で作成） | R4 |
 | FG-REVIEW-0001（R1a で登録済み） | DuplicateOpenMergeRequest | 409 | info | — | R1 |
-| 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
-| 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
+| FG-REVIEW-0013（R5 で登録） | SelfApprovalRefused | 403 | info | — | R5 |
+| FG-REVIEW-0014（R5 で登録） | CodeownersInvalid | 422 | warn | `codeowners`（R5 で作成） | R5 |
+| FG-REVIEW-0015（R5 で登録） | ApprovalLimitReached（MR ごとの生きた承認 50 件。版の記録の取り消しが 1 つの変更のイベント 100 件に収まるように） | 409 | info | — | R5 |
 | FG-REVIEW-0004（R3 で登録） | DiscussionPositionInvalid | 422 | info | — | R3 |
 | FG-REVIEW-0005（R3 のレビューで登録） | DiscussionLimitReached（スレッド・コメントの上限） | 409 | info | — | R3 |
 | FG-REVIEW-0010（R4 で登録） | MergeMethodNotAllowed | 409 | info | — | R4 |
@@ -626,10 +627,13 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 
 - ~~push の経路の pre-receive / post-receive のフックを M3 のどの MR で入れるか~~ → **R4 で決めた**（末尾の「実装で決めたこと（R4）」）:
   マージの経路はフックに頼らず、ロックの下で保護 ref の判定と生きた先端を照らし直す。push の経路のフックは X8（M3 後半）に残す。
-- CODEOWNERS の大きさの上限の既定値（R5 で決める）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
+- ~~CODEOWNERS の大きさの上限の既定値（R5 で決める）~~ → **R5 で決めた**（64 KiB・1 000 行・1 行 4 KiB・1 行の所有者 50。末尾の R5 の節）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
   リポジトリごとのロックで直列」に決めた（末尾の R4 の節）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
-- 変更されたパスの件数の上限と時間切れ、`codeowners_enforced_off_until` の既定と上限（24 時間以内）、保守の prune の猶予
-  （24 時間以上）の既定値（R5・O3 で決める）。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
+- 変更されたパスの件数の上限と時間切れは **R5 で決めた**（10 000 件・git の呼び出しごとに 10 秒）。`codeowners_enforced_off_until` の既定と上限
+  （24 時間以内）は **R6 に送った**（切り替えの Action と `merge_settings` と一緒。末尾の R5 の節）。保守の prune の猶予（24 時間以上）は O3。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
+- **リポジトリの ref の数の上限**（R5 の再レビュー 6 回目からの申し送り、O シリーズ）: push のたびに全 ref の先端を読む
+  （`ref_snapshot`、上限 1 000 000 ref で失敗 = その push の一覧は不完全）。ref が N 本を超えるリポジトリへの push を拒む上限と、
+  N に近づいたら知らせる doctor の warn を O シリーズで入れる（N は運用の実測で決める）。R5 では実装しない。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
   契約 4 と ADR-0019 §8 の `forge admin …` / `forge backup` / `forge restore`）と実際の運用のコマンドの一致も確かめるようにする（[root] の MR）。
 
@@ -1111,3 +1115,261 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
 - **配布の注意**: 既定のメッセージを要求の時点で固める変更（1 回目）より前に積まれた試行は `message` が空で、ジョブの時点の
   タイトルと説明を使う。配布の前にマージのキューを空にする（`queued` / `prepared` / `executing` の試行が無いことを確かめる）。
   手順は runbook `merge-execution` の「配布の前に」。
+
+## 実装で決めたこと（R5 `feat/core-approval-rules-codeowners`、2026-11-03）
+
+本文（§6・§7・§8・§9・§12）と違えたところは **逸脱** と書いた。
+
+- **表**（追記のマイグレーション 20261111100000）: `tokens_scopes_known` に `merge_approve` を足した（変種と CHECK は同じ MR、§8 の 5）。
+  `merge_request_approvals`（`approver_id`・`head_sha`・`target_branch`・`created_at`・終わりの `revoked_at` / `revoked_reason` =
+  `unapproved` / `new_commits` / `target_changed`）。承認は 1 行 1 回で、終わった行は消さずに残す（履歴）。生きた承認は承認者と MR ごとに 1 つ
+  （部分一意索引 `merge_request_approvals_one_live`）。ガード `merge_request_approvals_end_once`（同一性は変わらない、終わりは一度だけ）。
+  `approval_rules`（名前 `[a-z0-9][a-z0-9_.-]{0,63}`、プロジェクトで一意、`target_pattern` は `RefPattern`、`required_approvals` 1〜20）と
+  `approval_rule_approvers`（利用者かグループのどちらか 1 つ、外部キーつき）。3 つともプロジェクトに監査される表で、プロジェクトの purge で消す。
+- **承認と取り消し**: `approve_mr_decided` は MR の行のロックの下で、`decide`（`reconfirm` と、要求の `sha` が今の head、target が git の事実を
+  読んだときと同じこと。違えば FG-REVIEW-0008 `stale_view`）の後に行を書く。同じ組の生きた承認があれば何も書かない（`unchanged`）。別の組の
+  生きた承認（通常は起きない）は終わらせて書き直す。生きた承認が 50 件で **FG-REVIEW-0015** ApprovalLimitReached（**新規**。版の記録が承認ごとに
+  `merge_request.unapproved` を出すので、1 つの変更のイベントの上限 100 件に収める）。`merge_request.approved` の `counted` /
+  `uncounted_reason` は、書いた直後に同じトランザクションで読んだ承認の事実と、トランザクションの前に読んだ git の事実で評価する（§6）。
+  dedup は `merge_request_approved:<approval_id>` / `merge_request_unapproved:<approval_id>`（行は一度だけ終わる）。
+- **取り消し**: 版の記録（新しい版、**A → B → A の戻りを含む**）が `new_commits`、target の変更が `target_changed` で、生きた承認をすべて
+  終わらせ、承認ごとに監査の `affected` の行とイベントを同じトランザクションで書く。**逸脱**: `reset_approvals_on_push = false` で承認を
+  写す設定と `may_carry_approvals` は R5 に入れていない（設定を持つ `merge_settings` は R6。それまですべてのプロジェクトで既定の「消す」）。
+- **だれが承認できるか**（§8 の 4、§12）: `MergeRequestApprove` / `MergeRequestUnapprove` は人だけ（`is_people_only` に足した。サービス
+  アカウント・ボットの行は `matrix_rows_people.rs`）、所属のロールで Developer 以上、作成者は **ロールより先に** FG-REVIEW-0013
+  （`reason=self_approval`、管理者も。`admin_author_self_approval_is_denied`）。スコープ `merge_approve`（`api`・`admin`・`merge_execute` は
+  満たさない）。R4 の宿題だった「`merge_approve` だけのトークンでマージ」の deny の行も入れた（`matrix_rows_approval.rs`）。取り消しも同じ arm
+  （作成者には取り消す承認が無い）。
+- **数えるか**（§8 の 3・6、評価の時点）: 今の head と target の承認（`stale`）、承認者が有効（`inactive`）、人（`not_human`）、
+  所属のロールが Developer 以上（`role_insufficient`。**管理者の印は数えない**: 所属の無い管理者の承認は数えられない）、作成者でない
+  （`author`）、コミッターでない（`committer`、示せなければ `committers_unknown`）。有効でも、適用されるルール・CODEOWNERS の行・設定の
+  ファイルの条件のどれにも入らなければ `not_in_rule`（要件がまったく無いときは数える）。「コミッターの承認を数えない」設定は R6 まで常に有効。
+- **コミッターの問い合わせ**（§8 の 3 の「正確な問い合わせは R5 で固定する」）: 範囲 `merge_base..head` を git で読み（最大 1 000 コミット）、
+  そのリポジトリの `repository.pushed` の監査の行のうち、ref の `new` か一覧のコミットが範囲にあるものの actor（再生の行は `replayed_from`）を
+  コミッターにする（MR の作成の前の push・他のブランチへの push・別名の push を含む。テスト `committers_include_pushes_before_mr_creation`、
+  `committers_include_pushes_to_other_branches`）。どの行にも名前の出ない範囲のコミットは、一覧が切れた（21 件以上の）ref の更新のうち `new` から
+  そのコミットに届くもの（git、最大 16 件）の actor を全員コミッターにする。届く更新が無い・ref の一覧が切れた記録がある・git が失敗した・
+  上限を超えた → `committers_unknown`。**逸脱**: 本文の「範囲のコミットを祖先に持つ push の actor 全員」は、一覧が切れた更新についてだけ
+  git で確かめる（すべての push の `new` の祖先を確かめると、リポジトリの push の数だけ git を動かす）。範囲のコミットを新しく運ばず、
+  その上に自分のコミットを積んで別名で push しただけの人はコミッターにならない。push の記録の無いコミット（取り込み・手の `update-ref`・
+  保存期間の外）があると、ルールのある MR は止まる（`committers_unknown`、runbook `merge-blocked`）。
+- **CODEOWNERS**（§9、計画 11 Q5）: target の先端（ジョブではロックの下で読んだ target の先端）の `.forge/CODEOWNERS`、無ければ `CODEOWNERS` を
+  `ls-tree` と `cat-file` で読む（シンボリックリンク・ディレクトリは `not_a_file`）。文法は本文のとおりで、`\#` と `\ ` のエスケープ、
+  `[` `]` `{` `}`・`***`・要素の一部の `**`・`.` / `..` は `pattern_invalid`、セクション・任意の承認・メール・否定は `unsupported`。
+  **先頭の `/` の無いパターンはどの深さでも一致**（`/` を含んでも。GitLab と同じく `**/` を前に付けた扱い）、パターンはそのパス自身と
+  その下のすべてに一致、末尾の `/` は下だけ。所有者は 1 要素の `@name` が利用者、無ければ最上位のグループ。`@a/b` はグループの全パス。
+  グループの所有者は **直接のメンバー**（下位グループのメンバーは含めない）。知らない所有者は最初にその名前を書いた行で `unknown_owner`。
+  **上限（未決を決めた）**: 64 KiB・1 000 行・1 行 4 KiB・1 行の所有者 50。解析できないファイルは `codeowners_invalid{line, reason}` で止め、
+  評価のたびに warn `forge.review.codeowners_invalid`（FG-REVIEW-0014）を 1 回出す。
+- **変更されたパス**: `diff-tree --no-renames -r -z --name-only <merge_base> <head>`（**上限 10 000 件**、出力の上限は件数 × 4 KiB、
+  **git の呼び出しごとに 10 秒**。ジョブではロックの保持の残りで抑える）。超過は `too_many_paths`、UTF-8 でないパスは `non_utf8_path`、
+  共通の履歴が無いと `no_merge_base`、target が無いと `target_missing`、git の失敗は `timeout` / `git_failed`（warn
+  `forge.review.approval_input_unread`、git のコード）。**逸脱**: 本文の `spawn_stream` ではなく、上限つきの取り込み（超えたら止めて
+  `too_many_paths`）にした。閉じる側に倒すことは同じ。
+- **設定のファイル**（§8 の 7）: `is_config_path` は `.forge/**`・`.forge-ci.yml`・直下の `CODEOWNERS`。保護パスと CI の読み込むファイルは
+  M4 まで空の集合（テスト `is_config_path_holds_no_protected_paths_or_ci_includes_until_m4`）。Maintainer 以上の数えられる承認が 1 つ要る。
+- **`evaluate_merge()`**: `BlockReason` にデータを持たせた（`Copy` ではなくなった）。並びは §7 のとおり `approvals_missing`（ルールの名前の順）→
+  `codeowner_approval_missing`（行の順）→ `codeowners_invalid` → `config_change_needs_maintainer_approval` → `changed_paths_unknown`。
+  FG-REVIEW-0007 の context に `details`（`approvals_missing:rule=… required=… counted=…;…`）を足した。入力の git の事実（変更されたパス・
+  範囲・target の CODEOWNERS）は、マージの要求ではトランザクションの前に、ジョブではロックの下で ref を読んだ直後に 1 回読み、tx1a・
+  tx1b・再開のすべての判定が使う。承認・ルール・承認者の事実はゲートのトランザクションの中で読む（`MergeGate.approvals`）。
+  git の失敗は判定の失敗ではなく「分からない」事実として止める（ジョブでは `superseded` の MergeBlocked。再試行はしない）。
+- **ルールの管理**: `ApprovalRuleManage`（人だけ、Maintainer 以上、`api`）。`PUT /api/v1/projects/{id}/approval-rules/{name}`（作成か置き換え。
+  承認できる人は利用者名とグループの全パスで受け取り、ID で保存）、`DELETE …/{name}`、一覧は `GET …/approval-rules`（`ProjectRead`）。
+  プロジェクトごとに 20 ルール、1 ルール 50 の利用者・グループまで（FG-WEB-0006）。監査だけ（`approval_rule.put` / `.removed`、イベントなし）。
+  ルールの変更は承認を消さない（テスト `a_rule_change_changes_evaluate_merge`）。保護ブランチの `protected_ref_merge_rules`（最低の数）は R6。
+- **ルート**: `POST …/{iid}/approve`（本文 `sha`）、`POST …/{iid}/unapprove`、`GET …/{iid}/approvals`（`MergeRequestRead`: 承認ごとの
+  `counted` / `uncounted_reason` / `committer_push_audit_id`、ルール、必要な CODEOWNERS の行、`config_change_approved`、`blocked_by`）。
+  gstn は `mr approve --sha` / `mr unapprove` / `mr approvals` と `approval-rule list|set|remove`。
+- **R6 へ送ったもの**: `codeowners_enforced` と期限つきの切り替え（`CodeownersEnforcementToggle`、`codeowners_enforced_off_until`、期限が
+  過ぎたことの通知）と `merge_settings`（`reset_approvals_on_push`・コミッターの規則の切り替え）。それまで CODEOWNERS の行き詰まりの逃げ道は
+  target に push できる人の直接の push（runbook `codeowners`。R6 で保護ブランチへの直接の push の禁止を入れる前に切り替えを入れる）。
+  代理の deny の行は ADR-0025。
+
+### R5 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（security・authz・database・rust）の HIGH 3 件と MEDIUM / LOW への対応。上の R5 の節と違えたところは **改訂** と書いた。
+
+- **一覧が切れた push のコミッター（HIGH、改訂）**: 一覧が切れた（21 件以上の）ref の更新は、その `new` が範囲に届けば（範囲にある、または範囲の
+  底（範囲に親を持たないコミット）を祖先に持つ。`merge-base --is-ancestor`）、**範囲のコミットが別の記録に載っていても** その actor をコミッターに
+  する（Bob が B1..B21 を 1 回で push して B1 が一覧から落ち、Alice が B1 で `feature` を作ったとき、Bob の承認を数えない。テスト
+  `a_cut_push_reaching_a_named_commit_still_makes_a_committer`・`a_cut_push_reaching_the_range_makes_its_pusher_a_committer`）。リポジトリ全体の
+  一覧の切れた push を読み（最大 10 000 件）、届かないものは数えない（無関係な push で `committers_unknown` にしない）。届くものが 16 件を超える・
+  届くかが分からないと `committers_unknown`。push の記録の読み取りに部分索引 `audit_log_pushes`（追記のマイグレーション 20261111100100。
+  **CONCURRENTLY ではない**: 守られた監査の表への DDL は db.migrate の行と同じトランザクションでしか認められない。`-- no-transaction` は 1 文で
+  その行を書けない。作る間は監査の書き込みが待つ）。
+- **範囲と変更されたパス（MEDIUM、改訂）**: 範囲は `head ^<target の先端>`（マージが持ち込むコミット）、変更されたパスは **target の先端と
+  試しのマージ（`merge-tree --write-tree`）の木の差分**（共通の祖先が複数ある criss-cross の履歴でも、target に着地する変更だけ。テスト
+  `criss_cross_histories_count_only_what_the_merge_changes`）。`merge-base` は呼ばない（その失敗を `no_merge_base` と読む誤りも消えた）。
+  衝突なら承認の側の止める理由は足さない（`ChangedPathsFact::Conflict`。衝突は mergeability とジョブの試しのマージ（FG-REVIEW-0006）が止める。`changed_paths_unknown` にするとジョブの最初の判定が FG-REVIEW-0007 で先に止め、衝突のコードが失われた。全体のテストで見つけた）。
+- **読み取りの予算（MEDIUM）**: 1 回の評価のすべての git の呼び出しと push の記録の読み取りを 1 つの期限と回数で抑える（`Budget`）。要求
+  （マージ・承認）は 20 秒・64 回、`GET …/approvals` は 10 秒・32 回、マージのジョブはロックの保持の残り・64 回。各呼び出しは最大 10 秒。
+  尽きたら「分からない」事実（`timeout`）で止める。
+- **CODEOWNERS の照合（HIGH、改訂）**: パターンは解析の時に要素へ分け、連続する `**` と `*` をまとめ、ワイルドカードは 1 パターン 16 個まで
+  （超えたら `pattern_invalid`、行番号つき）。照合は（要素 × パスの位置）の表と要素ごとの 2 点の glob で、指数的な後戻りをしない。照合は
+  ブロッキングのタスクで 5 秒まで（超えたら `codeowners_invalid reason=match_budget`）。結果（行 → パスの数）を評価の入力に持つ。
+- **見えない文字（HIGH）**: 先頭の UTF-8 の BOM は捨てる。注釈の外の Unicode の Cf（ゼロ幅・方向制御など）と ASCII でない空白（U+3000 など）は
+  `pattern_invalid`（行番号つき）。注釈の中は文字として扱う。
+- **大文字と小文字（MEDIUM）**: CODEOWNERS の照合と `is_config_path` は ASCII の大文字と小文字を区別しない（`.Forge/ci.yml`、`SRC/auth.rs`）。
+- **ログ（MEDIUM）**: 読めない CODEOWNERS は `forge.review.codeowners_invalid`（FG-REVIEW-0014）を評価ごとに 1 回だけ出す（git の失敗は同じ行の
+  `git_error_code`）。
+- **承認者の事実（MEDIUM）**: 承認者の数によらず 3 文（アカウント、利用者の一覧を渡す 1 つの chain の問い合わせによるロール、直接のグループ）。
+  `GET …/approvals` の読み取りは 1 つのスナップショットではない（READ COMMITTED の 1 トランザクション）: 表示だけで判定に使わず、マージは
+  ゲートのトランザクションでロックの下で読み直す。分離レベルの指定は `ChangeTx` だけに許す（db-write-boundary ゲート）ので、そう注記した。
+- **存在の問い合わせ（MEDIUM）**: ルールの承認できる人と CODEOWNERS の所有者は **有効な** 利用者と生きたグループだけを引く。存在しない名前と
+  無効化された利用者は同じ答え（ルールは FG-WEB-0006 `unknown_user`、CODEOWNERS は `unknown_owner`）。グループは内部の公開で、見えないグループは無い。
+- **LOW**: ルールの利用者・グループは重複を除いてから比べて書く。権限の表に `merge_execute` だけ・`api` の無い Maintainer のトークンでの
+  `ApprovalRuleManage` の deny と、`merge_approve` + `admin` の管理者のトークンでの承認の allow を足した。
+- **記録だけ（LOW）**: (1) 引き下げられた元の承認者（Reporter など）は `MergeRequestUnapprove` を拒まれる。その承認は評価の時点で
+  `role_insufficient` で数えられないので、取り消せなくてもマージの条件を満たさない（必要なら新しいコミットか target の変更で消える）。
+  (2) 所属の無い管理者の承認は **受け付けるが数えない**（`role_insufficient`）。`authorize()` は管理者の権限で承認を許す（管理者の印は
+  評価に使わない）。拒むより、表示で「数えない理由」を見せる方を選んだ。(3) `forge_app` の `merge_request_approvals`・`approval_rules`・
+  `approval_rule_approvers` への DELETE はプロジェクトの purge だけが使う（承認の終わりは `revoked_at` の UPDATE、ルールの置き換えは承認できる人の
+  行の DELETE と INSERT で、どれも監査の行と同じトランザクション）。
+
+### R5 の再レビュー（2 回目）で決めたこと（2026-11-03）
+
+security の HIGH 3 件と MEDIUM / LOW への対応。上の R5 の節と 1 回目の節と違えたところは **改訂** と書いた。
+
+- **一覧に無い ref（HIGH、改訂）**: `repository.pushed` の監査の行は ref を 100 件（とバイトの予算）までしか載せない。101 件目に範囲のコミットを
+  置いた push は見えず、範囲のコミットが別の記録に載っていると早い return で `Known` になっていた。push の記録のトランザクションで、一覧に
+  載らなかった ref の更新（削除を除く）を新しい表 `push_unlisted_refs`（追記のマイグレーション 20261111100200。プロジェクトに監査される表、
+  更新しない（ガード `push_unlisted_refs_immutable`）、purge で消す）に残し、コミッターの規則はそれを「コミットの一覧が分からない push」として同じ
+  到達の判定に入れる。表ができる前の、ref の一覧が切れた記録が 1 つでもあれば、範囲のコミットがすべて名指されていても `committers_unknown`
+  （早い return の前に確かめる。テスト `a_record_with_cut_refs_is_unknown_even_when_every_commit_is_named`、
+  `a_ref_beyond_the_listed_hundred_still_makes_a_committer`）。ref の一覧が空の記録も読む（`LEFT JOIN`）。
+- **届くかの確認は git 1 回（HIGH、改訂）**: 一覧の切れた push の先端すべてと `^<target の先端>` を `rev-list --parents --stdin` 1 回に渡し
+  （最大 50 000 コミット。超えたら `push_graph_too_large`）、届くか・どのコミットに届くかはメモリの上で決める。大きな push が何件あっても予算の
+  回数を使い切らない（テスト `many_large_pushes_do_not_exhaust_the_budget`: 41 件で `GET …/approvals` の 32 回の予算が足りる）。先端の
+  コミットがリポジトリに無いと git の失敗（`git_failed`）で、「届かない」とはしない（O3 の prune が入ったら見直す）。
+- **パスの長さと照合の時間（HIGH）**: 4 KiB を超える変更されたパスは `changed_paths_unknown reason=path_too_long`（warn を 1 回、
+  FG-GIT-0006 `path_too_long`）。照合はパスの間に加えてルール 64 行ごとにも期限を確かめ、`spawn_blocking` の待ちも `tokio::time::timeout`
+  で抑える。タスクの失敗（panic）は予算の超過と分けて `codeowners_invalid reason=match_failed`（`join_error` つき）。`matches()` は 1 行の
+  表を回して使い、後ろが合わないときは glob を呼ばない。
+- **見えない文字の追加（MEDIUM）**: 注釈の外の、タブ以外の制御文字（VT・DEL など）、結合文字（U+0300–036F・0483–0489・1AB0–1AFF・
+  1DC0–1DFF・20D0–20FF・3099–309A・FE20–FE2F）、ハングルの埋め字（U+115F・U+1160・U+3164・U+FFA0）、点字の空白（U+2800）、異体字
+  セレクタ（U+FE00–FE0F・U+E0100–E01EF）も `pattern_invalid`。
+- **target が無いとき（MEDIUM）**: 評価できないことを warn `forge.review.approval_input_unread`（FG-REPO-0023 `ref_not_found`）で 1 回出す。
+- **状態の表示（MEDIUM）**: `GET …/approvals` は `conflict`（今の head が target の先端にきれいにマージできない）を返し、gstn も 1 行出す。
+  承認の側の止める理由が無くても、衝突している MR は「承認済み」に見えない。
+- **パターンの位置（LOW、改訂）**: §9 の「`/` のないパターンはどの深さでも一致」に合わせ、gitignore と同じく **先頭か途中に `/` がある
+  パターンは直下に固定** にした（上の R5 の節の「`/` を含んでもどの深さでも一致」を改める）。末尾だけの `/`（`docs/`）はどの深さでも一致。
+  両端の `//` は `pattern_invalid`。
+
+### R5 の再レビュー（3 回目）で決めたこと（2026-11-03）
+
+security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのすべての承認を永久に止められる、可用性の問題）と MEDIUM / LOW への対応。
+
+- **削除だけの一覧に無い ref（HIGH、改訂）**: 一覧に載らない ref がすべて削除の push は `push_unlisted_refs` に行が無く、「表ができる前の
+  切れた記録」と読まれて `committers_unknown` になっていた（101 本の `git push --delete` で永久に止まる）。新しい push の記録はすべて、監査の
+  行の `details` に印 `unlisted_kept: true` を持つ（イベントのペイロードには入れない）。古い記録かどうかは行の有無ではなくこの印で決める
+  （削除はどの範囲にも届かないので行は要らない）。テスト `deleting_many_branches_does_not_block_approvals`。
+- **リポジトリ全体の行の上限（HIGH、改訂）**: 一覧に無い ref の行をリポジトリ全体で数えて 10 000 件の上限に当てていたため、1 000 個のタグの
+  push 12 回で永久に止まった。**選んだ方法**: 一覧に無い ref は (先端, push した人) ごとに 1 項目にまとめ、記録に載った ref も、範囲の
+  コミットだけをコミットの一覧に残して小さくし、上限は各 200 000 項目（実際のリポジトリよりはるかに大きい正気の上限。超えたら
+  `push_records_over_cap`）。候補の先端はすべて 1 回の `commit_graph` に渡し、届くかはメモリの上で決め、**16 件の上限は範囲に届く候補の
+  数に当てる**。target の歴史の上のタグや無関係なブランチは `^<target の先端>` で外れるか届かないので、上限にも予算にも効かない
+  （テスト `many_tags_do_not_block_approvals`: 12 000 個のタグ）。新しい順に読む・時刻の窓で絞る方法は採らなかった（古い push を
+  上限の外へ押し出せばすり抜けられ、コミットの時刻は利用者が決められる）。
+- **消えた先端（MEDIUM）**: `commit_graph` の前に候補の先端を `cat-file --batch-check` で確かめ、リポジトリに無い先端は、どの ref も
+  向いていない（`for-each-ref`）ときだけ外す（届かない）。消えた先端に ref が向いていれば破損として `committers_unknown`
+  （`push_tip_missing`）。prune（O3、runbook `merge-request-mergeability`）の後の扱いを runbook に書いた。テスト
+  `a_pruned_cut_tip_no_ref_points_at_is_dropped`。
+- **見えない文字（LOW、改訂）**: 結合文字は選んだブロックではなく、Unicode の一般カテゴリ Mn / Me（と Cf）で判定する。表はすでに依存の木に
+  ある `unicode-properties`（sqlx の stringprep が使う。MIT / Apache-2.0）を `general-category` だけで直接の依存にした。
+
+### R5 の再レビュー（4 回目）で決めたこと（2026-11-03）— コミッターの規則の作り直し
+
+**改訂（R5 の節と 1〜3 回目の到達可能性の設計を置き換える）**: 監査の行（ref 100 件・ref ごとのコミット 20 件までの一覧）から push の
+中身を組み立て直し、一覧が切れたところを git の到達の判定で補う設計は、上限・予算・prune のたびに「安い操作で 1 つのリポジトリの承認を
+すべて止める」新しい穴を生んだ（タグの作成・削除の繰り返しで行数の上限、無関係な 51 000 コミットの孤立したブランチでグラフの上限、
+切れた先端の prune で B1 のすり抜けの再発）。コーディネーターの判断で、§8 の 3 の規則の実装を次のとおり作り直した。
+
+- **push を受けた時点で記録する**: 新しい表 `push_commits`（追記のマイグレーション 20261111100300。`repository_id`・`commit_sha`・
+  `pusher_id`・`project_id`・`request_id`（その push の監査の行と結ぶ。監査の行の id はコミットの時に決まるので）・`first_pushed_at`。
+  主キー (repository_id, commit_sha, pusher_id)、`ON CONFLICT DO NOTHING`、プロジェクトに監査される表、更新はガードで禁止、削除は purge だけ）。
+  push の経路（forge-web）は ref が動いた後に、push がそれまでどの ref からも届かなかったコミットを持ち込んだ集合を 1 回の
+  `rev-list --stdin <new>… --not --exclude=<更新した ref> --glob=refs/*`（と各 `^<old>`）で全部読み（forge-git `introduced_commits`。
+  切り詰めない。1 回の push に上限 1 000 000 コミット・30 秒）、push の記録と同じトランザクションで (コミット, push した人) ごとに書く。
+  既にあるコミットにタグ・ブランチを作るだけの更新、削除、木や blob のタグは行を書かない。上限・時間切れ・git の失敗は監査の行に
+  `push_commits_incomplete: true` を付け、一覧に入らなかったコミットは行を持たない。マージは自分のマージコミット（または squash の
+  コミット）を要求者の行として記録する（早送りは書かない）。git の一覧を持たない記録（runbook の再生、テスト）は、監査の行の一覧が
+  完全なとき（どの ref も切れていない）だけその一覧を、そうでなければ不完全として扱う。
+- **MR のコミッター** = `SELECT pusher_id FROM push_commits WHERE repository_id = $1 AND commit_sha = ANY(<範囲>)`（1 文、索引つき）。
+  範囲は従来どおり `head ^<target の先端>`（最大 1 000、超えたら `committers_unknown`）。**範囲のコミットに 1 つでも行が無ければ
+  `committers_unknown`**（表の前の履歴、`update-ref` の取り込み、不完全な push。閉じる側）。監査の行を読まず、履歴をたどらず、無関係な
+  履歴の量に上限が効かず、オブジェクトが残っているかにも依らない（prune に左右されない）。
+- **消したもの**: 監査の行からの組み立て（`push_coverage`）、一覧の切れた push の到達の判定（`commit_graph`・`reach_in`・16 件の上限・
+  50 000 の上限）、消えた先端の確かめ（`missing_objects` / `referenced_objects`）、印 `unlisted_kept` と表 `push_unlisted_refs` への書き込み。
+  **表 `push_unlisted_refs` は残す**（追記だけの履歴。読み手も書き手も無い。後のマイグレーションで消してよい、と tables.toml にも書いた）。
+  **索引 `audit_log_pushes` は消した**（20261111100300 で `DROP INDEX`。ほかに読み手が無い）。
+- **テスト**（実際の git と DB）: Bob が B1..B21 を push し Alice が B1 で `feature` を作る → Bob はコミッター（prune の後も同じ）、
+  ref 101 本の最後に head → コミッター、ブランチ 101 本の削除・タグ 12 000 個・タグの作成と削除の繰り返し・無関係な 51 000 コミットの
+  push → 止めない、`update-ref` で入れたコミット → `committers_unknown`、上限で不完全な push → その push の一覧に無いコミットを範囲に
+  持つ MR だけが止まる。forge-git で「既にあるコミットへのタグ・ブランチ・早送り・削除は何も持ち込まない」「上限で不完全」。
+- **残る設計上の制約**: 3 回目までに挙がった「子を 17 個タグ付けすると 1 つの MR を止められる」は、一覧の切れた push の扱いが無くなった
+  ので **もう無い**。代わりに、表の前の履歴を範囲に持つ MR は（ルールがあれば）止まる。**解き方は 5 回目で訂正した**（下の節）:
+  同じコミットの push し直しでは解けない（もう届くコミットは「新しくない」ので行を書かない）。コミットの id を変えて push する。
+
+### R5 の再レビュー（5 回目）で決めたこと（2026-11-03）— push_commits の作り直しの見直し
+
+- **HIGH 1（「push の前に届いていた」の TOCTOU）**: 4 回目の一覧は push の **後** に生きた ref を `--glob=refs/*` で読み、更新した ref
+  だけを除いていた。receive-pack と一覧の間に別の ref が同じコミットを指すと（同じコミットの別の push、MR の版の固定 ref
+  `refs/merge-requests/<iid>/…` の書き込み）、そのコミットは「前から届いていた」に見え、どちらの push も行を書かなかった
+  （コミッターの見落とし = 承認のすり抜け）。**改訂**: forge-web は receive-pack を始める **前** に全 ref の先端を読む
+  （forge-git `ref_snapshot`: `for-each-ref`、隠し ref も含む、タグはコミットまで剥がす、シンボリック ref は飛ばす、各コミット 1 回、
+  上限 1 000 000 ref、10 秒）。一覧は `rev-list --stdin --end-of-options` に、新しい先端・`^<スナップショットの先端>`・`^<old>` を
+  **すべて標準入力で** 渡す。生きた ref の glob は使わない。スナップショットの失敗は push を止めず、その push の一覧を不完全にする
+  （下の FG-GIT-0016）。
+  - **過剰な帰属は安全と決めた**: スナップショットの後に別の push が持ち込んだコミット、同時に同じ新しいコミットを push した 2 人は、
+    どちらも行を持つ。コミッターが増えるのは「承認を数えにくくする」方向だけで、数えすぎにはならない。危ないのは見落としの方。
+  - テスト（forge-git、実際の git）: 受けた後・一覧の前に同じコミットへ 2 本目の ref → 両方の push が行を持つ、push の後の版の固定
+    （隠し ref）→ 一覧は変わらない、シンボリック ref は何も隠さない（スナップショットに入らない）、隠し ref はスナップショットに入る。
+- **HIGH 2（行の上限と記録の予算）**: 上限 1 000 000 行は、記録の 30 秒の予算（3 回の試行の共通）の中で書けず、push の監査の行ごと
+  失う（FG-GIT-0012）恐れがあった。**測った**: 50 000 行を監査のトリガーつきで書くのに約 3.5 秒（開発機、debug ビルド）。上限を
+  **50 000**（6 回目で **20 000** に下げた。下の節）（`forge_core::MAX_PUSHED_COMMITS`）に下げ、予算は `forge_core::PUSH_RECORD_BUDGET` として共有し、テスト
+  `the_largest_listing_is_recorded_within_a_third_of_the_budget` が「上限の行が予算の 1/3 未満で書ける」ことを確かめる。上限を超えた
+  一覧は上限で止め（それ以上の行は書かない。記録の側でも上限で切って `push_commits_incomplete`）、保持するのは高々 50 000 個の id。
+  - **監査のトリガーは行ごとのまま**にした: PostgreSQL の制約トリガー（`CREATE CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED`）は
+    `FOR EACH ROW` しか作れない。文ごとの遅延しないトリガーにすると、監査の行が同じトランザクションの後で書かれる ChangeTx の順と、
+    doctor の検査（`audited.rs`: `audited_change_present` は遅延の制約トリガーで ALWAYS）の両方を崩す。第 2 のトランザクションに分ける
+    案は、その行のための監査の行がもう 1 つ要り、失敗したときの「不完全」の印を不変の監査の行に後から付けられない。測った値が予算に
+    十分収まるので、どちらも採らなかった。
+- **MEDIUM 3（不完全な一覧の warn）**: 新しいコード **FG-GIT-0016 `PushCommitsIncomplete`**（warn、runbook merge-blocked）。不完全な
+  一覧ごとに 1 行、`reason`（`cap` / `deadline` / `snapshot_failed` / `git_failed`）・`listed`・`refs`・`listing_ms`・`request_id`、
+  失敗には `cause_code`。
+- **MEDIUM 4（解き方の訂正と補填の手順）**: runbook と ADR の「push し直せば解ける」は誤り。**コミットの id を変えて**（`git commit
+  --amend`、`git rebase --force-rebase <target>`）push する。作り直せない履歴には、承認の要る管理者の補填 SQL を runbook merge-blocked
+  の Mitigate 2b に置いた（6 回目で「数えすぎにはならない」の誤りを直した。下の節）（監査の行と行を 1 トランザクションで。テスト
+  `the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row` が runbook の SQL をそのまま実行し、監査の行の無い挿入が拒まれる
+  ことも確かめる）。CLI は今は作らない。
+- **MEDIUM 5（squash がコミッターを洗い流す）**: マージ・squash のコミットは要求者だけでなく、**マージした範囲（`head ^<元の target>`）の
+  コミットを push した全員** の行を持つ（forge-review `merges/attribution.rs` が tx2 の前にロックの残り時間で範囲と push した人を読み、
+  forge-db `finish_merge` の `range_pushers` に渡す）。範囲の push した人が分からない（行の無いコミット、範囲が 1 000 超、git・DB の
+  失敗、時間切れ）ときは、マージのコミットに **行を書かない**（後でそれを含む範囲は `committers_unknown`。要求者だけを書くと見落としに
+  なる）。FG-GIT-0016 `reason=merge_pushers_unknown:<理由>` の warn を 1 行。再開・照合の経路も同じ関数を通る。早送りは新しいコミットが
+  無いので何も書かない。テスト: olga が dave の MR を squash した後の main → release の MR で dave はコミッター（承認は数えない）、
+  マージコミットも同じ、行の無い範囲の squash は行を持たない。
+- **MEDIUM 6（push の遅延）**: 毎回の一覧で `forge.git.push_commits_listed`（info）に `refs`（スナップショットの ref 数）・`listed`・
+  `complete`・`snapshot_ms`・`listing_ms` を出す。ref の多いリポジトリでの遅れはここで見える。
+
+### R5 の再レビュー（6 回目、マージ前の小さな直し）で決めたこと（2026-11-03）
+
+- **記録の最後の試行は行を持たない**: push の記録の 3 回の試行のうち、最後の 1 回は `PushedCommits::unknown()` を送る
+  （`push_commits` の行を書かず、その push を `push_commits_incomplete` にする）。DB が行の多さで遅いときにも、監査の行と
+  イベントは残る（FG-GIT-0012 で記録ごと失うより、コミッターが分からない方が安全で、閉じる側に倒れる）。最後の試行の時間を
+  確保するため、それより前の試行は予算の残りから 10 秒（`RECORD_FINAL_RESERVE`）早く打ち切り、最後の試行の前の待ちもその
+  10 秒を削らない。行を落として記録できたときは FG-GIT-0016 `reason=record_fallback`（`dropped`・`attempts`）を 1 行出す
+  （前の試行が実はコミットしていて最後が Deduped なら、落としていないので出さない）。テスト: 試行の計画の単体テストと、
+  最初の試行が 120 秒止まる記録先で「最後の試行が行なしで記録し、FG-GIT-0012 は出ない」。
+- **行の上限を 20 000 に下げた**: 5 回目の上限 50 000 の書き込みは全体テストの負荷の下で 10.1 秒（2 回分と DB の準備を含む）
+  かかり、予算の 1/3 の余裕が小さかった。20 000 行は通常時 1.35 秒。runbook も合わせた。
+- **スナップショットの記憶**: 先端は文字列とハッシュ集合でなく、32 バイトの生の id（SHA-1 は先頭 20 バイト）を並べて整列・重複除去して
+  持つ（100 万 ref でも 32 MB まで）。失敗したスナップショットの誤りにも読めた ref の数（`refs`）を載せ、FG-GIT-0016 の warn の
+  `refs` に出す。ref の数の上限は上の「未決」に O シリーズの申し送りとして書いた（今は実装しない）。
+- **runbook の補填の手順の訂正**: 「承認を数えにくくするだけで、数えすぎにはならない」は誤り。範囲のコミットに行が揃うと
+  `committers_unknown` が消え、補填した P 以外の承認が数えられるようになる（P のほかにも push した人がいれば、その人の承認まで
+  数えられる）。だから手順の承認者が証拠を自分で確かめ、push した人を全員確かめられないコミットは補填しない、と書いた。
+  値は psql の変数（`:'var'` / `:var`）で渡し、実行した人を `actor_label`（`merge-blocked 2b by <operator>`）と details の `operator` に残す。
+  テストは psql と同じ規則で変数を展開して runbook の SQL を実行する。
+- **マージのコミットの帰属の warn**: `forge.review.merge_commit_unattributed` に `repo_id` と `merge_request_id` を足した。

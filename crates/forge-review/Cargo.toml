@@ -20,6 +20,7 @@ forge-errors.workspace = true
 forge-git.workspace = true
 tracing.workspace = true
 tokio.workspace = true
+unicode-properties.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }

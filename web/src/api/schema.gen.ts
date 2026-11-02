@@ -319,6 +319,41 @@ export interface paths {
         patch: operations["patch_api_v1_projects_id"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/approval-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's approval rules (as reading the project) */
+        get: operations["get_api_v1_projects_id_approval_rules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/approval-rules/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Create or replace an approval rule (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_approval_rules_name"];
+        post?: never;
+        /** Delete an approval rule (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_approval_rules_name"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/members": {
         parameters: {
             query?: never;
@@ -389,6 +424,40 @@ export interface paths {
         head?: never;
         /** Change a merge request's title, description, draft flag or target (the author or Developer) */
         patch: operations["patch_api_v1_projects_id_merge_requests_iid"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evaluate a merge request's approvals now: how each counts, the rules, the CODEOWNERS rules its changes need, and what blocks the merge (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_approvals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a merge request's head (people only; Developer; never the author; a token needs merge_approve) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_approve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{id}/merge-requests/{iid}/close": {
@@ -540,6 +609,23 @@ export interface paths {
         put?: never;
         /** Reopen a closed merge request (the author or Developer; never a merged one) */
         post: operations["post_api_v1_projects_id_merge_requests_iid_reopen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/unapprove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Withdraw one's own approval of a merge request (as approving) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_unapprove"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1029,6 +1115,101 @@ export interface components {
             items: components["schemas"]["AdminUser"][];
             next_cursor: string | null;
         };
+        /** @description What an approve or unapprove did. */
+        ApprovalAnswerBody: {
+            approval: null | components["schemas"]["ApprovalBody"];
+            /**
+             * @description Approve: whether the approval counts now (never read it as final:
+             *     what may merge is `blocked_by` of `GET …/approvals`).
+             */
+            counted: boolean;
+            /** Format: int64 */
+            iid: number;
+            /** @description `approved`, `withdrawn` or `unchanged`. */
+            outcome: string;
+            /**
+             * @description Why it does not count (`committer`, `committers_unknown`,
+             *     `not_in_rule`, …); `null` when it counts or for an unapprove.
+             */
+            uncounted_reason: string | null;
+        };
+        /** @description One approval. */
+        ApprovalBody: {
+            /** Format: int64 */
+            approval_id: number;
+            /** Format: int64 */
+            approver_id: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** @description The head and target branch (without `refs/heads/`) it was given for. */
+            head_sha: string;
+            target_branch: string;
+        };
+        /** @description One approval rule. */
+        ApprovalRuleBody: {
+            /** Format: int64 */
+            approval_rule_id: number;
+            group_ids: number[];
+            name: string;
+            /** Format: int32 */
+            required_approvals: number;
+            target_pattern: string | null;
+            user_ids: number[];
+        };
+        /** @description `GET …/approval-rules`. */
+        ApprovalRulesBody: {
+            rules: components["schemas"]["ApprovalRuleBody"][];
+        };
+        /** @description `GET …/approvals`. */
+        ApprovalStateBody: {
+            approvals: components["schemas"]["ApprovalStatusBody"][];
+            blocked_by: components["schemas"]["BlockBody"][];
+            codeowners: components["schemas"]["CodeownerStatusBody"][];
+            /**
+             * @description A configuration path changed: whether a Maintainer's counted
+             *     approval is there (`null`: none changed).
+             */
+            config_change_approved: boolean | null;
+            /**
+             * @description The trial merge of the head into the target's tip conflicts now:
+             *     the merge request cannot merge whatever the approvals say (the
+             *     conflict itself is the mergeability's and the merge's to report).
+             */
+            conflict: boolean;
+            /**
+             * @description The merge request's head (`null` before its first version: nothing
+             *     to approve, nothing evaluated).
+             */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            rules: components["schemas"]["RuleStatusBody"][];
+            target_branch: string;
+        };
+        /** @description One live approval as evaluated now. */
+        ApprovalStatusBody: {
+            /** Format: int64 */
+            approval_id: number;
+            /** Format: int64 */
+            approver_id: number;
+            /**
+             * Format: int64
+             * @description `committer`: the audit row of a push by the approver that carried a
+             *     commit of the merge request (runbook merge-blocked).
+             */
+            committer_push_audit_id: number | null;
+            counted: boolean;
+            uncounted_reason: string | null;
+            username: string;
+        };
+        /** @description `POST …/approve`. */
+        ApproveMergeRequest: {
+            /**
+             * @description The head commit the approver reviewed (required): another head is
+             *     refused (FG-REVIEW-0008 stale_view).
+             */
+            sha: string;
+        };
         /** @description A blamed file. */
         BlameBody: {
             /** @description NUL bytes or not UTF-8: no hunks (download it through the raw route). */
@@ -1100,6 +1281,16 @@ export interface components {
             /** @description `blob` or `symlink` (the content is the link's target). */
             type: string;
         };
+        /** @description One reason the merge is blocked on the approval side. */
+        BlockBody: {
+            detail: string | null;
+            /**
+             * @description `approvals_missing`, `codeowner_approval_missing`,
+             *     `codeowners_invalid`, `config_change_needs_maintainer_approval` or
+             *     `changed_paths_unknown`.
+             */
+            reason: string;
+        };
         /** @description `PATCH …/members/{user_id}`: the member's new direct role. */
         ChangeMember: {
             role: components["schemas"]["RoleName"];
@@ -1110,6 +1301,15 @@ export interface components {
          */
         ChangeProtectedRef: {
             push_min_role: components["schemas"]["RoleName"];
+        };
+        /** @description One CODEOWNERS rule the changed paths need. */
+        CodeownerStatusBody: {
+            /** Format: int32 */
+            line: number;
+            owners: string[];
+            paths: number;
+            pattern: string;
+            satisfied: boolean;
         };
         /** @description One commit's metadata. */
         CommitBody: {
@@ -1692,6 +1892,26 @@ export interface components {
              */
             versions?: number[] | null;
         };
+        /** @description `PUT …/approval-rules/{name}`. */
+        PutApprovalRule: {
+            /**
+             * @description Group full paths whose direct members may approve for the rule
+             *     (no users and no groups: any eligible person).
+             */
+            groups?: string[];
+            /**
+             * Format: int32
+             * @description 1..=20.
+             */
+            required_approvals: number;
+            /**
+             * @description A protected-ref pattern (`refs/heads/main`, `refs/heads/release/*`);
+             *     absent: every target.
+             */
+            target_pattern?: string | null;
+            /** @description Usernames who may approve for the rule. */
+            users?: string[];
+        };
         /** @description One branch or tag. */
         RefBody: {
             /** @description The commit it peels to; `null` for a tag of a tree or a blob. */
@@ -1783,6 +2003,16 @@ export interface components {
          * @enum {string}
          */
         RoleName: "guest" | "reporter" | "developer" | "maintainer" | "owner";
+        /** @description One approval rule's state on this merge request. */
+        RuleStatusBody: {
+            /** @description The rule's target pattern matches the merge request's target. */
+            applies: boolean;
+            /** Format: int32 */
+            counted: number;
+            name: string;
+            /** Format: int32 */
+            required: number;
+        };
         /** @description The caller's web session. */
         SessionBody: {
             /** @description When the session ends at the latest (RFC 3339, UTC). */
@@ -2880,6 +3110,103 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_approval_rules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalRulesBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_approval_rules_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutApprovalRule"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalRuleBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_approval_rules_name: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     get_api_v1_projects_id_members: {
         parameters: {
             query?: {
@@ -3145,6 +3472,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_approvals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalStateBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_approve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAnswerBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -3517,6 +3912,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_unapprove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalAnswerBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

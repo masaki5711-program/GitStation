@@ -1775,6 +1775,162 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn approval-rule list --project 7 --json"
+      ],
+      "name": "approval-rule list",
+      "output": {
+        "properties": {
+          "rules": {
+            "items": {
+              "required": [
+                "approval_rule_id",
+                "name",
+                "target_pattern",
+                "required_approvals",
+                "user_ids",
+                "group_ids"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/approval-rules"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a project's approval rules (name, required approvals, target pattern, approvers)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The rule's name (a-z 0-9 _ . -).",
+          "kind": "option",
+          "name": "--name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Counted approvals needed (1..=20).",
+          "kind": "option",
+          "name": "--required",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A protected-ref pattern such as refs/heads/main; absent: every target.",
+          "kind": "option",
+          "name": "--target-pattern",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A username who may approve (repeatable).",
+          "kind": "option",
+          "name": "--user",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A group full path whose direct members may approve (repeatable).",
+          "kind": "option",
+          "name": "--group",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn approval-rule set --project 7 --name backend --required 2 --target-pattern refs/heads/main --group acme/backend"
+      ],
+      "name": "approval-rule set",
+      "output": {
+        "required": [
+          "approval_rule_id",
+          "name",
+          "target_pattern",
+          "required_approvals",
+          "user_ids",
+          "group_ids"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/approval-rules/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Create or replace an approval rule (people only; Maintainer): how many counted approvals a merge request into a matching target needs, and from whom (no --user and no --group: any eligible Developer). Existing approvals are kept; the merge decision changes at once."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The rule's name.",
+          "kind": "option",
+          "name": "--name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm the removal.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn approval-rule remove --project 7 --name backend --yes"
+      ],
+      "name": "approval-rule remove",
+      "output": {
+        "required": [
+          "removed",
+          "project_id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/approval-rules/{name}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Remove an approval rule (people only; Maintainer). --yes confirms."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "The source branch (feature/x or refs/heads/feature/x).",
@@ -2786,6 +2942,166 @@
         "read_api"
       ],
       "summary": "Merge a merge request: queue the merge of the head you reviewed (--sha; another head is refused). People only; the target branch's push role; the token needs merge_execute (api does not merge). --wait waits until it is applied, or exits with the refusal's code (conflict, a moved target, …)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The head commit you reviewed (mr view shows head_sha).",
+          "kind": "option",
+          "name": "--sha",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr approve --project 7 --iid 3 --sha 0123456789abcdef0123456789abcdef01234567"
+      ],
+      "name": "mr approve",
+      "output": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "approved",
+              "withdrawn",
+              "unchanged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "counted",
+          "uncounted_reason",
+          "approval"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/approve"
+      ],
+      "scopes": [
+        "merge_approve"
+      ],
+      "summary": "Approve the head you reviewed (--sha; another head is refused). People only; Developer; never your own merge request; the token needs merge_approve (api does not approve). The answer says whether the approval counts now (counted / uncounted_reason: committer, committers_unknown, not_in_rule, …); a new commit or a new target clears it."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr unapprove --project 7 --iid 3"
+      ],
+      "name": "mr unapprove",
+      "output": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "approved",
+              "withdrawn",
+              "unchanged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "counted",
+          "uncounted_reason",
+          "approval"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/unapprove"
+      ],
+      "scopes": [
+        "merge_approve"
+      ],
+      "summary": "Withdraw your approval of a merge request (unchanged when you have none)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr approvals --project 7 --iid 3 --json"
+      ],
+      "name": "mr approvals",
+      "output": {
+        "properties": {
+          "blocked_by": {
+            "items": {
+              "required": [
+                "reason",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "target_branch",
+          "approvals",
+          "rules",
+          "codeowners",
+          "config_change_approved",
+          "blocked_by",
+          "conflict"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/approvals"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Evaluate a merge request's approvals now: how each approval counts (and why not), the approval rules, the CODEOWNERS rules the changes need, and blocked_by (approvals_missing, codeowner_approval_missing, codeowners_invalid, config_change_needs_maintainer_approval, changed_paths_unknown)."
     },
     {
       "args": [

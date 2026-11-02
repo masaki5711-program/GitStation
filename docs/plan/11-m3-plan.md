@@ -301,8 +301,8 @@ runbook: `merge-execution`（新規）。
 
 | MR | 中身 | 先に書くテスト | エラーコード | 評価役 | モデル |
 |---|---|---|---|---|---|
-| R5 `feat/core-approval-rules-codeowners` | 承認・取り消し（SHA に結ぶ。新しいコミットで消すのが既定、Q4）、ルール（数・承認できる人）、CODEOWNERS（target のブランチから読む。文法は Q5）、自分の MR の承認の拒否 | CODEOWNERS の各文法と不正なファイル、push で承認が消える、自己承認の拒否、エージェントの拒否、ルールの変更で `evaluate_merge` が変わる | REVIEW-0006・0007 | `rust-reviewer`、`authz-matrix-auditor`、`security-reviewer`、`database-reviewer`、`error-contract-auditor` | **Opus** |
-| R6 `feat/core-merge-conditions` | `protected_ref_merge_rules`、`evaluate_merge()`（純粋な関数。止める理由の一覧を返す）、保護ブランチへの直接の push の禁止の設定、`gstn mr status --json` | 条件の組み合わせの表（proptest）、ドラフト、チェックが無いことは成功と区別、ジョブの中での再判定 | REVIEW-0002 | `rust-reviewer`、`authz-matrix-auditor`、`git-protocol-reviewer`、`pr-test-analyzer` | **Opus** |
+| R5 `feat/core-approval-rules-codeowners` | 承認・取り消し（SHA に結ぶ。新しいコミットで消すのが既定、Q4）、ルール（数・承認できる人）、CODEOWNERS（target のブランチから読む。文法は Q5）、自分の MR の承認の拒否 | CODEOWNERS の各文法と不正なファイル、push で承認が消える、自己承認の拒否、エージェントの拒否、ルールの変更で `evaluate_merge` が変わる | REVIEW-0013〜0015（登録の順に確定。計画の 0006・0007 は仮） | `rust-reviewer`、`authz-matrix-auditor`、`security-reviewer`、`database-reviewer`、`error-contract-auditor` | **Opus** |
+| R6 `feat/core-merge-conditions` | （R5 から）`merge_settings` と `codeowners_enforced` の期限つきの切り替え（`CodeownersEnforcementToggle`、直接の push の禁止より先）、`reset_approvals_on_push`、`protected_ref_merge_rules`、`evaluate_merge()`（純粋な関数。止める理由の一覧を返す）、保護ブランチへの直接の push の禁止の設定、`gstn mr status --json` | 条件の組み合わせの表（proptest）、ドラフト、チェックが無いことは成功と区別、ジョブの中での再判定 | REVIEW-0002 | `rust-reviewer`、`authz-matrix-auditor`、`git-protocol-reviewer`、`pr-test-analyzer` | **Opus** |
 | U2 `feat/ui-merge-approve-settings` | 承認・マージのボタン、条件のパネル、プロジェクトの設定（方式・ルール・必須チェック） | 理由の 1 行の表示、CSRF、E2E | — | U1 と同じ | Sonnet |
 
 ### 5.4 Checks・連携・Webhook・通知・サービスアカウント

@@ -320,6 +320,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/merge",
         Coverage::Command("mr merge-status"),
     ),
+    // M3 R5 (ADR-0024 §8): approvals and approval rules.
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/approve",
+        Coverage::Command("mr approve"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/unapprove",
+        Coverage::Command("mr unapprove"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
+        Coverage::Command("mr approvals"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/approval-rules",
+        Coverage::Command("approval-rule list"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/approval-rules/{name}",
+        Coverage::Command("approval-rule set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/approval-rules/{name}",
+        Coverage::Command("approval-rule remove"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

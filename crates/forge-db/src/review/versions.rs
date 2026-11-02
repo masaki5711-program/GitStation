@@ -388,6 +388,13 @@ pub async fn record_mr_version(
             // M3 R2: the stored mergeability is about another head now.
             tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
                 .await?;
+            // M3 R5 (ADR-0024 §8.2): approvals of the old head end.
+            let (affected, events) = super::approvals::revoke_on(
+                &mut tx,
+                &current,
+                forge_core::UnapproveReason::NewCommits,
+            )
+            .await?;
             let details =
                 AuditDetails::MergeRequestVersion(MergeRequestVersionChange::HeadRestored {
                     merge_request: mr,
@@ -398,8 +405,8 @@ pub async fn record_mr_version(
                 });
             let record = ChangeRecord {
                 audit: audit_entry(current.project_id, &details),
-                affected: Vec::new(),
-                events: Vec::new(),
+                affected,
+                events,
             };
             return Ok(crate::change::Settle::Commit(
                 record,
@@ -429,6 +436,10 @@ pub async fn record_mr_version(
         // M3 R2: the stored mergeability is about another head now.
         tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
             .await?;
+        // M3 R5 (ADR-0024 §8.2, plan 11 Q4): new commits end the approvals.
+        let (affected, mut revoked) =
+            super::approvals::revoke_on(&mut tx, &current, forge_core::UnapproveReason::NewCommits)
+                .await?;
         let change = MergeRequestChange::Pushed {
             merge_request: mr,
             iid: current.iid,
@@ -445,18 +456,20 @@ pub async fn record_mr_version(
         let event_type = details.event_type().ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "audit_only_event")
         })?;
+        let mut events = vec![DomainEvent {
+            event_type,
+            schema_version: 1,
+            aggregate_type: "merge_request",
+            aggregate_id: mr.get(),
+            project_id: Some(project),
+            payload: details.to_value(),
+            dedup_key: Some(dedup),
+        }];
+        events.append(&mut revoked);
         let record = ChangeRecord {
             audit: audit_entry(project, &details),
-            affected: Vec::new(),
-            events: vec![DomainEvent {
-                event_type,
-                schema_version: 1,
-                aggregate_type: "merge_request",
-                aggregate_id: mr.get(),
-                project_id: Some(project),
-                payload: details.to_value(),
-                dedup_key: Some(dedup),
-            }],
+            affected,
+            events,
         };
         Ok(crate::change::Settle::Commit(
             record,

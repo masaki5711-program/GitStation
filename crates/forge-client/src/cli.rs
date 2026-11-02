@@ -57,6 +57,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ProtectedRefCommand,
     },
+    /// Approval rules of a project (M3 R5): list, set, remove.
+    #[command(name = "approval-rule", disable_help_subcommand = true)]
+    ApprovalRule {
+        #[command(subcommand)]
+        command: ApprovalRuleCommand,
+    },
     /// Merge requests of a project: create, list, view, edit, close, reopen.
     #[command(disable_help_subcommand = true)]
     Mr {
@@ -439,6 +445,47 @@ pub enum MemberCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum ApprovalRuleCommand {
+    /// List a project's approval rules.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Create or replace a rule (Maintainer): how many approvals, for which
+    /// targets, from whom (no --user and no --group: any eligible person).
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The rule's name (a-z 0-9 _ . -).
+        #[arg(long, value_parser = crate::mr_approvals::parse_rule_name)]
+        name: String,
+        /// How many counted approvals it needs (1..=20).
+        #[arg(long, value_parser = clap::value_parser!(i32).range(1..=20))]
+        required: i32,
+        /// A protected-ref pattern (refs/heads/main, refs/heads/release/*);
+        /// absent: every target.
+        #[arg(long, value_parser = parse_text)]
+        target_pattern: Option<String>,
+        /// A username who may approve (repeatable).
+        #[arg(long, value_parser = parse_text)]
+        user: Vec<String>,
+        /// A group full path whose direct members may approve (repeatable).
+        #[arg(long, value_parser = parse_text)]
+        group: Vec<String>,
+    },
+    /// Remove a rule.
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = crate::mr_approvals::parse_rule_name)]
+        name: String,
+        /// Confirm the removal (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum ProtectedRefCommand {
     /// List a project's protected ref rules.
     List {
@@ -669,6 +716,33 @@ pub enum MrCommand {
         /// How long --wait waits, in seconds (default 300, at most 3600).
         #[arg(long, value_parser = parse_wait_secs, value_name = "SECS", requires = "wait")]
         wait_timeout: Option<u64>,
+    },
+    /// Approve the head you reviewed (--sha; M3 R5). The answer says
+    /// whether the approval counts now.
+    Approve {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The head commit you reviewed (`mr view` shows it); another head
+        /// is refused (FG-REVIEW-0008).
+        #[arg(long, value_parser = parse_oid, value_name = "SHA")]
+        sha: String,
+    },
+    /// Withdraw your approval.
+    Unapprove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// How each approval counts now, the rules, CODEOWNERS and what blocks
+    /// the merge on approvals.
+    Approvals {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
     },
     /// The latest merge attempt of a merge request (--wait: until it is final).
     #[command(name = "merge-status")]

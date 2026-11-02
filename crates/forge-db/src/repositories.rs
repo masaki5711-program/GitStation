@@ -37,8 +37,8 @@ use std::time::Duration;
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, PushReplay, Pusher,
-    RepositoryState, RequestId,
+    AuditDetails, DedupKey, DedupPart, ObjectId, PushRecord, PushRecorded, PushReplay,
+    PushedCommits, Pusher, RepositoryState, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
@@ -894,7 +894,18 @@ pub async fn record_push(
     ctx: &ChangeContext,
     push: &PushRecord,
 ) -> Result<PushRecorded, ForgeError> {
-    record(db, ctx, push, None).await
+    record(db, ctx, push, None, &listed_commits(push)).await
+}
+
+/// [`record_push`] with the commits the push introduced as git listed them
+/// (the push path, M3 R5 round 4): one `push_commits` row per commit.
+pub async fn record_push_with_commits(
+    db: &Db,
+    ctx: &ChangeContext,
+    push: &PushRecord,
+    commits: &PushedCommits,
+) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, None, commits).await
 }
 
 /// Record a push from its `forge.git.push_applied` log line (the runbook
@@ -914,7 +925,14 @@ pub async fn replay_push(
     replay: PushReplay,
     push: &PushRecord,
 ) -> Result<PushRecorded, ForgeError> {
-    record(db, ctx, push, Some((logged_project, replay))).await
+    record(
+        db,
+        ctx,
+        push,
+        Some((logged_project, replay)),
+        &listed_commits(push),
+    )
+    .await
 }
 
 async fn record(
@@ -922,6 +940,7 @@ async fn record(
     ctx: &ChangeContext,
     push: &PushRecord,
     replay: Option<(ProjectId, PushReplay)>,
+    commits: &PushedCommits,
 ) -> Result<PushRecorded, ForgeError> {
     push.check()?;
     let dedup_key = push_dedup_key(&ctx.request_id, push)?;
@@ -940,6 +959,39 @@ async fn record(
     let event_type = details
         .event_type()
         .ok_or_else(|| constant("audit_only_event"))?;
+    // M3 R5 round 4 (ADR-0024 §8.3): the commits the push introduced, one
+    // row per (commit, pusher), in this transaction; an incomplete listing
+    // is marked on the audit row (its unlisted commits have no row: a merge
+    // request whose range holds one has unknown committers).
+    let pusher = match (replay, &ctx.actor) {
+        (Some((_, who)), _) => Some(who.pusher),
+        (None, Actor::User(u) | Actor::ServiceAccount(u)) => Some(*u),
+        (None, Actor::UserViaServiceAccount { user, .. }) => Some(*user),
+        (None, Actor::System | Actor::Anonymous) => None,
+    };
+    let mut audit_details = details.to_value();
+    // Never more rows than the cap (the listing stops there; a caller
+    // that passes more gets the cap and the marker).
+    let list = commits
+        .commits
+        .get(..forge_core::MAX_PUSHED_COMMITS)
+        .unwrap_or(&commits.commits);
+    let complete = commits.complete && pusher.is_some() && list.len() == commits.commits.len();
+    if !complete {
+        if let Some(map) = audit_details.as_object_mut() {
+            map.insert(
+                "push_commits_incomplete".to_owned(),
+                serde_json::Value::Bool(true),
+            );
+        }
+    }
+    if let (Some(pusher), false) = (pusher, list.is_empty()) {
+        let request_id = ctx.request_id.as_str().to_owned();
+        tx.step(|c| async move {
+            insert_push_commits(c, (project_id, repo), &request_id, pusher, list).await
+        })
+        .await?;
+    }
     let record = ChangeRecord {
         audit: AuditEntry {
             action: details.action(),
@@ -948,7 +1000,7 @@ async fn record(
             resource_id: Some(project_id.get()),
             project_id: Some(project_id),
             error_code: None,
-            details: details.to_value(),
+            details: audit_details,
         },
         affected: Vec::new(),
         events: vec![DomainEvent {
@@ -965,6 +1017,61 @@ async fn record(
         Committed::Recorded { .. } => PushRecorded::Recorded,
         Committed::Deduped => PushRecorded::Deduped,
     })
+}
+
+/// The commits a caller without git can vouch for: the union of the
+/// listed commits when every update lists all of its new commits (none cut,
+/// no partial count); otherwise unknown (M3 R5 round 4). The runbook replay
+/// and tests record through this; the push path passes git's full listing.
+pub fn listed_commits(push: &PushRecord) -> PushedCommits {
+    let complete = push.updates.iter().all(|u| {
+        u.new.is_zero() || (!u.total_commits_partial && u.total_commits == u.commits.len() as u64)
+    });
+    if !complete {
+        return PushedCommits::unknown();
+    }
+    let mut commits: Vec<ObjectId> = push
+        .updates
+        .iter()
+        .flat_map(|u| u.commits.iter().cloned()) // clone: the list owns its ids
+        .collect();
+    commits.sort();
+    commits.dedup();
+    PushedCommits {
+        commits,
+        complete: true,
+    }
+}
+
+/// The most rows one statement inserts.
+const PUSH_COMMITS_BATCH: usize = 10_000;
+
+/// Insert one row per commit for `pusher` (`ON CONFLICT DO NOTHING`), in
+/// batches.
+pub(crate) async fn insert_push_commits(
+    conn: &mut sqlx::postgres::PgConnection,
+    (project, repo): (ProjectId, RepoId),
+    request_id: &str,
+    pusher: forge_core::UserId,
+    commits: &[ObjectId],
+) -> Result<(), ForgeError> {
+    for chunk in commits.chunks(PUSH_COMMITS_BATCH) {
+        let shas: Vec<&str> = chunk.iter().map(ObjectId::as_str).collect();
+        sqlx::query(
+            "INSERT INTO forge.push_commits (repository_id, commit_sha, pusher_id, project_id, \
+             request_id) SELECT $1, c, $2, $3, $4 FROM unnest($5::text[]) AS c \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(repo.get())
+        .bind(pusher.get())
+        .bind(project.get())
+        .bind(request_id)
+        .bind(&shas)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("repositories.push_commits", e))?;
+    }
+    Ok(())
 }
 
 /// The change context of a push by `pusher`: actor `user`, the push
@@ -986,6 +1093,17 @@ impl forge_core::PushRecorder for Db {
         push: &'a PushRecord,
     ) -> LookupFuture<'a, PushRecorded> {
         Box::pin(async move { record_push(self, &push_context(pusher), push).await })
+    }
+
+    fn record_push_with_commits<'a>(
+        &'a self,
+        pusher: &'a Pusher,
+        push: &'a PushRecord,
+        commits: &'a PushedCommits,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async move {
+            record_push_with_commits(self, &push_context(pusher), push, commits).await
+        })
     }
 }
 

@@ -157,7 +157,18 @@ pub async fn edit_mr_decided<P>(
             .iter()
             .map(|c| c.transition().event_type())
             .collect();
-        let record = record(project, changes, stored.revision)?;
+        let mut record = record(project, changes, stored.revision)?;
+        if retargets {
+            // M3 R5 (ADR-0024 §8.1): approvals for the old target end.
+            let (affected, mut events) = crate::review::approvals::revoke_on(
+                &mut tx,
+                &current,
+                forge_core::UnapproveReason::TargetChanged,
+            )
+            .await?;
+            record.affected.extend(affected);
+            record.events.append(&mut events);
+        }
         if retargets {
             // M3 R2 (ADR-0024 §3): the old status is about another target;
             // `unchecked` now, checked again by the job.

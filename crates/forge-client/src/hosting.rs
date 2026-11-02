@@ -30,7 +30,7 @@ pub(crate) fn client(cli: &Cli, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<ApiCl
 }
 
 /// A destructive command needs `--yes`; checked before anything else happens.
-fn confirm(yes: bool, what: &str) -> Result<()> {
+pub(crate) fn confirm(yes: bool, what: &str) -> Result<()> {
     if yes {
         Ok(())
     } else {

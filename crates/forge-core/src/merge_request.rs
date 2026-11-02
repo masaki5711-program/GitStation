@@ -11,9 +11,10 @@
 //! `conflict_resolved` (the mergeability job, [`MergeabilityStatus`]);
 //! `merged` and the rest join with their writers.
 
+use crate::approval::{UnapproveReason, UncountedReason};
 use crate::discussion::{CommentAction, DiscussionKind};
 use crate::event_type::EventType;
-use crate::ids::{DiscussionId, MergeRequestId, NoteId, UserId};
+use crate::ids::{ApprovalId, DiscussionId, MergeRequestId, NoteId, UserId};
 use crate::merge::MergeMethod;
 use crate::push::ObjectId;
 use crate::ref_name::RefName;
@@ -93,6 +94,11 @@ pub enum MergeRequestTransition {
     Merge,
     /// The source branch was deleted after a merge (M3 R4).
     SourceBranchDelete,
+    /// An approval was given (M3 R5).
+    Approve,
+    /// An approval was withdrawn or revoked (M3 R5: by the approver, a new
+    /// head or a new target).
+    Unapprove,
 }
 
 impl MergeRequestTransition {
@@ -109,6 +115,8 @@ impl MergeRequestTransition {
         Self::Comment,
         Self::Merge,
         Self::SourceBranchDelete,
+        Self::Approve,
+        Self::Unapprove,
     ];
 
     /// The one event the transition publishes.
@@ -125,6 +133,8 @@ impl MergeRequestTransition {
             Self::Comment => EventType::MergeRequestCommented,
             Self::Merge => EventType::MergeRequestMerged,
             Self::SourceBranchDelete => EventType::MergeRequestSourceBranchDeleted,
+            Self::Approve => EventType::MergeRequestApproved,
+            Self::Unapprove => EventType::MergeRequestUnapproved,
         }
     }
 }
@@ -243,6 +253,31 @@ pub enum MergeRequestChange {
         source_branch: RefName,
         old: ObjectId,
     },
+    /// `merge_request.approved` (M3 R5, ADR-0024 §6, §8.1): approval
+    /// `approval` of `head_sha` into `target_branch` by `approver`.
+    /// `counted` / `uncounted_reason` are the evaluation at that moment
+    /// only (review #35: never read `approved` as a counted approval).
+    /// Deduplicated by `merge_request_approved:<approval_id>`.
+    Approved {
+        merge_request: MergeRequestId,
+        iid: i64,
+        approval: ApprovalId,
+        approver: UserId,
+        head_sha: ObjectId,
+        target_branch: RefName,
+        counted: bool,
+        uncounted_reason: Option<UncountedReason>,
+    },
+    /// `merge_request.unapproved` (M3 R5): approval `approval` ended for
+    /// `reason`. Deduplicated by `merge_request_unapproved:<approval_id>`.
+    Unapproved {
+        merge_request: MergeRequestId,
+        iid: i64,
+        approval: ApprovalId,
+        approver: UserId,
+        head_sha: ObjectId,
+        reason: UnapproveReason,
+    },
 }
 
 impl MergeRequestChange {
@@ -260,6 +295,8 @@ impl MergeRequestChange {
             Self::Commented { .. } => MergeRequestTransition::Comment,
             Self::Merged { .. } => MergeRequestTransition::Merge,
             Self::SourceBranchDeleted { .. } => MergeRequestTransition::SourceBranchDelete,
+            Self::Approved { .. } => MergeRequestTransition::Approve,
+            Self::Unapproved { .. } => MergeRequestTransition::Unapprove,
         }
     }
 
@@ -276,7 +313,9 @@ impl MergeRequestChange {
             | Self::ConflictResolved { merge_request, .. }
             | Self::Commented { merge_request, .. }
             | Self::Merged { merge_request, .. }
-            | Self::SourceBranchDeleted { merge_request, .. } => *merge_request,
+            | Self::SourceBranchDeleted { merge_request, .. }
+            | Self::Approved { merge_request, .. }
+            | Self::Unapproved { merge_request, .. } => *merge_request,
         }
     }
 
@@ -304,6 +343,8 @@ impl MergeRequestChange {
             Self::Commented { action, .. } => action.dedup_prefix(),
             Self::Merged { .. } => "merge_request_merged",
             Self::SourceBranchDeleted { .. } => "merge_source_deleted",
+            Self::Approved { .. } => "merge_request_approved",
+            Self::Unapproved { .. } => "merge_request_unapproved",
         }
     }
 
@@ -318,7 +359,10 @@ impl MergeRequestChange {
     /// `{"merge_request_id","iid","action","discussion_id","kind","note_id",
     /// "discussion_started"}`, Merged `{"merge_request_id","iid","merge_id","method",
     /// "target_branch","target_sha","merged_sha","head_sha","merged_by"}`,
-    /// SourceBranchDeleted `{"merge_request_id","iid","merge_id","source_branch","old"}`.
+    /// SourceBranchDeleted `{"merge_request_id","iid","merge_id","source_branch","old"}`,
+    /// Approved `{"merge_request_id","iid","approval_id","approver_id","head_sha",
+    /// "target_branch","counted","uncounted_reason"}`, Unapproved
+    /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -461,6 +505,40 @@ impl MergeRequestChange {
                 "merge_id": merge_id,
                 "source_branch": source_branch.as_str(),
                 "old": old.as_str(),
+            }),
+            Self::Approved {
+                merge_request,
+                iid,
+                approval,
+                approver,
+                head_sha,
+                target_branch,
+                counted,
+                uncounted_reason,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "approval_id": approval.get(),
+                "approver_id": approver.get(),
+                "head_sha": head_sha.as_str(),
+                "target_branch": target_branch.as_str(),
+                "counted": counted,
+                "uncounted_reason": uncounted_reason.map(UncountedReason::as_str),
+            }),
+            Self::Unapproved {
+                merge_request,
+                iid,
+                approval,
+                approver,
+                head_sha,
+                reason,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "approval_id": approval.get(),
+                "approver_id": approver.get(),
+                "head_sha": head_sha.as_str(),
+                "reason": reason.as_str(),
             }),
         }
     }

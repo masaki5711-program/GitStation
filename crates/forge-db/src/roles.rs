@@ -242,6 +242,59 @@ pub(crate) async fn lock_roles(
 
 // ── end M1 phase 8b MR7a ──
 
+/// The native role of each of `users` on `project`, read on `conn`
+/// without locking, in one statement (M3 R5: the approvers' roles at
+/// evaluation time — the approval rows are read under the merge request's
+/// lock; the memberships are facts of that moment). The chain and the fold
+/// are the role loaders' (the same `chain_role_columns`, with the user
+/// taken from the list). A user without a role (or inactive) maps to `None`.
+pub(crate) async fn project_roles_on(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    users: &[UserId],
+) -> Result<std::collections::BTreeMap<UserId, Option<Role>>, ForgeError> {
+    const SQL: &str = concat!(
+        "WITH RECURSIVE ",
+        chain_cte!("kind = 'project' AND owner_id = $1"),
+        " SELECT x.user_id, ",
+        chain_role_columns!(),
+        " FROM chain c CROSS JOIN unnest($2::bigint[]) AS x(user_id) ORDER BY x.user_id, c.step"
+    );
+    let mut out = std::collections::BTreeMap::new();
+    if users.is_empty() {
+        return Ok(out);
+    }
+    // The role columns name the user as `$2`; here it is each listed id.
+    let sql = SQL.replace("= $2", "= x.user_id");
+    let ids: Vec<i64> = users.iter().map(|u| u.get()).collect();
+    let rows: Vec<(i64, i32, bool, Option<String>)> = sqlx::query_as(&sql)
+        .bind(project.get())
+        .bind(&ids)
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.project_roles", e))?;
+    if rows.is_empty() {
+        return Err(ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", "project")
+            .with_context("reason", "absent"));
+    }
+    let mut by_user: std::collections::BTreeMap<i64, Vec<(i32, bool, Option<String>)>> =
+        std::collections::BTreeMap::new();
+    for (user, step, truncated, role) in rows {
+        by_user
+            .entry(user)
+            .or_default()
+            .push((step, truncated, role));
+    }
+    for user in users {
+        let chain = by_user.remove(&user.get()).unwrap_or_default();
+        let roles = fold_chain(chain, "project", project.get(), Some(*user))?;
+        out.insert(*user, roles.native);
+    }
+    Ok(out)
+}
+
 /// `FG-DB-0018` with what the runbook needs to find the rows (`user` only
 /// for a signed-in viewer).
 fn invalid(

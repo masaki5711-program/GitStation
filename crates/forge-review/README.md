@@ -122,6 +122,24 @@ merge request in place (ADR-0024 §1).
   is cut to the hold's rest; `update_ref` takes both proofs; the reconciliation skips only a busy
   lock (`merge_lock_busy`), rotates what it cannot settle, has a 45 s pass budget; FF onto the
   head is `nothing_to_merge`; an identity refusal (FG-REVIEW-0012) supersedes.
+- M3 R5 (approvals, rules, CODEOWNERS, ADR-0024 §8, §9; `src/approvals/`): `codeowners::parse`
+  (the Q5 grammar, strict: line + `reason`; limits 64 KiB / 1 000 lines / 4 KiB / 50 owners),
+  `evaluate(&ApprovalInputs) -> ApprovalReport` (pure: how each approval counts — `stale`,
+  `inactive`, `not_human`, `role_insufficient`, `author`, `committer`, `committers_unknown`,
+  `not_in_rule` — and the block reasons `approvals_missing`, `codeowner_approval_missing`,
+  `codeowners_invalid`, `config_change_needs_maintainer_approval`, `changed_paths_unknown`;
+  `is_config_path`), `committers::committers_of` (R5 round 4: the pushers of the range's
+  commits as recorded at receive time in `push_commits`; a range commit without a row is
+  unknown). `ReviewGit::new(git, storage)` reads the changed paths (the target tip against the
+  trial merge's tree, `diff-tree --no-renames`, 10 000 paths), the range (`head ^<tip>`, 1 000
+  commits) and its pushers (one indexed statement), and the **target tip's** CODEOWNERS (owners resolved, matched in a blocking task
+  within 5 s), all under one `Budget` (20 s / 64 calls on a request, 10 s / 32 on the state
+  route, the lock's hold in the job); a git failure is an unknown fact (warn
+  `forge.review.approval_input_unread`; CODEOWNERS: one `forge.review.codeowners_invalid`). `Review::with_review_git`,
+  `approve(request, proof, repo, &sha)`, `unapprove`, `approval_state`, `approval_rules`,
+  `put_approval_rule(request, &Authorized<ProjectCtx>, &RuleAsk)`, `remove_approval_rule`.
+  `evaluate_merge()` takes `MergeFacts::approvals`; the request and every gate of the merge job
+  read them (the job under its lock). Tests `tests/approvals_git.rs` (real git).
 
 **Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
 DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
@@ -133,7 +151,10 @@ PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,
 runbook `merge-request-mergeability`); M3 R4: FG-REVIEW-0006 MergeRequestConflict, 0007
 MergeBlocked (`reasons`), 0008 HeadChanged (`stale_view` / `source_moved` / `target_moved`),
 0009 MergeExecutionFailed (alert: `update_ref_failed` / `record_failed` / `ref_state_unknown`),
-0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db). Reused: FG-AUTH-0002 / 0003 (with
+0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db); M3 R5: FG-REVIEW-0013
+SelfApprovalRefused (from `authorize()`), 0014 CodeownersInvalid (warn, logged once per
+evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db). Reused: FG-GIT-0016 (warn, round 5: a merge
+commit whose range pushers are unknown gets no `push_commits` row, `merges/attribution.rs`); FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid
 alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023
@@ -143,8 +164,8 @@ lookup), FG-DB-0001 / 0002, FG-SYS-0001 (`proof_action_mismatch`,
 `proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`),
 FG-DB-0002 (`merge_request_changed_concurrently`, retryable).
 
-**Runbooks**: `secret-removal` (R1b), `merge-execution` (R4). `codeowners` and
-`merge-blocked` arrive with R5–R6.
+**Runbooks**: `secret-removal` (R1b), `merge-execution` (R4), `codeowners` and
+`merge-blocked` (R5).
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched

@@ -223,8 +223,14 @@ async fn every_push_writes_one_audit_row_and_one_event() {
     let hash = expected.as_str().strip_prefix(&prefix).expect("prefix");
     assert_eq!(hash.len(), 64);
     assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
-    // Small push: the payload is the details.
+    // Small push: the payload is the details (a complete commit listing:
+    // no `push_commits_incomplete` marker, M3 R5 round 4).
     assert_eq!(payload, details);
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM forge.push_commits")
+        .fetch_one(&mut t.superuser().await)
+        .await
+        .expect("rows");
+    assert_eq!(rows, 2, "the listed new commits, one row each (b and e)");
     t.drop_now().await;
 }
 
@@ -480,5 +486,161 @@ async fn a_replay_names_the_operator_and_checks_the_log_against_the_database() {
         record_push(&t.db, &live, &push).await.expect("live"),
         PushRecorded::Deduped
     );
+    t.drop_now().await;
+}
+
+/// R5 review round 5: the largest listing a push records (the cap) is
+/// written, audit trigger included, within a third of the push path's
+/// record budget; a listing past the cap keeps the cap's rows and is
+/// marked incomplete.
+#[tokio::test]
+async fn the_largest_listing_is_recorded_within_a_third_of_the_budget() {
+    let t = FreshDb::migrated().await;
+    let (p, alice) = project(&t, "alice").await;
+    let push = PushRecord {
+        repository_id: p.repository_id,
+        updates: vec![update("refs/heads/main", '0', 'b', PushUpdateKind::Create)],
+    };
+    let cap = forge_core::MAX_PUSHED_COMMITS;
+    let all = |n: usize| PushedCommits {
+        commits: (0..n)
+            .map(|i| ObjectId::parse(&format!("{i:040x}")).expect("oid"))
+            .collect(),
+        complete: true,
+    };
+    let started = std::time::Instant::now();
+    let done = record_push_with_commits(
+        &t.db,
+        &push_context(&pusher(alice, "req-push-cap")),
+        &push,
+        &all(cap),
+    )
+    .await
+    .expect("recorded");
+    let took = started.elapsed();
+    eprintln!("push_commits: {cap} rows recorded in {took:?}");
+    assert_eq!(done, PushRecorded::Recorded);
+    assert!(
+        took < forge_core::PUSH_RECORD_BUDGET / 3,
+        "{cap} rows took {took:?}"
+    );
+    let mut su = t.superuser().await;
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM forge.push_commits")
+        .fetch_one(&mut su)
+        .await
+        .expect("rows");
+    assert_eq!(rows, cap as i64);
+    let audits = audit_rows(&mut su).await;
+    assert_eq!(audits[0].6.get("push_commits_incomplete"), None);
+
+    // Past the cap: the cap's rows, the marker.
+    let (q, bob) = project(&t, "bob").await;
+    let over = PushRecord {
+        repository_id: q.repository_id,
+        ..push
+    };
+    let mut more = all(cap + 3);
+    more.commits.rotate_left(3); // other ids first: they are the ones written
+    let over_done = record_push_with_commits(
+        &t.db,
+        &push_context(&pusher(bob, "req-push-over")),
+        &over,
+        &more,
+    )
+    .await
+    .expect("recorded");
+    assert_eq!(over_done, PushRecorded::Recorded);
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM forge.push_commits WHERE repository_id = $1")
+            .bind(q.repository_id.get())
+            .fetch_one(&mut su)
+            .await
+            .expect("rows");
+    assert_eq!(rows, cap as i64);
+    let audits = audit_rows(&mut su).await;
+    assert_eq!(audits[1].6["push_commits_incomplete"], true);
+    t.drop_now().await;
+}
+
+/// R5 review round 5: the runbook's approved backfill (merge-blocked,
+/// Mitigate 2b), run verbatim, writes the rows with their audit row in one
+/// transaction; without the audit row the same insert is refused.
+#[tokio::test]
+async fn the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row() {
+    let t = FreshDb::migrated().await;
+    let (p, alice) = project(&t, "alice").await;
+    let runbook = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../ops/runbooks/merge-blocked.md"),
+    )
+    .expect("runbook");
+    let begin = runbook
+        .find("-- push_commits backfill (begin)")
+        .expect("begin marker");
+    let end = runbook
+        .find("-- push_commits backfill (end)")
+        .expect("end marker");
+    // psql's interpolation: `:'name'` a quoted literal, `:name` the value.
+    let shas = format!("{{{},{}}}", "a".repeat(40), "b".repeat(40));
+    let quoted = |v: &str| format!("'{}'", v.replace('\'', "''"));
+    let mut sql = runbook[begin..end].to_owned();
+    for (name, value) in [
+        ("operator", "ops-o'brien"),
+        ("change_id", "chg-backfill-1"),
+        ("approver", "synthetic approver"),
+        ("evidence", "synthetic log"),
+        ("shas", shas.as_str()),
+    ] {
+        sql = sql.replace(&format!(":'{name}'"), &quoted(value));
+    }
+    for (name, value) in [
+        ("project_id", p.project_id.get()),
+        ("repo_id", p.repository_id.get()),
+        ("pusher_id", alice.get()),
+    ] {
+        sql = sql.replace(&format!(":{name}"), &value.to_string());
+    }
+    assert!(!sql.contains(":'"), "every variable is set: {sql}");
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(&sql)
+        .execute(&mut su)
+        .await
+        .expect("backfill");
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT commit_sha, pusher_id FROM forge.push_commits WHERE request_id = 'chg-backfill-1' \
+         ORDER BY commit_sha",
+    )
+    .fetch_all(&mut su)
+    .await
+    .expect("rows");
+    assert_eq!(
+        rows,
+        [("a".repeat(40), alice.get()), ("b".repeat(40), alice.get())]
+    );
+    let details: serde_json::Value = sqlx::query_scalar(
+        "SELECT details FROM forge.audit_log WHERE action = 'repository.push_commits_backfilled'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("audit row");
+    assert_eq!(details["commits"], 2);
+    assert_eq!(details["operator"], "ops-o'brien");
+    let label: String = sqlx::query_scalar(
+        "SELECT actor_label FROM forge.audit_log WHERE action = 'repository.push_commits_backfilled'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("label");
+    assert_eq!(label, "merge-blocked 2b by ops-o'brien");
+    // The insert alone (no audit row in its transaction) is refused.
+    let alone = sql[sql.find("INSERT INTO forge.push_commits").expect("insert")..]
+        .replace("COMMIT;", "")
+        .replace("chg-backfill-1", "chg-backfill-2")
+        .replace(&"a".repeat(40), &"c".repeat(40));
+    let refused = sqlx::raw_sql(&alone)
+        .execute(&mut su)
+        .await
+        .expect_err("an unaudited backfill must be refused");
+    assert!(refused.to_string().contains("no audit row"), "{refused}");
     t.drop_now().await;
 }

@@ -28,6 +28,9 @@ pub struct MergeGate {
     pub mergeability: Option<StoredMergeability>,
     pub live: Option<StoredMerge>,
     pub credential: CredentialFacts,
+    /// M3 R5: the live approvals with their approvers as they are now, and
+    /// the project's approval rules (ADR-0024 §8.6).
+    pub approvals: crate::review::approvals::ApprovalFacts,
 }
 
 /// The merge a request asks for.
@@ -78,12 +81,16 @@ pub(super) async fn gate(
     let credential = tx
         .step(|c| async move { credential_on(c, viewer, credential).await })
         .await?;
+    let approvals = tx
+        .step(|c| async move { crate::review::approvals::approval_facts_on(c, project, mr).await })
+        .await?;
     Ok(MergeGate {
         facts,
         protection,
         mergeability,
         live,
         credential,
+        approvals,
     })
 }
 

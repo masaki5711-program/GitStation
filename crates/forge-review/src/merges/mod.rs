@@ -43,6 +43,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::Browser;
 use forge_git::{Git, StorageRoot};
 
+mod attribution;
 pub mod evaluate;
 mod execute;
 mod reconcile;
@@ -56,6 +57,7 @@ pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
 pub use reconcile::ReconcileReport;
 pub use request::MergeAsk;
+pub(crate) use request::{head_changed as request_head_changed, is_ref_not_found};
 
 /// The methods a project allows and its defaults (ADR-0024 §4.1). M3 R4
 /// has no per-project setting yet: every project uses

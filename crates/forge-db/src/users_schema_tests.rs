@@ -46,6 +46,20 @@ async fn every_audited_table_has_its_audit_trigger() {
         audited,
         vec![
             AuditedTable {
+                name: "approval_rule_approvers".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "approval_rules".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
                 name: "group_members".into(),
                 audit_resource: AuditResource::Literal("group".into()),
                 audit_id_column: "group_id".into(),
@@ -60,6 +74,13 @@ async fn every_audited_table_has_its_audit_trigger() {
                 txn_audited_columns: vec![],
             },
             // M3 R1a: merge requests and their iid counter, on the project.
+            AuditedTable {
+                name: "merge_request_approvals".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "merge_request_counters".into(),
                 audit_resource: AuditResource::Literal("project".into()),
@@ -130,6 +151,20 @@ async fn every_audited_table_has_its_audit_trigger() {
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "project_id".into(),
                 unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "push_commits".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "push_unlisted_refs".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
             AuditedTable {

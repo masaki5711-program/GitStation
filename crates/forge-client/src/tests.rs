@@ -50,7 +50,8 @@ fn registry_and_clap_describe_the_same_commands() {
                     "read_api",
                     "api",
                     "admin",
-                    "merge_execute"
+                    "merge_execute",
+                    "merge_approve"
                 ]
                 .contains(s),
                 "{}: unknown scope {s}",

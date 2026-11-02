@@ -887,3 +887,177 @@ fn merge_wait_polls_through_transient_failures_and_other_attempts() {
     assert_eq!(o.code, 6, "{}", o.stderr);
     assert_eq!(o.err_json()["error_code"], "FG-CLI-0008");
 }
+
+const APPROVED: &str = r#"{"iid":3,"outcome":"approved","counted":false,"uncounted_reason":"committer","approval":{"approval_id":5,"approver_id":12,"head_sha":"2222222222222222222222222222222222222222","target_branch":"main","created_at":"2026-11-03T00:00:00Z"}}"#;
+
+const APPROVAL_STATE: &str = r#"{"iid":3,"head_sha":"2222222222222222222222222222222222222222","target_branch":"main","approvals":[{"approval_id":5,"approver_id":12,"username":"rita","counted":false,"uncounted_reason":"committer","committer_push_audit_id":44}],"rules":[{"name":"backend","applies":true,"required":1,"counted":0}],"codeowners":[{"line":2,"pattern":"*.rs","owners":["@mara"],"paths":1,"satisfied":false}],"config_change_approved":null,"blocked_by":[{"reason":"approvals_missing","detail":"rule=backend required=1 counted=0"},{"reason":"codeowner_approval_missing","detail":"pattern=*.rs owners=@mara"}]}"#;
+
+/// M3 R5: `mr approve` posts the sha it was given; `mr unapprove` and
+/// `mr approvals` call their routes; the human output says why an approval
+/// does not count and what blocks.
+#[test]
+fn mr_approve_unapprove_and_approvals_call_their_routes() {
+    let srv = Mock::start(|r| {
+        if r.target.ends_with("/approvals") {
+            ok(APPROVAL_STATE)
+        } else {
+            ok(APPROVED)
+        }
+    });
+    let sb = Sandbox::new();
+    let sha = "2222222222222222222222222222222222222222";
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "approve",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            sha,
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stdout.contains("does not count: committer"),
+        "{}",
+        o.stdout
+    );
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("POST", "/api/v1/projects/7/merge-requests/3/approve")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"sha": sha})
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "unapprove", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("POST", "/api/v1/projects/7/merge-requests/3/unapprove")
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "approvals", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stdout.contains("blocked: approvals_missing"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("CODEOWNERS line 2"), "{}", o.stdout);
+    // A sha that is not a full commit id never leaves the client.
+    let before = srv.seen().len();
+    let bad = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "approve",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            "main",
+        ],
+    );
+    assert_eq!(bad.code, 2);
+    assert_eq!(srv.seen().len(), before);
+}
+
+/// M3 R5: `approval-rule set` PUTs the rule by name, `list` and `remove`
+/// call their routes; a name that could leave the path is refused.
+#[test]
+fn approval_rule_commands_call_their_routes() {
+    let rule = r#"{"approval_rule_id":1,"name":"backend","target_pattern":"refs/heads/main","required_approvals":2,"user_ids":[12],"group_ids":[]}"#;
+    let srv = Mock::start(move |r| {
+        if r.method == "DELETE" {
+            Resp::json(204, "")
+        } else if r.method == "GET" {
+            ok(&format!(r#"{{"rules":[{rule}]}}"#))
+        } else {
+            ok(rule)
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "approval-rule",
+            "set",
+            "--project",
+            "7",
+            "--name",
+            "backend",
+            "--required",
+            "2",
+            "--target-pattern",
+            "refs/heads/main",
+            "--user",
+            "rita",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("PUT", "/api/v1/projects/7/approval-rules/backend")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"target_pattern": "refs/heads/main", "required_approvals": 2, "users": ["rita"], "groups": []})
+    );
+    let o = gstn(&sb, &srv, &["approval-rule", "list", "--project", "7"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "approval-rule",
+            "remove",
+            "--project",
+            "7",
+            "--name",
+            "backend",
+            "--yes",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("DELETE", "/api/v1/projects/7/approval-rules/backend")
+    );
+    let before = srv.seen().len();
+    for name in ["../x", "Backend", ""] {
+        let bad = gstn(
+            &sb,
+            &srv,
+            &[
+                "approval-rule",
+                "remove",
+                "--project",
+                "7",
+                "--name",
+                name,
+                "--yes",
+            ],
+        );
+        assert_eq!(bad.code, 2, "{name}");
+    }
+    assert_eq!(srv.seen().len(), before);
+}

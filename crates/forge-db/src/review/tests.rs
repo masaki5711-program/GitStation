@@ -469,13 +469,19 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                         total_commits_partial: false,
                     }],
                 };
-                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push)
+                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push, Some(&[]))
                     .await
                     .expect("finish");
                 assert!(matches!(done, merges::MergeFinished::Recorded(_)));
-                let again = merges::finish_merge(&t.db, &ctx("req-merge-again"), &attempt, &push)
-                    .await
-                    .expect("again");
+                let again = merges::finish_merge(
+                    &t.db,
+                    &ctx("req-merge-again"),
+                    &attempt,
+                    &push,
+                    Some(&[]),
+                )
+                .await
+                .expect("again");
                 assert_eq!(again, merges::MergeFinished::AlreadyApplied);
             }
             MergeRequestTransition::SourceBranchDelete => {
@@ -497,6 +503,33 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 )
                 .await
                 .expect("deleted");
+            }
+            // M3 R5: an approval and its withdrawal (forge-review decides
+            // who may; the command records).
+            MergeRequestTransition::Approve => {
+                let (done, _, ()) = approve_mr_decided(
+                    &t.db,
+                    &ctx(&request),
+                    (p, drafted.iid),
+                    alice,
+                    |_| Ok(()),
+                    |_, _, _| (true, None),
+                )
+                .await
+                .expect("approve");
+                assert!(matches!(done, ApproveOutcome::Approved { .. }));
+            }
+            MergeRequestTransition::Unapprove => {
+                let (done, _, ()) = unapprove_mr_decided(
+                    &t.db,
+                    &ctx(&request),
+                    (p, drafted.iid),
+                    alice,
+                    |_| Ok(()),
+                )
+                .await
+                .expect("unapprove");
+                assert_eq!(done, ApproveOutcome::Withdrawn);
             }
         }
         let events = events_of(&t, &request).await;

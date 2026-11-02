@@ -98,6 +98,17 @@ pub(crate) enum Actor {
     /// Administrator with a `merge_execute` token, no `admin` scope (acts as
     /// a normal user: no role on the fixture's project).
     AdminTokenMergeExecute,
+    /// Developer with a `merge_approve` token (M3 R5, ADR-0024 §8.5).
+    DevTokenMergeApprove,
+    /// Developer with a `merge_approve` token issued with `is_agent`.
+    AgentTokenMergeApprove,
+    /// The service account / bot twins of `DevTokenMergeApprove`.
+    ServiceAccountTokenMergeApprove,
+    BotTokenMergeApprove,
+    /// Maintainer with a `read_api` token (no `api`; R5 review).
+    MaintainerTokenReadApi,
+    /// Administrator with a `merge_approve` + `admin` token (R5 review).
+    AdminTokenMergeApproveAdmin,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -351,6 +362,16 @@ impl Actor {
             }
             Actor::AdminTokenMergeExecuteAdmin => token(true, &[Scope::MergeExecute, Scope::Admin]),
             Actor::AdminTokenMergeExecute => token(true, &[Scope::MergeExecute]),
+            Actor::DevTokenMergeApprove => token(false, &[Scope::MergeApprove]),
+            Actor::AgentTokenMergeApprove => token(false, &[Scope::MergeApprove]).as_agent(true),
+            Actor::ServiceAccountTokenMergeApprove => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::MergeApprove])
+            }
+            Actor::BotTokenMergeApprove => {
+                token_of(AccountKind::Bot, false, &[Scope::MergeApprove])
+            }
+            Actor::MaintainerTokenReadApi => token(false, &[Scope::ReadApi]),
+            Actor::AdminTokenMergeApproveAdmin => token(true, &[Scope::MergeApprove, Scope::Admin]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -377,12 +398,17 @@ impl Actor {
             | Actor::DevTokenMergeExecute
             | Actor::AgentTokenMergeExecute
             | Actor::ServiceAccountTokenMergeExecute
-            | Actor::BotTokenMergeExecute => Some(Role::Developer),
+            | Actor::BotTokenMergeExecute
+            | Actor::DevTokenMergeApprove
+            | Actor::AgentTokenMergeApprove
+            | Actor::ServiceAccountTokenMergeApprove
+            | Actor::BotTokenMergeApprove => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
             | Actor::ServiceAccountMaintainerTokenApi
-            | Actor::BotMaintainerTokenApi => Some(Role::Maintainer),
+            | Actor::BotMaintainerTokenApi
+            | Actor::MaintainerTokenReadApi => Some(Role::Maintainer),
             Actor::Owner
             | Actor::OwnerTokenReadApi
             | Actor::AgentOwnerTokenApi
@@ -403,7 +429,8 @@ impl Actor {
             | Actor::BotAdminTokenAdmin
             | Actor::BotAdminSession
             | Actor::AdminTokenMergeExecuteAdmin
-            | Actor::AdminTokenMergeExecute => None,
+            | Actor::AdminTokenMergeExecute
+            | Actor::AdminTokenMergeApproveAdmin => None,
         }
     }
 
@@ -426,6 +453,9 @@ impl Actor {
             Actor::ServiceAccountAdminSession | Actor::BotAdminSession => Some(Actor::Admin),
             Actor::ServiceAccountTokenMergeExecute | Actor::BotTokenMergeExecute => {
                 Some(Actor::DevTokenMergeExecute)
+            }
+            Actor::ServiceAccountTokenMergeApprove | Actor::BotTokenMergeApprove => {
+                Some(Actor::DevTokenMergeApprove)
             }
             Actor::Anonymous
             | Actor::Disabled
@@ -456,7 +486,11 @@ impl Actor {
             | Actor::DevTokenMergeExecute
             | Actor::AgentTokenMergeExecute
             | Actor::AdminTokenMergeExecuteAdmin
-            | Actor::AdminTokenMergeExecute => None,
+            | Actor::AdminTokenMergeExecute
+            | Actor::DevTokenMergeApprove
+            | Actor::AgentTokenMergeApprove
+            | Actor::MaintainerTokenReadApi
+            | Actor::AdminTokenMergeApproveAdmin => None,
         }
     }
 
@@ -734,6 +768,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows::BASE_ROWS,
         crate::matrix_rows_discussion::DISCUSSION_ROWS,
         crate::matrix_rows_merge::MERGE_ROWS,
+        crate::matrix_rows_approval::APPROVAL_ROWS,
+        crate::matrix_rows_approval::APPROVAL_OTHER_ROWS,
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
     ]

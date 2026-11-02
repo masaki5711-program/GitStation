@@ -139,11 +139,22 @@ pub enum EventType {
     /// `merge_request.source_branch_deleted` (M3 R4): the merge deleted the
     /// source branch. Deduplicated by `merge_source_deleted:<merge_id>`.
     MergeRequestSourceBranchDeleted,
+    /// `merge_request.approved` (M3 R5, ADR-0024 §6, §8): an approval row
+    /// was written for the head and target the approver saw. Carries
+    /// `counted` / `uncounted_reason` as evaluated then — never "counted"
+    /// by itself (whether a merge may happen is `evaluate_merge()`'s).
+    /// Deduplicated by `merge_request_approved:<approval_id>`.
+    MergeRequestApproved,
+    /// `merge_request.unapproved` (M3 R5): an approval was withdrawn
+    /// (`reason=unapproved`) or revoked by a new head (`new_commits`) or a
+    /// new target (`target_changed`). Deduplicated by
+    /// `merge_request_unapproved:<approval_id>` (each row ends once).
+    MergeRequestUnapproved,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 29] = [
+    pub const ALL: [EventType; 31] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -173,6 +184,8 @@ impl EventType {
         EventType::MergeRequestCommented,
         EventType::MergeRequestMerged,
         EventType::MergeRequestSourceBranchDeleted,
+        EventType::MergeRequestApproved,
+        EventType::MergeRequestUnapproved,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -207,6 +220,8 @@ impl EventType {
             EventType::MergeRequestCommented => "merge_request.commented",
             EventType::MergeRequestMerged => "merge_request.merged",
             EventType::MergeRequestSourceBranchDeleted => "merge_request.source_branch_deleted",
+            EventType::MergeRequestApproved => "merge_request.approved",
+            EventType::MergeRequestUnapproved => "merge_request.unapproved",
         }
     }
 
@@ -234,7 +249,9 @@ impl EventType {
             | EventType::MergeRequestConflictResolved
             | EventType::MergeRequestCommented
             | EventType::MergeRequestMerged
-            | EventType::MergeRequestSourceBranchDeleted => VisibilityClass::Integration,
+            | EventType::MergeRequestSourceBranchDeleted
+            | EventType::MergeRequestApproved
+            | EventType::MergeRequestUnapproved => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged

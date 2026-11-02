@@ -1,6 +1,7 @@
 //! forge-core: domain primitives and runtime foundations shared by every
 //! server-side crate. Depends only on `forge-errors` (CLAUDE.md §3.9).
 
+pub mod approval;
 pub mod audit_details;
 pub mod authenticator;
 pub mod config;
@@ -34,6 +35,7 @@ pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
 
+pub use approval::{ApprovalRuleChange, UnapproveReason, UncountedReason};
 pub use audit_details::{AuditDetails, ChangedField, IdentityLinkVia, SessionRevokeReason};
 pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
 pub use cursor::CursorKeys;
@@ -41,8 +43,8 @@ pub use dedup_key::{DedupKey, DedupPart};
 pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{
-    DiscussionId, GroupId, MergeRequestId, NamespaceId, NoteId, ProjectId, ProtectedRefId, RepoId,
-    TombstoneId, UserId,
+    ApprovalId, ApprovalRuleId, DiscussionId, GroupId, MergeRequestId, NamespaceId, NoteId,
+    ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
 };
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use merge::{MergeMethod, MergeState, SourceOutcome};
@@ -57,7 +59,8 @@ pub use namespace_resolver::{
     ProjectAccessLoader, ProjectRecord, ProjectRepository, Resolution, Resolved, ResolvedTarget,
 };
 pub use push::{
-    ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedRef, Pusher,
+    ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedCommits,
+    PushedRef, Pusher, MAX_PUSHED_COMMITS, PUSH_RECORD_BUDGET,
 };
 pub use push_log::{PushApplied, PushAppliedRef, PUSH_APPLIED_EVENT};
 pub use ref_name::RefName;

@@ -959,6 +959,64 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::merge_status,
         )
         .responds::<mr::MergeStatusBody>(Verb::Get, mr::MERGE)
+        // M3 R5 (ADR-0024 §8, §9): approvals of the head the caller saw,
+        // their evaluation, and the project's approval rules.
+        .route_with_body(
+            Verb::Post,
+            mr::APPROVE,
+            Action::MergeRequestApprove,
+            "Approve a merge request's head (people only; Developer; never the author; a token needs merge_approve)",
+            mr::APPROVAL_MAX_BODY,
+            mr::TO_APPROVE,
+            mr::approve,
+        )
+        .responds::<mr::ApprovalAnswerBody>(Verb::Post, mr::APPROVE)
+        .route_with(
+            Verb::Post,
+            mr::UNAPPROVE,
+            Action::MergeRequestUnapprove,
+            "Withdraw one's own approval of a merge request (as approving)",
+            mr::TO_UNAPPROVE,
+            mr::unapprove,
+        )
+        .responds::<mr::ApprovalAnswerBody>(Verb::Post, mr::UNAPPROVE)
+        .route_with(
+            Verb::Get,
+            mr::APPROVALS,
+            Action::MergeRequestRead,
+            "Evaluate a merge request's approvals now: how each counts, the rules, the CODEOWNERS rules its changes need, and what blocks the merge (as the repository browse API)",
+            mr::APPROVALS_OF,
+            mr::approvals,
+        )
+        .responds::<mr::ApprovalStateBody>(Verb::Get, mr::APPROVALS)
+        .route_with(
+            Verb::Get,
+            mr::APPROVAL_RULES,
+            Action::ProjectRead,
+            "List a project's approval rules (as reading the project)",
+            mr::RulesProject,
+            mr::approval_rules,
+        )
+        .responds::<mr::ApprovalRulesBody>(Verb::Get, mr::APPROVAL_RULES)
+        .route_with_body(
+            Verb::Put,
+            mr::APPROVAL_RULE,
+            Action::ApprovalRuleManage,
+            "Create or replace an approval rule (people only; Maintainer)",
+            mr::APPROVAL_MAX_BODY,
+            mr::RulesProject,
+            mr::put_approval_rule,
+        )
+        .responds::<mr::ApprovalRuleBody>(Verb::Put, mr::APPROVAL_RULE)
+        .route_with(
+            Verb::Delete,
+            mr::APPROVAL_RULE,
+            Action::ApprovalRuleManage,
+            "Delete an approval rule (people only; Maintainer)",
+            mr::RulesProject,
+            mr::delete_approval_rule,
+        )
+        .responds_no_content(Verb::Delete, mr::APPROVAL_RULE)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

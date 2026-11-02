@@ -11,7 +11,9 @@
 //! …/discussions/{discussion_id}/notes` (`MergeRequestComment`) and
 //! `…/resolve`, `…/unresolve` (`DiscussionResolve`), and (M3 R4,
 //! `merges.rs`) `POST|GET …/{iid}/merge` (`MergeRequestMerge` /
-//! `MergeRequestRead`: queue a merge, read the latest attempt). Reading and listing are
+//! `MergeRequestRead`: queue a merge, read the latest attempt), and (M3 R5,
+//! `approvals.rs`) `POST …/{iid}/approve`, `…/unapprove`, `GET …/approvals`
+//! and the project's `…/approval-rules[/{name}]`. Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -44,6 +46,7 @@ use crate::body::param_invalid;
 use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
+mod approvals;
 mod discussion_loaders;
 mod discussions;
 mod loaders;
@@ -51,6 +54,13 @@ mod mergeability;
 mod merges;
 mod versions;
 
+pub use approvals::{
+    approvals, approve, delete_rule as delete_approval_rule, put_rule as put_approval_rule,
+    rules as approval_rules, unapprove, ApprovalAnswerBody, ApprovalRuleBody, ApprovalRulesBody,
+    ApprovalStateBody, ApproveMergeRequest, PutApprovalRule, RulesProject, APPROVALS, APPROVALS_OF,
+    APPROVE, MAX_BODY as APPROVAL_MAX_BODY, RULE as APPROVAL_RULE, RULES as APPROVAL_RULES,
+    TO_APPROVE, TO_UNAPPROVE, UNAPPROVE,
+};
 pub use discussion_loaders::{
     DiscussionToReply, DiscussionToResolve, DiscussionToStart, TO_RESOLVE, TO_UNRESOLVE,
 };
