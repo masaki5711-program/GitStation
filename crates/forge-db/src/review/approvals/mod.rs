@@ -225,8 +225,8 @@ pub(crate) async fn approval_facts_on(
     Ok(ApprovalFacts { approvals, rules })
 }
 
-/// [`approval_facts_on`] in one read-only transaction on the read pool (the
-/// approval state route; one snapshot).
+/// [`approval_facts_on`] in one transaction on the read pool (the approval
+/// state route; the read pool's role reads only).
 pub async fn approval_facts(
     db: &Db,
     project: ProjectId,
@@ -238,10 +238,6 @@ pub async fn approval_facts(
             .pool()
             .executor()
             .begin()
-            .await
-            .map_err(|e| read_query_error(QUERY, e))?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            .execute(&mut *tx)
             .await
             .map_err(|e| read_query_error(QUERY, e))?;
         let facts = approval_facts_on(&mut tx, project, mr).await?;
