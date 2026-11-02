@@ -47,6 +47,7 @@ pub mod receive_report;
 pub mod receive_request;
 mod redact;
 mod refs;
+pub mod review_inputs;
 mod revision;
 pub mod smart_http;
 pub mod storage;
