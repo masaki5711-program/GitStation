@@ -11,6 +11,11 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
   - `reason=record_failed`: ref は動いた（直前に `forge.review.merge_applied` が出ている）が、記録のトランザクション（tx2: `applied`・
     MR の `merged`・監査・`repository.pushed`・`merge_request.merged`）が失敗した。行は `executing` のまま。
   - `reason=ref_state_unknown`: 照合が `executing` の行を見て、target が `new_sha`（とその子孫）でも `expected_old` でもなかった。行は `failed`。
+  - `reason=merge_request_not_open`: ref は動いたが、記録の時点で MR が開いていなかった（不変条件の破れ）。行は `failed`。
+  - `reason=reconcile_overdue`: `forge doctor` の `review.merges` が、照合の期限を 3 分以上過ぎた生きた試行を数えた（照合が動いていないか、
+    毎回失敗している）。
+- `FG-SYS-0003` ServeFailed（`operation=merge_task_exited`、`task=merge_runner|merge_reconcile`）: serve のマージのタスクが止まった・panic した
+  （監督のタスクが起動し直す）。
 - `forge.review.merge_retry`（warn、`reason=ref_locked|lock_lost`）が同じ `merge_id` で繰り返し出る、ジョブがデッドレター（FG-DB-0006、
   `kind=merge_request.merge`）になった。
 - 利用者から「マージがいつまでも終わらない」（`gstn mr merge-status` が `queued` / `prepared` / `executing` のまま）と問い合わせがあった。
@@ -38,6 +43,10 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 
 ## Diagnose（読み取りのみ）
 
+0. `forge doctor --json` の `review.merges`（期限を過ぎた生きた試行の数と最も古いものの経過秒、直近 7 日の `failed`）。serve のログの
+   debug のハートビート `forge.serve.merge_reconcile_pass`（照合の 1 回ごと、件数つき。debug を出していれば）と、
+   `forge.serve.merge_runner_stopped` / `FG-SYS-0003 merge_task_exited`。
+
 1. ログを `merge_id` と、要求の `request_id`（マージを要求した HTTP の要求の ID。ジョブのログもこの ID を持つ）で読む:
    `forge.review.merge_started` → `forge.review.merge_applied`（ref が動いた直後に **先に** 出る）→ `forge.review.merge_completed`（`outcome`）。
    `merge_applied` があれば ref は動いた。無ければ（`update-ref` の前に止まったなら）動いていない。
@@ -50,8 +59,10 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 
 ## 照合（reconciliation）の動き
 
-`forge serve` が 60 秒ごとに（マージのジョブと同じプロセスで）古い行を片付ける（`forge_review::merges::reconcile`）。
-どの行もリポジトリのマージのロック（`merge:<repo_id>`）の下で、行を読み直してから決める:
+`forge serve` が 60 秒ごとに（マージのジョブと同じプロセスの、ジョブとは別のタスクで。1 回 50 秒まで）古い行を片付ける
+（`Merger::reconcile`）。どの行もリポジトリのマージのロック（`merge:<repo_id>`）の下で、行を読み直してから決める。ロックが
+別のマージに使われていれば（FG-DB-0002 `merge_lock_busy`）その行は次の回へ回し、ほかの失敗は `error_code` つきで 1 回ログに
+出す。どちらも、その行を次の走査の後ろへ回す（`reconcile_seen_at`）:
 
 - `queued` / `prepared` で 10 分更新が無い → `superseded`（`reason=stale`）。フェンス（`prepared → executing`）を通っていないので、
   この行の worker は ref を動かしていない（まだ生きていても、フェンスの比較して交換に負けて止まる）。
@@ -71,7 +82,12 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 3. `ref_state_unknown`（`failed`）: 誰かがマージの最中に target を別の値に動かした（force push、手作業）。target の履歴（`git log <target>`）と
    `new_sha` を比べ、利用者（MR の作成者とマージした人）と相談する。`[MUTATING — needs approval]` 必要なら target を戻すか、
    改めて MR をマージし直す（新しい試行）。行は `failed` のまま残す（記録）。
-4. デッドレター（FG-DB-0006）: `queued` / `prepared` の行は照合が 10 分後に `superseded` にする。利用者はもう一度マージを要求する。
+4. デッドレター（FG-DB-0006）: 最後の試行で失敗したジョブは、フェンスを通っていない行を `superseded`（`reason=job_failed`）にする。
+   残った `queued` / `prepared` の行は照合が 10 分後に `superseded` にする。利用者はもう一度マージを要求する。
+5. `merge_request_not_open`（`failed`）: ref は `new_sha` に動いている。MR がどう閉じられたか（監査の `merge_request.*` の行）を確かめ、
+   利用者と相談する。`[MUTATING — needs approval]` 必要なら target を戻す（`git update-ref <target> <expected_old> <new_sha>`）。
+   戻し: もう一度 `new_sha` に動かす。
+6. `FG-REVIEW-0012`（作成者のメールが使えない）は alert ではない。利用者のメールを直してから、もう一度マージする。
 
 ## Verify
 
@@ -82,5 +98,7 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 ## Escalate
 
 - `failed`（`ref_state_unknown`）は必ず人が判断する（Maintainer とマージを要求した人）。
-- 照合が動かない（`forge serve` のログに `forge.review.merge_reconciled` が出ない）・同じ行が残り続ける: Claude（保守担当）へ、
+- 照合が動かない（`forge doctor` の `review.merges` が `reconcile_overdue`、serve のログに `FG-SYS-0003 merge_task_exited` や
+  `operation=merge_reconcile` の失敗が続く。照合が何かを片付けた回は info の `forge.review.merge_reconciled` も出る）・同じ行が残り
+  続ける: Claude（保守担当）へ、
   `merge_id`・`request_id`・行の値・target の先端を添えて。

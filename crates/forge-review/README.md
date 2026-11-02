@@ -118,6 +118,10 @@ merge request in place (ADR-0024 §1).
   on the merged head). Every ref write calls `Browser::invalidate`. `give_up(merge_id, cause)`
   ends an attempt that never passed the fence (`job_failed`); `reconcile(request_id) ->
   ReconcileReport` settles stuck attempts by asking git. Tests `tests/merges_git.rs` (real git).
+  Review round 1: the default message is frozen at the request; every git call under the lock
+  is cut to the hold's rest; `update_ref` takes both proofs; the reconciliation skips only a busy
+  lock (`merge_lock_busy`), rotates what it cannot settle, has a 45 s pass budget; FF onto the
+  head is `nothing_to_merge`; an identity refusal (FG-REVIEW-0012) supersedes.
 
 **Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
 DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from

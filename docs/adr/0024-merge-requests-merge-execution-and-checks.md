@@ -1031,3 +1031,62 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   マージ、保護の引き上げ・トークンの失効のジョブでの拒否、ソースの削除（保護ありは残す）、時間切れの後始末、照合の 3 つの場合、
   フェンスの後の再試行。閲覧が古い答えを返さないこと（マージとソース削除の直後の ref 一覧）。forge-db（`merge_tests.rs`）で
   同時の要求、ガード、フェンス、ロック、資格情報の読み直し。forge-git（`commit_tests.rs`）で `merge_plumbing_argv_on_git_2_38`。
+
+### R4 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（git-protocol・security・database・rust・silent-failure）の HIGH 4 件と MEDIUM / LOW への対応。上の R4 の節と違えたところは
+**改訂** と書いた。
+
+- **照合はロックの取り合いだけを飛ばす（HIGH）**: マージのロックの待ちが尽きたこと（`55P03`、または自前の上限）は FG-DB-0002
+  `reason=merge_lock_busy`（`is_lock_busy`）として他の失敗と分けた。照合はそれだけを次の回へ回し、接続の喪失などほかの失敗は
+  エラーとして返して `error_code` つきで 1 回ログに出す。どちらの場合も試行は次の走査の後ろへ回す（追記のマイグレーション
+  20261110100100 の `reconcile_seen_at`。走査は `reconcile_seen_at NULLS FIRST, id` の順で、片付けられない数件が残りを止めない）。
+  1 回の走査は 45 秒まで。照合が `end_merge` に負けた（ほかが先に片付けた）ときは alert を出さない。`applied` を記録した後に試行を
+  読み直せなければ、マージは `applied` のまま warn を出す。
+- **serve のマージのタスクを見張る（HIGH、改訂）**: ジョブのランナーと照合を **別のタスク** にし（遅い照合がマージを待たせない）、
+  それぞれを監督するタスクが、停止の要求なしに終わった・panic したことを FG-SYS-0003 ServeFailed（`operation=merge_task_exited`、
+  `task`、`panicked`）で 1 回ログに出し、1 秒から倍々で 30 秒までの間隔で起動し直す。停止のときは両方に止まれと伝え、panic した・
+  時間内に終わらなかった監督のタスクもログに出す。照合の 1 回は 50 秒で打ち切り、停止の要求ですぐ止まる。毎回 debug の
+  ハートビート `forge.serve.merge_reconcile_pass`（件数つき）を出す。ジョブを取れない失敗は 1 秒から 30 秒まで間隔を延ばし、
+  続く失敗は最初の 1 回とその後 1 分に 1 回だけ（件数つき）ログに出す。`retryable` は `ErrorCode` の全列挙の match にした
+  （新しいコードは分類するまでコンパイルできない）。
+- **`forge doctor` の `review.merges`（HIGH の一部）**: serve のプロセスの中の最終実行時刻は doctor（別のプロセス）から読めないので、
+  照合が止まっていることを **結果で** 見る: 照合の期限（放置 10 分、`executing` は 10 分 30 秒）をさらに 3 分過ぎた生きた試行の数
+  （照合が動いていないか、毎回失敗している）と、直近 7 日の `failed`（人の判断待ち）。どちらも FG-REVIEW-0009
+  （`reconcile_overdue` / `ref_state_unknown`）。
+- **既定のコミットメッセージは要求の時点で固める（HIGH、改訂）**: `message` が無い要求は、要求のトランザクションでロックした MR の
+  タイトルと説明から既定のメッセージを作り、試行の行の `message` に保存する。キューにある間のタイトル・説明の変更（許している）は
+  コミットに入らない。ジョブは保存されたメッセージを使う。
+- **gstn の `--wait`（HIGH）**: `merge: null` や別の試行の答えは終わりにしない。到達できない・5xx の答えは 1 秒から倍々で 8 秒までの
+  間隔で期限まで待ち直す。期限は FG-CLI-0008。
+- **ロックの下の git の時間（MEDIUM）**: ロックの下の git の呼び出し（ref の読み取り・`merge-base`・`commit-tree`・`update-ref`）は
+  どれも「その呼び出しの時間切れ」と「ロックの保持の残り」の短い方で抑え、残りが 0 なら起動しない（FG-DB-0002
+  `merge_lock_lost hold_exceeded`、再試行）。ソースブランチの削除は ADR §4.2 の 10 のとおりロックを放した後に行うので、自分の
+  時間切れ（ref の読み取り 10 秒・`update-ref` 30 秒）だけで抑える。
+- **`invalidate` の漏れ（MEDIUM）**: ジョブの再開で先端が既に `new_sha` だったとき、照合が「着地した」と判断したときも閲覧の
+  キャッシュを捨てる。
+- **ロックの取り方（MEDIUM）**: ロックのトランザクションは `statement_timeout` を待ちより 5 秒長く上げ（既定の 15 秒の文の
+  時間切れで 30 秒の待ちが切れないように）、取得の全体を自前の時間切れ（待ち + 10 秒）で包む。生きていることの確認は
+  `pg_locks` の `objsubid = 1` とデータベースも見る。
+- **MR が開いていない tx2（MEDIUM、改訂）**: ref が動いた後に MR が開いていない（不変条件の破れ。開いている MR を変える操作は
+  どれも生きた試行を断る）ときは、試行を `executing` のまま残さず、同じトランザクションで `failed`（FG-REVIEW-0009
+  `merge_request_not_open`、alert、runbook `merge-execution`）にする。版の ref の Purge も生きた試行があれば FG-REVIEW-0011 で
+  断る（マージが読む head の ref を消さない）。
+- **作成者の名前（MEDIUM、改訂）**: git は名前とメールの両端の「crud」（空白・`.` `,` `:` `;` `"` `\` `'`）を落とすので、crud だけの
+  表示名は「empty ident」で恒久的に失敗していた。名前は作るときに正規化する（制御文字は空白、`<` `>` は除く、両端の crud を落とす、
+  何も残らなければ username）。メールは直さずに断る: 制御文字・`<` `>`・crud だけのメールは **FG-REVIEW-0012**
+  MergeIdentityInvalid（422、新規）で、試行は `superseded`（FG-SYS-0001 にしない）。
+- **管理者のトークン（MEDIUM）**: `admin` と `merge_execute` を持つ管理者のトークンは、Owner で保護された target にもマージできる
+  （push の経路と同じく、管理者の権限は保護を越える）。`admin` の無い管理者のトークンは普通の利用者（行で固定）。ジョブの時点の
+  再判定（所属の削除・Reporter への引き下げ・無効化・種類が bot に・セッションの失効）をそれぞれ実際の git のテストで固定した。
+- **両方の証明（MEDIUM）**: `update_ref` は `Decided`（`Authorized` と `MergeClearance`）を引数に取る。再開の経路も同じ。
+- **ガード（MEDIUM、追記のマイグレーション 20261110100100）**: 試行は `queued` で始まる（INSERT もガードする。トリガーは
+  `BEFORE INSERT OR UPDATE`）。`applied` の試行は `source_outcome`（と `updated_at`）のほかは変わらない。
+- **tx1b と `update-ref` の間の残り（MEDIUM、§5 の補足）**: tx1b の再判定から `update-ref` までの間に権限が下がる・保護が上がる
+  ことは、push の経路（判定の後に git が ref を書く）と同じく残る窓として受け入れる。窓はロックの保持（最大 180 秒）とフェンスの
+  時刻の窓で抑えられ、照合の時刻の窓（570 秒）を超えては動かさない。
+- **小さな修正（LOW）**: `ref_locked` は `packed-refs.lock` も見る。push の記録で読めなかったコミットの ID は warn で数を出し、
+  一覧を `commits_truncated` にする。target が既に head の早送りは `MergeBlocked`（`nothing_to_merge`、新しい止める理由）。再開の
+  経路で ref を動かしたときの監査にトークンのスコープを残す（先端が既に動いていた再開と照合は資格情報を読み直さないので空）。
+- **今後のマイグレーションの注意**: 行の多い表の CHECK を広げるときは `ADD CONSTRAINT … NOT VALID` と `VALIDATE CONSTRAINT`
+  に分ける（書き込みを止めない）。R4 の `tokens_scopes_known` はトークンの行が少ないので一度に置き換えた。
