@@ -39,46 +39,62 @@ pub struct CommitIdentity {
     fell_back: bool,
 }
 
+/// `FG-REVIEW-0012` MergeIdentityInvalid (422): the account's e-mail cannot
+/// be a commit identity (`field`, `rule`; never the value).
 fn identity_invalid(field: &'static str, rule: &'static str) -> ForgeError {
-    ForgeError::new(ErrorCode::Internal)
+    ForgeError::new(ErrorCode::MergeIdentityInvalid)
         .with_context("reason", "commit_identity_invalid")
         .with_context("field", field)
         .with_context("rule", rule)
 }
 
-fn check_value(field: &'static str, value: &str) -> Result<(), ForgeError> {
-    if value.contains(['\n', '\r', '\0']) {
-        return Err(identity_invalid(field, "control_character"));
-    }
-    if value.contains(['<', '>']) {
-        return Err(identity_invalid(field, "angle_bracket"));
-    }
-    Ok(())
+/// git's "crud" (`ident.c`): stripped from both ends of a name and an
+/// e-mail, so a value made only of it becomes empty ("empty ident").
+fn crud(c: char) -> bool {
+    c <= ' ' || matches!(c, '.' | ',' | ':' | ';' | '<' | '>' | '"' | '\\' | '\'')
+}
+
+/// A name as git will keep it: control characters become spaces, `<` / `>`
+/// are dropped, the crud at both ends is trimmed.
+fn normalized_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !matches!(c, '<' | '>'))
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    cleaned.trim_matches(crud).to_owned()
 }
 
 impl CommitIdentity {
-    /// The identity of an account: its display name (or `username` when
-    /// that is empty after trimming) and its e-mail. `FG-SYS-0001
-    /// reason=commit_identity_invalid` (with `field` and `rule`, never the
-    /// value) for a value git would misread.
+    /// The identity of an account (review round 1: normalised, never a
+    /// permanent git failure): the display name with control characters,
+    /// `<` / `>` and git's end "crud" removed — or the username when nothing
+    /// is left ([`CommitIdentity::fell_back`]) — and the e-mail.
+    /// `FG-REVIEW-0012` MergeIdentityInvalid (422, `field=email`) for an
+    /// e-mail with a newline, a NUL, `<` / `>`, or only crud; `field=name`
+    /// when neither the name nor the username leaves anything.
     pub fn new(display_name: &str, email: &str, username: &str) -> Result<Self, ForgeError> {
-        let trimmed = display_name.trim();
-        let (name, fell_back) = if trimmed.is_empty() {
-            (username.trim(), true)
+        let shown = normalized_name(display_name);
+        let (name, fell_back) = if shown.is_empty() {
+            (normalized_name(username), true)
         } else {
-            (trimmed, false)
+            (shown, false)
         };
         if name.is_empty() {
             return Err(identity_invalid("name", "empty"));
         }
-        let email = email.trim();
+        if email.chars().any(char::is_control) {
+            return Err(identity_invalid("email", "control_character"));
+        }
+        if email.contains(['<', '>']) {
+            return Err(identity_invalid("email", "angle_bracket"));
+        }
+        let email = email.trim_matches(crud);
         if email.is_empty() {
             return Err(identity_invalid("email", "empty"));
         }
-        check_value("name", name)?;
-        check_value("email", email)?;
         Ok(Self {
-            name: name.to_owned(),
+            name,
             email: email.to_owned(),
             fell_back,
         })
@@ -177,7 +193,7 @@ impl Git {
         })
     }
 
-    /// Whether `<repo>/<name>.lock` exists: another git process holds the
+    /// Whether `<repo>/<name>.lock` or `<repo>/packed-refs.lock` exists: another git process holds the
     /// ref (a failed `update-ref` on it is worth a retry). A storage error
     /// is returned, never "not locked".
     pub fn ref_locked(
@@ -187,13 +203,23 @@ impl Git {
         name: &RefName,
     ) -> Result<bool, ForgeError> {
         let repo = storage.existing(id)?;
-        let lock = repo.join(format!("{}.lock", name.as_str()));
-        lock.try_exists().map_err(|e| {
-            ForgeError::new(ErrorCode::StorageIoFailed)
-                .with_context("operation", "ref_lock_check")
-                .with_context("repo_id", id.get())
-                .with_source(e)
-        })
+        // The loose ref's lock, and `packed-refs.lock` (a pack-refs or a
+        // packed-ref update holds every packed ref).
+        for lock in [
+            repo.join(format!("{}.lock", name.as_str())),
+            repo.join("packed-refs.lock"),
+        ] {
+            let held = lock.try_exists().map_err(|e| {
+                ForgeError::new(ErrorCode::StorageIoFailed)
+                    .with_context("operation", "ref_lock_check")
+                    .with_context("repo_id", id.get())
+                    .with_source(e)
+            })?;
+            if held {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

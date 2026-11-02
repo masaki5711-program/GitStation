@@ -16,7 +16,7 @@
 
 ## 原因 (cause)
 
-evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the merge request (`POST /api/v1/projects/{id}/merge-requests/{iid}/merge`, nothing written) or again inside the merge job under the lock (the attempt was set to `superseded`, no ref moved). The reasons M3 R4 knows: not_open, draft, merge_in_progress, source_branch_missing, mergeability_unknown (the stored check is not a decision for the live head and target tip; a new check was requested), conflict (the stored check found a conflict), ff_not_possible (fast_forward and the target is not an ancestor of the head). Approvals, CODEOWNERS, required checks and discussions join with R5 / R6.
+evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the merge request (`POST /api/v1/projects/{id}/merge-requests/{iid}/merge`, nothing written) or again inside the merge job under the lock (the attempt was set to `superseded`, no ref moved). The reasons M3 R4 knows: not_open, draft, merge_in_progress, source_branch_missing, mergeability_unknown (the stored check is not a decision for the live head and target tip; a new check was requested), conflict (the stored check found a conflict), ff_not_possible (fast_forward and the target is not an ancestor of the head), nothing_to_merge (fast_forward and the target is already at the head: there is nothing to merge). Approvals, CODEOWNERS, required checks and discussions join with R5 / R6.
 
 ## 調べ方 (diagnosis)
 

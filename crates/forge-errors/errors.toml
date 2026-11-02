@@ -1467,7 +1467,7 @@ severity = "info"
 user_message_ja = "このマージリクエストはまだマージできません。止めている理由を確認してください。"
 user_message_en = "This merge request cannot be merged yet. Check what is blocking it."
 user_message_id = "Merge request ini belum dapat digabungkan. Periksa apa yang memblokirnya."
-cause = "evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the merge request (`POST /api/v1/projects/{id}/merge-requests/{iid}/merge`, nothing written) or again inside the merge job under the lock (the attempt was set to `superseded`, no ref moved). The reasons M3 R4 knows: not_open, draft, merge_in_progress, source_branch_missing, mergeability_unknown (the stored check is not a decision for the live head and target tip; a new check was requested), conflict (the stored check found a conflict), ff_not_possible (fast_forward and the target is not an ancestor of the head). Approvals, CODEOWNERS, required checks and discussions join with R5 / R6."
+cause = "evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the merge request (`POST /api/v1/projects/{id}/merge-requests/{iid}/merge`, nothing written) or again inside the merge job under the lock (the attempt was set to `superseded`, no ref moved). The reasons M3 R4 knows: not_open, draft, merge_in_progress, source_branch_missing, mergeability_unknown (the stored check is not a decision for the live head and target tip; a new check was requested), conflict (the stored check found a conflict), ff_not_possible (fast_forward and the target is not an ancestor of the head), nothing_to_merge (fast_forward and the target is already at the head: there is nothing to merge). Approvals, CODEOWNERS, required checks and discussions join with R5 / R6."
 diagnosis = "The log event carries `reasons` (the names, in the fixed order of ADR-0024 §7), `merge_request_id`, `head_sha` and, inside the job, `merge_id`. The HTTP answer's request_id finds the line. `gstn mr view` / `gstn mr mergeability` show the state, draft flag and the check."
 fix = "Remove the first reason: mark the merge request ready, wait for the mergeability check (a request with mergeability_unknown queued one), resolve the conflict, or choose the merge_commit / squash method; then merge again."
 test = "a_merge_request_that_is_not_ready_is_refused_with_its_reasons"
@@ -1524,3 +1524,17 @@ cause = "A second merge, a close, a retarget or a draft toggle reached a merge r
 diagnosis = "The log event carries `merge_request_id`, `merge_id` (the live attempt), `state` and `action`. `gstn mr merge-status --project ID --iid N` shows the attempt; an attempt that stays `executing` is runbook merge-execution."
 fix = "Wait for the merge to finish (`gstn mr merge-status --wait`); if it was superseded, merge again."
 test = "two_merges_of_one_merge_request_at_once_let_exactly_one_win"
+
+# ── M3 R4 review round 1 (registration order) ──
+[[error]]
+code = "FG-REVIEW-0012"
+name = "MergeIdentityInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "アカウントのメールアドレスがコミットの作成者として使えない形式です。管理者にメールアドレスの修正を依頼してから、もう一度マージしてください。"
+user_message_en = "The account's e-mail address cannot be used as a commit author. Ask the administrator to fix the e-mail address, then merge again."
+user_message_id = "Alamat e-mail akun tidak dapat digunakan sebagai penulis commit. Minta administrator memperbaiki alamat e-mail, lalu merge lagi."
+cause = "The merge job builds the merge or squash commit's author and committer from the database (ADR-0024 §4.1) and an account's e-mail is one git would misread: it holds a control character (newline, NUL), `<` or `>`, or nothing but git's end \"crud\" (blanks, `.` `,` `:` `;` `\"` `\\` `'`). Display names are normalised instead (those characters dropped; a name with nothing left falls back to the username), so only the e-mail is refused. The attempt was set to `superseded`; no commit was written and no ref moved."
+diagnosis = "The job's `forge.review.merge_completed outcome=superseded error_code=FG-REVIEW-0012` carries `field=email` (or `name` when even the username leaves nothing), `rule=control_character|angle_bracket|empty` and `user_id`; the value is never logged. Read the account (read-only): SELECT id, username, email FROM forge.users WHERE id = <user_id>; the merge's author is the requester (and, for a squash, the merge request's author)."
+fix = "Correct the account's e-mail (the identity provider's attribute, then a new sign-in, or the administrator's account tools) and merge again."
+test = "a_merge_identity_with_a_bad_email_is_refused"

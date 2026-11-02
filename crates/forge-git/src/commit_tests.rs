@@ -257,29 +257,74 @@ async fn the_three_methods_build_the_expected_trees_and_parents() {
         .expect("ff"));
 }
 
-/// ADR-0024 §4.1: the identity comes from the database and is checked —
-/// a newline, a NUL, `<` / `>` are refused (git would misread them), an
-/// empty display name becomes the username (flagged), an empty e-mail is
-/// refused. Nothing is quoted into the error.
+/// ADR-0024 §4.1 (review round 1): a display name is normalised the way
+/// git would keep it — control characters, `<` / `>` and git's end "crud"
+/// (`.` `,` `:` `;` `"` `\` `'` and blanks) removed — and a name with
+/// nothing left falls back to the username, so no name is a permanent git
+/// failure. An e-mail git would misread is FG-REVIEW-0012 (422), never
+/// quoted into the error.
 #[test]
-fn commit_identities_refuse_what_git_would_misread() {
-    for (name, email) in [
-        ("Al\nice", "a@example.test"),
-        ("Alice", "a@exa\0mple.test"),
-        ("Alice <root>", "a@example.test"),
-        ("Alice", "<a@example.test>"),
-        ("Alice", "  "),
+fn a_merge_identity_with_a_bad_email_is_refused() {
+    for email in [
+        "a@exa\0mple.test",
+        "<a@example.test>",
+        "a@ex\nample.test",
+        " .,;: ",
+        "",
     ] {
-        let err = CommitIdentity::new(name, email, "alice").expect_err(name);
-        assert_eq!(err.code(), ErrorCode::Internal);
-        assert!(!format!("{err:?}").contains("root"), "{err:?}");
+        let err = CommitIdentity::new("Alice", email, "alice").expect_err(email);
+        assert_eq!(err.code(), ErrorCode::MergeIdentityInvalid, "{email:?}");
+        assert_eq!(err.code().http_status(), 422);
+        assert!(!format!("{err:?}").contains("example"), "{err:?}");
     }
-    let fallback = CommitIdentity::new("   ", "a@example.test", "alice").expect("fallback");
-    assert!(fallback.fell_back());
-    assert_eq!(fallback.name(), "alice");
-    let plain = CommitIdentity::new(" Alice A ", "a@example.test", "alice").expect("plain");
-    assert!(!plain.fell_back());
-    assert_eq!(plain.name(), "Alice A");
+    for (raw, kept, fell_back) in [
+        ("Al\nice", "Al ice", false),
+        ("Alice <root>", "Alice root", false),
+        (" Alice A ", "Alice A", false),
+        ("...", "alice", true),
+        ("\"'.;", "alice", true),
+        ("   ", "alice", true),
+        ("<>", "alice", true),
+    ] {
+        let id = CommitIdentity::new(raw, "a@example.test", "alice").expect(raw);
+        assert_eq!((id.name(), id.fell_back()), (kept, fell_back), "{raw:?}");
+    }
+    // The e-mail's own end crud is trimmed as git would.
+    let id = CommitIdentity::new("Alice", " a@example.test. ", "alice").expect("trimmed");
+    assert_eq!(id.email(), "a@example.test");
+}
+
+/// A name of crud only would have made git fail ("empty ident"): with the
+/// normalisation it commits under the username.
+#[tokio::test]
+async fn a_crud_only_display_name_commits_under_the_username() {
+    let f = fixture().await;
+    let base = commit(&f.path, &[("a.txt", "1\n")], &[]);
+    let tree = ObjectId::parse(&plumb(
+        &f.path,
+        &["rev-parse", &format!("{}^{{tree}}", base.as_str())],
+        None,
+    ))
+    .expect("tree");
+    let who = CommitIdentity::new("...", "a@example.test", "alice").expect("identity");
+    let made = f
+        .git
+        .commit_tree(
+            &f.root,
+            f.id,
+            &NewCommit {
+                tree: &tree,
+                parents: std::slice::from_ref(&base),
+                message: "m",
+                author: &who,
+                committer: &who,
+            },
+            T,
+        )
+        .await
+        .expect("commit");
+    let raw = plumb(&f.path, &["cat-file", "commit", made.as_str()], None);
+    assert!(raw.contains("author alice <a@example.test>"), "{raw}");
 }
 
 /// Revisions that look like options never reach argv: a "parent" or tree
@@ -305,6 +350,17 @@ async fn refs_and_ids_starting_with_a_dash_are_refused() {
         .expect("check"));
     std::fs::create_dir_all(f.path.join("refs/heads")).expect("dir");
     std::fs::write(f.path.join("refs/heads/main.lock"), b"").expect("lock");
+    assert!(f
+        .git
+        .ref_locked(
+            &f.root,
+            f.id,
+            &RefName::parse("refs/heads/main").expect("ref")
+        )
+        .expect("check"));
+    // A packed-refs lock holds every packed ref too.
+    std::fs::remove_file(f.path.join("refs/heads/main.lock")).expect("unlock");
+    std::fs::write(f.path.join("packed-refs.lock"), b"").expect("packed lock");
     assert!(f
         .git
         .ref_locked(
