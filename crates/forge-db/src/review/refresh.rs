@@ -17,6 +17,19 @@
 //! Each job's dedup key is `mr_refresh:<merge_request_id>:push:<seq>`: a
 //! retried step never doubles a job, and each push gets its own. The pusher
 //! (`actor_user_id` of a `user` event) becomes the version's `pushed_by`.
+//!
+//! **Target pushes** (M3 R2, ADR-0024 §3): every listed `refs/heads/*` that
+//! was created, moved OR deleted is also a target: the open merge requests
+//! targeting it get a mergeability check (`mergeability::request_check_on`:
+//! `unchecked`, a new `check_seq`, the job `merge_request.mergeability`),
+//! the most recently updated first, at most the configured fan-out cap
+//! (`review.mergeability_fanout_max`); the rest are only marked `unchecked`
+//! (their merge stays blocked, never "mergeable") and the overflow is
+//! logged once at warn (`forge.review.mergeability_deferred`). A deleted
+//! target is checked too: the job finds no tip and stores `check_failed
+//! reason=target_missing`. A cut list (`refs_truncated`) names no target:
+//! the version jobs it enqueues for every open merge request compare the
+//! stored pair with the current one and request the checks that are stale.
 //! `independent`: an event that keeps failing is quarantined (doctor's
 //! `subscribers.dead_letters` alerts) instead of holding up every later
 //! push.
@@ -25,6 +38,7 @@ use forge_core::ids::{MergeRequestId, UserId};
 use forge_core::{EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
+use super::mergeability::{defer_checks_on, not_checked, request_check_on};
 use super::versions::{refresh_job, RefreshRequest, RefreshTrigger};
 use crate::jobs::enqueue_on;
 use crate::query_error;
@@ -38,9 +52,28 @@ pub const MAX_REFRESH_FANOUT: i64 = 500;
 /// The subscriber's name (its row in forge.event_subscribers).
 pub const REFRESH_SUBSCRIBER: &str = "merge-request-refresh";
 
-/// The subscriber (stateless).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MergeRequestRefresh;
+/// The subscriber; it holds the mergeability fan-out cap
+/// (`review.mergeability_fanout_max`).
+#[derive(Debug, Clone, Copy)]
+pub struct MergeRequestRefresh {
+    mergeability_fanout: u32,
+}
+
+impl Default for MergeRequestRefresh {
+    fn default() -> Self {
+        Self::new(forge_core::config::ReviewConfig::DEFAULT_MERGEABILITY_FANOUT_MAX)
+    }
+}
+
+impl MergeRequestRefresh {
+    /// At most `mergeability_fanout` (at least 1) mergeability checks per
+    /// target push.
+    pub fn new(mergeability_fanout: u32) -> Self {
+        Self {
+            mergeability_fanout: mergeability_fanout.max(1),
+        }
+    }
+}
 
 fn bad_payload(event: &SourceEvent, field: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
@@ -50,9 +83,12 @@ fn bad_payload(event: &SourceEvent, field: &'static str) -> ForgeError {
         .with_context("seq", event.seq)
 }
 
-/// The source branches a push moved (`None`: the list was cut, every open
-/// merge request is re-checked).
-pub(crate) fn moved_branches(event: &SourceEvent) -> Result<Option<Vec<String>>, ForgeError> {
+/// The branches a push changed: `(moved, deleted)` — `None`: the list was
+/// cut, every open merge request is re-checked by its version job.
+pub(crate) type PushedBranches = Option<(Vec<String>, Vec<String>)>;
+
+/// The branches a push created or moved, and those it deleted.
+pub(crate) fn pushed_branches(event: &SourceEvent) -> Result<PushedBranches, ForgeError> {
     let payload = &event.payload;
     let truncated = payload
         .get("refs_truncated")
@@ -66,6 +102,7 @@ pub(crate) fn moved_branches(event: &SourceEvent) -> Result<Option<Vec<String>>,
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| bad_payload(event, "refs"))?;
     let mut moved = Vec::new();
+    let mut deleted = Vec::new();
     for entry in refs {
         let name = entry
             .get("ref")
@@ -75,19 +112,111 @@ pub(crate) fn moved_branches(event: &SourceEvent) -> Result<Option<Vec<String>>,
             .get("kind")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| bad_payload(event, "refs.kind"))?;
-        if name.starts_with("refs/heads/") && kind != "delete" {
+        if !name.starts_with("refs/heads/") {
+            continue;
+        }
+        if kind == "delete" {
+            deleted.push(name.to_owned());
+        } else {
             moved.push(name.to_owned());
         }
     }
-    Ok(Some(moved))
+    Ok(Some((moved, deleted)))
 }
 
 impl MergeRequestRefresh {
-    async fn on_push(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
+    async fn on_push(&self, event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
         let project = event
             .project_id
             .ok_or_else(|| bad_payload(event, "project_id"))?;
-        let moved = moved_branches(event)?;
+        let pushed = pushed_branches(event)?;
+        if let Some((moved, deleted)) = &pushed {
+            let targets: Vec<String> = moved.iter().chain(deleted).cloned().collect();
+            self.on_targets(event, tx, project, &targets).await?;
+        }
+        let moved = pushed.map(|(moved, _)| moved);
+        Self::on_sources(event, tx, project, moved).await
+    }
+
+    /// The mergeability checks of the open merge requests targeting one of
+    /// `targets` (module docs).
+    async fn on_targets(
+        &self,
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+        project: forge_core::ProjectId,
+        targets: &[String],
+    ) -> Result<(), ForgeError> {
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let cap = i64::from(self.mergeability_fanout);
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM forge.merge_requests WHERE project_id = $1 AND state = 'open' \
+             AND target_branch = ANY($2) ORDER BY updated_at DESC, id LIMIT $3",
+        )
+        .bind(project.get())
+        .bind(targets)
+        .bind(cap)
+        .fetch_all(tx.conn())
+        .await
+        .map_err(|e| query_error("review.mergeability_targets", e))?;
+        let origin = event.request_id().unwrap_or_else(RequestId::generate);
+        for id in &ids {
+            request_check_on(
+                tx.conn(),
+                MergeRequestId::new(*id),
+                project,
+                origin.clone(), // clone: each job keeps the origin request
+                Some(event.seq),
+            )
+            .await?;
+        }
+        let (deferred, skipped) = defer_checks_on(tx.conn(), project, targets, &ids).await?;
+        if deferred > 0 {
+            // Never silent: they stay `unchecked` (merge blocked); the
+            // worker's sweep requests them, the longest waiting first.
+            tracing::warn!(
+                target: "forge_db",
+                event = "forge.review.mergeability_deferred",
+                request_id = %event.request_id,
+                project_id = project.get(),
+                source_seq = event.seq,
+                targets = ?targets,
+                enqueued = ids.len(),
+                deferred,
+                "more open merge requests target the pushed branches than one push checks; the rest are unchecked and swept"
+            );
+        }
+        if skipped > 0 {
+            // Past even the deferral bound: their status is stale (readers
+            // compare the checked target with the live tip; the sweep only
+            // sees `unchecked` rows, so a push or retarget re-checks them).
+            let e = not_checked("fanout_deferred");
+            tracing::error!(
+                target: "forge_db",
+                event = "forge.review.mergeability_not_checked",
+                error_code = e.code().id(),
+                reason = "fanout_deferred",
+                request_id = %event.request_id,
+                project_id = project.get(),
+                source_seq = event.seq,
+                targets = ?targets,
+                skipped,
+                "too many open merge requests target the pushed branches to mark them all"
+            );
+        }
+        Ok(())
+    }
+
+    /// The version jobs of the open merge requests whose source moved
+    /// (`None`: every open one).
+    async fn on_sources(
+        event: &SourceEvent,
+        tx: &mut DerivedTx<'_>,
+        project: forge_core::ProjectId,
+        moved: Option<Vec<String>>,
+    ) -> Result<(), ForgeError> {
         if moved.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
         }
@@ -159,8 +288,7 @@ impl Subscriber for MergeRequestRefresh {
                 return Ok(());
             };
             match kind {
-                EventType::RepositoryPushed => Self::on_push(event, tx).await,
-                // Target pushes feed the mergeability job (R2), not versions.
+                EventType::RepositoryPushed => self.on_push(event, tx).await,
                 EventType::ProjectCreated
                 | EventType::RepositoryCreated
                 | EventType::TokenCreated
@@ -183,7 +311,9 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestDraftChanged
                 | EventType::MergeRequestClosed
                 | EventType::MergeRequestReopened
-                | EventType::MergeRequestPushed => Ok(()),
+                | EventType::MergeRequestPushed
+                | EventType::MergeRequestConflictDetected
+                | EventType::MergeRequestConflictResolved => Ok(()),
             }
         })
     }

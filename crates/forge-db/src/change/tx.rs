@@ -163,6 +163,22 @@ impl ChangeTx {
     }
 }
 
+impl ChangeTx {
+    /// COMMIT without an audit row or events ([`Settle::CommitDerived`]),
+    /// bounded like [`ChangeTx::commit`]'s COMMIT.
+    async fn commit_derived(self, action: &str) -> Result<(), ForgeError> {
+        match tokio::time::timeout(self.commit_timeout, self.tx.commit()).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(query_error("change.commit", e).with_context("action", action)),
+            Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("query", "change.commit")
+                .with_context("reason", "commit_outcome_unknown")
+                .with_context("timeout_ms", self.commit_timeout.as_millis())
+                .with_context("action", action)),
+        }
+    }
+}
+
 /// ROLLBACK now, bounded by [`ROLLBACK_TIMEOUT`]. Never left to `Drop`:
 /// sqlx 0.8 sends a dropped transaction's ROLLBACK from the task that
 /// returns the connection to the pool, so under load its row and advisory
@@ -199,6 +215,12 @@ pub(crate) enum Settle<T> {
     /// Nothing to write (an unchanged update, an already-done state):
     /// roll back explicitly.
     Discard(T),
+    /// Commit writes to derived tables only (tables.toml `kind =
+    /// "derived"`), without an audit row (M3 R2: a mergeability status
+    /// that did not flip). An audited table written in the same
+    /// transaction still needs its audit row: its deferred trigger refuses
+    /// the COMMIT (`FG-DB-0001`), so this can never hide an audited change.
+    CommitDerived(T),
 }
 
 impl ChangeTx {
@@ -227,6 +249,10 @@ impl ChangeTx {
             }
             Ok(Settle::Discard(value)) => {
                 self.rollback(action).await;
+                Ok(value)
+            }
+            Ok(Settle::CommitDerived(value)) => {
+                self.commit_derived(action).await?;
                 Ok(value)
             }
             Err(e) => {

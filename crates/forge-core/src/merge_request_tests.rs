@@ -133,7 +133,9 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.reopened",
             "merge_request.draft_changed",
             "merge_request.updated",
-            "merge_request.pushed"
+            "merge_request.pushed",
+            "merge_request.conflict_detected",
+            "merge_request.conflict_resolved"
         ]
     );
 }
@@ -193,5 +195,134 @@ fn pushed_is_a_transition_and_version_changes_are_audit_only() {
     assert_eq!(
         purged.to_value(),
         json!({"merge_request_id": 9, "iid": 3, "versions": [1, 2]})
+    );
+}
+
+/// M3 R2 (ADR-0024 §3, §6): a conflict flip is a transition with its own
+/// event, deduplicated per check; the payload carries ids, SHAs and the
+/// file count, never a path.
+#[test]
+fn conflict_flips_are_transitions_with_ids_and_shas_only() {
+    use crate::ObjectId;
+    let mr = MergeRequestId::new(9);
+    let head = ObjectId::parse(&"c".repeat(40)).expect("oid");
+    let target = ObjectId::parse(&"d".repeat(40)).expect("oid");
+    let detected = MergeRequestChange::ConflictDetected {
+        merge_request: mr,
+        iid: 3,
+        check_seq: 5,
+        head_sha: head.clone(),
+        target_sha: target.clone(),
+        conflict_files: 2,
+        files_truncated: false,
+    };
+    let resolved = MergeRequestChange::ConflictResolved {
+        merge_request: mr,
+        iid: 3,
+        check_seq: 6,
+        head_sha: head,
+        target_sha: target,
+    };
+    assert_eq!(
+        detected.transition(),
+        MergeRequestTransition::ConflictDetect
+    );
+    assert_eq!(
+        resolved.transition(),
+        MergeRequestTransition::ConflictResolve
+    );
+    assert_eq!(detected.dedup_prefix(), "merge_request_conflict_detected");
+    assert_eq!(resolved.dedup_prefix(), "merge_request_conflict_resolved");
+    assert_eq!(detected.merge_request(), mr);
+    assert_eq!(
+        detected.to_value(),
+        json!({"merge_request_id": 9, "iid": 3, "check_seq": 5, "head_sha": "c".repeat(40),
+               "target_sha": "d".repeat(40), "conflict_files": 2, "files_truncated": false})
+    );
+    assert_eq!(
+        resolved.to_value(),
+        json!({"merge_request_id": 9, "iid": 3, "check_seq": 6, "head_sha": "c".repeat(40),
+               "target_sha": "d".repeat(40)})
+    );
+    for (change, event) in [
+        (detected, EventType::MergeRequestConflictDetected),
+        (resolved, EventType::MergeRequestConflictResolved),
+    ] {
+        let details = AuditDetails::MergeRequest(change);
+        assert_eq!(details.event_type(), Some(event));
+        assert_eq!(details.action(), event.as_str());
+        assert_eq!(details.event_payload(), details.to_value());
+    }
+}
+
+/// M3 R2: the bases of a version are an audit-only change.
+#[test]
+fn recorded_bases_are_audit_only() {
+    use crate::{MergeRequestVersionChange, ObjectId};
+    let bases = AuditDetails::MergeRequestVersion(MergeRequestVersionChange::BasesRecorded {
+        merge_request: MergeRequestId::new(9),
+        iid: 3,
+        version: 2,
+        base_sha: ObjectId::parse(&"a".repeat(40)).expect("oid"),
+        merge_base_sha: None,
+    });
+    assert_eq!(bases.event_type(), None);
+    assert_eq!(bases.action(), "merge_request.version_bases_recorded");
+    assert_eq!(
+        bases.to_value(),
+        json!({"merge_request_id": 9, "iid": 3, "version": 2, "base_sha": "a".repeat(40),
+               "merge_base_sha": null})
+    );
+}
+
+/// M3 R2: the mergeability statuses are the table's CHECK values; only
+/// "can" and "cannot" are decisions.
+#[test]
+fn mergeability_statuses_are_the_check_values_and_only_two_decide() {
+    use crate::MergeabilityStatus;
+    let names: Vec<&str> = MergeabilityStatus::ALL.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "unchecked",
+            "checking",
+            "can_be_merged",
+            "cannot_be_merged",
+            "check_failed"
+        ]
+    );
+    for s in MergeabilityStatus::ALL {
+        assert_eq!(MergeabilityStatus::parse(s.as_str()), Some(*s));
+    }
+    assert_eq!(MergeabilityStatus::parse("mergeable"), None);
+    let decided: Vec<&str> = MergeabilityStatus::ALL
+        .iter()
+        .filter(|s| s.is_decided())
+        .map(|s| s.as_str())
+        .collect();
+    assert_eq!(decided, ["can_be_merged", "cannot_be_merged"]);
+}
+
+/// M3 R2: the reasons are the stored values; only the ones a rerun on the
+/// same pair repeats answer that pair.
+#[test]
+fn check_reasons_round_trip_and_only_deterministic_ones_answer_a_pair() {
+    use crate::CheckReason;
+    for r in CheckReason::ALL {
+        assert_eq!(CheckReason::parse(r.as_str()), Some(*r));
+    }
+    let answering: Vec<&str> = CheckReason::ALL
+        .iter()
+        .filter(|r| r.is_deterministic())
+        .map(|r| r.as_str())
+        .collect();
+    assert_eq!(
+        answering,
+        [
+            "conflict",
+            "target_missing",
+            "unrelated_histories",
+            "no_version"
+        ]
     );
 }

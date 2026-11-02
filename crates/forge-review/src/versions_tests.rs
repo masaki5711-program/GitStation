@@ -1,7 +1,12 @@
 #![allow(clippy::expect_used)] // tests may fail loudly
 
+use std::collections::BTreeMap;
+
 use super::*;
-use forge_db::review::StoredVersion;
+use forge_core::ids::MergeRequestId;
+use forge_core::{ObjectId, RefName};
+use forge_db::review::{StoredVersion, VersionsSnapshot};
+use forge_git::RefChange;
 
 fn oid(c: char) -> ObjectId {
     ObjectId::parse(&c.to_string().repeat(40)).expect("oid")
@@ -13,6 +18,9 @@ fn version(n: i64, head: char, purged: bool) -> StoredVersion {
         head_sha: oid(head),
         pushed_by: None,
         refs_purged: purged,
+        base_sha: None,
+        merge_base_sha: None,
+        created_at: "2026-11-02T00:00:00Z".to_owned(),
     }
 }
 

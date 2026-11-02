@@ -408,6 +408,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/compare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare two versions of a merge request, head to head (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_compare"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether a merge request can be merged, as last checked (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_mergeability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {
         parameters: {
             query?: never;
@@ -436,6 +470,40 @@ export interface paths {
         put?: never;
         /** Remove a merge request's hidden version refs (secret removal; an administrator's web session only) */
         post: operations["post_api_v1_projects_id_merge_requests_iid_version_refs_purge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a merge request's versions, oldest first (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One version's diff, merge base to head (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_versions_version_diff"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1268,6 +1336,38 @@ export interface components {
              */
             next_before?: number | null;
         };
+        /** @description What the mergeability check last stored. */
+        MergeabilityBody: {
+            /** @description UTC, RFC 3339. */
+            checked_at: string | null;
+            /** @description The head and target tip the last finished check looked at. */
+            checked_head_sha: string | null;
+            checked_target_sha: string | null;
+            /** @description The conflicted paths (at most 100; `conflicts_truncated` beyond). */
+            conflicts: string[];
+            conflicts_truncated: boolean;
+            /** @description The merge request's current head (`null` before its first version). */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /**
+             * @description Why: `conflict`, `target_missing`, `unrelated_histories`,
+             *     `no_version`, `git_timeout`, `git_busy`, `git_failed`, `job_failed`,
+             *     `job_stale` (`null` when mergeable or not checked yet).
+             */
+            reason: string | null;
+            /**
+             * @description The stored result is about another head or target tip than the
+             *     current ones: `status` says `unchecked` until the next check.
+             */
+            stale: boolean;
+            /**
+             * @description `unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or
+             *     `check_failed`. Only `can_be_merged` lets a merge go ahead; every
+             *     status but the two decisions means "unknown".
+             */
+            status: string;
+        };
         /** @description A move as it was written. */
         MoveBody: {
             /**
@@ -1633,6 +1733,65 @@ export interface components {
             token_scopes: string[] | null;
             username: string;
         };
+        /** @description One version of a merge request. */
+        VersionBody: {
+            /**
+             * @description The target's tip when the version was recorded (`null` until the
+             *     version job recorded it, or when the target was missing).
+             */
+            base_sha: string | null;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            head_sha: string;
+            /**
+             * @description The merge base of the head and `base_sha` (`null`: not recorded, or
+             *     no common history). The version's diff starts here.
+             */
+            merge_base_sha: string | null;
+            /**
+             * Format: int64
+             * @description The pusher whose push made the version (`null` for the first
+             *     version of a new or reopened merge request).
+             */
+            pushed_by: number | null;
+            /**
+             * @description The version's refs were removed (secret removal): its diff is no
+             *     longer served.
+             */
+            refs_purged: boolean;
+            /** Format: int64 */
+            version: number;
+        };
+        /** @description Two versions compared (`head(from)..head(to)`). */
+        VersionCompareBody: {
+            /** @description The commits `to` has and `from` does not, newest first. */
+            commits: components["schemas"]["CommitBody"][];
+            commits_truncated: boolean;
+            /** @description The tree diff from `from` to `to`. */
+            diff: components["schemas"]["DiffBody"];
+            from_sha: string;
+            /** Format: int64 */
+            from_version: number;
+            to_sha: string;
+            /** Format: int64 */
+            to_version: number;
+        };
+        /** @description One version's diff. */
+        VersionDiffBody: {
+            /** @description The commits `to` has and `from` does not, newest first. */
+            commits: components["schemas"]["CommitBody"][];
+            /** @description More commits than the server lists (200). */
+            commits_truncated: boolean;
+            diff: components["schemas"]["DiffBody"];
+            /**
+             * @description The commit the diff starts at: `merge_base_sha`, or `base_sha` when
+             *     there was no common history.
+             */
+            from: string;
+            /** @description The version's head. */
+            to: string;
+            version: components["schemas"]["VersionBody"];
+        };
         /** @description What a purge did. */
         VersionRefsPurged: {
             /** @description Versions purged before (their refs were removed again if present). */
@@ -1641,6 +1800,12 @@ export interface components {
             iid: number;
             /** @description Versions marked and whose refs were removed by this request. */
             purged: number[];
+        };
+        /** @description A merge request's versions, oldest first. */
+        VersionsBody: {
+            /** Format: int64 */
+            iid: number;
+            versions: components["schemas"]["VersionBody"][];
         };
         /**
          * @description A project's visibility in a request.
@@ -2792,6 +2957,75 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_merge_requests_iid_compare: {
+        parameters: {
+            query?: {
+                /** @description Required. The earlier version's number */
+                from?: number;
+                /** @description Required. The later version's number */
+                to?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionCompareBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_mergeability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeabilityBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_api_v1_projects_id_merge_requests_iid_reopen: {
         parameters: {
             query?: never;
@@ -2847,6 +3081,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionRefsPurged"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_versions_version_diff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiffBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

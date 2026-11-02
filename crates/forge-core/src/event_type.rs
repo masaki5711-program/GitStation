@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -116,11 +116,21 @@ pub enum EventType {
     /// Deduplicated by `merge_request_pushed:<merge_request_id>:<head_sha>`
     /// (ADR-0024 §6): one event per head commit of a merge request.
     MergeRequestPushed,
+    /// `merge_request.conflict_detected` (M3 R2, ADR-0024 §3, §6): the
+    /// mergeability check flipped from "can be merged" to "cannot be
+    /// merged" (never from or to an undecided status). Written by the
+    /// mergeability job (actor `system`); deduplicated by
+    /// `merge_request_conflict_detected:<merge_request_id>:<check_seq>`.
+    MergeRequestConflictDetected,
+    /// `merge_request.conflict_resolved` (M3 R2): "cannot" → "can be
+    /// merged". Deduplicated by
+    /// `merge_request_conflict_resolved:<merge_request_id>:<check_seq>`.
+    MergeRequestConflictResolved,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 24] = [
+    pub const ALL: [EventType; 26] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -145,6 +155,8 @@ impl EventType {
         EventType::MergeRequestClosed,
         EventType::MergeRequestReopened,
         EventType::MergeRequestPushed,
+        EventType::MergeRequestConflictDetected,
+        EventType::MergeRequestConflictResolved,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -174,6 +186,8 @@ impl EventType {
             EventType::MergeRequestClosed => "merge_request.closed",
             EventType::MergeRequestReopened => "merge_request.reopened",
             EventType::MergeRequestPushed => "merge_request.pushed",
+            EventType::MergeRequestConflictDetected => "merge_request.conflict_detected",
+            EventType::MergeRequestConflictResolved => "merge_request.conflict_resolved",
         }
     }
 
@@ -196,7 +210,9 @@ impl EventType {
             | EventType::MergeRequestDraftChanged
             | EventType::MergeRequestClosed
             | EventType::MergeRequestReopened
-            | EventType::MergeRequestPushed => VisibilityClass::Integration,
+            | EventType::MergeRequestPushed
+            | EventType::MergeRequestConflictDetected
+            | EventType::MergeRequestConflictResolved => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged

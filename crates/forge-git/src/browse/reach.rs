@@ -90,7 +90,7 @@ const MAX_CALLERS: usize = 10_000;
 
 /// The refs a commit named by id must be reachable from: always every
 /// branch and tag; a merge request view adds that merge request's version
-/// refs (`refs/merge-requests/<iid>/`, M3 R1 — not yet).
+/// refs (`refs/merge-requests/<iid>/*`, M3 R2: [`ReachRoots::merge_request`]).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReachRoots {
     /// More `rev-list --glob` patterns (forge-built `refs/…/*` only;
@@ -102,6 +102,17 @@ impl ReachRoots {
     /// Branches and tags only (every browse route outside a merge request).
     pub fn branches_and_tags() -> Self {
         Self::default()
+    }
+
+    /// Branches, tags and the hidden refs of merge request `iid` of the
+    /// repository (`refs/merge-requests/<iid>/*`: its `v<n>` and `head`;
+    /// M3 R2, ADR-0024 §2). Only that merge request's refs: a commit only
+    /// another merge request's version reaches stays unreachable here.
+    pub fn merge_request(iid: i64) -> Result<Self, ForgeError> {
+        let prefix = crate::hidden_refs::merge_request_ref_prefix(iid)?;
+        Ok(Self {
+            extra: vec![format!("{prefix}*")],
+        })
     }
 
     /// The cache key part (patterns cannot hold a newline).
@@ -280,6 +291,42 @@ impl Browser {
                 }
             }
         }
+    }
+
+    /// The commit `id` (a full id, any case) in the view of merge request
+    /// `iid` (M3 R2): reachable from a branch, a tag or one of that merge
+    /// request's version refs ([`ReachRoots::merge_request`]); counted
+    /// against `caller` like every id lookup. A purged version (its refs
+    /// gone) or a commit only a trial merge made answers like a missing id
+    /// (`FG-REPO-0023 reason=ref_not_found`).
+    pub async fn merge_request_commit(
+        &self,
+        repo: RepoId,
+        iid: i64,
+        id: &str,
+        caller: &str,
+    ) -> Result<String, ForgeError> {
+        let deadline = Deadline::new(self.limits.timeout);
+        let id = super::object_id(id).ok_or_else(|| not_resolved("ref_not_found"))?;
+        let roots = ReachRoots::merge_request(iid)?;
+        self.commit_reachable_from(repo, &id, &roots, caller, deadline)
+            .await
+    }
+
+    /// `from` → `to` (full ids) compared in the view of merge request
+    /// `iid`: both are checked like [`Self::merge_request_commit`] first,
+    /// then [`Self::compare`] runs on the resolved ids.
+    pub async fn merge_request_compare(
+        &self,
+        repo: RepoId,
+        iid: i64,
+        from: &str,
+        to: &str,
+        caller: &str,
+    ) -> Result<super::Comparison, ForgeError> {
+        let from = self.merge_request_commit(repo, iid, from, caller).await?;
+        let to = self.merge_request_commit(repo, iid, to, caller).await?;
+        self.compare(repo, &from, &to).await
     }
 
     /// One token and one slot of `caller` (held for the whole lookup).

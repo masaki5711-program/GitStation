@@ -7,7 +7,8 @@
 //! (`jobs.dead`, `jobs.expired_leases`, `jobs.queue_depth`), the event
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
 //! administers forge (`users.administration`), repository provisioning and
-//! storage (`repositories.provisioning`, `repositories.storage`), storage
+//! storage (`repositories.provisioning`, `repositories.storage`), merge
+//! request mergeability (`review.mergeability`, M3 R2), storage
 //! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
 //! provider (`auth.oidc`, M2 MR4). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
@@ -33,6 +34,8 @@ mod oidc;
 mod render;
 // ── D4 MR3b ──
 mod repositories;
+// M3 R2: FG-REVIEW-0003.
+mod review;
 // ── end D4 MR3b ──
 mod seal;
 // ── C5 ──
@@ -62,7 +65,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 15] = [
+const DB_CHECKS: [&str; 16] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -86,6 +89,8 @@ const DB_CHECKS: [&str; 15] = [
     "repositories.provisioning",
     "repositories.storage",
     // ── end D4 MR3b ──
+    // M3 R2: FG-REVIEW-0003.
+    "review.mergeability",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -215,6 +220,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         repositories::repository_checks(db, root, forge_db::repositories::PROVISIONING_STUCK_AFTER)
             .await;
     // ── end D4 MR3b ──
+    let mergeability = review::mergeability_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -231,6 +237,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         administration,
         provisioning,
         storage,
+        mergeability,
     ]
 }
 

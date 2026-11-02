@@ -108,6 +108,16 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   to the empty directory, nothing on argv; a refused transaction is FG-GIT-0003 (nothing
   changed). Tests `refs_tests.rs` (one transaction, a refused change leaves every ref,
   `a_version_ref_keeps_a_force_pushed_commit_through_gc`).
+- **Mergeability** (`mergeability`, M3 R2, ADR-0024 §3): `Git::merge_tree(&StorageRoot, RepoId,
+  target, head, MergeTreeLimits { timeout 30 s, max_output_bytes 256 KiB, max_files 100 }) ->
+  MergeTree::{Clean { tree }, Conflicted { files, files_truncated }}` (`merge-tree --write-tree
+  --name-only -z --end-of-options <target> <head>`; exit 0 clean, exit 1 conflict, an output over
+  the cap is a conflict with `files_truncated`, never FG-GIT-0006; any other exit — unrelated
+  histories — FG-GIT-0003), `Git::merge_base` (exit 1 = `None`), `Git::is_ancestor` (exit 1 =
+  `false`). They use the crate-internal `GitCommand::output_accepting(cap, &[codes])` (the capture
+  loop takes the accepted exit codes and returns the code; a signal is never accepted; `output()` /
+  `output_truncated()` are the `[0]` wrappers). Pinned by `merge_tree_exit_codes_on_git_2_38`
+  (verified on git 2.53; 2.38 itself not run here).
 - **pkt-line** (`pkt_line`): `decode(buf, PktMode) -> Option<(Packet, used)>`, `decode_all`,
   `encode` / `encode_data`, `PktReader` (async, one packet ≤ 65520 bytes), `encode_sideband` /
   `decode_sideband` (`Band::{Data, Progress, Error}`, ≤ 65515 data bytes per packet). Invalid
@@ -139,7 +149,11 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     `reach_timeout` (5 s) and takes one `max_per_repo` slot; a tip of the cached ref list needs no
     git; answers are cached per `(repo, id, ReachRoots)` with the repository's push generation for
     `refs_ttl`, at most `max_cached_reach` (4 096, oldest dropped first). `ReachRoots` is branches +
-    tags (`branches_and_tags()`); M3 R1 adds a merge request's version refs. Names never pay for the
+    tags (`branches_and_tags()`); M3 R2 adds `ReachRoots::merge_request(iid)` (that merge
+    request's `refs/merge-requests/<iid>/*` too) behind `merge_request_commit(repo, iid, id,
+    caller)` and `merge_request_compare(repo, iid, from, to, caller)` (both ends checked, then
+    `compare`): a purged version and a trial merge's objects answer like a missing id
+    (`merge_request_versions_are_browsable_only_in_their_merge_request`). Names never pay for the
     check or count against the caller. Known residual: response time can tell a missing id from an
     existing unreachable one (bounded by the per-caller limit).
   - `tree(repo, commit, &RepoPath)` (`ls-tree -z --long --full-tree --end-of-options <commit> --

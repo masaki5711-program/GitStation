@@ -26,12 +26,16 @@
 //!   M3 R1b) that Smart HTTP hides and the want check leaves out;
 //!   [`Git::read_refs`] / [`Git::update_refs`] read and write them
 //!   (`update-ref --stdin` in one transaction, hooks pinned empty).
+//! - [`mergeability`] runs the trial merge of a merge request
+//!   (`merge-tree --write-tree`, M3 R2) and the `merge-base` questions
+//!   (exit 1 is an answer there, `GitCommand::output_accepting`).
 
 pub mod browse;
 mod command;
 mod config;
 pub mod gzip;
 pub mod hidden_refs;
+pub mod mergeability;
 pub mod pkt_line;
 mod process;
 mod process_tree;

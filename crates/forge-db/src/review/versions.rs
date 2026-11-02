@@ -48,26 +48,55 @@ pub struct StoredVersion {
     pub pushed_by: Option<UserId>,
     /// Its refs were purged (secret removal): never written again.
     pub refs_purged: bool,
+    /// The target's tip when the version was recorded (M3 R2; `None`
+    /// until the version job recorded it, or when the target was missing).
+    pub base_sha: Option<ObjectId>,
+    /// The merge base of the head and `base_sha` (`None`: not recorded, or
+    /// no common history). A version's diff is `merge_base_sha..head_sha`.
+    pub merge_base_sha: Option<ObjectId>,
+    /// UTC, RFC 3339.
+    pub created_at: String,
 }
 
-/// `(version_no, head_sha, pushed_by, refs_purged)`.
-type VersionRow = (i64, String, Option<i64>, bool);
+/// `(version_no, head_sha, pushed_by, refs_purged, base_sha, merge_base_sha,
+/// created_at)`.
+type VersionRow = (
+    i64,
+    String,
+    Option<i64>,
+    bool,
+    Option<String>,
+    Option<String>,
+    String,
+);
 
 pub(super) const VERSION_COLUMNS: &str =
-    "version_no, head_sha, pushed_by, refs_purged_at IS NOT NULL";
+    "version_no, head_sha, pushed_by, refs_purged_at IS NOT NULL, base_sha, merge_base_sha, \
+     to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')";
 
 fn stored_version(row: VersionRow, mr: MergeRequestId) -> Result<StoredVersion, ForgeError> {
-    let (version_no, head, pushed_by, refs_purged) = row;
-    let head_sha = ObjectId::parse(&head).map_err(|_| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "stored_head_sha_invalid")
-            .with_context("merge_request_id", mr.get())
-    })?;
+    let (version_no, head, pushed_by, refs_purged, base, merge_base, created_at) = row;
+    let oid = |raw: &str, reason: &'static str| {
+        ObjectId::parse(raw).map_err(|_| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", reason)
+                .with_context("merge_request_id", mr.get())
+        })
+    };
     Ok(StoredVersion {
         version_no,
-        head_sha,
+        head_sha: oid(&head, "stored_head_sha_invalid")?,
         pushed_by: pushed_by.map(UserId::new),
         refs_purged,
+        base_sha: base
+            .as_deref()
+            .map(|b| oid(b, "stored_base_sha_invalid"))
+            .transpose()?,
+        merge_base_sha: merge_base
+            .as_deref()
+            .map(|b| oid(b, "stored_merge_base_sha_invalid"))
+            .transpose()?,
+        created_at,
     })
 }
 
@@ -103,6 +132,25 @@ pub async fn list_versions(db: &Db, mr: MergeRequestId) -> Result<Vec<StoredVers
         versions_on(&mut conn, mr, "", QUERY).await
     })
     .await
+}
+
+/// Every version of `mr`, oldest first, on the read pool (the API). One
+/// bounded statement.
+pub async fn read_versions(db: &Db, mr: MergeRequestId) -> Result<Vec<StoredVersion>, ForgeError> {
+    const QUERY: &str = "review.versions_read";
+    let rows: Vec<VersionRow> = db
+        .within(QUERY, async {
+            sqlx::query_as(&format!(
+                "SELECT {VERSION_COLUMNS} FROM forge.merge_request_versions \
+                 WHERE merge_request_id = $1 ORDER BY version_no"
+            ))
+            .bind(mr.get())
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| crate::read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter().map(|r| stored_version(r, mr)).collect()
 }
 
 /// What the version job works on.
@@ -337,6 +385,9 @@ pub async fn record_mr_version(
             }
             let version = v.version_no;
             move_head(&mut tx, mr, head).await?;
+            // M3 R2: the stored mergeability is about another head now.
+            tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
+                .await?;
             let details =
                 AuditDetails::MergeRequestVersion(MergeRequestVersionChange::HeadRestored {
                     merge_request: mr,
@@ -375,6 +426,9 @@ pub async fn record_mr_version(
         })
         .await?;
         move_head(&mut tx, mr, head).await?;
+        // M3 R2: the stored mergeability is about another head now.
+        tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
+            .await?;
         let change = MergeRequestChange::Pushed {
             merge_request: mr,
             iid: current.iid,

@@ -145,6 +145,11 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                 "INSERT INTO forge.merge_requests (project_id, iid, title, author_id,                  source_branch, target_branch, state, closed_at, closed_by) VALUES ({id}, 2,                  'synthetic', {b}, 'refs/heads/fix', 'refs/heads/main', 'closed', now(), {b})",
                 b = bob.user_id.get()
             ),
+            // M3 R2: a derived mergeability row goes with them.
+            format!(
+                "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id) \
+                 SELECT id, project_id FROM forge.merge_requests WHERE project_id = {id} AND iid = 1"
+            ),
         ],
     )
     .await;
@@ -247,7 +252,11 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
     assert_eq!(audit.2["members_removed"], json!(2));
     assert_eq!(audit.2["protected_refs_removed"], json!(1));
     assert_eq!(audit.2["merge_requests_removed"], json!(2));
-    for table in ["merge_requests", "merge_request_counters"] {
+    for table in [
+        "merge_requests",
+        "merge_request_counters",
+        "merge_request_mergeability",
+    ] {
         let rows = count(
             &mut su,
             &format!("SELECT count(*) FROM forge.{table} WHERE project_id = {id}"),

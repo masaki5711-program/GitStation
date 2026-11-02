@@ -42,11 +42,15 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
 
+mod after_version;
 mod fields;
+pub mod mergeability;
 mod purge;
+mod version_refs;
 pub mod versions;
 
-pub use forge_db::review::{PurgeOutcome, RefreshRequest};
+pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, StoredVersion};
+pub use mergeability::{check, CheckReport, Mergeability};
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
 pub use fields::{check_description, check_title, MAX_DESCRIPTION_BYTES, MAX_TITLE_CHARS};
@@ -277,6 +281,25 @@ impl Review {
         limit: usize,
     ) -> Result<Vec<StoredMergeRequest>, ForgeError> {
         review::list(&self.db, project, state, before, limit).await
+    }
+
+    /// Every version of merge request `mr`, oldest first (M3 R2; the
+    /// caller decided `MergeRequestRead` on it).
+    pub async fn versions(
+        &self,
+        mr: forge_core::MergeRequestId,
+    ) -> Result<Vec<review::StoredVersion>, ForgeError> {
+        review::read_versions(&self.db, mr).await
+    }
+
+    /// The stored mergeability of merge request `mr` (`None`: never
+    /// requested — shown as `unchecked`; M3 R2). Never enqueues a check:
+    /// reading writes nothing (ADR-0024 R2 decision 6).
+    pub async fn mergeability(
+        &self,
+        mr: forge_core::MergeRequestId,
+    ) -> Result<Option<review::StoredMergeability>, ForgeError> {
+        review::mergeability(&self.db, mr).await
     }
 
     // ── writes, each decided again inside its transaction ──

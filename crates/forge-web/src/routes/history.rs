@@ -295,7 +295,7 @@ pub struct BlameBody {
     pub truncated: bool,
 }
 
-fn commit_body(c: &CommitInfo) -> CommitBody {
+pub(crate) fn commit_body(c: &CommitInfo) -> CommitBody {
     CommitBody {
         oid: c.oid.clone(),                         // clone: the answer owns its strings
         parents: c.parents.clone(),                 // clone: as above
@@ -325,7 +325,7 @@ fn diff_file_body(f: &DiffFile) -> DiffFileBody {
     }
 }
 
-fn diff_body(d: &Diff) -> DiffBody {
+pub(crate) fn diff_body(d: &Diff) -> DiffBody {
     DiffBody {
         files: d.files.iter().map(diff_file_body).collect(),
         truncated: d.truncated,

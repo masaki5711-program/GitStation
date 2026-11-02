@@ -400,7 +400,10 @@ runbook: `backup-restore`（訓練の手順を含む）、`gitlab-mirror`（遅�
 3. Kanflow v2 の試験用インスタンスが GitStationSource で GitStation を読み、02 §8.2 の回帰テストが通る。
 4. 本物の Keycloak での通し（ログイン・ログアウト・無効化が次の操作から効く）。
 5. 新しいルートはすべて権限の表と C-1 の表にある。エラーのカタログ・runbook・ADR-0024 / 0025 がそろう。Windows でも全体のテストが緑。
-6. **R1 を始める条件**（M3 の外。人の決定と承認）: パイロットのチームの決定、本番の Kanflow の PG への切り替えを承認された runbook で終えること（Q2 で案 a の場合）。
+6. **O3（保守の prune）が入っている**（R2 のレビューで追加、2026-11-02）: R2 のマージできるかの判定は判定のたびに参照されない木・blob を
+   書き、forge のリポジトリは `gc.auto=0` なので、猶予つきの prune（O3）が無いとオブジェクトが増え続ける（秘密の除去の後も判定の残りが残る）。
+   O3 がマージされるまで M3 を完了にしない。それまでは runbook `merge-request-mergeability` の手での `git prune --expire=<猶予>`（承認つき）。
+7. **R1 を始める条件**（M3 の外。人の決定と承認）: パイロットのチームの決定、本番の Kanflow の PG への切り替えを承認された runbook で終えること（Q2 で案 a の場合）。
 
 **確かめのコマンド**: `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`FORGE_TEST_DATABASE_URL=… cargo nextest run --workspace -j 4`、`gen-catalog` / `gen-authz` の差分なし、web の 6 つのゲート、`node scripts/self-heal.js --check`。Kanflow は自分のリポジトリのゲート（lint・typecheck・test、PG の DB のテスト）。
 

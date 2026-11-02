@@ -18,7 +18,9 @@
 //! every `hosting.purge_interval_secs`, at once again after a full batch),
 //! and the purge of web sessions 30 days past their end (`session_purge`,
 //! M2 MR6: every `web.session_purge_interval_secs`, at once again after a
-//! full batch).
+//! full batch), and the mergeability sweep (`mergeability_sweep`, M3 R2:
+//! every 30 s, stale `checking` rows ended and deferred `unchecked` rows
+//! re-requested).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -31,7 +33,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::{Config, SealKeys};
+use forge_core::config::{Config, ReviewConfig, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
@@ -52,6 +54,9 @@ pub(crate) mod purge;
 // ── M3 R1b: merge request versions ──
 mod review;
 // ── end M3 R1b ──
+// ── M3 R2: stale and deferred mergeability checks ──
+mod mergeability_sweep;
+// ── end M3 R2 ──
 mod seal;
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -94,7 +99,7 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             interval: cfg.hosting.purge_interval,
             session_interval: cfg.web.session_purge_interval,
         });
-        let result = run(&db, keys, &storage, purge, stopped).await;
+        let result = run(&db, keys, &storage, purge, &cfg.review, stopped).await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -124,6 +129,8 @@ enum Task {
     // ── end D5 MR4 ──
     /// The purge of ended web sessions (`session_purge`, M2 MR6).
     SessionPurge,
+    /// Stale and deferred mergeability checks (`mergeability_sweep`, M3 R2).
+    MergeabilitySweep,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -142,6 +149,8 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
         Task::JobRunner,
         Task::JobReaper,
         Task::AuditSeal,
+        // M3 R2: needs only the database.
+        Task::MergeabilitySweep,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -159,11 +168,14 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
 // ── C5: the registered subscribers ──
 /// The subscribers this worker runs: `merge-request-refresh` (M3 R1b, the
 /// first in production: enqueues the version job on `repository.pushed`;
-/// registered at the head on the first start, ADR-0016 §1). The others
-/// (`notify`, `webhook-dispatch`, `work-item-sync`, …) join with their
-/// features.
-fn registry() -> Result<Registry, ForgeError> {
-    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh))
+/// registered at the head on the first start, ADR-0016 §1; M3 R2: it also
+/// enqueues the mergeability checks of a target push, at most
+/// `review.mergeability_fanout_max`). The others (`notify`,
+/// `webhook-dispatch`, `work-item-sync`, …) join with their features.
+fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
+    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh::new(
+        review.mergeability_fanout_max,
+    )))
 }
 // ── end C5 ──
 
@@ -185,6 +197,9 @@ struct Shared {
     // ── D5 MR4 ──
     purge: Option<PurgeTask>,
     // ── end D5 MR4 ──
+    /// The repositories (M3 R2: the mergeability sweep reads target tips;
+    /// `None` in the loop tests, which then skip that part).
+    storage: Option<Storage>,
 }
 
 impl Task {
@@ -197,6 +212,7 @@ impl Task {
             Self::Subscribers => subscribers::NAME,
             Self::Purge => purge::NAME,
             Self::SessionPurge => session_purge::NAME,
+            Self::MergeabilitySweep => mergeability_sweep::NAME,
         }
     }
 
@@ -216,6 +232,7 @@ impl Task {
                 .purge
                 .as_ref()
                 .map_or(MAX_BACKOFF, |purge| purge.session_interval),
+            Self::MergeabilitySweep => mergeability_sweep::PERIOD,
         }
     }
 
@@ -257,6 +274,9 @@ impl Task {
                     .with_context("reason", "purge_unconfigured")),
             },
             Self::SessionPurge => session_purge::run_session_purge(db).await,
+            Self::MergeabilitySweep => {
+                mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
+            }
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")
@@ -301,6 +321,7 @@ pub(crate) async fn run(
     keys: Arc<SealKeys>,
     storage: &Storage,
     purge: Option<PurgeTask>,
+    review: &ReviewConfig,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
@@ -310,10 +331,10 @@ pub(crate) async fn run(
     run_all(
         db,
         runner,
-        registry()?,
+        registry(review)?,
         jobs::SHUTDOWN_GRACE,
         keys,
-        purge,
+        (purge, Some(storage.clone())), // clone: the sweep's own handles
         shutdown,
     )
     .await
@@ -330,7 +351,7 @@ pub(crate) async fn run_with(
     keys: Arc<SealKeys>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
-    run_all(db, runner, registry, grace, keys, None, shutdown).await
+    run_all(db, runner, registry, grace, keys, (None, None), shutdown).await
 }
 
 async fn run_all(
@@ -339,7 +360,8 @@ async fn run_all(
     registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
-    purge: Option<PurgeTask>,
+    // The purge (D5 MR4) and the repositories (M3 R2 sweep), when given.
+    (purge, storage): (Option<PurgeTask>, Option<Storage>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -356,6 +378,7 @@ async fn run_all(
         seal_draining: Arc::new(AtomicBool::new(false)),
         registry,
         purge,
+        storage,
     };
     let runners = tasks(&shared.registry, shared.purge.as_ref())
         .into_iter()

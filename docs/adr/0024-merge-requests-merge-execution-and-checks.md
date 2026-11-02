@@ -606,6 +606,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
 | 仮（登録の順に決める） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
 | FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
 
 - 再利用: 権限の拒否は FG-AUTH-0003（エージェントは `reason=agent_token`、サービスアカウントは `service_account`、ボットは `bot`、ジョブの時点で失効した
@@ -624,9 +625,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 
 - push の経路の pre-receive / post-receive のフック（ADR-0008 の Amendment 段階 9 MR4 が M3 に送ったもの）を M3 のどの MR で入れるか。計画 11 では
   「push 時の検査（X8、M3 後半）」だけがフックに触れる。
-- マージのジョブの同時実行の上限、`merge-tree` の時間切れ、CODEOWNERS の大きさの上限の既定値（R2・R4・R5 で決める）。
-- 変更されたパスの件数の上限と時間切れ、`review.mergeability_fanout_max`、`codeowners_enforced_off_until` の既定と上限（24 時間以内）、保守の prune の猶予
-  （24 時間以上）の既定値（R2・R5・O3 で決める）。
+- マージのジョブの同時実行の上限、CODEOWNERS の大きさの上限の既定値（R4・R5 で決める）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
+- 変更されたパスの件数の上限と時間切れ、`codeowners_enforced_off_until` の既定と上限（24 時間以内）、保守の prune の猶予
+  （24 時間以上）の既定値（R5・O3 で決める）。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
   契約 4 と ADR-0019 §8 の `forge admin …` / `forge backup` / `forge restore`）と実際の運用のコマンドの一致も確かめるようにする（[root] の MR）。
 
@@ -730,3 +731,109 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 - **AccountKind**: `Principal` への `AccountKind` の追加は R5（承認）に送った。`MergeRequestVersionRefsPurge` は `SessionOnly` で、
   サービスアカウントとボットはセッションを持てない（サインインが `not_human` で拒む）ので、トークンの deny の行（`admin` スコープ、
   エージェントの `admin` トークンを含む）がそのまま彼らの deny になる。人だけの arm（`people_only`）も通す。
+
+## 実装で決めたこと（R2 `feat/git-merge-request-diff-mergeability`、2026-11-02）
+
+本文（§1・§3）と違えたところは **逸脱** と書いた。
+
+- **状態の置き場（逸脱: §1 の `merge_requests.merge_status`）**: マージできるかは新しい **派生の表**
+  `merge_request_mergeability`（`tables.toml` の `kind = "derived"`、MR ごとに 1 行、マイグレーション 20261108100000）に置き、
+  `merge_requests` の列にしない。`merge_requests` の行は版の番号の守り（20261106100100: 変更のたびに `revision + 1`）と
+  監査のトリガー（監査の行が要る）を持つので、ジョブと購読者が 1 つの MR に何度も書く状態には使えない。列は `status`
+  （`unchecked` / `checking` / `can_be_merged` / `cannot_be_merged` / `check_failed`）、`reason`、`check_seq`、確かめた組
+  `checked_head_sha` / `checked_target_sha` / `checked_at`、衝突のパス `conflicts`（`text[]`、最大 100 件・16 KiB、超えたら
+  `conflicts_truncated`）、`last_decided`（最後の決定 can / cannot）。プロジェクトの purge で消す。監査の行が無い状態の変更なので、
+  `ChangeTx` に `Settle::CommitDerived`（監査の行なしの COMMIT。監査つきの表を同じ tx で書けば遅延トリガーが COMMIT を拒むので、
+  監査つきの変更を隠せない）を足した。
+- **古い判定の守り（決定 2）**: 確かめ直しの要求ごとに `check_seq` を 1 つ進めて `unchecked` にし、ジョブ
+  `merge_request.mergeability` の dedup の鍵を **`mr_mergeability:<mr_id>:<check_seq>`** にした（逸脱: §3 の
+  `…:<head_sha>:<target_sha>`）。jobs の dedup の索引（20261027120000）は成功したジョブの鍵を残し続けるので、SHA の組を鍵にすると
+  target が A → B → A と戻ったときの 3 回目が積めない。ジョブは開始時（`begin_check`）と書き込み時（`record_check`）の両方で、
+  自分の seq が最新でなければ何も書かない（`superseded`。新しいジョブが決める）。版のジョブは、保存された状態が決まっていて
+  （can / cannot / check_failed）確かめた組が今の (head, target の先端) と同じなら要求しない。
+- **判定の中身**: 判定するのは **記録した head**（最新の版。ソースブランチが消えても隠した ref が持つ）と target の今の先端。
+  版がない → `check_failed reason=no_version`、target が無い → `target_missing`、共通の履歴がない（`merge-base` が終了コード 1）→
+  `unrelated_histories`（`merge-tree` は `--allow-unrelated-histories` なしで 128 を返す。どちらも「マージできる」にしない）、
+  `merge-tree --write-tree --name-only -z` の 0 → `can_be_merged`、1（または出力のあふれ）→ `cannot_be_merged reason=conflict`。
+  git の失敗は `check_failed reason=git_timeout|git_busy|git_failed` を保存してからジョブの失敗として返す（worker が 1 回ログに出し、
+  再試行する）。成功は `forge.review.mergeability_checked`（info）にパスの一覧つきで 1 回出す。`merge-tree` の時間切れは **30 秒**、
+  出力の上限は 256 KiB、一覧は 100 件（`forge_git::mergeability::MergeTreeLimits`）。
+- **受け付ける終了コード（決定 3）**: `forge-git::command` の `capture` が受け付ける終了コードの組を取り、終了コードを返す
+  （`output_accepting(cap, &[0, 1])`。`output()` / `output_truncated()` は `[0]` の包み）。シグナルの終了は受け付けない。
+  上限で git を止めたときは終了コードが無く、`merge-tree` ではそれを衝突（`files_truncated`）とし、FG-GIT-0006 にしない。
+  `merge_tree_exit_codes_on_git_2_38` が argv と終了コードを固定する。**ローカルの git は 2.53 で、2.38 そのものでは動かしていない**
+  （使うオプションは 2.38 にある）。
+- **版の base / merge-base（決定 4）**: 版のジョブが版を記録した直後に、その時の target の先端と merge-base を
+  `record_version_bases` で **一度だけ**、2 つ一緒に書く（監査だけの `merge_request.version_bases_recorded`）。古い版は target が
+  動いても書き換わらない（set-once の守りはそのまま）。target が無いときは書かず、次の版のジョブ（同じ head の再実行を含む）が埋める。
+- **確かめ直しのきっかけ（決定 5・6）**: 作成・再オープン・ソースへの push は版のジョブが（上の組の比較のあとで）要求する。
+  target の変更は編集のトランザクションの中で要求する（`unchecked` に戻る）。target への push と **削除** は
+  `merge-request-refresh` 購読者が要求する（2 つ目の購読者は足していない）。削除は購読者がジョブを積み、ジョブが先端なしを見て
+  `target_missing` を保存する。購読者は最近更新された順に `review.mergeability_fanout_max`（**既定 50**、1〜500）件まで積み、
+  残りは `unchecked` にして seq を進めるだけ（マージは `mergeability_unknown` で止まる）、warn の
+  `forge.review.mergeability_deferred` を 1 回出す。`refs_truncated` の push は target を特定できないので、版のジョブ（開いている MR
+  すべて、500 件まで）の組の比較に任せる。**読み取りでは積まない**（逸脱: §3 の「MR の画面の表示・`gstn mr status` のときに積む」。
+  上限を超えて `unchecked` になった MR は、次の push・target の変更・再オープンで確かめ直す。マージの要求のときに積むのは R4）。
+  ジョブの同時実行は worker がジョブを 1 つずつ実行することで抑える（リポジトリごとの上限は worker の数を超えない）。
+- **衝突のイベント（決定 8）**: `merge_request.conflict_detected` / `conflict_resolved`（integration）は、新しい決定が
+  `last_decided`（前の決定）と can ⇄ cannot で違うときだけ出す。最初の決定、決まらない状態への・からの変化では出さない
+  （can → check_failed → cannot は 1 回の変化として出す）。ジョブが `system` として監査の行と同じトランザクションで書き、
+  dedup は `<prefix>:<mr_id>:<check_seq>`。ペイロードは ID・SHA・`conflict_files`（件数）・`files_truncated` で、パスはログと状態だけ。
+  `MergeRequestTransition` に `ConflictDetect` / `ConflictResolve` を足し、`every_merge_request_transition_emits_exactly_one_event`
+  が 1 件ずつを確かめる。
+- **到達可能性（決定 9）**: `ReachRoots::merge_request(iid)`（`refs/merge-requests/<iid>/*`、その MR の ref だけ）と、公開の
+  `Browser::merge_request_commit` / `merge_request_compare`（両端を呼び出し元ごとの上限つきで確かめてから `compare`）を足した。
+  Purge 済みの版と存在しない版は、git を動かす前に同じ FG-REPO-0023 `ref_not_found` で答える。`merge-tree` / `commit-tree`
+  だけが作ったオブジェクトは MR の文脈でも読めない（`merge_request_versions_are_browsable_only_in_their_merge_request`）。
+  `forge serve` の到達の答えのキャッシュは worker が書いた新しい版の ref を最大 `refs_ttl`（5 秒）知らないことがある
+  （「見つからない」側にだけずれる。Purge は serve が自分のキャッシュを捨てる）。
+- **ルート（決定 10）**: どれも `GET`・`MergeRequestRead`（新しい Action なし）。`…/{iid}/versions`、`…/versions/{version}/diff`
+  （`merge_base_sha..head_sha`。共通の履歴がない版は `base_sha..head_sha`、base が未記録なら FG-REPO-0023
+  `version_base=pending`）、`…/compare?from=<版>&to=<版>`（`head..head` の二点）、`…/mergeability`。マージできるかは
+  **別の GET** にした（MR の本文に入れると一覧と書き込みの応答が毎回別の表を読む。答えが MR と別に変わる）。差分とコミットの本文は
+  M2 のもの（`routes/history.rs`）を使う。gstn は `mr versions` / `mr diff`（`--version N` か `--from N --to M`）/
+  `mr mergeability`。
+- **新しいエラーコードなし（決定 7）**: R2 は 409 を返さない（MergeRequestConflict は R4）。
+
+R4 へ: マージの要求で確かめ直しを積む・ロックの下での `merge-tree` の再計算（この表の状態は表示と早めの拒否だけ）、
+上限を超えて `unchecked` のままの MR の扱い。O3 へ: 判定のたびにできる参照されない木の、猶予つきの prune。
+
+### R2 の独立レビューで決めたこと（2026-11-02）
+
+独立レビュー（git-protocol・database・security・rust・silent-failure・pr-test）の HIGH 1 件と MEDIUM / LOW への対応。上の R2 の節と
+違えたところは **改訂** と書いた。
+
+- **`checking` のまま残らない（HIGH）**: `begin_check` の後にジョブが時間切れ・worker の停止・恒久的な失敗・デッドレターで終わると、
+  行が `checking` のまま残りえた。(a) ジョブが最終的に失敗する経路（恒久的な失敗、または最後の試行の失敗）で、その seq がまだ最新なら
+  `check_failed reason=job_failed` を書く（`forge_review::mergeability::fail`、`forge_db::review::fail_check`）。(b) worker の新しい
+  タスク `mergeability_sweep`（30 秒ごと）が、ジョブの時間切れ + リースの猶予（`STALE_AFTER`）より長く `checking` で、生きている
+  （queued / running の）ジョブが無い行を `check_failed reason=job_stale` にする（`reap_stale_checks`）。どちらも **新しいコード
+  FG-REVIEW-0003** MergeabilityNotChecked（warn、runbook `merge-request-mergeability`）でログに出す（**改訂**: 上の「新しいエラー
+  コードなし」。R2 は 409 を返さないが、決まらない判定をログと doctor で見分けるコードが要った。HTTP では返さない）。`forge doctor` に
+  `review.mergeability`（古い `checking`・ジョブの無い `unchecked` の件数、FG-REVIEW-0003 `reason=undecided`）を足した。
+- **古い決定を見せない（MEDIUM）**: 状態は `checked_head_sha` / `checked_target_sha` の組についての答えでしかない。新しい版を記録する
+  トランザクションで、決まっていた状態を `unchecked` に下げる（`downgrade_on`。`checking` の行は seq を残し、その結果は head が
+  違うので `record_check` が `Superseded` にする）。`GET …/mergeability` は、組が今の head と target の生きた先端（名前で ref の一覧から
+  読む。到達の確認も呼び出し元の上限も使わない）と違えば `unchecked` と `stale: true` を返し、古い理由と衝突の一覧を出さない。
+  **R4 のマージは、この表の状態を信じず、ロックの下で `checked_head` / `checked_target` を生きた先端と照らし直す**（さらに
+  `merge-tree` を計算し直す。§4）。`record_check` は、MR が閉じた・head が `begin_check` の時と違う結果も書かない。
+- **扇の上限の飢え（MEDIUM）**: 上限を超えて `unchecked` にした MR は、`mergeability_sweep` が生きているジョブの無い `unchecked` の
+  開いている MR を、最後の確認が古い順（`checked_at` が無いものが先）に 1 回 50 件ずつ確かめ直す（**改訂**: 上の「次の push・target
+  の変更・再オープンで確かめ直す」だけではない）。`defer_checks_on` は 1 回 5 000 件まで（`ORDER BY id` でロックの順を固定）。それも
+  超えた分は状態を変えず（読む側の古さの規則が守る）、error で FG-REVIEW-0003 `reason=fanout_deferred` を 1 回出す。
+- **答えになる `check_failed`（MEDIUM）**: 版のジョブが「保存済みの状態が今の組に答えている」とみなすのは、決定（can / cannot）と、
+  同じ組でやり直しても同じになる理由（`target_missing`・`unrelated_histories`・`no_version`。`CheckReason::is_deterministic`）の
+  `check_failed` だけ。`git_timeout` / `git_busy` / `git_failed` / `job_failed` / `job_stale` は確かめ直す。理由は `CheckReason` の enum。
+- **参照されないオブジェクト（MEDIUM）**: 判定の木・blob を消す仕組みはまだ無い（O3 で入れる予定）。runbook
+  `merge-request-mergeability` にディスクの増加、承認つきの手での `git prune --expire=<猶予>`、秘密の除去の後も判定が書いた blob が残る
+  ことを書き、計画 11 §9 に「O3 がマージされるまで M3 を完了にしない」を足した。
+- **小さな修正（LOW）**: 確かめ直しの要求で衝突の一覧を空にする（`checked_*` は最後に終わった確認として残す）、確認した head の版を
+  Purge したら状態を `unchecked` に戻し一覧を空にする、ログには保存した（上限つきの）パスと全体の件数だけを出す、`merge-tree` の
+  出力が一覧の終わりの後で切れたときは一覧を切れたとしない、`enqueue_on` が重複で入れなかったら warn、決まらない結果は warn で出す。
+- **再レビュー（2026-11-02）**: 決まっている状態（can / cannot、決まった理由の `check_failed`）の組が生きた組と違うまま（push の
+  イベントのデッドレター、繰り延べの上限 5 000 件の超過）だと、`stale` と表示され続けて誰も確かめ直さなかった。`mergeability_sweep` が
+  1 回 50 件ずつ、最後に確かめた時刻（新しい列 `confirmed_at`、追記のマイグレーション 20261108100100。無ければ `checked_at`）の古い順に、
+  target の生きた先端を git で読んで組を比べ、動いていれば確かめ直しを要求し、生きていれば `confirmed_at` を進める（git の失敗は
+  その行を飛ばし warn。生きているとはみなさない）。doctor の `review.mergeability` は、head が違う決定の件数と、1 時間確かめられていない
+  決定の件数も数える。`record_check` が「確認の途中で MR が閉じた」ために書かないときは、行を `unchecked`（ジョブなし）に戻し、
+  見回りの `job_stale`（と偽の FG-REVIEW-0003）を出さない。見回りは開いている MR の行だけを終わらせる。

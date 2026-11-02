@@ -52,7 +52,7 @@ fn revision_of(body: &Value, key: &str) -> String {
 
 /// One changed file as `status  path` (a rename shows both paths), plus
 /// its patch when asked. Server text reaches a terminal: sanitized.
-fn diff_human(diff: &Value, patch: bool) -> String {
+pub(crate) fn diff_human(diff: &Value, patch: bool) -> String {
     let files = diff
         .get("files")
         .and_then(Value::as_array)
@@ -94,7 +94,7 @@ fn diff_human(diff: &Value, patch: bool) -> String {
     out.join("\n")
 }
 
-fn commit_line(c: &Value) -> String {
+pub(crate) fn commit_line(c: &Value) -> String {
     format!(
         "{}  {}  {}  {}",
         text(c, "oid"),

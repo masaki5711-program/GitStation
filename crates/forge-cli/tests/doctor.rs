@@ -69,6 +69,8 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         // D4 MR3b: nothing provisioning, no ready repository to look for.
         "ok    repositories.provisioning 0 provisioning, none stuck",
         "ok    repositories.storage 0 ready repositories have their directory",
+        // M3 R2: no merge request, nothing stuck.
+        "ok    review.mergeability",
         "ok    storage",
         "ok    git",
     ] {

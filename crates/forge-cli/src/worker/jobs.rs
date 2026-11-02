@@ -4,7 +4,8 @@
 //! once at startup so leases left by a crashed worker are ended early).
 //!
 //! Handlers are registered in [`handlers`]: `repository.provision` (step
-//! D4 MR3b, `provision`) and `merge_request.refresh` (M3 R1b, `review`). The audit seal is a task (`seal`), not a job.
+//! D4 MR3b, `provision`), `merge_request.refresh` (M3 R1b, `review`) and
+//! `merge_request.mergeability` (M3 R2, `review`). The audit seal is a task (`seal`), not a job.
 //!
 //! Shutdown: a job may run for up to its timeout (≤ 1 h), longer than a
 //! stop should wait. A job in progress gets [`SHUTDOWN_GRACE`]; then its
@@ -28,7 +29,7 @@ use forge_errors::ForgeError;
 use tokio::sync::watch;
 
 use super::provision::{ProvisionHandler, Storage};
-use super::review::RefreshHandler;
+use super::review::{MergeabilityHandler, RefreshHandler};
 use super::supervise::Next;
 
 /// How often an idle runner looks for a ready job.
@@ -38,13 +39,19 @@ pub(crate) const REAP_PERIOD: Duration = Duration::from_secs(30);
 /// How long a job in progress may finish after a shutdown request.
 pub(crate) const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
-/// Every job handler of this build: `repository.provision` (D4 MR3b) and
-/// `merge_request.refresh` (M3 R1b: merge request versions).
+/// Every job handler of this build: `repository.provision` (D4 MR3b),
+/// `merge_request.refresh` (M3 R1b: merge request versions) and
+/// `merge_request.mergeability` (M3 R2: the trial merge).
 pub(crate) fn handlers(db: &Db, storage: &Storage) -> Result<Vec<Arc<dyn JobHandler>>, ForgeError> {
     // clone: the handler owns its storage handles (paths and an Arc)
     let provision = ProvisionHandler::new(db, storage.clone())?;
     let refresh = RefreshHandler::new(db, storage)?;
-    Ok(vec![Arc::new(provision), Arc::new(refresh)])
+    let mergeability = MergeabilityHandler::new(db, storage)?;
+    Ok(vec![
+        Arc::new(provision),
+        Arc::new(refresh),
+        Arc::new(mergeability),
+    ])
 }
 
 /// One run of the job runner: one job (or none); a shutdown request gives

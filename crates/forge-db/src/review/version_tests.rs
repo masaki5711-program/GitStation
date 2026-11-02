@@ -422,7 +422,7 @@ async fn drain(t: &FreshDb) {
     .await
     .expect("sequencer");
     loop {
-        match subscribers::run_once(&t.db, &MergeRequestRefresh)
+        match subscribers::run_once(&t.db, &MergeRequestRefresh::default())
             .await
             .expect("step")
         {
@@ -446,7 +446,7 @@ async fn pushes_open_and_reopen_enqueue_the_version_job() {
     let t = FreshDb::migrated().await;
     let (alice, web) = web(&t).await;
     let p = web.project_id;
-    subscribers::register(&t.db, &MergeRequestRefresh, Start::Head)
+    subscribers::register(&t.db, &MergeRequestRefresh::default(), Start::Head)
         .await
         .expect("register");
     let feature = open(&t, alice, p, "feature").await;

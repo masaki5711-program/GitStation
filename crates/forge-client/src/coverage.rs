@@ -262,6 +262,27 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
         Coverage::Command("mr reopen"),
     ),
+    // M3 R2 (ADR-0024 §1–§3): versions, their diffs and the mergeability.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/versions",
+        Coverage::Command("mr versions"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
+        Coverage::Command("mr diff"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/compare",
+        Coverage::Command("mr diff"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
+        Coverage::Command("mr mergeability"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

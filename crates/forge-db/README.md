@@ -284,6 +284,35 @@ connection, mapping driver errors to registered codes, migrations
   `repository.pushed` for the open merge requests from the moved branches, or every open one
   when `refs_truncated`. The project purge deletes the versions. Tests
   `review/version_tests.rs`.
+- **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
+  `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
+  can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked
+  head / target pair, capped `conflicts`, `last_decided`; migration 20261108100000).
+  `request_check_on` (in the caller's transaction: `unchecked`, `check_seq + 1`, job
+  `merge_request.mergeability` deduplicated by `mr_mergeability:<id>:<seq>`) — called by the
+  edit command on a retarget, by the subscriber for the open merge requests targeting a
+  pushed or deleted branch (at most `MergeRequestRefresh::new(fanout)`, the rest
+  `defer_checks_on` + warn `forge.review.mergeability_deferred`), and by `request_check`
+  (the version job). `begin_check` (a stale seq is `Superseded`; else `checking`),
+  `record_check` (stored only while the seq is the latest; a can ⇄ cannot difference from
+  `last_decided` writes `merge_request.conflict_detected` / `conflict_resolved` with an
+  audit row, dedup `<prefix>:<id>:<seq>`; anything else commits through
+  `Settle::CommitDerived`, a derived-only commit), `mergeability` (read pool) /
+  `mergeability_written`. `record_version_bases` sets a version's `base_sha` /
+  `merge_base_sha` once (audit-only `merge_request.version_bases_recorded`);
+  `read_versions` (read pool). The project purge deletes the rows. Review fixes: the module is
+  `review/mergeability/{mod,request,run,stale}.rs`; `record_check` also refuses a closed merge
+  request or a head other than the one checked; a new version downgrades a decided status in its
+  own transaction (`downgrade_on`); a purge of the checked version resets the row; `fail_check`
+  (`job_failed`), `reap_stale_checks` (`checking` past `STALE_AFTER` with no live job →
+  `job_stale`), `sweep_unchecked` (open `unchecked` rows with no live job, oldest first, 50 per
+  run), `defer_checks_on` bounded by `DEFER_MAX` (5 000, id order), `decided_candidates` /
+  `confirm_live` (decided rows verified against the live tips by the sweep, least recently
+  verified first; column `confirmed_at`, migration 20261108100100), `health` (doctor
+  `review.mergeability`, also `decided_stale_head` / `decided_unverified`); a run refused because
+  the merge request closed resets the row to `unchecked`; all log FG-REVIEW-0003 MergeabilityNotChecked (warn, runbook
+  `merge-request-mergeability`). Reasons are `forge_core::CheckReason`. Tests
+  `review/mergeability/tests.rs`.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

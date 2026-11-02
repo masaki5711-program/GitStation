@@ -445,7 +445,9 @@ pub(crate) fn ready<'a>(
 
 /// The per-principal stream key: the user id (Smart HTTP needs an
 /// authenticated user; the dispatcher refused anonymous callers).
-pub(crate) fn principal_key(request: &Dispatched<ProjectCtx>) -> Result<String, ForgeError> {
+pub(crate) fn principal_key<R: forge_auth::ResourceCtx, B>(
+    request: &Dispatched<R, B>,
+) -> Result<String, ForgeError> {
     request
         .principal()
         .user()

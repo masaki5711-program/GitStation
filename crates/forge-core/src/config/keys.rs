@@ -167,6 +167,11 @@ pub const KEYS: &[Key] = &[
         "hosting.purge_interval_secs",
         "FORGE_HOSTING_PURGE_INTERVAL_SECS",
     ),
+    // M3 R2: the mergeability fan-out cap (ADR-0024 §3).
+    number(
+        "review.mergeability_fanout_max",
+        "FORGE_REVIEW_MERGEABILITY_FANOUT_MAX",
+    ),
     // M2 MR3: web sessions (ADR-0021 §5, §7, §12).
     text("web.base_url", "FORGE_WEB_BASE_URL"),
     text("web.session_key_file", "FORGE_WEB_SESSION_KEY_FILE"),

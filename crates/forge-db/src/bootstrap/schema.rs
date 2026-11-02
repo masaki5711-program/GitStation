@@ -500,6 +500,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         // ── end M3 R1a ──
         // ── M3 R1b: versions, DELETE for the purge (20261107100000) ──
         ("forge.merge_request_versions", operational()),
+        // ── M3 R2: mergeability, DELETE for the purge (20261108100000) ──
+        ("forge.merge_request_mergeability", operational()),
     ]
 }
 
@@ -638,6 +640,8 @@ const LATER_TABLES: &[&str] = &[
     // ── end M3 R1a ──
     // ── M3 R1b: merge request versions (migration 20261107100000) ──
     "merge_request_versions",
+    // ── M3 R2: mergeability (migration 20261108100000) ──
+    "merge_request_mergeability",
 ];
 
 /// Every table the first migration creates.

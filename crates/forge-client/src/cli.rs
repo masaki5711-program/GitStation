@@ -574,6 +574,41 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+    /// List a merge request's versions (one per pushed head), oldest first.
+    Versions {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// One version's diff (merge base to head), or two versions compared
+    /// (head to head) with --from / --to.
+    Diff {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The version whose diff to show.
+        #[arg(long, value_parser = parse_id, value_name = "N", conflicts_with_all = ["from", "to"])]
+        version: Option<i64>,
+        /// The earlier version of a comparison.
+        #[arg(long, value_parser = parse_id, value_name = "N", requires = "to")]
+        from: Option<i64>,
+        /// The later version of a comparison.
+        #[arg(long, value_parser = parse_id, value_name = "N", requires = "from")]
+        to: Option<i64>,
+        /// Print the patches too.
+        #[arg(long)]
+        patch: bool,
+    },
+    /// Whether a merge request can be merged, as last checked (never
+    /// starts a check).
+    Mergeability {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
 }
 
 #[derive(Subcommand, Debug)]

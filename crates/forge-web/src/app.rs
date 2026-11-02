@@ -849,6 +849,45 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::purge_version_refs,
         )
         .responds::<mr::VersionRefsPurged>(Verb::Post, mr::PURGE)
+        // M3 R2 (ADR-0024 §1–§3): versions, their diffs and the
+        // mergeability, read like the merge request itself.
+        .route_with(
+            Verb::Get,
+            mr::VERSIONS,
+            Action::MergeRequestRead,
+            "List a merge request's versions, oldest first (as the repository browse API)",
+            mr::VERSIONS_OF,
+            mr::versions,
+        )
+        .responds::<mr::VersionsBody>(Verb::Get, mr::VERSIONS)
+        .route_with(
+            Verb::Get,
+            mr::VERSION_DIFF,
+            Action::MergeRequestRead,
+            "One version's diff, merge base to head (as the repository browse API)",
+            mr::VersionDiffOf,
+            mr::version_diff,
+        )
+        .responds::<mr::VersionDiffBody>(Verb::Get, mr::VERSION_DIFF)
+        .route_with(
+            Verb::Get,
+            mr::COMPARE,
+            Action::MergeRequestRead,
+            "Compare two versions of a merge request, head to head (as the repository browse API)",
+            mr::COMPARE_OF,
+            mr::compare,
+        )
+        .responds::<mr::VersionCompareBody>(Verb::Get, mr::COMPARE)
+        .queries(Verb::Get, mr::COMPARE, mr::COMPARE_QUERY)
+        .route_with(
+            Verb::Get,
+            mr::MERGEABILITY,
+            Action::MergeRequestRead,
+            "Whether a merge request can be merged, as last checked (as the repository browse API)",
+            mr::MERGEABILITY_OF,
+            mr::mergeability,
+        )
+        .responds::<mr::MergeabilityBody>(Verb::Get, mr::MERGEABILITY)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

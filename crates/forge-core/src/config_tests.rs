@@ -1313,3 +1313,41 @@ fn web_session_purge_interval_has_a_default_env_and_a_range() {
         );
     }
 }
+
+/// `review.mergeability_fanout_max` (M3 R2, ADR-0024 §3): default 50, env,
+/// and the 1..=500 range (FG-SYS-0002 naming the key).
+#[test]
+fn review_mergeability_fanout_has_a_default_env_and_a_range() {
+    use super::ReviewConfig;
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.review.mergeability_fanout_max, 50);
+    assert_eq!(cfg.review, ReviewConfig::default());
+    for (value, n) in [("1", 1), ("500", 500), (" 7 ", 7)] {
+        let cfg = load(
+            None,
+            &env(&[("FORGE_REVIEW_MERGEABILITY_FANOUT_MAX", value)]),
+        )
+        .expect(value);
+        assert_eq!(cfg.review.mergeability_fanout_max, n);
+    }
+    for (value, reason) in [
+        ("0", "below_min"),
+        ("501", "above_max"),
+        ("-1", "invalid"),
+        ("many", "invalid"),
+    ] {
+        let err = load(
+            None,
+            &env(&[("FORGE_REVIEW_MERGEABILITY_FANOUT_MAX", value)]),
+        )
+        .expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("review.mergeability_fanout_max") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+    let err = load(None, &env(&[("FORGE_REVIEW_FANOUT", "7")])).expect_err("typo");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}

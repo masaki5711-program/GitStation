@@ -320,6 +320,22 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/compare",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestReopen",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
@@ -331,6 +347,22 @@
     "action": "MergeRequestVersionRefsPurge",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/versions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
