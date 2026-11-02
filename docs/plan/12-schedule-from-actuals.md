@@ -1,6 +1,6 @@
 # 12 実績から作るスケジュール — ベースの計画に、過去の実績と反省点を落とし込み、負荷を配り直す
 
-作成: 2026-11-02（planner）。状態: **計画に盛り込み済み（2026-11-02、利用者の指示「ロジックも含めて作って計画に盛り込んでください」）**。§9 の答えは各 MR の着手前に聞く。E0 は 2026-11-02 に着手。**同じ日にセキュリティの設計レビューを受け、決めたことを各節に反映した（一覧は §10）。**
+作成: 2026-11-02（planner）。状態: **計画に盛り込み済み（2026-11-02、利用者の指示「ロジックも含めて作って計画に盛り込んでください」）**。§9 の答えは各 MR の着手前に聞く。E0 は 2026-11-02 に着手。**同じ日にセキュリティの設計レビューを受け、決めたことを各節に反映した（一覧は §10。再レビューの分も同じ表）。**
 参照: 01 §3（原則 3）・§6・§8、02 F-7・F-14・F-17・F-24・F-33・§5.2・§5.7、03 §7・§8.1、04 C-3、07 W12・W14-9、08、09 §2、11 §5.6・§5.7（X1〜X3）、ADR-0023。Kanflow v2（worktree `D:\APP\Kanflow-v2`）: `app/prisma/schema.prisma`、`app/src/services/plan/`、`app/src/lib/plan-schedule/base-schedule.ts`、`app/src/lib/plan-templates/schedule.ts`、`app/src/lib/plan-progress.ts`、`app/src/lib/chat-proposals.ts`、`app/src/app/api/mcp/_lib/plan-tools.ts`、`app/src/lib/authz/policy.ts`、`docs/plan/team-dev-implementation.md` §9・§10、`docs/plan/ux-simplicity.md` §1。
 
 ## 0. 前提の点検
@@ -153,7 +153,7 @@ GitStation 側: 開発状況 API（02 §5.2）は M3 の I1 で作る。応答�
 
 ### 3.1 照合（過去の観測を集める）
 
-対象は `includeInLearning = true` かつ `complete = true` かつ**使う時の機密の確認（§2.2 の `learnableItemFacts`）で機密でない**もので、**`closedAt` < 新しいプロジェクトの開始日**のもの（バックテストと同じ条件で先の情報を漏らさない）。出典は、提案する人が `project.view` を持つ「見える出典」と、持たない「見えない出典」に分け、見えない出典は §3.2 の決まりでだけ使う。
+対象は `includeInLearning = true` かつ `complete = true` かつ**使う時の機密の確認（§2.2 の `learnableItemFacts`）で機密でない**もので、**`closedAt` と `finalizedAt` が基準日 R より前**のもの（先の情報を漏らさない）。**基準日 R は提案する人が選ぶ開始日ではなく、実行を作った日をその月の 1 日に切り捨てた日**（再レビューで決定）。開始日を 1 日ずつ動かして実行し直しても照合の集合と重みが変わらないので、境目の 1 件の見えない出典を割り出せない。バックテスト（§5）だけは、評価するプロジェクトの開始日の月の 1 日を R にする（内部の評価で、画面に出さない）。出典は、提案する人が `project.view` を持つ「見える出典」と、持たない「見えない出典」に分け、見えない出典は §3.2 の決まりでだけ使う。
 
 | 段 | 条件 | 似ている度 s_j |
 |---|---|---|
@@ -164,7 +164,7 @@ GitStation 側: 開発状況 API（02 §5.2）は M3 の I1 で作る。応答�
 
 段 1 の観測が 3 件以上あれば段 3・4 は使わない。段 3・4 の採否は E6（M5）から LLM が補助する（返すのは候補の ID の部分集合だけで、似ている度は式のまま）。**LLM に渡す候補は見える出典のものだけ**で、見えない出典の候補（項目の名前もプロジェクトの内部の情報）は式だけで採否を決める（§3.4）。
 
-重み: w_j = s_j × 0.5^(経過日数_j / H)。H は半減期（既定 365 日、Q7）。
+重み: w_j = s_j × 0.5^(経過日数_j / H)。経過日数_j = R − `closedAt`_j（基準日 R から数える。開始日からは数えない）。H は半減期（既定 365 日、Q7）。
 
 ### 3.2 期間の見積もり（P50 / P80）
 
@@ -172,22 +172,28 @@ GitStation 側: 開発状況 API（02 §5.2）は M3 の I1 で作る。応答�
 
 ```
 estimate(i):
-  obs = match(i)                                    # §3.1
-  if obs is empty: return prior(i)                  # §3.3
-  m   = weighted_median(x, w)
-  mad = max(weighted_median(|x - m|, w), 0.05)
-  kept = obs where |x_j - m| <= 3 * 1.4826 * mad    # 外れ値を除く（除いた件数は根拠に出す）
-  m*  = weighted_median(x[kept], w[kept])
-  n   = (Σw)^2 / Σw^2   over kept                   # 有効な件数
+  obs = match(i)                                    # §3.1。基準日 R で切る
+  V, H = obs を見える出典と見えない出典に分ける
+  hid = hidden_pseudo_obs(H)                        # 下の「見えない出典の扱い」。使えなければ無し
+  if V is empty and hid is none: return prior(i)    # §3.3
+  m   = weighted_median(x[V], w[V])                 # V が空なら m = hid.x
+  mad = max(weighted_median(|x[V] - m|, w[V]), 0.05)
+  kept = V where |x_j - m| <= 3 * 1.4826 * mad      # 外れ値は見える出典だけで除く（見えない出典は刈り込み済み）
+  pool = kept ∪ {hid}                               # hid は 1 つの擬似の観測（x = hid.x、w = hid.w）
+  m*  = weighted_median(x[pool], w[pool])
+  n   = (Σw)^2 / Σw^2   over kept + (hid.h' - 2 if hid)   # 有効な件数
   μ0  = prior_logratio(projectType)                 # §3.3
   α   = n / (n + K)                                 # K = 3（Q7）
   x̂   = α * m* + (1 - α) * μ0                       # テンプレート側へ縮める
-  s80 = weighted_quantile(x[kept], w[kept], 0.8) - m*   (n >= 3 のときだけ。それ以外は S0)
+  s80 = weighted_quantile(x[pool], w[pool], 0.8) - m*   (n >= 3 のときだけ。それ以外は S0)
   ŝ   = α * max(s80, 0) + (1 - α) * S0              # S0 = 0.25（約 +28%）
   r50 = clamp(exp(x̂), RMIN, RMAX)                   # 0.5〜3.0
+  r80 = clamp(exp(x̂ + ŝ), RMIN, RMAX)
+  if 見えない出典が効いた葉（hid または μ0 の見えない分を使った）:
+    r50, r80 = round(r50, 0.1), round(r80, 0.1)     # 日数は必ず丸めた比から計算する（正確な比からは計算しない）
   D50 = clamp(ceil(T_i * r50), 1, 3650)
-  D80 = clamp(ceil(T_i * clamp(exp(x̂ + ŝ), RMIN, RMAX)), D50, 3650)
-  lag = shrink(weighted_median(waitGapDays), toward 0, K)   # 1 日以上のときだけ「待ち」を提案
+  D80 = clamp(ceil(T_i * r80), D50, 3650)
+  lag = shrink(weighted_median(waitGapDays), toward 0, K)   # 1 日以上のときだけ「待ち」を提案。見えない出典の分は同じ規則（下の 6）
   return { D50, D80, n, α, r50, kept, dropped, sources, lag,
            mrSet: { leadTimeP50, repoTouchedP50 } }  # ソフトウェアだけ。根拠の表示用
 ```
@@ -199,16 +205,22 @@ estimate(i):
 **見えない出典の扱い（設計レビューで決定。Q3）**:
 1. **葉ごとに数える。** 葉 i の観測のうち見えない出典（プロジェクトの単位で数える）が 3 件未満なら、その葉では見えない出典を**使わない**（見える出典だけで見積もる）。プロジェクト全体で 3 件あっても、葉ごとに足りなければ使わない。
 2. **差分で 1 件を割り出させない — 2 件ずつ進める。** 葉 i で使う見えない出典は、`finalizedAt` の古い順に並べた最初の h' 件だけにする。h' = 見えない出典の数 h を**偶数に切り下げた数**（h = 5 なら 4）。新しく確定した見えない出典 1 件だけでは見積もりが変わらず、変わるのは 2 件がそろった時だけなので、前後の実行の差から 1 件のプロジェクトの比を割り出せない。1 と合わせると、見えない出典が使われるのは葉ごとに 4 件以上のとき。確定し直し（`supersededAt`）は同じ出典の入れ替えとして扱い、数を増やさない。
-3. **丸めて出す。** 根拠に出す比（r50、P80 の比、見えない出典のまとめの比）は **0.1 単位に丸めた値**だけ。件数 n と α は「〜3 件」「4〜9 件」「10 件以上」の幅で出す。
+3. **丸めて出す。** 根拠に出す比（r50、P80 の比、見えない出典のまとめの比）は **0.1 単位に丸めた値**だけ。件数 n と α は「〜3 件」「4〜9 件」「10 件以上」の幅で出す。**見えない出典が効いた葉の D50 / D80 は、0.1 単位に丸めた比から計算した日数だけ**を使う（再レビューで決定）。正確な比から計算した日数は、カード・根拠・書き込む `durationDays`・平準化・全体のバッファ B のどこにも使わない（日数 ÷ T_i から正確な比を逆算させない）。
+3-2. **見えない出典は 1 つの値にまとめる — 刈り込み平均（再レビューで決定）。** 中央値は 1 件の出典の値そのものになりうるので、見えない出典の分には使わない。`hidden_pseudo_obs(H)`:
+   - 見えない出典をプロジェクトごとに 1 つの値にする: y_p = そのプロジェクトの葉 i の観測の x の平均。
+   - 1・2 の決まりで残った h' 件（4 件以上の偶数）の y を並べ、**最大と最小を 1 件ずつ除いた平均** x_H = (Σ y_p − max y − min y) / (h' − 2) を擬似の観測の値にする。重みは w_H = (h' − 2) × 見えない出典の w の平均。重みは基準日 R から計算するので、開始日では変わらない。
+   - 擬似の観測は外れ値の除去に加えず（すでに刈り込み済み）、見える出典の重みつき中央値に 1 件として加わる。見える出典は中央値のまま。
+
 4. **出典ごとの行を出さない。** 見えない出典は「他のプロジェクト n 件（幅）」の 1 行にまとめ、**プロジェクトごとの比・MR セットのリードタイム・n・除いた / 残した（kept / dropped）・リポジトリの数を出さない。** 外れ値として除いた件数も、見えない出典の分は見える出典の分と合わせた数でだけ出す。
 5. 根拠は `plan_estimate_run` に**出典の ID で**持ち、名前は**読む人の権限でその都度**解決する（作った人に見えて読む人に見えない出典は、読む人には見えない出典として表示する）。読む人にとって葉の見えない出典が 4 件未満になる場合は、まとめの行の比も出さず「他のプロジェクトの実績を含む」とだけ出す。
+6. **見えない出典を含みうる集計はすべて同じ決まり**（再レビューで決定）。葉の比だけでなく、種類の傾向 μ0（§3.3）、待ち `lag`、負荷 ℓ̂、同時に持つ数の上限 m_u（§3.5）、§5 の既定の切り替えに出す件数も、見えない出典の分は 1（集計の単位ごとに 3 件以上）・2（偶数に切り下げ）・3-2（刈り込み平均）・4（出典ごとの行を出さない）を当て、見える出典の分と合わせる。件数は幅で出す。照合と重みは基準日 R で決める（§3.1）。
 
 ### 3.3 データが無い・少ないとき
 
 | 状態 | 動き |
 |---|---|
 | 観測が無く、種類の観測も無い | μ0 = 0。D50 = T_i（**テンプレートどおり**）。D80 = T_i × e^0.25 |
-| 項目の観測は無いが、同じ種類の観測は N 件ある | μ0 = (N/(N+10)) × 種類の全観測の重みつき中央値。印「種類の傾向だけ」 |
+| 項目の観測は無いが、同じ種類の観測は N 件ある | μ0 = (N/(N+10)) × 種類の傾向。種類の傾向 = 見える出典の観測と、見えない出典の擬似の観測 1 件（種類の単位で §3.2 の 1・2・3-2 を当てる。見えない出典のプロジェクトが 3 件未満なら使わない）の重みつき中央値。N は見える出典の件数 + (h' − 2)。印「種類の傾向だけ」。μ0 に見えない分が入った葉は「見えない出典が効いた葉」として比を丸める（§3.2） |
 | 項目の観測が少ない | α が小さく、ほぼ μ0 に寄る |
 | 反省の規則が無い | 構造はテンプレートのまま |
 | 稼働量の表が空 | 全員 1.0 FTE、同時に持つ数の上限 m_u = 2（Q1） |
@@ -239,6 +251,9 @@ apply_rules(template, rules_confirmed_matching_scope):
 **LLM に渡すもの（設計レビューで決定）**:
 - **頼んだ人が見られるものだけ。** 確定の時は確定するプロジェクトの中の文だけ。提案の時は見える出典の項目の名前と、§3.2 の決まりで丸めたまとめの数字だけ。**見えないプロジェクトの名前・項目の名前・引用は渡さない。** 機密の PBI・教訓（使う時に確かめる）は渡さない。プロンプトを組み立てる関数は 1 つにし、その入力の型が「見える出典」だけを受け取るようにする。
 - **引用は出典のプロジェクトの中でだけ見せる。** 説明の文に他のプロジェクトの規則の引用を入れない（規則の種類と数字だけ）。
+- **説明の文は実行に保存され、作った人以外も読む（再レビューで決定。両方を行う）。**
+  1. 説明の文を書かせる時の入力は、**そのプロジェクトで `plan.estimate` を持つ全員（明示の PO / SM。管理者はすべて見えるので数えない）に見える出典の共通部分**だけにする。共通部分の外の出典は、LLM には「他のプロジェクト n 件（幅）」と丸めた数字だけを渡す。
+  2. 実行には LLM に名前を渡した出典の ID の集合を残し、**読む時に、読む人に見える出典がこの集合を含まなければ説明の文を出さない**（決定的な根拠の表だけを出し、「AI の説明は表示できません」と 1 行出す）。メンバーが後から変わっても、2 が最後の守りになる。
 
 **LLM の下書きの数字の扱い（設計レビューで決定）**: 下書きの規則は `factor`・`days`・`durationDays` などの数字を持つので、次を守る。
 - 引用した文は、**出典の文の完全な部分文字列**でなければ捨てる（サーバーで照合。言い換えた引用は認めない）。出典の ID が入力に無いものも捨てる。
@@ -281,7 +296,7 @@ level(items, D, ℓ, assign, C, m):
 - カード: 既存の `plan_load` に任意の `estimate`（`runId`、方式の版、テンプレートとの差の要約、終了日: テンプレート / P50 / P80、負荷の最大: 前 / 後、データの量の 1 行）。**項目ごとの根拠は `plan_estimate_run` に置く**（55,000 バイトの上限）。「根拠を見る」から T_i・D50・D80・n・α・比・出典・規則の ID と引用・MR セットのリードタイムとリポジトリの内訳を開く（見せ方の制限は §3.2 と §4）。
 - **`plan_estimate_run` を読める人（設計レビューで決定）**: 同じプロジェクトの中だけ。読むには**そのプロジェクトで `plan.estimate`** が要る。人ごとの部分（平準化の担当・`moves`・人ごとの使用率と重なる日）は、さらに `plan.viewMemberLoad` が要り、無ければその部分を応答から外す。道は `/projects/:projectId/plan/estimate-runs/:runId` だけで、`run.projectId ≠ :projectId` なら 404 `PLAN_ESTIMATE_RUN_NOT_FOUND`（他のプロジェクトの実行があるかどうかも教えない）。`/plan/load` も `estimateRunId` について同じく `run.projectId == パスの projectId` を確かめ、違えば同じ 404 にする。
 - 承認: `/plan/load` は `estimateRunId` を受け、次のどれかなら 409 `PLAN_ESTIMATE_STALE`（黙って違う計画を書かない）:
-  1. **入力のハッシュが違う。** 実行の時に保存した `inputHash` = ハッシュ（確定した規則の ID と版、使ったスナップショットの ID の集合（使う時の機密の確認の後）、テンプレートの `scheduleHash`、割り当てた人の `member_capacity` の行と他のプロジェクトでの割り付け、`roleAssignments`、方式の版）を承認の時に計算し直し、違えば古い。
+  1. **入力のハッシュが違う。** 実行の時に保存した `inputHash` = ハッシュ（確定した規則の ID と版、使ったスナップショットの ID の集合（使う時の機密の確認の後）、テンプレートの `scheduleHash`、基準日 R（§3.1）、割り当てた人の `member_capacity` の行と他のプロジェクトでの割り付け、`roleAssignments`、方式の版）を承認の時に計算し直し、違えば古い。
   2. **実行の寿命が切れた。** `expiresAt` = 作った時 + 24 時間。
   3. 念のため平準化をやり直し、終了日か担当が変わった。
   書き込みで `templateKey`・`scheduleLoadId`・基準・`ownerId`（実行の出力から外した分を除いたもの）・`durationDays = D50` を保存する。
@@ -293,8 +308,10 @@ level(items, D, ℓ, assign, C, m):
 |---|---|
 | 機密の PBI（D-5） | すべて機密の葉は学習から外す。一部が機密ならその PBI の時間と MR を入れない。**機密かどうかは凍結せず、使う時ごとに今の印を確かめる**（§2.2）。機密の教訓は規則の下書きに入れない。MCP と LLM に渡さない |
 | 見積もりの実行（`plan_estimate_run`） | 同じプロジェクトの中だけ、`plan.estimate` が要る。人ごとの部分はさらに `plan.viewMemberLoad`。`run.projectId` とパスの `projectId` が違えば 404（§3.6） |
+| 保存した根拠の読み直し（再レビューで決定） | 実行に保存した根拠（出典ごとの比・MR の事実・リポジトリの内訳）は、**読む時に `learnableItemFacts` を通し直す**。実行の後に機密になった PBI の分は表から除き、除いた出典がその葉の見積もりに効いていたら、比と日数を出さず「根拠の一部が機密になったため表示を減らしました」と出す。入力のハッシュは使う時の機密の確認の後のスナップショットの集合を含むので、その実行の承認は 409 `PLAN_ESTIMATE_STALE` になる（§3.6） |
+| LLM の説明の文 | 入力は `plan.estimate` を持つ全員に見える出典の共通部分だけ。読む人に見える出典が LLM に渡した集合を含まなければ出さない（§3.4） |
 | 他のプロジェクトの実績 | 名前を出すのは `project.view` を持つときだけ（読む人の権限でその都度）。見えないものは「他のプロジェクト n 件（幅）」とまとめ、**葉ごとに見えない出典が 3 件未満なら使わない**。差分で 1 件を割り出させないため**2 件ずつ進め**、比は **0.1 単位に丸め**、出典ごとの行（MR のリードタイム・n・kept / dropped を含む）は出さない（§3.2、Q3） |
-| リポジトリの内訳 | リポジトリの名前と差分の大きさを出すのは、**読む人が GitStation でそのリポジトリを読めるときだけ**。Kanflow は読む人の身元で GitStation に問い合わせて確かめる（I1 の `prove_visible` と同じ判定。1 回の表示でまとめて問い合わせる）。確かめられない（結び付けた身元が無い・GitStation が応答しない・時間切れ）ときは**隠す**側に倒し、「リポジトリ n 本」とだけ出す。見えないプロジェクトの出典では常に出さない |
+| リポジトリの内訳 | リポジトリの名前と差分の大きさを出すのは、**読む人が GitStation でそのリポジトリを読めるときだけ**。Kanflow は GitStation の専用の道 `POST /api/v1/integrations/{id}/visibility-check`（G1、再レビューで決定）に、読む人と対象のリポジトリをまとめて問い合わせる（I1 の `prove_visible` と同じ判定。1 回の表示で 1 回）。この道は**その連携のサービスアカウントだけ**が呼べ、返すのはリポジトリごとの真偽だけ、呼び出しは監査の記録に残す（§6 の G1）。確かめられない（結び付けた身元が無い・GitStation が応答しない・時間切れ）ときは**隠す**側に倒し、「リポジトリ n 本」とだけ出す。見えないプロジェクトの出典では常に出さない |
 | 他の人の負荷 | 新しい操作 `plan.viewMemberLoad`: 本人、プロジェクトの PO / SM、課長。見せるのは使用率と重なる日だけで、**他のプロジェクトの項目の名前は出さない**（Q2） |
 | 役割の割り当て | `roleAssignments` に挙げられるのはプロジェクトの明示のメンバーだけ（§3.5、`PLAN_ROLE_ASSIGNMENT_INVALID`） |
 | 担当の決め方 | 平準化の出力だけが担当を決める。外部の `schedule.yml` とカードの `ownerId` は無視し、カードからは外す操作だけを受ける（§3.6） |
@@ -335,14 +352,14 @@ level(items, D, ℓ, assign, C, m):
 |---|---|---|---|---|
 | **E0 [KF]** `feat/L4-plan-template-key-baseline` | `PlanItem.templateKey`・`scheduleLoadId`、表 `plan_schedule_load`、`BaseScheduleItem` の任意の `role`・`load`・`formerKeys`、`/plan/load` で `key`・読み込みの記録・基準を保存、既存の読み込みの埋め戻しのスクリプト（乾式の実行つき） | `load_stores_template_key_on_every_row`、`load_sets_baseline_equal_to_planned`、`load_records_source_ref_and_hash`、`old_schedule_without_role_and_load_still_loads`、`former_keys_map_to_current_key`、`backfill_leaves_ambiguous_rows_null` | `typescript-reviewer`、`database-reviewer`、`pr-test-analyzer` | **今** |
 | **E1 [KF]** `feat/L4-plan-actuals-snapshot` | §2.2 と §2.4 の表、「実績を確定」、確定の前の検査、純粋な関数（日数・滑り・待ち・同時に持つ数・負荷・MR セットのリードタイム）、機密の除外、`project_attribute`、`GitLink` の MR の項目 | `snapshot_counts_workdays_when_skip_weekends`、`incomplete_leaf_is_kept_but_not_learnable`、`confidential_pbi_hours_are_excluded`、`refinalize_supersedes_without_update`、`concurrent_load_stores_no_other_project_names`、`on_hold_days_from_activity_log`、`mr_set_lead_time_spans_all_bound_repositories`、`closed_unmerged_mr_not_in_set`、`per_repo_breakdown_sums_to_item_totals`、`unreadable_repository_gives_null_not_zero`、`same_pbi_in_two_repos_counted_once_as_set`、`newly_confidential_pbi_excluded_at_use_time`、`deleted_pbi_treated_as_confidential`、`item_facts_only_via_learnable_item_facts`、`include_in_learning_toggle_requires_actuals_finalize`、`pseudonymize_replaces_owner_with_role_only_and_is_audited`、`pseudonymize_denied_for_non_admin`、権限の行（`plan.actualsFinalize` の allow / deny） | `typescript-reviewer`、`database-reviewer`、`security-reviewer`、`silent-failure-hunter` | K3 の後（**Q8 を決めてから**） |
-| **E2 [KF]** `feat/L4-plan-estimate-engine` | `lib/plan-estimate/`（照合・重み・外れ値・縮め・P50 / P80・待ち・全体のバッファ）、バックテスト（リポジトリの数の層別を含む）と `plan_estimate_eval` | 性質のテスト: `no_observations_returns_template`、`estimate_moves_toward_data_as_n_grows`、`outlier_beyond_3_mad_is_dropped_and_reported`、`p80_never_below_p50`、`ratio_clamped_to_bounds`、`future_projects_never_used`、`same_input_same_output`、`backtest_reports_mape_by_repo_count` | `typescript-reviewer`、`pr-test-analyzer` | E1 の後 |
+| **E2 [KF]** `feat/L4-plan-estimate-engine` | `lib/plan-estimate/`（照合・重み・外れ値・縮め・P50 / P80・待ち・全体のバッファ）、バックテスト（リポジトリの数の層別を含む）と `plan_estimate_eval` | 性質のテスト: `no_observations_returns_template`、`estimate_moves_toward_data_as_n_grows`、`outlier_beyond_3_mad_is_dropped_and_reported`、`p80_never_below_p50`、`ratio_clamped_to_bounds`、`future_projects_never_used`、`same_input_same_output`、`backtest_reports_mape_by_repo_count`、`start_date_sweep_does_not_isolate_hidden_source`、`reference_date_is_run_month_not_start_date`、`hidden_contribution_is_trimmed_mean_not_single_source_value`、`one_new_hidden_source_does_not_change_estimate`、`type_prior_applies_hidden_source_rules`、`lag_load_and_parallel_cap_apply_hidden_source_rules`、`days_computed_from_rounded_ratio_when_hidden_influenced` | `typescript-reviewer`、`pr-test-analyzer` | E1 の後 |
 | **E3 [KF]** `feat/L4-plan-lesson-rules` | `plan_lesson_rule`、6 種類の適用と検証、確定の流れと画面 | `draft_rule_never_changes_plan`、`rule_creating_cycle_is_rejected_with_reason`、`added_items_capped`、`scale_product_bounded`、`rules_apply_in_fixed_order`、`retro_rule_is_project_scope_only`、`rule_with_newly_confidential_source_stops_outside_project`、`promotion_strips_quote`、`lineage_rule_confirm_admin_only`、`rule_confirm_is_one_at_a_time_with_numbers`、権限の行（`plan.lessonRule.confirm`・`canConfirmLineageRule` の allow / deny） | `typescript-reviewer`、`database-reviewer`、`security-reviewer` | E2 と並行 |
 | **E4 [KF]** `feat/L4-plan-capacity-leveling` | `member_capacity`、m_u の学習、§3.5 の平準化、`scheduleFrom` の `notBefore`、`plan.viewMemberLoad`・`capacity.manage` | `critical_path_item_scheduled_first`、`no_user_exceeds_capacity_after_leveling`、`zero_load_item_consumes_no_capacity`、`split_suggested_only_when_it_finishes_earlier`、`unassigned_role_leaves_owner_null`、`not_before_respected_by_server_recompute`、`member_cannot_see_others_load`、`po_sees_utilization_but_not_other_project_names`、`role_assignment_outside_project_rejected`、`section_manager_not_member_cannot_be_assigned`、`capacity_has_no_free_text_note`、`user_capacity_allowed_for_self_section_manager_admin_only`、`po_cannot_set_user_level_capacity`、`po_sets_only_own_project_allocation`、権限の行（`plan.viewMemberLoad`・`capacity.manage`・`canManageUserCapacity` の allow / deny）、500 件で 2 秒以内 | `typescript-reviewer`、`security-reviewer`、`database-reviewer`、`pr-test-analyzer` | E2 の後 |
-| **E5 [KF]** `feat/L4-plan-propose-from-actuals` | `plan_estimate_run`、Web の「計画を作る」、MCP `propose_plan_from_actuals`、カードと根拠の画面、`/plan/load` の再検査と `PLAN_ESTIMATE_STALE`、反応の記録、系統ごとの既定の切り替え | `card_fits_size_limit_with_500_items`、`approval_recomputes_and_refuses_stale_plan`、`stale_when_input_hash_changes`、`stale_after_run_lifetime`、`mcp_response_has_no_per_person_load`、`mcp_requires_plan_estimate`、`run_of_another_project_is_refused`、`load_with_run_of_another_project_is_refused`、`per_person_parts_need_view_member_load`、`invisible_sources_under_3_per_leaf_are_not_used`、`hidden_sources_advance_two_at_a_time`、`hidden_source_ratio_never_shown`、`shown_ratios_rounded_to_0_1`、`evidence_names_resolved_with_reader_permissions`、`repo_names_hidden_for_invisible_source_projects`、`repo_names_need_gitstation_read_access`、`repo_names_hidden_when_gitstation_unreachable`、`evidence_shows_roles_not_owner_ids`、`card_cannot_add_owners`、`external_schedule_owner_id_ignored`、`proposal_contains_only_template_or_rule_items`、`same_proposal_loads_once`、`gate_off_lineage_shows_template_with_reason`、権限の行（`plan.estimate` の allow / deny） | `typescript-reviewer`、`security-reviewer`、`a11y-architect`、`i18n-sync-auditor`、`silent-failure-hunter` | E3・E4 の後 |
-| **E6 [KF]** `feat/L4-plan-estimate-llm` | 規則の下書き（引用つき）、段 3・4 の候補の採否、説明の文。止まったら決定的な部分に戻る | `llm_timeout_falls_back_and_is_logged`、`invalid_llm_output_retried_once_then_dropped`、`llm_cannot_emit_numbers_outside_rule_schema`、`injected_retro_text_does_not_change_rules`、`confidential_lessons_not_in_prompt`、`llm_input_contains_only_viewer_visible_data`、`hidden_candidates_not_sent_to_llm`、`llm_quote_must_be_exact_substring`、`llm_rule_name_capped_and_sanitized`、`llm_drafts_are_project_scope`、`explanation_has_no_quotes_from_other_projects`、規則の下書きの評価セット | `llm-integration-reviewer`（M5 で追加の予定）、`security-reviewer`、`typescript-reviewer` | **M5**（L-5 と同じ段） |
-| G1 `feat/cross-dev-status-mr-timing` | 開発状況 API の MR に `opened_at`・`merged_at`・`closed_at`・`version_count`・`diff_stats` を足す（足すだけ）。結んだ全リポジトリの MR を返す。イベントの履歴の `merge_request.opened` / `merged` が時刻を持つか確かめる（**未確認**。無ければ足す） | `dev_status_reports_opened_and_merged_at`、`version_count_matches_merge_request_versions`、`diff_stats_absent_when_not_computed_is_null_not_zero`、`dev_status_returns_mrs_from_every_bound_repository`、`mr_in_repository_caller_cannot_read_is_omitted` | `rust-reviewer`、`authz-matrix-auditor`、`database-reviewer`、`pr-test-analyzer`、`error-contract-auditor` | I1 の後 |
+| **E5 [KF]** `feat/L4-plan-propose-from-actuals` | `plan_estimate_run`、Web の「計画を作る」、MCP `propose_plan_from_actuals`、カードと根拠の画面、`/plan/load` の再検査と `PLAN_ESTIMATE_STALE`、反応の記録、系統ごとの既定の切り替え | `card_fits_size_limit_with_500_items`、`approval_recomputes_and_refuses_stale_plan`、`stale_when_input_hash_changes`、`stale_after_run_lifetime`、`mcp_response_has_no_per_person_load`、`mcp_requires_plan_estimate`、`run_of_another_project_is_refused`、`load_with_run_of_another_project_is_refused`、`per_person_parts_need_view_member_load`、`invisible_sources_under_3_per_leaf_are_not_used`、`hidden_sources_advance_two_at_a_time`、`hidden_source_ratio_never_shown`、`shown_ratios_rounded_to_0_1`、`evidence_names_resolved_with_reader_permissions`、`stored_evidence_refiltered_at_read_time`、`newly_confidential_source_hides_leaf_ratio_and_makes_run_stale`、`llm_explanation_hidden_from_reader_seeing_fewer_sources`、`repo_names_hidden_for_invisible_source_projects`、`repo_names_need_gitstation_read_access`、`repo_names_hidden_when_gitstation_unreachable`、`evidence_shows_roles_not_owner_ids`、`card_cannot_add_owners`、`external_schedule_owner_id_ignored`、`proposal_contains_only_template_or_rule_items`、`same_proposal_loads_once`、`gate_off_lineage_shows_template_with_reason`、権限の行（`plan.estimate` の allow / deny） | `typescript-reviewer`、`security-reviewer`、`a11y-architect`、`i18n-sync-auditor`、`silent-failure-hunter` | E3・E4 の後 |
+| **E6 [KF]** `feat/L4-plan-estimate-llm` | 規則の下書き（引用つき）、段 3・4 の候補の採否、説明の文。止まったら決定的な部分に戻る | `llm_timeout_falls_back_and_is_logged`、`invalid_llm_output_retried_once_then_dropped`、`llm_cannot_emit_numbers_outside_rule_schema`、`injected_retro_text_does_not_change_rules`、`confidential_lessons_not_in_prompt`、`llm_input_contains_only_viewer_visible_data`、`hidden_candidates_not_sent_to_llm`、`llm_quote_must_be_exact_substring`、`llm_rule_name_capped_and_sanitized`、`llm_drafts_are_project_scope`、`explanation_has_no_quotes_from_other_projects`、`llm_explanation_input_is_intersection_of_estimators_visibility`、`run_records_source_ids_given_to_llm`、規則の下書きの評価セット | `llm-integration-reviewer`（M5 で追加の予定）、`security-reviewer`、`typescript-reviewer` | **M5**（L-5 と同じ段） |
+| G1 `feat/cross-dev-status-mr-timing` | 開発状況 API の MR に `opened_at`・`merged_at`・`closed_at`・`version_count`・`diff_stats` を足す（足すだけ）。結んだ全リポジトリの MR を返す。イベントの履歴の `merge_request.opened` / `merged` が時刻を持つか確かめる（**未確認**。無ければ足す）。**読む人の閲覧の確認の道 `POST /api/v1/integrations/{id}/visibility-check`**（再レビューで決定）: 本文は（GitStation の利用者の参照 1 人、リポジトリの参照 100 件まで）、応答は `{ repo: bool }` だけ（理由・存在・権限の種類を返さない。無いリポジトリと知らない利用者は `false`）。`forge-auth` の `authorize()` で**その連携のサービスアカウントだけ**を許し、他の利用者・他の連携のサービスアカウント・エージェントのトークン・代理（act-as）での呼び出しは断る。権限の表に 1 行（allow / deny）。呼び出しごとに監査の記録（呼んだサービスアカウント・対象の利用者・件数・`request_id`）を残し、速度の上限を付ける | `dev_status_reports_opened_and_merged_at`、`version_count_matches_merge_request_versions`、`diff_stats_absent_when_not_computed_is_null_not_zero`、`dev_status_returns_mrs_from_every_bound_repository`、`mr_in_repository_caller_cannot_read_is_omitted`、`visibility_check_allowed_only_for_integration_service_account`、`visibility_check_denied_for_other_users_and_other_service_accounts`、`visibility_check_denied_for_agent_tokens`、`visibility_check_denied_under_act_as`、`visibility_check_returns_booleans_only`、`unknown_repo_and_unknown_user_return_false`、`visibility_check_matches_prove_visible`、`visibility_check_is_audited`、権限の表の行 | `rust-reviewer`、`authz-matrix-auditor`、`security-reviewer`、`database-reviewer`、`pr-test-analyzer`、`error-contract-auditor` | I1 の後 |
 
-**エラーコード**: GitStation の G1 は既存のコードで足りる見込み。Kanflow は `PLAN_ACTUALS_INCOMPLETE`（400）、`PLAN_RULE_INVALID`（400）、`PLAN_ROLE_ASSIGNMENT_INVALID`（400）、`PLAN_ESTIMATE_STALE`（409）、`PLAN_ESTIMATE_RUN_NOT_FOUND`（404。他のプロジェクトの実行もこれにする）。LLM の失敗は利用者に見せず、記録して元の表示に戻す（07 W14）。
+**エラーコード**: GitStation の G1 は既存のコードで足りる見込み（閲覧の確認の道の拒否は既存の認可の拒否のコード。新しい失敗が要れば同じ MR で `errors.toml` に登録する）。Kanflow は `PLAN_ACTUALS_INCOMPLETE`（400）、`PLAN_RULE_INVALID`（400）、`PLAN_ROLE_ASSIGNMENT_INVALID`（400）、`PLAN_ESTIMATE_STALE`（409）、`PLAN_ESTIMATE_RUN_NOT_FOUND`（404。他のプロジェクトの実行もこれにする）。LLM の失敗は利用者に見せず、記録して元の表示に戻す（07 W14）。
 
 **運用**: メトリクス（見積もりの実行の時間、LLM の時間切れと戻り、`PLAN_ESTIMATE_STALE` の回数、確定の時に読めなかったリポジトリの数）、ログ（`runId`・入力のハッシュ・方式の版）。「見積もりが変なとき」の調べ方（`runId` → 根拠 → 出典 → リポジトリの内訳 → バックテストの記録）を Kanflow の運用の文書に足す。
 
@@ -356,7 +373,7 @@ level(items, D, ℓ, assign, C, m):
 | リポジトリを分けた・まとめたことで MR の数字が別の作業に見える | MR セットを単位にする。リポジトリの数は層別で確かめてから照合に入れる |
 | 確定の時に結び付きが外れていて MR が欠ける | 欠けは null と一覧で示す |
 | 他の人の負荷が監視の道具になる | 使用率と重なる日だけ、見る人を限る（Q2） |
-| 他のプロジェクトの数字が漏れる | `project.view`（読む人の権限で都度）、葉ごとに見えない出典 3 件以上・2 件ずつ進める・比を 0.1 に丸める・出典ごとの行を出さない、リポジトリの名前は GitStation で読める人だけ、実行は同じプロジェクトの中だけ |
+| 他のプロジェクトの数字が漏れる | `project.view`（読む人の権限で都度）、葉ごとに見えない出典 3 件以上・2 件ずつ進める・刈り込み平均・比を 0.1 に丸めて日数も丸めた比から・出典ごとの行を出さない・μ0 などの集計にも同じ決まり・基準日は実行の月で固定、リポジトリの名前は GitStation で読める人だけ、実行は同じプロジェクトの中だけ |
 | 後から機密になった PBI・教訓が使われ続ける | 機密を凍結せず、使う時に今の印を結合して確かめる（PBI の ID を葉ごとに残す） |
 | 平準化から外の人の忙しい日が漏れる | `roleAssignments` はプロジェクトのメンバーだけ |
 | LLM の規則が計画を壊す | 下書きは効かない、確定は人で 1 件ずつ数字を見せて、6 種類だけ、検証で外す、引用は完全な部分文字列だけ、下書きは `project` の範囲だけ |
@@ -379,7 +396,7 @@ level(items, D, ℓ, assign, C, m):
 
 1. **稼働量の決め方**。推奨: 人ごとに FTE（既定 1.0）と同時に持つ数の上限（既定 2、実績から学ぶ）。1 日 7.5 時間。休みと会社の休日の正本（社内のカレンダー）はあるか。無ければ当面は土日だけを飛ばす。
 2. **他の人の負荷を誰が見られるか**。推奨: 本人、そのプロジェクトの PO / SM（使用率と重なる日だけ）、課長。稼働量を入れるのは、人の単位の FTE は本人・その人の課長・管理者、プロジェクトへの割り当ては PO / SM（§4 の権限の決まり。設計レビューで決定）。
-3. **見えないプロジェクトの実績を使ってよいか**。推奨: 使う。名前を出さず、葉ごとに 3 件以上（2 件ずつ進めるので実際は 4 件以上）をまとめ、比を 0.1 に丸めたときだけ（§3.2。仕組みは設計レビューで決定）。残る問い: 部署をまたいでよいか（課の範囲に限るか）。
+3. **見えないプロジェクトの実績を使ってよいか**。推奨: 使う。名前を出さず、葉ごとに 3 件以上（2 件ずつ進めるので実際は 4 件以上）を刈り込み平均でまとめ、比を 0.1 に丸めたときだけ。基準日は実行の月で固定（§3.1・§3.2。仕組みは設計レビューと再レビューで決定）。残る問い: 部署をまたいでよいか（課の範囲に限るか）。
 4. **全体のバッファを計画の行として入れるか**。推奨: 入れない。P50 と P80 の終了日を並べる。約束の日付は P80 に合わせる運用を勧める。
 5. **設備・工程のマスタの正本**（IoT の PFS の DB か、別の台帳か）。決まるまでは自由な文字列。
 6. **反省の規則を確定できる人**。設計レビューで決定: プロジェクトの規則は出典のプロジェクトの PO / SM。系統・種類の規則と昇格は**管理者だけ**（「系統の持ち主」の考えを Kanflow に作るまで）。残る問い: 系統の持ち主を作るか、作るなら誰か（テンプレートの持ち主など）。
@@ -408,3 +425,10 @@ level(items, D, ℓ, assign, C, m):
 | MEDIUM: 根拠の MR の事実 | リポジトリの名前と差分の大きさは、読む人が GitStation でそのリポジトリを読めるときだけ（読む人の身元で GitStation に問い合わせる）。確かめられなければ隠して「リポジトリ n 本」 | §4 |
 | MEDIUM: 保持と個人の情報 | Q8 は E1 の前に決める。仮名化は管理者の専用の監査つきの操作で、追記だけの約束のただ 1 つの例外（担当の列だけ）。実行と反応は 1 年。根拠に担当の ID を出さず役割だけ。`member_capacity` の自由記述の欄は**持たない**（注意書きと字数の上限より確実なため） | §2.1、§2.2、§4、§9 |
 | LOW: `includeInLearning` の切り替えの権限 | `plan.actualsFinalize`（PO / SM）の下。理由と操作した人を記録 | §2.2、§4、§6 |
+| 再レビュー HIGH 3 (a): 種類の傾向 μ0 などの集計に見えない出典の決まりが無い | μ0・`lag`・ℓ̂・m_u・§5 の件数も、見えない出典の分は集計の単位ごとに 3 件以上・偶数に切り下げ・刈り込み平均・出典ごとの行を出さない、を当てる | §3.2、§3.3 |
+| 再レビュー HIGH 3 (b): 出す日数から正確な比を逆算できる | 見えない出典が効いた葉は比を 0.1 単位に丸め、D50 / D80 は**丸めた比から**計算する。正確な比からの日数はカード・根拠・`durationDays`・平準化・B のどこにも使わない | §3.2 |
+| 再レビュー HIGH 3 (c): 開始日を動かして境目の 1 件を割り出せる | 照合の締め切りと重みの経過日数は、**実行を作った日の月の 1 日（基準日 R）**から決める。提案する人の開始日は使わない。R は入力のハッシュに入れる。バックテストだけは評価するプロジェクトの開始月 | §3.1、§3.6、§6 |
+| 再レビュー HIGH 3 (d): 重みつき中央値は 1 件の出典の値そのものになる | 見えない出典はプロジェクトごとに 1 つの値 y_p にし、最大と最小を除いた平均 x_H = (Σ y_p − max − min) / (h' − 2)、重み w_H = (h' − 2) × 見えない出典の w の平均の擬似の観測 1 件にまとめる。見える出典は中央値のまま | §3.2 |
+| 再レビュー MEDIUM N2: LLM の説明の文が作った人の見え方で保存される | 両方を行う: 入力は `plan.estimate` を持つ全員（明示の PO / SM）に見える出典の共通部分だけにし、さらに読む時に読む人に見える出典が LLM に渡した集合を含まなければ説明の文を出さない（メンバーの変更への最後の守り） | §3.4、§4、§6 |
+| 再レビュー MEDIUM N3: 「読む人として」リポジトリの閲覧を確かめる道が無い | G1 に `POST /api/v1/integrations/{id}/visibility-check` を足す。その連携のサービスアカウントだけ、真偽だけ、監査つき、権限の表に allow / deny の行（他の利用者・エージェント・act-as は拒否）。評価役に `security-reviewer` を足す | §4、§6 |
+| 再レビュー MEDIUM: 保存した根拠が実行の後の機密の変更を反映しない | 読む時に `learnableItemFacts` を通し直し、機密になった分を除く。効いていた葉は比と日数を出さず、その実行の承認は 409 | §4、§6 |
