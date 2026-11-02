@@ -48,6 +48,15 @@ jobs:
             echo "::error::a test-support feature is enabled in forge-cli's normal dependency graph"
             exit 1
           fi
+      # Same for `gstn`: its `test-support` adds the `test-file` credential
+      # store (a plain file, no 0600 protection), enabled by the crate's own
+      # dev-dependency only. The shipped client must never accept it.
+      - name: no test-support feature in the gstn binary
+        run: |
+          if cargo tree -p forge-client -e normal,features | grep -F 'feature "test-support"'; then
+            echo "::error::a test-support feature is enabled in forge-client's normal dependency graph"
+            exit 1
+          fi
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:

@@ -361,6 +361,9 @@ impl TokenStore {
                 "config_key=GSTN_CREDENTIAL_STORE reason=file_unsupported_on_windows (use the Credential Manager, or set GSTN_TOKEN)",
             )),
             "file" => Ok(Self::new(Box::new(FileBackend::new(dir)), None)),
+            // Tests only: the file store on every OS (feature `test-support`).
+            #[cfg(feature = "test-support")]
+            "test-file" => Ok(Self::new(Box::new(FileBackend::new(dir)), None)),
             _ => Err(ClientError::local(
                 ErrorCode::CliConfigInvalid,
                 "config_key=GSTN_CREDENTIAL_STORE reason=invalid (auto|keyring|file)",
