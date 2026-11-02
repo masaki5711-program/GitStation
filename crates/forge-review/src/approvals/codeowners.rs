@@ -6,11 +6,12 @@
 //!   blanks. `#` starts a comment (to the end of the line); blank lines are
 //!   ignored. `\#` and `\ ` put a literal `#` / blank into a pattern.
 //! - Globs: `*` (any characters but `/`), `?` (one character but `/`), `**`
-//!   as a whole segment (any number of segments). A leading `/` anchors the
-//!   pattern at the repository root; without it the pattern matches at any
-//!   depth (as if it began with `**/`). A pattern matches a path itself and
+//!   as a whole segment (any number of segments). As gitignore (R5
+//!   re-review round 2): a `/` at the start or in the middle anchors the
+//!   pattern at the repository root; a pattern without one (a trailing `/`
+//!   aside) matches at any depth. A pattern matches a path itself and
 //!   everything below it (a directory); a trailing `/` matches only what is
-//!   below.
+//!   below; `//` at either end is refused.
 //! - Owners: `@username` and `@group/path` (a full group path). A single
 //!   segment names a user, or a top-level group when no such user exists.
 //! - The last rule matching a path wins.
@@ -125,6 +126,41 @@ fn is_format(c: char) -> bool {
     )
 }
 
+/// Other characters that are invisible or attach to the previous one (R5
+/// review round 2): combining marks (the combining blocks of categories
+/// Mn / Me: U+0300–036F, U+0483–0489, U+1AB0–1AFF, U+1DC0–1DFF,
+/// U+20D0–20FF, U+3099–309A, U+FE20–FE2F), the Hangul fillers (U+115F,
+/// U+1160, U+3164, U+FFA0), the Braille blank (U+2800) and the variation
+/// selectors (U+FE00–FE0F, U+E0100–E01EF).
+fn is_invisible(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0x3099..=0x309A
+            | 0xFE20..=0xFE2F
+            | 0x115F
+            | 0x1160
+            | 0x3164
+            | 0xFFA0
+            | 0x2800
+            | 0xFE00..=0xFE0F
+            | 0xE0100..=0xE01EF
+    )
+}
+
+/// Refused outside a comment: a control character other than the tab (VT,
+/// DEL, …), a format character, a non-ASCII blank, or [`is_invisible`].
+fn refused(c: char) -> bool {
+    (c.is_control() && c != '\t')
+        || is_format(c)
+        || (c.is_whitespace() && !c.is_ascii())
+        || is_invisible(c)
+}
+
 /// Split a line into tokens (ASCII-blank-separated), honouring `\#` and
 /// `\ `, dropping a comment. `Err(reason)` for another escape, a non-ASCII
 /// blank (U+3000 …) or a format character outside the comment.
@@ -139,9 +175,7 @@ fn tokens(line: &str) -> Result<Vec<String>, &'static str> {
                 _ => return Err("pattern_invalid"),
             },
             '#' => break,
-            c if is_format(c) || (c.is_whitespace() && !c.is_ascii()) => {
-                return Err("pattern_invalid")
-            }
+            c if refused(c) => return Err("pattern_invalid"),
             c if c.is_ascii_whitespace() => {
                 if !cur.is_empty() {
                     out.push(std::mem::take(&mut cur));
@@ -203,8 +237,11 @@ fn segment_glob(part: &str) -> (Vec<char>, usize) {
     (out, wild)
 }
 
-/// The segments of a pattern (`anchored`: it began with `/`), consecutive
-/// `**` collapsed, at most [`MAX_WILDCARDS`] wildcards.
+/// The segments of a pattern, consecutive `**` collapsed, at most
+/// [`MAX_WILDCARDS`] wildcards. As gitignore (R5 review round 2, ADR-0024
+/// §9): a pattern with a `/` at its start or in its middle is anchored at
+/// the root; only a pattern without one (a trailing `/` aside) matches at
+/// any depth. `//` at either end is refused.
 fn compile(pattern: &str) -> Result<Vec<Seg>, &'static str> {
     if pattern.starts_with('!') {
         return Err("unsupported");
@@ -216,9 +253,12 @@ fn compile(pattern: &str) -> Result<Vec<Seg>, &'static str> {
     {
         return Err("pattern_invalid");
     }
-    let anchored = pattern.starts_with('/');
+    if pattern.starts_with("//") || (pattern.len() > 2 && pattern.ends_with("//")) {
+        return Err("pattern_invalid");
+    }
     let directory = pattern.ends_with('/');
     let body = pattern.trim_start_matches('/').trim_end_matches('/');
+    let anchored = pattern.starts_with('/') || body.contains('/');
     if body.is_empty() {
         // `/` alone: the whole repository.
         return if anchored {
@@ -340,31 +380,32 @@ fn glob(pattern: &[char], name: &[char]) -> bool {
 }
 
 /// Whether `segs` matches the whole `path`: a table over (segment, path
-/// position), `segs.len() × path.len()` glob checks at most.
+/// position) kept as one rolling row, `segs.len() × path.len()` glob checks
+/// at most (and none where the rest cannot match anyway).
 fn matches(segs: &[Seg], path: &[Vec<char>]) -> bool {
-    let (s_len, p_len) = (segs.len(), path.len());
-    // ok[i][j]: segs[i..] matches path[j..].
-    let mut ok = vec![vec![false; p_len + 1]; s_len + 1];
-    if let Some(last) = ok.get_mut(s_len).and_then(|row| row.get_mut(p_len)) {
-        *last = true;
+    let p_len = path.len();
+    // next[j]: segs[i + 1..] matches path[j..]; starts as "no segment left".
+    let mut next = vec![false; p_len + 1];
+    if let Some(end) = next.get_mut(p_len) {
+        *end = true;
     }
-    for i in (0..s_len).rev() {
+    for seg in segs.iter().rev() {
+        let mut row = vec![false; p_len + 1];
         for j in (0..=p_len).rev() {
-            let next =
-                |ii: usize, jj: usize| ok.get(ii).and_then(|r| r.get(jj)).copied().unwrap_or(false);
-            let value = match segs.get(i) {
-                Some(Seg::Any) => next(i + 1, j) || (j < p_len && next(i, j + 1)),
-                Some(Seg::Glob(g)) => {
-                    j < p_len && path.get(j).is_some_and(|name| glob(g, name)) && next(i + 1, j + 1)
+            let at = |v: &[bool], k: usize| v.get(k).copied().unwrap_or(false);
+            let value = match seg {
+                Seg::Any => at(&next, j) || (j < p_len && at(&row, j + 1)),
+                Seg::Glob(g) => {
+                    j < p_len && at(&next, j + 1) && path.get(j).is_some_and(|name| glob(g, name))
                 }
-                None => false,
             };
-            if let Some(cell) = ok.get_mut(i).and_then(|r| r.get_mut(j)) {
+            if let Some(cell) = row.get_mut(j) {
                 *cell = value;
             }
         }
+        next = row;
     }
-    ok.first().and_then(|r| r.first()).copied().unwrap_or(false)
+    next.first().copied().unwrap_or(false)
 }
 
 /// A path split into ASCII-folded segments (R5 review: matching ignores
@@ -381,13 +422,26 @@ pub fn owned_lines(
     paths: &[String],
     deadline: Option<std::time::Instant>,
 ) -> Option<std::collections::BTreeMap<u32, usize>> {
+    let past = || deadline.is_some_and(|d| std::time::Instant::now() >= d);
     let mut lines = std::collections::BTreeMap::new();
     for path in paths {
-        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+        if past() {
             return None;
         }
-        if let Some(rule) = file.rule_for(path) {
-            *lines.entry(rule.line).or_insert(0) += 1;
+        let parts = folded(path);
+        // The last matching rule, the deadline checked every 64 rules.
+        let mut found = None;
+        for (n, rule) in file.rules.iter().rev().enumerate() {
+            if n % 64 == 63 && past() {
+                return None;
+            }
+            if matches(&rule.segs, &parts) {
+                found = Some(rule.line);
+                break;
+            }
+        }
+        if let Some(line) = found {
+            *lines.entry(line).or_insert(0) += 1;
         }
     }
     Some(lines)
@@ -403,7 +457,7 @@ impl Codeowners {
 
     /// The lines the changed `paths` need: for each path its last matching
     /// rule, counted per line. `None` once `deadline` passes (checked per
-    /// path; the caller fails closed).
+    /// path and every 64 rules; the caller fails closed).
     pub fn owned_lines(
         &self,
         paths: &[String],

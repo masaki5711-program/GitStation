@@ -323,3 +323,77 @@ fn matching_ignores_ascii_case() {
     let c = parse(b"/src/ @a\n").expect("valid");
     assert_eq!(owners_of(&c, "SRC/auth.txt"), Some(vec!["@a".to_owned()]));
 }
+
+/// R5 review round 2 (MEDIUM): control characters (VT, DEL), combining
+/// marks, Hangul fillers, the Braille blank and variation selectors are
+/// refused outside a comment; a tab still separates.
+#[test]
+fn other_invisible_characters_are_refused() {
+    for bad in [
+        "*.rs\u{000B} @a\n",
+        "*.rs\u{007F} @a\n",
+        "*.rs\u{0301} @a\n",
+        "*.rs\u{20DD} @a\n",
+        "*.rs\u{3164} @a\n",
+        "*.rs\u{115F} @a\n",
+        "*.rs\u{1160} @a\n",
+        "*.rs\u{FFA0} @a\n",
+        "*.rs\u{2800} @a\n",
+        "*.rs\u{FE0F} @a\n",
+        "*.rs @a\u{E0101}\n",
+    ] {
+        assert_eq!(
+            err(bad),
+            CodeownersError {
+                line: 1,
+                reason: "pattern_invalid"
+            },
+            "{bad:?}"
+        );
+    }
+    let c = parse(b"*.rs\t@a\n").expect("a tab separates");
+    assert_eq!(owners_of(&c, "x.rs"), Some(vec!["@a".to_owned()]));
+}
+
+/// R5 review round 2 (LOW): a doubled slash at either end is refused; a
+/// pattern with a slash before its end is anchored at the root (gitignore,
+/// ADR-0024 §9: only a pattern without `/` matches at any depth).
+#[test]
+fn patterns_with_a_slash_are_anchored_and_doubled_slashes_refused() {
+    assert_eq!(
+        err("//src @a\n"),
+        CodeownersError {
+            line: 1,
+            reason: "pattern_invalid"
+        }
+    );
+    assert_eq!(
+        err("src// @a\n"),
+        CodeownersError {
+            line: 1,
+            reason: "pattern_invalid"
+        }
+    );
+    let c = parse(b"src/*.rs @a\ndocs/ @b\n").expect("valid");
+    assert_eq!(owners_of(&c, "src/x.rs"), Some(vec!["@a".to_owned()]));
+    assert_eq!(
+        owners_of(&c, "lib/src/x.rs"),
+        None,
+        "anchored: not at depth"
+    );
+    assert_eq!(
+        owners_of(&c, "pkg/docs/a.md"),
+        Some(vec!["@b".to_owned()]),
+        "trailing slash only"
+    );
+}
+
+/// R5 review round 2 (HIGH): matching stops at its deadline inside the
+/// rule loop too, not only between paths.
+#[test]
+fn matching_stops_at_the_deadline_inside_the_rules() {
+    let text: String = (0..1000).map(|n| format!("/d{n}/**/x*y*z @a\n")).collect();
+    let c = parse(text.as_bytes()).expect("valid");
+    let past = std::time::Instant::now();
+    assert_eq!(c.owned_lines(&["a/b".to_owned()], Some(past)), None);
+}
