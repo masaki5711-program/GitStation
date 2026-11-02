@@ -888,6 +888,56 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::mergeability,
         )
         .responds::<mr::MergeabilityBody>(Verb::Get, mr::MERGEABILITY)
+        // M3 R3 (ADR-0024 §6, §12): discussions — read like the merge
+        // request, started and answered as `MergeRequestComment`, resolved
+        // as `DiscussionResolve` on the thread.
+        .route_with(
+            Verb::Get,
+            mr::DISCUSSIONS,
+            Action::MergeRequestRead,
+            "List a merge request's discussions with their notes and whether a later version changed their line (as the repository browse API)",
+            mr::DISCUSSIONS_OF,
+            mr::discussions,
+        )
+        .responds::<mr::DiscussionsBody>(Verb::Get, mr::DISCUSSIONS)
+        .route_with_body(
+            Verb::Post,
+            mr::DISCUSSIONS,
+            Action::MergeRequestComment,
+            "Start a discussion, general or on a line of a version's diff (Reporter; agents' tokens too)",
+            mr::DISCUSSION_MAX_BODY,
+            mr::DiscussionToStart,
+            mr::start_discussion,
+        )
+        .responds_created::<mr::DiscussionBody>(Verb::Post, mr::DISCUSSIONS)
+        .route_with_body(
+            Verb::Post,
+            mr::NOTES,
+            Action::MergeRequestComment,
+            "Reply to a discussion (Reporter; agents' tokens too)",
+            mr::DISCUSSION_MAX_BODY,
+            mr::DiscussionToReply,
+            mr::reply_to_discussion,
+        )
+        .responds_created::<mr::DiscussionBody>(Verb::Post, mr::NOTES)
+        .route_with(
+            Verb::Post,
+            mr::RESOLVE,
+            Action::DiscussionResolve,
+            "Resolve a discussion (people only: its starter, or a Developer who is not the merge request's author)",
+            mr::TO_RESOLVE,
+            mr::resolve_discussion,
+        )
+        .responds::<mr::DiscussionBody>(Verb::Post, mr::RESOLVE)
+        .route_with(
+            Verb::Post,
+            mr::UNRESOLVE,
+            Action::DiscussionResolve,
+            "Unresolve a discussion (as resolving)",
+            mr::TO_UNRESOLVE,
+            mr::unresolve_discussion,
+        )
+        .responds::<mr::DiscussionBody>(Verb::Post, mr::UNRESOLVE)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

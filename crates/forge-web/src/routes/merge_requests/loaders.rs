@@ -82,7 +82,7 @@ fn collection_id(raw_path: &str) -> Result<ProjectId, ForgeError> {
 
 /// The project for `viewer` (its row too: the handler needs the
 /// repository), `None` when it does not exist.
-async fn project_of(
+pub(super) async fn project_of(
     state: &AppState,
     id: ProjectId,
     viewer: Option<UserId>,
@@ -99,7 +99,7 @@ async fn project_of(
     Ok(Some((projects::loaded(&record), record)))
 }
 
-fn found<R>(ctx: R, record: ProjectRecord) -> Lookup<R> {
+pub(super) fn found<R>(ctx: R, record: ProjectRecord) -> Lookup<R> {
     Lookup::Found {
         ctx,
         canonical: None,
@@ -123,7 +123,7 @@ async fn stored_lookup(
 }
 
 /// [`stored_lookup`] on ids already parsed.
-async fn lookup_ids(
+pub(super) async fn lookup_ids(
     state: &AppState,
     (id, iid): (ProjectId, i64),
     viewer: Option<UserId>,
@@ -334,6 +334,8 @@ pub const VERSIONS_OF: MergeRequestRead = MergeRequestRead(VERSIONS_SUFFIX);
 pub const COMPARE_OF: MergeRequestRead = MergeRequestRead(COMPARE_SUFFIX);
 /// `GET …/mergeability`.
 pub const MERGEABILITY_OF: MergeRequestRead = MergeRequestRead(MERGEABILITY_SUFFIX);
+/// `GET …/discussions` (M3 R3).
+pub const DISCUSSIONS_OF: MergeRequestRead = MergeRequestRead(super::DISCUSSIONS_SUFFIX);
 
 impl Loader<AppState> for MergeRequestRead {
     type Ctx = MergeRequestCtx;
