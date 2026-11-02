@@ -43,8 +43,9 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
 
 ## Diagnose（読み取りのみ）
 
-0. `forge doctor --json` の `review.merges`（期限を過ぎた生きた試行の数と最も古いものの経過秒、直近 7 日の `failed`）。serve のログの
-   debug のハートビート `forge.serve.merge_reconcile_pass`（照合の 1 回ごと、件数つき。debug を出していれば）と、
+0. `forge doctor --json` の `review.merges`（期限を過ぎた生きた試行の数と最も古いものの経過秒、直近 24 時間の `failed`。それより古い `failed` は
+   下の SQL で見る）。serve のログの info のハートビート `forge.serve.merge_reconcile_pass`（照合の 1 回ごと、1 分に 1 回、件数つき。
+   途切れていれば照合が止まっている）と、
    `forge.serve.merge_runner_stopped` / `FG-SYS-0005 merge_task_exited`。
 
 1. ログを `merge_id` と、要求の `request_id`（マージを要求した HTTP の要求の ID。ジョブのログもこの ID を持つ）で読む:
@@ -88,6 +89,14 @@ M3 R4（ADR-0024 §4）の MR のマージの実行（ジョブ `merge_request.m
    利用者と相談する。`[MUTATING — needs approval]` 必要なら target を戻す（`git update-ref <target> <expected_old> <new_sha>`）。
    戻し: もう一度 `new_sha` に動かす。
 6. `FG-REVIEW-0012`（作成者のメールが使えない）は alert ではない。利用者のメールを直してから、もう一度マージする。
+
+## 配布の前に（R4 の 1 回目の修正を含む版へ上げるとき）
+
+- 既定のコミットメッセージは要求の時点で固める（`merge_request_merges.message`）。それより前の版で積まれた試行は `message` が空で、
+  ジョブの時点の MR のタイトルと説明を使う。配布の前にマージのキューを空にする（読み取り:
+  `SELECT count(*) FROM forge.merge_request_merges WHERE state IN ('queued','prepared','executing');` が 0 になるまで待つ）。
+- 照合が 1 件を片付けるのに 20 秒を超えると `FG-SYS-0005 reason=reconcile_attempt_timeout`（`merge_id` つき）を出し、その試行は
+  次の回の後ろへ回る。同じ `merge_id` で繰り返すなら、その試行の ref とロック（`<ref>.lock`）を Diagnose の手順で見る。
 
 ## Verify
 

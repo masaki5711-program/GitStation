@@ -1046,13 +1046,12 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
 - **serve のマージのタスクを見張る（HIGH、改訂）**: ジョブのランナーと照合を **別のタスク** にし（遅い照合がマージを待たせない）、
   それぞれを監督するタスクが、停止の要求なしに終わった・panic したことを FG-SYS-0005 ServeFailed（`operation=merge_task_exited`、
   `task`、`panicked`）で 1 回ログに出し、1 秒から倍々で 30 秒までの間隔で起動し直す。停止のときは両方に止まれと伝え、panic した・
-  時間内に終わらなかった監督のタスクもログに出す。照合の 1 回は 50 秒で打ち切り、停止の要求ですぐ止まる。毎回 debug の
-  ハートビート `forge.serve.merge_reconcile_pass`（件数つき）を出す。ジョブを取れない失敗は 1 秒から 30 秒まで間隔を延ばし、
+  時間内に終わらなかった監督のタスクもログに出す。照合の 1 回は 50 秒で打ち切り、停止の要求ですぐ止まる。毎回ハートビート（2 回目で info に改訂） `forge.serve.merge_reconcile_pass`（件数つき）を出す。ジョブを取れない失敗は 1 秒から 30 秒まで間隔を延ばし、
   続く失敗は最初の 1 回とその後 1 分に 1 回だけ（件数つき）ログに出す。`retryable` は `ErrorCode` の全列挙の match にした
   （新しいコードは分類するまでコンパイルできない）。
 - **`forge doctor` の `review.merges`（HIGH の一部）**: serve のプロセスの中の最終実行時刻は doctor（別のプロセス）から読めないので、
   照合が止まっていることを **結果で** 見る: 照合の期限（放置 10 分、`executing` は 10 分 30 秒）をさらに 3 分過ぎた生きた試行の数
-  （照合が動いていないか、毎回失敗している）と、直近 7 日の `failed`（人の判断待ち）。どちらも FG-REVIEW-0009
+  （照合が動いていないか、毎回失敗している）と、直近 7 日（2 回目で 24 時間に改訂）の `failed`（人の判断待ち）。どちらも FG-REVIEW-0009
   （`reconcile_overdue` / `ref_state_unknown`）。
 - **既定のコミットメッセージは要求の時点で固める（HIGH、改訂）**: `message` が無い要求は、要求のトランザクションでロックした MR の
   タイトルと説明から既定のメッセージを作り、試行の行の `message` に保存する。キューにある間のタイトル・説明の変更（許している）は
@@ -1090,3 +1089,25 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   経路で ref を動かしたときの監査にトークンのスコープを残す（先端が既に動いていた再開と照合は資格情報を読み直さないので空）。
 - **今後のマイグレーションの注意**: 行の多い表の CHECK を広げるときは `ADD CONSTRAINT … NOT VALID` と `VALIDATE CONSTRAINT`
   に分ける（書き込みを止めない）。R4 の `tokens_scopes_known` はトークンの行が少ないので一度に置き換えた。
+
+### R4 の再レビュー（2 回目）で決めたこと（2026-11-03）
+
+- **コードの誤記（HIGH）**: マージのタスクが止まったときのコードは **FG-SYS-0005** ServeFailed（FG-SYS-0003 は
+  UnknownErrorCode）。runbook・この ADR・FG-REVIEW-0009 の説明・serve_merges のコメント・forge-cli の README を直し、
+  FG-SYS-0005 の診断にマージの operation（`merge_task_exited`・`merge_supervisor_exited`・`merge_task_pending`・
+  `reconcile_pass_timeout`・`reconcile_attempt_timeout`）と runbook `merge-execution` を足した。
+- **照合の 1 件ごとの時間切れ**: 1 件の片付けは 20 秒まで（`ATTEMPT_TIMEOUT`）。超えたら FG-SYS-0005
+  `reconcile_attempt_timeout` を `merge_id` つきで 1 回ログに出し、その試行を次の走査の後ろへ回す（1 件が 45 秒の走査を
+  使い切らない）。
+- **doctor の `failed` は直近 24 時間（改訂: 上の 1 回目の節の「7 日」）**: 対処の済んだ失敗が doctor を長く赤くしないように、
+  新しい表は足さずに数える範囲を 24 時間にした。それより古い `failed` は runbook の SQL で見る。doctor の期限は serve と同じ
+  `MergeTimeouts::default()` から作る（R4 では設定の鍵が無い。鍵を足すときは serve とこの検査の両方がそれを読む）。
+- **ロックの下の git の読み取り**: `merge-tree`、CAS の負けの読み直し、照合の ref の読み取りと祖先の確認も、ロックの保持の残りで
+  抑え、残りが 0 なら起動しない（再試行）。ref が動いた後の記録（tx2）だけは保持の残りで断らない: push の記録のコミットの一覧は
+  残りの時間で取り、残りが無ければ一覧なし（`commits_truncated`、warn）で記録する。
+- **ハートビート**: `forge.serve.merge_reconcile_pass` を info（1 分に 1 回）にし、forge-review の同じ意味の debug のイベントは
+  消した。生きていることの信号はこのハートビートと doctor の `review.merges`。照合が何かを片付けた回の
+  `forge.review.merge_reconciled`（結果の件数）は別の意味なので残す。
+- **配布の注意**: 既定のメッセージを要求の時点で固める変更（1 回目）より前に積まれた試行は `message` が空で、ジョブの時点の
+  タイトルと説明を使う。配布の前にマージのキューを空にする（`queued` / `prepared` / `executing` の試行が無いことを確かめる）。
+  手順は runbook `merge-execution` の「配布の前に」。
