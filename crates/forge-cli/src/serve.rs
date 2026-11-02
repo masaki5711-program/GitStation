@@ -81,6 +81,18 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         // the database (forge-web reads both through forge-core traits).
         let smart_http = smart_http.with_push(Arc::new(db.clone()), Arc::new(db.clone()));
         let push_tasks = smart_http.push_tasks();
+        // M3 R4 (ADR-0024 §4.2): the merge job runs here, next to the browse
+        // cache its ref writes invalidate (`serve_merges`).
+        let merger = Arc::new(
+            forge_review::Merger::new(
+                db.clone(),                 // clone: the pool handle is shared
+                smart_http.git.clone(),     // clone: Arc handles
+                smart_http.storage.clone(), // clone: the root path
+            )
+            .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+        );
+        let (merge_stop, merge_stopped) = tokio::sync::watch::channel(false);
+        let merge_task = crate::serve_merges::spawn(&db, merger, merge_stopped)?;
         let oidc = crate::oidc::service(cfg, &db)?;
         let mut state = app_state(&db, database, cfg.web.session_idle, oidc.as_ref())
             .with_web_origin(&web_origin)
@@ -162,6 +174,21 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             forge_web::server::shutdown_signal(),
         )
         .await;
+        // The merge in progress gets its grace, then is released (an
+        // `executing` attempt is the reconciliation's after the restart).
+        // No receiver left means the runner already ended.
+        let _ = merge_stop.send(true);
+        if tokio::time::timeout(MERGE_SHUTDOWN_WAIT, merge_task)
+            .await
+            .is_err()
+        {
+            forge_core::telemetry::log_failure(
+                &forge_errors::ForgeError::new(forge_errors::ErrorCode::ServeFailed)
+                    .with_context("operation", "merge_runner_pending")
+                    .with_context("wait_ms", MERGE_SHUTDOWN_WAIT.as_millis()),
+                &forge_core::RequestId::generate(),
+            );
+        }
         // A receive-pack whose body was complete runs on in its own task
         // (and records the push afterwards): let it finish before the
         // runtime and the database pool go away.
@@ -180,6 +207,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
         Ok(String::new())
     })
 }
+
+/// How long a shutdown waits for the merge runner (its grace, the abort
+/// wait and the hand-back of the job).
+const MERGE_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a shutdown waits for running pushes (their git, then their
 /// record: 30 s of retries at most).

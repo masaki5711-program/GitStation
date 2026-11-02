@@ -9,7 +9,9 @@
 //! `…/mergeability` (`MergeRequestRead`), and (M3 R3, `discussions.rs`)
 //! the discussions: `GET|POST …/{iid}/discussions`, `POST
 //! …/discussions/{discussion_id}/notes` (`MergeRequestComment`) and
-//! `…/resolve`, `…/unresolve` (`DiscussionResolve`). Reading and listing are
+//! `…/resolve`, `…/unresolve` (`DiscussionResolve`), and (M3 R4,
+//! `merges.rs`) `POST|GET …/{iid}/merge` (`MergeRequestMerge` /
+//! `MergeRequestRead`: queue a merge, read the latest attempt). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -46,6 +48,7 @@ mod discussion_loaders;
 mod discussions;
 mod loaders;
 mod mergeability;
+mod merges;
 mod versions;
 
 pub use discussion_loaders::{
@@ -63,6 +66,10 @@ pub use loaders::{
     COMPARE_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
 };
 pub use mergeability::{mergeability, MergeabilityBody};
+pub use merges::{
+    merge, merge_status, MergeAttemptBody, MergeMergeRequest, MergeRequestToMerge, MergeStatusBody,
+    MergeStatusOf, MAX_BODY as MERGE_MAX_BODY, MERGE,
+};
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,
     VersionsBody, COMPARE, COMPARE_QUERY, MERGEABILITY, VERSIONS, VERSION_DIFF,

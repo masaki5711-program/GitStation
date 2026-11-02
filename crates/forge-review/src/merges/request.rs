@@ -75,6 +75,18 @@ impl Review {
         self
     }
 
+    /// The protection in effect on `target` of `project` (the push path's
+    /// rules, strictest first; `None`: unprotected) — what the merge route's
+    /// loader decides with (ADR-0024 §4.3).
+    pub async fn target_protection(
+        &self,
+        project: forge_core::ProjectId,
+        target: &forge_core::RefName,
+    ) -> Result<Option<RefProtection>, ForgeError> {
+        let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
+        Ok(RefProtection::effective(rules.levels(target)))
+    }
+
     /// The latest merge attempt of merge request `mr` (`None`: never asked).
     pub async fn latest_merge(
         &self,
@@ -150,7 +162,7 @@ impl Review {
             credential,
         };
         let sha = &ask.sha;
-        let wanted_check = std::cell::Cell::new(false);
+        let wanted_check = std::sync::atomic::AtomicBool::new(false);
         let decided =
             merges::request_merge_mr_decided(&self.db, &ctx, (project, iid), user, &new, |gate| {
                 let mr = locked(&gate.facts)?;
@@ -194,13 +206,15 @@ impl Review {
                     if reasons.contains(&BlockReason::MergeabilityUnknown)
                         && wants_check(gate.mergeability.as_ref())
                     {
-                        wanted_check.set(true);
+                        wanted_check.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     blocked(&reasons)
                 })
             })
             .await;
-        if wanted_check.get() && current.state == forge_core::MergeRequestState::Open {
+        if wanted_check.load(std::sync::atomic::Ordering::Relaxed)
+            && current.state == forge_core::MergeRequestState::Open
+        {
             // A merge waiting on the check asks for one (ADR-0024 R2: "マー
             // ジの要求のときに積むのは R4"); failing to ask is logged, the
             // answer is the refusal either way.

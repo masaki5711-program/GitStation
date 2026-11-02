@@ -494,6 +494,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's latest merge attempt (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_merge"];
+        put?: never;
+        /** Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_merge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {
         parameters: {
             query?: never;
@@ -1407,6 +1425,67 @@ export interface components {
              */
             next_after: number | null;
         };
+        /**
+         * @description One merge attempt (ADR-0024 §4.2): `queued` → `prepared` → `executing`
+         *     → `applied`, or `superseded` / `failed`.
+         */
+        MergeAttemptBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            delete_source_branch: boolean;
+            /** @description The error code of a superseded or failed attempt. */
+            error_code: string | null;
+            /** @description The target's tip the merge was built on (from `prepared`). */
+            expected_old: string | null;
+            finished_at: string | null;
+            /** @description The head the requester asked to merge. */
+            head_sha: string;
+            /** Format: int64 */
+            iid: number;
+            /** Format: int64 */
+            merge_id: number;
+            /** @description `merge_commit`, `squash` or `fast_forward`. */
+            method: string;
+            /** @description The commit the target moves to (from `prepared`). */
+            new_sha: string | null;
+            /** @description Why it was superseded or failed (`conflict`, `target_moved`, …). */
+            reason: string | null;
+            /** @description The request that asked for the merge (the job's log lines carry it). */
+            request_id: string;
+            /**
+             * @description After `applied` with `delete_source_branch`: `deleted`,
+             *     `kept_refused`, `kept_moved` or `kept_failed`.
+             */
+            source_outcome: string | null;
+            /** @description `queued`, `prepared`, `executing`, `applied`, `superseded` or `failed`. */
+            state: string;
+            /** @description The target branch without `refs/heads/`. */
+            target_branch: string;
+            updated_at: string;
+        };
+        /** @description `POST …/merge-requests/{iid}/merge`. */
+        MergeMergeRequest: {
+            /**
+             * @description Delete the source branch after the merge (decided as a branch delete
+             *     of the requester: a protected branch is kept). Absent: `false`.
+             */
+            delete_source_branch?: boolean | null;
+            /**
+             * @description The commit message (1 character to 64 KiB); absent: built from the
+             *     merge request's title and description.
+             */
+            message?: string | null;
+            /**
+             * @description `merge_commit` or `squash` (`fast_forward` when the project allows
+             *     it); absent: the project's default (`merge_commit`).
+             */
+            method?: string | null;
+            /**
+             * @description The head commit the requester reviewed (required): a merge request
+             *     whose head is another commit is refused (FG-REVIEW-0008 stale_view).
+             */
+            sha: string;
+        };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
             /** Format: int64 */
@@ -1446,6 +1525,12 @@ export interface components {
              * @description Pass as `before` for the next page; `null` on the last page.
              */
             next_before?: number | null;
+        };
+        /** @description The latest merge attempt of a merge request (`null`: never asked). */
+        MergeStatusBody: {
+            /** Format: int64 */
+            iid: number;
+            merge: null | components["schemas"]["MergeAttemptBody"];
         };
         /** @description What the mergeability check last stored. */
         MergeabilityBody: {
@@ -3300,6 +3385,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DiscussionBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeStatusBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_merge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergeMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeAttemptBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

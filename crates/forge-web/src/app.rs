@@ -938,6 +938,27 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::unresolve_discussion,
         )
         .responds::<mr::DiscussionBody>(Verb::Post, mr::UNRESOLVE)
+        // M3 R4 (ADR-0024 §4): queue a merge (202, the job runs it) and read
+        // the latest attempt.
+        .route_with_body(
+            Verb::Post,
+            mr::MERGE,
+            Action::MergeRequestMerge,
+            "Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job",
+            mr::MERGE_MAX_BODY,
+            mr::MergeRequestToMerge,
+            mr::merge,
+        )
+        .responds_accepted::<mr::MergeAttemptBody>(Verb::Post, mr::MERGE)
+        .route_with(
+            Verb::Get,
+            mr::MERGE,
+            Action::MergeRequestRead,
+            "A merge request's latest merge attempt (as the repository browse API)",
+            mr::MergeStatusOf,
+            mr::merge_status,
+        )
+        .responds::<mr::MergeStatusBody>(Verb::Get, mr::MERGE)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

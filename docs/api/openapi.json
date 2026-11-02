@@ -1189,6 +1189,147 @@
         ],
         "type": "object"
       },
+      "MergeAttemptBody": {
+        "additionalProperties": false,
+        "description": "One merge attempt (ADR-0024 §4.2): `queued` → `prepared` → `executing`\n→ `applied`, or `superseded` / `failed`.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "delete_source_branch": {
+            "type": "boolean"
+          },
+          "error_code": {
+            "description": "The error code of a superseded or failed attempt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_old": {
+            "description": "The target's tip the merge was built on (from `prepared`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "description": "The head the requester asked to merge.",
+            "type": "string"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merge_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "method": {
+            "description": "`merge_commit`, `squash` or `fast_forward`.",
+            "type": "string"
+          },
+          "new_sha": {
+            "description": "The commit the target moves to (from `prepared`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it was superseded or failed (`conflict`, `target_moved`, …).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "description": "The request that asked for the merge (the job's log lines carry it).",
+            "type": "string"
+          },
+          "source_outcome": {
+            "description": "After `applied` with `delete_source_branch`: `deleted`,\n`kept_refused`, `kept_moved` or `kept_failed`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`queued`, `prepared`, `executing`, `applied`, `superseded` or `failed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "The target branch without `refs/heads/`.",
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "merge_id",
+          "iid",
+          "state",
+          "method",
+          "head_sha",
+          "target_branch",
+          "delete_source_branch",
+          "expected_old",
+          "new_sha",
+          "reason",
+          "error_code",
+          "source_outcome",
+          "request_id",
+          "created_at",
+          "updated_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "MergeMergeRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-requests/{iid}/merge`.",
+        "properties": {
+          "delete_source_branch": {
+            "description": "Delete the source branch after the merge (decided as a branch delete\nof the requester: a protected branch is kept). Absent: `false`.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "The commit message (1 character to 64 KiB); absent: built from the\nmerge request's title and description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "method": {
+            "description": "`merge_commit` or `squash` (`fast_forward` when the project allows\nit); absent: the project's default (`merge_commit`).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha": {
+            "description": "The head commit the requester reviewed (required): a merge request\nwhose head is another commit is refused (FG-REVIEW-0008 stale_view).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
       "MergeRequestBody": {
         "additionalProperties": false,
         "description": "One merge request as the API shows it.",
@@ -1293,6 +1434,32 @@
         },
         "required": [
           "merge_requests"
+        ],
+        "type": "object"
+      },
+      "MergeStatusBody": {
+        "additionalProperties": false,
+        "description": "The latest merge attempt of a merge request (`null`: never asked).",
+        "properties": {
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "merge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeAttemptBody"
+              }
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "merge"
         ],
         "type": "object"
       },
@@ -4608,6 +4775,113 @@
         },
         "summary": "Unresolve a discussion (as resolving)",
         "x-forge-action": "DiscussionResolve"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/merge": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's latest merge attempt (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_merge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeAttemptBody"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Merge a merge request (people only; the target branch's push role; a token needs merge_execute). Queues the merge job",
+        "x-forge-action": "MergeRequestMerge",
+        "x-forge-max-body-bytes": 65536
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {
