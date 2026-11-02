@@ -41,6 +41,8 @@ clone 済みの手元、ミラー（O2）、バックアップには写しが残
    - 開いている MR: 秘密を含む版だけを指定する（今の head は指定できない: FG-REVIEW-0002）。
      本文 `{"versions": [1, 2]}`
    - クローズ・マージ済みの MR: 本文 `{}`（すべての版）も可
+   - プロジェクトが **削除待ち** なら、どの要求も FG-REPO-0006 になる。先にプロジェクトを復元する（Owner の
+     `POST /api/v1/projects/{id}/restore`）か、完全削除（purge）を待つ（リポジトリごと消える）。
    - ブラウザのセッションで（CSRF トークン付き）`POST /api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge`。
      答え `{"iid", "purged", "already_purged"}`。監査の行 `merge_request.version_refs_purged`（`versions`）と
      ログ `event=forge.review.version_refs_purged` が残る。

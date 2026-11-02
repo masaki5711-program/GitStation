@@ -51,12 +51,15 @@ merge request in place (ADR-0024 §1).
   the reopen compares the source's head with the purged versions);
   `versions::refresh(&Db, &VersionRefs, RefreshRequest, &RequestId) -> RefreshReport` (the
   body of the job `merge_request.refresh`: read the source tip, record the version, sync the
-  refs; log `forge.review.version_refreshed`); `VersionRefs::{new, with_browser, sync,
-  branch_tip}` (the ref sync: one `update-ref` transaction from the committed rows,
-  `plan_ref_changes` is the pure planner, a lost CAS planned again once,
+  refs; log `forge.review.version_refreshed`); `VersionRefs::{new, with_browser, sync, sync_locked,
+  branch_tip}` (the ref sync under the merge request's refs lock — the job holds it for its
+  whole run, so two runs never interleave —, every git call bounded by what is left of the
+  hold: one `update-ref` transaction from the committed rows,
+  `plan_ref_changes` is the pure planner, a refused transaction logged at warn
+  (`forge.review.version_refs_retry`) and planned again once,
   `forge.review.version_ref_reclaimed` for an unclaimed `v<n>`, `Browser::invalidate` when
   it holds one); `Review::with_version_refs` and `purge_version_refs(request, proof, repo,
-  versions) -> PurgeOutcome` (`MergeRequestVersionRefsPurge`, a human administrator's
+  versions) -> PurgeOutcome` (`src/purge.rs`) (`MergeRequestVersionRefsPurge`, a human administrator's
   session; log `forge.review.version_refs_purged`).
 
 **Error codes owned**: FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from

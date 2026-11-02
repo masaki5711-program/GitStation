@@ -695,9 +695,18 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
   `pushed_by` は push の actor）→ ref を同期。同じ head の再実行は何も書かない（2 つ目のイベントも出ない）。
 - **同じ SHA に戻った**（A → B → A）: 一意 `(merge_request_id, head_sha)` があるので版は足さず、その版を head に戻す。
   監査だけの `merge_request.head_restored`（イベントは出さない。`merge_request_pushed:<id>:<sha>` は既にある）。
-- **ref の同期**（`VersionRefs::sync`）: 版の行を `FOR SHARE` でロックしたまま、ref を読んで 1 回の `update-ref` の transaction
-  （`start` / `prepare` / `commit`、`core.hooksPath` は空のディレクトリ、時間切れ付き）。Purge の `UPDATE … refs_purged_at` は同じ行の
-  ロックを要るので、同期と Purge は交差しない（MR の行はロックしない: 編集を git で待たせない）。既に目的の値なら何もしない。
+- **ref の同期**（`VersionRefs::sync_locked`）: ref を読んで 1 回の `update-ref` の transaction（`start` / `prepare` / `commit`、
+  `core.hooksPath` は空のディレクトリ）。**MR ごとのロック**（`lock_version_refs`: `pg_advisory_xact_lock` を
+  `merge_request_refs:<mr_id>` に。待ちは 10 秒まで（超えたら FG-DB-0002、ジョブは再試行）、持つのは 45 秒まで）の下で行う。
+  版のジョブは先端の読み取り・版の行・同期の **全体** でロックを持つ（独立のレビューで MEDIUM: 2 つのジョブが交差すると、
+  A が古い先端を読み、B が v3 を書いて同期した後で、A が `head` を戻しうる）。Purge は印のコミットの後の同期でロックを取る。
+  Purge の印が同期の最中にコミットされても、その同期が書いた ref は Purge 自身の同期（ロックを待つ）が消し、以後の同期は印を読む。
+  MR の行も版の行もロックしない（編集を git で待たせない）。git の呼び出しはどれも「ロックを持てる残りの時間」（最大 20 秒）で
+  抑えるので、遅い git は FG-GIT-0002 になる。ref を書く直前にロックの接続が生きていることを確かめる（`RefsLock::alive`）。
+  ロックの間は書き込みのプールの接続を 1 本（トランザクションの中で待機）、加えて短い文に 1 本を使う。worker はジョブを 1 つずつ
+  実行し、serve は Purge の要求ごとに 1 回なので、同時に走る数 × 2 本をプールの大きさに見込む。拒まれた transaction（手で ref が
+  動いた、ロックを失った）は warn で 1 回ログに出し（`forge.review.version_refs_retry`、`request_id`・`error_code`）、読み直して
+  1 回だけ計画し直す。既に目的の値なら何もしない。
   行が主張しない値の `v<n>` は CAS で取り戻し `forge.review.version_ref_reclaimed`（info）。行を先に書く設計では `v<n>` を主張できる
   行は `n` の行だけなので、§2 の「別の行が主張していれば積み直す」は起こらない。Purge 済みの版の ref は消し、書かない。
   `refs/merge-requests/<iid>/` の下の他の名前（`merge` など）には触れない。
@@ -707,8 +716,17 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 - **Purge**: `POST /api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge`、本文 `{"versions": [n, …]}`（省略 = すべて）。
   開いている MR で今の head の版を含めば FG-REVIEW-0002 `purge_requires_closed_or_rewritten`。印（`refs_purged_at`、一度だけ。
   ガード `merge_request_versions_guard`）を先にコミットし、その後に ref を消す（消すのに失敗しても、もう一度頼めば消える）。
-  Purge 済みの head に source が force push で戻っても head にしない（`purged_head`）。再オープンは source の先端が Purge 済みの
+  Purge 済みの head に source が force push で戻っても head にしない（`purged_head`）。その事実は監査だけの行
+  `merge_request.purged_head_pushed` と warn のログ `forge.review.purged_head_pushed` に残す（独立のレビュー）。このとき
+  ブランチの先端と MR の記録した head は食い違うので、**R4 のマージは、ブランチの先端が記録した head と違えば拒む**
+  （HeadChanged `source_moved`）。再オープンは source の先端が Purge 済みの
   版なら FG-REVIEW-0002 `reopen_at_purged_head`。gstn は `BrowserOnly`（`SessionOnly` でトークンを持つ gstn は届かない）。
+- **途中の先端**: 2 回のジョブの間にだけ source が指したコミット（push の直後に force push で消えた、ジョブが先端を読む前）は
+  版にならず、版の ref も持たない（ジョブは実行の時点の先端だけを読む）。レビューの対象は版になった head だけ。
+- **扇の広がり**: 1 回の push で積むジョブは最大 500（最近更新された MR の順）。超えたら warn
+  `forge.review.refresh_fanout_capped` を 1 回出し、残りはそれぞれの次の push・作成・再オープンで確かめ直す。
+- **`deepen-not`**: upload-pack の要求の `deepen-not` が `merge-requests/` を含む名前（git の DWIM で隠した ref に解決される）なら
+  FG-GIT-0014 `deepen_not_hidden` で拒む（v0 / v2）。
 - **AccountKind**: `Principal` への `AccountKind` の追加は R5（承認）に送った。`MergeRequestVersionRefsPurge` は `SessionOnly` で、
   サービスアカウントとボットはセッションを持てない（サインインが `not_human` で拒む）ので、トークンの deny の行（`admin` スコープ、
   エージェントの `admin` トークンを含む）がそのまま彼らの deny になる。人だけの arm（`people_only`）も通す。

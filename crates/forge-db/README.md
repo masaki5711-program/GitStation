@@ -271,10 +271,12 @@ connection, mapping driver errors to registered codes, migrations
   VersionOutcome` (the version job's write: row FIRST under the merge request's lock, `max +
   1`, `merge_request.pushed` deduplicated by `merge_request_pushed:<id>:<head_sha>`; an older
   head again is the audit-only `merge_request.head_restored`; `AlreadyHead` / `PurgedHead` /
-  `NotOpen` / `Gone` write nothing), `list_versions`, `refresh_target`, `refresh_job` /
+  `NotOpen` / `Gone` write nothing; `PurgedHead` writes only the audit-only
+  `merge_request.purged_head_pushed`), `list_versions`, `refresh_target`, `refresh_job` /
   `refresh_payload` (job `merge_request.refresh`, dedup `mr_refresh:<id>:opened` /
-  `reopened:<rev>` / `push:<seq>`), `with_versions_locked` (version rows `FOR SHARE` around
-  forge-review's ref sync), `purge_mr_version_refs_decided` (marks `refs_purged_at`, audit-only
+  `reopened:<rev>` / `push:<seq>`), `lock_version_refs` (the per merge request refs lock:
+  `pg_advisory_xact_lock` on `merge_request_refs:<id>`, waited ≤ 10 s, held ≤ 45 s, proven by
+  `RefsLock::alive` before a ref write; `versions_snapshot` reads under it), `purge_mr_version_refs_decided` (marks `refs_purged_at`, audit-only
   `merge_request.version_refs_purged`; FG-REVIEW-0002 `purge_requires_closed_or_rewritten`).
   `open_mr_decided` / `reopen_mr_decided` enqueue the version job; `reopen_mr_decided` takes the
   source's head and refuses a purged one (FG-REVIEW-0002 `reopen_at_purged_head`). The
