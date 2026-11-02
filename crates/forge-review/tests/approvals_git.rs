@@ -980,3 +980,161 @@ async fn missing_and_disabled_accounts_answer_alike() {
     );
     w.t.drop_now().await;
 }
+
+impl World {
+    /// One push record of `updates` (ref, new) by `who`, each listing its
+    /// new commit (`total` new commits each: more than one cuts the list).
+    async fn record_push_refs(
+        &self,
+        who: UserId,
+        updates: &[(String, String)],
+        total: u64,
+        request_id: &str,
+    ) {
+        let zero = "0".repeat(40);
+        let push = PushRecord {
+            repository_id: self.repo,
+            updates: updates
+                .iter()
+                .map(|(name, new)| PushedRef {
+                    name: RefName::parse(&format!("refs/heads/{name}")).expect("ref"),
+                    old: oid(&zero),
+                    new: oid(new),
+                    kind: PushUpdateKind::Create,
+                    commits: vec![oid(new)],
+                    total_commits: total,
+                    total_commits_partial: false,
+                })
+                .collect(),
+        };
+        let ctx = ChangeContext::new(Actor::User(who), RequestId::parse(request_id).expect("id"));
+        let recorded = repositories::record_push(&self.t.db, &ctx, &push)
+            .await
+            .expect("push record");
+        assert_eq!(recorded, forge_core::PushRecorded::Recorded);
+    }
+
+    async fn state(&self) -> forge_review::approvals::ApprovalState {
+        self.review
+            .approval_state(
+                &RequestId::parse("req-state").expect("id"),
+                &self
+                    .mr_proof(&session(self.rita), Action::MergeRequestRead)
+                    .await
+                    .expect("proof"),
+                ready(self.repo),
+            )
+            .await
+            .expect("state")
+    }
+}
+
+/// R5 re-review round 2 (HIGH): rita pushes 101 refs in one push; the last
+/// one (by name) points at the merge request's head, so the record's list
+/// of 100 refs leaves it out. dave's own record names the head. Rita's
+/// approval must not count.
+#[tokio::test]
+async fn a_ref_beyond_the_listed_hundred_still_makes_a_committer() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let mut updates: Vec<(String, String)> = (0..100)
+        .map(|n| (format!("a{n:03}"), w.base.clone()))
+        .collect();
+    updates.push(("zzz".to_owned(), w.head.clone()));
+    w.record_push_refs(w.rita, &updates, 1, "req-push-many-refs")
+        .await;
+    w.rule(1, &[]).await;
+    let answer = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        answer.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::Committer)
+        }
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 re-review round 2 (HIGH): 41 large (cut) pushes of unrelated
+/// branches cost one git call, not one per push: the state route's budget
+/// (32 calls) holds and rita's approval counts.
+#[tokio::test]
+async fn many_large_pushes_do_not_exhaust_the_budget() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    for n in 0..41 {
+        let side = commit(
+            &w.path,
+            &[("README.md", "base\n"), ("side.txt", &format!("{n}\n"))],
+            Some(&w.base),
+        );
+        plumb(
+            &w.path,
+            &["update-ref", &format!("refs/heads/side{n}"), &side],
+            None,
+        );
+        w.record_push_refs(
+            w.dave,
+            &[(format!("side{n}"), side)],
+            25,
+            &format!("req-push-side-{n}"),
+        )
+        .await;
+    }
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    assert!(report.approvals[0].counted);
+    w.t.drop_now().await;
+}
+
+/// R5 re-review round 2 (HIGH): a changed path over 4 KiB is never matched:
+/// `changed_paths_unknown reason=path_too_long`.
+#[tokio::test]
+async fn a_changed_path_over_four_kib_fails_closed() {
+    let long = "a".repeat(4097);
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), (long.as_str(), "x\n")],
+    )
+    .await;
+    let report = w.state().await.report.expect("report");
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.detail().as_deref() == Some("reason=path_too_long")),
+        "{:?}",
+        report.blocks
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 re-review round 2 (MEDIUM): the approval state says when the head no
+/// longer merges cleanly, so a conflicting merge request never looks
+/// approved.
+#[tokio::test]
+async fn the_approval_state_reports_a_conflict() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    assert!(!w.state().await.conflict);
+    let clash = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("f.txt", "clash\n")],
+        Some(&w.base),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &clash], None);
+    w.browser.invalidate(w.repo);
+    assert!(w.state().await.conflict);
+    w.t.drop_now().await;
+}

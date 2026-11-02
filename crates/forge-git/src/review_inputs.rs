@@ -182,6 +182,66 @@ impl Git {
         }))
     }
 
+    /// The commits reachable from any of `tips` and not from `exclude`,
+    /// each with its parents — one `rev-list --parents --stdin` (the tips
+    /// and `^<exclude>` on stdin, validated object ids only), at most `cap`
+    /// commits (`None` beyond). The committer rule decides in memory which
+    /// tips reach the range (R5 review round 2: one call, not one per tip
+    /// and bottom). A tip that is not in the repository fails the call
+    /// (`FG-GIT-0003`): never read as "reaches nothing".
+    pub async fn commit_graph(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        tips: &[ObjectId],
+        exclude: &ObjectId,
+        cap: usize,
+        timeout: Duration,
+    ) -> Result<Option<Vec<(ObjectId, Vec<ObjectId>)>>, ForgeError> {
+        if tips.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let repo = Self::repo_dir(storage, id)?;
+        let mut input = String::with_capacity((tips.len() + 1) * 66);
+        for tip in tips {
+            input.push_str(Revision::object_id(tip.as_str())?.as_str());
+            input.push('\n');
+        }
+        input.push_str(Revision::object_id(exclude.as_str())?.excluding().as_str());
+        input.push('\n');
+        // 2 + parents ids of 41 bytes a line; a little headroom per commit.
+        let max_bytes = cap.saturating_add(1).saturating_mul(4 * 65);
+        let (output, truncated) = self
+            .command("rev-list")
+            .arg("--parents")
+            .arg("--stdin")
+            .arg("-n")
+            .arg_owned(cap.saturating_add(1).to_string())
+            .repo(&repo)
+            .stdin(input.into_bytes())
+            .timeout(timeout)
+            .output_truncated(max_bytes)
+            .await
+            .map_err(|e| e.with_context("repo_id", id.get()))?;
+        if truncated {
+            return Ok(None);
+        }
+        let mut rows = Vec::new();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut ids = line.split_ascii_whitespace().map(|raw| {
+                ObjectId::parse(raw).map_err(|_| unexpected("rev-list", "unexpected_output"))
+            });
+            let Some(commit) = ids.next() else {
+                continue;
+            };
+            rows.push((commit?, ids.collect::<Result<Vec<_>, _>>()?));
+        }
+        if rows.len() > cap {
+            return Ok(None);
+        }
+        Ok(Some(rows))
+    }
+
     /// The CODEOWNERS file of `commit` (module docs), at most `max_bytes`.
     pub async fn codeowners_file(
         &self,

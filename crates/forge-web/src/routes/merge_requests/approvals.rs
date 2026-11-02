@@ -165,6 +165,10 @@ pub struct ApprovalStateBody {
     #[schema(required = true)]
     pub config_change_approved: Option<bool>,
     pub blocked_by: Vec<BlockBody>,
+    /// The trial merge of the head into the target's tip conflicts now:
+    /// the merge request cannot merge whatever the approvals say (the
+    /// conflict itself is the mergeability's and the merge's to report).
+    pub conflict: bool,
 }
 
 /// `PUT …/approval-rules/{name}`.
@@ -261,6 +265,7 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
             codeowners: Vec::new(),
             config_change_approved: None,
             blocked_by: Vec::new(),
+            conflict: s.conflict,
         };
     };
     ApprovalStateBody {
@@ -309,6 +314,7 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
                 detail: b.detail(),
             })
             .collect(),
+        conflict: s.conflict,
     }
 }
 

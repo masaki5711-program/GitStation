@@ -274,6 +274,10 @@
               "null"
             ]
           },
+          "conflict": {
+            "description": "The trial merge of the head into the target's tip conflicts now:\nthe merge request cannot merge whatever the approvals say (the\nconflict itself is the mergeability's and the merge's to report).",
+            "type": "boolean"
+          },
           "head_sha": {
             "description": "The merge request's head (`null` before its first version: nothing\nto approve, nothing evaluated).",
             "type": [
@@ -304,7 +308,8 @@
           "rules",
           "codeowners",
           "config_change_approved",
-          "blocked_by"
+          "blocked_by",
+          "conflict"
         ],
         "type": "object"
       },

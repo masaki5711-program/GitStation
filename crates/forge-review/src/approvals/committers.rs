@@ -15,9 +15,15 @@
 //!    even when the commits it reaches are named by another record (R5
 //!    review HIGH: Bob pushes B1..B21 in one push, B1 drops off the list;
 //!    Alice creating `feature` at B1 must not make Bob's approval count).
-//!    Reaching is asked of git (`merge-base --is-ancestor <bottom> <new>`);
-//!    more than [`MAX_PARTIAL_CHECKS`] reaching updates, or an answer git
-//!    could not give, is unknown.
+//!    Reaching is decided in memory on one `rev-list --parents --stdin` of
+//!    every cut update's `new` beyond the target tip (R5 re-review round 2:
+//!    one git call, whatever the number of large pushes); more than
+//!    [`MAX_PARTIAL_CHECKS`] reaching updates, or a graph git could not
+//!    give, is unknown.
+//!    The ref updates a record did not list (more than 100 refs) are kept
+//!    in `push_unlisted_refs` and come here as cut updates; an older record
+//!    with cut refs and none kept makes the committers unknown (R5 re-review
+//!    round 2).
 //! 4. A range commit no record names must be reached by a cut update (its
 //!    possible introducer); otherwise — no record at all (retention, a
 //!    failed record, a hand-moved ref), or a record whose ref list was cut —
@@ -36,6 +42,89 @@ use super::evaluate::Committers;
 pub const MAX_RANGE_COMMITS: usize = 1_000;
 /// The most cut ref updates that may reach the range.
 pub const MAX_PARTIAL_CHECKS: usize = 16;
+
+/// The most commits of the graph of the cut updates' tips beyond the
+/// target tip (`push_graph_too_large` beyond: unknown).
+pub const MAX_GRAPH_COMMITS: usize = 50_000;
+
+/// The answers of step 3 from `graph` — the commits reachable from the cut
+/// updates' tips and not from the target tip, with their parents (one
+/// `rev-list --parents --stdin`): a tip outside the graph reaches nothing of
+/// the range (it is reachable from the target tip); a tip in it reaches the
+/// range when a range commit is among its ancestors in the graph. The range
+/// commits a reaching tip reaches are listed for its first
+/// [`MAX_PARTIAL_CHECKS`] + 1 tips (more is unknown anyway).
+pub fn reach_in(
+    graph: &[(ObjectId, Vec<ObjectId>)],
+    range: &[ObjectId],
+    coverage: &PushCoverage,
+) -> BTreeMap<usize, Reach> {
+    let parents: BTreeMap<&ObjectId, &[ObjectId]> =
+        graph.iter().map(|(c, p)| (c, p.as_slice())).collect();
+    let in_range: BTreeSet<&ObjectId> = range.iter().collect();
+    // reaches[c]: c is, or has as an ancestor, a range commit (iterative
+    // post-order over the graph: no recursion depth).
+    let mut reaches: BTreeMap<&ObjectId, bool> = BTreeMap::new();
+    for (start, _) in graph {
+        if reaches.contains_key(start) {
+            continue;
+        }
+        let mut stack: Vec<(&ObjectId, bool)> = vec![(start, false)];
+        while let Some((node, expanded)) = stack.pop() {
+            if reaches.contains_key(node) {
+                continue;
+            }
+            let ps = parents.get(node).copied().unwrap_or(&[]);
+            if expanded {
+                let value = in_range.contains(node)
+                    || ps.iter().any(|p| reaches.get(p).copied().unwrap_or(false));
+                reaches.insert(node, value);
+            } else {
+                stack.push((node, true));
+                for p in ps {
+                    if parents.contains_key(p) && !reaches.contains_key(p) {
+                        stack.push((p, false));
+                    }
+                }
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    let mut listed = 0;
+    for index in cut_entries(coverage) {
+        let Some(new) = coverage.entries.get(index).and_then(|e| e.new.as_ref()) else {
+            continue;
+        };
+        if !reaches.get(new).copied().unwrap_or(false) {
+            out.insert(index, Reach::No);
+            continue;
+        }
+        listed += 1;
+        if listed > MAX_PARTIAL_CHECKS + 1 {
+            out.insert(index, Reach::Yes(None));
+            continue;
+        }
+        // The range commits among its ancestors.
+        let mut seen: BTreeSet<&ObjectId> = BTreeSet::new();
+        let mut stack = vec![new];
+        let mut set = BTreeSet::new();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            if in_range.contains(node) {
+                set.insert(node.clone()); // clone: the answer owns its ids
+            }
+            for p in parents.get(node).copied().unwrap_or(&[]) {
+                if parents.contains_key(p) {
+                    stack.push(p);
+                }
+            }
+        }
+        out.insert(index, Reach::Yes(Some(set)));
+    }
+    out
+}
 
 /// Whether a cut ref update's `new` reaches the range (git's answer).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +174,13 @@ pub fn committers_of(
     if coverage.over_cap {
         return Committers::Unknown("push_records_over_cap");
     }
+    // R5 re-review round 2 (HIGH): a record whose refs were cut and whose
+    // unlisted refs were not kept (written before push_unlisted_refs) may
+    // have carried a range commit on a ref nobody can see: unknown, even
+    // when every range commit is named elsewhere.
+    if coverage.refs_truncated {
+        return Committers::Unknown("push_record_truncated");
+    }
     let range_set: BTreeSet<&ObjectId> = range.iter().collect();
     let mut pushers: BTreeMap<forge_core::ids::UserId, i64> = BTreeMap::new();
     // Step 2.
@@ -125,9 +221,6 @@ pub fn committers_of(
     let missing = unnamed(range, coverage);
     if missing.is_empty() {
         return Committers::Known(pushers);
-    }
-    if coverage.refs_truncated {
-        return Committers::Unknown("push_record_truncated");
     }
     for commit in &missing {
         let mut found = false;
@@ -277,6 +370,54 @@ mod tests {
             committers_of(&range, &coverage, &nobody),
             Committers::Unknown("push_record_missing")
         );
+    }
+
+    /// R5 re-review round 2 (HIGH): an old record whose refs were cut makes
+    /// the committers unknown even when every range commit is named.
+    #[test]
+    fn a_record_with_cut_refs_is_unknown_even_when_every_commit_is_named() {
+        let range = [oid('a')];
+        let coverage = PushCoverage {
+            entries: vec![entry(11, 1, 'a', &['a'], false)],
+            refs_truncated: true,
+            ..PushCoverage::default()
+        };
+        assert_eq!(
+            committers_of(&range, &coverage, &BTreeMap::new()),
+            Committers::Unknown("push_record_truncated")
+        );
+    }
+
+    /// R5 re-review round 2: the graph answers every cut update at once —
+    /// a tip outside it reaches nothing, one in it reaches the range when a
+    /// range commit is among its ancestors there.
+    #[test]
+    fn reach_is_decided_in_memory_on_one_graph() {
+        // Range: a <- b (b is the head). A cut push to `c` on top of b;
+        // another to `f` on an unrelated side branch; one to the target.
+        let range = [oid('b'), oid('a')];
+        let graph = vec![
+            (oid('c'), vec![oid('b')]),
+            (oid('b'), vec![oid('a')]),
+            (oid('a'), vec![oid('0')]),
+            (oid('f'), vec![oid('0')]),
+        ];
+        let coverage = PushCoverage {
+            entries: vec![
+                entry(1, 2, 'c', &['c'], true),
+                entry(2, 3, 'f', &['f'], true),
+                entry(3, 4, '9', &['9'], true),
+            ],
+            ..PushCoverage::default()
+        };
+        let reach = reach_in(&graph, &range, &coverage);
+        assert_eq!(
+            reach.get(&0),
+            Some(&Reach::Yes(Some(BTreeSet::from([oid('a'), oid('b')]))))
+        );
+        assert_eq!(reach.get(&1), Some(&Reach::No));
+        assert_eq!(reach.get(&2), Some(&Reach::No), "outside the graph");
+        assert_eq!(known(&committers_of(&range, &coverage, &reach)), [2]);
     }
 
     /// No record at all (retention, a failed record): unknown.

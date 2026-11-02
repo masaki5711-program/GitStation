@@ -1171,6 +1171,12 @@ export interface components {
              */
             config_change_approved: boolean | null;
             /**
+             * @description The trial merge of the head into the target's tip conflicts now:
+             *     the merge request cannot merge whatever the approvals say (the
+             *     conflict itself is the mergeability's and the merge's to report).
+             */
+            conflict: boolean;
+            /**
              * @description The merge request's head (`null` before its first version: nothing
              *     to approve, nothing evaluated).
              */

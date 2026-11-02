@@ -609,7 +609,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn mr approvals --project 7 --iid 3 --json"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/approvals"],
-        output: r#"{"type":"object","required":["iid","head_sha","target_branch","approvals","rules","codeowners","config_change_approved","blocked_by"],"properties":{"blocked_by":{"type":"array","items":{"type":"object","required":["reason","detail"]}}}}"#,
+        output: r#"{"type":"object","required":["iid","head_sha","target_branch","approvals","rules","codeowners","config_change_approved","blocked_by","conflict"],"properties":{"blocked_by":{"type":"array","items":{"type":"object","required":["reason","detail"]}}}}"#,
     },
     CommandSpec {
         name: "mr merge-status",

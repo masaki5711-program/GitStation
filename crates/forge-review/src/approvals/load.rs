@@ -2,7 +2,7 @@
 //! [`Budget`] (module docs of `approvals`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use forge_core::ObjectId;
 use forge_db::review::{self, StoredMergeRequest};
@@ -12,11 +12,15 @@ use forge_git::mergeability::{MergeTree, MergeTreeLimits};
 use forge_git::review_inputs::{ChangedPaths, CodeownersFile};
 
 use super::codeowners::{self, Codeowners, CodeownersError, Owner};
-use super::committers::{self, Reach};
+use super::committers;
 use super::{
     warn_unread, Asker, Budget, ChangedPathsFact, CodeownersFact, Committers, GitFacts, OwnerRef,
     ReviewGit, MATCH_BUDGET, MAX_CHANGED_PATHS,
 };
+
+/// The longest changed path evaluated (a CODEOWNERS line is at most 4 KiB):
+/// longer is `changed_paths_unknown reason=path_too_long` (R5 re-review).
+pub const MAX_PATH_BYTES: usize = 4096;
 
 /// A git error's reason for an unknown fact.
 fn git_reason(e: &ForgeError) -> &'static str {
@@ -50,6 +54,12 @@ impl ReviewGit {
         budget: &mut Budget,
     ) -> Result<GitFacts, ForgeError> {
         let Some(tip) = target_tip else {
+            // R5 re-review round 2: one warn for the evaluation that cannot
+            // run (the target branch is gone).
+            let e = ForgeError::new(ErrorCode::RepositoryPathNotResolved)
+                .with_context("reason", "ref_not_found")
+                .with_context("branch", "target_branch");
+            warn_unread(asker, mr, "target_tip", &e);
             return Ok(GitFacts {
                 committers: Committers::Unknown("target_missing"),
                 changed: ChangedPathsFact::Unknown("target_missing"),
@@ -123,7 +133,19 @@ impl ReviewGit {
             )
             .await
         {
-            Ok(ChangedPaths::Complete(paths)) => ChangedPathsFact::Known(paths),
+            Ok(ChangedPaths::Complete(paths)) => {
+                // R5 re-review round 2: a path longer than a CODEOWNERS line
+                // could hold is never matched; fail closed, once.
+                if let Some(long) = paths.iter().find(|p| p.len() > MAX_PATH_BYTES) {
+                    let e = ForgeError::new(ErrorCode::GitOutputTooLarge)
+                        .with_context("reason", "path_too_long")
+                        .with_context("path_bytes", long.len())
+                        .with_context("limit", MAX_PATH_BYTES);
+                    warn_unread(asker, mr, "changed_paths", &e);
+                    return ChangedPathsFact::Unknown("path_too_long");
+                }
+                ChangedPathsFact::Known(paths)
+            }
             Ok(ChangedPaths::TooMany) => ChangedPathsFact::Unknown("too_many_paths"),
             Ok(ChangedPaths::NonUtf8) => ChangedPathsFact::Unknown("non_utf8_path"),
             Err(e) => {
@@ -175,107 +197,47 @@ impl ReviewGit {
                 return Ok(Committers::Unknown("timeout"));
             }
         };
-        let in_range: BTreeSet<&ObjectId> = range.commits.iter().collect();
-        let need_sets = !committers::unnamed(&range.commits, &coverage).is_empty();
-        let mut reach = BTreeMap::new();
-        let mut reaching = 0;
-        for index in committers::cut_entries(&coverage) {
-            let Some(new) = coverage.entries.get(index).and_then(|e| e.new.as_ref()) else {
-                continue;
-            };
-            let answer = self
-                .reaches(asker, mr, new, &range.bottoms, &in_range, budget)
-                .await;
-            if matches!(answer, Reach::Yes(_)) {
-                reaching += 1;
-                if reaching > committers::MAX_PARTIAL_CHECKS {
-                    return Ok(Committers::Unknown("too_many_partial_pushes"));
-                }
-            }
-            let answer = if need_sets && answer == Reach::Yes(None) {
-                self.reached(asker, mr, new, tip, &in_range, budget).await
-            } else {
-                answer
-            };
-            reach.insert(index, answer);
+        let cut = committers::cut_entries(&coverage);
+        if cut.is_empty() {
+            return Ok(committers::committers_of(
+                &range.commits,
+                &coverage,
+                &BTreeMap::new(),
+            ));
         }
-        Ok(committers::committers_of(&range.commits, &coverage, &reach))
-    }
-
-    /// Whether `new` reaches the range: it is in it, or a bottom of the
-    /// range is its ancestor.
-    async fn reaches(
-        &self,
-        asker: Asker<'_>,
-        mr: &StoredMergeRequest,
-        new: &ObjectId,
-        bottoms: &[ObjectId],
-        in_range: &BTreeSet<&ObjectId>,
-        budget: &mut Budget,
-    ) -> Reach {
-        if in_range.contains(new) {
-            return Reach::Yes(None);
-        }
-        for bottom in bottoms {
-            let Ok(timeout) = budget.next() else {
-                spent(asker, mr, "push_reach", "budget");
-                return Reach::Unknown;
-            };
-            match self
-                .git
-                .is_ancestor(&self.storage, asker.repo, bottom, new, timeout)
-                .await
-            {
-                Ok(true) => return Reach::Yes(None),
-                Ok(false) => {}
-                Err(e) => {
-                    warn_unread(asker, mr, "push_reach", &e);
-                    return Reach::Unknown;
-                }
-            }
-        }
-        Reach::No
-    }
-
-    /// The range commits `new` reaches (`head`-side commits not on the
-    /// target).
-    async fn reached(
-        &self,
-        asker: Asker<'_>,
-        mr: &StoredMergeRequest,
-        new: &ObjectId,
-        tip: &ObjectId,
-        in_range: &BTreeSet<&ObjectId>,
-        budget: &mut Budget,
-    ) -> Reach {
+        // One git call for every cut update (R5 re-review round 2): what
+        // their tips reach beyond the target tip, decided in memory.
+        let tips: Vec<ObjectId> = cut
+            .iter()
+            .filter_map(|i| coverage.entries.get(*i).and_then(|e| e.new.clone())) // clone: the call owns its tips
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let Ok(timeout) = budget.next() else {
             spent(asker, mr, "push_reach", "budget");
-            return Reach::Unknown;
+            return Ok(Committers::Unknown("timeout"));
         };
-        match self
+        let graph = match self
             .git
-            .range_commits(
+            .commit_graph(
                 &self.storage,
                 asker.repo,
-                Some(tip),
-                new,
-                committers::MAX_RANGE_COMMITS,
+                &tips,
+                tip,
+                committers::MAX_GRAPH_COMMITS,
                 timeout,
             )
             .await
         {
-            Ok(Some(r)) => Reach::Yes(Some(
-                r.commits
-                    .into_iter()
-                    .filter(|c| in_range.contains(c))
-                    .collect(),
-            )),
-            Ok(None) => Reach::Unknown,
+            Ok(Some(graph)) => graph,
+            Ok(None) => return Ok(Committers::Unknown("push_graph_too_large")),
             Err(e) => {
                 warn_unread(asker, mr, "push_reach", &e);
-                Reach::Unknown
+                return Ok(Committers::Unknown(git_reason(&e)));
             }
-        }
+        };
+        let reach = committers::reach_in(&graph, &range.commits, &coverage);
+        Ok(committers::committers_of(&range.commits, &coverage, &reach))
     }
 
     /// The target tip's CODEOWNERS, resolved and matched against the
@@ -292,6 +254,7 @@ impl ReviewGit {
         budget: &mut Budget,
     ) -> Result<CodeownersFact, ForgeError> {
         let mut git_error: Option<ForgeError> = None;
+        let mut join_error: Option<String> = None;
         let (path, parsed) = match budget.next() {
             // Out of budget: unread (the one warn below says so).
             Err(_) => ("", Err(CodeownersError::file("read_failed"))),
@@ -332,13 +295,16 @@ impl ReviewGit {
                 };
                 match matched(file.clone(), paths, budget.deadline()).await {
                     // clone: the task owns its copy
-                    Some(matched) => CodeownersFact::Valid {
+                    Ok(matched) => CodeownersFact::Valid {
                         path,
                         file,
                         owners,
                         matched,
                     },
-                    None => CodeownersFact::Invalid(CodeownersError::file("match_budget")),
+                    Err((reason, join)) => {
+                        join_error = join;
+                        CodeownersFact::Invalid(CodeownersError::file(reason))
+                    }
                 }
             }
             Err(e) => CodeownersFact::Invalid(e),
@@ -350,6 +316,7 @@ impl ReviewGit {
                 error_code = ErrorCode::CodeownersInvalid.id(),
                 git_error_code = git_error.as_ref().map(|g| g.code().id()),
                 git_error = git_error.as_ref().map(|g| g.to_string()),
+                join_error = join_error.as_deref(),
                 request_id = %asker.request_id,
                 merge_request_id = mr.id.get(),
                 project_id = asker.project.get(),
@@ -365,18 +332,25 @@ impl ReviewGit {
 }
 
 /// The CODEOWNERS lines the changed paths need (line → paths), computed in
-/// a blocking task until the earlier of [`MATCH_BUDGET`] and `deadline`;
-/// `None` past it (fail closed).
+/// a blocking task until the earlier of [`MATCH_BUDGET`] and `deadline`
+/// (checked inside the matching, and the await itself bounded). Past it:
+/// `match_budget`; the task panicked: `match_failed` with the join message
+/// (R5 re-review round 2) — both fail closed.
 async fn matched(
     file: Codeowners,
     paths: Vec<String>,
     deadline: Instant,
-) -> Option<BTreeMap<u32, usize>> {
+) -> Result<BTreeMap<u32, usize>, (&'static str, Option<String>)> {
     let deadline = deadline.min(Instant::now() + MATCH_BUDGET);
-    tokio::task::spawn_blocking(move || codeowners::owned_lines(&file, &paths, Some(deadline)))
-        .await
-        .ok()
-        .flatten()
+    let task =
+        tokio::task::spawn_blocking(move || codeowners::owned_lines(&file, &paths, Some(deadline)));
+    // A little past the deadline: the task checks it itself and returns.
+    let bound = deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(500);
+    match tokio::time::timeout(bound, task).await {
+        Ok(Ok(Some(lines))) => Ok(lines),
+        Ok(Ok(None)) | Err(_) => Err(("match_budget", None)),
+        Ok(Err(join)) => Err(("match_failed", Some(join.to_string()))),
+    }
 }
 
 /// Resolve every owner of `file`: a single name is an active user, else a

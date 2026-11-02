@@ -35,6 +35,9 @@ pub struct ApprovalState {
     pub head_sha: Option<ObjectId>,
     pub target_branch: forge_core::RefName,
     pub report: Option<ApprovalReport>,
+    /// The trial merge of the head into the target tip conflicts (R5
+    /// re-review round 2): nothing can merge, whatever the approvals say.
+    pub conflict: bool,
 }
 
 /// An approval rule as asked for (users by username, groups by full path).
@@ -261,17 +264,20 @@ impl Review {
                 head_sha: None,
                 target_branch: current.target_branch,
                 report: None,
+                conflict: false,
             });
         };
         let git = self
             .git_facts(request_id, repo, user, &current, &head, STATE_BUDGET)
             .await?;
         let facts = review::approval_facts(&self.db, project, current.id).await?;
+        let conflict = git.changed == super::ChangedPathsFact::Conflict;
         let report = evaluate(&git.inputs(&current, &head, facts));
         Ok(ApprovalState {
             head_sha: Some(head),
             target_branch: current.target_branch,
             report: Some(report),
+            conflict,
         })
     }
 

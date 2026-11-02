@@ -102,6 +102,12 @@ fn state_human(body: &Value) -> String {
             }
         ));
     }
+    if body.get("conflict") == Some(&Value::Bool(true)) {
+        out.push_str(
+            "
+conflict: the head does not merge cleanly into the target (resolve it first)",
+        );
+    }
     let blocks = list("blocked_by");
     if blocks.is_empty() {
         out.push_str("\nnothing blocks on approvals");
