@@ -56,6 +56,17 @@ pub struct GitOutput {
     pub stdout: Vec<u8>,
 }
 
+/// A captured run whose exit code may be one of several results
+/// ([`GitCommand::output_accepting`]).
+#[derive(Debug)]
+pub(crate) struct Captured {
+    pub(crate) output: GitOutput,
+    /// The cap stopped git: stdout is a prefix, the exit code unknown.
+    pub(crate) truncated: bool,
+    /// One of the accepted codes; `None` exactly when `truncated`.
+    pub(crate) exit_code: Option<i32>,
+}
+
 impl GitOutput {
     pub fn stdout_str(&self) -> String {
         String::from_utf8_lossy(&self.stdout).into_owned()
@@ -383,7 +394,7 @@ impl GitCommand {
     /// binary not runnable → `FG-GIT-0001`.
     pub async fn output(self) -> Result<GitOutput, ForgeError> {
         let cap = self.git.config().max_output_bytes;
-        self.capture(cap, false).await.map(|(out, _)| out)
+        self.capture(cap, false, &[0]).await.map(|c| c.output)
     }
 
     /// Run and keep at most `cap` bytes of stdout (never more than
@@ -397,14 +408,37 @@ impl GitCommand {
         cap: usize,
     ) -> Result<(GitOutput, bool), ForgeError> {
         let cap = cap.min(self.git.config().max_output_bytes);
-        self.capture(cap, true).await
+        self.capture(cap, true, &[0])
+            .await
+            .map(|c| (c.output, c.truncated))
     }
 
+    /// Run like [`Self::output_truncated`], but an exit code in `accepted`
+    /// is a result, not a failure (M3 R2, ADR-0024 §3: `merge-tree
+    /// --write-tree` exits 1 on a conflict, `merge-base` 1 when there is no
+    /// answer). The result carries the exit code and keeps stdout; any
+    /// other code is still `FG-GIT-0003`, and a run ended by a signal is
+    /// never accepted. When the cap stops git early the exit code is
+    /// unknown (`exit_code: None`, `truncated: true`): the caller decides
+    /// what an overflow means.
+    pub(crate) async fn output_accepting(
+        self,
+        cap: usize,
+        accepted: &[i32],
+    ) -> Result<Captured, ForgeError> {
+        let cap = cap.min(self.git.config().max_output_bytes);
+        self.capture(cap, true, accepted).await
+    }
+
+    /// The one capture loop. `truncate`: an overflow is a truncated result
+    /// (git killed and reaped) instead of `FG-GIT-0006`. `accepted`: the
+    /// exit codes that are results (`[0]` for every plain run).
     async fn capture(
         mut self,
         max_out: usize,
         truncate: bool,
-    ) -> Result<(GitOutput, bool), ForgeError> {
+        accepted: &[i32],
+    ) -> Result<Captured, ForgeError> {
         if self.option_like_value {
             // A forge bug, never user input (user input cannot reach arg_owned).
             return Err(self
@@ -493,12 +527,13 @@ impl GitCommand {
         if overflow && truncate {
             // Enough read: git was killed at the cap; confirm it is gone.
             return match reap(&mut child).await {
-                Ok(()) => Ok((
-                    GitOutput {
+                Ok(()) => Ok(Captured {
+                    output: GitOutput {
                         stdout: stdout_bytes,
                     },
-                    true,
-                )),
+                    truncated: true,
+                    exit_code: None,
+                }),
                 Err(failure) => Err(failure.attach(
                     self.fail(ErrorCode::GitProcessFailed)
                         .with_context("reason", "stopped_early"),
@@ -538,22 +573,25 @@ impl GitCommand {
             "git.exec"
         );
 
-        if !status.success() {
+        // A signal (no code) is never a result.
+        let code = status.code().filter(|c| accepted.contains(c));
+        let Some(code) = code else {
             return Err(self
                 .fail(ErrorCode::GitProcessFailed)
                 .with_context("exit_code", exit_code)
                 .with_context("stderr", stderr_head));
-        }
+        };
         if let Err(e) = write_res {
-            // git succeeded but did not receive all input: not a success.
+            // git ended but did not receive all input: not a result.
             return Err(self.fail(ErrorCode::GitProcessFailed).with_source(e));
         }
-        Ok((
-            GitOutput {
+        Ok(Captured {
+            output: GitOutput {
                 stdout: stdout_bytes,
             },
-            false,
-        ))
+            truncated: false,
+            exit_code: Some(code),
+        })
     }
 }
 

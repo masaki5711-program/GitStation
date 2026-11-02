@@ -614,3 +614,100 @@ async fn a_full_reachability_cache_drops_the_oldest_answer_only() {
     want.sort_unstable();
     assert_eq!(kept, want);
 }
+
+/// M3 R2 (ADR-0024 §2): in a merge request's view, a commit only its own
+/// version refs reach is browsable; another merge request's view, the
+/// branch context, commits only a trial merge made (and their trees), and
+/// a purged version stay answered like a missing id.
+#[tokio::test]
+async fn merge_request_versions_are_browsable_only_in_their_merge_request() {
+    let f = fixture().await;
+    let g = graph(&f.path);
+    let b = f.browser(BrowseLimits::default());
+    let missing = told(
+        &b.resolve_ref(f.id, &"0".repeat(40), "user:1")
+            .await
+            .expect_err("missing"),
+    );
+    // `dangling` becomes version 1 of merge request 3.
+    update_ref(&f.path, "refs/merge-requests/3/v1", &g.dangling);
+    update_ref(&f.path, "refs/merge-requests/3/head", &g.dangling);
+    b.invalidate(f.id);
+    let got = b
+        .merge_request_commit(f.id, 3, &g.dangling.to_ascii_uppercase(), "user:1")
+        .await
+        .expect("its own version");
+    assert_eq!(got, g.dangling);
+    let e = b
+        .merge_request_commit(f.id, 4, &g.dangling, "user:1")
+        .await
+        .expect_err("another merge request");
+    assert_eq!(told(&e), missing, "another merge request's view");
+    let e = b
+        .resolve_ref(f.id, &g.dangling, "user:1")
+        .await
+        .expect_err("branch context");
+    assert_eq!(told(&e), missing, "the branch context never sees it");
+    // A deleted branch's commit is not in the merge request's view either.
+    let e = b
+        .merge_request_commit(f.id, 3, &g.gone, "user:1")
+        .await
+        .expect_err("gone");
+    assert_eq!(told(&e), missing, "deleted branch");
+    // A trial merge's tree, and a commit made on it, are on no ref.
+    let tip = forge_core::ObjectId::parse(&g.tip).expect("oid");
+    let head = forge_core::ObjectId::parse(&g.dangling).expect("oid");
+    let trial = f
+        .git
+        .merge_tree(
+            &f.storage,
+            f.id,
+            &tip,
+            &head,
+            crate::mergeability::MergeTreeLimits::default(),
+        )
+        .await
+        .expect("trial merge");
+    let crate::mergeability::MergeTree::Clean { tree } = trial else {
+        panic!("a clean trial merge: {trial:?}");
+    };
+    let trial_commit = commit_msg(&f.path, tree.as_str(), Some(&g.tip), "trial");
+    for (what, id) in [
+        ("trial tree", tree.as_str()),
+        ("trial commit", &trial_commit),
+    ] {
+        let e = b
+            .merge_request_commit(f.id, 3, id, "user:1")
+            .await
+            .expect_err(what);
+        assert_eq!(told(&e), missing, "{what}");
+    }
+    // Compare inside the view: both ends checked.
+    let cmp = b
+        .merge_request_compare(f.id, 3, &g.tip, &g.dangling, "user:1")
+        .await
+        .expect("compare");
+    assert_eq!(cmp.commits.len(), 1);
+    let e = b
+        .merge_request_compare(f.id, 3, &g.tip, &trial_commit, "user:1")
+        .await
+        .expect_err("trial end");
+    assert_eq!(told(&e), missing, "compare to a trial commit");
+    // Purged: the refs are gone (the purge drops the caches).
+    plumb(
+        &f.path,
+        &["update-ref", "-d", "refs/merge-requests/3/v1"],
+        None,
+    );
+    plumb(
+        &f.path,
+        &["update-ref", "-d", "refs/merge-requests/3/head"],
+        None,
+    );
+    b.invalidate(f.id);
+    let e = b
+        .merge_request_commit(f.id, 3, &g.dangling, "user:1")
+        .await
+        .expect_err("purged");
+    assert_eq!(told(&e), missing, "a purged version");
+}
