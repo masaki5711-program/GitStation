@@ -138,9 +138,48 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.conflict_resolved",
             "merge_request.commented",
             "merge_request.merged",
-            "merge_request.source_branch_deleted"
+            "merge_request.source_branch_deleted",
+            "merge_request.approved",
+            "merge_request.unapproved"
         ]
     );
+}
+
+/// M3 R5: an approval and its end are transitions with their own events,
+/// deduplicated by the approval row (ADR-0024 §6); `approved` carries the
+/// evaluation of that moment (`counted`, `uncounted_reason`).
+#[test]
+fn approved_and_unapproved_are_transitions_keyed_by_the_approval() {
+    use crate::{ApprovalId, ObjectId, RefName, UnapproveReason, UncountedReason};
+    let mr = MergeRequestId::new(9);
+    let head = ObjectId::parse(&"c".repeat(40)).expect("oid");
+    let approved = MergeRequestChange::Approved {
+        merge_request: mr,
+        iid: 3,
+        approval: ApprovalId::new(11),
+        approver: UserId::new(4),
+        head_sha: head.clone(),
+        target_branch: RefName::parse("refs/heads/main").expect("ref"),
+        counted: false,
+        uncounted_reason: Some(UncountedReason::Committer),
+    };
+    assert_eq!(approved.transition(), MergeRequestTransition::Approve);
+    assert_eq!(approved.dedup_prefix(), "merge_request_approved");
+    let value = approved.to_value();
+    assert_eq!(value["counted"], false);
+    assert_eq!(value["uncounted_reason"], "committer");
+    assert_eq!(value["approval_id"], 11);
+    let unapproved = MergeRequestChange::Unapproved {
+        merge_request: mr,
+        iid: 3,
+        approval: ApprovalId::new(11),
+        approver: UserId::new(4),
+        head_sha: head,
+        reason: UnapproveReason::NewCommits,
+    };
+    assert_eq!(unapproved.transition(), MergeRequestTransition::Unapprove);
+    assert_eq!(unapproved.dedup_prefix(), "merge_request_unapproved");
+    assert_eq!(unapproved.to_value()["reason"], "new_commits");
 }
 
 /// M3 R4: the merge and the source branch deletion are transitions with

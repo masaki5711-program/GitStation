@@ -17,6 +17,7 @@ mod contexts;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
+mod matrix_rows_approval;
 mod matrix_rows_discussion;
 mod matrix_rows_merge;
 mod matrix_rows_people;

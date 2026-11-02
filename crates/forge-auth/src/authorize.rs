@@ -682,6 +682,35 @@ pub fn authorize(
             })
         }
 
+        // Approving / unapproving (M3 R5, ADR-0024 §8.3, §8.4, §12): people
+        // only; never the author — administrators included, before any role
+        // (FG-REVIEW-0013); Developer and above by membership. Whether the
+        // approval counts is evaluate_merge()'s at evaluation time.
+        (
+            Action::MergeRequestApprove | Action::MergeRequestUnapprove,
+            Resource::MergeRequest {
+                project,
+                author,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            people_only()?;
+            branches(source_branch, target_branch).map_err(refused)?;
+            if *author == user {
+                return Err(
+                    deny(ErrorCode::SelfApprovalRefused).with_context("reason", "self_approval")
+                );
+            }
+            need(Role::Developer, project.role)
+        }
+        // Approval rules (M3 R5, ADR-0024 §8.6): people only, Maintainer.
+        (Action::ApprovalRuleManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         // --- discussions (M3 R3, ADR-0024 §12) ---
         // Commenting: Reporter and above by membership (an internal
         // project's non-member reads but does not write); an agent's token
@@ -778,6 +807,9 @@ pub fn authorize(
             | Action::MergeRequestComment
             | Action::DiscussionResolve
             | Action::MergeRequestMerge
+            | Action::MergeRequestApprove
+            | Action::MergeRequestUnapprove
+            | Action::ApprovalRuleManage
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

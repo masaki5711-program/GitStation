@@ -105,6 +105,22 @@ actions! {
     /// does not satisfy it, ADR-0017 §4.0). Whether the merge request is
     /// ready is `evaluate_merge()`'s, never a permission.
     MergeRequestMerge,
+    /// `POST …/merge-requests/{iid}/approve` (M3 R5, ADR-0024 §8, §12):
+    /// approve the head and target the caller saw. People only (agents,
+    /// service accounts and bots are refused); Developer and above by
+    /// membership; never the merge request's author, administrators
+    /// included (`FG-REVIEW-0013`). A token needs `merge_approve` (`api`
+    /// and `merge_execute` do not satisfy it). Whether the approval counts
+    /// (rules, CODEOWNERS, committers) is `evaluate_merge()`'s, decided at
+    /// evaluation time.
+    MergeRequestApprove,
+    /// `POST …/merge-requests/{iid}/unapprove` (M3 R5): withdraw one's own
+    /// approval; decided like `MergeRequestApprove`.
+    MergeRequestUnapprove,
+    /// `PUT …/approval-rules/{name}`, `DELETE …/approval-rules/{name}` (M3
+    /// R5, ADR-0024 §8.6, §12): manage a project's approval rules. People
+    /// only (a rule is a merge condition); Maintainer and above; `api`.
+    ApprovalRuleManage,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -256,6 +272,9 @@ impl Action {
                 | Action::MergeRequestVersionRefsPurge
                 | Action::DiscussionResolve
                 | Action::MergeRequestMerge
+                | Action::MergeRequestApprove
+                | Action::MergeRequestUnapprove
+                | Action::ApprovalRuleManage
         )
     }
 
@@ -326,9 +345,14 @@ impl Action {
             | Action::MergeRequestClose
             | Action::MergeRequestReopen
             | Action::MergeRequestComment
-            | Action::DiscussionResolve => Some(Scope::Api),
+            | Action::DiscussionResolve
+            | Action::ApprovalRuleManage => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
+            // M3 R5: satisfied by `merge_approve` alone.
+            Action::MergeRequestApprove | Action::MergeRequestUnapprove => {
+                Some(Scope::MergeApprove)
+            }
         }
     }
 }

@@ -1,12 +1,13 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 6] = [
+const ALL: [(Scope, &str); 7] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
     (Scope::Api, "api"),
     (Scope::Admin, "admin"),
     (Scope::MergeExecute, "merge_execute"),
+    (Scope::MergeApprove, "merge_approve"),
 ];
 
 #[test]
@@ -54,7 +55,9 @@ fn scope_satisfies_is_unchanged_after_the_move() {
 fn merge_scopes_are_satisfied_only_by_themselves() {
     for held in Scope::ALL {
         for required in Scope::ALL {
-            let merge = [held, required].contains(&Scope::MergeExecute);
+            let merge = [held, required]
+                .iter()
+                .any(|s| matches!(s, Scope::MergeExecute | Scope::MergeApprove));
             if merge {
                 assert_eq!(
                     held.satisfies(required),
@@ -68,4 +71,11 @@ fn merge_scopes_are_satisfied_only_by_themselves() {
     assert!(!Scope::Admin.satisfies(Scope::MergeExecute));
     assert!(!Scope::MergeExecute.satisfies(Scope::Api));
     assert!(!Scope::MergeExecute.satisfies(Scope::ReadApi));
+    // M3 R5: `merge_approve` likewise, and the two never stand in for each
+    // other.
+    assert!(!Scope::Api.satisfies(Scope::MergeApprove));
+    assert!(!Scope::Admin.satisfies(Scope::MergeApprove));
+    assert!(!Scope::MergeExecute.satisfies(Scope::MergeApprove));
+    assert!(!Scope::MergeApprove.satisfies(Scope::MergeExecute));
+    assert!(!Scope::MergeApprove.satisfies(Scope::Api));
 }

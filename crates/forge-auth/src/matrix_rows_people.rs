@@ -40,9 +40,11 @@ const ADMIN_TOKEN: (W, W) = (W::ServiceAccountAdminTokenAdmin, W::BotAdminTokenA
 const ADMIN_SESSION: (W, W) = (W::ServiceAccountAdminSession, W::BotAdminSession);
 /// M3 R4: a merge needs `merge_execute`, so the twins hold that scope.
 const MERGER: (W, W) = (W::ServiceAccountTokenMergeExecute, W::BotTokenMergeExecute);
+/// M3 R5: an approval needs `merge_approve`.
+const APPROVER: (W, W) = (W::ServiceAccountTokenMergeApprove, W::BotTokenMergeApprove);
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 13] = [
+const GROUPS: [[Row; 2]; 16] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -57,6 +59,9 @@ const GROUPS: [[Row; 2]; 13] = [
     // Session only: the twin is the administrator's session.
     both!(A::MergeRequestVersionRefsPurge, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Mr(MF::other())),
     both!(A::MergeRequestMerge, MERGER.0, MERGER.1, F::Mr(MF::other())),
+    both!(A::MergeRequestApprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
+    both!(A::MergeRequestUnapprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
+    both!(A::ApprovalRuleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
 ];
 
 /// The rows, flattened (`matrix::ROWS` appends them), and the Owner

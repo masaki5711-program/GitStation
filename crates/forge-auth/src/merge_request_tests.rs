@@ -248,3 +248,33 @@ fn a_merge_request_proof_carries_the_project_and_the_iid() {
     let proof = prove(&session(), Action::MergeRequestCreate, new).expect("developer opens");
     assert_eq!(proof.id(), &(ProjectId::new(7), None));
 }
+
+/// M3 R5 (ADR-0024 §8.3, §12): an administrator who authored the merge
+/// request cannot approve (or unapprove) it — FG-REVIEW-0013
+/// `reason=self_approval`, decided before any role; another's merge
+/// request is approved by the same administrator.
+#[test]
+fn admin_author_self_approval_is_denied() {
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
+    for action in [Action::MergeRequestApprove, Action::MergeRequestUnapprove] {
+        let own = mr(Some(Role::Owner), ME, MergeRequestState::Open);
+        let e = authorize(&admin, action, &own).expect_err("self approval");
+        assert_eq!(e.code(), ErrorCode::SelfApprovalRefused);
+        assert!(e
+            .context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "self_approval"));
+        let other = mr(None, UserId::new(2), MergeRequestState::Open);
+        authorize(&admin, action, &other).expect("another's merge request");
+    }
+    // A plain author too, whatever their role.
+    let own = mr(Some(Role::Owner), ME, MergeRequestState::Open);
+    let e = authorize(&session(), Action::MergeRequestApprove, &own).expect_err("self");
+    assert_eq!(e.code(), ErrorCode::SelfApprovalRefused);
+}

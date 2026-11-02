@@ -124,7 +124,9 @@ fn all_lists_every_event_type_once() {
             "merge_request.conflict_resolved",
             "merge_request.commented",
             "merge_request.merged",
-            "merge_request.source_branch_deleted"
+            "merge_request.source_branch_deleted",
+            "merge_request.approved",
+            "merge_request.unapproved"
         ]
     );
 }

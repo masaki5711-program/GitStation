@@ -70,6 +70,16 @@ id_type!(
     /// A row of forge.merge_request_notes (M3 R3): one comment in a thread.
     NoteId
 );
+id_type!(
+    /// A row of forge.merge_request_approvals (M3 R5): one approval of one
+    /// head and target, by one approver.
+    ApprovalId
+);
+id_type!(
+    /// A row of forge.approval_rules (M3 R5): one approval rule of a
+    /// project.
+    ApprovalRuleId
+);
 
 #[cfg(test)]
 mod tests {

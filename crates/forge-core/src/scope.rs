@@ -20,17 +20,22 @@ pub enum Scope {
     /// scope is satisfied only by itself: `api` and `admin` do not satisfy
     /// it, and it satisfies nothing else.
     MergeExecute,
+    /// Approve or unapprove a merge request (M3 R5, ADR-0024 §8.5). Like
+    /// `MergeExecute`, satisfied only by itself: `api`, `admin` and
+    /// `merge_execute` do not satisfy it, and it satisfies nothing else.
+    MergeApprove,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 6] = [
+    pub const ALL: [Scope; 7] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
         Scope::Api,
         Scope::Admin,
         Scope::MergeExecute,
+        Scope::MergeApprove,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -46,12 +51,14 @@ impl Scope {
             Scope::Api => "api",
             Scope::Admin => "admin",
             Scope::MergeExecute => "merge_execute",
+            Scope::MergeApprove => "merge_approve",
         }
     }
 
     /// Whether holding `self` satisfies a requirement of `required`. The
-    /// merge scope (`MergeExecute`) is satisfied only by itself and
-    /// implies nothing (ADR-0024 §8.5: `api` / `admin` never merge).
+    /// merge scopes (`MergeExecute`, `MergeApprove`) are satisfied only by
+    /// themselves and imply nothing (ADR-0024 §8.5: `api` / `admin` never
+    /// merge or approve, and neither merge scope stands in for the other).
     pub fn satisfies(self, required: Scope) -> bool {
         self == required
             || matches!(

@@ -1538,3 +1538,44 @@ cause = "The merge job builds the merge or squash commit's author and committer 
 diagnosis = "The job's `forge.review.merge_completed outcome=superseded error_code=FG-REVIEW-0012` carries `field=email` (or `name` when even the username leaves nothing), `rule=control_character|angle_bracket|empty` and `user_id`; the value is never logged. Read the account (read-only): SELECT id, username, email FROM forge.users WHERE id = <user_id>; the merge's author is the requester (and, for a squash, the merge request's author)."
 fix = "Correct the account's e-mail (the identity provider's attribute, then a new sign-in, or the administrator's account tools) and merge again."
 test = "a_merge_identity_with_a_bad_email_is_refused"
+
+# ── M3 R5: approvals, approval rules and CODEOWNERS (registration order) ──
+[[error]]
+code = "FG-REVIEW-0013"
+name = "SelfApprovalRefused"
+http_status = 403
+severity = "info"
+user_message_ja = "自分のマージリクエストは承認できません。ほかのレビュアーに承認を依頼してください。"
+user_message_en = "You cannot approve your own merge request. Ask another reviewer to approve it."
+user_message_id = "Anda tidak dapat menyetujui merge request Anda sendiri. Minta peninjau lain untuk menyetujuinya."
+cause = "The author of a merge request asked to approve it (ADR-0024 §8.3, §12; ADR-0017 §2.6). authorize() refuses `MergeRequestApprove` when the caller is the author, administrators included (no exception). Nothing was written."
+diagnosis = "The log event carries `action=MergeRequestApprove`, `reason=self_approval` and the request_id; the merge request's author is the caller (SELECT author_id FROM forge.merge_requests WHERE project_id = <project_id> AND iid = <iid>)."
+fix = "Ask another Developer (or higher) of the project to approve. A committer's approval is accepted but not counted (`uncounted_reason=committer`, runbook merge-blocked)."
+test = "the_author_cannot_approve_their_own_merge_request"
+
+[[error]]
+code = "FG-REVIEW-0014"
+name = "CodeownersInvalid"
+http_status = 422
+severity = "warn"
+user_message_ja = "対象のブランチの CODEOWNERS ファイルを読めないため、マージできません。CODEOWNERS を直すよう管理者に依頼してください。"
+user_message_en = "The target branch's CODEOWNERS file cannot be read, so the merge request cannot be merged. Ask a maintainer to fix CODEOWNERS."
+user_message_id = "File CODEOWNERS pada branch target tidak dapat dibaca, sehingga merge request tidak dapat di-merge. Minta maintainer untuk memperbaiki CODEOWNERS."
+cause = "The CODEOWNERS file on the merge request's target branch tip (`.forge/CODEOWNERS`, else `CODEOWNERS`; ADR-0024 §9) could not be used: reason=syntax (a line is not `<pattern> <owner>…`), owner_syntax (an owner is not `@username` or `@group/path`), unsupported (a section `[Section]`, an optional section `^[…]`, an e-mail owner or a negation `!`: refused, never ignored), pattern_invalid (an empty or malformed glob, a `***`), unknown_owner (no such user, or no such group), too_large (over 64 KiB), too_many_lines (over 1 000 lines), line_too_long (over 4 KiB), not_utf8, read_failed (git could not read the file: also FG-GIT-0002 / 0003). The merge is blocked with `codeowners_invalid{line, reason}` (fail closed: an unreadable file never means \"no owners\"). Logged once per evaluation at warn."
+diagnosis = "Runbook codeowners. The event `forge.review.codeowners_invalid` carries `line` (1-based; 0 for the whole file), `reason`, `path` (which file), `target_sha` and `merge_request_id`. Read the file at that commit (read-only): git --git-dir <repo> show <target_sha>:<path> | sed -n '<line>p'."
+fix = "Fix the CODEOWNERS file on the target branch (runbook codeowners). Until M3 R6 adds the time-boxed `codeowners_enforced` switch, a person who may push to the target branch pushes the fix directly (an approved runbook step); the merge requests are evaluated again on their next merge or status request."
+runbook = "codeowners"
+test = "a_codeowners_file_with_an_unknown_owner_blocks_the_merge"
+
+[[error]]
+code = "FG-REVIEW-0015"
+name = "ApprovalLimitReached"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストの承認の数が上限に達しています。既存の承認を確認してください。"
+user_message_en = "This merge request has reached the limit on approvals. Check the existing approvals."
+user_message_id = "Merge request ini telah mencapai batas jumlah persetujuan. Periksa persetujuan yang ada."
+cause = "An approval would make more than 50 live approvals on one merge request (M3 R5). The cap keeps the revocation of a new head within one change's 100 events (one `merge_request.unapproved` per approval) and the evaluation bounded; it is checked under the merge request's row lock. Nothing was written."
+diagnosis = "The log event carries `reason=approvals_per_merge_request`, `limit`, `merge_request_id`. Count (read-only): SELECT count(*) FROM forge.merge_request_approvals WHERE merge_request_id = <id> AND revoked_at IS NULL."
+fix = "Approvals beyond the rules' needs add nothing; ask approvers who are not needed to withdraw (`gstn mr unapprove`), or push a new commit (which clears the approvals)."
+test = "an_approval_past_the_cap_is_refused"
