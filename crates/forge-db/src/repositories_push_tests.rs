@@ -580,15 +580,27 @@ async fn the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row()
     let end = runbook
         .find("-- push_commits backfill (end)")
         .expect("end marker");
-    let shas = format!("{},{}", "a".repeat(40), "b".repeat(40));
-    let sql = runbook[begin..end]
-        .replace("<project_id>", &p.project_id.get().to_string())
-        .replace("<repo_id>", &p.repository_id.get().to_string())
-        .replace("<pusher_id>", &alice.get().to_string())
-        .replace("<change_id>", "chg-backfill-1")
-        .replace("<approver>", "synthetic approver")
-        .replace("<evidence>", "synthetic log")
-        .replace("<sha>", &shas);
+    // psql's interpolation: `:'name'` a quoted literal, `:name` the value.
+    let shas = format!("{{{},{}}}", "a".repeat(40), "b".repeat(40));
+    let quoted = |v: &str| format!("'{}'", v.replace('\'', "''"));
+    let mut sql = runbook[begin..end].to_owned();
+    for (name, value) in [
+        ("operator", "ops-o'brien"),
+        ("change_id", "chg-backfill-1"),
+        ("approver", "synthetic approver"),
+        ("evidence", "synthetic log"),
+        ("shas", shas.as_str()),
+    ] {
+        sql = sql.replace(&format!(":'{name}'"), &quoted(value));
+    }
+    for (name, value) in [
+        ("project_id", p.project_id.get()),
+        ("repo_id", p.repository_id.get()),
+        ("pusher_id", alice.get()),
+    ] {
+        sql = sql.replace(&format!(":{name}"), &value.to_string());
+    }
+    assert!(!sql.contains(":'"), "every variable is set: {sql}");
     let mut su = t.superuser().await;
     sqlx::raw_sql(&sql)
         .execute(&mut su)
@@ -612,6 +624,14 @@ async fn the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row()
     .await
     .expect("audit row");
     assert_eq!(details["commits"], 2);
+    assert_eq!(details["operator"], "ops-o'brien");
+    let label: String = sqlx::query_scalar(
+        "SELECT actor_label FROM forge.audit_log WHERE action = 'repository.push_commits_backfilled'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("label");
+    assert_eq!(label, "merge-blocked 2b by ops-o'brien");
     // The insert alone (no audit row in its transaction) is refused.
     let alone = sql[sql.find("INSERT INTO forge.push_commits").expect("insert")..]
         .replace("COMMIT;", "")

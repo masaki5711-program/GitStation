@@ -631,6 +631,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
   リポジトリごとのロックで直列」に決めた（末尾の R4 の節）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
 - 変更されたパスの件数の上限と時間切れは **R5 で決めた**（10 000 件・git の呼び出しごとに 10 秒）。`codeowners_enforced_off_until` の既定と上限
   （24 時間以内）は **R6 に送った**（切り替えの Action と `merge_settings` と一緒。末尾の R5 の節）。保守の prune の猶予（24 時間以上）は O3。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
+- **リポジトリの ref の数の上限**（R5 の再レビュー 6 回目からの申し送り、O シリーズ）: push のたびに全 ref の先端を読む
+  （`ref_snapshot`、上限 1 000 000 ref で失敗 = その push の一覧は不完全）。ref が N 本を超えるリポジトリへの push を拒む上限と、
+  N に近づいたら知らせる doctor の warn を O シリーズで入れる（N は運用の実測で決める）。R5 では実装しない。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
   契約 4 と ADR-0019 §8 の `forge admin …` / `forge backup` / `forge restore`）と実際の運用のコマンドの一致も確かめるようにする（[root] の MR）。
 
@@ -1324,7 +1327,7 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
     （隠し ref）→ 一覧は変わらない、シンボリック ref は何も隠さない（スナップショットに入らない）、隠し ref はスナップショットに入る。
 - **HIGH 2（行の上限と記録の予算）**: 上限 1 000 000 行は、記録の 30 秒の予算（3 回の試行の共通）の中で書けず、push の監査の行ごと
   失う（FG-GIT-0012）恐れがあった。**測った**: 50 000 行を監査のトリガーつきで書くのに約 3.5 秒（開発機、debug ビルド）。上限を
-  **50 000**（`forge_core::MAX_PUSHED_COMMITS`）に下げ、予算は `forge_core::PUSH_RECORD_BUDGET` として共有し、テスト
+  **50 000**（6 回目で **20 000** に下げた。下の節）（`forge_core::MAX_PUSHED_COMMITS`）に下げ、予算は `forge_core::PUSH_RECORD_BUDGET` として共有し、テスト
   `the_largest_listing_is_recorded_within_a_third_of_the_budget` が「上限の行が予算の 1/3 未満で書ける」ことを確かめる。上限を超えた
   一覧は上限で止め（それ以上の行は書かない。記録の側でも上限で切って `push_commits_incomplete`）、保持するのは高々 50 000 個の id。
   - **監査のトリガーは行ごとのまま**にした: PostgreSQL の制約トリガー（`CREATE CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED`）は
@@ -1337,7 +1340,7 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   失敗には `cause_code`。
 - **MEDIUM 4（解き方の訂正と補填の手順）**: runbook と ADR の「push し直せば解ける」は誤り。**コミットの id を変えて**（`git commit
   --amend`、`git rebase --force-rebase <target>`）push する。作り直せない履歴には、承認の要る管理者の補填 SQL を runbook merge-blocked
-  の Mitigate 2b に置いた（監査の行と行を 1 トランザクションで。テスト
+  の Mitigate 2b に置いた（6 回目で「数えすぎにはならない」の誤りを直した。下の節）（監査の行と行を 1 トランザクションで。テスト
   `the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row` が runbook の SQL をそのまま実行し、監査の行の無い挿入が拒まれる
   ことも確かめる）。CLI は今は作らない。
 - **MEDIUM 5（squash がコミッターを洗い流す）**: マージ・squash のコミットは要求者だけでなく、**マージした範囲（`head ^<元の target>`）の
@@ -1349,3 +1352,24 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   マージコミットも同じ、行の無い範囲の squash は行を持たない。
 - **MEDIUM 6（push の遅延）**: 毎回の一覧で `forge.git.push_commits_listed`（info）に `refs`（スナップショットの ref 数）・`listed`・
   `complete`・`snapshot_ms`・`listing_ms` を出す。ref の多いリポジトリでの遅れはここで見える。
+
+### R5 の再レビュー（6 回目、マージ前の小さな直し）で決めたこと（2026-11-03）
+
+- **記録の最後の試行は行を持たない**: push の記録の 3 回の試行のうち、最後の 1 回は `PushedCommits::unknown()` を送る
+  （`push_commits` の行を書かず、その push を `push_commits_incomplete` にする）。DB が行の多さで遅いときにも、監査の行と
+  イベントは残る（FG-GIT-0012 で記録ごと失うより、コミッターが分からない方が安全で、閉じる側に倒れる）。最後の試行の時間を
+  確保するため、それより前の試行は予算の残りから 10 秒（`RECORD_FINAL_RESERVE`）早く打ち切り、最後の試行の前の待ちもその
+  10 秒を削らない。行を落として記録できたときは FG-GIT-0016 `reason=record_fallback`（`dropped`・`attempts`）を 1 行出す
+  （前の試行が実はコミットしていて最後が Deduped なら、落としていないので出さない）。テスト: 試行の計画の単体テストと、
+  最初の試行が 120 秒止まる記録先で「最後の試行が行なしで記録し、FG-GIT-0012 は出ない」。
+- **行の上限を 20 000 に下げた**: 5 回目の上限 50 000 の書き込みは全体テストの負荷の下で 10.1 秒（2 回分と DB の準備を含む）
+  かかり、予算の 1/3 の余裕が小さかった。20 000 行は通常時 1.35 秒。runbook も合わせた。
+- **スナップショットの記憶**: 先端は文字列とハッシュ集合でなく、32 バイトの生の id（SHA-1 は先頭 20 バイト）を並べて整列・重複除去して
+  持つ（100 万 ref でも 32 MB まで）。失敗したスナップショットの誤りにも読めた ref の数（`refs`）を載せ、FG-GIT-0016 の warn の
+  `refs` に出す。ref の数の上限は上の「未決」に O シリーズの申し送りとして書いた（今は実装しない）。
+- **runbook の補填の手順の訂正**: 「承認を数えにくくするだけで、数えすぎにはならない」は誤り。範囲のコミットに行が揃うと
+  `committers_unknown` が消え、補填した P 以外の承認が数えられるようになる（P のほかにも push した人がいれば、その人の承認まで
+  数えられる）。だから手順の承認者が証拠を自分で確かめ、push した人を全員確かめられないコミットは補填しない、と書いた。
+  値は psql の変数（`:'var'` / `:var`）で渡し、実行した人を `actor_label`（`merge-blocked 2b by <operator>`）と details の `operator` に残す。
+  テストは psql と同じ規則で変数を展開して runbook の SQL を実行する。
+- **マージのコミットの帰属の warn**: `forge.review.merge_commit_unattributed` に `repo_id` と `merge_request_id` を足した。

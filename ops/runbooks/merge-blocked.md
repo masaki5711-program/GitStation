@@ -35,7 +35,7 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 
 | 原因 | 典型 | 対処 |
 |---|---|---|
-| 範囲のコミットに `push_commits` の行が無い（`push_record_missing`） | 表ができる前（マイグレーション 20261111100300 より前）に push されたコミット、`update-ref` で手で動かした ref・ファイルで取り込んだリポジトリ、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、1 回の push が 50 000 コミットを超えた・一覧の 30 秒の時間切れ・push 前の ref の読み取り（スナップショット）や git の失敗（その push の監査の行に `push_commits_incomplete: true`、ログに FG-GIT-0016 の warn が 1 行: `reason` = `cap` / `deadline` / `snapshot_failed` / `git_failed`、`listed`、`refs`。その push の一覧に入らなかったコミットを範囲に持つ MR だけが止まる）、行の無いコミットを含む MR の squash・マージのコミット（範囲の push した人が分からないので、マージのコミットにも行を書かない。ログ `forge.review.merge_commit_unattributed`、FG-GIT-0016 `reason=merge_pushers_unknown:<理由>`） | **コミットの id を変えて** push する: 作成者が `git commit --amend`（先端だけのとき）か `git rebase --force-rebase <target>` で範囲のコミットを作り直し、`git push --force-with-lease` する（新しい id のコミットは「どの ref からも届かなかった」ので行を持つ）。**同じコミットをそのまま push し直しても行は書かれない**（もう届くコミットで、新しくない）。作り直せない（取り込んだ履歴・巨大な push）ときは下の Mitigate 2b（管理者の補填、承認が要る）。push の記録の再生（`forge admin repo record-push`）は git の一覧を持たないので、記録の行の一覧が完全な小さな push だけ行を書く |
+| 範囲のコミットに `push_commits` の行が無い（`push_record_missing`） | 表ができる前（マイグレーション 20261111100300 より前）に push されたコミット、`update-ref` で手で動かした ref・ファイルで取り込んだリポジトリ、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、1 回の push が 20 000 コミットを超えた・一覧の 30 秒の時間切れ・push 前の ref の読み取り（スナップショット）や git の失敗（その push の監査の行に `push_commits_incomplete: true`、ログに FG-GIT-0016 の warn が 1 行: `reason` = `cap` / `deadline` / `snapshot_failed` / `git_failed` / `record_fallback`（DB が遅く、行を付けた記録の試行が失敗し、最後の試行が行なしで監査の行だけを書いた）、`listed`、`refs`。その push の一覧に入らなかったコミットを範囲に持つ MR だけが止まる）、行の無いコミットを含む MR の squash・マージのコミット（範囲の push した人が分からないので、マージのコミットにも行を書かない。ログ `forge.review.merge_commit_unattributed`、FG-GIT-0016 `reason=merge_pushers_unknown:<理由>`） | **コミットの id を変えて** push する: 作成者が `git commit --amend`（先端だけのとき）か `git rebase --force-rebase <target>` で範囲のコミットを作り直し、`git push --force-with-lease` する（新しい id のコミットは「どの ref からも届かなかった」ので行を持つ）。**同じコミットをそのまま push し直しても行は書かれない**（もう届くコミットで、新しくない）。作り直せない（取り込んだ履歴・巨大な push）ときは下の Mitigate 2b（管理者の補填、承認が要る）。push の記録の再生（`forge admin repo record-push`）は git の一覧を持たないので、記録の行の一覧が完全な小さな push だけ行を書く |
 | 範囲が 1 000 コミットを超える（`range_too_long`）、範囲を読む git の失敗（`git_failed`）・時間切れ（`timeout`） | 長く分岐したブランチ、遅いディスク | ブランチを分ける。もう一度要求する |
 
 タグの作成・削除、既にあるコミットへのブランチ、ほかの無関係な大きな push、prune（オブジェクトの削除）は、この判定に影響しない
@@ -63,33 +63,48 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 
 2b. **管理者の補填（作り直せない履歴）** `[MUTATING — needs approval]`: 取り込んだリポジトリ・上限を超えた push など、
    コミットを作り直せず、**誰が push したかが別の証拠（push のログ `forge.git.push_applied`、移行の記録）で分かる** ときだけ。
-   人の承認（誰が・どのコミットを・どの証拠で）を変更の記録に残してから、DB の管理者のロールで 1 トランザクションで実行する。
-   監査の行が同じトランザクションに無いと `audited_change_present` が拒む（XF002）。行は変更されない（`push_commits_immutable`）ので、
-   誤りは消せない: 補填は「push した人を増やす」方向にだけ使う（承認を数えにくくするだけで、数えすぎにはならない）。
-   `<project_id>` `<repo_id>` `<pusher_id>` `<change_id>`（承認の記録の番号、128 文字以内）`<approver>`（承認した人）
-   `<evidence>`（証拠の場所）と `<sha>` の並び（カンマ区切り）を埋める。テスト
-   `the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row` がこの SQL をそのまま実行して確かめている。
+   - **補填は承認を数えさせる**: 範囲のコミットに行が揃うと `committers_unknown` が消え、**補填した P 以外の人の承認が数えられる
+     ようになる**。P のほかにも push した人がいたのに P だけを書くと、その人（本当のコミッター）の承認が数えられてしまう。
+     「数えすぎにはならない」わけではない。だから **手順の承認者が証拠を自分で確かめる**（各コミットについて、push した人を
+     すべて証拠と突き合わせる。分からない人がいるコミットは補填しない — 止めたままにする）。
+   - 行は変更も削除もできない（`push_commits_immutable`、削除は purge だけ）ので、誤りは消せない。
+   - 人の承認（誰が・どのコミットを・どの証拠で）を変更の記録に残してから、DB の管理者のロールで psql から 1 トランザクションで
+     実行する。監査の行が同じトランザクションに無いと `audited_change_present` が拒む（XF002）。
+   - 値は psql の変数で渡す（手で SQL に埋め込まない。psql が `:'var'` を引用つきの文字列に、`:var` をそのままの数に展開する）。
+     `operator` は実行する人（OS のアカウント名など。`actor_label` に入る。全体で 64 文字以内）、`change_id` は承認の記録の番号
+     （128 文字以内、push の request_id と別の名前）、`shas` はコミットの id の並び `{<id>,<id>,…}`。
 
    ```sql
+   \set project_id 12
+   \set repo_id 34
+   \set pusher_id 56
+   \set operator 'ops-alice'
+   \set change_id 'chg-2026-11-03-001'
+   \set approver 'Approver Name'
+   \set evidence 'push log of request req-…'
+   \set shas '{<40 or 64 hex>,<40 or 64 hex>}'
    -- push_commits backfill (begin)
    BEGIN;
    INSERT INTO forge.audit_log (actor_kind, actor_label, action, outcome, resource_type,
        resource_id, project_id, request_id, details)
-   VALUES ('system', 'runbook merge-blocked 2b', 'repository.push_commits_backfilled', 'succeeded',
-       'project', <project_id>, <project_id>, '<change_id>',
-       pg_catalog.jsonb_build_object('repository_id', <repo_id>, 'pusher_id', <pusher_id>,
-           'commits', pg_catalog.cardinality('{<sha>}'::text[]),
-           'approved_by', '<approver>', 'evidence', '<evidence>'));
+   VALUES ('system', 'merge-blocked 2b by ' || :'operator', 'repository.push_commits_backfilled',
+       'succeeded', 'project', :project_id, :project_id, :'change_id',
+       pg_catalog.jsonb_build_object('repository_id', :repo_id, 'pusher_id', :pusher_id,
+           'commits', pg_catalog.cardinality(:'shas'::text[]),
+           'operator', :'operator', 'approved_by', :'approver', 'evidence', :'evidence'));
    INSERT INTO forge.push_commits (repository_id, commit_sha, pusher_id, project_id, request_id)
-   SELECT <repo_id>, c, <pusher_id>, <project_id>, '<change_id>'
-   FROM pg_catalog.unnest('{<sha>}'::text[]) AS c
+   SELECT :repo_id, c, :pusher_id, :project_id, :'change_id'
+   FROM pg_catalog.unnest(:'shas'::text[]) AS c
    ON CONFLICT DO NOTHING;
    COMMIT;
    -- push_commits backfill (end)
    ```
 
-   確かめる: `SELECT commit_sha, pusher_id, request_id FROM forge.push_commits WHERE request_id = '<change_id>';` と、
-   `gstn mr approvals` の `committers_unknown` が消えること。
+   テスト `the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row` が begin〜end の SQL を psql と同じ規則で
+   変数を展開して実行し、監査の行の無い挿入が拒まれることも確かめている。
+
+   確かめる: `SELECT commit_sha, pusher_id, request_id FROM forge.push_commits WHERE request_id = :'change_id';` と、
+   `gstn mr approvals` の `committers_unknown` が消えること（消えたら、残りの承認がどう数えられるかも確かめる）。
 
 3. 規則やルールを手で弱めない（監査つきの設定の変更として、権限のある人が判断する）。
 
