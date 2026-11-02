@@ -24,4 +24,4 @@ Runbook codeowners. The event `forge.review.codeowners_invalid` carries `line` (
 
 ## 対処 (fix)
 
-Fix the CODEOWNERS file on the target branch (runbook codeowners). Until M3 R6 adds the time-boxed `codeowners_enforced` switch, a person who may push to the target branch pushes the fix directly (an approved runbook step); the merge requests are evaluated again on their next merge or status request.
+Fix the CODEOWNERS file on the target branch (runbook codeowners). When the fix itself cannot merge, a Maintainer whose role is at least every protection of the project suspends CODEOWNERS enforcement for at most 24 hours (`gstn codeowners-enforcement suspend --project <id> --for <minutes>`, an approved runbook step; it comes back by itself at the expiry), merges the fix, and enforces it again. The merge requests are evaluated again on their next merge or status request.

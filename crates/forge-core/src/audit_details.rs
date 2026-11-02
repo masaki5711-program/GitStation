@@ -4,6 +4,7 @@
 use crate::approval::ApprovalRuleChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
@@ -295,6 +296,17 @@ pub enum AuditDetails {
     /// `approval_rule.put` / `approval_rule.removed` (M3 R5, ADR-0024 §8.6):
     /// audit-only, on the project. Shapes: [`ApprovalRuleChange::to_value`].
     ApprovalRule(ApprovalRuleChange),
+    /// `merge_settings.*` (M3 R6, ADR-0024 §4.1, §8, §9) of `project`:
+    /// `updated` is audit-only; the CODEOWNERS enforcement changes are
+    /// events of the maintainer class. Shapes: [`MergeSettingsChange::to_value`].
+    MergeSettings {
+        project: ProjectId,
+        change: MergeSettingsChange,
+    },
+    /// `protected_ref.merge_rule_put` / `.merge_rule_removed` (M3 R6,
+    /// ADR-0024 §12): audit-only, on the project. Shapes:
+    /// [`MergeRuleChange::to_value`].
+    ProtectedRefMergeRule(MergeRuleChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -446,6 +458,8 @@ impl AuditDetails {
             Self::MergeRequest(change) => change.action(),
             Self::MergeRequestVersion(change) => change.action(),
             Self::ApprovalRule(change) => change.action(),
+            Self::MergeSettings { change, .. } => change.action(),
+            Self::ProtectedRefMergeRule(change) => change.action(),
         }
     }
 
@@ -492,7 +506,18 @@ impl AuditDetails {
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
             Self::MergeRequest(change) => Some(change.transition().event_type()),
-            Self::MergeRequestVersion(_) | Self::ApprovalRule(_) => None,
+            Self::MergeRequestVersion(_)
+            | Self::ApprovalRule(_)
+            | Self::ProtectedRefMergeRule(_) => None,
+            Self::MergeSettings { change, .. } => match change {
+                MergeSettingsChange::Updated { .. } => None,
+                MergeSettingsChange::CodeownersEnforcementChanged { .. } => {
+                    Some(EventType::CodeownersEnforcementChanged)
+                }
+                MergeSettingsChange::CodeownersEnforcementRestored { .. } => {
+                    Some(EventType::CodeownersEnforcementRestored)
+                }
+            },
             // ADR-0021 §5: sessions are audit rows, never domain events.
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
@@ -846,6 +871,8 @@ impl AuditDetails {
             Self::MergeRequest(change) => change.to_value(),
             Self::MergeRequestVersion(change) => change.to_value(),
             Self::ApprovalRule(change) => change.to_value(),
+            Self::MergeSettings { project, change } => change.to_value(*project),
+            Self::ProtectedRefMergeRule(change) => change.to_value(),
         }
     }
 
@@ -915,7 +942,9 @@ impl AuditDetails {
             | Self::UserIdentityLinked { .. }
             | Self::MergeRequest(_)
             | Self::MergeRequestVersion(_)
-            | Self::ApprovalRule(_) => self.to_value(),
+            | Self::ApprovalRule(_)
+            | Self::MergeSettings { .. }
+            | Self::ProtectedRefMergeRule(_) => self.to_value(),
         }
     }
 }

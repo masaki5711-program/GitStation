@@ -8,6 +8,7 @@
 //! `rules_for_matches_levels_for`); feed it to
 //! `forge_auth::RefProtection::effective`, which takes the strictest.
 
+use crate::merge_conditions::MergeRule;
 use crate::namespace_resolver::LookupFuture;
 use crate::{ProjectId, RefName, RefPattern, Role};
 
@@ -16,6 +17,9 @@ use crate::{ProjectId, RefName, RefPattern, Role};
 pub struct ProtectionRule {
     pub pattern: RefPattern,
     pub push_min_role: Role,
+    /// M3 R6: the rule's merge conditions (`protected_ref_merge_rules`;
+    /// empty when the rule has none).
+    pub merge: MergeRule,
 }
 
 /// Every rule of one project, in rule id order, and the project they were
@@ -58,6 +62,25 @@ impl ProtectionRules {
             .filter(|rule| rule.pattern.matches(name))
             .map(|rule| rule.push_min_role)
             .collect()
+    }
+
+    /// The merge conditions of **every** rule matching `name`, combined
+    /// to the strictest (M3 R6: like the minimum push roles, adding a rule
+    /// never loosens a branch). Empty for an unprotected ref.
+    pub fn merge_rule(&self, name: &RefName) -> MergeRule {
+        MergeRule::strictest(
+            self.rules
+                .iter()
+                .filter(|rule| rule.pattern.matches(name))
+                .map(|rule| &rule.merge),
+        )
+    }
+
+    /// The highest minimum push role of any rule (M3 R6: the
+    /// `above_own_role` check of `CodeownersEnforcementToggle`, ADR-0024
+    /// §9); `None` without rules.
+    pub fn highest_push_min_role(&self) -> Option<Role> {
+        self.rules.iter().map(|rule| rule.push_min_role).max()
     }
 
     pub fn rules(&self) -> &[ProtectionRule] {

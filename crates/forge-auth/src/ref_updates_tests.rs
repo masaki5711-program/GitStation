@@ -37,6 +37,7 @@ fn rules() -> ProtectionRules {
     let rule = |pattern: &str, role| ProtectionRule {
         pattern: RefPattern::parse(pattern).expect("pattern"),
         push_min_role: role,
+        merge: Default::default(),
     };
     ProtectionRules::for_project(
         ProjectId::new(3),
@@ -171,5 +172,63 @@ fn rules_of_another_project_are_refused() {
         let err = authorize_ref_updates(&proof, &updates).expect_err("mismatch");
         assert_eq!(err.code(), ErrorCode::Internal);
         assert!(err.to_string().contains("rules_project_mismatch"), "{err}");
+    }
+}
+
+/// M3 R6 (ADR-0024 §4.3, §12; FG-GIT-0017): a matching rule's merge rule
+/// that forbids direct pushes refuses a create or a fast-forward of the
+/// branch for every caller, administrators included; another rule on the
+/// same branch without the ban does not loosen it; other branches push.
+#[test]
+fn a_direct_push_to_a_branch_with_the_ban_is_refused() {
+    let banned = forge_core::MergeRule {
+        direct_push_forbidden: true,
+        ..Default::default()
+    };
+    let rules = ProtectionRules::for_project(
+        ProjectId::new(3),
+        vec![
+            ProtectionRule {
+                pattern: RefPattern::parse("refs/heads/main").expect("pattern"),
+                push_min_role: Role::Maintainer,
+                merge: banned,
+            },
+            ProtectionRule {
+                pattern: RefPattern::parse("refs/heads/ma*").expect("pattern"),
+                push_min_role: Role::Developer,
+                merge: Default::default(),
+            },
+        ],
+    );
+    for admin in [false, true] {
+        let me = user(admin);
+        let proof = prove(&me, Action::RepoPush, project(Some(Role::Owner))).expect("owner");
+        let updates = [
+            RefUpdateCtx::new(name("refs/heads/main"), RefUpdate::FastForward, &rules),
+            RefUpdateCtx::new(name("refs/heads/MAIN"), RefUpdate::Create, &rules),
+            RefUpdateCtx::new(name("refs/heads/mainline"), RefUpdate::FastForward, &rules),
+        ];
+        assert!(updates[0]
+            .protection()
+            .is_some_and(|p| p.direct_push_forbidden()));
+        let got = authorize_ref_updates(&proof, &updates).expect("decided");
+        let codes: Vec<Option<ErrorCode>> = got
+            .iter()
+            .map(|r| r.as_ref().err().map(|e| e.code()))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                Some(ErrorCode::ProtectedRefDirectPushForbidden),
+                Some(ErrorCode::ProtectedRefDirectPushForbidden),
+                None,
+            ],
+            "admin={admin}"
+        );
+        let e = got[0].as_ref().expect_err("banned");
+        assert!(e
+            .context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "direct_push_forbidden"));
     }
 }

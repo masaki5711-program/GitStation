@@ -13,11 +13,13 @@
 
 mod action;
 mod authorize;
+mod codeowners_ctx;
 mod contexts;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
 mod matrix_rows_approval;
+mod matrix_rows_conditions;
 mod matrix_rows_discussion;
 mod matrix_rows_merge;
 mod matrix_rows_people;
@@ -28,12 +30,13 @@ mod ref_updates;
 
 pub use action::Action;
 pub use authorize::authorize;
+pub use codeowners_ctx::CodeownersToggleCtx;
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
-    AccountKind, AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestEdit,
-    MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
-    ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason,
-    Visibility,
+    AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
+    MergeRequestEdit, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind,
+    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
+    UnresolvedReason, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,

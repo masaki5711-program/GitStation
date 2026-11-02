@@ -140,6 +140,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::LoginNotConfigured
         | ErrorCode::ProtectedRefForcePush
         | ErrorCode::ProtectedRefPushNotAllowed
+        | ErrorCode::ProtectedRefDirectPushForbidden
         | ErrorCode::ProtectedRefDeletion
         | ErrorCode::ReservedRefNamespace
         | ErrorCode::AmbiguousRefName
@@ -199,7 +200,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::MergeIdentityInvalid
         | ErrorCode::SelfApprovalRefused
         | ErrorCode::CodeownersInvalid
-        | ErrorCode::ApprovalLimitReached => false,
+        | ErrorCode::ApprovalLimitReached
+        | ErrorCode::RequiredCheckNamespaceNotAllowed => false,
     }
 }
 

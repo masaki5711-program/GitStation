@@ -44,7 +44,7 @@ const MERGER: (W, W) = (W::ServiceAccountTokenMergeExecute, W::BotTokenMergeExec
 const APPROVER: (W, W) = (W::ServiceAccountTokenMergeApprove, W::BotTokenMergeApprove);
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 16] = [
+const GROUPS: [[Row; 2]; 18] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -62,6 +62,13 @@ const GROUPS: [[Row; 2]; 16] = [
     both!(A::MergeRequestApprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::MergeRequestUnapprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::ApprovalRuleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    // M3 R6.
+    both!(A::MergeSettingsManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    both!(A::CodeownersEnforcementToggle, MAINTAINER.0, MAINTAINER.1, F::Codeowners {
+        highest: Some(R::Maintainer),
+        change: crate::model::CodeownersToggle::Suspend { minutes: Some(60) },
+        deleted: false,
+    }),
 ];
 
 /// The rows, flattened (`matrix::ROWS` appends them), and the Owner

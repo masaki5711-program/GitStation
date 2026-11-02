@@ -134,6 +134,7 @@ pub(crate) async fn rules_on(
             .map(|rule| ProtectionRule {
                 pattern: rule.pattern,
                 push_min_role: rule.push_min_role,
+                merge: forge_core::MergeRule::default(),
             })
             .collect(),
     ))
@@ -682,6 +683,7 @@ pub async fn rules_for(db: &Db, project: ProjectId) -> Result<ProtectionRules, F
             .map(|rule| ProtectionRule {
                 pattern: rule.pattern,
                 push_min_role: rule.push_min_role,
+                merge: forge_core::MergeRule::default(),
             })
             .collect(),
     ))

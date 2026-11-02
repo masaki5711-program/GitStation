@@ -42,14 +42,18 @@
 //!    author (`author_foreign_discussion`, administrators included);
 //! 7. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
-//!    administrators, and `FG-GIT-0008` below the minimum push role
-//!    (administrators pass the minimum role).
+//!    administrators, `FG-GIT-0017` (a create or fast-forward of a branch
+//!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
+//!    `FG-GIT-0008` below the minimum push role (administrators pass the
+//!    minimum role).
 
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
+use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
+
 use crate::model::{
-    AccountKind, AdmissionAccount, Credential, MembershipChange, MembershipScope,
+    AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
     MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia,
     Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
@@ -261,6 +265,16 @@ pub fn authorize(
             match update {
                 RefUpdate::Force => Err(protected(ErrorCode::ProtectedRefForcePush)),
                 RefUpdate::Delete => Err(protected(ErrorCode::ProtectedRefDeletion)),
+                // M3 R6 (ADR-0024 §4.3, §12): the branch changes through
+                // merge requests only — for every caller, administrators
+                // included (like a force push or a deletion). The merge
+                // path (`MergeRequestMerge`) never reads it.
+                RefUpdate::Create | RefUpdate::FastForward
+                    if protection.direct_push_forbidden() =>
+                {
+                    Err(protected(ErrorCode::ProtectedRefDirectPushForbidden)
+                        .with_context("reason", "direct_push_forbidden"))
+                }
                 RefUpdate::Create | RefUpdate::FastForward => {
                     if admin
                         || project
@@ -705,10 +719,48 @@ pub fn authorize(
             }
             need(Role::Developer, project.role)
         }
-        // Approval rules (M3 R5, ADR-0024 §8.6): people only, Maintainer.
-        (Action::ApprovalRuleManage, Resource::Project(p)) => {
+        // Approval rules (M3 R5, ADR-0024 §8.6) and merge settings (M3 R6,
+        // §4.1, §8.2, §8.3): people only, Maintainer.
+        (Action::ApprovalRuleManage | Action::MergeSettingsManage, Resource::Project(p)) => {
             people_only()?;
             need(Role::Maintainer, p.role)
+        }
+        // CODEOWNERS enforcement (M3 R6, ADR-0024 §9): people only,
+        // Maintainer. A suspension needs a role at or above every
+        // protection of the project (a Maintainer cannot drop the owners'
+        // check where an Owner-level branch exists; administrators pass)
+        // and an expiry of 1 minute to 24 hours. Enforcing again only
+        // tightens: Maintainer is enough.
+        (
+            Action::CodeownersEnforcementToggle,
+            Resource::CodeownersEnforcement {
+                project,
+                highest_protection,
+                change,
+            },
+        ) => {
+            people_only()?;
+            need(Role::Maintainer, project.role)?;
+            let CodeownersToggle::Suspend { minutes } = change else {
+                return Ok(());
+            };
+            match highest_protection {
+                Some(level) if !admin && project.role.is_none_or(|r| *level > r) => {
+                    return Err(deny(ErrorCode::Forbidden)
+                        .with_context("reason", "above_own_role")
+                        .with_context("required_role", level.as_str())
+                        .with_context("actual_role", project.role.map_or("none", Role::as_str)));
+                }
+                Some(_) | None => {}
+            }
+            match minutes {
+                None => Err(refused("expiry_missing")),
+                Some(m) if *m == 0 || *m > MAX_CODEOWNERS_SUSPENSION_MINUTES => {
+                    Err(refused("expiry_out_of_range")
+                        .with_context("max_minutes", MAX_CODEOWNERS_SUSPENSION_MINUTES))
+                }
+                Some(_) => Ok(()),
+            }
         }
 
         // --- discussions (M3 R3, ADR-0024 §12) ---
@@ -810,6 +862,8 @@ pub fn authorize(
             | Action::MergeRequestApprove
             | Action::MergeRequestUnapprove
             | Action::ApprovalRuleManage
+            | Action::MergeSettingsManage
+            | Action::CodeownersEnforcementToggle
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -829,7 +883,8 @@ pub fn authorize(
             | Resource::Admission { .. }
             | Resource::Resolved { .. }
             | Resource::MergeRequest { .. }
-            | Resource::Discussion { .. },
+            | Resource::Discussion { .. }
+            | Resource::CodeownersEnforcement { .. },
         ) => wrong_resource(),
     }
 }
@@ -869,7 +924,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         Resource::RefProtectionChange { project, .. }
         | Resource::VisibilityChange { project, .. }
         | Resource::MergeRequest { project, .. }
-        | Resource::Discussion { project, .. } => live(project),
+        | Resource::Discussion { project, .. }
+        | Resource::CodeownersEnforcement { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -943,7 +999,8 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Unresolved(_)
         | Resource::Resolved { .. }
         | Resource::MergeRequest { .. }
-        | Resource::Discussion { .. } => None,
+        | Resource::Discussion { .. }
+        | Resource::CodeownersEnforcement { .. } => None,
     }
 }
 

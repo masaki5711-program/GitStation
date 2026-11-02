@@ -12,6 +12,7 @@ pub mod event_type;
 pub mod ids;
 pub mod list_page;
 pub mod merge;
+pub mod merge_conditions;
 pub mod merge_request;
 pub mod move_details;
 pub mod namespace_path;
@@ -48,6 +49,10 @@ pub use ids::{
 };
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use merge::{MergeMethod, MergeState, SourceOutcome};
+pub use merge_conditions::{
+    CheckName, CheckNameError, CheckNamespace, MergeRule, MergeRuleChange, MergeSettingsChange,
+    MergeSettingsValues,
+};
 pub use merge_request::{
     CheckReason, MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
     MergeRequestVersionChange, MergeabilityStatus,

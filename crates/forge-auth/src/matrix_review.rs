@@ -62,6 +62,9 @@ pub(crate) struct MrFixture {
     /// The target branch's minimum push role (`None` = unprotected; read
     /// by `MergeRequestMerge` only, M3 R4).
     pub protected: Option<crate::model::Role>,
+    /// M3 R6: the target's protection forbids direct pushes (never read by
+    /// `MergeRequestMerge`: merging is how such a branch changes).
+    pub no_direct_push: bool,
 }
 
 impl MrFixture {
@@ -77,6 +80,7 @@ impl MrFixture {
             set_draft: None,
             target: MrTarget::Unchanged,
             protected: None,
+            no_direct_push: false,
         }
     }
 
@@ -123,7 +127,13 @@ impl MrFixture {
                 target_branch: new_target,
                 draft: self.set_draft,
             },
-            target_protection: RefProtection::effective(self.protected),
+            target_protection: RefProtection::effective(self.protected).map(|p| {
+                if self.no_direct_push {
+                    p.forbidding_direct_push()
+                } else {
+                    p
+                }
+            }),
         }
     }
 }

@@ -125,6 +125,18 @@ pub(crate) enum Fixture {
         update: RefUpdate,
         protected: Option<Role>,
     },
+    /// A branch update on a private project whose Maintainer-level
+    /// protection forbids direct pushes (M3 R6).
+    RefNoDirectPush {
+        update: RefUpdate,
+    },
+    /// A CODEOWNERS enforcement change (M3 R6) on a private project
+    /// (`deleted`: pending deletion) whose highest protection is `highest`.
+    Codeowners {
+        highest: Option<Role>,
+        change: crate::model::CodeownersToggle,
+        deleted: bool,
+    },
     /// A branch fast-forward on an internal project.
     InternalRef,
     /// A branch fast-forward on a project pending deletion.
@@ -556,6 +568,22 @@ impl Fixture {
                 update,
                 protection: RefProtection::effective(protected),
             },
+            Fixture::RefNoDirectPush { update } => Resource::Ref {
+                project: private,
+                name: ref_name(RefKind::Branch),
+                update,
+                protection: RefProtection::effective([Role::Maintainer])
+                    .map(RefProtection::forbidding_direct_push),
+            },
+            Fixture::Codeowners {
+                highest,
+                change,
+                deleted: gone,
+            } => Resource::CodeownersEnforcement {
+                project: if gone { deleted } else { private },
+                highest_protection: highest,
+                change,
+            },
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),
             Fixture::Group => Resource::Group { role },
@@ -770,6 +798,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_merge::MERGE_ROWS,
         crate::matrix_rows_approval::APPROVAL_ROWS,
         crate::matrix_rows_approval::APPROVAL_OTHER_ROWS,
+        crate::matrix_rows_conditions::CONDITION_ROWS,
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
     ]

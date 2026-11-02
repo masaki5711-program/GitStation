@@ -823,6 +823,20 @@ fix = "Nothing is wrong with the repository. A merge request blocked by it (merg
 runbook = "merge-blocked"
 test = "an_incomplete_listing_logs_one_warn_with_its_reason"
 
+# ── M3 R6: the direct-push ban of a protected branch ──────────────────
+[[error]]
+code = "FG-GIT-0017"
+name = "ProtectedRefDirectPushForbidden"
+http_status = 403
+severity = "info"
+user_message_ja = "このブランチには直接 push できません。マージリクエストを作成してマージしてください。"
+user_message_en = "This branch cannot be pushed to directly. Open a merge request and merge it."
+user_message_id = "Branch ini tidak dapat di-push secara langsung. Buat merge request lalu lakukan merge."
+cause = "The branch is protected and a matching rule's merge rule forbids direct pushes (`protected_ref_merge_rules.direct_push_forbidden`, M3 R6, ADR-0024 §4.3, §12): a push may neither create nor move it — for every caller, administrators included (like force pushes and deletions of a protected ref). Merging a merge request is not affected (`MergeRequestMerge` does not read the ban). The whole push was refused in-band before git ran (no ref changed)."
+diagnosis = "The log event carries `action=RepoPush`, `reason=direct_push_forbidden` and `protection` (the protection's minimum push role); on a Smart HTTP push also `refs`, `denied_refs`, `denied_codes`. Which rule bans it (read-only): GET /api/v1/projects/<id>/protected-refs (the rules with their `merge_rule`)."
+fix = "Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban by setting the merge rule again without `--no-direct-push` (`gstn protected-ref merge-rule set --project <id> --rule-id <n> …`) or removes it (`gstn protected-ref merge-rule remove`)."
+test = "a_direct_push_to_a_branch_with_the_ban_is_refused"
+
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
 [[error]]
@@ -1578,7 +1592,7 @@ user_message_en = "The target branch's CODEOWNERS file cannot be read, so the me
 user_message_id = "File CODEOWNERS pada branch target tidak dapat dibaca, sehingga merge request tidak dapat di-merge. Minta maintainer untuk memperbaiki CODEOWNERS."
 cause = "The CODEOWNERS file on the merge request's target branch tip (`.forge/CODEOWNERS`, else `CODEOWNERS`; ADR-0024 §9) could not be used: reason=syntax (a line is not `<pattern> <owner>…`), owner_syntax (an owner is not `@username` or `@group/path`), unsupported (a section `[Section]`, an optional section `^[…]`, an e-mail owner or a negation `!`: refused, never ignored), pattern_invalid (an empty or malformed glob, a `***`, more than 16 wildcards, `//` at either end, a control character other than the tab, a Unicode format character, a combining mark, a Hangul filler, the Braille blank, a variation selector or a non-ASCII blank outside a comment), unknown_owner (no active user and no group of that name: missing and disabled answer alike), too_large (over 64 KiB), too_many_lines (over 1 000 lines), line_too_long (over 4 KiB), not_utf8, read_failed (git could not read the file, or the evaluation's read budget ran out: the event carries `git_error_code`), match_budget (matching the changed paths took more than 5 s: fail closed), match_failed (the matching task failed: the event carries `join_error`). The merge is blocked with `codeowners_invalid{line, reason}` (fail closed: an unreadable file never means \"no owners\"). Logged once per evaluation at warn."
 diagnosis = "Runbook codeowners. The event `forge.review.codeowners_invalid` carries `line` (1-based; 0 for the whole file), `reason`, `path` (which file), `target_sha` and `merge_request_id`. Read the file at that commit (read-only): git --git-dir <repo> show <target_sha>:<path> | sed -n '<line>p'."
-fix = "Fix the CODEOWNERS file on the target branch (runbook codeowners). Until M3 R6 adds the time-boxed `codeowners_enforced` switch, a person who may push to the target branch pushes the fix directly (an approved runbook step); the merge requests are evaluated again on their next merge or status request."
+fix = "Fix the CODEOWNERS file on the target branch (runbook codeowners). When the fix itself cannot merge, a Maintainer whose role is at least every protection of the project suspends CODEOWNERS enforcement for at most 24 hours (`gstn codeowners-enforcement suspend --project <id> --for <minutes>`, an approved runbook step; it comes back by itself at the expiry), merges the fix, and enforces it again. The merge requests are evaluated again on their next merge or status request."
 runbook = "codeowners"
 test = "a_codeowners_file_with_an_unknown_owner_blocks_the_merge"
 
@@ -1594,3 +1608,17 @@ cause = "An approval would make more than 50 live approvals on one merge request
 diagnosis = "The log event carries `reason=approvals_per_merge_request`, `limit`, `merge_request_id`. Count (read-only): SELECT count(*) FROM forge.merge_request_approvals WHERE merge_request_id = <id> AND revoked_at IS NULL."
 fix = "Approvals beyond the rules' needs add nothing; ask approvers who are not needed to withdraw (`gstn mr unapprove`), or push a new commit (which clears the approvals)."
 test = "an_approval_past_the_cap_is_refused"
+
+# ── M3 R6: merge conditions ───────────────────────────────────────────
+[[error]]
+code = "FG-REVIEW-0016"
+name = "RequiredCheckNamespaceNotAllowed"
+http_status = 422
+severity = "info"
+user_message_ja = "このチェックは必須にできません。必須にできるのは ci/・kanflow/・forge/ のチェックだけです。"
+user_message_en = "This check cannot be required. Only checks under ci/, kanflow/ or forge/ can be required."
+user_message_id = "Pemeriksaan ini tidak dapat diwajibkan. Hanya pemeriksaan di bawah ci/, kanflow/, atau forge/ yang dapat diwajibkan."
+cause = "A protected ref's merge rule named a required check in a namespace a person can write (`ext/`; ADR-0024 §10, M3 R6): a check a person can report must never satisfy a merge condition, so only the namespaces of service accounts and of forge itself (`ci/`, `kanflow/`, `forge/`) can be required. Nothing was written."
+diagnosis = "The log event carries `reason=namespace_not_allowed`, `namespace` and `check` (the refused name), with `action=ProtectedRefManage`."
+fix = "Require the check under the namespace of the service account that reports it (for example `ci/gates`), or leave it optional."
+test = "an_ext_check_cannot_be_required"
