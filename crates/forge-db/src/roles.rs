@@ -242,6 +242,30 @@ pub(crate) async fn lock_roles(
 
 // ── end M1 phase 8b MR7a ──
 
+/// The native role of `user` on `project`, read on `conn` without locking
+/// (M3 R5: an approver's role at evaluation time; the approval rows are
+/// read under the merge request's lock, the approver's memberships are
+/// facts of that moment). `None` = no role (or an inactive user).
+pub(crate) async fn project_role_on(
+    conn: &mut PgConnection,
+    project: ProjectId,
+    user: UserId,
+) -> Result<Option<Role>, ForgeError> {
+    let rows: Vec<(i32, bool, Option<String>)> = sqlx::query_as(BY_PROJECT)
+        .bind(project.get())
+        .bind(user.get())
+        .bind(CAP)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| query_error("roles.project_role", e))?;
+    if rows.is_empty() {
+        return Err(ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", "project")
+            .with_context("reason", "absent"));
+    }
+    Ok(fold_chain(rows, "project", project.get(), Some(user))?.native)
+}
+
 /// `FG-DB-0018` with what the runbook needs to find the rows (`user` only
 /// for a signed-in viewer).
 fn invalid(

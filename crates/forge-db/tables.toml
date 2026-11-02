@@ -44,6 +44,8 @@ guarded_functions = [
     "merge_request_notes_guard",
     # M3 R4: a merge attempt only moves forward; final states never change.
     "merge_request_merges_guard",
+    # M3 R5: an approval's identity never changes; it ends once.
+    "merge_request_approvals_guard",
 ]
 
 [tables.events]
@@ -305,6 +307,35 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 # ── end M3 R4 ──
+
+# ── M3 R5: approvals and approval rules (ADR-0024 §8), audited on their project ──
+[tables.merge_request_approvals]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.approval_rules]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.approval_rule_approvers]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 R5 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

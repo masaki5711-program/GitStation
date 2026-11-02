@@ -498,6 +498,33 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .await
                 .expect("deleted");
             }
+            // M3 R5: an approval and its withdrawal (forge-review decides
+            // who may; the command records).
+            MergeRequestTransition::Approve => {
+                let (done, _, ()) = approve_mr_decided(
+                    &t.db,
+                    &ctx(&request),
+                    (p, drafted.iid),
+                    alice,
+                    |_| Ok(()),
+                    |_, _, _| (true, None),
+                )
+                .await
+                .expect("approve");
+                assert!(matches!(done, ApproveOutcome::Approved { .. }));
+            }
+            MergeRequestTransition::Unapprove => {
+                let (done, _, ()) = unapprove_mr_decided(
+                    &t.db,
+                    &ctx(&request),
+                    (p, drafted.iid),
+                    alice,
+                    |_| Ok(()),
+                )
+                .await
+                .expect("unapprove");
+                assert_eq!(done, ApproveOutcome::Withdrawn);
+            }
         }
         let events = events_of(&t, &request).await;
         // M3 R4: a merge and a source deletion also record the ref update

@@ -34,6 +34,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::{read_query_error, Db};
 
+pub mod approvals;
 mod commands;
 pub mod discussions;
 pub mod mergeability;
@@ -43,6 +44,13 @@ mod version_bases;
 mod version_refs;
 pub mod versions;
 
+pub use approvals::{
+    approval_facts, approval_rules, approve_mr_decided, owners, push_coverage,
+    put_approval_rule_mr_decided, remove_approval_rule_mr_decided, unapprove_mr_decided,
+    ApprovalFacts, ApproveOutcome, ApproverFacts, NewApprovalRule, Owners, PushCoverage,
+    PushedEntry, RuleOutcome, StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES,
+    MAX_RULE_APPROVERS,
+};
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,
     start_discussion_mr_decided, DiscussionFacts, DiscussionPage, DiscussionPosition,
@@ -224,6 +232,8 @@ pub async fn list(
     rows.into_iter().map(Row::parse).collect()
 }
 
+#[cfg(test)]
+mod approval_tests;
 #[cfg(test)]
 mod discussion_tests;
 #[cfg(test)]

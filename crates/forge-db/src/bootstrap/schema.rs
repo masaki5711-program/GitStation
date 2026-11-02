@@ -43,6 +43,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.merge_request_notes_guard()",
     // ── M3 R4: a merge attempt only moves forward (20261110100000) ──
     "forge.merge_request_merges_guard()",
+    // ── M3 R5: an approval ends once (20261111100000) ──
+    "forge.merge_request_approvals_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -107,6 +109,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER merge_request_merges_forward BEFORE INSERT OR UPDATE ON \
          forge.merge_request_merges FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_merges_guard()",
+    ),
+    // ── M3 R5: an approval's identity never changes; it ends once (20261111100000) ──
+    (
+        "merge_request_approvals",
+        "merge_request_approvals_end_once",
+        "CREATE TRIGGER merge_request_approvals_end_once BEFORE UPDATE ON \
+         forge.merge_request_approvals FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_approvals_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -536,6 +546,10 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_request_notes", operational()),
         // ── M3 R4: merge attempts, DELETE for the purge (20261110100000) ──
         ("forge.merge_request_merges", operational()),
+        // ── M3 R5: approvals and rules, removed by the purge (20261111100000) ──
+        ("forge.merge_request_approvals", operational()),
+        ("forge.approval_rules", operational()),
+        ("forge.approval_rule_approvers", operational()),
     ]
 }
 
@@ -681,6 +695,10 @@ const LATER_TABLES: &[&str] = &[
     "merge_request_notes",
     // ── M3 R4: merge attempts (migration 20261110100000) ──
     "merge_request_merges",
+    // ── M3 R5: approvals and approval rules (migration 20261111100000) ──
+    "merge_request_approvals",
+    "approval_rules",
+    "approval_rule_approvers",
 ];
 
 /// Every table the first migration creates.
