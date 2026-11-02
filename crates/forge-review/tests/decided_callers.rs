@@ -11,10 +11,16 @@ use std::path::{Path, PathBuf};
 
 /// The review commands' names, assembled so this file does not match itself.
 fn review_commands() -> Vec<String> {
-    ["open_mr", "edit_mr", "close_mr", "reopen_mr"]
-        .iter()
-        .map(|c| format!("{c}{}{}", "_decided", "("))
-        .collect()
+    [
+        "open_mr",
+        "edit_mr",
+        "close_mr",
+        "reopen_mr",
+        "purge_mr_version_refs",
+    ]
+    .iter()
+    .map(|c| format!("{c}{}{}", "_decided", "("))
+    .collect()
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -36,6 +36,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.web_sessions_purge_guard()",
     // ── M3 R1a: merged is final (20261106100000) ──
     "forge.merge_requests_state_guard()",
+    // ── M3 R1b: a version's identity never changes (20261107100000) ──
+    "forge.merge_request_versions_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -68,6 +70,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "merge_requests_state_forward",
         "CREATE TRIGGER merge_requests_state_forward BEFORE UPDATE ON forge.merge_requests \
          FOR EACH ROW EXECUTE FUNCTION forge.merge_requests_state_guard()",
+    ),
+    // ── M3 R1b: a version's identity never changes (20261107100000) ──
+    (
+        "merge_request_versions",
+        "merge_request_versions_set_once",
+        "CREATE TRIGGER merge_request_versions_set_once BEFORE UPDATE ON \
+         forge.merge_request_versions FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_versions_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -488,6 +498,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_requests", operational()),
         ("forge.merge_request_counters", operational()),
         // ── end M3 R1a ──
+        // ── M3 R1b: versions, DELETE for the purge (20261107100000) ──
+        ("forge.merge_request_versions", operational()),
     ]
 }
 
@@ -624,6 +636,8 @@ const LATER_TABLES: &[&str] = &[
     "merge_requests",
     "merge_request_counters",
     // ── end M3 R1a ──
+    // ── M3 R1b: merge request versions (migration 20261107100000) ──
+    "merge_request_versions",
 ];
 
 /// Every table the first migration creates.

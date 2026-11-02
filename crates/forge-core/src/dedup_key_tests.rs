@@ -89,3 +89,21 @@ fn is_well_formed_matches_the_documented_shape() {
         assert!(!DedupKey::is_well_formed(bad), "{bad:?}");
     }
 }
+
+/// M3 R1b: `merge_request_pushed:<merge_request_id>:<head_sha>` — a git
+/// object id is a part (SHA-1 and SHA-256 lengths fit).
+#[test]
+fn an_object_id_is_a_part() {
+    for len in [40, 64] {
+        let oid = crate::ObjectId::parse(&"a".repeat(len)).expect("oid");
+        let key = DedupKey::new(
+            "merge_request_pushed",
+            &[DedupPart::Id(7), DedupPart::Object(&oid)],
+        )
+        .expect("key");
+        assert_eq!(
+            key.as_str(),
+            format!("merge_request_pushed:7:{}", "a".repeat(len))
+        );
+    }
+}

@@ -3,7 +3,7 @@
 
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
-use crate::merge_request::MergeRequestChange;
+use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryState;
@@ -288,6 +288,9 @@ pub enum AuditDetails {
     /// `protected_ref.*`) and published as the transition's event
     /// (integration class). The shapes: [`MergeRequestChange::to_value`].
     MergeRequest(MergeRequestChange),
+    /// `merge_request.head_restored` / `.version_refs_purged` (M3 R1b):
+    /// audit-only, on the project. Shapes: [`MergeRequestVersionChange::to_value`].
+    MergeRequestVersion(MergeRequestVersionChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -437,6 +440,7 @@ impl AuditDetails {
             Self::UserCreatedOnLogin { .. } => "user.created",
             Self::UserIdentityLinked { .. } => "user.identity_linked",
             Self::MergeRequest(change) => change.action(),
+            Self::MergeRequestVersion(change) => change.action(),
         }
     }
 
@@ -483,6 +487,7 @@ impl AuditDetails {
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
             Self::MergeRequest(change) => Some(change.transition().event_type()),
+            Self::MergeRequestVersion(_) => None,
             // ADR-0021 §5: sessions are audit rows, never domain events.
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
@@ -834,6 +839,7 @@ impl AuditDetails {
                 "via": via.as_str(),
             }),
             Self::MergeRequest(change) => change.to_value(),
+            Self::MergeRequestVersion(change) => change.to_value(),
         }
     }
 
@@ -901,7 +907,8 @@ impl AuditDetails {
             | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
             | Self::UserIdentityLinked { .. }
-            | Self::MergeRequest(_) => self.to_value(),
+            | Self::MergeRequest(_)
+            | Self::MergeRequestVersion(_) => self.to_value(),
         }
     }
 }

@@ -7,10 +7,12 @@
 //! lists them with that type, and forge-db's tests drive each one against
 //! the database and count the events (`every_merge_request_transition_emits_exactly_one_event`).
 //! R1a writes `opened`, `updated`, `draft_changed`, `closed` and
-//! `reopened`; `merged`, `pushed` and the rest join with their writers.
+//! `reopened`; R1b `pushed` (the version job); `merged` and the rest join
+//! with their writers.
 
 use crate::event_type::EventType;
 use crate::ids::{MergeRequestId, UserId};
+use crate::push::ObjectId;
 use crate::ref_name::RefName;
 
 /// `open`, `merged` or `closed` (the CHECK of forge.merge_requests.state).
@@ -75,6 +77,8 @@ pub enum MergeRequestTransition {
     DraftToggle,
     /// The title, the description or the target branch changed.
     Edit,
+    /// A version was added (M3 R1b).
+    Push,
 }
 
 impl MergeRequestTransition {
@@ -85,6 +89,7 @@ impl MergeRequestTransition {
         Self::Reopen,
         Self::DraftToggle,
         Self::Edit,
+        Self::Push,
     ];
 
     /// The one event the transition publishes.
@@ -95,6 +100,7 @@ impl MergeRequestTransition {
             Self::Reopen => EventType::MergeRequestReopened,
             Self::DraftToggle => EventType::MergeRequestDraftChanged,
             Self::Edit => EventType::MergeRequestUpdated,
+            Self::Push => EventType::MergeRequestPushed,
         }
     }
 }
@@ -137,6 +143,19 @@ pub enum MergeRequestChange {
         merge_request: MergeRequestId,
         iid: i64,
     },
+    /// `merge_request.pushed` (M3 R1b): version `version` with head commit
+    /// `head_sha` was added by the version job (actor `system`);
+    /// `pushed_by` is the pusher whose push triggered it (`None` when no
+    /// push did: the first version of a new or reopened merge request),
+    /// `previous_head` the head before.
+    Pushed {
+        merge_request: MergeRequestId,
+        iid: i64,
+        version: i64,
+        head_sha: ObjectId,
+        previous_head: Option<ObjectId>,
+        pushed_by: Option<UserId>,
+    },
 }
 
 impl MergeRequestChange {
@@ -148,6 +167,7 @@ impl MergeRequestChange {
             Self::DraftChanged { .. } => MergeRequestTransition::DraftToggle,
             Self::Closed { .. } => MergeRequestTransition::Close,
             Self::Reopened { .. } => MergeRequestTransition::Reopen,
+            Self::Pushed { .. } => MergeRequestTransition::Push,
         }
     }
 
@@ -158,7 +178,8 @@ impl MergeRequestChange {
             | Self::Updated { merge_request, .. }
             | Self::DraftChanged { merge_request, .. }
             | Self::Closed { merge_request, .. }
-            | Self::Reopened { merge_request, .. } => *merge_request,
+            | Self::Reopened { merge_request, .. }
+            | Self::Pushed { merge_request, .. } => *merge_request,
         }
     }
 
@@ -168,7 +189,9 @@ impl MergeRequestChange {
     }
 
     /// The fixed prefix of the event's dedup key
-    /// (`<prefix>:<merge_request_id>:<revision>`, server ids only).
+    /// (`<prefix>:<merge_request_id>:<revision>`, server ids only;
+    /// `merge_request_pushed:<merge_request_id>:<head_sha>` for a push,
+    /// ADR-0024 §6).
     pub fn dedup_prefix(&self) -> &'static str {
         match self {
             Self::Opened { .. } => "merge_request_opened",
@@ -176,13 +199,15 @@ impl MergeRequestChange {
             Self::DraftChanged { .. } => "merge_request_draft_changed",
             Self::Closed { .. } => "merge_request_closed",
             Self::Reopened { .. } => "merge_request_reopened",
+            Self::Pushed { .. } => "merge_request_pushed",
         }
     }
 
     /// Opened `{"merge_request_id","iid","author_id","source_branch","target_branch","draft"}`,
     /// Updated `{"merge_request_id","iid","fields","target_branch"}` (`target_branch`:
     /// `{"from","to"}` or `null`), DraftChanged `{"merge_request_id","iid","draft"}`,
-    /// Closed / Reopened `{"merge_request_id","iid"}`.
+    /// Closed / Reopened `{"merge_request_id","iid"}`, Pushed
+    /// `{"merge_request_id","iid","version","head_sha","previous_head","pushed_by"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -229,6 +254,115 @@ impl MergeRequestChange {
                     "iid": iid,
                 })
             }
+            Self::Pushed {
+                merge_request,
+                iid,
+                version,
+                head_sha,
+                previous_head,
+                pushed_by,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "version": version,
+                "head_sha": head_sha.as_str(),
+                "previous_head": previous_head.as_ref().map(ObjectId::as_str),
+                "pushed_by": pushed_by.map(UserId::get),
+            }),
+        }
+    }
+}
+
+/// The audit-only changes of a merge request's versions (M3 R1b, ADR-0024
+/// §2): never a domain event (ADR-0024 §6 lists none for them).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeRequestVersionChange {
+    /// `merge_request.head_restored`: the source branch went back to the
+    /// head commit of an existing version (`version`), which is the head
+    /// again; no version is added (one version per head commit).
+    HeadRestored {
+        merge_request: MergeRequestId,
+        iid: i64,
+        version: i64,
+        head_sha: ObjectId,
+        previous_head: Option<ObjectId>,
+    },
+    /// `merge_request.purged_head_pushed`: the source branch was moved
+    /// (force-pushed) back to the head commit of a version whose refs were
+    /// purged; it does not become the head again (the merge request keeps
+    /// its recorded head; R4's merge refuses a branch tip other than it).
+    PurgedHeadPushed {
+        merge_request: MergeRequestId,
+        iid: i64,
+        version: i64,
+        head_sha: ObjectId,
+    },
+    /// `merge_request.version_refs_purged`: an administrator removed the
+    /// hidden refs of these versions (secret removal, runbook
+    /// `secret-removal`); they are never written again.
+    VersionRefsPurged {
+        merge_request: MergeRequestId,
+        iid: i64,
+        versions: Vec<i64>,
+    },
+}
+
+impl MergeRequestVersionChange {
+    pub fn merge_request(&self) -> MergeRequestId {
+        match self {
+            Self::HeadRestored { merge_request, .. }
+            | Self::PurgedHeadPushed { merge_request, .. }
+            | Self::VersionRefsPurged { merge_request, .. } => *merge_request,
+        }
+    }
+
+    /// The `audit_log.action`.
+    pub fn action(&self) -> &'static str {
+        match self {
+            Self::HeadRestored { .. } => "merge_request.head_restored",
+            Self::PurgedHeadPushed { .. } => "merge_request.purged_head_pushed",
+            Self::VersionRefsPurged { .. } => "merge_request.version_refs_purged",
+        }
+    }
+
+    /// HeadRestored `{"merge_request_id","iid","version","head_sha","previous_head"}`,
+    /// PurgedHeadPushed `{"merge_request_id","iid","version","head_sha"}`,
+    /// VersionRefsPurged `{"merge_request_id","iid","versions"}`.
+    pub fn to_value(&self) -> serde_json::Value {
+        match self {
+            Self::HeadRestored {
+                merge_request,
+                iid,
+                version,
+                head_sha,
+                previous_head,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "version": version,
+                "head_sha": head_sha.as_str(),
+                "previous_head": previous_head.as_ref().map(ObjectId::as_str),
+            }),
+            Self::PurgedHeadPushed {
+                merge_request,
+                iid,
+                version,
+                head_sha,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "version": version,
+                "head_sha": head_sha.as_str(),
+            }),
+            Self::VersionRefsPurged {
+                merge_request,
+                iid,
+                versions,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "versions": versions,
+            }),
         }
     }
 }

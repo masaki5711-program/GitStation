@@ -723,6 +723,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "flate2",
+ "forge-auth",
  "forge-core",
  "forge-db",
  "forge-errors",
@@ -884,6 +885,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

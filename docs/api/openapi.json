@@ -1366,6 +1366,24 @@
         ],
         "type": "object"
       },
+      "PurgeVersionRefs": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-requests/{iid}/version-refs/purge`.",
+        "properties": {
+          "versions": {
+            "description": "The version numbers whose refs to remove; absent = every version.\nAn open merge request's current head may not be among them (close\nit or rewrite its source branch first: FG-REVIEW-0002).",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "RefBody": {
         "additionalProperties": false,
         "description": "One branch or tag.",
@@ -2090,6 +2108,39 @@
           "is_admin",
           "is_agent",
           "token_scopes"
+        ],
+        "type": "object"
+      },
+      "VersionRefsPurged": {
+        "additionalProperties": false,
+        "description": "What a purge did.",
+        "properties": {
+          "already_purged": {
+            "description": "Versions purged before (their refs were removed again if present).",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purged": {
+            "description": "Versions marked and whose refs were removed by this request.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "iid",
+          "purged",
+          "already_purged"
         ],
         "type": "object"
       },
@@ -3792,6 +3843,66 @@
         },
         "summary": "Reopen a closed merge request (the author or Developer; never a merged one)",
         "x-forge-action": "MergeRequestReopen"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_version_refs_purge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurgeVersionRefs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionRefsPurged"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a merge request's hidden version refs (secret removal; an administrator's web session only)",
+        "x-forge-action": "MergeRequestVersionRefsPurge",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/projects/{id}/protected-refs": {

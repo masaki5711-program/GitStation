@@ -47,10 +47,26 @@ merge request in place (ADR-0024 §1).
   built the same way by the route loaders and the commands.
 - `check_title`, `check_description`: the field rules (title 1..=255
   characters, no control character; description ≤ 64 KiB).
+- M3 R1b (versions, ADR-0024 §2): `BranchProbe::branch_head` (was `branch_exists`;
+  the reopen compares the source's head with the purged versions);
+  `versions::refresh(&Db, &VersionRefs, RefreshRequest, &RequestId) -> RefreshReport` (the
+  body of the job `merge_request.refresh`: read the source tip, record the version, sync the
+  refs; log `forge.review.version_refreshed`); `VersionRefs::{new, with_browser, sync, sync_locked,
+  branch_tip}` (the ref sync under the merge request's refs lock — the job holds it for its
+  whole run, so two runs never interleave —, every git call bounded by what is left of the
+  hold: one `update-ref` transaction from the committed rows,
+  `plan_ref_changes` is the pure planner, a refused transaction logged at warn
+  (`forge.review.version_refs_retry`) and planned again once,
+  `forge.review.version_ref_reclaimed` for an unclaimed `v<n>`, `Browser::invalidate` when
+  it holds one); `Review::with_version_refs` and `purge_version_refs(request, proof, repo,
+  versions) -> PurgeOutcome` (`src/purge.rs`) (`MergeRequestVersionRefsPurge`, a human administrator's
+  session; log `forge.review.version_refs_purged`).
 
 **Error codes owned**: FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
-`merge_requests_one_open` is the backstop). Reused: FG-AUTH-0002 / 0003 (with
+`merge_requests_one_open` is the backstop); FG-REVIEW-0002
+PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,
+`reopen_at_purged_head`; runbook `secret-removal`). Reused: FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid
 alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023
@@ -60,14 +76,17 @@ lookup), FG-DB-0001 / 0002, FG-SYS-0001 (`proof_action_mismatch`,
 `proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`),
 FG-DB-0002 (`merge_request_changed_concurrently`, retryable).
 
-**Runbooks**: none yet (no alerting code; `merge-execution`, `codeowners`,
-`secret-removal` and `merge-blocked` arrive with R1b–R6).
+**Runbooks**: `secret-removal` (R1b). `merge-execution`, `codeowners` and
+`merge-blocked` arrive with R4–R6.
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched
 proofs), `tests/stale_proofs.rs` (a reopen proof taken while open, a retarget the
 proof saw as current: both still checked), `tests/real_browser.rs`
 (`browser_probe_accepts_only_an_existing_branch`: the real `Browser` against a real
-repository), `tests/decided_callers.rs`; the SQL side in
+repository), `tests/decided_callers.rs`, `tests/versions_git.rs` (R1b, real git:
+`a_push_adds_a_version_and_its_hidden_refs_which_survive_a_force_push`,
+`purged_version_refs_are_never_recreated`), `src/versions_tests.rs` (the ref
+planner); the SQL side in
 `crates/forge-db/src/review/tests.rs` (iid allocation under concurrency, one
 event per transition, the state guard, FG-REVIEW-0001).

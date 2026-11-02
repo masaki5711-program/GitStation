@@ -211,3 +211,39 @@ fn sparse_filters_are_refused() {
         parse_upload_pack_request(&req, ProtocolVersion::V2).expect(spec);
     }
 }
+
+/// M3 R1b review: `deepen-not <rev>` resolves a ref name on the server;
+/// one naming a hidden merge request ref (full or short, as git's DWIM
+/// would find it) is refused in v0 and v2; other revisions pass.
+#[test]
+fn deepen_not_naming_a_hidden_ref_is_refused() {
+    for rev in [
+        "refs/merge-requests/1/v1",
+        "merge-requests/1/head",
+        "refs/merge-requests/12/v3",
+    ] {
+        let line = format!("deepen-not {rev}\n");
+        let v0 = body(&[data(&format!("want {A}\n")), data(&line), Packet::Flush]);
+        let err = parse_upload_pack_request(&v0, ProtocolVersion::V0).expect_err(rev);
+        assert_eq!(reason(&err), Some("deepen_not_hidden"), "{rev}");
+        let v2 = body(&[
+            data("command=fetch\n"),
+            Packet::Delim,
+            data(&format!("want {A}\n")),
+            data(&line),
+            Packet::Flush,
+        ]);
+        let err = parse_upload_pack_request(&v2, ProtocolVersion::V2).expect_err(rev);
+        assert_eq!(reason(&err), Some("deepen_not_hidden"), "{rev}");
+    }
+    for rev in ["refs/heads/main", "v1.0", "main"] {
+        let req = body(&[
+            data("command=fetch\n"),
+            Packet::Delim,
+            data(&format!("want {A}\n")),
+            data(&format!("deepen-not {rev}\n")),
+            Packet::Flush,
+        ]);
+        parse_upload_pack_request(&req, ProtocolVersion::V2).expect(rev);
+    }
+}

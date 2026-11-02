@@ -2,7 +2,8 @@
 //! `forge.events.dedup_key` is unique instance-wide, so a key built from a
 //! client value would let one caller pre-empt another's change. A
 //! [`DedupKey`] is therefore built only from server-side values: fixed
-//! words (`&'static str`), ids and 32-byte hashes. Its shape is
+//! words (`&'static str`), ids, 32-byte hashes and git object ids forge
+//! read from its own repositories. Its shape is
 //! `^[a-z][a-z_]*(:[0-9a-z_-]{1,64}){1,4}$`, at most 200 characters; a
 //! violation is `FG-DB-0010 reason=invalid_dedup_key`.
 //!
@@ -36,6 +37,10 @@ pub enum DedupPart<'a> {
     Hash(&'a [u8; 32]),
     /// A fixed word from the source code.
     Word(&'static str),
+    /// A git object id forge read from its own repository (M3 R1b: the head
+    /// commit of a merge request version); validated lowercase hex, 40 or
+    /// 64 characters.
+    Object(&'a crate::ObjectId),
 }
 
 /// A well-formed idempotency key. No constructor takes a runtime string.
@@ -67,7 +72,7 @@ impl DedupKey {
         let words_ok = is_prefix(prefix)
             && parts.iter().all(|p| match p {
                 DedupPart::Word(w) => is_part(w),
-                DedupPart::Id(_) | DedupPart::Hash(_) => true,
+                DedupPart::Id(_) | DedupPart::Hash(_) | DedupPart::Object(_) => true,
             });
         if !words_ok {
             return Err(invalid().with_context("prefix", prefix));
@@ -83,6 +88,7 @@ impl DedupKey {
                     }
                 }
                 DedupPart::Word(word) => key.push_str(word),
+                DedupPart::Object(oid) => key.push_str(oid.as_str()),
             }
         }
         if Self::is_well_formed(&key) {

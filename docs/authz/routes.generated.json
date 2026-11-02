@@ -328,6 +328,14 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestVersionRefsPurge",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProtectedRefList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/protected-refs",

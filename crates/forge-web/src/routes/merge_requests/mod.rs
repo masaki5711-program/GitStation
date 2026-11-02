@@ -1,7 +1,10 @@
 //! Merge requests of a project (M3 R1a, ADR-0024):
 //! `GET|POST /api/v1/projects/{id}/merge-requests`,
 //! `GET|PATCH /api/v1/projects/{id}/merge-requests/{iid}` and
-//! `POST …/merge-requests/{iid}/close`, `…/reopen`. Reading and listing are
+//! `POST …/merge-requests/{iid}/close`, `…/reopen`, and (M3 R1b) the
+//! administrator's `POST …/merge-requests/{iid}/version-refs/purge`
+//! (`MergeRequestVersionRefsPurge`: a web session only, ADR-0024 §2;
+//! runbook `secret-removal`). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -37,8 +40,8 @@ use crate::routes::write::{bounded, json, no_store};
 mod loaders;
 
 pub use loaders::{
-    MergeRequestOf, MergeRequestToClose, MergeRequestToReopen, MergeRequestToUpdate,
-    MergeRequestsOf, NewMergeRequest,
+    MergeRequestOf, MergeRequestToClose, MergeRequestToPurge, MergeRequestToReopen,
+    MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest,
 };
 
 /// `GET` / `POST` a project's merge requests.
@@ -49,6 +52,12 @@ pub const ONE: &str = "/api/v1/projects/{id}/merge-requests/{iid}";
 pub const CLOSE: &str = "/api/v1/projects/{id}/merge-requests/{iid}/close";
 /// `POST` reopen one.
 pub const REOPEN: &str = "/api/v1/projects/{id}/merge-requests/{iid}/reopen";
+/// The path after `{iid}` of [`PURGE`].
+pub const PURGE_SUFFIX: &str = "/version-refs/purge";
+/// `POST` remove the hidden version refs (M3 R1b, secret removal).
+pub const PURGE: &str = "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge";
+/// The body cap of the purge (a list of version numbers).
+pub const PURGE_MAX_BODY: usize = 16 * 1024;
 
 /// The body cap of the merge request routes (a 64 KiB description,
 /// JSON-escaped, and the rest).
@@ -105,6 +114,28 @@ pub struct UpdateMergeRequest {
     pub draft: Option<bool>,
     /// A branch other than the source; it must exist; only while open.
     pub target_branch: Option<String>,
+}
+
+/// `POST …/merge-requests/{iid}/version-refs/purge`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PurgeVersionRefs {
+    /// The version numbers whose refs to remove; absent = every version.
+    /// An open merge request's current head may not be among them (close
+    /// it or rewrite its source branch first: FG-REVIEW-0002).
+    pub versions: Option<Vec<i64>>,
+}
+
+/// What a purge did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VersionRefsPurged {
+    #[schema(minimum = 1)]
+    pub iid: i64,
+    /// Versions marked and whose refs were removed by this request.
+    pub purged: Vec<i64>,
+    /// Versions purged before (their refs were removed again if present).
+    pub already_purged: Vec<i64>,
 }
 
 // Built only by `body_of`; its doc comment is the schema description.
@@ -373,6 +404,33 @@ pub async fn reopen(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
             .reopen(&review_request(&w), &w.proof, repo?)
             .await?;
         json(body_of(&stored))
+    }
+    .await;
+    respond(&w.ctx, StatusCode::OK, built)
+}
+
+/// `POST …/merge-requests/{iid}/version-refs/purge` → `200` what was
+/// purged (also when every version was purged before).
+pub async fn purge_version_refs(
+    state: AppState,
+    request: Dispatched<MergeRequestCtx, PurgeVersionRefs>,
+) -> Response {
+    let repo = repository(&request);
+    let w = request.into_write();
+    let built = async {
+        let outcome = review(&state)?
+            .purge_version_refs(
+                &review_request(&w),
+                &w.proof,
+                repo?,
+                w.input.versions.as_deref(),
+            )
+            .await?;
+        json(VersionRefsPurged {
+            iid: outcome.merge_request.iid,
+            purged: outcome.purged,
+            already_purged: outcome.already_purged,
+        })
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

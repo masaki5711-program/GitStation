@@ -1681,3 +1681,88 @@ impl LogSink {
             .collect()
     }
 }
+
+/// M3 R1b (ADR-0024 §2, ADR-0007 amendment): merge request version refs
+/// are in no advertisement (`ls-remote` over v0 and v2, a clone, the
+/// receive-pack advertisement), an object only they reach is refused by id
+/// (commit and blob, both wire versions), and a push to them is refused
+/// (FG-GIT-0010) with nothing changed.
+#[test]
+fn hidden_merge_request_refs_are_not_advertised_or_fetchable() {
+    let s = server(Options::default());
+    for name in ["refs/merge-requests/1/v1", "refs/merge-requests/1/head"] {
+        let out = local_git(s.home.path())
+            .arg("--git-dir")
+            .arg(&s.bare)
+            .args(["update-ref", name, &s.secret_commit])
+            .output()
+            .expect("update-ref");
+        ok(&out, "update-ref");
+    }
+    for version in ["2", "0"] {
+        let out = s
+            .git(Some(&s.alice))
+            .args(["-c", &format!("protocol.version={version}")])
+            .args(["ls-remote"])
+            .arg(s.url("alice/web.git"))
+            .output()
+            .expect("ls-remote");
+        let listed = ok(&out, "ls-remote");
+        assert!(listed.contains(&s.tip), "v{version}: {listed}");
+        assert!(
+            !listed.contains("refs/merge-requests"),
+            "v{version}: {listed}"
+        );
+        assert!(!listed.contains(&s.secret_commit), "v{version}: {listed}");
+    }
+    let (out, dest) = s.clone_into(Some(&s.alice), "alice/web.git", &["--mirror"]);
+    ok(&out, "mirror clone");
+    let has = s
+        .git(None)
+        .arg("--git-dir")
+        .arg(&dest)
+        .args(["cat-file", "-e", &s.secret_commit])
+        .output()
+        .expect("cat-file");
+    assert!(
+        !has.status.success(),
+        "the hidden commit arrived with --mirror"
+    );
+    let advertised = s.http(
+        "GET",
+        "/alice/web.git/info/refs?service=git-receive-pack",
+        Some(&s.alice_write),
+        &[],
+        &[],
+    );
+    assert_eq!(advertised.status, 200);
+    let text = String::from_utf8_lossy(&advertised.body);
+    assert!(!text.contains("refs/merge-requests"), "{text}");
+    assert!(!text.contains(&s.secret_commit), "{text}");
+    for (label, body, protocol) in [
+        ("v0 commit", v0_request(&s.secret_commit), None),
+        ("v0 blob", v0_request(&s.secret_blob), None),
+        ("v2 commit", v2_request(&s.secret_commit), Some("version=2")),
+        ("v2 blob", v2_request(&s.secret_blob), Some("version=2")),
+    ] {
+        let mut headers = vec![REQUEST_TYPE];
+        if let Some(p) = protocol {
+            headers.push(("Git-Protocol", p));
+        }
+        let answer = s.http("POST", UPLOAD, Some(&s.alice), &headers, &body);
+        assert_eq!(answer.status, 200, "{label}");
+        let text = String::from_utf8_lossy(&answer.body);
+        assert!(
+            text.get(4..).is_some_and(|t| t.starts_with("ERR ")),
+            "{label}: {text}"
+        );
+        assert!(!text.contains("PACK"), "{label}");
+    }
+    let work = s.work();
+    let before = s.refs();
+    let out = s.push(&s.alice_write, &work, &["HEAD:refs/merge-requests/1/v2"]);
+    refused(&out, ErrorCode::ReservedRefNamespace);
+    let out = s.push(&s.dave_admin, &work, &["HEAD:refs/merge-requests/1/head"]);
+    refused(&out, ErrorCode::ReservedRefNamespace);
+    assert_eq!(s.refs(), before);
+}

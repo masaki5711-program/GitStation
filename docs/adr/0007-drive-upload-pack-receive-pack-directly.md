@@ -177,3 +177,27 @@ Amendment（案 B）。転送の面で決めた点:
   本文を受け取り終えた後は、receive-pack はリクエストが持たないタスクで最後まで動く。
 - **tripwire**: forge-web が git を使ってよいファイルは `routes/git.rs`、`routes/git_push.rs`、`git_stream.rs`
   （`forge_web_runs_git_only_through_smart_http_api`）。
+
+## Amendment（2026-11-02、M3 R1b: 隠した ref と `want` の確認の除外）
+
+ADR-0024 §2 が MR の版の隠した ref（`refs/merge-requests/<iid>/v<n>` と `…/head`）を作ったので、MR3 の Amendment の注意書き
+「隠す ref を作るときは、この確認も同じ ref を除く」を実行した（`feat/core-merge-request-versions`）。
+
+- **広告から隠す**: Smart HTTP の固定の `-c` の組の **両方**（`UPLOAD_PACK_CONFIG` と `RECEIVE_PACK_CONFIG`、`smart_http.rs`）に
+  `transfer.hideRefs=refs/merge-requests/` を足した。upload-pack（v0 の広告と v2 の `ls-refs`）にも receive-pack の広告にも、
+  隠した ref と、それだけが指す ID は出ない。receive-pack は隠した ref の更新を git 自身も拒む（一次の拒否は今までどおり
+  `authorize()` の FG-GIT-0010 ReservedRefNamespace。push の前に止まる）。
+- **`want` の確認から除く**: MINIMUM は 2.38 なので git 2.42 の `--exclude-hidden=uploadpack` は使わない。代わりに
+  `forge_git::command` に crate 内部の `exclude_glob(&'static str)`（`--exclude=<glob>`）を足し、`want_check.rs` の `--all` を使う
+  **2 つの走査の両方**（手順 2 `rev-list --max-count=1 --stdin --not --exclude=refs/merge-requests/* --all` と手順 3
+  `rev-list --objects --exclude=refs/merge-requests/* --all --no-object-names`）で `--all` の **直前** に置いた（`--exclude` は次の
+  `--all` にだけ効く。git の ref の除外の照合は `*` が `/` にも一致する）。並びは単体テスト `want_walks_exclude_the_hidden_refs` が固定する。
+- **1 つの定数**: hideRefs の値と glob は `forge_git::hidden_refs::HIDDEN_REF_PREFIX`（`refs/merge-requests/`）から導き、
+  単体テスト `hidden_ref_settings_derive_from_one_prefix` が 2 か所（と両方の `-c` の組）の一致を確かめる。
+- **確かめた結果**（実際の git）: `objects_reachable_only_from_merge_request_refs_are_refused`（forge-git: 隠した ref だけが指す
+  コミット・木・blob の `want` を拒む）、`hidden_merge_request_refs_are_not_advertised`（forge-git: 3 つの広告）、
+  `hidden_merge_request_refs_are_not_advertised_or_fetchable`（`smart_http_e2e.rs`: `ls-remote` の v0 / v2、`clone --mirror`、
+  receive-pack の広告、手で組み立てた v0 / v2 の `want`（コミットと blob）、`refs/merge-requests/*` への push が FG-GIT-0010 で
+  ref が変わらない）。`unreferenced_object_cannot_be_fetched_by_id` は変わらず通る。hideRefs を外すと広告のテストが落ちることを
+  手で確かめた。
+- **費用**: `--exclude` は ref を読むときの照合 1 回ぶんで、走査の費用は変わらない（隠した ref の数だけ負の側の先端が減る）。

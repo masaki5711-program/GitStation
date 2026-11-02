@@ -30,8 +30,8 @@ use forge_auth::{
 };
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    MergeRequestState, ProjectId, ProjectRepository, RefName, RepoId, RepositoryState, RequestId,
-    UserId,
+    MergeRequestState, ObjectId, ProjectId, ProjectRepository, RefName, RepoId, RepositoryState,
+    RequestId, UserId,
 };
 use forge_db::access::Account;
 use forge_db::change::{Actor, ChangeContext};
@@ -43,37 +43,46 @@ use forge_errors::{ErrorCode, ForgeError};
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
 
 mod fields;
+mod purge;
+pub mod versions;
+
+pub use forge_db::review::{PurgeOutcome, RefreshRequest};
+pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
 pub use fields::{check_description, check_title, MAX_DESCRIPTION_BYTES, MAX_TITLE_CHARS};
 
-/// Whether a branch exists in a repository, for the commands that name
-/// one (create, retarget, reopen). `Ok(())` when it does; `FG-REPO-0023
+/// A branch's head commit in a repository, for the commands that name one
+/// (create, retarget, reopen — M3 R1b: the reopen also compares it with
+/// the purged versions). `Ok(head)` when the branch exists; `FG-REPO-0023
 /// reason=ref_not_found` when it does not; the lookup's own error
 /// (`FG-GIT-0002` / `FG-GIT-0004`, …) otherwise — never "exists" on a
 /// failure.
 pub trait BranchProbe: Send + Sync {
     /// `caller` is the caller's key (`user:<id>`) for the browse limits.
-    fn branch_exists<'a>(
+    fn branch_head<'a>(
         &'a self,
         repo: RepoId,
         branch: &'a RefName,
         caller: &'a str,
-    ) -> LookupFuture<'a, ()>;
+    ) -> LookupFuture<'a, ObjectId>;
 }
 
 /// The browse API's ref resolution (`resolve_ref` on the full
 /// `refs/heads/…` name: only a branch of that exact name answers).
 impl BranchProbe for forge_git::browse::Browser {
-    fn branch_exists<'a>(
+    fn branch_head<'a>(
         &'a self,
         repo: RepoId,
         branch: &'a RefName,
         caller: &'a str,
-    ) -> LookupFuture<'a, ()> {
+    ) -> LookupFuture<'a, ObjectId> {
         Box::pin(async move {
-            self.resolve_ref(repo, branch.as_str(), caller)
-                .await
-                .map(drop)
+            let resolved = self.resolve_ref(repo, branch.as_str(), caller).await?;
+            ObjectId::parse(&resolved.commit).map_err(|_| {
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "resolved_commit_invalid")
+                    .with_context("repo_id", repo.get())
+            })
         })
     }
 }
@@ -108,6 +117,9 @@ pub struct EditFields {
 pub struct Review {
     db: Db,
     branches: Arc<dyn BranchProbe>,
+    /// M3 R1b: where the purge deletes version refs (`None`: the purge is
+    /// `FG-SYS-0001 reason=version_refs_unconfigured`).
+    refs: Option<VersionRefs>,
 }
 
 impl std::fmt::Debug for Review {
@@ -208,26 +220,41 @@ fn ready(project: ProjectId, repo: ProjectRepository) -> Result<RepoId, ForgeErr
 
 impl Review {
     pub fn new(db: Db, branches: Arc<dyn BranchProbe>) -> Self {
-        Self { db, branches }
+        Self {
+            db,
+            branches,
+            refs: None,
+        }
     }
 
-    /// Each of `names` exists in `repo` (`which` names it in the error).
+    /// Where the hidden version refs live (M3 R1b; `forge serve` sets it).
+    #[must_use]
+    pub fn with_version_refs(mut self, refs: VersionRefs) -> Self {
+        self.refs = Some(refs);
+        self
+    }
+
+    /// Each of `names` exists in `repo` (`which` names it in the error);
+    /// their heads, in order.
     async fn require_branches(
         &self,
         project: ProjectId,
         repo: ProjectRepository,
         user: UserId,
         names: &[(&'static str, &RefName)],
-    ) -> Result<(), ForgeError> {
+    ) -> Result<Vec<ObjectId>, ForgeError> {
         let id = ready(project, repo)?;
         let key = format!("user:{}", user.get());
+        let mut heads = Vec::with_capacity(names.len());
         for (which, name) in names {
-            self.branches
-                .branch_exists(id, name, &key)
-                .await
-                .map_err(|e| e.with_context("branch", *which))?;
+            heads.push(
+                self.branches
+                    .branch_head(id, name, &key)
+                    .await
+                    .map_err(|e| e.with_context("branch", *which))?,
+            );
         }
-        Ok(())
+        Ok(heads)
     }
 
     // ── reads for the route loaders and the list (read pool) ──
@@ -392,34 +419,47 @@ impl Review {
         let ctx = change_context(request, proof.principal(), user);
         for _ in 0..STALE_ATTEMPTS {
             let current = self.merge_request(project, iid).await?.ok_or_else(absent)?;
-            // The branches of a closed merge request, checked to exist.
-            let checked = if current.state == MergeRequestState::Closed {
-                self.require_branches(
-                    project,
-                    repo,
-                    user,
-                    &[
-                        ("source_branch", &current.source_branch),
-                        ("target_branch", &current.target_branch),
-                    ],
+            // The branches of a closed merge request, checked to exist; the
+            // source's head is compared with the purged versions (R1b).
+            let (checked, source_head) = if current.state == MergeRequestState::Closed {
+                let heads = self
+                    .require_branches(
+                        project,
+                        repo,
+                        user,
+                        &[
+                            ("source_branch", &current.source_branch),
+                            ("target_branch", &current.target_branch),
+                        ],
+                    )
+                    .await?;
+                (
+                    Some((current.source_branch, current.target_branch)),
+                    heads.into_iter().next(),
                 )
-                .await?;
-                Some((current.source_branch, current.target_branch))
             } else {
-                None
+                (None, None)
             };
-            let attempt = review::reopen_mr_decided(&self.db, &ctx, project, iid, user, |facts| {
-                let mr = locked(facts)?;
-                let unchecked = mr.state == MergeRequestState::Closed
-                    && checked.as_ref().is_none_or(|(source, target)| {
-                        *source != mr.source_branch || *target != mr.target_branch
-                    });
-                if unchecked {
-                    return Err(changed_concurrently(iid));
-                }
-                let fresh = MergeRequestCtx::new(loaded(&facts.project), mr);
-                proof.reconfirm(account(facts.account), fresh).map(drop)
-            })
+            let attempt = review::reopen_mr_decided(
+                &self.db,
+                &ctx,
+                project,
+                iid,
+                user,
+                source_head.as_ref(),
+                |facts| {
+                    let mr = locked(facts)?;
+                    let unchecked = mr.state == MergeRequestState::Closed
+                        && checked.as_ref().is_none_or(|(source, target)| {
+                            *source != mr.source_branch || *target != mr.target_branch
+                        });
+                    if unchecked {
+                        return Err(changed_concurrently(iid));
+                    }
+                    let fresh = MergeRequestCtx::new(loaded(&facts.project), mr);
+                    proof.reconfirm(account(facts.account), fresh).map(drop)
+                },
+            )
             .await;
             match attempt {
                 Err(e) if is_changed_concurrently(&e) => continue,

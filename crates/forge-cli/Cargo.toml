@@ -42,6 +42,8 @@ tempfile.workspace = true
 # The worker loop tests: paused time and captured JSON logs.
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true
+# M3 R1b: the worker test opens a merge request with a real proof.
+forge-auth.workspace = true
 
 [lints]
 workspace = true

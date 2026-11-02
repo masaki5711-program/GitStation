@@ -18,6 +18,8 @@ forge-core.workspace = true
 forge-db.workspace = true
 forge-errors.workspace = true
 forge-git.workspace = true
+tracing.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 forge-db = { workspace = true, features = ["test-support"] }

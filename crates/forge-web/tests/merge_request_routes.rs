@@ -44,16 +44,16 @@ impl forge_core::Authenticator for NoTokens {
 struct Branches(BTreeSet<&'static str>);
 
 impl BranchProbe for Branches {
-    fn branch_exists<'a>(
+    fn branch_head<'a>(
         &'a self,
         _repo: RepoId,
         branch: &'a RefName,
         _caller: &'a str,
-    ) -> LookupFuture<'a, ()> {
+    ) -> LookupFuture<'a, forge_core::ObjectId> {
         let found = branch.branch().is_some_and(|b| self.0.contains(b));
         Box::pin(async move {
             if found {
-                Ok(())
+                forge_core::ObjectId::parse(&"1".repeat(40))
             } else {
                 Err(ForgeError::new(ErrorCode::RepositoryPathNotResolved)
                     .with_context("reason", "ref_not_found"))

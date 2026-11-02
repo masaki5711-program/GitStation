@@ -84,7 +84,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "purge_delete_guard",
             "web_sessions_revocation_guard",
             "web_sessions_purge_guard",
-            "merge_requests_state_guard"
+            "merge_requests_state_guard",
+            "merge_request_versions_guard"
         ]
     );
 }

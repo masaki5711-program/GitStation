@@ -101,7 +101,7 @@
   **`SessionOnly`**: 人間の管理者のセッションだけ。`admin` スコープのトークンも、エージェントのトークン・サービスアカウント・代理も deny。監査の行と
   `request_id` つき。再レビュー）。**前提条件**: 開いている MR では、先に MR をクローズするか、ソースブランチを秘密を含まない形に書き換えて
   （新しい版ができる）から行う。開いたままで今の head を消すと次の版の追加で同じ ref が戻るので、開いている MR で今の head を指す版の ref の削除は
-  **FG-REVIEW-仮** PurgePreconditionFailed（409、`reason=purge_requires_closed_or_rewritten`）で断る（権限ではなく状態の拒否。手順は runbook `secret-removal`）。`refs/merge-requests/<iid>/`
+  **FG-REVIEW-0002** PurgePreconditionFailed（409、`reason=purge_requires_closed_or_rewritten`）で断る（権限ではなく状態の拒否。手順は runbook `secret-removal`）。`refs/merge-requests/<iid>/`
   の下の ref を CAS で消し、MR に「版の ref を削除した」ことを残す（以後その MR の古い版の差分は読めない、と表示する）。オブジェクトそのものの除去
   （到達できないオブジェクトの即時の prune）は本番を変えるので、runbook `secret-removal` の **人が承認した手順** として行う。ミラー（O2）と
   バックアップに残る写しの扱いも同じ runbook に書く（漏れとして扱い、秘密の失効が先。ref を消すだけでは足りない）。
@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest だけが **FG-REVIEW-0001** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -606,7 +606,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
 | 仮（登録の順に決める） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
-| 仮（登録の順に決める） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除） | 409 | info | `secret-removal` | R1b |
+| FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
 
 - 再利用: 権限の拒否は FG-AUTH-0003（エージェントは `reason=agent_token`、サービスアカウントは `service_account`、ボットは `bot`、ジョブの時点で失効した
   資格情報は `credential_revoked`、`source_equals_target`、`above_own_role`）、スコープ不足は FG-AUTH-0002、見えない MR と存在しない iid は FG-REPO-0005 の 404、
@@ -681,3 +681,52 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 | 42 | 最終の再レビュー MEDIUM（security）: Purge の後に版の ref が作り直される | `merge_request_versions` に削除済みの印 `refs_purged_at` を持つ。確かめ直すジョブは印のある版の ref を作らない。テスト `purged_version_refs_are_never_recreated`（R1b） | §2 |
 | 43 | 最終の再レビュー LOW（security）: Purge 済みの MR の再オープン | Purge 済みの MR の再オープンは、ソースの head が Purge した版と違うときだけ許す（同じなら FG-REVIEW-仮（PurgePreconditionFailed））。runbook `secret-removal` にも書く（R1b） | §2、§12 |
 | 44 | 最終の再レビュー LOW（security）: 管理者の印を外した後の戻し方 | runbook `backup-restore` に、`system` で印を付け直す `forge admin` のコマンドを名指しで書く（無ければ O1 で足す） | ADR-0019 Amendment |
+
+## 実装で決めたこと（R1b `feat/core-merge-request-versions`、2026-11-02）
+
+- **版を作るきっかけ**: `merge-request-refresh` の購読者（`forge-db/src/review/refresh.rs`、`independent`）が `repository.pushed` で
+  ジョブ `merge_request.refresh` を **積むだけ**（dedup `mr_refresh:<mr_id>:push:<seq>`）。積む相手は、作成・fast-forward・force の
+  `refs/heads/*` を source に持つ開いている MR。`refs_truncated` ならそのプロジェクトの開いている MR **すべて**。MR の作成
+  （`open_mr_decided`、`mr_refresh:<id>:opened`）と再オープン（`reopened:<revision>`）も同じジョブを同じトランザクションで積む
+  （最初の版もジョブが作る。git をトランザクションに入れない、が一貫する）。購読者は R1b で初めて本番の worker に登録される
+  （`worker::registry()`、`Start::Head`）。
+- **ジョブ**（`forge_review::versions::refresh`、worker の `RefreshHandler`）: source の先端を `for-each-ref` で読む → 版の行を先に
+  コミット（`record_mr_version`、MR の行のロックの下で `max + 1`、監査 `merge_request.pushed` とイベント、actor `system`、
+  `pushed_by` は push の actor）→ ref を同期。同じ head の再実行は何も書かない（2 つ目のイベントも出ない）。
+- **同じ SHA に戻った**（A → B → A）: 一意 `(merge_request_id, head_sha)` があるので版は足さず、その版を head に戻す。
+  監査だけの `merge_request.head_restored`（イベントは出さない。`merge_request_pushed:<id>:<sha>` は既にある）。
+- **ref の同期**（`VersionRefs::sync_locked`）: ref を読んで 1 回の `update-ref` の transaction（`start` / `prepare` / `commit`、
+  `core.hooksPath` は空のディレクトリ）。**MR ごとのロック**（`lock_version_refs`: `pg_advisory_xact_lock` を
+  `merge_request_refs:<mr_id>` に。待ちは 10 秒まで（超えたら FG-DB-0002、ジョブは再試行）、持つのは 45 秒まで）の下で行う。
+  版のジョブは先端の読み取り・版の行・同期の **全体** でロックを持つ（独立のレビューで MEDIUM: 2 つのジョブが交差すると、
+  A が古い先端を読み、B が v3 を書いて同期した後で、A が `head` を戻しうる）。Purge は印のコミットの後の同期でロックを取る。
+  Purge の印が同期の最中にコミットされても、その同期が書いた ref は Purge 自身の同期（ロックを待つ）が消し、以後の同期は印を読む。
+  MR の行も版の行もロックしない（編集を git で待たせない）。git の呼び出しはどれも「ロックを持てる残りの時間」（最大 20 秒）で
+  抑えるので、遅い git は FG-GIT-0002 になる。ref を書く直前にロックの接続が生きていることを確かめる（`RefsLock::alive`）。
+  ロックの間は書き込みのプールの接続を 1 本（トランザクションの中で待機）、加えて短い文に 1 本を使う。worker はジョブを 1 つずつ
+  実行し、serve は Purge の要求ごとに 1 回なので、同時に走る数 × 2 本をプールの大きさに見込む。拒まれた transaction（手で ref が
+  動いた、ロックを失った）は warn で 1 回ログに出し（`forge.review.version_refs_retry`、`request_id`・`error_code`）、読み直して
+  1 回だけ計画し直す。既に目的の値なら何もしない。
+  行が主張しない値の `v<n>` は CAS で取り戻し `forge.review.version_ref_reclaimed`（info）。行を先に書く設計では `v<n>` を主張できる
+  行は `n` の行だけなので、§2 の「別の行が主張していれば積み直す」は起こらない。Purge 済みの版の ref は消し、書かない。
+  `refs/merge-requests/<iid>/` の下の他の名前（`merge` など）には触れない。
+- **閲覧のキャッシュ**: 同期は `Browser` を持つとき（`forge serve` の Purge）`invalidate` を呼ぶ。worker のプロセスには閲覧の
+  キャッシュが無く、隠した ref は閲覧の ref 一覧（`refs/heads/` `refs/tags/`）にも到達の確認（`--branches --tags`）にも入らないので、
+  他のプロセスのキャッシュはこの ref に依存しない。`ReachRoots` に MR の ref は **足していない**（MR の画面は R2 以降）。
+- **Purge**: `POST /api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge`、本文 `{"versions": [n, …]}`（省略 = すべて）。
+  開いている MR で今の head の版を含めば FG-REVIEW-0002 `purge_requires_closed_or_rewritten`。印（`refs_purged_at`、一度だけ。
+  ガード `merge_request_versions_guard`）を先にコミットし、その後に ref を消す（消すのに失敗しても、もう一度頼めば消える）。
+  Purge 済みの head に source が force push で戻っても head にしない（`purged_head`）。その事実は監査だけの行
+  `merge_request.purged_head_pushed` と warn のログ `forge.review.purged_head_pushed` に残す（独立のレビュー）。このとき
+  ブランチの先端と MR の記録した head は食い違うので、**R4 のマージは、ブランチの先端が記録した head と違えば拒む**
+  （HeadChanged `source_moved`）。再オープンは source の先端が Purge 済みの
+  版なら FG-REVIEW-0002 `reopen_at_purged_head`。gstn は `BrowserOnly`（`SessionOnly` でトークンを持つ gstn は届かない）。
+- **途中の先端**: 2 回のジョブの間にだけ source が指したコミット（push の直後に force push で消えた、ジョブが先端を読む前）は
+  版にならず、版の ref も持たない（ジョブは実行の時点の先端だけを読む）。レビューの対象は版になった head だけ。
+- **扇の広がり**: 1 回の push で積むジョブは最大 500（最近更新された MR の順）。超えたら warn
+  `forge.review.refresh_fanout_capped` を 1 回出し、残りはそれぞれの次の push・作成・再オープンで確かめ直す。
+- **`deepen-not`**: upload-pack の要求の `deepen-not` が `merge-requests/` を含む名前（git の DWIM で隠した ref に解決される）なら
+  FG-GIT-0014 `deepen_not_hidden` で拒む（v0 / v2）。
+- **AccountKind**: `Principal` への `AccountKind` の追加は R5（承認）に送った。`MergeRequestVersionRefsPurge` は `SessionOnly` で、
+  サービスアカウントとボットはセッションを持てない（サインインが `not_human` で拒む）ので、トークンの deny の行（`admin` スコープ、
+  エージェントの `admin` トークンを含む）がそのまま彼らの deny になる。人だけの arm（`people_only`）も通す。

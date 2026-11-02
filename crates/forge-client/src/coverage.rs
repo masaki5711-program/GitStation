@@ -262,6 +262,13 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
         Coverage::Command("mr reopen"),
     ),
+    // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
+    // included, is refused; gstn holds a token.
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge",
+        Coverage::BrowserOnly("secret removal: a human administrator's web session only; tokens are refused (FG-AUTH-0002 session_required); runbook secret-removal"),
+    ),
     (
         "PUT",
         "/api/v1/projects/{id}/visibility",

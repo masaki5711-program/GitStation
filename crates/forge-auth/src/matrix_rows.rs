@@ -1027,6 +1027,27 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestReopen, W::OwnerTokenReadApi, other_in(S::Closed), deny(E::InsufficientScope)),
     row(A::MergeRequestReopen, W::Guest, own_in(S::Closed), deny(E::Forbidden)),
     row(A::MergeRequestReopen, W::Anonymous, other_in(S::Closed), deny(E::Unauthenticated)),
+    // --- MergeRequestVersionRefsPurge (M3 R1b, ADR-0024 §2: a human
+    // administrator's session only; the open-head precondition is the
+    // command's FG-REVIEW-0002). Every token is session_required — the
+    // `admin` scope and an agent's admin token included. Service accounts
+    // and bots hold only tokens (the sign-in refuses them, `not_human`), so
+    // the token rows are their deny rows too (AccountKind arrives with R5). ---
+    row(A::MergeRequestVersionRefsPurge, W::Admin, OTHER_MR, Allow),
+    row(A::MergeRequestVersionRefsPurge, W::Admin, other_in(S::Closed), Allow),
+    row(A::MergeRequestVersionRefsPurge, W::Admin, other_in(S::Merged), Allow),
+    row(A::MergeRequestVersionRefsPurge, W::AdminTokenAdmin, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestVersionRefsPurge, W::AgentAdminTokenAdmin, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestVersionRefsPurge, W::AdminTokenApi, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestVersionRefsPurge, W::AgentMaintainerTokenApi, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestVersionRefsPurge, W::Owner, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestVersionRefsPurge, W::Maintainer, other_in(S::Closed), deny(E::Forbidden)),
+    row(A::MergeRequestVersionRefsPurge, W::Developer, OWN_MR, deny(E::Forbidden)),
+    row(A::MergeRequestVersionRefsPurge, W::NonMember, OTHER_MR, deny(E::NotFound)),
+    row(A::MergeRequestVersionRefsPurge, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestVersionRefsPurge, W::DisabledAdmin, OTHER_MR, deny(E::AccountDisabled)),
+    row(A::MergeRequestVersionRefsPurge, W::Admin, other_on(MP::Deleted), deny(E::PendingDeletion)),
+    row(A::MergeRequestVersionRefsPurge, W::Admin, new_mr(MB::ReservedSource), deny(E::Forbidden)),
     // --- Operations ---
     row(A::Health, W::Anonymous, F::Instance, Allow),
     row(A::Metrics, W::Admin, F::Instance, Allow),

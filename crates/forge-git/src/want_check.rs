@@ -24,10 +24,13 @@
 //!    by requests that want non-commits, at most `max_object_wants` of them
 //!    (`FG-GIT-0014 reason=too_many_wants` above it).
 //!
-//! `--all` is every ref, which is exactly what upload-pack advertises
-//! (forge configures no `transfer.hideRefs` / `uploadpack.hideRefs`; if it
-//! ever does, this check must exclude the same refs, e.g. with
-//! `--exclude-hidden=uploadpack`, git ≥ 2.42).
+//! `--all` is every ref, which is more than upload-pack advertises since M3
+//! R1b: Smart HTTP hides `refs/merge-requests/` (`transfer.hideRefs`). Both
+//! walks therefore put `--exclude=refs/merge-requests/*`
+//! ([`HIDDEN_REF_GLOB`], from the same constant as the hideRefs value)
+//! right before their `--all` (`--exclude` applies to the next `--all`
+//! only; argv pinned by tests). git 2.42's `--exclude-hidden=uploadpack`
+//! is not used: the minimum is 2.38 (ADR-0007 amendment, M3 R1b).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -38,6 +41,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::command::Git;
+use crate::hidden_refs::HIDDEN_REF_GLOB;
 use crate::storage::StorageRoot;
 use crate::upload_request::is_object_id;
 
@@ -223,6 +227,29 @@ impl Git {
         Ok(kinds)
     }
 
+    /// The walk of step 2: the wants (stdin) minus every ref but the hidden
+    /// ones. `--stdin` is read where it stands: before `--not`, the wants
+    /// are the positive side; `--exclude` applies to the `--all` right
+    /// after it (both pinned by `want_walks_exclude_the_hidden_refs`).
+    pub(crate) fn commit_walk(&self) -> crate::GitCommand {
+        self.command("rev-list")
+            .arg("--max-count=1")
+            .arg("--stdin")
+            .arg("--not")
+            .exclude_glob(HIDDEN_REF_GLOB)
+            .arg("--all")
+    }
+
+    /// The walk of step 3: every object a ref other than the hidden ones
+    /// reaches (`--exclude` right before `--all`).
+    pub(crate) fn object_walk(&self) -> crate::GitCommand {
+        self.command("rev-list")
+            .arg("--objects")
+            .exclude_glob(HIDDEN_REF_GLOB)
+            .arg("--all")
+            .arg("--no-object-names")
+    }
+
     /// Step 2: the first commit (in walk order) that a want reaches and no
     /// ref does, or `None` when every wanted commit is reachable.
     async fn first_unreachable_commit(
@@ -232,13 +259,7 @@ impl Git {
         timeout: Duration,
     ) -> Result<Option<String>, ForgeError> {
         let out = self
-            .command("rev-list")
-            .arg("--max-count=1")
-            // `--stdin` is read where it stands: before `--not`, the wants
-            // are the positive side (pinned by a test).
-            .arg("--stdin")
-            .arg("--not")
-            .arg("--all")
+            .commit_walk()
             .repo(repo)
             .stdin(lines(commits.iter().copied()))
             .timeout(timeout)
@@ -262,10 +283,7 @@ impl Git {
         timeout: Duration,
     ) -> Result<(Vec<&'w str>, u64), ForgeError> {
         let mut stream = self
-            .command("rev-list")
-            .arg("--objects")
-            .arg("--all")
-            .arg("--no-object-names")
+            .object_walk()
             .repo(repo)
             .timeout(timeout)
             .spawn_stream(principal)

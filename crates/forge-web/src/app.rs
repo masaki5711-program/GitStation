@@ -837,6 +837,18 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::reopen,
         )
         .responds::<mr::MergeRequestBody>(Verb::Post, mr::REOPEN)
+        // M3 R1b (ADR-0024 §2): secret removal, a human administrator's
+        // session only (every token is refused before the lookup).
+        .route_with_body(
+            Verb::Post,
+            mr::PURGE,
+            Action::MergeRequestVersionRefsPurge,
+            "Remove a merge request's hidden version refs (secret removal; an administrator's web session only)",
+            mr::PURGE_MAX_BODY,
+            mr::MergeRequestToPurge,
+            mr::purge_version_refs,
+        )
+        .responds::<mr::VersionRefsPurged>(Verb::Post, mr::PURGE)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

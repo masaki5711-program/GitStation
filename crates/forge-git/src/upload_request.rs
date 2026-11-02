@@ -97,6 +97,24 @@ fn check_filter(payload: &[u8]) -> Result<(), ForgeError> {
     Ok(())
 }
 
+/// `deepen-not <rev>` naming a hidden merge request ref (M3 R1b review):
+/// git resolves the name on the server (DWIM: `merge-requests/1/v1` finds
+/// `refs/merge-requests/1/v1`), which would reveal a hidden ref's history
+/// boundary: `deepen_not_hidden`.
+fn check_deepen_not(payload: &[u8]) -> Result<(), ForgeError> {
+    let Some(rev) = payload.strip_prefix(b"deepen-not ") else {
+        return Ok(());
+    };
+    let hidden = crate::hidden_refs::HIDDEN_REF_PREFIX
+        .strip_prefix("refs/")
+        .unwrap_or(crate::hidden_refs::HIDDEN_REF_PREFIX)
+        .as_bytes();
+    if rev.windows(hidden.len()).any(|w| w == hidden) {
+        return Err(refused("deepen_not_hidden"));
+    }
+    Ok(())
+}
+
 /// Parse a complete (decompressed) upload-pack request body for the
 /// protocol `version` the request asked for (`Git-Protocol`, the value git
 /// receives as well).
@@ -115,6 +133,7 @@ fn parse_v0(body: &[u8]) -> Result<UploadPackRequest, ForgeError> {
     for packet in pkt_line::decode_all(body, PktMode::V0)? {
         if let Packet::Data(payload) = packet {
             check_filter(&payload)?;
+            check_deepen_not(&payload)?;
             if let Some(oid) = want_of(&payload)? {
                 wants.push(oid);
             }
@@ -165,6 +184,7 @@ fn parse_v2(body: &[u8]) -> Result<UploadPackRequest, ForgeError> {
             }
             Packet::Data(payload) if in_args && command == UploadPackCommand::Fetch => {
                 check_filter(payload)?;
+                check_deepen_not(payload)?;
                 if let Some(oid) = want_of(payload)? {
                     wants.push(oid);
                 }
