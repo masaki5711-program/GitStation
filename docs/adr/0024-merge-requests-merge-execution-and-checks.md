@@ -1252,3 +1252,25 @@ security の HIGH 3 件と MEDIUM / LOW への対応。上の R5 の節と 1 回
 - **パターンの位置（LOW、改訂）**: §9 の「`/` のないパターンはどの深さでも一致」に合わせ、gitignore と同じく **先頭か途中に `/` がある
   パターンは直下に固定** にした（上の R5 の節の「`/` を含んでもどの深さでも一致」を改める）。末尾だけの `/`（`docs/`）はどの深さでも一致。
   両端の `//` は `pattern_invalid`。
+
+### R5 の再レビュー（3 回目）で決めたこと（2026-11-03）
+
+security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのすべての承認を永久に止められる、可用性の問題）と MEDIUM / LOW への対応。
+
+- **削除だけの一覧に無い ref（HIGH、改訂）**: 一覧に載らない ref がすべて削除の push は `push_unlisted_refs` に行が無く、「表ができる前の
+  切れた記録」と読まれて `committers_unknown` になっていた（101 本の `git push --delete` で永久に止まる）。新しい push の記録はすべて、監査の
+  行の `details` に印 `unlisted_kept: true` を持つ（イベントのペイロードには入れない）。古い記録かどうかは行の有無ではなくこの印で決める
+  （削除はどの範囲にも届かないので行は要らない）。テスト `deleting_many_branches_does_not_block_approvals`。
+- **リポジトリ全体の行の上限（HIGH、改訂）**: 一覧に無い ref の行をリポジトリ全体で数えて 10 000 件の上限に当てていたため、1 000 個のタグの
+  push 12 回で永久に止まった。**選んだ方法**: 一覧に無い ref は (先端, push した人) ごとに 1 項目にまとめ、記録に載った ref も、範囲の
+  コミットだけをコミットの一覧に残して小さくし、上限は各 200 000 項目（実際のリポジトリよりはるかに大きい正気の上限。超えたら
+  `push_records_over_cap`）。候補の先端はすべて 1 回の `commit_graph` に渡し、届くかはメモリの上で決め、**16 件の上限は範囲に届く候補の
+  数に当てる**。target の歴史の上のタグや無関係なブランチは `^<target の先端>` で外れるか届かないので、上限にも予算にも効かない
+  （テスト `many_tags_do_not_block_approvals`: 12 000 個のタグ）。新しい順に読む・時刻の窓で絞る方法は採らなかった（古い push を
+  上限の外へ押し出せばすり抜けられ、コミットの時刻は利用者が決められる）。
+- **消えた先端（MEDIUM）**: `commit_graph` の前に候補の先端を `cat-file --batch-check` で確かめ、リポジトリに無い先端は、どの ref も
+  向いていない（`for-each-ref`）ときだけ外す（届かない）。消えた先端に ref が向いていれば破損として `committers_unknown`
+  （`push_tip_missing`）。prune（O3、runbook `merge-request-mergeability`）の後の扱いを runbook に書いた。テスト
+  `a_pruned_cut_tip_no_ref_points_at_is_dropped`。
+- **見えない文字（LOW、改訂）**: 結合文字は選んだブロックではなく、Unicode の一般カテゴリ Mn / Me（と Cf）で判定する。表はすでに依存の木に
+  ある `unicode-properties`（sqlx の stringprep が使う。MIT / Apache-2.0）を `general-category` だけで直接の依存にした。
