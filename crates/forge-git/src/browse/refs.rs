@@ -10,6 +10,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use tokio::time::Instant;
 
 use super::path::RepoPath;
+use super::reach::ReachRoots;
 use super::{not_resolved, object_id, Browser, Cached, Deadline, REFS_OUTPUT_BYTES};
 
 /// A browsable ref's kind.
@@ -155,7 +156,7 @@ impl Browser {
         Ok(list)
     }
 
-    fn cached(&self, repo: RepoId) -> Option<Arc<RefList>> {
+    pub(super) fn cached(&self, repo: RepoId) -> Option<Arc<RefList>> {
         let entries = self
             .cache
             .entries
@@ -249,8 +250,39 @@ impl Browser {
         Ok(list)
     }
 
-    /// The commit a full id names (`not_a_commit` / `ref_not_found`).
+    /// The commit a full id names, reachable from a branch or a tag
+    /// (`not_a_commit` / `ref_not_found`; M3 P6, `reach.rs`).
     pub(super) async fn commit_of(
+        &self,
+        repo: RepoId,
+        id: &str,
+        deadline: Deadline,
+    ) -> Result<String, ForgeError> {
+        self.commit_reachable_from(repo, id, &ReachRoots::branches_and_tags(), deadline)
+            .await
+    }
+
+    /// The commit a full id names, if a ref of `roots` reaches it. An
+    /// unreachable commit is `ref_not_found`, exactly like a missing id
+    /// (ADR-0024 §2: existence never leaks); only the log says
+    /// `unreachable`.
+    pub(super) async fn commit_reachable_from(
+        &self,
+        repo: RepoId,
+        id: &str,
+        roots: &ReachRoots,
+        deadline: Deadline,
+    ) -> Result<String, ForgeError> {
+        let commit = self.commit_exists(repo, id, deadline).await?;
+        if self.reachable(repo, &commit, roots, deadline).await? {
+            Ok(commit)
+        } else {
+            Err(not_resolved("ref_not_found").with_context("unreachable", true))
+        }
+    }
+
+    /// The commit a full id names, reachable or not.
+    async fn commit_exists(
         &self,
         repo: RepoId,
         id: &str,

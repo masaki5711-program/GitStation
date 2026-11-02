@@ -109,6 +109,16 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
     `RefName`-valid prefixes only, so `-n`, `--output=x` never match). A truncated ref list falls back
     to `for-each-ref --end-of-options <exact candidates>`. Unknown → `FG-REPO-0023`
     (`ref_not_found`, `not_a_commit`).
+  - Reachability (M3 P6, `browse/reach.rs`, ADR-0024 §2): a commit named by id (`resolve_*`, a
+    history cursor's tip, `commit(repo, oid)`) resolves only when a branch or tag reaches it —
+    `echo <id> | rev-list --max-count=1 --stdin --not --branches --tags [--glob=<extra>]`, empty =
+    reachable; otherwise `FG-REPO-0023 ref_not_found` exactly like a missing id (log:
+    `unreachable=true`). Own limit `reach_timeout` (5 s, within the operation's deadline;
+    `FG-GIT-0002 check=reachability`), one `max_per_repo` slot (`FG-GIT-0004 reason=repo_browse`);
+    a tip of the cached ref list needs no git; answers cached per `(repo, id, ReachRoots)` with the
+    ref cache's push epoch for `refs_ttl`, at most `max_cached_reach` (4 096). `ReachRoots` is
+    branches + tags (`branches_and_tags()`); M3 R1 adds a merge request's version refs. Names never
+    pay for the check.
   - `tree(repo, commit, &RepoPath)` (`ls-tree -z --long --full-tree --end-of-options <commit> --
     <path>` for the entry, then `ls-tree -z --long <tree id>`; ≤ `max_tree_entries` 5 000),
     `blob(…)` (`cat-file blob <blob id>`, ≤ `max_blob_bytes` 1 MiB), `raw_entry(…)`, `raw(…,

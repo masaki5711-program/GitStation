@@ -21,6 +21,9 @@
 //!   Archives and large raw files stream (idle 60 s, total 10 min) through
 //!   [`crate::GitStream`]: a client that goes away kills git's process
 //!   tree.
+//! - **Reachability** (M3 P6, `reach.rs`): a commit named by id resolves
+//!   only when a branch or a tag reaches it; otherwise it is answered like
+//!   an id that does not exist (`FG-REPO-0023 reason=ref_not_found`).
 //! - **Caps**: tree entries and blob bytes are truncated at their limit
 //!   (git is killed at the cap, `truncated: true`), never buffered whole;
 //!   at most [`BrowseLimits::max_per_repo`] captured browse calls run per
@@ -54,6 +57,7 @@ mod content;
 mod diff;
 mod history;
 mod path;
+mod reach;
 mod refs;
 mod tree;
 
@@ -62,6 +66,7 @@ pub use content::{ArchiveFormat, Blob, RawBlob, RawBody};
 pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
 pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
+pub use reach::ReachRoots;
 pub use refs::{RefEntry, RefKind, RefList, ResolvedRev, ResolvedSpec, Target};
 pub use tree::{EntryKind, Tree, TreeEntry};
 
@@ -109,6 +114,11 @@ pub struct BrowseLimits {
     pub max_file_patch_bytes: usize,
     /// Lines of one blame; more marks it `truncated`.
     pub max_blame_lines: usize,
+    /// One reachability check of a commit named by id (`reach.rs`; never
+    /// longer than what is left of the operation's deadline).
+    pub reach_timeout: Duration,
+    /// Reachability answers kept at once (0: none kept).
+    pub max_cached_reach: usize,
 }
 
 impl Default for BrowseLimits {
@@ -133,6 +143,8 @@ impl Default for BrowseLimits {
             max_diff_bytes: 2 * 1024 * 1024,
             max_file_patch_bytes: 256 * 1024,
             max_blame_lines: 10_000,
+            reach_timeout: Duration::from_secs(5),
+            max_cached_reach: 4_096,
         }
     }
 }
@@ -160,6 +172,7 @@ pub struct Browser {
     limits: BrowseLimits,
     slots: Arc<Mutex<HashMap<RepoId, usize>>>,
     cache: Arc<RefCache>,
+    reach: Arc<reach::ReachCache>,
 }
 
 #[derive(Debug, Default)]
@@ -237,6 +250,7 @@ impl Browser {
             limits,
             slots: Arc::new(Mutex::new(HashMap::new())),
             cache: Arc::new(RefCache::default()),
+            reach: Arc::new(reach::ReachCache::default()),
         }
     }
 
@@ -244,15 +258,19 @@ impl Browser {
         &self.limits
     }
 
-    /// Drop `repo`'s cached ref list (a push changed its refs).
+    /// Drop `repo`'s cached ref list and reachability answers (a push
+    /// changed its refs; the epoch makes every older answer stale).
     pub fn invalidate(&self, repo: RepoId) {
         self.cache.epoch.fetch_add(1, Ordering::SeqCst);
-        let mut entries = self
-            .cache
-            .entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        entries.remove(&repo);
+        {
+            let mut entries = self
+                .cache
+                .entries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            entries.remove(&repo);
+        }
+        self.reach.forget(repo);
     }
 
     fn claim(&self, repo: RepoId) -> Result<RepoSlot, ForgeError> {
@@ -274,6 +292,9 @@ impl Browser {
 
 #[cfg(test)]
 mod history_tests;
+
+#[cfg(test)]
+mod reach_tests;
 
 #[cfg(test)]
 use forge_core::RefName;

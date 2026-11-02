@@ -264,6 +264,8 @@ async fn merge_commits_list_their_parents_and_diff_against_the_first() {
         ],
     );
     let merge = commit_with(&f.path, &merged, &[&main, &side], "merge");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &merge);
     let b = f.browser(BrowseLimits::default());
 
     // One by one through cursors: every commit of both sides, once.
@@ -309,6 +311,8 @@ async fn a_commit_has_its_message_and_a_diff_with_patches() {
         &[("100644", "a.txt", b"one\ntwo\n"), ("100644", "n.txt", b"")],
     );
     let c2 = commit_with(&f.path, &t2, &[&c1], "second line\ncontinues\n\nthe body\n");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
 
     // A root commit is compared with nothing.
@@ -363,6 +367,8 @@ async fn renames_binaries_and_mode_changes_are_told_apart() {
         ],
     );
     let c2 = commit_with(&f.path, &t2, &[&c1], "second");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
     let d = b.commit(f.id, &c2).await.expect("c2").diff;
     let by = |name: &str| {
@@ -402,6 +408,8 @@ async fn a_type_change_is_one_file_with_both_halves() {
         &[("120000", "x", b"y"), ("100644", "y", b"y changed\n")],
     );
     let c2 = commit_with(&f.path, &t2, &[&c1], "second");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
     let d = b.commit(f.id, &c2).await.expect("c2").diff;
     assert_eq!(d.files.len(), 2);
@@ -431,6 +439,8 @@ async fn diff_caps_truncate_and_say_so() {
     };
     let c1 = commit_with(&f.path, &build("old"), &[], "old");
     let c2 = commit_with(&f.path, &build("new"), &[&c1], "new");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &c2);
 
     // Whole.
     let whole = f.browser(BrowseLimits::default());
@@ -521,6 +531,8 @@ async fn blame_groups_lines_by_the_commit_that_last_changed_them() {
     let c1 = commit_with(&f.path, &t1, &[], "first");
     let t2 = tree_of(&f.path, &[("100644", "f.txt", b"a\nB\nc\nd\n")]);
     let c2 = commit_with(&f.path, &t2, &[&c1], "second");
+    // A commit is browsable by id only when a ref reaches it (M3 P6).
+    update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
     let path = RepoPath::parse("f.txt").unwrap();
     let blame = b.blame(f.id, &c2, &path).await.expect("blame");
