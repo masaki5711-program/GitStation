@@ -92,10 +92,21 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
             // M3 R1a (ADR-0024): merge requests; the branch checks read the
             // browse API's refs (the same Browser and ref cache, so a push's
             // invalidation is seen).
-            .with_review(forge_review::Review::new(
-                db.clone(),                          // clone: the pool handle is shared
-                Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
-            ))
+            // M3 R1b: the administrator's purge deletes version refs with
+            // the same git and storage, and drops the same browse caches.
+            .with_review(
+                forge_review::Review::new(
+                    db.clone(),                          // clone: the pool handle is shared
+                    Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
+                )
+                .with_version_refs(
+                    forge_review::VersionRefs::new(
+                        smart_http.git.clone(),     // clone: Arc handles
+                        smart_http.storage.clone(), // clone: the root path
+                    )
+                    .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
+                ),
+            )
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(

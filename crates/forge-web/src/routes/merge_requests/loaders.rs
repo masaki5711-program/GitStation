@@ -10,7 +10,7 @@ use forge_auth::{
 use forge_core::{parse_positive_id, MergeRequestState, ProjectId, ProjectRecord, RefName, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::{review, CreateMergeRequest, UpdateMergeRequest};
+use super::{review, CreateMergeRequest, PurgeVersionRefs, UpdateMergeRequest, PURGE_SUFFIX};
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, LoadFuture, Loader, Lookup};
@@ -258,6 +258,29 @@ impl Loader<AppState> for MergeRequestToReopen {
             state,
             parts,
             "/reopen",
+            viewer,
+            MergeRequestEdit::default(),
+        ))
+    }
+}
+
+/// `POST …/merge-requests/{iid}/version-refs/purge` (M3 R1b): the merge
+/// request as stored (the body names versions, decided by the command).
+pub struct MergeRequestToPurge;
+
+impl BodyLoader<AppState, PurgeVersionRefs> for MergeRequestToPurge {
+    type Ctx = MergeRequestCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        _body: &'a PurgeVersionRefs,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, MergeRequestCtx> {
+        Box::pin(stored_lookup(
+            state,
+            parts,
+            PURGE_SUFFIX,
             viewer,
             MergeRequestEdit::default(),
         ))

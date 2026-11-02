@@ -49,6 +49,9 @@ pub(crate) mod provision;
 // ── D5 MR4: the purge ──
 pub(crate) mod purge;
 // ── end D5 MR4 ──
+// ── M3 R1b: merge request versions ──
+mod review;
+// ── end M3 R1b ──
 mod seal;
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -154,10 +157,13 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
 }
 
 // ── C5: the registered subscribers ──
-/// The subscribers this worker runs. None yet: the concrete ones (`notify`,
-/// `webhook-dispatch`, `work-item-sync`, …) are added with their features.
-fn registry() -> Registry {
-    Registry::new()
+/// The subscribers this worker runs: `merge-request-refresh` (M3 R1b, the
+/// first in production: enqueues the version job on `repository.pushed`;
+/// registered at the head on the first start, ADR-0016 §1). The others
+/// (`notify`, `webhook-dispatch`, `work-item-sync`, …) join with their
+/// features.
+fn registry() -> Result<Registry, ForgeError> {
+    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh))
 }
 // ── end C5 ──
 
@@ -304,7 +310,7 @@ pub(crate) async fn run(
     run_all(
         db,
         runner,
-        registry(),
+        registry()?,
         jobs::SHUTDOWN_GRACE,
         keys,
         purge,

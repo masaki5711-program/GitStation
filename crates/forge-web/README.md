@@ -182,7 +182,11 @@ admitted proof.
   transaction and checks the branches exist (`FG-REPO-0023`). Answers: the merge request
   re-read (`201` for a create, `200` otherwise, also when nothing changed);
   `FG-REVIEW-0001` (409) for a second open one between the same branches. Tests
-  `tests/merge_request_routes.rs`.
+  `tests/merge_request_routes.rs`. M3 R1b: `POST …/{iid}/version-refs/purge`
+  (`MergeRequestVersionRefsPurge`, session only — every token is FG-AUTH-0002
+  `session_required` —, administrators; body `{"versions": [n…]}` or `{}`; answers
+  `{"iid","purged","already_purged"}`; FG-REVIEW-0002), tests
+  `tests/merge_request_purge_route.rs`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body

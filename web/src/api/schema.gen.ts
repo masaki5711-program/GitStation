@@ -425,6 +425,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a merge request's hidden version refs (secret removal; an administrator's web session only) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_version_refs_purge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/protected-refs": {
         parameters: {
             query?: never;
@@ -1339,6 +1356,15 @@ export interface components {
         ProtectedRefRules: {
             rules: components["schemas"]["ProtectedRefBody"][];
         };
+        /** @description `POST …/merge-requests/{iid}/version-refs/purge`. */
+        PurgeVersionRefs: {
+            /**
+             * @description The version numbers whose refs to remove; absent = every version.
+             *     An open merge request's current head may not be among them (close
+             *     it or rewrite its source branch first: FG-REVIEW-0002).
+             */
+            versions?: number[] | null;
+        };
         /** @description One branch or tag. */
         RefBody: {
             /** @description The commit it peels to; `null` for a tag of a tree or a blob. */
@@ -1606,6 +1632,15 @@ export interface components {
             /** @description The token's scopes; `null` for a session. */
             token_scopes: string[] | null;
             username: string;
+        };
+        /** @description What a purge did. */
+        VersionRefsPurged: {
+            /** @description Versions purged before (their refs were removed again if present). */
+            already_purged: number[];
+            /** Format: int64 */
+            iid: number;
+            /** @description Versions marked and whose refs were removed by this request. */
+            purged: number[];
         };
         /**
          * @description A project's visibility in a request.
@@ -2776,6 +2811,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_version_refs_purge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PurgeVersionRefs"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionRefsPurged"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
