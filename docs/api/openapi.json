@@ -25,7 +25,7 @@
         "description": "`POST …/discussions/{discussion_id}/notes`.",
         "properties": {
           "body": {
-            "description": "Plain text / Markdown, 1 character to 64 KiB.",
+            "description": "Plain text / Markdown, 1 character to 60 KiB.",
             "type": "string"
           }
         },
@@ -2050,7 +2050,7 @@
         "description": "`POST …/discussions`.",
         "properties": {
           "body": {
-            "description": "The first note: plain text / Markdown, 1 character to 64 KiB.",
+            "description": "The first note: plain text / Markdown, 1 character to 60 KiB.",
             "type": "string"
           },
           "position": {

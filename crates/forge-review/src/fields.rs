@@ -52,8 +52,12 @@ pub fn check_description(description: &str) -> Result<(), ForgeError> {
     Ok(())
 }
 
-/// A note body is at most 64 KiB (migration 20261109100000, M3 R3).
-pub const MAX_NOTE_BYTES: usize = 64 * 1024;
+/// A note body is at most 60 KiB (M3 R3 review): the request body's JSON
+/// cap is 64 KiB (`forge_web::body::MAX_JSON_BODY_BYTES`), and the note
+/// with its JSON envelope and a 4 KiB path must fit in it, so every note
+/// this rule accepts can be sent. The table allows 64 KiB (the backstop,
+/// migration 20261109100000).
+pub const MAX_NOTE_BYTES: usize = 60 * 1024;
 /// A position's path is at most 4 KiB.
 pub const MAX_PATH_BYTES: usize = 4096;
 

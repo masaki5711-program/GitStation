@@ -14,6 +14,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use forge_auth::{AccountKind, Credential, Principal};
 use forge_core::ids::MergeRequestId;
+use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{ObjectId, RequestId, Role, Scope, UserId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::projects::{self, NewProject};
@@ -21,12 +22,14 @@ use forge_db::repositories;
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::browse::Diff;
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
-use forge_review::Review;
+use forge_review::{DiffProbe, Review};
 use forge_web::{AppConfig, AppState, GitHttpLimits, Lookups, SmartHttp};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
 
 struct NoTokens;
@@ -139,12 +142,45 @@ fn commit(repo: &std::path::Path, ten: &str, parent: Option<&str>) -> String {
     plumb(repo, &args, None)
 }
 
+/// The browse API's diffs, failing (`FG-GIT-0004` busy) once `allowed`
+/// calls have run: a write whose position check passed and whose
+/// `outdated` view then fails (review round 1).
+struct Flaky {
+    browser: Arc<Browser>,
+    allowed: AtomicUsize,
+}
+
+impl DiffProbe for Flaky {
+    fn merge_request_diff<'a>(
+        &'a self,
+        repo: forge_core::RepoId,
+        iid: i64,
+        from: &'a str,
+        to: &'a str,
+        caller: &'a str,
+    ) -> LookupFuture<'a, Diff> {
+        let left = self.allowed.load(Ordering::SeqCst);
+        if left == 0 {
+            return Box::pin(async { Err(ForgeError::new(ErrorCode::GitBusy)) });
+        }
+        self.allowed.store(left - 1, Ordering::SeqCst);
+        self.browser.merge_request_diff(repo, iid, from, to, caller)
+    }
+}
+
 struct World {
     t: FreshDb,
     _home: tempfile::TempDir,
     _root: tempfile::TempDir,
     router: axum::Router,
+    flaky: Arc<Flaky>,
+    path: std::path::PathBuf,
+    base: String,
+    mr: MergeRequestId,
     project: i64,
+    /// A service account with the Developer role.
+    svc: UserId,
+    dave_ns: forge_core::NamespaceId,
     /// The project's Owner and the merge request's author.
     dave: UserId,
     bob: UserId,
@@ -172,6 +208,18 @@ async fn world() -> World {
     let rita = user("rita").await.user_id;
     let gus = user("gus").await.user_id;
     let outsider = user("olga").await.user_id;
+    let svc = users::create(
+        &t.db,
+        &ctx("req-svc"),
+        &NewUser {
+            kind: forge_core::UserKind::ServiceAccount,
+            email: None,
+            ..NewUser::human("ci-bot", "CI", "unused@example.test")
+        },
+    )
+    .await
+    .expect("service account")
+    .user_id;
     let web = projects::create(
         &t.db,
         &ctx("req-web"),
@@ -183,6 +231,7 @@ async fn world() -> World {
         (bob, Role::Developer),
         (rita, Role::Reporter),
         (gus, Role::Guest),
+        (svc, Role::Developer),
     ] {
         projects::add_member(&t.db, &ctx("req-member"), web.project_id, who, role)
             .await
@@ -203,6 +252,7 @@ async fn world() -> World {
     let v1 = commit(&path, "ten", Some(&base));
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &v1], None);
+    plumb(&path, &["update-ref", "refs/heads/fix", &v1], None);
     // clone: the router owns its handles
     let browser = Arc::new(Browser::new(
         git.clone(),
@@ -210,6 +260,10 @@ async fn world() -> World {
         BrowseLimits::default(),
     ));
     let smart = SmartHttp::new(git, storage, GitHttpLimits::default());
+    let flaky = Arc::new(Flaky {
+        browser: browser.clone(), // clone: the probe shares the browse caches
+        allowed: AtomicUsize::new(usize::MAX),
+    });
     let state = AppState::new(
         "test",
         Vec::new(),
@@ -220,7 +274,7 @@ async fn world() -> World {
         },
     )
     .with_smart_http(smart)
-    .with_review(Review::new(t.db.clone(), browser.clone()).with_diffs(browser));
+    .with_review(Review::new(t.db.clone(), browser).with_diffs(flaky.clone()));
     let router = forge_web::app(state, AppConfig::default()).expect("router");
     let p = web.project_id.get();
     let (status, opened) = send(
@@ -264,6 +318,12 @@ async fn world() -> World {
         _home: home,
         _root: root,
         router,
+        flaky,
+        path,
+        base,
+        mr,
+        svc,
+        dave_ns: dave.namespace_id,
         project: p,
         dave: dave.user_id,
         bob,
@@ -470,5 +530,314 @@ async fn inline_positions_are_checked_against_the_version_diff() {
         )
         .await;
     assert_eq!(code(&answer), "FG-WEB-0006", "{status} {answer}");
+    w.t.drop_now().await;
+}
+
+impl World {
+    /// Version `n` whose head rewrites line 10 as `ten`, recorded as the
+    /// version job does (row, bases, ref).
+    async fn version(&self, n: i64, ten: &str) {
+        let head = commit(&self.path, ten, Some(&self.base));
+        plumb(
+            &self.path,
+            &["update-ref", "refs/heads/feature", &head],
+            None,
+        );
+        let oid = |raw: &str| ObjectId::parse(raw).expect("oid");
+        forge_db::review::record_mr_version(
+            &self.t.db,
+            &ctx(&format!("req-v{n}")),
+            self.mr,
+            &oid(&head),
+            None,
+        )
+        .await
+        .expect("version");
+        forge_db::review::record_version_bases(
+            &self.t.db,
+            &ctx(&format!("req-v{n}-b")),
+            self.mr,
+            n,
+            &oid(&self.base),
+            Some(&oid(&self.base)),
+        )
+        .await
+        .expect("bases");
+        plumb(
+            &self.path,
+            &["update-ref", &format!("refs/merge-requests/1/v{n}"), &head],
+            None,
+        );
+    }
+
+    async fn commented(&self) -> i64 {
+        self.t
+            .json_rows("SELECT count(*) AS n FROM forge.events WHERE event_type = 'merge_request.commented'")
+            .await[0]["n"]
+            .as_i64()
+            .expect("count")
+    }
+
+    /// Set the merge request's state behind the API (no merge route yet).
+    async fn set_state(&self, state: &str) {
+        let closed = if state == "closed" {
+            format!("closed_at = now(), closed_by = {}", self.dave.get())
+        } else {
+            "closed_at = NULL, closed_by = NULL".to_owned()
+        };
+        self.t
+            .commit_audited(
+                ("project", self.project),
+                &[format!(
+                    "UPDATE forge.merge_requests SET state = '{state}', {closed}, \
+                     revision = revision + 1 WHERE id = {}",
+                    self.mr.get()
+                )],
+            )
+            .await;
+    }
+}
+
+fn service_account(user: UserId) -> Principal {
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        AccountKind::ServiceAccount,
+    )
+}
+
+/// Review round 1 (HIGH): a committed write answers with what it stored
+/// even when the `outdated` view's diff fails — 201 with
+/// `outdated_unknown: true`, one event, nothing to retry.
+#[tokio::test]
+async fn a_failed_outdated_view_never_fails_a_committed_write() {
+    let w = world().await;
+    w.version(2, "ten v2").await;
+    // The position check's diff may run; the view's diff fails.
+    w.flaky.allowed.store(1, Ordering::SeqCst);
+    let body = json!({"body": "here", "position": {"version": 1, "path": "lib.rs", "side": "new", "line": 10}});
+    let (status, created) = w.post("/discussions", session(w.bob), Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["outdated"], json!(true));
+    assert_eq!(created["outdated_unknown"], json!(true));
+    assert_eq!(w.commented().await, 1, "stored once");
+    // The list answers too, marking the thread unknown.
+    let (status, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/discussions"),
+        session(w.rita),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["discussions"][0]["outdated_unknown"], json!(true));
+    w.flaky.allowed.store(usize::MAX, Ordering::SeqCst);
+    let (_, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/discussions"),
+        session(w.rita),
+        None,
+    )
+    .await;
+    assert_eq!(list["discussions"][0]["outdated"], json!(true));
+    assert_eq!(list["discussions"][0]["outdated_unknown"], json!(false));
+    w.t.drop_now().await;
+}
+
+/// Review round 1: note bodies over HTTP for both write routes — empty,
+/// blank, NUL and unknown fields are FG-WEB-0006; 60 KiB is the cap (a
+/// note the rule accepts always fits the JSON body cap).
+#[tokio::test]
+async fn note_bodies_are_checked_over_http() {
+    let w = world().await;
+    let (_, thread) = w
+        .post("/discussions", session(w.rita), Some(json!({"body": "x"})))
+        .await;
+    let d = thread["id"].as_i64().expect("id");
+    let reply = format!("/discussions/{d}/notes");
+    let cap = forge_review::MAX_NOTE_BYTES;
+    for tail in ["/discussions", reply.as_str()] {
+        for (body, ok) in [
+            (json!({"body": ""}), false),
+            (json!({"body": " \n\t "}), false),
+            (json!({"body": "a\u{0}b"}), false),
+            (json!({"body": "x", "extra": 1}), false),
+            (json!({"body": "x".repeat(cap)}), true),
+            (json!({"body": "x".repeat(cap + 1)}), false),
+        ] {
+            let (status, answer) = w.post(tail, session(w.bob), Some(body)).await;
+            if ok {
+                assert_eq!(status, StatusCode::CREATED, "{tail} {answer}");
+            } else {
+                assert_eq!(
+                    (status, code(&answer)),
+                    (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+                    "{tail}"
+                );
+            }
+        }
+    }
+    w.t.drop_now().await;
+}
+
+/// Review round 1 (IDOR): a real thread of another merge request of the
+/// same project, or of another project, named under this merge request is
+/// the same 404 on reply, resolve and unresolve — nothing is written.
+#[tokio::test]
+async fn a_thread_of_another_merge_request_is_not_found_here() {
+    let w = world().await;
+    let (status, other_mr) = send(
+        w.router.clone(),
+        "POST",
+        &format!("/api/v1/projects/{}/merge-requests", w.project),
+        session(w.dave),
+        Some(json!({"title": "Fix", "source_branch": "fix", "target_branch": "main"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_mr}");
+    let (status, foreign) = send(
+        w.router.clone(),
+        "POST",
+        &format!(
+            "/api/v1/projects/{}/merge-requests/2/discussions",
+            w.project
+        ),
+        session(w.rita),
+        Some(json!({"body": "on !2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign}");
+    let same_project = foreign["id"].as_i64().expect("id");
+    // A thread of another project (rows written behind the API).
+    let elsewhere = projects::create(
+        &w.t.db,
+        &ctx("req-elsewhere"),
+        &NewProject::new("elsewhere", w.dave_ns, "Elsewhere", w.dave),
+    )
+    .await
+    .expect("project");
+    let e = elsewhere.project_id.get();
+    w.t.commit_audited(
+        ("project", e),
+        &[
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch) VALUES ({e}, 1, 'x', {}, 'refs/heads/a', \
+                 'refs/heads/main')",
+                w.dave.get()
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_discussions (merge_request_id, project_id, \
+                 kind, started_by) SELECT id, project_id, 'general', {} \
+                 FROM forge.merge_requests WHERE project_id = {e}",
+                w.dave.get()
+            ),
+        ],
+    )
+    .await;
+    let other_project =
+        w.t.json_rows(&format!(
+            "SELECT id FROM forge.merge_request_discussions WHERE project_id = {e}"
+        ))
+        .await[0]["id"]
+            .as_i64()
+            .expect("id");
+    let before = w.commented().await;
+    for d in [same_project, other_project] {
+        for (tail, body) in [
+            (
+                format!("/discussions/{d}/notes"),
+                Some(json!({"body": "x"})),
+            ),
+            (format!("/discussions/{d}/resolve"), None),
+            (format!("/discussions/{d}/unresolve"), None),
+        ] {
+            let (status, answer) = w.post(&tail, session(w.dave), body).await;
+            assert_eq!(
+                (status, code(&answer)),
+                (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+                "{tail}"
+            );
+        }
+    }
+    assert_eq!(w.commented().await, before, "nothing written");
+    w.t.drop_now().await;
+}
+
+/// Review round 1: a service account's token comments but is refused the
+/// resolution (403); resolving twice answers 200 with one event; a closed
+/// or merged merge request still takes comments and resolutions
+/// (resolution is bookkeeping; what blocks a merge is evaluate_merge()).
+#[tokio::test]
+async fn service_accounts_repeats_and_finished_merge_requests() {
+    let w = world().await;
+    let (status, thread) = w
+        .post(
+            "/discussions",
+            service_account(w.svc),
+            Some(json!({"body": "ci says"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    let d = thread["id"].as_i64().expect("id");
+    let resolve = format!("/discussions/{d}/resolve");
+    let (status, answer) = w.post(&resolve, service_account(w.svc), None).await;
+    assert_eq!(
+        (status, code(&answer)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003")
+    );
+    let (status, _) = w.post(&resolve, session(w.bob), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let after_first = w.commented().await;
+    let (status, again) = w.post(&resolve, session(w.bob), None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["resolved"], json!(true));
+    assert_eq!(w.commented().await, after_first, "a repeat writes nothing");
+    for state in ["closed", "merged"] {
+        w.set_state(state).await;
+        let (status, answer) = w
+            .post(
+                "/discussions",
+                session(w.rita),
+                Some(json!({"body": state})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{state}: {answer}");
+        let id = answer["id"].as_i64().expect("id");
+        let (status, answer) = w
+            .post(&format!("/discussions/{id}/resolve"), session(w.rita), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{state}: {answer}");
+        if state == "closed" {
+            w.set_state("open").await;
+        }
+    }
+    w.t.drop_now().await;
+}
+
+/// Review round 1: hunk boundaries over HTTP (version 1 rewrites line 10
+/// of 20, so its hunk is lines 7..=13 on both sides): the last line is in,
+/// the next is FG-REVIEW-0004; the old side's removed line is in.
+#[tokio::test]
+async fn hunk_boundaries_over_http() {
+    let w = world().await;
+    let at = |line: i64, side: &str| json!({"body": "b", "position": {"version": 1, "path": "lib.rs", "side": side, "line": line}});
+    for (body, expect) in [
+        (at(7, "new"), StatusCode::CREATED),
+        (at(13, "new"), StatusCode::CREATED),
+        (at(14, "new"), StatusCode::UNPROCESSABLE_ENTITY),
+        (at(6, "new"), StatusCode::UNPROCESSABLE_ENTITY),
+        (at(10, "old"), StatusCode::CREATED),
+        (at(14, "old"), StatusCode::UNPROCESSABLE_ENTITY),
+    ] {
+        let (status, answer) = w
+            .post("/discussions", session(w.bob), Some(body.clone()))
+            .await;
+        assert_eq!(status, expect, "{body} {answer}");
+    }
     w.t.drop_now().await;
 }

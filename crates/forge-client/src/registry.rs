@@ -530,7 +530,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--iid", "option", true, "The merge request's number in the project."),
-            arg("--body", "option", true, "The note: plain text / Markdown, stored as written (at most 64 KiB)."),
+            arg("--body", "option", true, "The note: plain text / Markdown, stored as written (at most 60 KiB)."),
             arg("--discussion", "option", false, "Reply to this discussion."),
             arg("--version", "option", false, "An inline discussion: the version whose diff the line is in."),
             arg("--path", "option", false, "An inline discussion: the file's path on that side."),

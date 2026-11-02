@@ -47,9 +47,10 @@ pub const RESOLVE: &str =
 pub const UNRESOLVE: &str =
     "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve";
 
-/// The body cap of the discussion routes: the registry's JSON maximum (as
-/// the merge request routes: a note near its 64 KiB cap that JSON escaping
-/// pushes past it is refused as too large, `FG-WEB-0009`).
+/// The body cap of the discussion routes: the registry's JSON maximum
+/// (64 KiB). A note is at most 60 KiB (`forge_review::MAX_NOTE_BYTES`) so
+/// it fits with its envelope and a position; only a note whose JSON
+/// escaping more than doubles part of it can pass 64 KiB (`FG-WEB-0009`).
 pub const MAX_BODY: usize = crate::body::MAX_JSON_BODY_BYTES;
 
 /// Where an inline discussion sits: a line of one side of one version's
@@ -73,7 +74,7 @@ pub struct PositionBody {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StartDiscussion {
-    /// The first note: plain text / Markdown, 1 character to 64 KiB.
+    /// The first note: plain text / Markdown, 1 character to 60 KiB.
     pub body: String,
     /// Absent: a general discussion on the merge request.
     pub position: Option<PositionBody>,
@@ -83,7 +84,7 @@ pub struct StartDiscussion {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AddNote {
-    /// Plain text / Markdown, 1 character to 64 KiB.
+    /// Plain text / Markdown, 1 character to 60 KiB.
     pub body: String,
 }
 

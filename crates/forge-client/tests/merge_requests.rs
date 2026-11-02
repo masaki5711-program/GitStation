@@ -573,3 +573,41 @@ fn mr_comment_resolve_and_discussions_call_their_routes() {
     }
     assert_eq!(srv.seen().len(), before, "refused before any request");
 }
+
+/// Review round 1: a position outside the diff (FG-REVIEW-0004, 422) is a
+/// usage error (exit 2) and a full thread (FG-REVIEW-0005, 409) a conflict
+/// (exit 5); both keep the server's code and request id.
+#[test]
+fn mr_comment_errors_keep_their_code_and_exit_class() {
+    for (status, code, exit) in [(422, "FG-REVIEW-0004", 2), (409, "FG-REVIEW-0005", 5)] {
+        let body =
+            format!(r#"{{"error_code":"{code}","user_message":"synthetic","request_id":"req-c"}}"#);
+        let srv = Mock::start(move |_| Resp::json(status, &body));
+        let sb = Sandbox::new();
+        let o = gstn(
+            &sb,
+            &srv,
+            &[
+                "mr",
+                "comment",
+                "--project",
+                "7",
+                "--iid",
+                "3",
+                "--version",
+                "1",
+                "--path",
+                "lib.rs",
+                "--line",
+                "99",
+                "--body",
+                "x",
+                "--json",
+            ],
+        );
+        assert_eq!(o.code, exit, "{code}");
+        let e = o.err_json();
+        assert_eq!(e["error_code"], code);
+        assert_eq!(e["request_id"], "req-c");
+    }
+}

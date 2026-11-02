@@ -2748,7 +2748,7 @@
           "required": true
         },
         {
-          "description": "The note: plain text / Markdown, stored as written (at most 64 KiB).",
+          "description": "The note: plain text / Markdown, stored as written (at most 60 KiB).",
           "kind": "option",
           "name": "--body",
           "repeatable": false,

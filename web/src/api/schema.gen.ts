@@ -985,7 +985,7 @@ export interface components {
         };
         /** @description `POST …/discussions/{discussion_id}/notes`. */
         AddNote: {
-            /** @description Plain text / Markdown, 1 character to 64 KiB. */
+            /** @description Plain text / Markdown, 1 character to 60 KiB. */
             body: string;
         };
         /**
@@ -1762,7 +1762,7 @@ export interface components {
         };
         /** @description `POST …/discussions`. */
         StartDiscussion: {
-            /** @description The first note: plain text / Markdown, 1 character to 64 KiB. */
+            /** @description The first note: plain text / Markdown, 1 character to 60 KiB. */
             body: string;
             position?: null | components["schemas"]["PositionBody"];
         };
