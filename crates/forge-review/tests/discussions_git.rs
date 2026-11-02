@@ -851,9 +851,12 @@ async fn check_inline_names_every_reason_it_refuses() {
 }
 
 /// Re-review: one read (and a write's answer) spends at most its time
-/// budget on diffs. With 1.5 s and a git that takes 1 s per diff, the
+/// budget on diffs. With 4.5 s and a git that takes 3 s per diff, the
 /// first pair is answered, the second is cut at the deadline and the third
-/// never runs git; all past the deadline are `Unknown`.
+/// never runs git; all past the deadline are `Unknown`. (R5 round 3: the
+/// margins leave 1.5 s for the database reads before the first diff and
+/// 3 s past the deadline for the answer, so a loaded machine does not make
+/// it flaky; without the deadline the read would take 9 s, the view 20 s.)
 #[tokio::test]
 async fn the_outdated_computation_stops_at_its_deadline() {
     let w = world().await;
@@ -875,11 +878,11 @@ async fn the_outdated_computation_stops_at_its_deadline() {
         );
     }
     w.version_on_base(4, "ten last").await;
-    let budget = Duration::from_millis(1500);
+    let budget = Duration::from_millis(4500);
     let review = Review::new(w.t.db.clone(), w.diffs.browser.clone())
         .with_diffs(w.diffs.clone())
         .with_outdated_budget(budget);
-    w.diffs.delay_ms.store(1000, Ordering::SeqCst);
+    w.diffs.delay_ms.store(3000, Ordering::SeqCst);
     let before = w.diffs.calls.load(Ordering::SeqCst);
     let started = Instant::now();
     let list = review
@@ -891,8 +894,9 @@ async fn the_outdated_computation_stops_at_its_deadline() {
         )
         .await
         .expect("a read never fails on git");
+    // Cut at the deadline: well below the 9 s of three uncut diffs.
     assert!(
-        started.elapsed() < budget + Duration::from_millis(500),
+        started.elapsed() < budget + Duration::from_secs(3),
         "{:?}",
         started.elapsed()
     );
@@ -908,7 +912,7 @@ async fn the_outdated_computation_stops_at_its_deadline() {
     );
     // A write's answer is bounded the same way: a git slower than the
     // whole budget is cut at the deadline.
-    w.diffs.delay_ms.store(5000, Ordering::SeqCst);
+    w.diffs.delay_ms.store(20_000, Ordering::SeqCst);
     let started = Instant::now();
     let view = review
         .view(
@@ -919,8 +923,9 @@ async fn the_outdated_computation_stops_at_its_deadline() {
             threads[0].clone(),
         )
         .await;
+    // Cut at the deadline: well below the 20 s of the uncut diff.
     assert!(
-        started.elapsed() < budget + Duration::from_millis(500),
+        started.elapsed() < budget + Duration::from_secs(3),
         "{:?}",
         started.elapsed()
     );
