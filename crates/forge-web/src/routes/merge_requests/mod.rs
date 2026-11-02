@@ -18,15 +18,11 @@
 //! (`FG-REPO-0023`). Every answer is re-read after the commit and never
 //! cached by a shared cache.
 
-use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use forge_auth::{
-    LoadedMergeRequest, LoadedProject, MergeRequestCtx, MergeRequestEdit, ProjectCtx,
-};
+use forge_auth::{MergeRequestCtx, ProjectCtx};
 use forge_core::{
-    parse_positive_id, MergeRequestState, ProjectId, ProjectRecord, ProjectRepository, RefName,
-    UserId,
+    parse_positive_id, MergeRequestState, ProjectId, ProjectRepository, RefName, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_review::{EditFields, NewFields, Review, ReviewRequest, StoredMergeRequest, MAX_PAGE};
@@ -35,9 +31,15 @@ use serde_json::Value;
 
 use crate::app::AppState;
 use crate::body::param_invalid;
-use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup, QueryParam, WriteParts};
-use crate::routes::projects::{self, PREFIX};
-use crate::routes::write::{absent, bounded, id_in, json, no_store};
+use crate::registry::{Dispatched, QueryParam, WriteParts};
+use crate::routes::write::{bounded, json, no_store};
+
+mod loaders;
+
+pub use loaders::{
+    MergeRequestOf, MergeRequestToClose, MergeRequestToReopen, MergeRequestToUpdate,
+    MergeRequestsOf, NewMergeRequest,
+};
 
 /// `GET` / `POST` a project's merge requests.
 pub const COLLECTION: &str = "/api/v1/projects/{id}/merge-requests";
@@ -175,253 +177,6 @@ fn review(state: &AppState) -> Result<&Review, ForgeError> {
     })
 }
 
-/// A branch named in a request: `name` or `refs/heads/name`; any other
-/// namespace is `not_a_branch` (ADR-0024 §1), a name git refuses
-/// `invalid_ref_name` — `FG-WEB-0006` before anything is looked up.
-fn branch_param(param: &'static str, raw: &str) -> Result<RefName, ForgeError> {
-    let full = if raw.starts_with("refs/") {
-        if !raw.starts_with("refs/heads/") {
-            return Err(param_invalid(param, "not_a_branch"));
-        }
-        raw.to_owned()
-    } else {
-        format!("refs/heads/{raw}")
-    };
-    RefName::parse(&full).map_err(|_| param_invalid(param, "invalid_ref_name"))
-}
-
-/// The ids of `/api/v1/projects/{id}/merge-requests/{iid}[suffix]` (raw path).
-fn ids(raw_path: &str, suffix: &str) -> Result<(ProjectId, i64), ForgeError> {
-    let (id, rest) = raw_path
-        .strip_prefix(PREFIX)
-        .and_then(|rest| rest.split_once("/merge-requests/"))
-        .ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
-    let id = parse_positive_id(id).ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
-    let iid = rest
-        .strip_suffix(suffix)
-        .filter(|iid| !iid.contains('/'))
-        .and_then(parse_positive_id)
-        .ok_or_else(|| param_invalid("iid", "not_positive_decimal"))?;
-    Ok((ProjectId::new(id), iid))
-}
-
-fn collection_id(raw_path: &str) -> Result<ProjectId, ForgeError> {
-    id_in(raw_path, PREFIX, "/merge-requests")
-        .map(ProjectId::new)
-        .ok_or_else(|| param_invalid("id", "not_positive_decimal"))
-}
-
-/// The project for `viewer` (its row too: the handler needs the
-/// repository), `None` when it does not exist.
-async fn project_of(
-    state: &AppState,
-    id: ProjectId,
-    viewer: Option<UserId>,
-) -> Result<Option<(LoadedProject, ProjectRecord)>, ForgeError> {
-    let Some(record) = projects::load_bounded(state, id, viewer).await? else {
-        return Ok(None);
-    };
-    if record.id != id {
-        return Err(ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "loaded_another_project")
-            .with_context("project_id", id.get())
-            .with_context("loaded_project_id", record.id.get()));
-    }
-    Ok(Some((projects::loaded(&record), record)))
-}
-
-fn found<R>(ctx: R, record: ProjectRecord) -> Lookup<R> {
-    Lookup::Found {
-        ctx,
-        canonical: None,
-        tombstone: None,
-        project: Some(record),
-        group: None,
-    }
-}
-
-/// A route on stored merge request `{iid}` (`edit` for an update): the
-/// project and the row; either missing is the same `FG-REPO-0005`.
-async fn stored_lookup(
-    state: &AppState,
-    parts: &Parts,
-    suffix: &str,
-    viewer: Option<UserId>,
-    edit: MergeRequestEdit,
-) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
-    let (id, iid) = ids(parts.uri.path(), suffix)?;
-    let Some((project, record)) = project_of(state, id, viewer).await? else {
-        return Ok(absent());
-    };
-    let stored = bounded(
-        state,
-        "merge_request_load",
-        review(state)?.merge_request(id, iid),
-    )
-    .await?;
-    let Some(stored) = stored else {
-        return Ok(absent());
-    };
-    let mr = forge_review::loaded_merge_request(&stored);
-    Ok(found(MergeRequestCtx::edited(project, mr, edit), record))
-}
-
-/// `GET …/merge-requests`: the project.
-pub struct MergeRequestsOf;
-
-impl Loader<AppState> for MergeRequestsOf {
-    type Ctx = ProjectCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, ProjectCtx> {
-        Box::pin(async move {
-            let id = collection_id(parts.uri.path())?;
-            Ok(match project_of(state, id, viewer).await? {
-                Some((project, record)) => found(ProjectCtx::new(project), record),
-                None => absent(),
-            })
-        })
-    }
-}
-
-/// `POST …/merge-requests`: the project and the merge request about to
-/// be opened by the caller.
-pub struct NewMergeRequest;
-
-impl BodyLoader<AppState, CreateMergeRequest> for NewMergeRequest {
-    type Ctx = MergeRequestCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        body: &'a CreateMergeRequest,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, MergeRequestCtx> {
-        Box::pin(async move {
-            let id = collection_id(parts.uri.path())?;
-            let source = branch_param("source_branch", &body.source_branch)?;
-            let target = branch_param("target_branch", &body.target_branch)?;
-            if source == target {
-                return Err(param_invalid("target_branch", "source_equals_target"));
-            }
-            // Nobody signed in: decided by `authorize()` (FG-AUTH-0001).
-            let Some(author) = viewer else {
-                return Ok(absent());
-            };
-            Ok(match project_of(state, id, viewer).await? {
-                Some((project, record)) => found(
-                    MergeRequestCtx::new(
-                        project,
-                        LoadedMergeRequest {
-                            iid: None,
-                            author,
-                            state: MergeRequestState::Open,
-                            draft: body.draft,
-                            source_branch: source,
-                            target_branch: target,
-                        },
-                    ),
-                    record,
-                ),
-                None => absent(),
-            })
-        })
-    }
-}
-
-/// `GET …/merge-requests/{iid}`.
-pub struct MergeRequestOf;
-
-impl Loader<AppState> for MergeRequestOf {
-    type Ctx = MergeRequestCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, MergeRequestCtx> {
-        Box::pin(stored_lookup(
-            state,
-            parts,
-            "",
-            viewer,
-            MergeRequestEdit::default(),
-        ))
-    }
-}
-
-/// `PATCH …/merge-requests/{iid}`: the row and what the body changes.
-pub struct MergeRequestToUpdate;
-
-impl BodyLoader<AppState, UpdateMergeRequest> for MergeRequestToUpdate {
-    type Ctx = MergeRequestCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        body: &'a UpdateMergeRequest,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, MergeRequestCtx> {
-        Box::pin(async move {
-            let target = body
-                .target_branch
-                .as_deref()
-                .map(|raw| branch_param("target_branch", raw))
-                .transpose()?;
-            let edit = MergeRequestEdit {
-                target_branch: target,
-                draft: body.draft,
-            };
-            stored_lookup(state, parts, "", viewer, edit).await
-        })
-    }
-}
-
-/// `POST …/merge-requests/{iid}/close`.
-pub struct MergeRequestToClose;
-
-impl Loader<AppState> for MergeRequestToClose {
-    type Ctx = MergeRequestCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, MergeRequestCtx> {
-        Box::pin(stored_lookup(
-            state,
-            parts,
-            "/close",
-            viewer,
-            MergeRequestEdit::default(),
-        ))
-    }
-}
-
-/// `POST …/merge-requests/{iid}/reopen`.
-pub struct MergeRequestToReopen;
-
-impl Loader<AppState> for MergeRequestToReopen {
-    type Ctx = MergeRequestCtx;
-    fn load<'a>(
-        &'a self,
-        state: &'a AppState,
-        parts: &'a Parts,
-        viewer: Option<UserId>,
-    ) -> LoadFuture<'a, MergeRequestCtx> {
-        Box::pin(stored_lookup(
-            state,
-            parts,
-            "/reopen",
-            viewer,
-            MergeRequestEdit::default(),
-        ))
-    }
-}
-
 // ── handlers ──
 
 fn respond(ctx: &crate::Ctx, status: StatusCode, body: Result<Value, ForgeError>) -> Response {
@@ -449,7 +204,8 @@ fn repository<B>(
     })
 }
 
-/// The merge request re-read after a committed write.
+/// The merge request read for `GET …/{iid}` (the loader read it before
+/// the decision; the answer is read again, after it).
 async fn written(state: &AppState, project: ProjectId, iid: i64) -> Result<Value, ForgeError> {
     let stored = bounded(
         state,
@@ -551,7 +307,8 @@ pub async fn view(state: AppState, request: Dispatched<MergeRequestCtx>) -> Resp
     respond(request.ctx(), StatusCode::OK, built)
 }
 
-/// `POST …/merge-requests` → `201` the merge request.
+/// `POST …/merge-requests` → `201` the merge request as committed (the
+/// command's own row: a committed write never answers 5xx for a re-read).
 pub async fn create(
     state: AppState,
     request: Dispatched<MergeRequestCtx, CreateMergeRequest>,
@@ -561,12 +318,12 @@ pub async fn create(
     let built = async {
         let fields = NewFields {
             title: w.input.title.clone(), // clone: the input stays borrowed by the parts
-            description: w.input.description.clone(),
+            description: w.input.description.clone(), // clone: as the title
         };
         let opened = review(&state)?
             .open(&review_request(&w), &w.proof, repo?, &fields)
             .await?;
-        written(&state, opened.project_id, opened.iid).await
+        json(body_of(&opened))
     }
     .await;
     respond(&w.ctx, StatusCode::CREATED, built)
@@ -583,13 +340,12 @@ pub async fn update(
     let built = async {
         let fields = EditFields {
             title: w.input.title.clone(), // clone: the input stays borrowed by the parts
-            description: w.input.description.clone(),
+            description: w.input.description.clone(), // clone: as the title
         };
-        let (forge_review::EditOutcome::Changed(_) | forge_review::EditOutcome::Unchanged) =
-            review(&state)?
-                .edit(&review_request(&w), &w.proof, repo?, &fields)
-                .await?;
-        stored_answer(&state, &w).await
+        let (_, stored) = review(&state)?
+            .edit(&review_request(&w), &w.proof, repo?, &fields)
+            .await?;
+        json(body_of(&stored))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -600,9 +356,8 @@ pub async fn update(
 pub async fn close(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
     let w = request.into_write();
     let built = async {
-        let (forge_review::StateOutcome::Changed | forge_review::StateOutcome::Unchanged) =
-            review(&state)?.close(&review_request(&w), &w.proof).await?;
-        stored_answer(&state, &w).await
+        let (_, stored) = review(&state)?.close(&review_request(&w), &w.proof).await?;
+        json(body_of(&stored))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
@@ -614,96 +369,14 @@ pub async fn reopen(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
     let repo = repository(&request);
     let w = request.into_write();
     let built = async {
-        let (forge_review::StateOutcome::Changed | forge_review::StateOutcome::Unchanged) =
-            review(&state)?
-                .reopen(&review_request(&w), &w.proof, repo?)
-                .await?;
-        stored_answer(&state, &w).await
+        let (_, stored) = review(&state)?
+            .reopen(&review_request(&w), &w.proof, repo?)
+            .await?;
+        json(body_of(&stored))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)
 }
 
-/// The merge request of a write's proof, re-read.
-async fn stored_answer<B>(
-    state: &AppState,
-    w: &WriteParts<MergeRequestCtx, B>,
-) -> Result<Value, ForgeError> {
-    let (project, iid) = *w.proof.id();
-    let iid = iid.ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_iid")
-    })?;
-    written(state, project, iid).await
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rule(err: &ForgeError) -> String {
-        err.to_string()
-    }
-
-    #[test]
-    fn branch_params_are_branches_only() {
-        assert_eq!(
-            branch_param("source_branch", "feature/x")
-                .expect("short")
-                .as_str(),
-            "refs/heads/feature/x"
-        );
-        assert_eq!(
-            branch_param("source_branch", "refs/heads/main")
-                .expect("full")
-                .as_str(),
-            "refs/heads/main"
-        );
-        for (raw, why) in [
-            ("refs/tags/v1", "not_a_branch"),
-            ("refs/merge-requests/1/head", "not_a_branch"),
-            ("-rf", "invalid_ref_name"),
-            ("a..b", "invalid_ref_name"),
-            ("", "invalid_ref_name"),
-        ] {
-            let err = branch_param("target_branch", raw).expect_err(raw);
-            assert_eq!(err.code(), ErrorCode::RequestInvalid, "{raw}");
-            assert!(rule(&err).contains(why), "{raw}: {err}");
-        }
-    }
-
-    #[test]
-    fn ids_and_queries_are_strict() {
-        let p = "/api/v1/projects/7/merge-requests/3";
-        assert_eq!(ids(p, "").expect("ids"), (ProjectId::new(7), 3));
-        assert_eq!(
-            ids("/api/v1/projects/7/merge-requests/3/close", "/close").expect("ids"),
-            (ProjectId::new(7), 3)
-        );
-        for bad in [
-            "/api/v1/projects/7/merge-requests/0",
-            "/api/v1/projects/7/merge-requests/03",
-            "/api/v1/projects/7/merge-requests/3/x",
-            "/api/v1/projects/x/merge-requests/3",
-        ] {
-            assert!(ids(bad, "").is_err(), "{bad}");
-        }
-        assert_eq!(
-            page_query(None).expect("defaults"),
-            (Some(MergeRequestState::Open), DEFAULT_LIMIT, None)
-        );
-        assert_eq!(
-            page_query(Some("state=all&limit=5&before=9")).expect("all"),
-            (None, 5, Some(9))
-        );
-        for bad in [
-            "state=draft",
-            "limit=101",
-            "limit=0",
-            "before=-1",
-            "x=1",
-            "limit=1&limit=2",
-        ] {
-            assert!(page_query(Some(bad)).is_err(), "{bad}");
-        }
-    }
-}
+mod tests;

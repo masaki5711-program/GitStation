@@ -260,7 +260,9 @@ connection, mapping driver errors to registered codes, migrations
   `merge_requests_one_open` answers `unique_index`), draws the iid from
   `merge_request_counters` (`INSERT … ON CONFLICT DO UPDATE`, never `max(iid)+1`: the purge
   deletes rows), then inserts. Edit (`MergeRequestPatch`: title, description, draft, target)
-  returns `EditOutcome::Changed(events)` or `Unchanged`; close / reopen `StateOutcome`.
+  returns `EditOutcome::Changed(events)` or `Unchanged`; close / reopen `StateOutcome`; every
+  command also returns the row as it stands after the transaction. A CHECK on a request
+  value is `FG-WEB-0006 param_invalid` (with `constraint`), not a query error.
   Every change writes one `merge_request.*` audit row (resource `project`) and one event
   (aggregate `merge_request`, integration class) per transition, deduplicated by
   `<prefix>:<merge_request_id>:<revision>` (`revision` counts the row's changes).
@@ -471,8 +473,9 @@ project, both branches `refs/heads/*` and different (CHECKs), `state` open | mer
 closed, `closed_at` / `closed_by` exactly while closed, `head_sha` NULL until R1b, the
 partial unique index `merge_requests_one_open`, and the guard trigger
 `merge_requests_state_forward` (`merge_requests_state_guard`, XF001, enabled ALWAYS,
-compared by doctor): `merged` is final, `closed` is reopened before it is merged, and the
-project, iid, author and source branch never change. `merge_request_versions` arrives with
+compared by doctor; replaced by `20261106100100`): `merged` is final, `closed` is reopened
+before it is merged, the project, iid, author and source branch never change, and every
+change adds exactly one to `revision` (the events' dedup keys depend on it). `merge_request_versions` arrives with
 R1b. The purge deletes both tables' rows (`project.purged` counts `merge_requests_removed`);
 the DDL-status decision is
 `forge_audit.ddl_audit_status()` (bootstrap, owned by forge_audit). The ledger `tables.toml` lists every table

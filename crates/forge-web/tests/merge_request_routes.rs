@@ -271,9 +271,11 @@ async fn merge_requests_are_opened_listed_read_edited_closed_and_reopened_throug
     t.drop_now().await;
 }
 
-/// ADR-0024 §12: an invisible project's existing iid, its missing iid, a
-/// missing project and a visible project's missing iid all answer the same
-/// 404 body (FG-REPO-0005, the same user message).
+/// ADR-0024 §12: every merge request route answers the same 404 body
+/// (FG-REPO-0005, the same user message) for an invisible project, a
+/// missing project and — on the routes of one merge request — a missing
+/// iid of a project the caller sees, and for an existing iid of an
+/// invisible project.
 #[tokio::test]
 async fn invisible_merge_request_is_indistinguishable_from_missing() {
     let t = FreshDb::migrated().await;
@@ -292,37 +294,126 @@ async fn invisible_merge_request_is_indistinguishable_from_missing() {
     )
     .await;
     assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
+    let create = json!({"title": "y", "source_branch": "fix", "target_branch": "main"});
+    let patch = json!({"title": "z"});
+    // (method, suffix after the project's merge-requests, body)
+    let routes: [(&str, &str, Option<Value>); 6] = [
+        ("GET", "", None),
+        ("POST", "", Some(create)),
+        ("GET", "/{iid}", None),
+        ("PATCH", "/{iid}", Some(patch)),
+        ("POST", "/{iid}/close", None),
+        ("POST", "/{iid}/reopen", None),
+    ];
     let mut answers = Vec::new();
-    for (who, uri) in [
-        (stranger, format!("/api/v1/projects/{p}/merge-requests/1")),
-        (stranger, format!("/api/v1/projects/{p}/merge-requests/2")),
-        (
-            stranger,
-            "/api/v1/projects/9999/merge-requests/1".to_owned(),
-        ),
-        (dave, format!("/api/v1/projects/{p}/merge-requests/2")),
-        (
-            stranger,
-            format!("/api/v1/projects/{p}/merge-requests/1/close"),
-        ),
-    ] {
-        let method = if uri.ends_with("/close") {
-            "POST"
-        } else {
-            "GET"
+    for (method, suffix, body) in &routes {
+        let one = suffix.contains("{iid}");
+        let uri = |project: i64, iid: i64| {
+            format!(
+                "/api/v1/projects/{project}/merge-requests{}",
+                suffix.replace("{iid}", &iid.to_string())
+            )
         };
-        let a = call(r(), method, &uri, session(who), None).await;
-        assert_eq!(denied(&a), (StatusCode::NOT_FOUND, "FG-REPO-0005"), "{uri}");
-        let mut body = a.json.clone();
-        body.as_object_mut()
-            .expect("an error object")
-            .remove("request_id");
-        answers.push(body);
+        // (who, project, iid): an invisible project (existing iid and, for
+        // the routes of one, a missing one), a missing project, and a
+        // visible project's missing iid.
+        let mut cases = vec![(stranger, p, 1), (stranger, 9999, 1)];
+        if one {
+            cases.push((stranger, p, 2));
+            cases.push((dave, p, 2));
+        }
+        for (who, project, iid) in cases {
+            let target = uri(project, iid);
+            let a = call(r(), method, &target, session(who), body.clone()).await;
+            assert_eq!(
+                denied(&a),
+                (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+                "{method} {target}"
+            );
+            let mut answer = a.json.clone();
+            answer
+                .as_object_mut()
+                .expect("an error object")
+                .remove("request_id");
+            answers.push(answer);
+        }
     }
     assert!(
         answers.windows(2).all(|w| w[0] == w[1]),
         "every 404 body is the same: {answers:?}"
     );
+    t.drop_now().await;
+}
+
+/// The list's paging and query through the router: `limit` and `before`
+/// page newest first, `next_before` ends with `null`; a bad `state`,
+/// `limit` or `before` and an unknown parameter are FG-WEB-0006 (400).
+#[tokio::test]
+async fn the_list_pages_newest_first_and_refuses_a_bad_query() {
+    let t = FreshDb::migrated().await;
+    let olga = user(&t, "olga").await;
+    let web = web(&t, olga, &[]).await;
+    let p = web.project_id.get();
+    let r = || router(&t.db);
+    let list = format!("/api/v1/projects/{p}/merge-requests");
+    for source in ["feature", "fix", "release"] {
+        let a = call(
+            r(),
+            "POST",
+            &list,
+            session(olga),
+            Some(json!({"title": source, "source_branch": source, "target_branch": "main"})),
+        )
+        .await;
+        assert_eq!(a.status, StatusCode::CREATED, "{}", a.json);
+    }
+    let iids = |a: &Answer| -> Vec<i64> {
+        a.json["merge_requests"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|m| m["iid"].as_i64().expect("iid"))
+            .collect()
+    };
+    let first = call(r(), "GET", &format!("{list}?limit=2"), session(olga), None).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.json);
+    assert_eq!(iids(&first), [3, 2]);
+    assert_eq!(first.json["next_before"], 2);
+    let second = call(
+        r(),
+        "GET",
+        &format!("{list}?limit=2&before=2"),
+        session(olga),
+        None,
+    )
+    .await;
+    assert_eq!(iids(&second), [1]);
+    assert_eq!(second.json["next_before"], Value::Null);
+    let closed = call(
+        r(),
+        "GET",
+        &format!("{list}?state=closed"),
+        session(olga),
+        None,
+    )
+    .await;
+    assert_eq!(iids(&closed), Vec::<i64>::new());
+    for bad in [
+        "state=draft",
+        "limit=0",
+        "limit=101",
+        "before=0",
+        "before=x",
+        "page=2",
+        "state=open&state=all",
+    ] {
+        let a = call(r(), "GET", &format!("{list}?{bad}"), session(olga), None).await;
+        assert_eq!(
+            denied(&a),
+            (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+            "{bad}"
+        );
+    }
     t.drop_now().await;
 }
 

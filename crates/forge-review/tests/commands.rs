@@ -55,7 +55,7 @@ async fn a_developer_opens_and_the_author_edits_closes_and_reopens() {
     let proof = stored_proof(&t, &review, &as_dev, Action::MergeRequestUpdate, p, 1, edit)
         .await
         .expect("the author edits");
-    let edited = review
+    let (edited, returned) = review
         .edit(
             &request("req-edit"),
             &proof,
@@ -79,6 +79,7 @@ async fn a_developer_opens_and_the_author_edits_closes_and_reopens() {
         .await
         .expect("get")
         .expect("there");
+    assert_eq!(returned, now, "the command answers the row it committed");
     assert_eq!(
         (now.title.as_str(), now.draft, now.target_branch.as_str()),
         ("Add the login form", false, "refs/heads/release")
@@ -99,7 +100,8 @@ async fn a_developer_opens_and_the_author_edits_closes_and_reopens() {
         review
             .close(&request("req-close"), &proof)
             .await
-            .expect("close"),
+            .expect("close")
+            .0,
         StateOutcome::Changed
     );
     let proof = stored_proof(
@@ -117,7 +119,8 @@ async fn a_developer_opens_and_the_author_edits_closes_and_reopens() {
         review
             .reopen(&request("req-reopen"), &proof, repo)
             .await
-            .expect("reopen"),
+            .expect("reopen")
+            .0,
         StateOutcome::Changed
     );
     let events = count(
@@ -228,7 +231,7 @@ async fn a_missing_branch_is_ref_not_found_and_writes_nothing() {
     )
     .await
     .expect("close proof");
-    let closed = review
+    let (closed, _) = review
         .close(&request("req-d"), &close)
         .await
         .expect("close");

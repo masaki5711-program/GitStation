@@ -185,4 +185,6 @@ pub async fn list(
 }
 
 #[cfg(test)]
+mod race_tests;
+#[cfg(test)]
 mod tests;

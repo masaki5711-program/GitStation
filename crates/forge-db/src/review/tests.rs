@@ -184,7 +184,7 @@ async fn a_second_open_merge_request_for_the_same_branches_is_refused() {
         .expect("other target");
     // Closed, the branches are free again; reopening the old one then
     // collides with the new one.
-    let (closed, ()) = close_mr_decided(
+    let (closed, _, ()) = close_mr_decided(
         &t.db,
         &as_user(alice, "req-close"),
         p,
@@ -295,14 +295,14 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     .expect("open");
             }
             MergeRequestTransition::Close => {
-                let (done, ()) =
+                let (done, _, ()) =
                     close_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, |_| Ok(()))
                         .await
                         .expect("close");
                 assert_eq!(done, StateOutcome::Changed);
             }
             MergeRequestTransition::Reopen => {
-                let (done, ()) =
+                let (done, _, ()) =
                     reopen_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, |_| Ok(()))
                         .await
                         .expect("reopen");
@@ -313,7 +313,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     draft: Some(true),
                     ..MergeRequestPatch::default()
                 };
-                let (done, ()) =
+                let (done, _, ()) =
                     edit_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, &patch, |_| {
                         Ok(())
                     })
@@ -329,7 +329,7 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     title: Some("Renamed".to_owned()),
                     ..MergeRequestPatch::default()
                 };
-                let (done, ()) =
+                let (done, _, ()) =
                     edit_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, &patch, |_| {
                         Ok(())
                     })
@@ -367,7 +367,7 @@ async fn an_edit_writes_one_row_and_event_per_transition_or_nothing() {
         target_branch: Some(branch("main")),
         ..MergeRequestPatch::default()
     };
-    let (done, ()) = edit_mr_decided(
+    let (done, _, ()) = edit_mr_decided(
         &t.db,
         &as_user(alice, "req-same"),
         p,
@@ -386,7 +386,7 @@ async fn an_edit_writes_one_row_and_event_per_transition_or_nothing() {
         target_branch: Some(branch("release")),
         ..MergeRequestPatch::default()
     };
-    let (done, ()) = edit_mr_decided(
+    let (done, _, ()) = edit_mr_decided(
         &t.db,
         &as_user(alice, "req-both"),
         p,
@@ -449,43 +449,45 @@ async fn close_and_reopen_set_their_fields_and_repeat_as_unchanged() {
     open(&t, alice, p, "req-open", &new_mr("feature", "main"))
         .await
         .expect("open");
-    let (done, ()) = close_mr_decided(&t.db, &as_user(alice, "req-close"), p, 1, alice, |_| Ok(()))
-        .await
-        .expect("close");
+    let (done, _, ()) =
+        close_mr_decided(&t.db, &as_user(alice, "req-close"), p, 1, alice, |_| Ok(()))
+            .await
+            .expect("close");
     assert_eq!(done, StateOutcome::Changed);
     let closed = get(&t.db, p, 1).await.expect("get").expect("there");
     assert_eq!(closed.state, MergeRequestState::Closed);
     assert_eq!(closed.closed_by, Some(alice));
     assert!(closed.closed_at.is_some());
-    let (again, ()) = close_mr_decided(&t.db, &as_user(alice, "req-close-2"), p, 1, alice, |_| {
-        Ok(())
-    })
-    .await
-    .expect("again");
+    let (again, _, ()) =
+        close_mr_decided(&t.db, &as_user(alice, "req-close-2"), p, 1, alice, |_| {
+            Ok(())
+        })
+        .await
+        .expect("again");
     assert_eq!(again, StateOutcome::Unchanged);
     assert!(audit_of(&t, "req-close-2").await.is_empty());
-    let (done, ()) =
-        reopen_mr_decided(
-            &t.db,
-            &as_user(alice, "req-reopen"),
-            p,
-            1,
-            alice,
-            |_| Ok(()),
-        )
-        .await
-        .expect("reopen");
+    let (done, _, ()) = reopen_mr_decided(
+        &t.db,
+        &as_user(alice, "req-reopen"),
+        p,
+        1,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("reopen");
     assert_eq!(done, StateOutcome::Changed);
     let open_again = get(&t.db, p, 1).await.expect("get").expect("there");
     assert_eq!(
         (open_again.state, open_again.closed_at, open_again.closed_by),
         (MergeRequestState::Open, None, None)
     );
-    let (same, ()) = reopen_mr_decided(&t.db, &as_user(alice, "req-reopen-2"), p, 1, alice, |_| {
-        Ok(())
-    })
-    .await
-    .expect("again");
+    let (same, _, ()) =
+        reopen_mr_decided(&t.db, &as_user(alice, "req-reopen-2"), p, 1, alice, |_| {
+            Ok(())
+        })
+        .await
+        .expect("again");
     assert_eq!(same, StateOutcome::Unchanged);
     // An absent iid is FG-REPO-0005 after decide.
     let err = close_mr_decided(&t.db, &as_user(alice, "req-none"), p, 9, alice, |_| Ok(()))
@@ -527,7 +529,7 @@ async fn decide_sees_the_locked_facts_and_a_denial_writes_nothing() {
     open(&t, alice, p, "req-ok", &new_mr("feature", "main"))
         .await
         .expect("open");
-    let (edited, ()) = edit_mr_decided(
+    let (edited, _, ()) = edit_mr_decided(
         &t.db,
         &as_user(alice, "req-edit"),
         p,
@@ -565,7 +567,7 @@ async fn the_state_guard_keeps_merged_final_and_the_identity_fixed() {
     t.commit_audited(
         ("project", p.get()),
         &[format!(
-            "UPDATE forge.merge_requests SET state = 'merged' WHERE id = {id}"
+            "UPDATE forge.merge_requests SET state = 'merged', revision = revision + 1              WHERE id = {id}"
         )],
     )
     .await;
@@ -595,7 +597,7 @@ async fn the_state_guard_keeps_merged_final_and_the_identity_fixed() {
     let other = open(&t, alice, p, "req-open-2", &new_mr("other", "main"))
         .await
         .expect("open");
-    let (closed, ()) = close_mr_decided(
+    let (closed, _, ()) = close_mr_decided(
         &t.db,
         &as_user(alice, "req-close"),
         p,

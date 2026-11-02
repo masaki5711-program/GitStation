@@ -25,8 +25,12 @@ written, no iid drawn). Only this crate calls those commands
 names never match forge-hosting's needles, so forge-hosting's scan needs no
 exception for this crate.
 
-Before the transaction a create checks both branches exist, an edit a new target,
-a reopen both branches, through `BranchProbe` (in `forge serve`:
+Before the transaction a create checks both branches exist, an edit any target it
+asks for (whatever the proof saw as the current one), a reopen both branches of the
+row as read just before the transaction — and the transaction refuses to go on when the
+row it locks is closed with other branches (or was not closed when read), re-reading
+and checking again up to `STALE_ATTEMPTS` (3) times, then `FG-DB-0002
+reason=merge_request_changed_concurrently` (retryable). All through `BranchProbe` (in `forge serve`:
 `forge_git::browse::Browser::resolve_ref` on the full `refs/heads/…` name — the
 browse API's ref list, no new git plumbing). A branch deleted later leaves the
 merge request in place (ADR-0024 §1).
@@ -34,9 +38,11 @@ merge request in place (ADR-0024 §1).
 **Public API** (`Review::new(Db, Arc<dyn BranchProbe>)`)
 - Reads (read pool): `merge_request(project, iid)`, `merge_requests(project,
   state, before, limit)` (newest first, at most `MAX_PAGE` = 100).
-- Writes: `open(request, proof, repo, NewFields)`, `edit(request, proof, repo,
-  EditFields)` (`EditOutcome::Changed(events)` / `Unchanged`), `close`,
-  `reopen(…, repo)` (`StateOutcome::Changed` / `Unchanged`).
+- Writes: `open(request, proof, repo, NewFields) -> StoredMergeRequest`,
+  `edit(request, proof, repo, EditFields) -> (EditOutcome, StoredMergeRequest)`
+  (`Changed(events)` / `Unchanged`), `close` and `reopen(…, repo) -> (StateOutcome,
+  StoredMergeRequest)` (`Changed` / `Unchanged`): the row as committed, so the route
+  answers without another read.
 - `loaded_merge_request(&StoredMergeRequest)`: forge-auth's `LoadedMergeRequest`,
   built the same way by the route loaders and the commands.
 - `check_title`, `check_description`: the field rules (title 1..=255
@@ -51,13 +57,17 @@ alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023
 (`ref_not_found` with `branch=source_branch|target_branch`), FG-WEB-0006
 (`param_invalid` with `param=title|description`), FG-GIT-0002 / 0004 (the branch
 lookup), FG-DB-0001 / 0002, FG-SYS-0001 (`proof_action_mismatch`,
-`proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`).
+`proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`),
+FG-DB-0002 (`merge_request_changed_concurrently`, retryable).
 
 **Runbooks**: none yet (no alerting code; `merge-execution`, `codeowners`,
 `secret-removal` and `merge-blocked` arrive with R1b–R6).
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched
-proofs), `tests/decided_callers.rs`; the SQL side in
+proofs), `tests/stale_proofs.rs` (a reopen proof taken while open, a retarget the
+proof saw as current: both still checked), `tests/real_browser.rs`
+(`browser_probe_accepts_only_an_existing_branch`: the real `Browser` against a real
+repository), `tests/decided_callers.rs`; the SQL side in
 `crates/forge-db/src/review/tests.rs` (iid allocation under concurrency, one
 event per transition, the state guard, FG-REVIEW-0001).
