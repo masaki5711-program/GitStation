@@ -171,11 +171,14 @@ cargo build --release -p forge-client
 出典: `ops/runbooks/db-bootstrap.md`（手順の正）、`ops/db/bootstrap/01-cluster-roles.sql` / `02-create-database.sql` / `03-database-objects.sql`。
 
 **superuser で**、順に実行する。各ファイルは最初の誤りで止まる。手で `psql` を開いたら最初に `SET search_path = pg_catalog, pg_temp;`。
+下の `psql -d …` は、サーバー上で superuser（例: OS の `postgres` ユーザー）のソケット接続ができる前提の書き方。別ホストや TCP で入るなら、各 `psql` に
+`-h <DB_HOST> -p <PORT> -U <SUPERUSER>` を付け、パスワードは `~/.pgpass` か対話入力にする（本番の資格情報を `PGPASSWORD` に残さない。2026-11-02 の予行演習は合成の開発用資格情報を `PGPASSWORD` で渡して TCP で実行した。§6.4）。
 
 ```bash
 cd <GITSTATION_SRC>/ops/db/bootstrap
 
 # 1. クラスターのロール（forge_owner, forge_migrator, forge_seq, forge_purge, forge_app, forge_ro, forge_maint, forge_audit の 8 つ）
+#    ロールは DB ではなくクラスター全体のもの。同じクラスターに別の GitStation の DB があっても、何度実行してもよい
 psql -d postgres -f 01-cluster-roles.sql
 
 # 2. ログイン 3 つのパスワード（\password は入力を表示しない。値は記録に残さない）
@@ -183,10 +186,11 @@ psql -d postgres -c '\password forge_app'
 psql -d postgres -c '\password forge_migrator'
 psql -d postgres -c '\password forge_maint'
 
-# 3. DB を作る（新規のみ。DB の所有者はこの superuser になる）
+# 3. DB を作る（新規のみ。DB の所有者はこの superuser になる）。DB 名は `-v dbname=` で決める。
+#    forge.toml / forge-migrate.toml の URL の末尾（/forge）と揃える
 psql -d postgres -v dbname=forge -f 02-create-database.sql
 
-# 4. DB の中のオブジェクト（1 トランザクション。何度でも実行可）
+# 4. DB の中のオブジェクト（1 トランザクション。何度でも実行可）。`-d` は手順 3 の DB 名
 psql -d forge -f 03-database-objects.sql
 ```
 
@@ -199,6 +203,12 @@ psql -d forge -f 03-database-objects.sql
 
 秘密は**ファイルで**渡す。絶対パス、所有者だけが読める（`0600`）、Unix では他人が読めると拒否される (出典: `crates/forge-core/src/config/secret.rs`)。
 置き場は `<SECRETS_DIR>`（例: `/etc/forge/secrets`、提案）。`forge serve` のサービスユーザーは**移行と保守のパスワードのファイルを読めないようにする** (出典: `ops/runbooks/db-bootstrap.md` 手順 5)。
+
+**所有者（提案）**: ファイルが `0600` だと、**所有者だけ**が読める。したがって `forge serve` / `forge worker` / `forge doctor` が読むファイル
+（`db-app.pw`、`cursor-keys`、`audit-seal-keys`、`web-session-keys`、`oidc-client-secret`）は**サービスユーザーの所有**にし（`chown <SERVICE_USER> …; chmod 600 …`）、
+`db-migrate.pw` と `db-maint.pw` は**運用者（`forge db migrate` を実行する人）の所有**にする。root 所有の `0600` を置くと、サービスユーザーでは読めず起動しない。
+`0644` など他人が読めるファイルは `FG-SYS-0002 config_key=<キー> reason=insecure_permissions` で拒否される（2026-11-02 の予行演習で確認: `database.password_file` を `0644` にすると `doctor` と `serve` が失敗）。
+ディレクトリ（`<SECRETS_DIR>`、`<CONF_DIR>`）の権限は検査されないが、サービスユーザーが辿れる `0750` 程度にしておく。
 
 | ファイル | 中身・形式 | 使うキー | 出典 |
 |---|---|---|---|
@@ -332,7 +342,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 export FORGE=<GITSTATION_SRC>/target/release/forge
 
 # マイグレーション（forge_migrator で。serve/worker は決して migrate しない）(出典: crates/forge-cli/src/db.rs、ops/runbooks/db-migration.md)
-$FORGE --config <CONF_DIR>/forge-migrate.toml db migrate        # "up to date" か "applied …"
+$FORGE --config <CONF_DIR>/forge-migrate.toml db migrate        # "up to date" か "applied <版の一覧>"
 $FORGE --config <CONF_DIR>/forge.toml db status --check         # serve が起動できるか。非互換なら FG-DB-0004
 
 # 読み取り専用の総点検（設定・DB・スキーマ・保存先・git・auth.oidc・web.ui）(出典: crates/forge-cli/src/doctor/mod.rs)
@@ -340,9 +350,14 @@ $FORGE --config <CONF_DIR>/forge.toml doctor            # 人向け
 $FORGE --config <CONF_DIR>/forge.toml doctor --json     # 機械向け
 ```
 
-- マイグレーションは 21 本（`crates/forge-db/migrations/`）。**適用済みのマイグレーションは編集しない**（契約 6）。
+- マイグレーションは 23 本（`crates/forge-db/migrations/*.sql`。2026-11-02 の予行演習で `db status` の `applied` に 23 版が並んだ）。**適用済みのマイグレーションは編集しない**（契約 6）。
+- **初回の `db migrate` は stderr に約 230 行の JSON ログ（`level":"WARN"`、`forge_audit.ddl_audit: CREATE TABLE (…) recorded` など）を出す**。DDL を監査表に記録した通知で、**異常ではない**。
+  終わりは stdout の `<host:port>/<db>: applied …` と終了コード 0。2 回目は `up to date` で、ログは出ない。慌てて止めない。
+- `db status --check` の期待: `pending -` / `unknown -` / `modified -` / `dirty -` / `serve compatible`。
 - `doctor` の主な項目: `database` `db.bootstrap` `db.connections` `outbox.*` `audit.seal_*` `jobs.*` `subscribers.*` `users.administration` `repositories.provisioning` `repositories.storage` `storage` `auth.oidc` `web.ui`。
-  初回に `auth.oidc` を設定していなければ warn（黙って無効にはしない）。`users.administration` は管理者がいないと警告になりうる（§3.6 の後に消える。詳細は未確認）。
+  初回に `auth.oidc` を設定していなければ warn（黙って無効にはしない）。`users.administration` は管理者がいないと警告になる（§3.6 の `bootstrap-admin` の後に ok になる。予行演習で確認）。
+  最初の `doctor`（管理者を作る前、OIDC 無し）の期待は **ok が多数、warn は `users.administration` と `auth.oidc` の 2 件だけ、FAIL 0、終了コード 0**。
+  `outbox.sequencer_lag` は worker を起動するまで `worker not observed (no heartbeat yet)`、起動後は `heartbeat … ms ago`。`audit.seal_*` の `audit sequencing off` は現行ビルドの既定の表示で、異常ではない。
 - 起動（2 つとも常駐させる）:
 
 ```bash
@@ -376,10 +391,12 @@ $FORGE --config <CONF_DIR>/forge.toml admin token list --user <USERNAME>     # �
 $FORGE --config <CONF_DIR>/forge.toml admin token revoke <TOKEN_ID>
 ```
 
+- `forge admin …` は stderr に `neither USERNAME nor USER is set; the audit row names forge-cli:unknown` と警告することがある（systemd や `env -i` で実行したとき）。監査行の操作者名が `forge-cli:unknown` になるので、`USER=<運用者名>` を付けて実行する。
+- **トークンは stdout に出る**（`token fgp_…` の行）。`> file` に落とすなら `umask 077` の下で行い、`awk '$1=="token"{print $2}'` で値だけを `0600` のファイルに取り出して `gstn auth login --with-token < file` に渡す。
 - スコープ: `read_repository` `write_repository`（clone/fetch と push）、`read_api` `api`（REST の読み / 読み書き）、`admin`（**管理者のトークンが管理者の権限を使うために必要**。無いと普通の利用者として動く）(出典: `crates/forge-core/src/scope.rs`)。有効期限は 1d〜365d、既定 90d。
 - **トークンは画面（利用者の設定 → トークン、`/{利用者}/-/settings?tab=tokens`）で発行できる**が、ブラウザのセッションが要る（トークンからは FG-AUTH-0002。ADR-0019 Amendment M2）。Keycloak でログインできるまでは、この CLI（`forge admin token issue`）が唯一の入口。トークンをチャットやリポジトリに貼らない。
 - 他の利用者を作る方法は、OIDC の初回ログイン（自動作成）か、`bootstrap-admin --create`（管理者がいない時だけ）。OIDC を使わない場合に**2 人目以降のローカル利用者を作る経路は未確認**（`forge admin` に user create が無い）。
-- **注（接続のロール）**: runbook は `forge admin …` を `database.maint_url`（`forge_maint`）と書いているが、現行コードの `admin_token.rs` / `admin_user.rs` などは `Db::connect(cfg)`、つまり `database.url`（`forge_app`）で接続し、`maint_url()` の呼び出し元は本番コードに無い（`grep` で確認）。**権限不足で失敗したときの扱いは「未確認」**。まず `forge.toml`（app 用）で実行する。
+- **注（接続のロール）**: runbook は `forge admin …` を `database.maint_url`（`forge_maint`）と書いているが、現行コードの `admin_token.rs` / `admin_user.rs` などは `Db::connect(cfg)`、つまり `database.url`（`forge_app`）で接続し、`maint_url()` の呼び出し元は本番コードに無い（`grep` で確認）。**予行演習（§6.4）では `forge.toml`（`forge_app`）で `admin bootstrap-admin` と `admin token issue` が成功した**。`forge_maint` の設定は不要。権限不足になる操作が他にあるかは未確認。
 - `forge admin user link-identity --user … --issuer … --subject …` は OIDC の結び付けを手で直す (出典: `ops/runbooks/oidc-identity-link.md`)。
 
 ### 3.7 TLS・`base_url`・リバースプロキシ
@@ -401,7 +418,9 @@ $FORGE --config <CONF_DIR>/forge.toml admin token revoke <TOKEN_ID>
 ```bash
 export GSTN_HOST=https://<TEST_SERVER_HOST>            # または ~/.config/gstn/config.toml の host
 # 社内 CA なら: export GSTN_CA_FILE=<INTERNAL_CA_PEM>
-gstn auth login --with-token < <TOKEN_FILE>            # 標準入力から。引数で渡さない
+gstn auth login --with-token < <TOKEN_FILE>            # 標準入力から。引数で渡さない。
+# 画面の無いサーバーでは "the OS credential store is not available (secret_service_unavailable …)" の警告が出る。
+# 失敗ではなく、トークンは 0600 の ~/.config/gstn/credentials.toml に保存される（以降の gstn / git でも同じ警告が出続ける）
 gstn auth status                                       # ユーザー・スコープ・is_agent (トークンは出ない)
 
 gstn auth git-credential --install                     # 素の git が自動でトークンを使う (host 限定)
@@ -411,9 +430,12 @@ gstn group create --path <GROUP_PATH> --display-name "<NAME>"
 gstn namespace resolve <GROUP_PATH>                    # namespace の id を引く
 gstn project create --namespace-id <NAMESPACE_ID> --path <PROJECT_PATH> --display-name "<NAME>"
 gstn project list
-gstn project view <PROJECT_ID>                         # リポジトリが ready になるまで待つ (worker が作る)
+gstn project view <PROJECT_ID>                         # id・path・可視性などを出す。**リポジトリの状態（provisioning / ready）は出ない**
+# リポジトリが作られたかは: worker のログの forge.repo.provisioned、または gstn browse refs --project <PROJECT_ID> が
+# "default branch: -" / "(none)" で返る（空のリポジトリ = 作成済み）。forge doctor の repositories.provisioning でも見える
 ```
 
+- `gstn group create` は `Created group <id> (<path>)` を返すが、**`project create` に渡すのはグループの id ではなく `gstn namespace resolve` の `namespace_id`**（予行演習では group 1 の namespace_id は 2）。
 - 項目の根拠: `gstn project create` の引数は `crates/forge-client/src/cli.rs`（`--namespace-id`、`--path`、`--display-name`、`--visibility private|internal`）。`--kind` は ADR-0023 で削除した。
 - プロジェクトを作ると `repository.provision` のジョブが入り、**`forge worker` がベアリポジトリを作る**（`forge.repo.provisioned` ログ）(出典: `ops/runbooks/repository-provisioning.md`)。`provisioning` のまま 10 分を超えると `forge doctor` が `FG-REPO-0012`（alert）。
 
@@ -426,8 +448,10 @@ echo "synthetic" > README.md && git add README.md && git commit -m "chore: first
 git push -u origin main
 ```
 
-- 読み取りの API で履歴が見える: `gstn browse refs --project <PROJECT_ID>`、`browse tree`、`browse file`、`browse commits`、`browse commit`、`browse compare`、`browse blame` (出典: `crates/forge-client/src/cli.rs` の `BrowseCommand`、`docs/handoff/2026-11-01-m2-mr7.md`、`…-mr8.md`)。
-- ブランチ保護: `gstn protected-ref add/list/remove`、メンバー: `gstn member …` (出典: `crates/forge-client/README.md`)。
+- 読み取りの API で履歴が見える: `gstn browse refs --project <PROJECT_ID>`、`browse tree --project <ID> --ref <REV> [--path <DIR>]`、`browse file --project <ID> --ref <REV> --path <FILE>`、`browse commits --project <ID> --ref <REV>`、
+  `browse commit`、`browse compare`、`browse blame`（`--ref` は tree / file / commits で**必須**。`browse commit` は `--ref` を取らない。各 `--help` を見る）。生のファイルとアーカイブは **`GET /<namespace パス>/-/raw/<ref>/<パス>`**、**`GET /<namespace パス>/-/archive/<ref>.tar.gz` または `.zip`**（`Authorization: Bearer fgp_…` が要る。`/api/v1/…/repository/blob` が JSON、こちらは本体）(出典: `crates/forge-client/src/cli.rs` の `BrowseCommand`、`docs/handoff/2026-11-01-m2-mr7.md`、`…-mr8.md`)。
+- ブランチ保護: `gstn protected-ref add --project <ID> --pattern refs/heads/main --push-min-role developer|maintainer|owner`（`list` / `remove`）、メンバー: `gstn member …` (出典: `crates/forge-client/README.md`)。
+- 空のリポジトリを clone すると、HEAD は既に `refs/heads/main` で `git checkout -b main` は要らない（`git checkout -b main` は害はないが不要）。clone 時に `warning: You appear to have cloned an empty repository.` が出るのは正常。
 - 2 つの規約の違い: GitStation 自身のブランチ名は `<type>/<area>-<topic>`（`CLAUDE.md`）だが、Kanflow の PBI 結び付けは**ブランチ名・MR タイトル・コミットに `PBI-123` を含める**必要がある (出典: `Kanflow/docs/operations/git-integration.md` の Linking rule)。製品側（GitStation で管理される対象リポジトリ）のブランチ名には `PBI-<番号>` を入れる。
 
 ### 3.9 Keycloak（`sso`）— ブラウザのログイン
@@ -685,12 +709,12 @@ curl -X POST https://<TEST_SERVER_HOST>/api/mcp -H "Content-Type: application/js
 | G2 | スキーマ | `forge --config forge.toml db status --check` | 保留なし・`serve` が起動できる |
 | G3 | 生存 | `curl -i http://127.0.0.1:8080/healthz` | 200（出典: `docs/api/openapi.json`） |
 | G4 | 準備完了 | `curl -i http://127.0.0.1:8080/readyz` | 200（DB が使える。Keycloak は見ない） |
-| G5 | 殻 | `curl -i https://<TEST_SERVER_HOST>/` | 200、HTML（`doctor` の `web.ui` が `embedded`） |
+| G5 | 殻 | `curl -i https://<TEST_SERVER_HOST>/`（`/index.html` や `/<任意の 1 セグメント>` も同じ殻） | 200、`text/html`、`cache-control: no-cache`、`content-security-policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`（ADR-0022）。本文の `<script src="/-/assets/index-….js">` と `<link href="/-/assets/index-….css">` を `curl -I` し、200・`cache-control: public, max-age=31536000, immutable`・`Accept-Encoding: br` で `content-encoding: br`。`doctor` の `web.ui` が `embedded`。2026-11-02 の予行演習で `GET /` が 404 `FG-WEB-0001` になる不具合が見つかり、デプロイの版で直した（`/` を殻の固定ルートにした）。 |
 | G6 | トークン認証 | `gstn auth status` | ユーザー・スコープ・`is_agent` |
 | G7 | 認可の拒否 | トークン無しで `curl -i https://<TEST_SERVER_HOST>/api/v1/user` | 401（`FG-AUTH-…` と `request_id`） |
 | G8 | プロジェクト作成 | `gstn project create …` → `project view` | worker のログに `forge.repo.provisioned`。リポジトリが ready |
 | G9 | clone / push | §3.8 | push 成功。`gstn browse refs` / `browse commits` に反映 |
-| G10 | 保護ブランチ | `gstn protected-ref add …` 後に保護対象へ direct push | 拒否される（`FG-…` と `request_id`）。具体的な拒否のコードは未確認（`docs/errors/` を引く） |
+| G10 | 保護ブランチ | `gstn protected-ref add --project <ID> --pattern refs/heads/main --push-min-role owner` 後に (a) `git push -f origin main`（履歴を書き換えた強制 push）、(b) `git push origin :main`（削除） | (a) `[remote rejected] … (FG-GIT-0007 保護されたブランチ・タグには強制プッシュできません。)`、(b) `FG-GIT-0009 保護されたブランチ・タグは削除できません。 (request_id: …)`。**管理者（owner）自身の通常の fast-forward push は通る**。「権限不足の利用者の direct push の拒否」は 2 人目の利用者が要り、OIDC 無しでは作れないため未確認（§9 の 8） |
 | G11 | worker | `forge … doctor --json` の `jobs.*` `outbox.*` `audit.seal_*` | 滞留なし |
 | G12 | OIDC（使う場合） | `doctor` の `auth.oidc`、ブラウザで `/-/auth/login` | discovery・JWKS ok、Keycloak 経由で戻る。`access` ロール無しの利用者 carol は `FG-AUTH-0013` で拒否 |
 | G13 | ログ | `journalctl`（systemd の場合）等で `forge.serve.listening` | `request_id` / `error_code` で検索できる |
@@ -750,6 +774,38 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 - vitest の件数は 8413 件合格という記録がある（`GitStation/docs/plan/00-master-plan.md`）。**実 MySQL のテストと E2E は未実行**。
 - E2E は `next start` を別に立てて（CI は 3001）、`E2E_USER` を `User` に投入してから回す（CI の「seed the E2E user」と同じ。`role='member'`、`language='ja'`）。ブラウザは `npx playwright install --with-deps chromium`（社内でダウンロードが遮断される場合は `PLAYWRIGHT_DOWNLOAD_HOST` に内部ミラー。出典: `.gitlab-ci.yml`）。
 - `e2e/eval/*`（評価用の大きなスイート）は Windows の固定パスと評価用 DB を前提とし、CI でも回していない。回さない。
+
+### 6.4 2026-11-02 ローカルでの予行演習（GitStation）
+
+コンテナ内で、この文書の §3 と §6.1 をそのとおりに実行した（コミット `d3d8056`）。PostgreSQL 16.15 は同じ環境の開発用クラスター（`127.0.0.1:55432`）に新しい DB `forge_rehearsal` を作って使い、`forge` は `127.0.0.1:18080` に、`web.base_url = "http://127.0.0.1:18080"`（localhost の例外）で待ち受けさせた。鍵・パスワード・設定・ストレージ・ログはすべて作業用の一時ディレクトリに置き、合成の値だけを使った。
+
+**通ったこと（コマンドと結果）**
+
+| 手順 | コマンド（抜粋） | 結果 |
+|---|---|---|
+| bootstrap | `psql -h 127.0.0.1 -p 55432 -U <superuser> -d postgres -f 01-cluster-roles.sql` → `ALTER ROLE … PASSWORD` ×3 → `-v dbname=forge_rehearsal -f 02-create-database.sql` → `-d forge_rehearsal -f 03-database-objects.sql` | すべて成功（01 は既存ロールに `already been granted` の NOTICE だけ） |
+| 設定・鍵 | §3.3 の `openssl rand -hex 32` 3 本、§3.4 の 2 つの TOML（`tls_mode = "disable"`、ループバック） | `0600` で読める |
+| migrate | `forge --config forge-migrate.toml db migrate` | `applied` 23 版、終了 0。初回は stderr に WARN 228 行（`ddl_audit … recorded`。正常）。2 回目 `up to date` |
+| 互換 | `forge --config forge.toml db status --check` | `serve compatible`、pending/unknown/modified/dirty なし |
+| doctor | `forge --config forge.toml doctor` | 終了 0。warn は `users.administration`（管理者なし）と `auth.oidc`（未設定）の 2 件だけ。`web.ui embedded`、`git 2.43.0`、`db.bootstrap version 8` |
+| 管理者・トークン | `forge --config forge.toml admin bootstrap-admin --user … --create --email … --display-name …` → `admin token issue --scopes read_repository,write_repository,read_api,api,admin --expires-in 30d` | 成功（`forge_app` の設定のまま）。トークンは stdout の `token fgp_…` |
+| 起動 | `forge … worker` と `forge … serve` を同時に常駐 | `forge.worker.started`、`forge.serve.session_keys_loaded`、`forge.serve.oidc_disabled`（warn）、`forge.serve.listening`。SIGTERM で `forge.serve.stopped` / `forge.worker.stopped` |
+| ヘルス | `curl -i /healthz`、`/readyz` | どちらも 200 `{"status":"ok"}`。`content-security-policy: default-src 'none'; frame-ancestors 'none'`、`x-content-type-options: nosniff`、`referrer-policy: same-origin`、`cross-origin-opener-policy`、`permissions-policy`、`cache-control: no-store`、`x-request-id` |
+| 殻・資産 | `curl -i /index.html`、`/-/assets/index-….js` | 200、CSP は ADR-0022 のとおり（G5）。資産は `immutable`、`Accept-Encoding: br` で `content-encoding: br`。存在しない資産名は 404。`GET /` も殻（予行演習で見つけて修正済み） |
+| 認可の拒否 | `curl -i /api/v1/user`（トークン無し） | 401、本文は `{"error_code":"FG-AUTH-0001","user_message":"ログインが必要です。","request_id":"…"}` の 3 つだけ。`www-authenticate: Bearer realm="GitStation"` |
+| OIDC 未設定 | `curl -i /-/auth/login` | 503 `FG-AUTH-0018`（「このサーバーではブラウザのログインが設定されていません。gstn と個人アクセストークンを使ってください。」+ `request_id`）。画面（SPA）そのものはブラウザが無く未確認 |
+| gstn | `GSTN_HOST=http://127.0.0.1:18080 gstn auth login --with-token < token`、`auth status`、`auth git-credential --install` | ユーザー・5 スコープ・`is_agent: false`。画面なし環境の keyring 警告あり（§3.8 に追記） |
+| 作成 | `gstn group create --path rehearsal-group …` → `namespace resolve rehearsal-group`（namespace_id 2）→ `project create --namespace-id 2 --path demo --display-name Demo`（`--kind` なし） | 作成後 1 秒以内に worker が `forge.repo.provisioned`（`outcome":"created"`）。`--kind system` は gstn が `FG-CLI-0001 unexpected argument '--kind'` で拒否 |
+| clone / push | `git clone http://127.0.0.1:18080/rehearsal-group/demo.git` → コミット → `git push -u origin main` | 空リポジトリの警告のみで clone 成功、push 成功（認証は credential helper） |
+| 閲覧 API | `gstn browse refs / tree / file / commits`、`GET /api/v1/projects/1/repository/refs` | `main` と先頭コミット、`README.md` と `src`、本文 `synthetic`、コミット 1 件。いずれも期待どおり |
+| raw / archive | `GET /rehearsal-group/demo/-/raw/main/README.md`、`/-/archive/main.tar.gz`、`/-/archive/main.zip`（Bearer） | 200。raw は `text/plain` `content-disposition: inline`、CSP `sandbox; default-src 'none'`。tar.gz は `demo-<12 桁>/README.md` `src/main.rs` を含む。zip も 200。トークン無しの raw は 401 `FG-AUTH-0001` |
+| 保護ブランチ | `gstn protected-ref add --project 1 --pattern refs/heads/main --push-min-role owner` → 強制 push、削除 push | owner の fast-forward push は通る。強制 push: `[remote rejected] (FG-GIT-0007 …)`、削除: `FG-GIT-0009 … (request_id: …)`（G10） |
+| ログ | `serve.log` を `request_id` で検索 | `error_code` と `request_id` が同じ行に出る（`FG-GIT-0009`、`FG-AUTH-0018` ほか）。`http.request` 行に `method`、`path`、`status`、`duration_ms`。エラー本文に内部パス・SQL・git の stderr は無い |
+| 設定の誤り | 秘密ファイルを `0644` にして `doctor` / `serve` | `FG-SYS-0002 config_key=database.password_file reason=insecure_permissions`（利用者向けは「サーバーの設定に問題があります…[FG-SYS-0002] (問い合わせ番号: …)」だけ）。`FORGE_WEB_BASE_URL=http://example.test` は `reason=insecure_http` |
+
+**予行演習で見つかり、この文書を直した点**: G5 の `GET /` の 404（製品の不具合。同日に直した）、`project view` にリポジトリの状態が出ない、`browse` の `--ref` が必須、`create` に渡すのは `namespace_id`、マイグレーションは 23 本（21 は誤り）、初回 migrate の WARN 約 230 行、秘密ファイルの所有者（サービスユーザー）、`forge admin` は `forge_app` で動く、トークンは stdout に出る、keyring 警告、bootstrap の接続オプション、G10 の具体的なコード、raw / archive の URL。
+
+**ここでは確認できなかったこと**: Keycloak でのログインとその後の画面（SPA は HTTP で配ることまで。ブラウザでの表示・操作は未実行）、`access` ロール無しの拒否（`FG-AUTH-0013`）、TLS リバースプロキシ越しの動作（`base_url` の https、`Origin` の通過、`max_connections_per_peer`、大きな push の上限・タイムアウト）、systemd のユニットとサービスユーザーの権限分離（`db-migrate.pw` を読めない設定）、DB の TLS（`verify-full`、社内 CA）、2 人目の利用者と権限不足の push 拒否、Kanflow との連携（未実装。Kanflow 側は §6.2 を本演習では実行していない）、`forge_maint` を使う設定。
 
 ---
 
@@ -826,13 +882,13 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 5. TLS 証明書（社内 CA）、ホスト名、リバースプロキシの製品と設定。
 6. IoT プラットフォーム側の Keycloak の実在・URL・realm・担当（ADR-0021 §13 は要求の形のみ）。
 7. 本物の Keycloak での通しの動作（dev realm の取り込みを含む）。
-8. 2 人目以降の「ローカル」利用者の作成経路（OIDC を使わない場合）。
-9. `forge admin` が `forge_maint` を使うかの runbook とコードの食い違い（現行は `forge_app`）。
+8. 2 人目以降の「ローカル」利用者の作成経路（OIDC を使わない場合）。これが無いと、保護ブランチの「権限不足の利用者の push 拒否」（G10）も試せない。
+9. `forge admin` が `forge_maint` を使うかの runbook とコードの食い違い（現行は `forge_app`。`bootstrap-admin` と `token issue` は `forge_app` で成功: §6.4）。
 10. systemd ユニット（GitStation）と Linux 用の常駐化（Kanflow）。
 11. Kanflow の MySQL の DB・ユーザー作成 SQL の公式文面。
 12. Kanflow `/api/health` と Ollama の状態コードの関係（文書間の食い違い）。
 13. MCP のツール数（`deploy.md` の 20 は古い可能性）。
-14. 保護ブランチへの direct push が返す具体的なエラーコード。
+14. 保護ブランチへの権限不足の利用者の direct push が返すコード（強制 push は `FG-GIT-0007`、削除は `FG-GIT-0009` と確認済み: §6.4）。
 15. （確認済みのため削除: MR4・MR7・MR8 のレビューは §7 のとおり完了。）
 16. GitStation↔Kanflow の機械的な連携（未実装のため、設定手順そのものが存在しない）。
 17. Collabora / Ollama の実機（GPU・モデル）の用意。
