@@ -3,7 +3,9 @@
 //! and read the latest attempt (`GET …/merge`). With `--wait`, `mr merge`
 //! (and `mr merge-status --wait`) polls the attempt until it is final
 //! (`applied`, `superseded`, `failed`) or `--wait-timeout` passes
-//! (`FG-CLI-0008`, retryable): a superseded or failed attempt exits with
+//! (`FG-CLI-0008`, retryable). `merge: null` or another attempt is not
+//! final, and a 5xx / unreachable server is polled through with a capped
+//! backoff (review round 1). A superseded or failed attempt exits with
 //! its own error code (e.g. `FG-REVIEW-0008`) and the merge's request id.
 //! The token needs `merge_execute` (`api` does not merge).
 
@@ -100,26 +102,62 @@ fn is_final(state: &str) -> bool {
     matches!(state, "applied" | "superseded" | "failed")
 }
 
+/// A failure worth polling through: the server unreachable, or a 5xx /
+/// retryable answer (review round 1: a restart of `forge serve` during a
+/// merge is no reason to stop waiting).
+fn transient(e: &ClientError) -> bool {
+    e.retryable() || ErrorCode::parse(e.code_id()).is_some_and(|c| c.http_status() >= 500)
+}
+
+/// The backoff after the `n`-th transient failure in a row: 1 s doubling,
+/// capped at 8 s.
+fn backoff(n: u32) -> Duration {
+    POLL.saturating_mul(1 << n.min(3))
+}
+
 /// Poll `GET …/merge` until the attempt `merge_id` (or, `None`, the latest)
-/// is final or `timeout` passes.
+/// is final or `timeout` passes (`FG-CLI-0008`). `merge: null` and another
+/// attempt's answer are not final (review round 1); transient failures are
+/// retried with a capped exponential backoff until the deadline.
 fn wait_for(c: &ApiClient, path: &str, merge_id: Option<i64>, timeout: Duration) -> Result<Value> {
     let deadline = Instant::now() + timeout;
+    let mut failures = 0u32;
     loop {
-        let status = call(c, Method::Get, path, &[], None)?;
-        let attempt = status.get("merge").cloned().unwrap_or(Value::Null);
-        let same =
-            merge_id.is_none_or(|id| attempt.get("merge_id").and_then(Value::as_i64) == Some(id));
-        let state = attempt.get("state").and_then(Value::as_str).unwrap_or("");
-        if attempt.is_null() || (same && is_final(state)) {
-            return Ok(attempt);
-        }
-        if Instant::now() >= deadline {
+        let (wait, last_state) = match call(c, Method::Get, path, &[], None) {
+            Ok(status) => {
+                failures = 0;
+                let attempt = status.get("merge").cloned().unwrap_or(Value::Null);
+                let same = !attempt.is_null()
+                    && merge_id.is_none_or(|id| {
+                        attempt.get("merge_id").and_then(Value::as_i64) == Some(id)
+                    });
+                let state = attempt.get("state").and_then(Value::as_str).unwrap_or("");
+                if same && is_final(state) {
+                    return Ok(attempt);
+                }
+                (
+                    POLL,
+                    if same {
+                        state.to_owned()
+                    } else {
+                        "none".to_owned()
+                    },
+                )
+            }
+            Err(e) if transient(&e) && Instant::now() < deadline => {
+                failures = failures.saturating_add(1);
+                (backoff(failures - 1), "unreachable".to_owned())
+            }
+            Err(e) => return Err(e),
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
             return Err(ClientError::local(
                 ErrorCode::CliWaitTimedOut,
-                format!("reason=merge_not_final state={state}"),
+                format!("reason=merge_not_final state={last_state}"),
             ));
         }
-        std::thread::sleep(POLL.min(deadline.saturating_duration_since(Instant::now())));
+        std::thread::sleep(wait.min(left));
     }
 }
 

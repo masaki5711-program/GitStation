@@ -813,3 +813,77 @@ fn merge_wait_that_times_out_is_retryable() {
     assert_eq!(o.code, 2, "{}", o.stderr);
     assert_eq!(srv.seen().len(), before);
 }
+
+/// Review round 1: `--wait` polls through what is not yet an answer — a
+/// 503 while `forge serve` restarts, `merge: null`, another attempt's
+/// state — and succeeds only on its own attempt's final state.
+#[test]
+fn merge_wait_polls_through_transient_failures_and_other_attempts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let gets = std::sync::Arc::new(AtomicUsize::new(0));
+    let seen = std::sync::Arc::clone(&gets);
+    let srv = Mock::start(move |r| {
+        if r.method == "POST" {
+            return Resp::json(202, &attempt("queued", ""));
+        }
+        match seen.fetch_add(1, Ordering::SeqCst) {
+            0 => Resp::json(
+                503,
+                r#"{"error_code":"FG-WEB-0008","user_message":"busy","request_id":"req-1"}"#,
+            ),
+            1 => Resp::json(200, r#"{"iid":3,"merge":null}"#),
+            2 => {
+                let other = attempt("applied", "").replace(r#""merge_id":41"#, r#""merge_id":40"#);
+                Resp::json(200, &format!(r#"{{"iid":3,"merge":{other}}}"#))
+            }
+            _ => Resp::json(
+                200,
+                &format!(r#"{{"iid":3,"merge":{}}}"#, attempt("applied", "")),
+            ),
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--wait",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let out: Value = serde_json::from_str(o.stdout.trim()).expect("json");
+    assert_eq!(
+        (out["merge_id"].clone(), out["state"].clone()),
+        (json!(41), json!("applied"))
+    );
+    assert_eq!(gets.load(Ordering::SeqCst), 4);
+    // `merge: null` until the deadline is a timeout, never a success.
+    let srv = Mock::start(|_| Resp::json(200, r#"{"iid":3,"merge":null}"#));
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge-status",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--wait",
+            "--wait-timeout",
+            "0",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 6, "{}", o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-CLI-0008");
+}
