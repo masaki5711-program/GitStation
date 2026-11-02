@@ -92,6 +92,12 @@ pub(crate) enum Actor {
     /// The service account / bot twins of `DevTokenMergeExecute`.
     ServiceAccountTokenMergeExecute,
     BotTokenMergeExecute,
+    /// Administrator with a `merge_execute` + `admin` token (review round 1:
+    /// administrator rights apply on the merge as on a push).
+    AdminTokenMergeExecuteAdmin,
+    /// Administrator with a `merge_execute` token, no `admin` scope (acts as
+    /// a normal user: no role on the fixture's project).
+    AdminTokenMergeExecute,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -343,6 +349,8 @@ impl Actor {
             Actor::BotTokenMergeExecute => {
                 token_of(AccountKind::Bot, false, &[Scope::MergeExecute])
             }
+            Actor::AdminTokenMergeExecuteAdmin => token(true, &[Scope::MergeExecute, Scope::Admin]),
+            Actor::AdminTokenMergeExecute => token(true, &[Scope::MergeExecute]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -393,7 +401,9 @@ impl Actor {
             | Actor::ServiceAccountAdminTokenAdmin
             | Actor::ServiceAccountAdminSession
             | Actor::BotAdminTokenAdmin
-            | Actor::BotAdminSession => None,
+            | Actor::BotAdminSession
+            | Actor::AdminTokenMergeExecuteAdmin
+            | Actor::AdminTokenMergeExecute => None,
         }
     }
 
@@ -444,7 +454,9 @@ impl Actor {
             | Actor::AdminTokenAdmin
             | Actor::OwnerTokenApi
             | Actor::DevTokenMergeExecute
-            | Actor::AgentTokenMergeExecute => None,
+            | Actor::AgentTokenMergeExecute
+            | Actor::AdminTokenMergeExecuteAdmin
+            | Actor::AdminTokenMergeExecute => None,
         }
     }
 

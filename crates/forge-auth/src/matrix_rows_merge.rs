@@ -60,6 +60,12 @@ pub(crate) const MERGE_ROWS: &[Row] = &[
     row(W::Maintainer, protected(R::Maintainer), Allow),
     row(W::Developer, protected(R::Developer), Allow),
     row(W::Admin, protected(R::Owner), Allow),
+    // Review round 1: an administrator's token with `admin` merges into an
+    // Owner-protected target exactly as its push may (administrator rights
+    // pass the protection on both paths); without `admin` it is a plain
+    // user with no role on the private project.
+    row(W::AdminTokenMergeExecuteAdmin, protected(R::Owner), Allow),
+    row(W::AdminTokenMergeExecute, protected(R::Owner), deny(E::NotFound)),
     row(W::DevTokenMergeExecute, OTHER_MR, Allow),
     // Readiness is evaluate_merge()'s: a draft or merged one is no denial.
     row(W::Developer, F::Mr(MF { draft: true, ..MF::other() }), Allow),
