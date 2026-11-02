@@ -1,32 +1,33 @@
-//! The production worker (`run`: the job handlers of this build and its
-//! subscribers) against a migrated database and a temporary storage root
-//! with real git: the `merge-request-refresh` subscriber is registered and
-//! fed, opening a merge request records version 1, a push to its source
-//! branch records version 2, each with its hidden refs, and doctor's
-//! subscriber lag returns to 0 (M3 R1b).
+//! The production pieces of the worker (`jobs::handlers` and `registry`,
+//! what `run` starts) against a migrated database and a temporary storage
+//! root with real git, driven step by step (no polling, no wall clock):
+//! the `merge-request-refresh` subscriber is registered and fed, opening a
+//! merge request records version 1, a push to its source branch records
+//! version 2, each with its hidden refs, and doctor's subscriber lag is 0
+//! (M3 R1b).
 
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use forge_auth::{prove, Action, Credential, LoadedMergeRequest, LoadedProject, MergeRequestCtx};
 use forge_core::{
     MergeRequestState, ObjectId, ProjectAccessLoader, ProjectRepository, PushRecord, PushRecorder,
     PushUpdateKind, PushedRef, Pusher, RefName, RepositoryState, RequestId,
 };
+use forge_db::jobs::{JobRunner, Ran, WorkerId};
 use forge_db::review::{list_versions, REFRESH_SUBSCRIBER};
-use forge_db::subscribers::{check_lag, states};
+use forge_db::sequencer::{self, AuditSequencing, BatchSize};
+use forge_db::subscribers::{self, check_lag, register, states, Progress, Registry, Start};
 use forge_db::test_support::FreshDb;
 use forge_errors::ErrorCode;
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_review::{NewFields, Review, ReviewRequest};
-use tokio::sync::watch;
 
 use super::retryable;
+use crate::worker::jobs::handlers;
 use crate::worker::provision::tests::{project, storage};
-use crate::worker::run;
-use crate::worker::seal_tests::seal_keys;
+use crate::worker::registry;
 
 fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
     use std::io::Write as _;
@@ -81,19 +82,46 @@ fn hidden(repo: &Path) -> String {
     )
 }
 
-/// Wait (bounded) until `done` returns `Some`.
-async fn until<T, F, Fut>(what: &str, mut done: F) -> T
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Option<T>>,
-{
-    let deadline = Instant::now() + Duration::from_secs(60);
+/// Run every step the worker would until nothing is left: number the
+/// events, let each subscriber handle what waits for it, run every ready
+/// job. A job that fails fails the test (nothing here should retry).
+async fn drain(t: &FreshDb, runner: &JobRunner, registry: &Registry) {
     loop {
-        if let Some(v) = done().await {
-            return v;
+        let mut progressed = false;
+        let assigned = sequencer::run_once(&t.db, BatchSize::MAX, AuditSequencing::Skip)
+            .await
+            .expect("sequencer");
+        progressed |= assigned.events.is_some();
+        for subscriber in registry.iter() {
+            loop {
+                match subscribers::run_once(&t.db, subscriber.as_ref())
+                    .await
+                    .expect("subscriber step")
+                {
+                    Progress::Handled { .. } => progressed = true,
+                    Progress::CaughtUp => break,
+                    other @ (Progress::Busy
+                    | Progress::Disabled
+                    | Progress::Failed(_)
+                    | Progress::Stuck(_)
+                    | Progress::Quarantined(_)) => panic!("subscriber: {other:?}"),
+                }
+            }
         }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        while let Some(ran) = runner.run_once().await.expect("job runner") {
+            match ran {
+                Ran::Succeeded(_) => progressed = true,
+                other @ (Ran::Retrying { .. }
+                | Ran::Dead { .. }
+                | Ran::Fenced(_)
+                | Ran::Released { .. }
+                | Ran::LeftLeased { .. }
+                | Ran::Unrecorded { .. }) => panic!("job: {other:?}"),
+            }
+        }
+        if !progressed {
+            return;
+        }
     }
 }
 
@@ -111,6 +139,26 @@ fn transient_failures_are_retried_and_broken_jobs_are_not() {
     for code in [ErrorCode::Internal, ErrorCode::NotFound] {
         assert!(!retryable(&forge_errors::ForgeError::new(code)), "{code:?}");
     }
+    // The whole set, over every registered code: a new code is permanent
+    // until it is added here on purpose.
+    let retried: Vec<&str> = ErrorCode::all()
+        .filter(|c| retryable(&forge_errors::ForgeError::new(*c)))
+        .map(ErrorCode::id)
+        .collect();
+    let mut expected = vec![
+        ErrorCode::GitTimeout.id(),
+        ErrorCode::GitBusy.id(),
+        ErrorCode::GitProcessFailed.id(),
+        ErrorCode::GitUnavailable.id(),
+        ErrorCode::StorageIoFailed.id(),
+        ErrorCode::DbUnavailable.id(),
+        ErrorCode::DbQueryFailed.id(),
+        ErrorCode::RepositoryNotReady.id(),
+    ];
+    let mut retried = retried;
+    retried.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(retried, expected);
 }
 
 #[tokio::test]
@@ -119,28 +167,21 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
     let (_dir, storage) = storage();
     let web = project(&t, "alice").await;
     let repo = web.repository_id;
-    let (stop, stopped) = watch::channel(false);
-    let db = t.db.clone(); // clone: the worker owns its pool handles
-    let worker_storage = storage.clone(); // clone: the worker owns its handles
-    let worker =
-        tokio::spawn(async move { run(&db, seal_keys(), &worker_storage, None, stopped).await });
-
+    // What `run` starts: this build's handlers and subscribers, the
+    // subscribers registered at the head before anything else.
+    let mut runner = JobRunner::new(t.db.clone(), WorkerId::generate()); // clone: pool handles
+    for handler in handlers(&t.db, &storage).expect("handlers") {
+        runner.register(handler).expect("register");
+    }
+    let registry = registry().expect("registry");
+    for subscriber in registry.iter() {
+        register(&t.db, subscriber.as_ref(), Start::Head)
+            .await
+            .expect("register subscriber");
+    }
     // The provisioning job (also a production handler) creates the repository.
-    let path = until("the repository", || async {
-        let rows = t
-            .json_rows(&format!(
-                "SELECT state FROM forge.repositories WHERE id = {}",
-                repo.get()
-            ))
-            .await;
-        let ready = rows
-            .first()
-            .and_then(|r| r.get("state"))
-            .and_then(|v| v.as_str())
-            == Some("ready");
-        ready.then(|| storage.root.existing(repo).expect("path"))
-    })
-    .await;
+    drain(&t, &runner, &registry).await;
+    let path = storage.root.existing(repo).expect("provisioned");
     let base = commit(&path, "base\n");
     let c1 = commit(&path, "first\n");
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
@@ -209,13 +250,16 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
         .expect("open");
 
     // The open's job records version 1 and its refs.
-    until("version 1", || async {
-        let refs = hidden(&path);
-        (refs.contains(&format!("refs/merge-requests/1/v1 {c1}"))
-            && refs.contains(&format!("refs/merge-requests/1/head {c1}")))
-        .then_some(())
-    })
-    .await;
+    drain(&t, &runner, &registry).await;
+    let refs = hidden(&path);
+    assert!(
+        refs.contains(&format!("refs/merge-requests/1/v1 {c1}")),
+        "{refs}"
+    );
+    assert!(
+        refs.contains(&format!("refs/merge-requests/1/head {c1}")),
+        "{refs}"
+    );
 
     // A push to the source: forge-web records it (here through the same
     // trait); the subscriber enqueues the job; it records version 2.
@@ -248,35 +292,27 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
         .await
         .expect("record push");
     assert_eq!(recorded, forge_core::PushRecorded::Recorded);
-    until("version 2", || async {
-        let refs = hidden(&path);
-        (refs.contains(&format!("refs/merge-requests/1/v2 {c2}"))
-            && refs.contains(&format!("refs/merge-requests/1/head {c2}"))
-            && refs.contains(&format!("refs/merge-requests/1/v1 {c1}")))
-        .then_some(())
-    })
-    .await;
+    drain(&t, &runner, &registry).await;
+    let refs = hidden(&path);
+    for wanted in [
+        format!("refs/merge-requests/1/v1 {c1}"),
+        format!("refs/merge-requests/1/v2 {c2}"),
+        format!("refs/merge-requests/1/head {c2}"),
+    ] {
+        assert!(refs.contains(&wanted), "{wanted}: {refs}");
+    }
     let versions = list_versions(&t.db, mr.id).await.expect("versions");
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[1].pushed_by, Some(alice), "the pusher");
 
     // doctor: the subscriber is registered and caught up.
-    until("subscriber lag 0", || async {
-        let all = states(&t.db).await.expect("states").expect("migrated");
-        check_lag(&all).expect("no lag alert");
-        all.iter()
-            .find(|s| s.name == REFRESH_SUBSCRIBER)
-            .filter(|s| s.lag_events == 0)
-            .map(drop)
-    })
-    .await;
-
-    stop.send(true).expect("worker listens");
-    tokio::time::timeout(Duration::from_secs(30), worker)
-        .await
-        .expect("stops in time")
-        .expect("no panic")
-        .expect("clean stop");
+    let all = states(&t.db).await.expect("states").expect("migrated");
+    check_lag(&all).expect("no lag alert");
+    let refresh = all
+        .iter()
+        .find(|s| s.name == REFRESH_SUBSCRIBER)
+        .expect("registered");
+    assert_eq!(refresh.lag_events, 0);
     t.drop_now().await;
 }
 
@@ -284,7 +320,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
 /// refresh subscriber, so the worker starts its `subscribers` task.
 #[test]
 fn the_production_registry_starts_the_subscribers_task() {
-    let registry = crate::worker::registry().expect("registry");
+    let registry = registry().expect("registry");
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(names, [REFRESH_SUBSCRIBER]);
     let tasks = crate::worker::tasks(&registry, None);
