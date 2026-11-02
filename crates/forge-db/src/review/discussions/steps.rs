@@ -122,8 +122,10 @@ pub(super) async fn counts(
     .map_err(|e| query_error("review.discussion_counts", e))
 }
 
-/// `FG-REVIEW-0005` when one more discussion (`new_discussion`) or note
-/// would pass a cap.
+/// `FG-REVIEW-0005` when the write would pass a cap: `discussion = None`
+/// starts a discussion (one more discussion and one more note on the merge
+/// request); `Some(d)` adds a note to `d` (one more note on the merge
+/// request and on `d`).
 pub(super) async fn refuse_full(
     tx: &mut ChangeTx,
     mr: &StoredMergeRequest,

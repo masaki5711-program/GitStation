@@ -747,6 +747,11 @@ async fn a_thread_of_another_merge_request_is_not_found_here() {
             .as_i64()
             .expect("id");
     let before = w.commented().await;
+    // The answer for an id that exists nowhere, to compare with.
+    let (_, mut missing) = w
+        .post("/discussions/999999/resolve", session(w.dave), None)
+        .await;
+    missing.as_object_mut().expect("error").remove("request_id");
     for d in [same_project, other_project] {
         for (tail, body) in [
             (
@@ -756,12 +761,14 @@ async fn a_thread_of_another_merge_request_is_not_found_here() {
             (format!("/discussions/{d}/resolve"), None),
             (format!("/discussions/{d}/unresolve"), None),
         ] {
-            let (status, answer) = w.post(&tail, session(w.dave), body).await;
+            let (status, mut answer) = w.post(&tail, session(w.dave), body).await;
             assert_eq!(
                 (status, code(&answer)),
                 (StatusCode::NOT_FOUND, "FG-REPO-0005"),
                 "{tail}"
             );
+            answer.as_object_mut().expect("error").remove("request_id");
+            assert_eq!(answer, missing, "{tail}: the same body as a missing id");
         }
     }
     assert_eq!(w.commented().await, before, "nothing written");
