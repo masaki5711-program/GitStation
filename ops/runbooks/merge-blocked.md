@@ -33,9 +33,10 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 | 原因 | 典型 |
 |---|---|
 | push の記録が無いコミットがある（`push_record_missing`） | 監査の保存期間を過ぎた古いコミット、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、push の記録が始まる前・バックアップから戻したリポジトリ、`update-ref` で手で動かした ref |
-| ref の一覧が切れた push（`push_record_truncated`、1 回に 100 を超える ref）| 大きな取り込み |
+| ref の一覧が切れた push で、一覧に無い ref を残していない記録（`push_record_truncated`。表 `push_unlisted_refs` ができる前（マイグレーション 20261111100200 より前）に 100 を超える ref を 1 回で push した）| 古い大きな取り込み。新しい push は一覧に無い ref を `push_unlisted_refs` に残すので、この理由にならない |
+| 一覧の切れた push の先端から先の履歴が 50 000 コミットを超える（`push_graph_too_large`）、先端のコミットがリポジトリに無い（`git_failed`） | 長い別の履歴の一括の push |
 | 範囲に届く一覧の切れた push が 16 件を超える（`too_many_partial_pushes`）、届くかを確かめる git が失敗した・予算が尽きた（`push_reach_unknown`） | 長い履歴の一括の push。リポジトリ全体の一覧の切れた push のうち、範囲に届かないものは数えない |
-| 評価の読み取りの予算が尽きた（`timeout`。要求 20 秒・64 回、`GET …/approvals` 10 秒・32 回、ジョブはロックの残り） | 大きなリポジトリ・遅いディスク。もう一度要求する |
+| 評価の読み取りの予算が尽きた（`timeout`。要求 20 秒・64 回、`GET …/approvals` 10 秒・32 回、ジョブはロックの残り。一覧の切れた push の数によらず、届くかの確認は git 1 回） | 大きなリポジトリ・遅いディスク。もう一度要求する |
 | 範囲が 1 000 コミットを超える（`range_too_long`）、git の失敗（`git_failed`） | 長く分岐したブランチ |
 
 ## Diagnose（読み取りのみ）

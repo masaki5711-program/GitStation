@@ -1223,3 +1223,32 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   評価に使わない）。拒むより、表示で「数えない理由」を見せる方を選んだ。(3) `forge_app` の `merge_request_approvals`・`approval_rules`・
   `approval_rule_approvers` への DELETE はプロジェクトの purge だけが使う（承認の終わりは `revoked_at` の UPDATE、ルールの置き換えは承認できる人の
   行の DELETE と INSERT で、どれも監査の行と同じトランザクション）。
+
+### R5 の再レビュー（2 回目）で決めたこと（2026-11-03）
+
+security の HIGH 3 件と MEDIUM / LOW への対応。上の R5 の節と 1 回目の節と違えたところは **改訂** と書いた。
+
+- **一覧に無い ref（HIGH、改訂）**: `repository.pushed` の監査の行は ref を 100 件（とバイトの予算）までしか載せない。101 件目に範囲のコミットを
+  置いた push は見えず、範囲のコミットが別の記録に載っていると早い return で `Known` になっていた。push の記録のトランザクションで、一覧に
+  載らなかった ref の更新（削除を除く）を新しい表 `push_unlisted_refs`（追記のマイグレーション 20261111100200。プロジェクトに監査される表、
+  更新しない（ガード `push_unlisted_refs_immutable`）、purge で消す）に残し、コミッターの規則はそれを「コミットの一覧が分からない push」として同じ
+  到達の判定に入れる。表ができる前の、ref の一覧が切れた記録が 1 つでもあれば、範囲のコミットがすべて名指されていても `committers_unknown`
+  （早い return の前に確かめる。テスト `a_record_with_cut_refs_is_unknown_even_when_every_commit_is_named`、
+  `a_ref_beyond_the_listed_hundred_still_makes_a_committer`）。ref の一覧が空の記録も読む（`LEFT JOIN`）。
+- **届くかの確認は git 1 回（HIGH、改訂）**: 一覧の切れた push の先端すべてと `^<target の先端>` を `rev-list --parents --stdin` 1 回に渡し
+  （最大 50 000 コミット。超えたら `push_graph_too_large`）、届くか・どのコミットに届くかはメモリの上で決める。大きな push が何件あっても予算の
+  回数を使い切らない（テスト `many_large_pushes_do_not_exhaust_the_budget`: 41 件で `GET …/approvals` の 32 回の予算が足りる）。先端の
+  コミットがリポジトリに無いと git の失敗（`git_failed`）で、「届かない」とはしない（O3 の prune が入ったら見直す）。
+- **パスの長さと照合の時間（HIGH）**: 4 KiB を超える変更されたパスは `changed_paths_unknown reason=path_too_long`（warn を 1 回、
+  FG-GIT-0006 `path_too_long`）。照合はパスの間に加えてルール 64 行ごとにも期限を確かめ、`spawn_blocking` の待ちも `tokio::time::timeout`
+  で抑える。タスクの失敗（panic）は予算の超過と分けて `codeowners_invalid reason=match_failed`（`join_error` つき）。`matches()` は 1 行の
+  表を回して使い、後ろが合わないときは glob を呼ばない。
+- **見えない文字の追加（MEDIUM）**: 注釈の外の、タブ以外の制御文字（VT・DEL など）、結合文字（U+0300–036F・0483–0489・1AB0–1AFF・
+  1DC0–1DFF・20D0–20FF・3099–309A・FE20–FE2F）、ハングルの埋め字（U+115F・U+1160・U+3164・U+FFA0）、点字の空白（U+2800）、異体字
+  セレクタ（U+FE00–FE0F・U+E0100–E01EF）も `pattern_invalid`。
+- **target が無いとき（MEDIUM）**: 評価できないことを warn `forge.review.approval_input_unread`（FG-REPO-0023 `ref_not_found`）で 1 回出す。
+- **状態の表示（MEDIUM）**: `GET …/approvals` は `conflict`（今の head が target の先端にきれいにマージできない）を返し、gstn も 1 行出す。
+  承認の側の止める理由が無くても、衝突している MR は「承認済み」に見えない。
+- **パターンの位置（LOW、改訂）**: §9 の「`/` のないパターンはどの深さでも一致」に合わせ、gitignore と同じく **先頭か途中に `/` がある
+  パターンは直下に固定** にした（上の R5 の節の「`/` を含んでもどの深さでも一致」を改める）。末尾だけの `/`（`docs/`）はどの深さでも一致。
+  両端の `//` は `pattern_invalid`。
