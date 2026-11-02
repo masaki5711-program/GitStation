@@ -58,9 +58,13 @@ fn header(line: &str) -> Option<Hunk> {
 
 /// The file of `diff` with `path` on `side` (the path before the change
 /// on `old`, after it on `new`).
+/// A copy's `old_path` is a source that still exists unchanged (its own
+/// change, if any, is another entry), so the old side never resolves to a
+/// copy (review round 1).
 fn file_on<'a>(diff: &'a Diff, path: &str, side: DiscussionSide) -> Option<&'a DiffFile> {
     diff.files.iter().find(|f| {
         let named = match side {
+            DiscussionSide::Old if f.status == DiffStatus::Copied => None,
             DiscussionSide::Old => f.old_path.as_deref(),
             DiscussionSide::New => f.new_path.as_deref(),
         };
@@ -289,6 +293,25 @@ mod tests {
         let mut omitted = file(DiffStatus::Modified, Some("big.rs"), Some("big.rs"), None);
         omitted.omitted = Some(forge_git::browse::PatchOmitted::TooLarge);
         assert!(line_changed(&diff(vec![omitted]), "big.rs", 1));
+    }
+
+    /// A copy is never the old side of its source: the source's own entry
+    /// (or none) decides.
+    #[test]
+    fn the_old_side_never_resolves_to_a_copy() {
+        let copy = file(
+            DiffStatus::Copied,
+            Some("a.rs"),
+            Some("b.rs"),
+            Some("@@ -1,2 +1,2 @@\n x\n-y\n+z\n"),
+        );
+        let d = diff(vec![copy]);
+        assert_eq!(
+            check_position(&d, "a.rs", DiscussionSide::Old, 2),
+            Err(PATH_NOT_IN_DIFF)
+        );
+        assert_eq!(check_position(&d, "b.rs", DiscussionSide::New, 2), Ok(()));
+        assert!(!line_changed(&d, "a.rs", 2), "the source is untouched");
     }
 
     #[test]

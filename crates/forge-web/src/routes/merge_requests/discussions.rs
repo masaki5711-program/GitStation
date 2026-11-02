@@ -112,8 +112,13 @@ pub struct DiscussionBody {
     /// Set exactly for an inline discussion.
     #[schema(required = true)]
     pub position: Option<PositionBody>,
-    /// A later version rewrote (or moved) the line: look again.
+    /// A later version rewrote (or moved) the line — or whether it did
+    /// could not be computed (`outdated_unknown`): look again.
     pub outdated: bool,
+    /// `outdated` could not be computed (git busy or failed, a purged
+    /// version, unrecorded bases, too many diffs for one read): it is
+    /// shown as `true`.
+    pub outdated_unknown: bool,
     #[schema(minimum = 1)]
     pub started_by: i64,
     pub resolved: bool,
@@ -149,7 +154,8 @@ fn body_of(view: DiscussionView) -> DiscussionBody {
             side: p.side.as_str().to_owned(),
             line: p.line,
         }),
-        outdated: view.outdated,
+        outdated: view.outdated.shown(),
+        outdated_unknown: view.outdated.is_unknown(),
         started_by: d.started_by.get(),
         resolved: d.resolved,
         resolved_by: d.resolved_by.map(UserId::get),
@@ -177,18 +183,49 @@ fn key_of(user: Option<UserId>) -> Result<String, ForgeError> {
     })
 }
 
-/// `discussion` with `outdated`, as the list shows it.
+/// A discussion a write just committed, with `outdated` as the list shows
+/// it. Never an error (review round 1): the write is stored, so a failure
+/// here must not make the client retry and duplicate it — the thread is
+/// shown `outdated_unknown` and the failure is logged once.
 async fn shown(
     state: &AppState,
-    project: ProjectId,
-    iid: i64,
-    repo: Result<forge_core::ProjectRepository, ForgeError>,
+    (project, iid): (ProjectId, i64),
+    repo: forge_core::ProjectRepository,
     key: &str,
+    request_id: &forge_core::RequestId,
     discussion: StoredDiscussion,
-) -> Result<DiscussionBody, ForgeError> {
-    let mr = merge_request(state, project, iid).await?;
-    let view = review(state)?.view(&mr, repo?, key, discussion).await?;
-    Ok(body_of(view))
+) -> DiscussionBody {
+    let read = match review(state) {
+        Ok(review) => merge_request(state, project, iid)
+            .await
+            .map(|mr| (review, mr)),
+        Err(e) => Err(e),
+    };
+    let view = match read {
+        Ok((review, mr)) => review.view(&mr, repo, key, request_id, discussion).await,
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_web",
+                event = "forge.review.discussion_outdated_unknown",
+                request_id = %request_id,
+                project_id = project.get(),
+                iid,
+                reason = "merge_request_unreadable",
+                error_code = e.code().id(),
+                "discussion outdated state could not be computed after the write"
+            );
+            let outdated = if discussion.position.is_some() {
+                forge_review::Outdated::Unknown
+            } else {
+                forge_review::Outdated::No
+            };
+            DiscussionView {
+                discussion,
+                outdated,
+            }
+        }
+    };
+    body_of(view)
 }
 
 /// `GET …/discussions` → `200` the discussions.
@@ -196,13 +233,16 @@ pub async fn list(state: AppState, request: Dispatched<MergeRequestCtx>) -> Resp
     let ids = proof_ids(&request);
     let repo = repository(&request);
     let key = key_of(request.principal().user());
-    // Owned before the first await: the request (its body) is not `Sync`.
+    let request_id = request.ctx().request_id.clone(); // clone: owned before the first await
+                                                       // Owned before the first await: the request (its body) is not `Sync`.
     let params = query(request.raw_query(), &[]).map(drop);
     let built = async {
         let (project, iid) = ids?;
         params?;
         let mr = merge_request(&state, project, iid).await?;
-        let list = review(&state)?.discussions(&mr, repo?, &key?).await?;
+        let list = review(&state)?
+            .discussions(&mr, repo?, &key?, &request_id)
+            .await?;
         json(DiscussionsBody {
             iid,
             discussions: list.discussions.into_iter().map(body_of).collect(),
@@ -240,7 +280,17 @@ pub async fn start(
                 position.as_ref(),
             )
             .await?;
-        json(shown(&state, project, iid, Ok(repo), &key, stored).await?)
+        json(
+            shown(
+                &state,
+                (project, iid),
+                repo,
+                &key,
+                &w.ctx.request_id,
+                stored,
+            )
+            .await,
+        )
     }
     .await;
     respond(&w.ctx, StatusCode::CREATED, built)
@@ -261,10 +311,21 @@ pub async fn reply(state: AppState, request: Dispatched<MergeRequestCtx, AddNote
             }
         };
         let key = key_of(w.proof.principal().user())?;
+        let repo = repo?;
         let stored = review(&state)?
             .reply(&review_request(&w), &w.proof, discussion?, &w.input.body)
             .await?;
-        json(shown(&state, project, iid, repo, &key, stored).await?)
+        json(
+            shown(
+                &state,
+                (project, iid),
+                repo,
+                &key,
+                &w.ctx.request_id,
+                stored,
+            )
+            .await,
+        )
     }
     .await;
     respond(&w.ctx, StatusCode::CREATED, built)
@@ -289,6 +350,7 @@ async fn set_resolved(
             }
         };
         let key = key_of(w.proof.principal().user())?;
+        let repo = repo?;
         let request = forge_review::ReviewRequest {
             request_id: w.ctx.request_id.clone(), // clone: the context stays for the error path
             credential_id: w.credential_id,
@@ -296,7 +358,17 @@ async fn set_resolved(
         let (_, stored) = review(&state)?
             .resolve(&request, &w.proof, resolved)
             .await?;
-        json(shown(&state, project, iid, repo, &key, stored).await?)
+        json(
+            shown(
+                &state,
+                (project, iid),
+                repo,
+                &key,
+                &w.ctx.request_id,
+                stored,
+            )
+            .await,
+        )
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

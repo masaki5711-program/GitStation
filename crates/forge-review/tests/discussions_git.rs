@@ -17,6 +17,8 @@ use forge_auth::{
     prove, AccountKind, Action, Authorized, Credential, DiscussionCtx, LoadedDiscussion,
     MergeRequestCtx, MergeRequestEdit, Principal,
 };
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::RequestId;
 use forge_core::{
     DiscussionId, DiscussionSide, ObjectId, ProjectId, RepoId, Role, Scope, UserId, UserKind,
 };
@@ -24,11 +26,14 @@ use forge_db::repositories;
 use forge_db::test_support::FreshDb;
 use forge_db::users::{self, NewUser};
 use forge_errors::{ErrorCode, ForgeError};
+use forge_git::browse::Diff;
 use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
+use forge_review::{DiffProbe, Outdated};
 use forge_review::{
     DiscussionPosition, NewFields, ResolveOutcome, Review, StoredDiscussion, StoredMergeRequest,
 };
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
     use std::io::Write as _;
@@ -89,8 +94,36 @@ fn oid(raw: &str) -> ObjectId {
     ObjectId::parse(raw).expect("oid")
 }
 
+/// The browse API's diffs, failing on demand (`FG-GIT-0004` busy): what
+/// a read or a write does when git cannot answer.
+struct Switchable {
+    browser: Arc<Browser>,
+    fail: AtomicBool,
+    calls: AtomicUsize,
+}
+
+impl DiffProbe for Switchable {
+    fn merge_request_diff<'a>(
+        &'a self,
+        repo: RepoId,
+        iid: i64,
+        from: &'a str,
+        to: &'a str,
+        caller: &'a str,
+    ) -> LookupFuture<'a, Diff> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail.load(Ordering::SeqCst) {
+            return Box::pin(async { Err(ForgeError::new(ErrorCode::GitBusy)) });
+        }
+        self.browser.merge_request_diff(repo, iid, from, to, caller)
+    }
+}
+
 struct World {
     t: FreshDb,
+    diffs: Arc<Switchable>,
+    git: Git,
+    storage: StorageRoot,
     _home: tempfile::TempDir,
     _root: tempfile::TempDir,
     path: PathBuf,
@@ -154,8 +187,18 @@ async fn world() -> World {
     let v1 = commit(&path, &[(10, "ten v1")], Some(&base));
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &v1], None);
-    let browser = Arc::new(Browser::new(git, storage, BrowseLimits::default()));
-    let review = Review::new(t.db.clone(), browser.clone()).with_diffs(browser);
+    // clone: the world keeps handles for a second, capped Browser
+    let browser = Arc::new(Browser::new(
+        git.clone(),
+        storage.clone(),
+        BrowseLimits::default(),
+    ));
+    let diffs = Arc::new(Switchable {
+        browser: browser.clone(), // clone: the probe shares the browse caches
+        fail: AtomicBool::new(false),
+        calls: AtomicUsize::new(0),
+    });
+    let review = Review::new(t.db.clone(), browser).with_diffs(diffs.clone());
     let proof = open_proof(
         &t,
         &session(alice),
@@ -179,6 +222,9 @@ async fn world() -> World {
         .expect("open");
     let w = World {
         t,
+        diffs,
+        git,
+        storage,
         _home: home,
         _root: root,
         path,
@@ -410,7 +456,7 @@ async fn a_discussion_is_outdated_after_a_version_changes_its_line() {
         list.discussions
             .iter()
             .find(|v| v.discussion.id == id)
-            .map(|v| v.outdated)
+            .map(|v| v.outdated.shown())
             .expect("listed")
     };
     let mr = w
@@ -421,7 +467,7 @@ async fn a_discussion_is_outdated_after_a_version_changes_its_line() {
         .expect("mr");
     let before = w
         .review
-        .discussions(&mr, ready(w.repo), "user:1")
+        .discussions(&mr, ready(w.repo), "user:1", &rid("req-list"))
         .await
         .expect("list");
     assert!(!outdated(&before, on_ten.id));
@@ -442,7 +488,7 @@ async fn a_discussion_is_outdated_after_a_version_changes_its_line() {
     assert_eq!(mr.head_sha.as_deref(), Some(v2.as_str()));
     let after = w
         .review
-        .discussions(&mr, ready(w.repo), "user:1")
+        .discussions(&mr, ready(w.repo), "user:1", &rid("req-list"))
         .await
         .expect("list");
     assert!(outdated(&after, on_ten.id), "line 10 was rewritten");
@@ -532,5 +578,264 @@ async fn a_comment_after_losing_the_role_is_refused_under_the_lock() {
         .await
         .expect_err("refused");
     assert_eq!(err.code(), ErrorCode::Forbidden);
+    w.t.drop_now().await;
+}
+
+fn rid(raw: &str) -> RequestId {
+    RequestId::parse(raw).expect("request id")
+}
+
+impl World {
+    /// Version `n` whose head rewrites line 10 as `text`, on top of main.
+    async fn version_on_base(&self, n: i64, text: &str) -> String {
+        let head = commit(&self.path, &[(10, text)], Some(&self.base));
+        plumb(
+            &self.path,
+            &["update-ref", "refs/heads/feature", &head],
+            None,
+        );
+        self.version(n, &head).await;
+        head
+    }
+
+    async fn current(&self) -> StoredMergeRequest {
+        self.review
+            .merge_request(self.project, self.mr.iid)
+            .await
+            .expect("load")
+            .expect("merge request")
+    }
+
+    async fn list(&self) -> forge_review::DiscussionList {
+        self.review
+            .discussions(
+                &self.current().await,
+                ready(self.repo),
+                "user:1",
+                &rid("req-list"),
+            )
+            .await
+            .expect("a read never fails on git")
+    }
+}
+
+fn state_of(list: &forge_review::DiscussionList, id: DiscussionId) -> Outdated {
+    list.discussions
+        .iter()
+        .find(|v| v.discussion.id == id)
+        .map(|v| v.outdated)
+        .expect("listed")
+}
+
+/// Review round 1 (HIGH): git trouble never fails a read or a write's
+/// answer — the thread is `Unknown` (shown as outdated), and the write
+/// that triggered the view stays committed exactly once.
+#[tokio::test]
+async fn a_diff_failure_marks_threads_unknown_instead_of_failing() {
+    let w = world().await;
+    let alice = session(w.alice);
+    let on_ten = w
+        .start(&alice, "req-10", at(1, "lib.rs", DiscussionSide::New, 10))
+        .await
+        .expect("10");
+    w.version_on_base(2, "ten v2").await;
+    w.diffs.fail.store(true, Ordering::SeqCst);
+    let list = w.list().await;
+    assert_eq!(state_of(&list, on_ten.id), Outdated::Unknown);
+    let view = w
+        .review
+        .view(
+            &w.current().await,
+            ready(w.repo),
+            "user:1",
+            &rid("req-view"),
+            on_ten.clone(),
+        )
+        .await;
+    assert_eq!(view.outdated, Outdated::Unknown);
+    assert!(view.outdated.shown() && view.outdated.is_unknown());
+    // A general thread needs no git and stays known.
+    let general = w.start(&alice, "req-g", None).await.expect("general");
+    assert_eq!(state_of(&w.list().await, general.id), Outdated::No);
+    w.diffs.fail.store(false, Ordering::SeqCst);
+    assert_eq!(state_of(&w.list().await, on_ten.id), Outdated::Yes);
+    w.t.drop_now().await;
+}
+
+/// A merge request whose head is no recorded version (the version job has
+/// not caught up) cannot say whether a line changed: `Unknown`, not "no".
+#[tokio::test]
+async fn a_missing_current_version_is_unknown_not_fresh() {
+    let w = world().await;
+    let alice = session(w.alice);
+    let on_ten = w
+        .start(&alice, "req-10", at(1, "lib.rs", DiscussionSide::New, 10))
+        .await
+        .expect("10");
+    let other = commit(&w.path, &[(10, "elsewhere")], Some(&w.base));
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "UPDATE forge.merge_requests SET head_sha = '{other}', revision = revision + 1 \
+             WHERE id = {}",
+            w.mr.id.get()
+        )],
+    )
+    .await;
+    assert_eq!(state_of(&w.list().await, on_ten.id), Outdated::Unknown);
+    w.t.drop_now().await;
+}
+
+/// One read diffs at most `MAX_DIFFS_PER_READ` distinct pairs; the threads
+/// beyond are `Unknown` (one log line), and the read still answers.
+#[tokio::test]
+async fn one_read_runs_at_most_the_diff_cap() {
+    let w = world().await;
+    let alice = session(w.alice);
+    let cap = i64::try_from(forge_review::MAX_DIFFS_PER_READ).expect("small");
+    let mut threads = vec![w
+        .start(&alice, "req-t1", at(1, "lib.rs", DiscussionSide::New, 10))
+        .await
+        .expect("v1")];
+    for n in 2..=cap + 1 {
+        w.version_on_base(n, &format!("ten v{n}")).await;
+        threads.push(
+            w.start(
+                &alice,
+                &format!("req-t{n}"),
+                at(n, "lib.rs", DiscussionSide::New, 10),
+            )
+            .await
+            .expect("thread"),
+        );
+    }
+    w.version_on_base(cap + 2, "ten last").await;
+    let before = w.diffs.calls.load(Ordering::SeqCst);
+    let list = w.list().await;
+    let ran = w.diffs.calls.load(Ordering::SeqCst) - before;
+    assert_eq!(ran, forge_review::MAX_DIFFS_PER_READ);
+    let states: Vec<Outdated> = threads.iter().map(|d| state_of(&list, d.id)).collect();
+    assert_eq!(
+        states.iter().filter(|s| **s == Outdated::Yes).count(),
+        forge_review::MAX_DIFFS_PER_READ
+    );
+    assert_eq!(
+        states.iter().filter(|s| **s == Outdated::Unknown).count(),
+        1
+    );
+    w.t.drop_now().await;
+}
+
+/// A commit with these files (path, bytes) on top of `parent`.
+fn commit_files(repo: &Path, files: &[(&str, &[u8])], parent: Option<&str>) -> String {
+    let mut sorted: Vec<&(&str, &[u8])> = files.iter().collect();
+    sorted.sort_by_key(|(name, _)| *name);
+    let mut listing = String::new();
+    for (name, content) in sorted {
+        let blob = plumb(repo, &["hash-object", "-w", "--stdin"], Some(content));
+        listing.push_str(&format!("100644 blob {blob}\t{name}\n"));
+    }
+    let tree = plumb(repo, &["mktree"], Some(listing.as_bytes()));
+    let mut args = vec!["commit-tree", tree.as_str(), "-m", "synthetic"];
+    if let Some(p) = parent {
+        args.extend(["-p", p]);
+    }
+    plumb(repo, &args, None)
+}
+
+/// The reasons FG-REVIEW-0004 gives besides a wrong line or path (review
+/// round 1): a version whose bases are not recorded yet, a purged version,
+/// a binary file (no lines to comment on) and a path a capped diff may
+/// hide.
+#[tokio::test]
+async fn check_inline_names_every_reason_it_refuses() {
+    let w = world().await;
+    let alice = session(w.alice);
+    let new = DiscussionSide::New;
+    let lines: String = (1..=20).map(|n| format!("line {n}\n")).collect();
+    // v2: lib.rs rewritten, a binary logo and a second text file added.
+    let v2 = commit_files(
+        &w.path,
+        &[
+            ("lib.rs", "ten v2\n".as_bytes()),
+            ("logo.png", b"\x89PNG\0\0\x01binary"),
+            ("zz.txt", lines.as_bytes()),
+        ],
+        Some(&w.base),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/feature", &v2], None);
+    // Recorded without its bases first: version_base_pending.
+    forge_db::review::record_mr_version(&w.t.db, &system("req-v2"), w.mr.id, &oid(&v2), None)
+        .await
+        .expect("version");
+    let iid = w.mr.iid;
+    plumb(
+        &w.path,
+        &["update-ref", &format!("refs/merge-requests/{iid}/v2"), &v2],
+        None,
+    );
+    let err = w
+        .start(&alice, "req-pending", at(2, "zz.txt", new, 1))
+        .await
+        .expect_err("bases pending");
+    assert_eq!(reason(&err), "version_base_pending");
+    forge_db::review::record_version_bases(
+        &w.t.db,
+        &system("req-v2-bases"),
+        w.mr.id,
+        2,
+        &oid(&w.base),
+        Some(&oid(&w.base)),
+    )
+    .await
+    .expect("bases");
+    w.start(&alice, "req-text", at(2, "zz.txt", new, 20))
+        .await
+        .expect("a line of an added text file");
+    let err = w
+        .start(&alice, "req-binary", at(2, "logo.png", new, 1))
+        .await
+        .expect_err("binary");
+    assert_eq!(
+        (err.code(), reason(&err).as_str()),
+        (ErrorCode::DiscussionPositionInvalid, "no_patch")
+    );
+    // A diff capped at one file lists lib.rs only: zz.txt may be hidden.
+    let capped = Arc::new(Browser::new(
+        w.git.clone(),     // clone: a second Browser on the same repository
+        w.storage.clone(), // clone: as the git handle
+        BrowseLimits {
+            max_diff_files: 1,
+            ..BrowseLimits::default()
+        },
+    ));
+    let review = Review::new(w.t.db.clone(), capped.clone()).with_diffs(capped);
+    let proof = w.comment_proof(&alice).await.expect("proof");
+    let err = review
+        .start_discussion(
+            &request("req-capped"),
+            &proof,
+            ready(w.repo),
+            "hidden",
+            at(2, "zz.txt", new, 1).as_ref(),
+        )
+        .await
+        .expect_err("capped");
+    assert_eq!(reason(&err), "diff_truncated");
+    // Purged version 1: version_purged, before any git.
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[format!(
+            "UPDATE forge.merge_request_versions SET refs_purged_at = now() \
+             WHERE merge_request_id = {} AND version_no = 1",
+            w.mr.id.get()
+        )],
+    )
+    .await;
+    let err = w
+        .start(&alice, "req-purged", at(1, "lib.rs", new, 10))
+        .await
+        .expect_err("purged");
+    assert_eq!(reason(&err), "version_purged");
     w.t.drop_now().await;
 }

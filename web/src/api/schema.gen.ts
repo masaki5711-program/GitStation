@@ -1287,8 +1287,17 @@ export interface components {
             kind: string;
             /** @description Oldest first. */
             notes: components["schemas"]["NoteBody"][];
-            /** @description A later version rewrote (or moved) the line: look again. */
+            /**
+             * @description A later version rewrote (or moved) the line — or whether it did
+             *     could not be computed (`outdated_unknown`): look again.
+             */
             outdated: boolean;
+            /**
+             * @description `outdated` could not be computed (git busy or failed, a purged
+             *     version, unrecorded bases, too many diffs for one read): it is
+             *     shown as `true`.
+             */
+            outdated_unknown: boolean;
             position: null | components["schemas"]["PositionBody"];
             resolved: boolean;
             resolved_at: string | null;

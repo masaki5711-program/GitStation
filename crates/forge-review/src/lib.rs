@@ -46,6 +46,7 @@ mod after_version;
 pub mod discussions;
 mod fields;
 pub mod mergeability;
+pub mod outdated;
 pub mod position;
 mod purge;
 mod version_refs;
@@ -55,12 +56,13 @@ pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, Sto
 pub use mergeability::{check, CheckReport, Mergeability};
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
-pub use discussions::{DiffProbe, DiscussionList, DiscussionView};
+pub use discussions::DiffProbe;
 pub use fields::{
     check_description, check_note_body, check_position_shape, check_title, MAX_DESCRIPTION_BYTES,
     MAX_NOTE_BYTES, MAX_PATH_BYTES, MAX_TITLE_CHARS,
 };
 pub use forge_db::review::{DiscussionPosition, ResolveOutcome, StoredDiscussion, StoredNote};
+pub use outdated::{DiscussionList, DiscussionView, Outdated, MAX_DIFFS_PER_READ};
 
 /// A branch's head commit in a repository, for the commands that name one
 /// (create, retarget, reopen — M3 R1b: the reopen also compares it with

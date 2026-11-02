@@ -837,7 +837,11 @@
             "type": "array"
           },
           "outdated": {
-            "description": "A later version rewrote (or moved) the line: look again.",
+            "description": "A later version rewrote (or moved) the line — or whether it did\ncould not be computed (`outdated_unknown`): look again.",
+            "type": "boolean"
+          },
+          "outdated_unknown": {
+            "description": "`outdated` could not be computed (git busy or failed, a purged\nversion, unrecorded bases, too many diffs for one read): it is\nshown as `true`.",
             "type": "boolean"
           },
           "position": {
@@ -878,6 +882,7 @@
           "kind",
           "position",
           "outdated",
+          "outdated_unknown",
           "started_by",
           "resolved",
           "resolved_by",

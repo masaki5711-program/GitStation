@@ -15,27 +15,25 @@
 //! branch or a tag): FG-REVIEW-0004 with the reason of
 //! [`crate::position::check_position`]. `outdated` is computed when the
 //! threads are read (never stored: every push would rewrite it and it
-//! needs git): see [`crate::position::line_changed`].
-
-use std::collections::HashMap;
+//! needs git): see `outdated.rs` and [`crate::position::line_changed`].
 
 use forge_auth::{Action, Authorized, DiscussionCtx, LoadedDiscussion, MergeRequestCtx};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    DiscussionId, DiscussionSide, MergeRequestId, ObjectId, ProjectId, ProjectRepository, RepoId,
+    DiscussionId, DiscussionSide, MergeRequestId, ProjectId, ProjectRepository, RepoId,
 };
 use forge_db::review::{
     self, DiscussionFacts, DiscussionPosition, NewDiscussion, ResolveOutcome, StoredDiscussion,
-    StoredVersion,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::{Browser, Diff};
 
 use crate::fields::{check_note_body, check_position_shape};
-use crate::position::{check_position, line_changed};
+use crate::outdated::side_commit;
+use crate::position::check_position;
 use crate::{
     absent, account, caller, change_context, loaded, locked, ready, require, shape_mismatch,
-    Review, ReviewRequest, StoredMergeRequest,
+    Review, ReviewRequest,
 };
 
 /// The diff of two commits of a merge request's repository, in the view
@@ -72,22 +70,6 @@ impl DiffProbe for Browser {
     }
 }
 
-/// One discussion as read, with whether a later version changed its line
-/// (`false` for a general one and for one on the current version).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiscussionView {
-    pub discussion: StoredDiscussion,
-    pub outdated: bool,
-}
-
-/// The discussions of a merge request, oldest first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiscussionList {
-    pub discussions: Vec<DiscussionView>,
-    /// A cap cut the list (`forge_db::review::MAX_DISCUSSIONS` / `MAX_NOTES`).
-    pub truncated: bool,
-}
-
 /// `FG-REVIEW-0004` with its reason and the position's safe facts (never
 /// the path or the body).
 fn position_invalid(
@@ -118,16 +100,6 @@ fn discussion_absent() -> ForgeError {
         .with_context("reason", "absent")
 }
 
-/// The commit a side of a version shows: the head (`new`), or the merge
-/// base (`old`; the target's tip when there was no common history; `None`
-/// before the version job recorded it).
-fn side_commit(v: &StoredVersion, side: DiscussionSide) -> Option<&ObjectId> {
-    match side {
-        DiscussionSide::New => Some(&v.head_sha),
-        DiscussionSide::Old => v.merge_base_sha.as_ref().or(v.base_sha.as_ref()),
-    }
-}
-
 impl Review {
     /// The diff source of the inline positions and `outdated` (M3 R3;
     /// `forge serve` sets the browse API).
@@ -137,7 +109,7 @@ impl Review {
         self
     }
 
-    fn diffs(&self) -> Result<&dyn DiffProbe, ForgeError> {
+    pub(crate) fn diffs(&self) -> Result<&dyn DiffProbe, ForgeError> {
         self.diffs.as_deref().ok_or_else(unconfigured)
     }
 
@@ -305,117 +277,5 @@ impl Review {
         id: DiscussionId,
     ) -> Result<Option<StoredDiscussion>, ForgeError> {
         review::discussion(&self.db, mr, id).await
-    }
-
-    /// The discussions of `mr` with their notes and `outdated` (the caller
-    /// decided `MergeRequestRead` on it). Runs one diff per distinct pair
-    /// of commits an inline discussion needs compared (none when every one
-    /// sits on the current version); a diff that fails fails the read
-    /// (never "not outdated" on an error).
-    pub async fn discussions(
-        &self,
-        mr: &StoredMergeRequest,
-        repo: ProjectRepository,
-        key: &str,
-    ) -> Result<DiscussionList, ForgeError> {
-        let page = review::discussions(&self.db, mr.id).await?;
-        Ok(DiscussionList {
-            discussions: self.annotate(mr, repo, key, page.discussions).await?,
-            truncated: page.truncated,
-        })
-    }
-
-    /// One discussion (as a write returned it) with `outdated`, as the
-    /// list shows it.
-    pub async fn view(
-        &self,
-        mr: &StoredMergeRequest,
-        repo: ProjectRepository,
-        key: &str,
-        discussion: StoredDiscussion,
-    ) -> Result<DiscussionView, ForgeError> {
-        let mut one = self.annotate(mr, repo, key, vec![discussion]).await?;
-        one.pop().ok_or_else(|| {
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "discussion_view_empty")
-        })
-    }
-
-    /// `outdated` for each of `discussions` (one read of the versions, one
-    /// diff per distinct pair of commits).
-    async fn annotate(
-        &self,
-        mr: &StoredMergeRequest,
-        repo: ProjectRepository,
-        key: &str,
-        discussions: Vec<StoredDiscussion>,
-    ) -> Result<Vec<DiscussionView>, ForgeError> {
-        let needs_git = discussions.iter().any(|d| d.position.is_some());
-        let versions = if needs_git {
-            review::read_versions(&self.db, mr.id).await?
-        } else {
-            Vec::new()
-        };
-        let current = versions
-            .iter()
-            .find(|v| mr.head_sha.as_deref() == Some(v.head_sha.as_str()));
-        let mut cache: HashMap<(String, String), Diff> = HashMap::new();
-        let mut out = Vec::with_capacity(discussions.len());
-        for d in discussions {
-            let outdated = match (&d.position, current) {
-                (None, _) | (Some(_), None) => false,
-                (Some(p), Some(current)) => {
-                    self.outdated(mr, repo, key, &versions, current, p, &mut cache)
-                        .await?
-                }
-            };
-            out.push(DiscussionView {
-                discussion: d,
-                outdated,
-            });
-        }
-        Ok(out)
-    }
-
-    /// Whether `p` sits on a line the current version changed (module
-    /// docs of `position`). Unknown commits (a purged version, bases not
-    /// recorded) count as changed.
-    #[allow(clippy::too_many_arguments)] // the read's context and its per-call cache
-    async fn outdated(
-        &self,
-        mr: &StoredMergeRequest,
-        repo: ProjectRepository,
-        key: &str,
-        versions: &[StoredVersion],
-        current: &StoredVersion,
-        p: &DiscussionPosition,
-        cache: &mut HashMap<(String, String), Diff>,
-    ) -> Result<bool, ForgeError> {
-        if p.version == current.version_no {
-            return Ok(false);
-        }
-        let Some(v) = versions.iter().find(|v| v.version_no == p.version) else {
-            return Ok(true);
-        };
-        if v.refs_purged || current.refs_purged {
-            return Ok(true);
-        }
-        let (Some(from), Some(to)) = (side_commit(v, p.side), side_commit(current, p.side)) else {
-            return Ok(true);
-        };
-        if from == to {
-            return Ok(false);
-        }
-        let pair = (from.as_str().to_owned(), to.as_str().to_owned());
-        if !cache.contains_key(&pair) {
-            let repo_id = ready(mr.project_id, repo)?;
-            let diff = self
-                .diffs()?
-                .merge_request_diff(repo_id, mr.iid, &pair.0, &pair.1, key)
-                .await?;
-            cache.insert(pair.clone(), diff); // clone: the key is looked up again below
-        }
-        Ok(cache
-            .get(&pair)
-            .is_some_and(|diff| line_changed(diff, &p.path, p.line)))
     }
 }
