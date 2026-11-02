@@ -36,7 +36,7 @@
   その他の名前空間は拒む）。`source_branch == target_branch` は入力の検査で拒み、`authorize()` の arm も `reason=source_equals_target` で deny する
   （二重の守り。§12 の `Resource::MergeRequest` が両方の名前を持つ）。
 - **開いている MR の重複を許さない**: 同じ `(project_id, source_branch, target_branch)` で `state = 'open'` の行は 1 つまで（部分一意索引）。違反は
-  **FG-REVIEW-0005** DuplicateOpenMergeRequest（409）。
+  **FG-REVIEW-0001** DuplicateOpenMergeRequest（409）。
 - **`merge_request_versions`**: push ごとの `(version_no, head_sha, base_sha（その時の target の先端）, merge_base_sha, pushed_by, created_at)`。
   `pushed_by` は版を作るきっかけの push の actor で、**承認を数えないコミッターの集合は `pushed_by` だけでは決めない**（§8 の 3）。
   版の差分は `merge_base_sha..head_sha`、版どうしの比較は `head_sha(v1)..head_sha(v2)`。差分は M2 の `browse::diff` で作り、上限と `truncated` も M2 と同じ。
@@ -101,7 +101,7 @@
   **`SessionOnly`**: 人間の管理者のセッションだけ。`admin` スコープのトークンも、エージェントのトークン・サービスアカウント・代理も deny。監査の行と
   `request_id` つき。再レビュー）。**前提条件**: 開いている MR では、先に MR をクローズするか、ソースブランチを秘密を含まない形に書き換えて
   （新しい版ができる）から行う。開いたままで今の head を消すと次の版の追加で同じ ref が戻るので、開いている MR で今の head を指す版の ref の削除は
-  **FG-REVIEW-0014** PurgePreconditionFailed（409、`reason=purge_requires_closed_or_rewritten`）で断る（権限ではなく状態の拒否。手順は runbook `secret-removal`）。`refs/merge-requests/<iid>/`
+  **FG-REVIEW-仮** PurgePreconditionFailed（409、`reason=purge_requires_closed_or_rewritten`）で断る（権限ではなく状態の拒否。手順は runbook `secret-removal`）。`refs/merge-requests/<iid>/`
   の下の ref を CAS で消し、MR に「版の ref を削除した」ことを残す（以後その MR の古い版の差分は読めない、と表示する）。オブジェクトそのものの除去
   （到達できないオブジェクトの即時の prune）は本番を変えるので、runbook `secret-removal` の **人が承認した手順** として行う。ミラー（O2）と
   バックアップに残る写しの扱いも同じ runbook に書く（漏れとして扱い、秘密の失効が先。ref を消すだけでは足りない）。
@@ -148,7 +148,7 @@
 
 - 「rebase して早送り」は作らない（M3 後半に一時的な作業ツリー（案 B）か `git replay` かを決める。計画 11 §10 Q3）。
 - プロジェクトの `merge_settings`（R4）が許可する方式と既定（推奨: マージコミットと squash を許可、既定はマージコミット）を持つ。許可されない方式の要求は
-  **FG-REVIEW-0009** MergeMethodNotAllowed（409）。
+  **FG-REVIEW-仮** MergeMethodNotAllowed（409）。
 - **どの方式も、新しい target は古い target の子孫になる**（マージコミットと squash は第 1 の親が古い target、早送りは祖先の確認）。これを実行の前に不変条件として
   確かめ、破れていればプログラムの誤りとして FG-SYS-0001（`reason=merge_not_descendant`）で止める。マージの経路は force にも削除にもならない。
 - コミットのメッセージ（利用者の入力、上限 64 KiB）は **標準入力** で渡す（`commit-tree -F -`）。`command.rs` のオプションは `&'static str` だけなので、
@@ -169,26 +169,26 @@
 **マージの行の状態**（`merge_request_merges.state`）: `queued`（ジョブを積んだ）→ `prepared`（オブジェクトを作り、`expected_old` と `new_sha` を確定した）→
 `executing`（ref を動かす権利を取った）→ `applied`（終端）。途中から `superseded`（ref は動いていない。終端）か `failed`（人の判断。終端）。
 **マージの実行中** は「`queued` / `prepared` / `executing` の行がある」ことで、`merge_status`（§3）とは別に持つ。MR ごとに実行中の行は 1 つまでで、
-**部分一意索引**（`merge_request_merges (mr_id) WHERE state IN ('queued', 'prepared', 'executing')`）で守る。違反は **FG-REVIEW-0012**
+**部分一意索引**（`merge_request_merges (mr_id) WHERE state IN ('queued', 'prepared', 'executing')`）で守る。違反は **FG-REVIEW-仮**
 MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `update-ref`）は、MR の行をロックしたトランザクションの **外** で行う
 （行のロックを git の時間だけ持ち続けない。advisory lock は持ったまま）。
 
 1. **入口**（HTTP）: 要求の本文は **利用者が見た `sha`**（必須）と方式とメッセージ。ルートが `authorize(MergeRequestMerge)` で判定し、`sha` が MR の今の
-   `head_sha` と違えば **FG-REVIEW-0003** HeadChanged（409、`reason=stale_view`。ADR-0017 §4.0 の `MergeHeadMismatch` はこのコードに含める）で断る。
-   `evaluate_merge()`（§7）を一度計算し、止める理由があれば **FG-REVIEW-0002** MergeBlocked（409、`reasons`）を返してジョブを作らない。通れば、
+   `head_sha` と違えば **FG-REVIEW-仮** HeadChanged（409、`reason=stale_view`。ADR-0017 §4.0 の `MergeHeadMismatch` はこのコードに含める）で断る。
+   `evaluate_merge()`（§7）を一度計算し、止める理由があれば **FG-REVIEW-仮** MergeBlocked（409、`reasons`）を返してジョブを作らない。通れば、
    同じトランザクションで `merge_request_merges` の `queued` の行（`merge_id`、方式、`sha`、メッセージ、`request_id`）とジョブを書き、202 とジョブ ID を返す。
    **ジョブの行と `queued` の行に残す主体は「利用者 ID と資格情報の種類と ID（セッション ID かトークン ID）」だけ** で、スコープ・`is_agent`・アカウントの種類・
-   ロールは残さない（§5。古い権限の写しで実行しない）。部分一意索引の違反は FG-REVIEW-0012。
+   ロールは残さない（§5。古い権限の写しで実行しない）。部分一意索引の違反は FG-REVIEW-仮（MergeInProgress）。
 2. **ロック**: ジョブはリポジトリごとの advisory lock `merge:<repo_id>`（セッション単位、待ちに時間切れ。時間切れはジョブの再試行、尽きればデッドレター
    FG-DB-0006）を取る。同じリポジトリのマージは直列になる。
 3. **準備の判定のトランザクション**（tx1a）: MR の行を `FOR UPDATE` → `Authorized::reconfirm`（§5: 資格情報 ID から主体を作り直し、同じ Action で
    `authorize()` をもう一度）→ 事実を読み直して `evaluate_merge()` をもう一度 → リポジトリから今のソースの先端と target の先端を読む。
-   **ソースの先端が `sha` と違えば FG-REVIEW-0003** HeadChanged（`reason=source_moved`）で止める（行は `superseded`）。コミットして行のロックを放す。
+   **ソースの先端が `sha` と違えば FG-REVIEW-仮** HeadChanged（`reason=source_moved`）で止める（行は `superseded`）。コミットして行のロックを放す。
 4. **オブジェクトを作る**（トランザクションの外、advisory lock の下）: `merge-tree` / `commit-tree`（オブジェクトを作るだけ。ref は動かない）。
-   衝突なら **FG-REVIEW-0001** MergeRequestConflict（行は `superseded`）。CODEOWNERS と設定のファイルの判定に使う変更されたパスも、ここで §9 の方法で読む。
+   衝突なら **FG-REVIEW-仮** MergeRequestConflict（行は `superseded`）。CODEOWNERS と設定のファイルの判定に使う変更されたパスも、ここで §9 の方法で読む。
 5. **準備の記録のトランザクション**（tx1b）: MR の行を `FOR UPDATE` → reconfirm と `evaluate_merge()` をもう一度（DB だけを読む純粋な判定。git は
    呼ばない。4 で読んだ変更されたパスを事実として渡す）→ MR の `head_sha` と 3 で読んだ target の先端が 4 の計算の前提と同じことを確かめる（違えば
-   FG-REVIEW-0003）→ 行を `queued → prepared`（`expected_old` = target の先端、`new_sha`、`head_sha`）。**この遷移も `WHERE state = 'queued'` の条件つき**で、
+   FG-REVIEW-仮（HeadChanged））→ 行を `queued → prepared`（`expected_old` = target の先端、`new_sha`、`head_sha`）。**この遷移も `WHERE state = 'queued'` の条件つき**で、
    1 行でなければ（照合が先に `superseded` にした）先へ進まない。コミット。
 6. **フェンス**（ref を動かす直前）: (a) advisory lock を持つ接続が生きていて、その接続のロックがまだあることを確かめる（同じ接続で
    `pg_locks` の自分の `pid` の `merge:<repo_id>` を読む。失敗・不在なら ref を動かさず、ジョブを再試行に回す。行は `prepared` のまま）。
@@ -200,11 +200,11 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
    **再試行**（ロックのファイル・ロックの喪失・worker の停止の後）は、advisory lock を取り直してから行を読み直し、**まだ `executing` のときだけ** 7 へ進む
    （照合が `superseded` / `applied` / `failed` にしていれば何もしない）。
 7. **ref の更新**: `update-ref -z --stdin` で target を `expected_old → new_sha` に比較して交換する（CAS）。**失敗したときは ref を読み直して分ける**:
-   - 今の先端が `expected_old` と違う（判定の後に誰かが target に push した）→ 行を `superseded` にして **FG-REVIEW-0003**（409、`reason=target_moved`、
+   - 今の先端が `expected_old` と違う（判定の後に誰かが target に push した）→ 行を `superseded` にして **FG-REVIEW-仮（HeadChanged）**（409、`reason=target_moved`、
      `expected`、`actual`）。alert にしない。
    - git がロックのファイル（`<ref>.lock` が既にある）で失敗した → 再試行できる失敗として行を `executing` のまま残し、ジョブを再試行に回す
      （再試行は照合と同じ手順で ref を読んでから決める）。warn で 1 回ログ（`forge.review.merge_retry`、`reason=ref_locked`。尽きれば FG-DB-0006）。
-   - それ以外（先端は `expected_old` のままなのに更新できない、ref が読めない、時間切れ）→ **FG-REVIEW-0004** MergeExecutionFailed
+   - それ以外（先端は `expected_old` のままなのに更新できない、ref が読めない、時間切れ）→ **FG-REVIEW-仮** MergeExecutionFailed
      （alert、`reason=update_ref_failed`）。行は `executing` のまま残し、照合に渡す。
 8. ref が動いた直後に、ログの行 `forge.review.merge_applied`（`request_id`、`job_id`、`merge_id`、`mr_id`、`project_id`、`repo_id`、`method`、`target`、
    `expected_old`、`new_sha`、`head_sha`）を **先に** 出す（ADR-0008 の `forge.git.push_applied` と同じ考え方）。
@@ -219,18 +219,18 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
    `ref`、`old`）を出す（8 と同じ考え方）。削除の失敗はマージを取り消さない（warn で 1 回、`ref` とエラーコード（FG-GIT-0002 / 0003、記録の失敗は
    FG-DB-0001）つきでログ）。
 
-**照合（ref と DB が食い違ったとき）**: tx2 の失敗は FG-REVIEW-0004（`reason=record_failed`、alert）。同じジョブの再試行と照合のジョブ
+**照合（ref と DB が食い違ったとき）**: tx2 の失敗は FG-REVIEW-仮（MergeExecutionFailed）（`reason=record_failed`、alert）。同じジョブの再試行と照合のジョブ
 `merge_request.reconcile`（`forge doctor` の `jobs.merge` も数える）が、advisory lock の下で行の状態ごとに決定的に片付ける:
 
 - **`queued` / `prepared` のまま**（10 分を超えた行）: 6 の比較して交換を通っていないので、この行の worker は ref を動かしていない。`superseded` にする
   （ジョブがまだ生きていれば、6 (b) の交換に負けて止まる）。
 - **`executing` のまま**（`executing_at` から `update-ref` の時間切れ + 余裕（既定 10 分）を超えた行。それより前は、元の worker の `update-ref` がまだ
   動きうるので触らない）: **git に聞く** — target を読み、先端が `new_sha`、または `new_sha` を祖先に持つ → tx2 をやり直して `applied`。先端が
-  `expected_old` のまま → ref は動いていないので `superseded`。どちらでもない（`new_sha` が届かない）→ `failed` にして FG-REVIEW-0004
+  `expected_old` のまま → ref は動いていないので `superseded`。どちらでもない（`new_sha` が届かない）→ `failed` にして FG-REVIEW-仮（MergeExecutionFailed）
   （`reason=ref_state_unknown`）で人に渡す（runbook `merge-execution`）。
 - 祖先の確認は `merge-base --is-ancestor`（§3 の受け付ける終了コード。1 = 祖先でない）。
 
-**マージの実行中**（実行中の行がある間）、MR を変える操作（クローズ、target の変更、ドラフトへの切り替え）は MR の行のロックの下で **FG-REVIEW-0012** で断る。
+**マージの実行中**（実行中の行がある間）、MR を変える操作（クローズ、target の変更、ドラフトへの切り替え）は MR の行のロックの下で **FG-REVIEW-仮（MergeInProgress）** で断る。
 版の追加は事実の記録なので断らない（マージは判定した `head_sha` を使い、5 の確認でずれを拾う）。
 
 #### 4.3 保護 ref の判定をマージの経路でも行う
@@ -246,13 +246,13 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
 
 | 起きたこと | コード | ログで見るもの |
 |---|---|---|
-| 判定で止まった（承認不足など） | FG-REVIEW-0002 | `reasons`（§7 の名前の並び）、`mr_id`、`head_sha` |
-| 利用者が見た `sha` が今の head と違う / 判定の後にソースが動いた / target が動いた | FG-REVIEW-0003 | `reason=stale_view|source_moved|target_moved`、`expected`、`actual` |
-| ロックの下の `merge-tree` で衝突 | FG-REVIEW-0001 | `conflicted_files`（数と最初の 10 件のパス、ログだけ。一覧が切れたら `truncated=true`） |
+| 判定で止まった（承認不足など） | FG-REVIEW-仮（MergeBlocked） | `reasons`（§7 の名前の並び）、`mr_id`、`head_sha` |
+| 利用者が見た `sha` が今の head と違う / 判定の後にソースが動いた / target が動いた | FG-REVIEW-仮（HeadChanged） | `reason=stale_view|source_moved|target_moved`、`expected`、`actual` |
+| ロックの下の `merge-tree` で衝突 | FG-REVIEW-仮（MergeRequestConflict） | `conflicted_files`（数と最初の 10 件のパス、ログだけ。一覧が切れたら `truncated=true`） |
 | git が時間切れ / 異常終了（判定・`merge-tree`） | FG-GIT-0002 / FG-GIT-0003 | `operation=merge_tree|commit_tree|merge_base`、stderr の先頭（ログだけ） |
 | ref のロックのファイルで update-ref が失敗した / ref を動かす直前に advisory lock を失っていた（どちらも再試行する） | 再試行のログ `forge.review.merge_retry`（warn）。再試行が尽きれば FG-DB-0006（デッドレター）、行は照合へ | `reason=ref_locked|lock_lost`、`merge_id` |
-| update-ref の失敗（CAS の負け・ロックのファイル以外）、記録の失敗、照合できない | FG-REVIEW-0004（alert） | `reason=update_ref_failed|record_failed|ref_state_unknown`、`merge_id`、直前の `forge.review.merge_applied` |
-| マージ中の MR を変えようとした / 2 つ目のマージ | FG-REVIEW-0012 | `mr_id`、`merge_id`、`job_id` |
+| update-ref の失敗（CAS の負け・ロックのファイル以外）、記録の失敗、照合できない | FG-REVIEW-仮（MergeExecutionFailed）（alert） | `reason=update_ref_failed|record_failed|ref_state_unknown`、`merge_id`、直前の `forge.review.merge_applied` |
+| マージ中の MR を変えようとした / 2 つ目のマージ | FG-REVIEW-仮（MergeInProgress） | `mr_id`、`merge_id`、`job_id` |
 | 権限が判定とジョブの間に変わった | FG-AUTH-0003 | `action=MergeRequestMerge`、`reason` |
 
 ジョブの開始と終了は `forge.review.merge_started` / `forge.review.merge_completed`（`outcome`）。どの行も `request_id`（マージを要求した要求の ID）と `job_id` を持つ。
@@ -318,7 +318,7 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
 1. **SHA と target に結ぶ**: 承認の行は `(mr_id, approver_id, head_sha, target_branch)` を持ち、`evaluate_merge()` は **今の `head_sha` と今の
    `target_branch` に一致する承認だけ** を数える（構造で失効させる。ADR-0017 §2.6）。target を変えると承認は数えられなくなる（`dev` で承認を集めてから
    `main` に向け直す抜け道を塞ぐ。計画 11 は SHA だけを書いていたので、ここで足す）。
-   **承認の要求は利用者が見た `sha` を必須で持ち**、MR の行をロックした中で今の `head_sha` と比べる。違えば **FG-REVIEW-0003** HeadChanged
+   **承認の要求は利用者が見た `sha` を必須で持ち**、MR の行をロックした中で今の `head_sha` と比べる。違えば **FG-REVIEW-仮** HeadChanged
    （409、`reason=stale_view`）で断り、承認の行を作らない（見ていない版を承認させない。マージの要求も同じ。§4.2 の 1）。
 2. **新しいコミットで消すのが既定**（計画 11 §10 Q4）: 版を足すとき、古い承認ごとに `merge_request.unapproved`（`reason=new_commits`）を出す。
    プロジェクトの設定 `reset_approvals_on_push = false` のときだけ、版を足す処理が人間の承認を新しい SHA へ写す（`carried_from`）。
@@ -327,7 +327,7 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
    §8 の 7 の設定のファイルに触れる、(c) その変更が CODEOWNERS の所有者のいるパス（target の先端の CODEOWNERS で判定）に触れる、
    (d) その変更を読み切れない（§9 の `changed_paths_unknown` に当たる）。写すかどうかの判定は `forge-review` の純粋な関数
    （`may_carry_approvals`）で、各場合をテストで固定する。
-3. **自己承認の拒否**: `MergeRequestApprove` は `user == author` を `authorize()` で拒む（**FG-REVIEW-0006** SelfApprovalRefused、403）。
+3. **自己承認の拒否**: `MergeRequestApprove` は `user == author` を `authorize()` で拒む（**FG-REVIEW-仮** SelfApprovalRefused、403）。
    **管理者にも例外はない**（管理者の作成者の自己承認も deny の行を持つ。`admin_author_self_approval_is_denied`）。
    ADR-0017 §2.6 に従い、コミッターの承認は、プロジェクトの設定「コミッターの承認を数えない」（既定で有効）のとき数えない
    （`evaluate_merge()` が数えないだけで、承認そのものは拒まない）。**コミッターの集合は、MR の範囲（`merge_base..head`）のコミットを ref に入れた
@@ -386,7 +386,7 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
   **同じパスに複数の行が一致するときは最後の行が効く**。
 - **入れないもの**: セクション（`[Section]`）、任意の承認（`^[...]`）、メールでの所有者、否定。これらは「無視」ではなく **解析の誤り** にする。
 - **解析できない・知らない所有者・上限超え（大きさと行数の上限は R5 で決める）は黙って無視しない**: `evaluate_merge()` の止める理由 `codeowners_invalid`
-  （行番号と `reason`）でマージを止め、ログには **FG-REVIEW-0007** CodeownersInvalid（warn、runbook `codeowners`）を 1 回出す。所有者の要件は
+  （行番号と `reason`）でマージを止め、ログには **FG-REVIEW-仮** CodeownersInvalid（warn、runbook `codeowners`）を 1 回出す。所有者の要件は
   変更されたパスごとに「一致した最後の行の所有者のうち 1 人以上の承認」（所有者の承認の有効性は §8 の 6 と同じく評価の時点で読み直す）。
 - **変更されたパスの読み方**（CODEOWNERS と §8 の 7 の設定のファイルの判定に共通）: 表示用の差分（`browse::diff`。上限・`truncated`・名前の変更の検出
   あり）は **使わない**。専用の `git diff-tree --no-renames -r -z --name-only <merge_base> <head>`（名前の変更の検出なし。名前の変更は「古いパスの削除と
@@ -420,11 +420,11 @@ MergeInProgress（409）。git の処理（`merge-tree` / `commit-tree` / `updat
     （`ProjectView.via_bound = true`。ADR-0017 §4.0）。結びついていないプロジェクトへの書き込み、他の名前空間への書き込み、人間のトークンは deny。
   - `ext/`: `api` スコープの Developer 以上の人間。ただし **`sha_stakeholders`（作成者・コミッター）とエージェントのトークンは deny**
     （自分の MR のチェックを自分で緑にさせない）。サービスアカウントも `ext/` には書けない。
-  - 拒否は **FG-REVIEW-0010** CheckNamespaceDenied（403）、注釈の上限超え・形の誤りは **FG-REVIEW-0011** CheckPayloadInvalid（422）。
+  - 拒否は **FG-REVIEW-仮** CheckNamespaceDenied（403）、注釈の上限超え・形の誤りは **FG-REVIEW-仮** CheckPayloadInvalid（422）。
 - **必須のチェック**は「MR の今の `head_sha` に、その名前の `completed` かつ `success` がある」。**チェックが無いことは成功と区別する**
   （`required_check_missing`。計画 02 §8.3 O-6）。`neutral` も必須のチェックを満たさない。
 - **必須にできる名前はサービスアカウントか forge が持つ名前空間（`ci/`・`kanflow/`・`forge/`）だけ**。`ext/` の名前を必須のチェックに設定する要求は
-  設定の API が **FG-REVIEW-0013** RequiredCheckNamespaceNotAllowed（422、この ADR で追加）で拒む。人が書ける名前でマージの条件を満たさせない。
+  設定の API が **FG-REVIEW-仮** RequiredCheckNamespaceNotAllowed（422、この ADR で追加）で拒む。人が書ける名前でマージの条件を満たさせない。
 - `check.completed` は結論が変わったときだけ出す（C1）。
 - target が進んだときにチェックを「古い」とする扱い（ADR-0006 のマージ結果のパイプライン）は M4。M3 のチェックは head の SHA にだけ結ぶ。
 
@@ -496,9 +496,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | `MergeRequestUpdate` / `MergeRequestClose` / `MergeRequestReopen` | `api` | 作成者、Developer 以上（他人の MR のドラフトの切り替えは作成者と Maintainer 以上） | Reporter、他人のドラフトを切り替える Developer、target を `refs/heads/` 以外・source と同じ名前に変える | 不可 |
 | `MergeRequestComment` | `api` | Reporter 以上。**エージェントのトークンも可**（コメントはマージの条件にならない。スレッドの解決は別の Action）。サービスアカウントも自分のロールの範囲で可 | private の Guest、匿名、Reporter 未満 | 不可 |
 | `DiscussionResolve` | `api` | **人だけ**。自分が始めたスレッド（Reporter 以上）。**他人が始めたスレッドは、MR の作成者でない Developer 以上** | エージェントのトークン（`agent_token`）、サービスアカウント（`service_account`）、Reporter が他人のスレッド、**MR の作成者が他人のスレッド**（作成者が `unresolved_discussions` を自分で消さない） | 不可 |
-| `MergeRequestApprove` / `MergeRequestUnapprove` | `merge_approve` | 人間の Developer 以上で作成者でない（取り消しは自分の承認だけ）。ルールで数えるかは評価の時点（§8 の 6） | **作成者自身**（FG-REVIEW-0006。管理者でも）、エージェントのトークン、サービスアカウント、`api` だけのトークン、`merge_execute` だけのトークン、Reporter | **可（主張が必須。ADR-0025）** |
+| `MergeRequestApprove` / `MergeRequestUnapprove` | `merge_approve` | 人間の Developer 以上で作成者でない（取り消しは自分の承認だけ）。ルールで数えるかは評価の時点（§8 の 6） | **作成者自身**（FG-REVIEW-仮（SelfApprovalRefused）。管理者でも）、エージェントのトークン、サービスアカウント、`api` だけのトークン、`merge_execute` だけのトークン、Reporter | **可（主張が必須。ADR-0025）** |
 | `MergeRequestMerge` | `merge_execute` | target の `push_min_role` 以上（保護なしは Developer 以上）。直接の push の禁止（R6）は効かない | 保護が Maintainer の target × Developer、エージェントのトークン、サービスアカウント、`api` だけのトークン、`merge_approve` だけのトークン | 不可（M4） |
-| `MergeSettingsManage` / `ApprovalRuleManage` | `api` | **人だけ**。Maintainer 以上 | Developer、エージェントのトークン、サービスアカウント、`ext/` を必須のチェックにする設定（FG-REVIEW-0013） | 不可 |
+| `MergeSettingsManage` / `ApprovalRuleManage` | `api` | **人だけ**。Maintainer 以上 | Developer、エージェントのトークン、サービスアカウント、`ext/` を必須のチェックにする設定（FG-REVIEW-仮（RequiredCheckNamespaceNotAllowed）） | 不可 |
 | `CodeownersEnforcementToggle` | `api` | 人だけ。Maintainer 以上で、ロールがプロジェクトの保護ブランチの `push_min_role` の最大値以上。期限つき（§9） | エージェントのトークン、サービスアカウント、Developer、`above_own_role`（Owner の保護があるプロジェクトの Maintainer）、期限なし・期限が上限を超える要求 | 不可 |
 | `MergeRequestVersionRefsPurge` | `SessionOnly` | 人間の管理者のセッションだけ。監査つき。開いている MR はクローズか書き換えの後（§2） | 管理者でない、**`admin` スコープのトークンを含むすべてのトークン**、エージェントのトークン、サービスアカウント | 不可 |
 | `CheckWrite` | `api` | §10: `ci/`・`kanflow/` は割り当てられたサービスアカウント × 結びついたプロジェクト（`via_bound`）、`ext/` は作成者・コミッターでない人間の Developer 以上 | `forge/`（HTTP からは管理者も）、他の名前空間、結びついていないプロジェクト、`ext/` × 作成者・コミッター・エージェントのトークン・サービスアカウント | 不可 |
@@ -579,7 +579,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 - **ミラーとバックアップ**: O2 の GitLab へのミラーは **明示の refspec**（`refs/heads/*`・`refs/tags/*` だけ。`--mirror` や `refs/*` を使わない）で送り、
   `refs/merge-requests/*` を外へ出さない（テスト: ミラー先に `refs/merge-requests/` が無い）。O1 のバックアップはリポジトリのファイルの複写なので
   隠した ref（版の ref）を **含む**。`forge restore verify` は版の ref と `merge_request_versions` の突き合わせも行う。
-- **記録の失敗が放置される** → FG-REVIEW-0004（alert）、doctor の `jobs.merge`、照合のジョブ、runbook `merge-execution`。
+- **記録の失敗が放置される** → FG-REVIEW-仮（MergeExecutionFailed）（alert）、doctor の `jobs.merge`、照合のジョブ、runbook `merge-execution`。
 - **CODEOWNERS で全員が止まる** → `codeowners_enforced` の逃げ道（監査つき）と runbook `codeowners`。
 - **advisory lock の保持中に DB の接続を 1 つ使い続ける** → マージのジョブの同時実行の上限を設定に持つ（R4 で既定を決める）。
 
@@ -589,24 +589,24 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード（番号は登録時に確かめる。計画 11 §4.4 に 0012 を足した）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest だけが **FG-REVIEW-0001** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
-| FG-REVIEW-0001 | MergeRequestConflict | 409 | info | — | R2 / R4 |
-| FG-REVIEW-0002 | MergeBlocked（`reasons`） | 409 | info | — | R6（入口は R4） |
-| FG-REVIEW-0003 | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
-| FG-REVIEW-0004 | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（新規） | R4 |
-| FG-REVIEW-0005 | DuplicateOpenMergeRequest | 409 | info | — | R1 |
-| FG-REVIEW-0006 | SelfApprovalRefused | 403 | info | — | R5 |
-| FG-REVIEW-0007 | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
-| FG-REVIEW-0008 | DiscussionPositionInvalid | 422 | info | — | R3 |
-| FG-REVIEW-0009 | MergeMethodNotAllowed | 409 | info | — | R4 |
-| FG-REVIEW-0010 | CheckNamespaceDenied | 403 | info | — | C1 |
-| FG-REVIEW-0011 | CheckPayloadInvalid | 422 | info | — | C1 |
-| FG-REVIEW-0012 | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
-| FG-REVIEW-0013 | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
-| FG-REVIEW-0014 | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除） | 409 | info | `secret-removal` | R1b |
+| 仮（登録の順に決める） | MergeRequestConflict | 409 | info | — | R2 / R4 |
+| 仮（登録の順に決める） | MergeBlocked（`reasons`） | 409 | info | — | R6（入口は R4） |
+| 仮（登録の順に決める） | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
+| 仮（登録の順に決める） | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（新規） | R4 |
+| FG-REVIEW-0001（R1a で登録済み） | DuplicateOpenMergeRequest | 409 | info | — | R1 |
+| 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
+| 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
+| 仮（登録の順に決める） | DiscussionPositionInvalid | 422 | info | — | R3 |
+| 仮（登録の順に決める） | MergeMethodNotAllowed | 409 | info | — | R4 |
+| 仮（登録の順に決める） | CheckNamespaceDenied | 403 | info | — | C1 |
+| 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
+| 仮（登録の順に決める） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
+| 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| 仮（登録の順に決める） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除） | 409 | info | `secret-removal` | R1b |
 
 - 再利用: 権限の拒否は FG-AUTH-0003（エージェントは `reason=agent_token`、サービスアカウントは `service_account`、ボットは `bot`、ジョブの時点で失効した
   資格情報は `credential_revoked`、`source_equals_target`、`above_own_role`）、スコープ不足は FG-AUTH-0002、見えない MR と存在しない iid は FG-REPO-0005 の 404、
@@ -650,7 +650,7 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 | 11 | HIGH: `head` の ref 1 つでは force push で版のコミットが消える | 版ごとの `refs/merge-requests/<iid>/v<n>` と `head` を 1 つの transaction で書く。再試行で「既に `head_sha`」は成功 | §2 |
 | 12 | HIGH: `merge-tree` / `merge-base --is-ancestor` の終了コード 1 を今の `command` が失敗にする | 「受け付ける終了コード」の出力の形を足し、そのコードでは標準出力を残す。衝突の一覧は切り詰めの出力で、上限超えを FG-GIT-0006 にしない。2.38 のテストで固定 | §3、§4.2 |
 | 13 | HIGH: ref の更新のフェンスが無い（ロックを失った worker と照合が競う） | ref の直前に行を `prepared → executing` に比較して交換、ロックの接続が生きていてロックがあることを確かめる。照合は `executing` を「git に聞く」（時間切れ + 余裕の後だけ）。`repository.pushed` と Outbox の dedup の鍵は `merge_id` | §4.2 の 6・9、照合 |
-| 14 | MEDIUM: CAS の負けの見分け方 | 失敗したら ref を読み直す: 先端 ≠ `expected_old` → `target_moved`（409、FG-REVIEW-0003）、ロックのファイル → 再試行、それ以外だけ FG-REVIEW-0004（alert） | §4.2 の 7、§4.4 |
+| 14 | MEDIUM: CAS の負けの見分け方 | 失敗したら ref を読み直す: 先端 ≠ `expected_old` → `target_moved`（409、FG-REVIEW-仮（HeadChanged））、ロックのファイル → 再試行、それ以外だけ FG-REVIEW-仮（MergeExecutionFailed）（alert） | §4.2 の 7、§4.4 |
 | 15 | MEDIUM: 実行中を `merge_status` に混ぜている | `merge_status` はマージできるかだけ。実行中は `merge_request_merges` の `queued` / `prepared` / `executing` の行で表し、部分一意索引で 1 つに限る。git は行をロックしたトランザクションの外（tx1a / tx1b に分けた） | §3、§4.2 |
 | 16 | MEDIUM: ソースブランチの削除が push の副作用を出さない | 削除の `repository.pushed` を自分のトランザクションで出す（dedup `merge_source_deleted:<merge_id>`） | §4.2 の 10 |
 | 17 | MEDIUM: hideRefs が upload-pack だけ、ミラー・バックアップの扱い | `UPLOAD_PACK_CONFIG` と `RECEIVE_PACK_CONFIG` の両方。O2 は明示の refspec（`refs/merge-requests` を送らない）。バックアップは版の ref を含む | §2、Risks |
@@ -659,8 +659,8 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 | 20 | HIGH: CODEOWNERS・設定の判定に表示用の差分（上限・名前の変更の検出）を使うと所有者が消える | 専用の `diff-tree --no-renames -r -z --name-only <merge_base> <head>` を上限で切らずに流す。読み切れなければ `changed_paths_unknown` で止める（「所有者なし」にしない） | §9、§7 |
 | 21 | HIGH: 承認を新しい SHA へ写す設定が保護ブランチ・設定の変更にも効く | 保護された target、設定のファイル・所有者のいるパスに触れる新しい版、読み切れない変更では、設定にかかわらず写さない（`may_carry_approvals`） | §8 の 2 |
 | 22 | HIGH: コミッターを版の `pushed_by` だけで決めている | MR の範囲のコミットを運んだすべての push の記録の actor（MR の作成の前、他のブランチへの push を含む）。判定できなければその承認を数えない | §1、§8 の 3 |
-| 23 | HIGH: `ext/` のチェックを必須にすると人がマージの条件を満たせる | 必須にできるのは `ci/`・`kanflow/`・`forge/` だけ（設定は FG-REVIEW-0013 で拒む）。`ext/` は作成者・コミッター・エージェントのトークンに deny | §10、§12 |
-| 24 | HIGH: 承認・マージが利用者の見た版に結びついていない | 承認とマージの要求は `sha` を必須で持ち、今の head と違えば FG-REVIEW-0003 HeadChanged（409、`reason=stale_view`） | §4.2 の 1、§8 の 1 |
+| 23 | HIGH: `ext/` のチェックを必須にすると人がマージの条件を満たせる | 必須にできるのは `ci/`・`kanflow/`・`forge/` だけ（設定は FG-REVIEW-仮（RequiredCheckNamespaceNotAllowed） で拒む）。`ext/` は作成者・コミッター・エージェントのトークンに deny | §10、§12 |
+| 24 | HIGH: 承認・マージが利用者の見た版に結びついていない | 承認とマージの要求は `sha` を必須で持ち、今の head と違えば FG-REVIEW-仮 HeadChanged（409、`reason=stale_view`） | §4.2 の 1、§8 の 1 |
 | 25 | HIGH: 閲覧の API が到達できないオブジェクトを ID で返す（`browse/refs.rs` の `commit_of`） | SHA の指定はブランチ・タグ（MR の文脈では、その MR の版の ref）から届くときだけ解決し、届かなければ存在しない SHA と同じ応答。人だけ・監査つきの管理者の操作 `MergeRequestVersionRefsPurge`（秘密の除去）。M3-0 に `fix/git-browse-reachability`（R1 の前に必須）を足す | §2、§12、計画 11 §5.1 |
 | 26 | HIGH: 復元で失効した資格情報が生き返る | `forge restore` は復元の前に発行されたすべてのセッションと個人のトークンを失効させ（利用者は再発行）、利用者の無効化の状態を Keycloak と監査の記録から当て直す。バックアップは暗号化し、ファイルの権限を絞る | ADR-0019 の Amendment（計画 11 P1）、計画 11 O1 |
 | 27 | MEDIUM: 承認者の有効性を承認した時点で決めている | 評価の時点で、有効・ロール・種類・ルールの承認できる人を読み直す。ルールの承認できる人かは `authorize()` でなく評価で決める（承認の後に変わるので） | §8 の 6 |
@@ -676,8 +676,8 @@ P1 の設計レビュー（`authz-matrix-auditor`・`git-protocol-reviewer`・`s
 | 37 | 再レビュー MEDIUM（git+security）: 到達の確認の費用 | 時間切れつき（時間切れ・busy は FG-GIT-0002 / 0004 で、届いたことにしない）、呼び出し元ごとの流量制限、`(repo, sha, refs の世代)` の短いキャッシュ、commit-graph を使ってよい。P6 に性能のテスト | §2、計画 11 §5.1 P6 |
 | 38 | 再レビュー LOW（authz）: 代理の deny の行がいつ入るか、運用の例外の一覧の検査 | 代理の資格情報の種類がまだ無いので、代理の deny の行は ADR-0025 の MR でこの ADR のすべての Action に入れる。ゲート `authz-coverage` が運用の例外の一覧を確かめることはエージェントモデルへの申し送り | §12、未決 |
 | 39 | 再レビュー LOW（git）: フェンスと再試行、遷移の条件、ソース削除のログ、衝突の一覧のあふれ、保守 | `update-ref` の直前に `now − executing_at` を照合の余裕と比べ、`update-ref` の時間切れは余裕より十分に短く。再試行はロックの下で行を読み直し `executing` のときだけ進む。tx1b の `queued → prepared` は `state='queued'` の条件つき。ソース削除は記録の前に `forge.review.merge_source_deleted_applied`、失敗は ref とエラーコードつきでログ。`merge-tree` の出力のあふれは衝突（衝突のない出力は 1 行）で 2.38 のテストに固定。計画の O3 に prune の猶予と「版の ref が gc の後も残る」テスト | §3、§4.2 の 5・6・10、計画 11 §5.5 O3 |
-| 40 | 再レビュー LOW（security）: 版の ref の削除の前提、資格情報、コミッターの規則の副作用 | 開いている MR は先にクローズかソースの書き換え（前提を満たさなければ FG-REVIEW-0014、runbook `secret-removal`）。`MergeRequestVersionRefsPurge` は `SessionOnly`（`admin` スコープのトークンも deny）。コミッターの規則の副作用（push の記録が保存期間を過ぎると止まる、別名でブランチを push したレビュアーはコミッターになる）は `uncounted_reason`（`committers_unknown` / `committer`）と runbook `merge-blocked` で見せる | §2、§8 の 3、§12 |
+| 40 | 再レビュー LOW（security）: 版の ref の削除の前提、資格情報、コミッターの規則の副作用 | 開いている MR は先にクローズかソースの書き換え（前提を満たさなければ FG-REVIEW-仮（PurgePreconditionFailed）、runbook `secret-removal`）。`MergeRequestVersionRefsPurge` は `SessionOnly`（`admin` スコープのトークンも deny）。コミッターの規則の副作用（push の記録が保存期間を過ぎると止まる、別名でブランチを push したレビュアーはコミッターになる）は `uncounted_reason`（`committers_unknown` / `committer`）と runbook `merge-blocked` で見せる | §2、§8 の 3、§12 |
 | 41 | 最終の再レビュー MEDIUM（security）: 復元でマージの条件の強化が戻る | 復元の当て直し（ADR-0019 Amendment の手順 2）は、監査の写しにある**権限や条件を狭める設定の変更をすべて**当て直す。少なくとも `protected_ref_merge_rules`・`approval_rules`・`merge_settings`・`codeowners_enforced`・必須チェック。`restore_reapplies_post_backup_role_changes` に含める（O1） | ADR-0019 Amendment |
 | 42 | 最終の再レビュー MEDIUM（security）: Purge の後に版の ref が作り直される | `merge_request_versions` に削除済みの印 `refs_purged_at` を持つ。確かめ直すジョブは印のある版の ref を作らない。テスト `purged_version_refs_are_never_recreated`（R1b） | §2 |
-| 43 | 最終の再レビュー LOW（security）: Purge 済みの MR の再オープン | Purge 済みの MR の再オープンは、ソースの head が Purge した版と違うときだけ許す（同じなら FG-REVIEW-0014）。runbook `secret-removal` にも書く（R1b） | §2、§12 |
+| 43 | 最終の再レビュー LOW（security）: Purge 済みの MR の再オープン | Purge 済みの MR の再オープンは、ソースの head が Purge した版と違うときだけ許す（同じなら FG-REVIEW-仮（PurgePreconditionFailed））。runbook `secret-removal` にも書く（R1b） | §2、§12 |
 | 44 | 最終の再レビュー LOW（security）: 管理者の印を外した後の戻し方 | runbook `backup-restore` に、`system` で印を付け直す `forge admin` のコマンドを名指しで書く（無ければ O1 で足す） | ADR-0019 Amendment |

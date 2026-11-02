@@ -20,7 +20,7 @@ A merge request was to be opened (`POST /api/v1/projects/{id}/merge-requests`), 
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason=open_exists` (the check under the lock, with `existing_iid`) or `reason=unique_index` (the backstop), `project_id` and `action` (`merge_request.opened` / `merge_request.reopened` / `merge_request.updated`); branch names are not logged. List the open merge requests with `GET /api/v1/projects/{id}/merge-requests?state=open` (`gstn mr list --project ID`).
+The log event carries `reason=open_exists` (the check under the lock, with `existing_iid`) or `reason=unique_index` (the backstop), `project_id` and `action` (`merge_request.opened` / `merge_request.reopened` / `merge_request.updated`); branch names are not logged. List the open merge requests with `GET /api/v1/projects/{id}/merge-requests?state=open` (`gstn mr list --project ID`). The event also carries `user_id` (who asked).
 
 ## 対処 (fix)
 
