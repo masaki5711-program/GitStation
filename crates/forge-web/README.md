@@ -194,6 +194,14 @@ admitted proof.
   FG-REPO-0023 `ref_not_found` before any git; the M2 commit / diff bodies are reused
   (`history::commit_body` / `diff_body`); `browse::Target::of` / `answer` take any context
   whose loader read the project row. Tests `tests/merge_request_version_routes.rs`.
+  M3 R3 (`routes/merge_requests/discussions.rs`): `GET …/{iid}/discussions`
+  (`MergeRequestRead`; `DiscussionsBody`, each thread with `outdated`), `POST
+  …/{iid}/discussions` (`StartDiscussion { body, position? { version, path, side, line } }`)
+  and `POST …/discussions/{discussion_id}/notes` (`AddNote`) as `MergeRequestComment`, `POST
+  …/discussions/{discussion_id}/resolve` / `…/unresolve` as `DiscussionResolve` (loader
+  `DiscussionToResolve`: project, merge request and thread; any missing is FG-REPO-0005).
+  Bodies are stored and returned as written (never rendered); FG-REVIEW-0004 (422) for a
+  position outside the version's diff. Tests `tests/merge_request_discussion_routes.rs`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body
