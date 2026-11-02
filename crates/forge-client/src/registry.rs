@@ -467,6 +467,52 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: MR_SCHEMA,
     },
     CommandSpec {
+        name: "mr versions",
+        summary: "List a merge request's versions (one per pushed head), oldest first, with their bases.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr versions --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/versions"],
+        output: r#"{"type":"object","required":["iid","versions"],"properties":{"iid":{"type":"integer"},"versions":{"type":"array","items":{"type":"object","required":["version","head_sha","base_sha","merge_base_sha","pushed_by","created_at","refs_purged"]}}}}"#,
+    },
+    CommandSpec {
+        name: "mr diff",
+        summary: "One version's diff (merge base to head), or two versions compared head to head with --from / --to (capped like browse compare; a purged version is not found).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--version", "option", false, "The version whose diff to show (or --from / --to)."),
+            arg("--from", "option", false, "The earlier version of a comparison (with --to)."),
+            arg("--to", "option", false, "The later version of a comparison (with --from)."),
+            arg("--patch", "flag", false, "Print the patches too (--json always has them)."),
+        ],
+        examples: &[
+            "gstn mr diff --project 7 --iid 3 --version 2 --patch",
+            "gstn mr diff --project 7 --iid 3 --from 1 --to 2 --json",
+        ],
+        scopes: &["read_api"],
+        routes: &[
+            "GET /api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
+            "GET /api/v1/projects/{id}/merge-requests/{iid}/compare",
+        ],
+        output: r#"{"type":"object","required":["commits","commits_truncated","diff"],"properties":{"version":{"type":"object","required":["version","head_sha"]},"from":{"type":"string"},"to":{"type":"string"},"from_version":{"type":"integer"},"to_version":{"type":"integer"},"from_sha":{"type":"string"},"to_sha":{"type":"string"},"commits":{"type":"array","items":{"type":"object","required":["oid","parents","subject"]}},"commits_truncated":{"type":"boolean"},"diff":{"type":"object","required":["files","truncated"]}}}"#,
+    },
+    CommandSpec {
+        name: "mr mergeability",
+        summary: "Whether a merge request can be merged, as last checked (unchecked / checking / can_be_merged / cannot_be_merged / check_failed, the reason and the conflicted files); never starts a check.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr mergeability --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/mergeability"],
+        output: r#"{"type":"object","required":["iid","status","reason","head_sha","checked_head_sha","checked_target_sha","checked_at","conflicts","conflicts_truncated"],"properties":{"status":{"type":"string","enum":["unchecked","checking","can_be_merged","cannot_be_merged","check_failed"]},"conflicts":{"type":"array","items":{"type":"string"}}}}"#,
+    },
+    CommandSpec {
         name: "namespace resolve",
         summary: "Which project, group or user a full path names (and its ids).",
         args: &[arg("path", "positional", true, "The full path, e.g. team/app.")],

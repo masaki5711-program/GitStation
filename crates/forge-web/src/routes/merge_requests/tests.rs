@@ -4,7 +4,7 @@
 use forge_core::{MergeRequestState, ProjectId};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::loaders::{branch_param, ids};
+use super::loaders::{branch_param, ids, version_ids};
 use super::{page_query, DEFAULT_LIMIT};
 
 fn rule(err: &ForgeError) -> String {
@@ -71,5 +71,43 @@ fn ids_and_queries_are_strict() {
         "limit=1&limit=2",
     ] {
         assert!(page_query(Some(bad)).is_err(), "{bad}");
+    }
+}
+
+/// M3 R2: `…/{iid}/versions/{version}/diff` — both numbers plain positive
+/// decimals, nothing after `/diff`.
+#[test]
+fn version_diff_paths_name_an_iid_and_a_version() {
+    assert_eq!(
+        version_ids("/api/v1/projects/7/merge-requests/3/versions/2/diff").expect("ids"),
+        (ProjectId::new(7), 3, 2)
+    );
+    for (raw, param) in [
+        (
+            "/api/v1/projects/7/merge-requests/3/versions/0/diff",
+            "version",
+        ),
+        (
+            "/api/v1/projects/7/merge-requests/3/versions/02/diff",
+            "version",
+        ),
+        (
+            "/api/v1/projects/7/merge-requests/3/versions/x/diff",
+            "version",
+        ),
+        (
+            "/api/v1/projects/7/merge-requests/3/versions/2/diff/x",
+            "version",
+        ),
+        (
+            "/api/v1/projects/7/merge-requests/3/versions/2/3/diff",
+            "version",
+        ),
+        ("/api/v1/projects/7/merge-requests/a/versions/2/diff", "iid"),
+        ("/api/v1/projects/x/merge-requests/3/versions/2/diff", "id"),
+    ] {
+        let err = version_ids(raw).expect_err(raw);
+        assert_eq!(err.code(), ErrorCode::RequestInvalid, "{raw}");
+        assert!(rule(&err).contains(param), "{raw}: {err}");
     }
 }

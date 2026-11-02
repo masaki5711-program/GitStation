@@ -407,20 +407,21 @@ pub(crate) struct Target {
 }
 
 impl Target {
-    pub(crate) fn of(
+    /// Also for a merge request route (M3 R2): any context whose loader
+    /// read the project row (its id is the proof's project).
+    pub(crate) fn of<R: forge_auth::ResourceCtx>(
         state: &AppState,
-        request: &Dispatched<ProjectCtx>,
+        request: &Dispatched<R>,
     ) -> Result<Self, ForgeError> {
         let Some(smart) = state.smart_http.as_ref() else {
             return Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("reason", "smart_http_unconfigured"));
         };
-        let project = *request.proof().id();
         let Some(record) = request.project() else {
             return Err(ForgeError::new(ErrorCode::Internal)
-                .with_context("reason", "browse_without_project_row")
-                .with_context("project_id", project.get()));
+                .with_context("reason", "browse_without_project_row"));
         };
+        let project = record.id;
         let repository = record.repository;
         if repository.state != RepositoryState::Ready {
             return Err(ForgeError::new(ErrorCode::RepositoryNotReady)
@@ -440,13 +441,14 @@ impl Target {
 
 /// Run one handler body; any failure is rendered with the request id and
 /// the route (the target's ids once known).
-pub(crate) async fn answer<T, F, Fut>(
+pub(crate) async fn answer<R, T, F, Fut>(
     state: AppState,
-    request: Dispatched<ProjectCtx>,
+    request: Dispatched<R>,
     route: &'static str,
     run: F,
 ) -> Response
 where
+    R: forge_auth::ResourceCtx,
     T: Serialize,
     F: FnOnce(Target, Option<String>) -> Fut,
     Fut: std::future::Future<Output = Result<T, ForgeError>>,

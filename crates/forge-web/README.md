@@ -186,7 +186,14 @@ admitted proof.
   (`MergeRequestVersionRefsPurge`, session only — every token is FG-AUTH-0002
   `session_required` —, administrators; body `{"versions": [n…]}` or `{}`; answers
   `{"iid","purged","already_purged"}`; FG-REVIEW-0002), tests
-  `tests/merge_request_purge_route.rs`.
+  `tests/merge_request_purge_route.rs`. M3 R2 (`routes/merge_requests/versions.rs`, all
+  `GET`, `MergeRequestRead`): `…/{iid}/versions` (`VersionsBody`), `…/versions/{version}/diff`
+  (`merge_base..head` through `Browser::merge_request_compare`; `VersionDiffBody`),
+  `…/compare?from=&to=` (versions, `head..head`; `VersionCompareBody`) and `…/mergeability`
+  (the stored status, never enqueues; `MergeabilityBody`); an unknown or purged version is
+  FG-REPO-0023 `ref_not_found` before any git; the M2 commit / diff bodies are reused
+  (`history::commit_body` / `diff_body`); `browse::Target::of` / `answer` take any context
+  whose loader read the project row. Tests `tests/merge_request_version_routes.rs`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body

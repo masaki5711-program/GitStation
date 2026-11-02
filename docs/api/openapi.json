@@ -1175,6 +1175,77 @@
         ],
         "type": "object"
       },
+      "MergeabilityBody": {
+        "additionalProperties": false,
+        "description": "What the mergeability check last stored.",
+        "properties": {
+          "checked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_head_sha": {
+            "description": "The head and target tip the last finished check looked at.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checked_target_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflicts": {
+            "description": "The conflicted paths (at most 100; `conflicts_truncated` beyond).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "conflicts_truncated": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "The merge request's current head (`null` before its first version).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Why: `conflict`, `target_missing`, `unrelated_histories`,\n`no_version`, `git_timeout`, `git_busy`, `git_failed` (`null` when\nmergeable or not checked yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "`unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or\n`check_failed`. Only `can_be_merged` lets a merge go ahead; every\nstatus but the two decisions means \"unknown\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "status",
+          "reason",
+          "head_sha",
+          "checked_head_sha",
+          "checked_target_sha",
+          "checked_at",
+          "conflicts",
+          "conflicts_truncated"
+        ],
+        "type": "object"
+      },
       "MoveBody": {
         "additionalProperties": false,
         "description": "A move as it was written.",
@@ -2111,6 +2182,146 @@
         ],
         "type": "object"
       },
+      "VersionBody": {
+        "additionalProperties": false,
+        "description": "One version of a merge request.",
+        "properties": {
+          "base_sha": {
+            "description": "The target's tip when the version was recorded (`null` until the\nversion job recorded it, or when the target was missing).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "merge_base_sha": {
+            "description": "The merge base of the head and `base_sha` (`null`: not recorded, or\nno common history). The version's diff starts here.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pushed_by": {
+            "description": "The pusher whose push made the version (`null` for the first\nversion of a new or reopened merge request).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "refs_purged": {
+            "description": "The version's refs were removed (secret removal): its diff is no\nlonger served.",
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "head_sha",
+          "base_sha",
+          "merge_base_sha",
+          "pushed_by",
+          "created_at",
+          "refs_purged"
+        ],
+        "type": "object"
+      },
+      "VersionCompareBody": {
+        "additionalProperties": false,
+        "description": "Two versions compared (`head(from)..head(to)`).",
+        "properties": {
+          "commits": {
+            "description": "The commits `to` has and `from` does not, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "type": "boolean"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody",
+            "description": "The tree diff from `from` to `to`."
+          },
+          "from_sha": {
+            "type": "string"
+          },
+          "from_version": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "to_sha": {
+            "type": "string"
+          },
+          "to_version": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_version",
+          "to_version",
+          "from_sha",
+          "to_sha",
+          "commits",
+          "commits_truncated",
+          "diff"
+        ],
+        "type": "object"
+      },
+      "VersionDiffBody": {
+        "additionalProperties": false,
+        "description": "One version's diff.",
+        "properties": {
+          "commits": {
+            "description": "The commits `to` has and `from` does not, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommitBody"
+            },
+            "type": "array"
+          },
+          "commits_truncated": {
+            "description": "More commits than the server lists (200).",
+            "type": "boolean"
+          },
+          "diff": {
+            "$ref": "#/components/schemas/DiffBody"
+          },
+          "from": {
+            "description": "The commit the diff starts at: `merge_base_sha`, or `base_sha` when\nthere was no common history.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The version's head.",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/VersionBody"
+          }
+        },
+        "required": [
+          "version",
+          "from",
+          "to",
+          "commits",
+          "commits_truncated",
+          "diff"
+        ],
+        "type": "object"
+      },
       "VersionRefsPurged": {
         "additionalProperties": false,
         "description": "What a purge did.",
@@ -2141,6 +2352,28 @@
           "iid",
           "purged",
           "already_purged"
+        ],
+        "type": "object"
+      },
+      "VersionsBody": {
+        "additionalProperties": false,
+        "description": "A merge request's versions, oldest first.",
+        "properties": {
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/VersionBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "iid",
+          "versions"
         ],
         "type": "object"
       },
@@ -3796,6 +4029,126 @@
         "x-forge-action": "MergeRequestClose"
       }
     },
+    "/api/v1/projects/{id}/merge-requests/{iid}/compare": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_compare",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required. The earlier version's number",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Required. The later version's number",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionCompareBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Compare two versions of a merge request, head to head (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_mergeability",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeabilityBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Whether a merge request can be merged, as last checked (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
     "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {
       "post": {
         "operationId": "post_api_v1_projects_id_merge_requests_iid_reopen",
@@ -3903,6 +4256,112 @@
         "summary": "Remove a merge request's hidden version refs (secret removal; an administrator's web session only)",
         "x-forge-action": "MergeRequestVersionRefsPurge",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/versions": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_versions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a merge request's versions, oldest first (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_versions_version_diff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDiffBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One version's diff, merge base to head (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
       }
     },
     "/api/v1/projects/{id}/protected-refs": {

@@ -252,3 +252,142 @@ fn mr_errors_keep_the_server_code_and_exit_class() {
     assert_eq!(o.err_json()["request_id"], "req-9");
     assert!(!o.stderr.contains(TOKEN));
 }
+
+const VERSIONS: &str = r#"{"iid":3,"versions":[{"version":1,"head_sha":"1111111111111111111111111111111111111111","base_sha":"0000000000000000000000000000000000000001","merge_base_sha":"0000000000000000000000000000000000000001","pushed_by":null,"created_at":"2026-11-02T00:00:00Z","refs_purged":true},{"version":2,"head_sha":"2222222222222222222222222222222222222222","base_sha":null,"merge_base_sha":null,"pushed_by":12,"created_at":"2026-11-02T01:00:00Z","refs_purged":false}]}"#;
+
+const COMPARED: &str = r#"{"from_version":1,"to_version":2,"from_sha":"1111111111111111111111111111111111111111","to_sha":"2222222222222222222222222222222222222222","commits":[{"oid":"2222222222222222222222222222222222222222","parents":["1111111111111111111111111111111111111111"],"author_name":"forge-test","author_email":"forge-test@example.invalid","authored_at":"2026-11-02T01:00:00+09:00","committer_name":"forge-test","committer_email":"forge-test@example.invalid","committed_at":"2026-11-02T01:00:00+09:00","subject":"synthetic"}],"commits_truncated":false,"diff":{"files":[{"status":"modified","old_path":"feature.txt","new_path":"feature.txt","old_mode":"100644","new_mode":"100644","old_oid":"a","new_oid":"b","similarity":null,"binary":false,"patch":"@@ -1 +1 @@\n-one\n+two\n","omitted":null}],"truncated":false}}"#;
+
+const MERGEABILITY: &str = r#"{"iid":3,"status":"cannot_be_merged","reason":"conflict","head_sha":"2222222222222222222222222222222222222222","checked_head_sha":"2222222222222222222222222222222222222222","checked_target_sha":"3333333333333333333333333333333333333333","checked_at":"2026-11-02T02:00:00Z","conflicts":["feature.txt","\u001b[31mevil"],"conflicts_truncated":true}"#;
+
+/// M3 R2: `mr versions`, `mr diff` (a version or two versions) and
+/// `mr mergeability` call their routes; server text is sanitized.
+#[test]
+fn mr_versions_diff_and_mergeability_call_their_routes() {
+    let srv = Mock::start(|r| {
+        if r.target.ends_with("/versions") {
+            ok(VERSIONS)
+        } else if r.target.contains("/mergeability") {
+            ok(MERGEABILITY)
+        } else {
+            ok(COMPARED)
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "versions", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(r.target, "/api/v1/projects/7/merge-requests/3/versions");
+    assert!(
+        o.stdout.contains("v1  1111") && o.stdout.contains("(purged)"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("v2  2222"), "{}", o.stdout);
+
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "diff",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--version",
+            "2",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        r.target,
+        "/api/v1/projects/7/merge-requests/3/versions/2/diff"
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "diff",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--from",
+            "1",
+            "--to",
+            "2",
+            "--patch",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        r.target,
+        "/api/v1/projects/7/merge-requests/3/compare?from=1&to=2"
+    );
+    assert!(o.stdout.contains("from v1 1111"), "{}", o.stdout);
+    assert!(o.stdout.contains("modified  feature.txt"), "{}", o.stdout);
+    assert!(o.stdout.contains("+two"), "{}", o.stdout);
+
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "mergeability", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(r.target, "/api/v1/projects/7/merge-requests/3/mergeability");
+    assert!(
+        o.stdout.contains("cannot_be_merged (conflict)"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("conflict: feature.txt"), "{}", o.stdout);
+    assert!(
+        !o.stdout.contains('\u{1b}'),
+        "terminal escapes are sanitized"
+    );
+    assert!(o.stdout.contains("more conflicted files"), "{}", o.stdout);
+
+    // Neither a version nor a range, or half a range: refused before any
+    // request.
+    let before = srv.seen().len();
+    for args in [
+        vec!["mr", "diff", "--project", "7", "--iid", "3"],
+        vec!["mr", "diff", "--project", "7", "--iid", "3", "--from", "1"],
+        vec![
+            "mr",
+            "diff",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--version",
+            "1",
+            "--from",
+            "1",
+            "--to",
+            "2",
+        ],
+        vec![
+            "mr",
+            "diff",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--version",
+            "0",
+        ],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_eq!(o.code, 2, "{args:?}: {}", o.stderr);
+    }
+    assert_eq!(srv.seen().len(), before);
+}

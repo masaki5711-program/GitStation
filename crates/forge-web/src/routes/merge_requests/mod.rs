@@ -4,7 +4,9 @@
 //! `POST …/merge-requests/{iid}/close`, `…/reopen`, and (M3 R1b) the
 //! administrator's `POST …/merge-requests/{iid}/version-refs/purge`
 //! (`MergeRequestVersionRefsPurge`: a web session only, ADR-0024 §2;
-//! runbook `secret-removal`). Reading and listing are
+//! runbook `secret-removal`), and (M3 R2, `versions.rs`) the reads
+//! `GET …/{iid}/versions`, `…/versions/{version}/diff`, `…/compare` and
+//! `…/mergeability` (`MergeRequestRead`). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -38,10 +40,17 @@ use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
 mod loaders;
+mod versions;
 
 pub use loaders::{
-    MergeRequestOf, MergeRequestToClose, MergeRequestToPurge, MergeRequestToReopen,
-    MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest,
+    MergeRequestOf, MergeRequestRead, MergeRequestToClose, MergeRequestToPurge,
+    MergeRequestToReopen, MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest, VersionDiffOf,
+    COMPARE_OF, MERGEABILITY_OF, VERSIONS_OF,
+};
+pub use versions::{
+    compare, mergeability, version_diff, versions, MergeabilityBody, VersionBody,
+    VersionCompareBody, VersionDiffBody, VersionsBody, COMPARE, COMPARE_QUERY, MERGEABILITY,
+    VERSIONS, VERSION_DIFF,
 };
 
 /// `GET` / `POST` a project's merge requests.

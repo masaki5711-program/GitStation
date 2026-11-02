@@ -90,6 +90,10 @@ gstn mr view --project 7 --iid 3
 gstn mr edit --project 7 --iid 3 [--title …] [--description …] [--target BRANCH] [--draft | --ready]
 gstn mr close --project 7 --iid 3
 gstn mr reopen --project 7 --iid 3
+gstn mr versions --project 7 --iid 3                      # 版の一覧（M3 R2）
+gstn mr diff --project 7 --iid 3 --version 2 [--patch]     # 版の差分（merge-base..head）
+gstn mr diff --project 7 --iid 3 --from 1 --to 2 [--patch] # 版どうしの比較（head..head）
+gstn mr mergeability --project 7 --iid 3                  # マージできるか（最後の確認の結果。確認は始めない）
 ```
 
 `--iid` はプロジェクトの中の番号（`!3`）。ブランチ名・タイトル・説明は JSON の本文で送り、パスには入れない。

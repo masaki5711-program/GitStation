@@ -10,6 +10,9 @@ use forge_auth::{
 use forge_core::{parse_positive_id, MergeRequestState, ProjectId, ProjectRecord, RefName, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 
+use super::versions::{
+    COMPARE_SUFFIX, DIFF_SUFFIX, MERGEABILITY_SUFFIX, VERSIONS_INFIX, VERSIONS_SUFFIX,
+};
 use super::{review, CreateMergeRequest, PurgeVersionRefs, UpdateMergeRequest, PURGE_SUFFIX};
 use crate::app::AppState;
 use crate::body::param_invalid;
@@ -45,6 +48,30 @@ pub(super) fn ids(raw_path: &str, suffix: &str) -> Result<(ProjectId, i64), Forg
         .and_then(parse_positive_id)
         .ok_or_else(|| param_invalid("iid", "not_positive_decimal"))?;
     Ok((ProjectId::new(id), iid))
+}
+
+/// The ids and the version of
+/// `/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff`
+/// (raw path; M3 R2). The version is a plain positive decimal
+/// (`FG-WEB-0006 param_invalid param=version`).
+pub(super) fn version_ids(raw_path: &str) -> Result<(ProjectId, i64, i64), ForgeError> {
+    let (id, rest) = raw_path
+        .strip_prefix(PREFIX)
+        .and_then(|rest| rest.split_once("/merge-requests/"))
+        .ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
+    let id = parse_positive_id(id).ok_or_else(|| param_invalid("id", "not_positive_decimal"))?;
+    let (iid, tail) = rest
+        .split_once(VERSIONS_INFIX)
+        .ok_or_else(|| param_invalid("iid", "not_positive_decimal"))?;
+    let iid = parse_positive_id(iid)
+        .filter(|_| !iid.contains('/'))
+        .ok_or_else(|| param_invalid("iid", "not_positive_decimal"))?;
+    let version = tail
+        .strip_suffix(DIFF_SUFFIX)
+        .filter(|v| !v.contains('/'))
+        .and_then(parse_positive_id)
+        .ok_or_else(|| param_invalid("version", "not_positive_decimal"))?;
+    Ok((ProjectId::new(id), iid, version))
 }
 
 fn collection_id(raw_path: &str) -> Result<ProjectId, ForgeError> {
@@ -91,7 +118,17 @@ async fn stored_lookup(
     viewer: Option<UserId>,
     edit: MergeRequestEdit,
 ) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
-    let (id, iid) = ids(parts.uri.path(), suffix)?;
+    let ids = ids(parts.uri.path(), suffix)?;
+    lookup_ids(state, ids, viewer, edit).await
+}
+
+/// [`stored_lookup`] on ids already parsed.
+async fn lookup_ids(
+    state: &AppState,
+    (id, iid): (ProjectId, i64),
+    viewer: Option<UserId>,
+    edit: MergeRequestEdit,
+) -> Result<Lookup<MergeRequestCtx>, ForgeError> {
     let Some((project, record)) = project_of(state, id, viewer).await? else {
         return Ok(absent());
     };
@@ -284,5 +321,53 @@ impl BodyLoader<AppState, PurgeVersionRefs> for MergeRequestToPurge {
             viewer,
             MergeRequestEdit::default(),
         ))
+    }
+}
+
+/// A read route on stored merge request `{iid}` whose path ends in a fixed
+/// suffix (M3 R2: `/versions`, `/compare`, `/mergeability`).
+pub struct MergeRequestRead(pub &'static str);
+
+/// `GET …/versions`.
+pub const VERSIONS_OF: MergeRequestRead = MergeRequestRead(VERSIONS_SUFFIX);
+/// `GET …/compare`.
+pub const COMPARE_OF: MergeRequestRead = MergeRequestRead(COMPARE_SUFFIX);
+/// `GET …/mergeability`.
+pub const MERGEABILITY_OF: MergeRequestRead = MergeRequestRead(MERGEABILITY_SUFFIX);
+
+impl Loader<AppState> for MergeRequestRead {
+    type Ctx = MergeRequestCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, MergeRequestCtx> {
+        Box::pin(stored_lookup(
+            state,
+            parts,
+            self.0,
+            viewer,
+            MergeRequestEdit::default(),
+        ))
+    }
+}
+
+/// `GET …/versions/{version}/diff` (M3 R2): the merge request; the version
+/// is read again by the handler after the decision.
+pub struct VersionDiffOf;
+
+impl Loader<AppState> for VersionDiffOf {
+    type Ctx = MergeRequestCtx;
+    fn load<'a>(
+        &'a self,
+        state: &'a AppState,
+        parts: &'a Parts,
+        viewer: Option<UserId>,
+    ) -> LoadFuture<'a, MergeRequestCtx> {
+        Box::pin(async move {
+            let (id, iid, _version) = version_ids(parts.uri.path())?;
+            lookup_ids(state, (id, iid), viewer, MergeRequestEdit::default()).await
+        })
     }
 }
