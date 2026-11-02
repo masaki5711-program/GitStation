@@ -76,13 +76,14 @@ async fn browser_probe_accepts_only_an_existing_branch() {
     let probe: &dyn BranchProbe = &browser;
     let caller = "user:1";
 
-    probe
-        .branch_exists(id, &name("refs/heads/feature"), caller)
+    let head = probe
+        .branch_head(id, &name("refs/heads/feature"), caller)
         .await
         .expect("the branch exists");
+    assert_eq!(head.as_str(), commit, "the head is the branch tip");
     for missing in ["refs/heads/v1", "refs/heads/nope", "refs/heads/feature/x"] {
         let err = probe
-            .branch_exists(id, &name(missing), caller)
+            .branch_head(id, &name(missing), caller)
             .await
             .expect_err(missing);
         assert_eq!(
@@ -96,7 +97,7 @@ async fn browser_probe_accepts_only_an_existing_branch() {
     // A repository that is not there: its own error, never "exists" and
     // never mistaken for a missing branch.
     let err = probe
-        .branch_exists(RepoId::new(999), &name("refs/heads/feature"), caller)
+        .branch_head(RepoId::new(999), &name("refs/heads/feature"), caller)
         .await
         .expect_err("no repository");
     assert_ne!(err.code(), ErrorCode::RepositoryPathNotResolved, "{err}");
@@ -106,7 +107,7 @@ async fn browser_probe_accepts_only_an_existing_branch() {
     std::fs::remove_dir_all(path.join("refs")).expect("break refs");
     browser.invalidate(id);
     let err = probe
-        .branch_exists(id, &name("refs/heads/feature"), caller)
+        .branch_head(id, &name("refs/heads/feature"), caller)
         .await
         .expect_err("broken repository");
     assert_ne!(err.code(), ErrorCode::RepositoryPathNotResolved, "{err}");

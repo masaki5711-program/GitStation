@@ -1375,3 +1375,18 @@ cause = "A merge request was to be opened (`POST /api/v1/projects/{id}/merge-req
 diagnosis = "The log event carries `reason=open_exists` (the check under the lock, with `existing_iid`) or `reason=unique_index` (the backstop), `project_id` and `action` (`merge_request.opened` / `merge_request.reopened` / `merge_request.updated`); branch names are not logged. List the open merge requests with `GET /api/v1/projects/{id}/merge-requests?state=open` (`gstn mr list --project ID`). The event also carries `user_id` (who asked)."
 fix = "Use (or close) the existing open merge request for those branches; then open or reopen the other one."
 test = "a_second_open_merge_request_for_the_same_branches_is_refused"
+
+# ── M3 R1b: merge request versions (ADR-0024 §2; registration order) ──
+[[error]]
+code = "FG-REVIEW-0002"
+name = "PurgePreconditionFailed"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストの状態では版の参照を削除・再オープンできません。先にマージリクエストをクローズするか、ソースブランチを書き換えてください。"
+user_message_en = "The merge request's state does not allow this: close the merge request or rewrite its source branch first."
+user_message_id = "Status merge request tidak mengizinkan ini: tutup merge request atau tulis ulang branch sumbernya terlebih dahulu."
+cause = "Either an administrator asked to purge the hidden version refs of an open merge request whose current head is one of the versions to purge (`POST /api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge`, `reason=purge_requires_closed_or_rewritten`: the next version job would bring the same commit back as the head), or a merge request whose version refs were purged was to be reopened while its source branch still points at a purged commit (`POST …/merge-requests/{iid}/reopen`, `reason=reopen_at_purged_head`; ADR-0024 closing table #43). A state refusal, not a permission one: nothing was written and no ref was touched."
+diagnosis = "The log event carries `reason`, `project_id`, `iid` and `merge_request_id` (and `version` for the purged head). Read the merge request (`gstn mr view IID --project ID`): `state` and `head_sha`. Runbook `secret-removal` lists the order of the steps."
+fix = "Close the merge request (or force-push the source branch without the secret, which adds a new version), then purge again; to reopen a purged merge request, first move the source branch away from the purged commit."
+test = "purge_of_an_open_merge_requests_current_head_is_refused"
+runbook = "secret-removal"

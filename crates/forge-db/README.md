@@ -266,6 +266,22 @@ connection, mapping driver errors to registered codes, migrations
   Every change writes one `merge_request.*` audit row (resource `project`) and one event
   (aggregate `merge_request`, integration class) per transition, deduplicated by
   `<prefix>:<merge_request_id>:<revision>` (`revision` counts the row's changes).
+  M3 R1b (versions, ADR-0024 §1, §2; table `merge_request_versions`, audited on the project,
+  guard `merge_request_versions_guard`): `record_mr_version(&Db, ctx, mr, head, pushed_by) ->
+  VersionOutcome` (the version job's write: row FIRST under the merge request's lock, `max +
+  1`, `merge_request.pushed` deduplicated by `merge_request_pushed:<id>:<head_sha>`; an older
+  head again is the audit-only `merge_request.head_restored`; `AlreadyHead` / `PurgedHead` /
+  `NotOpen` / `Gone` write nothing), `list_versions`, `refresh_target`, `refresh_job` /
+  `refresh_payload` (job `merge_request.refresh`, dedup `mr_refresh:<id>:opened` /
+  `reopened:<rev>` / `push:<seq>`), `with_versions_locked` (version rows `FOR SHARE` around
+  forge-review's ref sync), `purge_mr_version_refs_decided` (marks `refs_purged_at`, audit-only
+  `merge_request.version_refs_purged`; FG-REVIEW-0002 `purge_requires_closed_or_rewritten`).
+  `open_mr_decided` / `reopen_mr_decided` enqueue the version job; `reopen_mr_decided` takes the
+  source's head and refuses a purged one (FG-REVIEW-0002 `reopen_at_purged_head`). The
+  subscriber `MergeRequestRefresh` (`merge-request-refresh`, independent) enqueues the job on
+  `repository.pushed` for the open merge requests from the moved branches, or every open one
+  when `refs_truncated`. The project purge deletes the versions. Tests
+  `review/version_tests.rs`.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

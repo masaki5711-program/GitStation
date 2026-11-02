@@ -206,6 +206,7 @@ async fn a_second_open_merge_request_for_the_same_branches_is_refused() {
         p,
         first.iid,
         alice,
+        None,
         |_| Ok(()),
     )
     .await
@@ -303,9 +304,11 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
             }
             MergeRequestTransition::Reopen => {
                 let (done, _, ()) =
-                    reopen_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, |_| Ok(()))
-                        .await
-                        .expect("reopen");
+                    reopen_mr_decided(&t.db, &ctx(&request), p, drafted.iid, alice, None, |_| {
+                        Ok(())
+                    })
+                    .await
+                    .expect("reopen");
                 assert_eq!(done, StateOutcome::Changed);
             }
             MergeRequestTransition::DraftToggle => {
@@ -339,6 +342,14 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     done,
                     EditOutcome::Changed(vec![EventType::MergeRequestUpdated])
                 );
+            }
+            // M3 R1b: the version job (actor system) adds a version.
+            MergeRequestTransition::Push => {
+                let head = forge_core::ObjectId::parse(&"a".repeat(40)).expect("oid");
+                let done = record_mr_version(&t.db, &system(&request), drafted.id, &head, None)
+                    .await
+                    .expect("push");
+                assert_eq!(done, VersionOutcome::Added { version: 1 });
             }
         }
         let events = events_of(&t, &request).await;
@@ -472,6 +483,7 @@ async fn close_and_reopen_set_their_fields_and_repeat_as_unchanged() {
         p,
         1,
         alice,
+        None,
         |_| Ok(()),
     )
     .await
@@ -482,12 +494,17 @@ async fn close_and_reopen_set_their_fields_and_repeat_as_unchanged() {
         (open_again.state, open_again.closed_at, open_again.closed_by),
         (MergeRequestState::Open, None, None)
     );
-    let (same, _, ()) =
-        reopen_mr_decided(&t.db, &as_user(alice, "req-reopen-2"), p, 1, alice, |_| {
-            Ok(())
-        })
-        .await
-        .expect("again");
+    let (same, _, ()) = reopen_mr_decided(
+        &t.db,
+        &as_user(alice, "req-reopen-2"),
+        p,
+        1,
+        alice,
+        None,
+        |_| Ok(()),
+    )
+    .await
+    .expect("again");
     assert_eq!(same, StateOutcome::Unchanged);
     // An absent iid is FG-REPO-0005 after decide.
     let err = close_mr_decided(&t.db, &as_user(alice, "req-none"), p, 9, alice, |_| Ok(()))

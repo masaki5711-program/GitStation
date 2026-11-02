@@ -3,7 +3,7 @@
 //! scripted probe instead of a repository).
 #![allow(dead_code, clippy::expect_used, clippy::panic)]
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use forge_auth::{
@@ -12,8 +12,8 @@ use forge_auth::{
 };
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    MergeRequestState, ProjectAccessLoader, ProjectId, ProjectRepository, RefName, RepoId,
-    RepositoryState, RequestId, Role, UserId,
+    MergeRequestState, ObjectId, ProjectAccessLoader, ProjectId, ProjectRepository, RefName,
+    RepoId, RepositoryState, RequestId, Role, UserId,
 };
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::groups::{self, CreatedGroup, NewGroup};
@@ -23,14 +23,21 @@ use forge_db::users::{self, NewUser};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_review::{BranchProbe, Review, ReviewRequest};
 
-/// The branches that exist (full names), changeable during a test.
+/// The head every scripted branch starts at.
+pub const DEFAULT_HEAD: &str = "1111111111111111111111111111111111111111";
+
+/// The branches that exist (full names) and their heads, changeable during
+/// a test.
 #[derive(Default)]
-pub struct Branches(pub Mutex<BTreeSet<String>>);
+pub struct Branches(pub Mutex<BTreeMap<String, String>>);
 
 impl Branches {
     pub fn with(names: &[&str]) -> Arc<Self> {
         Arc::new(Self(Mutex::new(
-            names.iter().map(|n| format!("refs/heads/{n}")).collect(),
+            names
+                .iter()
+                .map(|n| (format!("refs/heads/{n}"), DEFAULT_HEAD.to_owned()))
+                .collect(),
         )))
     }
 
@@ -40,22 +47,29 @@ impl Branches {
             .expect("lock")
             .remove(&format!("refs/heads/{name}"));
     }
+
+    /// Move (or create) `name` to `head`.
+    pub fn set(&self, name: &str, head: &str) {
+        self.0
+            .lock()
+            .expect("lock")
+            .insert(format!("refs/heads/{name}"), head.to_owned());
+    }
 }
 
 impl BranchProbe for Branches {
-    fn branch_exists<'a>(
+    fn branch_head<'a>(
         &'a self,
         _repo: RepoId,
         branch: &'a RefName,
         _caller: &'a str,
-    ) -> LookupFuture<'a, ()> {
-        let found = self.0.lock().expect("lock").contains(branch.as_str());
+    ) -> LookupFuture<'a, ObjectId> {
+        let found = self.0.lock().expect("lock").get(branch.as_str()).cloned();
         Box::pin(async move {
-            if found {
-                Ok(())
-            } else {
-                Err(ForgeError::new(ErrorCode::RepositoryPathNotResolved)
-                    .with_context("reason", "ref_not_found"))
+            match found {
+                Some(head) => Ok(ObjectId::parse(&head).expect("scripted head")),
+                None => Err(ForgeError::new(ErrorCode::RepositoryPathNotResolved)
+                    .with_context("reason", "ref_not_found")),
             }
         })
     }

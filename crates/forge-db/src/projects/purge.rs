@@ -444,7 +444,16 @@ async fn finish_steps(
     )
     .await?;
     // M3 R1a (plan 11 §11.8): the merge requests and their counter go
-    // with the project (the project.purged row covers the audited deletes).
+    // with the project (the project.purged row covers the audited deletes);
+    // M3 R1b: their versions first (they reference the merge requests; the
+    // hidden refs go with the repository directory).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_versions WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_versions",
+    )
+    .await?;
     let merge_requests_removed = delete_rows(
         tx,
         "DELETE FROM forge.merge_requests WHERE project_id = $1",

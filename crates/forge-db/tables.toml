@@ -37,6 +37,8 @@ guarded_functions = [
     "web_sessions_purge_guard",
     # M3 R1a: merged is final; the identity of a merge request never changes.
     "merge_requests_state_guard",
+    # M3 R1b: a version's identity never changes; purge marks are final.
+    "merge_request_versions_guard",
 ]
 
 [tables.events]
@@ -252,6 +254,17 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 R1a ──
+
+# ── M3 R1b: merge request versions (ADR-0024 §1, §2), audited on their project ──
+[tables.merge_request_versions]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 R1b ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

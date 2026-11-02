@@ -2,7 +2,11 @@
 //! forge-review lives here). The reads the route loaders and the list use
 //! ([`get`], [`list`]), and the commands decided inside their transaction
 //! (`commands.rs`): [`open_mr_decided`], [`edit_mr_decided`],
-//! [`close_mr_decided`], [`reopen_mr_decided`].
+//! [`close_mr_decided`], [`reopen_mr_decided`]; M3 R1b: the versions
+//! (`versions.rs`: the version job's [`record_mr_version`]), their hidden
+//! refs (`version_refs.rs`: [`with_versions_locked`] and the
+//! administrator's [`purge_mr_version_refs_decided`]) and the
+//! `merge-request-refresh` subscriber (`refresh.rs`).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -27,6 +31,18 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::{read_query_error, Db};
 
 mod commands;
+mod refresh;
+mod version_refs;
+pub mod versions;
+
+pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
+pub use version_refs::{
+    purge_mr_version_refs_decided, with_versions_locked, PurgeOutcome, VersionsSnapshot,
+};
+pub use versions::{
+    list_versions, record_mr_version, refresh_job, refresh_payload, refresh_target, RefreshRequest,
+    RefreshTarget, RefreshTrigger, StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+};
 
 pub use commands::{
     close_mr_decided, edit_mr_decided, open_mr_decided, reopen_mr_decided, EditOutcome,
@@ -188,3 +204,5 @@ pub async fn list(
 mod race_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod version_tests;

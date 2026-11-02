@@ -125,7 +125,7 @@ async fn concurrent_close_and_reopen_stay_consistent() {
             let outcome = if i % 2 == 0 {
                 close_mr_decided(&db, &ctx, p, 1, alice, |_| Ok(())).await
             } else {
-                reopen_mr_decided(&db, &ctx, p, 1, alice, |_| Ok(())).await
+                reopen_mr_decided(&db, &ctx, p, 1, alice, None, |_| Ok(())).await
             };
             outcome.map(|(done, stored, ())| (done, stored.revision))
         });
