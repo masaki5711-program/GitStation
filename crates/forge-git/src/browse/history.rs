@@ -263,6 +263,7 @@ impl Browser {
         path: &RepoPath,
         limit: usize,
         after: Option<&LogCursor>,
+        caller: &str,
     ) -> Result<CommitPage, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let limit = limit.clamp(1, self.limits.max_log_page.max(1));
@@ -270,7 +271,7 @@ impl Browser {
         if after.is_some() {
             // A cursor names its own tip: it must be a commit of this
             // repository (not a blob or an id that does not exist).
-            self.commit_of(repo, &tip, deadline).await?;
+            self.commit_of(repo, &tip, caller, deadline).await?;
         }
         // The anchor (the previous page's last commit) is read again and
         // dropped: it proves the cursor belongs to this tip and path.
@@ -331,10 +332,15 @@ impl Browser {
 
     /// The commit `oid` (a full id) with its message and its diff against
     /// the first parent.
-    pub async fn commit(&self, repo: RepoId, oid: &str) -> Result<CommitDetail, ForgeError> {
+    pub async fn commit(
+        &self,
+        repo: RepoId,
+        oid: &str,
+        caller: &str,
+    ) -> Result<CommitDetail, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let oid = object_id(oid).ok_or_else(|| not_resolved("ref_not_found"))?;
-        self.commit_of(repo, &oid, deadline).await?;
+        self.commit_of(repo, &oid, caller, deadline).await?;
         let dir = self.storage.existing(repo)?;
         let (out, cut) = {
             let _slot = self.claim(repo)?;

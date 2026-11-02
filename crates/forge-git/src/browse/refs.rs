@@ -1,16 +1,14 @@
 //! Refs and revision resolution (see [`super`]): the ref list, its cache,
 //! `?ref=` / `ref/path…` resolution and `for-each-ref` parsing.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::PoisonError;
 
 use forge_core::{RefName, RepoId};
-use forge_errors::{ErrorCode, ForgeError};
+use forge_errors::ForgeError;
 use tokio::time::Instant;
 
 use super::path::RepoPath;
-use super::reach::ReachRoots;
 use super::{not_resolved, object_id, Browser, Cached, Deadline, REFS_OUTPUT_BYTES};
 
 /// A browsable ref's kind.
@@ -148,9 +146,9 @@ impl Browser {
         if let Some(list) = self.cached(repo) {
             return Ok(list);
         }
-        let epoch = self.cache.epoch.load(Ordering::SeqCst);
+        let epoch = self.epoch(repo);
         let list = Arc::new(self.load_refs(repo, deadline).await?);
-        if self.cache.epoch.load(Ordering::SeqCst) == epoch {
+        if self.epoch(repo) == epoch {
             self.store(repo, Arc::clone(&list));
         }
         Ok(list)
@@ -250,67 +248,6 @@ impl Browser {
         Ok(list)
     }
 
-    /// The commit a full id names, reachable from a branch or a tag
-    /// (`not_a_commit` / `ref_not_found`; M3 P6, `reach.rs`).
-    pub(super) async fn commit_of(
-        &self,
-        repo: RepoId,
-        id: &str,
-        deadline: Deadline,
-    ) -> Result<String, ForgeError> {
-        self.commit_reachable_from(repo, id, &ReachRoots::branches_and_tags(), deadline)
-            .await
-    }
-
-    /// The commit a full id names, if a ref of `roots` reaches it. An
-    /// unreachable commit is `ref_not_found`, exactly like a missing id
-    /// (ADR-0024 §2: existence never leaks); only the log says
-    /// `unreachable`.
-    pub(super) async fn commit_reachable_from(
-        &self,
-        repo: RepoId,
-        id: &str,
-        roots: &ReachRoots,
-        deadline: Deadline,
-    ) -> Result<String, ForgeError> {
-        let commit = self.commit_exists(repo, id, deadline).await?;
-        if self.reachable(repo, &commit, roots, deadline).await? {
-            Ok(commit)
-        } else {
-            Err(not_resolved("ref_not_found").with_context("unreachable", true))
-        }
-    }
-
-    /// The commit a full id names, reachable or not.
-    async fn commit_exists(
-        &self,
-        repo: RepoId,
-        id: &str,
-        deadline: Deadline,
-    ) -> Result<String, ForgeError> {
-        let dir = self.storage.existing(repo)?;
-        let _slot = self.claim(repo)?;
-        let out = self
-            .git
-            .command("cat-file")
-            .arg("--batch-check=%(objectname) %(objecttype)")
-            .repo(&dir)
-            .stdin(format!("{id}\n").into_bytes())
-            .timeout(deadline.left()?)
-            .output()
-            .await?;
-        let text = out.stdout_str();
-        let mut fields = text.split_whitespace();
-        match (fields.next(), fields.next()) {
-            (Some(found), Some("commit")) if found == id => Ok(id.to_owned()),
-            (Some(_), Some("missing")) => Err(not_resolved("ref_not_found")),
-            (None, _) => Err(ForgeError::new(ErrorCode::GitProcessFailed)
-                .with_context("reason", "batch_check_empty")
-                .with_context("repo_id", repo.get())),
-            _ => Err(not_resolved("not_a_commit")),
-        }
-    }
-
     /// A ref (resolved from the list) to its revision.
     fn rev_of(entry: &RefEntry) -> Result<ResolvedRev, ForgeError> {
         let Some(commit) = entry.commit.clone() else {
@@ -341,10 +278,15 @@ impl Browser {
 
     /// A `?ref=` value: a full commit id, a full `refs/heads/…` /
     /// `refs/tags/…` name, or a short name (branch first, then tag).
-    pub async fn resolve_ref(&self, repo: RepoId, raw: &str) -> Result<ResolvedRev, ForgeError> {
+    pub async fn resolve_ref(
+        &self,
+        repo: RepoId,
+        raw: &str,
+        caller: &str,
+    ) -> Result<ResolvedRev, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         if let Some(id) = object_id(raw) {
-            let commit = self.commit_of(repo, &id, deadline).await?;
+            let commit = self.commit_of(repo, &id, caller, deadline).await?;
             return Ok(ResolvedRev {
                 target: Target::Commit,
                 commit,
@@ -377,6 +319,7 @@ impl Browser {
         &self,
         repo: RepoId,
         segments: &[S],
+        caller: &str,
     ) -> Result<ResolvedSpec, ForgeError> {
         let deadline = Deadline::new(self.limits.timeout);
         let Some(first) = segments.first() else {
@@ -385,7 +328,7 @@ impl Browser {
         if let Some(id) = object_id(first.as_ref()) {
             let path = RepoPath::from_segments(segments.get(1..).unwrap_or_default())
                 .map_err(|_| not_resolved("path_not_found"))?;
-            let commit = self.commit_of(repo, &id, deadline).await?;
+            let commit = self.commit_of(repo, &id, caller, deadline).await?;
             return Ok(ResolvedSpec {
                 rev: ResolvedRev {
                     target: Target::Commit,

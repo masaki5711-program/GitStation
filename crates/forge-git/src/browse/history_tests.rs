@@ -85,7 +85,7 @@ async fn commits_page_by_a_keyset_cursor_in_log_order() {
     let mut pages = 0;
     loop {
         let page = b
-            .commits(f.id, tip, &root(), 2, after.as_ref())
+            .commits(f.id, tip, &root(), 2, after.as_ref(), "user:1")
             .await
             .expect("page");
         pages += 1;
@@ -107,7 +107,10 @@ async fn commits_page_by_a_keyset_cursor_in_log_order() {
     assert_eq!(seen, expected, "no commit lost or repeated");
 
     // The metadata is filled in.
-    let page = b.commits(f.id, tip, &root(), 1, None).await.expect("one");
+    let page = b
+        .commits(f.id, tip, &root(), 1, None, "user:1")
+        .await
+        .expect("one");
     let c = &page.commits[0];
     assert_eq!(c.oid, *tip);
     assert_eq!(c.subject, "commit 5");
@@ -117,7 +120,10 @@ async fn commits_page_by_a_keyset_cursor_in_log_order() {
     assert!(c.authored_at.contains('T'), "{}", c.authored_at);
     assert!(page.next.is_some());
     // A page that ends exactly at the history has no cursor.
-    let all = b.commits(f.id, tip, &root(), 5, None).await.expect("all");
+    let all = b
+        .commits(f.id, tip, &root(), 5, None, "user:1")
+        .await
+        .expect("all");
     assert_eq!((all.commits.len(), all.next), (5, None));
 }
 
@@ -130,10 +136,13 @@ async fn a_path_limits_the_history_and_its_cursor() {
     let path = RepoPath::parse("b.txt").unwrap();
     let expected = log_ids(&f.path, tip, &["--", "b.txt"]);
     assert_eq!(expected.len(), 3, "commits 1, 2 and 4 changed b.txt");
-    let first = b.commits(f.id, tip, &path, 2, None).await.expect("p1");
+    let first = b
+        .commits(f.id, tip, &path, 2, None, "user:1")
+        .await
+        .expect("p1");
     let next = first.next.clone().expect("more");
     let second = b
-        .commits(f.id, tip, &path, 2, Some(&next))
+        .commits(f.id, tip, &path, 2, Some(&next), "user:1")
         .await
         .expect("p2");
     let all: Vec<String> = first
@@ -148,7 +157,7 @@ async fn a_path_limits_the_history_and_its_cursor() {
     // The same cursor with another path is refused: the commit it names
     // is not where it says.
     let e = b
-        .commits(f.id, tip, &root(), 2, Some(&next))
+        .commits(f.id, tip, &root(), 2, Some(&next), "user:1")
         .await
         .expect_err("another path");
     assert_eq!(e.code(), ErrorCode::RequestInvalid);
@@ -158,7 +167,7 @@ async fn a_path_limits_the_history_and_its_cursor() {
         ..next.clone()
     };
     let e = b
-        .commits(f.id, tip, &path, 2, Some(&forged))
+        .commits(f.id, tip, &path, 2, Some(&forged), "user:1")
         .await
         .expect_err("forged last");
     assert_eq!(reason(&e), "cursor_invalid");
@@ -175,6 +184,7 @@ async fn a_path_limits_the_history_and_its_cursor() {
                 last: next.last.clone(),
                 skip: 1,
             }),
+            "user:1",
         )
         .await
         .expect_err("tree tip");
@@ -217,7 +227,10 @@ async fn option_like_paths_and_ids_are_names_not_options() {
     let b = f.browser(BrowseLimits::default());
     for name in ["-n", "--output=x", "--all"] {
         let path = RepoPath::parse(name).unwrap();
-        let page = b.commits(f.id, &c, &path, 5, None).await.expect(name);
+        let page = b
+            .commits(f.id, &c, &path, 5, None, "user:1")
+            .await
+            .expect(name);
         let want = usize::from(name != "--all");
         assert_eq!(page.commits.len(), want, "{name}");
     }
@@ -225,9 +238,12 @@ async fn option_like_paths_and_ids_are_names_not_options() {
     assert!(!f.path.join("--output=x").exists());
     // Ids that are not full hex never reach git.
     for bad in ["--output=x", "-n", "HEAD", &c[..39]] {
-        let e = b.commits(f.id, bad, &root(), 5, None).await.expect_err(bad);
+        let e = b
+            .commits(f.id, bad, &root(), 5, None, "user:1")
+            .await
+            .expect_err(bad);
         assert_eq!(e.code(), ErrorCode::RepositoryPathNotResolved, "{bad}");
-        let e = b.commit(f.id, bad).await.expect_err(bad);
+        let e = b.commit(f.id, bad, "user:1").await.expect_err(bad);
         assert_eq!(e.code(), ErrorCode::RepositoryPathNotResolved, "{bad}");
         let e = b.compare(f.id, bad, &c).await.expect_err(bad);
         assert_eq!(e.code(), ErrorCode::RepositoryPathNotResolved, "{bad}");
@@ -275,7 +291,7 @@ async fn merge_commits_list_their_parents_and_diff_against_the_first() {
     let mut after: Option<LogCursor> = None;
     loop {
         let page = b
-            .commits(f.id, &merge, &root(), 1, after.as_ref())
+            .commits(f.id, &merge, &root(), 1, after.as_ref(), "user:1")
             .await
             .expect("page");
         seen.extend(page.commits.iter().map(|c| c.oid.clone()));
@@ -290,7 +306,7 @@ async fn merge_commits_list_their_parents_and_diff_against_the_first() {
     assert_eq!(seen, expected);
 
     // The diff is against the first parent: the side branch's file.
-    let detail = b.commit(f.id, &merge).await.expect("merge");
+    let detail = b.commit(f.id, &merge, "user:1").await.expect("merge");
     assert_eq!(detail.info.parents.len(), 2);
     let files: Vec<(&str, DiffStatus)> = detail
         .diff
@@ -316,7 +332,7 @@ async fn a_commit_has_its_message_and_a_diff_with_patches() {
     let b = f.browser(BrowseLimits::default());
 
     // A root commit is compared with nothing.
-    let root_commit = b.commit(f.id, &c1).await.expect("root");
+    let root_commit = b.commit(f.id, &c1, "user:1").await.expect("root");
     assert!(root_commit.info.parents.is_empty());
     assert_eq!(root_commit.diff.files.len(), 1);
     let added = &root_commit.diff.files[0];
@@ -327,7 +343,7 @@ async fn a_commit_has_its_message_and_a_diff_with_patches() {
     );
     assert_eq!(added.patch.as_deref(), Some("@@ -0,0 +1 @@\n+one\n"));
 
-    let d = b.commit(f.id, &c2).await.expect("c2");
+    let d = b.commit(f.id, &c2, "user:1").await.expect("c2");
     assert_eq!(d.info.subject, "second line continues");
     assert_eq!(d.message.trim_end(), "second line\ncontinues\n\nthe body");
     assert!(!d.diff.truncated);
@@ -370,7 +386,7 @@ async fn renames_binaries_and_mode_changes_are_told_apart() {
     // A commit is browsable by id only when a ref reaches it (M3 P6).
     update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
-    let d = b.commit(f.id, &c2).await.expect("c2").diff;
+    let d = b.commit(f.id, &c2, "user:1").await.expect("c2").diff;
     let by = |name: &str| {
         d.files
             .iter()
@@ -411,7 +427,7 @@ async fn a_type_change_is_one_file_with_both_halves() {
     // A commit is browsable by id only when a ref reaches it (M3 P6).
     update_ref(&f.path, "refs/heads/main", &c2);
     let b = f.browser(BrowseLimits::default());
-    let d = b.commit(f.id, &c2).await.expect("c2").diff;
+    let d = b.commit(f.id, &c2, "user:1").await.expect("c2").diff;
     assert_eq!(d.files.len(), 2);
     assert_eq!(d.files[0].status, DiffStatus::TypeChanged);
     let patch = d.files[0].patch.as_deref().expect("patch");
@@ -444,7 +460,7 @@ async fn diff_caps_truncate_and_say_so() {
 
     // Whole.
     let whole = f.browser(BrowseLimits::default());
-    let d = whole.commit(f.id, &c2).await.expect("whole").diff;
+    let d = whole.commit(f.id, &c2, "user:1").await.expect("whole").diff;
     assert_eq!(d.files.len(), 5);
     assert!(!d.truncated);
     assert!(d.files.iter().all(|x| x.patch.is_some()));
@@ -454,7 +470,7 @@ async fn diff_caps_truncate_and_say_so() {
         max_diff_files: 2,
         ..BrowseLimits::default()
     });
-    let d = few.commit(f.id, &c2).await.expect("few").diff;
+    let d = few.commit(f.id, &c2, "user:1").await.expect("few").diff;
     assert_eq!(d.files.len(), 2);
     assert!(d.truncated);
     assert!(
@@ -467,7 +483,7 @@ async fn diff_caps_truncate_and_say_so() {
         max_file_patch_bytes: 50,
         ..BrowseLimits::default()
     });
-    let d = small.commit(f.id, &c2).await.expect("small").diff;
+    let d = small.commit(f.id, &c2, "user:1").await.expect("small").diff;
     assert!(d.truncated);
     assert!(d
         .files
@@ -480,7 +496,7 @@ async fn diff_caps_truncate_and_say_so() {
         max_diff_bytes: 400,
         ..BrowseLimits::default()
     });
-    let d = tight.commit(f.id, &c2).await.expect("tight").diff;
+    let d = tight.commit(f.id, &c2, "user:1").await.expect("tight").diff;
     assert_eq!(d.files.len(), 5, "the list itself is complete");
     assert!(d.truncated);
     assert_eq!(d.files[4].omitted, Some(PatchOmitted::TotalCap));
@@ -691,7 +707,7 @@ async fn answers_that_do_not_fit_are_process_failed() {
     );
     let b = f.browser_with_bin(&bin, BrowseLimits::default());
     let e = b
-        .commits(f.id, ids.last().unwrap(), &root(), 5, None)
+        .commits(f.id, ids.last().unwrap(), &root(), 5, None, "user:1")
         .await
         .expect_err("bad id");
     assert_eq!(e.code(), ErrorCode::GitProcessFailed);
@@ -703,7 +719,10 @@ async fn answers_that_do_not_fit_are_process_failed() {
         "printf 'diff --git a/x b/x\\n@@ -1 +1 @@\\n-a\\n+b\\ndiff --git a/y b/y\\n@@ -1 +1 @@\\n-a\\n+b\\n'",
     );
     let b = f.browser_with_bin(&bin, BrowseLimits::default());
-    let e = b.commit(f.id, &ids[4]).await.expect_err("mismatch");
+    let e = b
+        .commit(f.id, &ids[4], "user:1")
+        .await
+        .expect_err("mismatch");
     assert_eq!(e.code(), ErrorCode::GitProcessFailed);
     assert_eq!(reason(&e), "diff_chunk_mismatch");
 }
@@ -857,7 +876,10 @@ async fn a_commit_answer_for_another_commit_or_none_is_commit_record_missing() {
     for answer in ["printf ''".to_owned(), other] {
         let bin = super::tests::wrapping_git(tmp.path(), "[ \"$1\" = log ]", &answer);
         let b = f.browser_with_bin(&bin, BrowseLimits::default());
-        let e = b.commit(f.id, &ids[4]).await.expect_err("missing");
+        let e = b
+            .commit(f.id, &ids[4], "user:1")
+            .await
+            .expect_err("missing");
         assert_eq!(e.code(), ErrorCode::GitProcessFailed);
         assert_eq!(reason(&e), "commit_record_missing");
     }

@@ -431,12 +431,12 @@ pub async fn commits(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
             let limit = limit_param(&params, browse.limits().max_log_page)?;
             let cursor = cursor_param(&params, browse.limits().max_log_skip)?;
             let repo = t.repository.id;
-            let rev = browse.resolve_ref(repo, rev_name).await?;
+            let rev = browse.resolve_ref(repo, rev_name, &t.principal).await?;
             let tip = cursor
                 .as_ref()
                 .map_or(rev.commit.as_str(), |c| c.tip.as_str());
             let page = browse
-                .commits(repo, tip, &path, limit, cursor.as_ref())
+                .commits(repo, tip, &path, limit, cursor.as_ref(), &t.principal)
                 .await
                 .map_err(|e| e.with_context("commit", &rev.commit))?;
             Ok(CommitsBody {
@@ -465,7 +465,7 @@ pub async fn commit(state: AppState, request: Dispatched<ProjectCtx>) -> Respons
             let detail = t
                 .smart
                 .browse
-                .commit(t.repository.id, &oid)
+                .commit(t.repository.id, &oid, &t.principal)
                 .await
                 .map_err(|e| e.with_context("commit", &oid))?;
             Ok(CommitDetailBody {
@@ -489,8 +489,16 @@ pub async fn compare(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
             let from_name = required(&params, "from")?;
             let to_name = required(&params, "to")?;
             let repo = t.repository.id;
-            let from = t.smart.browse.resolve_ref(repo, from_name).await?;
-            let to = t.smart.browse.resolve_ref(repo, to_name).await?;
+            let from = t
+                .smart
+                .browse
+                .resolve_ref(repo, from_name, &t.principal)
+                .await?;
+            let to = t
+                .smart
+                .browse
+                .resolve_ref(repo, to_name, &t.principal)
+                .await?;
             let cmp = t
                 .smart
                 .browse
@@ -521,7 +529,11 @@ pub async fn blame(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             required(&params, "path")?;
             let path = path_param(&params)?;
             let repo = t.repository.id;
-            let rev = t.smart.browse.resolve_ref(repo, rev_name).await?;
+            let rev = t
+                .smart
+                .browse
+                .resolve_ref(repo, rev_name, &t.principal)
+                .await?;
             let blamed = t
                 .smart
                 .browse
