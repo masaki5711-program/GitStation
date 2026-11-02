@@ -313,7 +313,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestReopened
                 | EventType::MergeRequestPushed
                 | EventType::MergeRequestConflictDetected
-                | EventType::MergeRequestConflictResolved => Ok(()),
+                | EventType::MergeRequestConflictResolved
+                | EventType::MergeRequestCommented => Ok(()),
             }
         })
     }

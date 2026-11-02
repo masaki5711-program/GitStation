@@ -97,7 +97,13 @@ async fn call(
 }
 
 fn session(user: UserId, admin: bool) -> Principal {
-    Principal::authenticated(user, admin, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        admin,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn code(a: &Answer) -> &str {
@@ -360,6 +366,7 @@ async fn projects_are_created_updated_and_made_internal_through_the_routes() {
         false,
         true,
         Credential::Token(vec![forge_core::Scope::Api]),
+        forge_auth::AccountKind::Human,
     )
     .as_agent(true);
     let by_agent = call(

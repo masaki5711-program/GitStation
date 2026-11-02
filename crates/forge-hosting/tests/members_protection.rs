@@ -16,7 +16,14 @@ use forge_errors::ErrorCode;
 use forge_hosting::{Hosting, MemberChange, RuleChange};
 
 fn agent(user: forge_core::UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Token(vec![Scope::Api])).as_agent(true)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        forge_auth::AccountKind::Human,
+    )
+    .as_agent(true)
 }
 
 fn main_pattern() -> RefPattern {

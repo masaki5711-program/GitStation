@@ -31,6 +31,17 @@ pub use directory::{
 };
 pub use rename::{rename_decided, UserRenameFacts};
 
+/// A stored `users.kind` (M3 R3: the authenticators hand it to
+/// `forge_auth::Principal`, ADR-0024 §8.4). The CHECK makes another value
+/// unreachable: `FG-SYS-0001 reason=unknown_user_kind`, never a default.
+pub(crate) fn parse_kind(user_id: i64, raw: &str) -> Result<UserKind, ForgeError> {
+    UserKind::parse(raw).ok_or_else(|| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "unknown_user_kind")
+            .with_context("user_id", user_id)
+    })
+}
+
 /// Where a user's credentials are checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthSource {

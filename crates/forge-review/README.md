@@ -77,7 +77,28 @@ merge request in place (ADR-0024 §1).
   `version_refs.rs` holds `VersionRefs` / `plan_ref_changes` (re-exported from `versions`). Tests
   `tests/mergeability_git.rs` (`check_maps_git_timeout_and_no_version_to_check_failed`).
 
-**Error codes owned**: FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
+- M3 R3 (discussions, ADR-0024 §6, §12; `src/discussions.rs`, `src/position.rs`):
+  `Review::start_discussion(request, proof: &Authorized<MergeRequestCtx>, repo, body,
+  position)`, `reply(request, proof, discussion, body)` (`MergeRequestComment`),
+  `resolve(request, proof: &Authorized<DiscussionCtx>, resolved)` (`DiscussionResolve`),
+  reads `discussions(mr, repo, key) -> DiscussionList` / `view(…)` / `discussion(mr, id)`.
+  The diff source is `DiffProbe` (`Review::with_diffs`; the browse API's
+  `merge_request_compare`, implemented for `Browser`). An inline position must be in a hunk
+  of a file the version's diff (`merge_base..head`) lists on that side
+  (`position::check_position`, FG-REVIEW-0004); `outdated` is computed when read
+  (`src/outdated.rs`: `Outdated::{No, Yes, Unknown}` from `position::line_changed` on the
+  diff from the thread's side commit to the current version's — a `-` line at its number,
+  or its file deleted / renamed / unreadable). Unknown (no current version, a purged
+  version, bases pending, more than `MAX_DIFFS_PER_READ` = 20 diffs, a failed diff) is shown
+  as outdated and logged once (`forge.review.discussion_outdated_unknown`; routine states at
+  debug), within a time budget per read (`OUTDATED_BUDGET` = 8 s, `Review::with_outdated_budget`;
+  past it `reason=deadline` without running git); neither the list
+  nor `view` (a committed write's answer) ever fails on git. Field checks `check_note_body`
+  (at most 60 KiB) / `check_position_shape` (FG-WEB-0006). Tests
+  `tests/discussions_git.rs` (`an_inline_discussion_outside_the_diff_is_refused`).
+
+**Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
+DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
 `merge_requests_one_open` is the backstop); FG-REVIEW-0002
 PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,

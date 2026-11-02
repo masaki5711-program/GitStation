@@ -28,6 +28,7 @@ async fn issued_token_authenticates_to_its_owner_with_its_scopes() {
             is_admin: false,
             scopes: vec![Scope::ReadApi, Scope::WriteRepository],
             is_agent: false,
+            kind: forge_core::UserKind::Human,
         }
     );
     t.drop_now().await;

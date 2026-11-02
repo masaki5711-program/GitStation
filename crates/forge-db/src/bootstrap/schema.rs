@@ -38,6 +38,9 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.merge_requests_state_guard()",
     // ── M3 R1b: a version's identity never changes (20261107100000) ──
     "forge.merge_request_versions_guard()",
+    // ── M3 R3: discussions keep their position, notes are final (20261109100000) ──
+    "forge.merge_request_discussions_guard()",
+    "forge.merge_request_notes_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -78,6 +81,21 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER merge_request_versions_set_once BEFORE UPDATE ON \
          forge.merge_request_versions FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_versions_guard()",
+    ),
+    // ── M3 R3: discussions keep their position, notes are final (20261109100000) ──
+    (
+        "merge_request_discussions",
+        "merge_request_discussions_identity",
+        "CREATE TRIGGER merge_request_discussions_identity BEFORE UPDATE ON \
+         forge.merge_request_discussions FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_discussions_guard()",
+    ),
+    (
+        "merge_request_notes",
+        "merge_request_notes_immutable",
+        "CREATE TRIGGER merge_request_notes_immutable BEFORE UPDATE ON \
+         forge.merge_request_notes FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_notes_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -502,6 +520,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_request_versions", operational()),
         // ── M3 R2: mergeability, DELETE for the purge (20261108100000) ──
         ("forge.merge_request_mergeability", operational()),
+        // ── M3 R3: discussions and notes, DELETE for the purge (20261109100000) ──
+        ("forge.merge_request_discussions", operational()),
+        ("forge.merge_request_notes", operational()),
     ]
 }
 
@@ -642,6 +663,9 @@ const LATER_TABLES: &[&str] = &[
     "merge_request_versions",
     // ── M3 R2: mergeability (migration 20261108100000) ──
     "merge_request_mergeability",
+    // ── M3 R3: discussions and notes (migration 20261109100000) ──
+    "merge_request_discussions",
+    "merge_request_notes",
 ];
 
 /// Every table the first migration creates.

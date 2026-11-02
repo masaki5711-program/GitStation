@@ -63,8 +63,29 @@ lands (M1 phase 5).
   flag needs it open (`not_open`); another's draft flag needs Maintainer
   (`foreign_draft`). An invisible project is `FG-REPO-0005` like a missing iid.
   Fixtures in `matrix_review.rs`; tests `merge_request_tests.rs`.
-  ADR-0024's `AccountKind` and `target_protection` arrive with the people-only
-  actions and `MergeRequestMerge` (R4 / R5): R1a's actions do not need them.
+  ADR-0024's `target_protection` arrives with `MergeRequestMerge` (R4).
+- Discussions (M3 R3, ADR-0024 §8.4, §12): `MergeRequestComment` (`api`, on
+  `Resource::MergeRequest`: Reporter and above **by membership** — an internal
+  project's non-member reads but does not comment —, agents' tokens and service
+  accounts included) and `DiscussionResolve` (`api`, on `Resource::Discussion {
+  project, mr_author, started_by }`, context `DiscussionCtx::new(LoadedProject,
+  LoadedMergeRequest, LoadedDiscussion { id, started_by })`, `Id = (ProjectId,
+  Option<i64>, DiscussionId)`): people only; the starter (Reporter) or a Developer
+  who is not the merge request's author (`author_foreign_discussion`,
+  administrators included). Rows in `matrix_rows_discussion.rs` (the matrix's
+  `ROWS` is the base rows plus these and `matrix_rows_people.rs`); tests
+  `discussion_tests.rs`.
+- People-only actions (`Action::is_people_only`, ADR-0024 §8.4): each has a service
+  account and a bot deny row (`matrix_rows_people.rs`) whose human twin
+  (`Actor::human_twin`) is allowed, and the kind decides nothing elsewhere
+  (`people_only_rows_are_allowed_for_the_human_twin`,
+  `only_people_only_actions_refuse_by_account_kind`).
+- **Account kind** (M3 R3, ADR-0024 §8.4): `Principal::authenticated(user,
+  is_admin, active, credential, kind)` takes `AccountKind` (forge-core's
+  `UserKind`: `Human` / `ServiceAccount` / `Bot`, from `users.kind`; no default,
+  kept by `reconfirm`). The people-only arm refuses `agent_token`, then
+  `service_account` / `bot` — on every action kept for people, the older ones
+  (`ProjectVisibilityChange`, `MemberManage`, …) included (fail closed).
 - Agents (`Principal::as_agent`, ADR-0017 amendments MR7a / MR8) are refused
   `ProjectVisibilityChange`, `MemberManage` and `ProtectedRefManage`
   (`FG-AUTH-0003 reason=agent_token`, after visibility and scope, whatever the

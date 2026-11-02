@@ -70,7 +70,13 @@ async fn send(
 }
 
 fn session(user: UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 /// Plumbing on the bare repository (test setup only; synthetic content).
@@ -399,8 +405,13 @@ async fn versions_diffs_compare_and_mergeability_are_read_by_members_only() {
         );
     }
     // A token needs a read scope like the browse API.
-    let read =
-        Principal::authenticated(w.dev, false, true, Credential::Token(vec![Scope::ReadApi]));
+    let read = Principal::authenticated(
+        w.dev,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        forge_auth::AccountKind::Human,
+    );
     let (status, body) = w.get("/versions", read).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -419,7 +430,13 @@ async fn versions_diffs_compare_and_mergeability_are_read_by_members_only() {
         w.router.clone(),
         "POST",
         &w.uri("/version-refs/purge"),
-        Principal::authenticated(w.admin, true, true, Credential::Session),
+        Principal::authenticated(
+            w.admin,
+            true,
+            true,
+            Credential::Session,
+            forge_auth::AccountKind::Human,
+        ),
         Some(json!({"versions": [1]})),
     )
     .await;
@@ -462,8 +479,13 @@ async fn reads_refuse_anonymous_callers_and_tokens_without_a_read_scope() {
             "{tail}: {body}"
         );
         for scopes in [vec![Scope::WriteRepository], vec![]] {
-            let token =
-                Principal::authenticated(w.dev, false, true, Credential::Token(scopes.clone()));
+            let token = Principal::authenticated(
+                w.dev,
+                false,
+                true,
+                Credential::Token(scopes.clone()),
+                forge_auth::AccountKind::Human,
+            );
             let (status, body) = w.get(tail, token).await;
             assert_eq!(
                 (status, body["error_code"].as_str()),

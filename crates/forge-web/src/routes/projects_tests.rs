@@ -133,7 +133,13 @@ fn app(script: &Arc<Script>) -> axum::Router {
 }
 
 fn session(admin: bool, active: bool) -> Principal {
-    Principal::authenticated(UserId::new(5), admin, active, Credential::Session)
+    Principal::authenticated(
+        UserId::new(5),
+        admin,
+        active,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn member() -> Principal {
@@ -146,6 +152,7 @@ fn token(scopes: &[Scope]) -> Principal {
         false,
         true,
         Credential::Token(scopes.to_vec()),
+        forge_auth::AccountKind::Human,
     )
 }
 

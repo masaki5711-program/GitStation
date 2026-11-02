@@ -74,11 +74,24 @@ async fn call(router: axum::Router, uri: &str, who: Principal, body: Value) -> (
 }
 
 fn session(user: UserId, admin: bool) -> Principal {
-    Principal::authenticated(user, admin, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        admin,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn token(user: UserId, scopes: &[Scope], agent: bool) -> Principal {
-    Principal::authenticated(user, true, true, Credential::Token(scopes.to_vec())).as_agent(agent)
+    Principal::authenticated(
+        user,
+        true,
+        true,
+        Credential::Token(scopes.to_vec()),
+        forge_auth::AccountKind::Human,
+    )
+    .as_agent(agent)
 }
 
 /// The world of a test: an administrator, the project's owner `dev` (who

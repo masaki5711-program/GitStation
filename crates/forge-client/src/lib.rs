@@ -19,6 +19,7 @@ pub mod error;
 pub mod gitcfg;
 pub mod hosting;
 pub mod http;
+pub mod mr_discussions;
 pub mod registry;
 pub mod review;
 pub mod store;

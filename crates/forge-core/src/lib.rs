@@ -6,6 +6,7 @@ pub mod authenticator;
 pub mod config;
 pub mod cursor;
 pub mod dedup_key;
+pub mod discussion;
 pub mod event_type;
 pub mod ids;
 pub mod list_page;
@@ -36,9 +37,11 @@ pub use audit_details::{AuditDetails, ChangedField, IdentityLinkVia, SessionRevo
 pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
+pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{
-    GroupId, MergeRequestId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
+    DiscussionId, GroupId, MergeRequestId, NamespaceId, NoteId, ProjectId, ProtectedRefId, RepoId,
+    TombstoneId, UserId,
 };
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use merge_request::{

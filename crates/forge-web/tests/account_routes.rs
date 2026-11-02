@@ -132,11 +132,23 @@ async fn call(
 }
 
 fn session(user: UserId, admin: bool) -> Principal {
-    Principal::authenticated(user, admin, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        admin,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn token(user: UserId, admin: bool, scopes: &[Scope]) -> Principal {
-    Principal::authenticated(user, admin, true, Credential::Token(scopes.to_vec()))
+    Principal::authenticated(
+        user,
+        admin,
+        true,
+        Credential::Token(scopes.to_vec()),
+        forge_auth::AccountKind::Human,
+    )
 }
 
 // ── tokens ───────────────────────────────────────────────────────────────

@@ -30,11 +30,11 @@
 //! - an unreadable header or another scheme → `FG-AUTH-0001`
 //!   (`malformed_header` / `unsupported_scheme`);
 //! - the token authenticator's answer: a valid token inserts
-//!   `Principal::authenticated(owner, is_admin, true, Credential::Token(scopes))`
+//!   `Principal::authenticated(owner, is_admin, true, Credential::Token(scopes), kind)`
 //!   (an administrator's token without the `admin` scope has no
 //!   administrator rights, `Principal::admin_rights`);
 //! - the session authenticator's answer: a valid session inserts
-//!   `Principal::authenticated(user, is_admin, true, Credential::Session)`
+//!   `Principal::authenticated(user, is_admin, true, Credential::Session, kind)`
 //!   and the [`SessionCredential`]; a state-changing request must then
 //!   pass the CSRF token check ([`crate::csrf::session_check`],
 //!   `FG-AUTH-0016`);
@@ -482,6 +482,8 @@ pub(crate) async fn authenticate_request(
                     // `authenticate` refuses a disabled owner (FG-AUTH-0004).
                     true,
                     Credential::Token(identity.scopes),
+                    // ADR-0024 §8.4: the owner's users.kind.
+                    identity.kind,
                 )
                 // ADR-0017 §4.0: an authorization input since M1 phase 8b MR7a.
                 .as_agent(identity.is_agent),
@@ -638,6 +640,8 @@ async fn authenticate_session(
         // `authenticate_session` refuses a disabled user (FG-AUTH-0004).
         true,
         Credential::Session,
+        // ADR-0024 §8.4: the user's users.kind (the sign-in admits people only).
+        identity.kind,
     ));
     req.extensions_mut().insert(SessionCredential {
         session_id: identity.session_id,

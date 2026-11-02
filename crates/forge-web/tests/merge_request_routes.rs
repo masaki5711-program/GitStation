@@ -123,11 +123,24 @@ async fn call(
 }
 
 fn session(user: UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn token(user: UserId, scopes: &[Scope], agent: bool) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Token(scopes.to_vec())).as_agent(agent)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Token(scopes.to_vec()),
+        forge_auth::AccountKind::Human,
+    )
+    .as_agent(agent)
 }
 
 fn code(a: &Answer) -> &str {

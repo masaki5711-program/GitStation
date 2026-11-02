@@ -17,6 +17,8 @@ mod contexts;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
+mod matrix_rows_discussion;
+mod matrix_rows_people;
 mod merge_request_ctx;
 mod model;
 mod prove;
@@ -24,9 +26,9 @@ mod ref_updates;
 
 pub use action::Action;
 pub use authorize::authorize;
-pub use merge_request_ctx::{LoadedMergeRequest, MergeRequestCtx};
+pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
-    AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestEdit,
+    AccountKind, AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestEdit,
     MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
     ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason,
     Visibility,
@@ -48,6 +50,9 @@ mod tests;
 #[cfg(test)]
 #[path = "prove_tests.rs"]
 mod prove_tests;
+
+#[cfg(test)]
+mod discussion_tests;
 
 #[cfg(test)]
 mod merge_request_tests;

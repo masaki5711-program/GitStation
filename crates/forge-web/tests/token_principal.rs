@@ -84,6 +84,7 @@ fn identity(user: i64, is_admin: bool, scopes: &[Scope]) -> TokenIdentity {
         is_admin,
         scopes: scopes.to_vec(),
         is_agent: false,
+        kind: forge_core::UserKind::Human,
     }
 }
 
@@ -541,6 +542,7 @@ async fn a_token_on_top_of_an_existing_principal_is_ambiguous() {
         false,
         true,
         Credential::Session,
+        forge_auth::AccountKind::Human,
     ));
     let (status, headers, body) = call(router(Arc::clone(&auth)), req).await;
     assert_unauthenticated(status, &headers, &body);

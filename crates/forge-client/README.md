@@ -94,6 +94,11 @@ gstn mr versions --project 7 --iid 3                      # 版の一覧（M3 R2
 gstn mr diff --project 7 --iid 3 --version 2 [--patch]     # 版の差分（merge-base..head）
 gstn mr diff --project 7 --iid 3 --from 1 --to 2 [--patch] # 版どうしの比較（head..head）
 gstn mr mergeability --project 7 --iid 3                  # マージできるか（最後の確認の結果。確認は始めない）
+gstn mr discussions --project 7 --iid 3                   # スレッドとコメントの一覧（M3 R3。古くなった行は [outdated]）
+gstn mr comment --project 7 --iid 3 --body '…'            # 全体へのコメント（新しいスレッド）
+gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 [--side old|new] --body '…'  # 行へのコメント
+gstn mr comment --project 7 --iid 3 --discussion 12 --body '…'   # 返信
+gstn mr resolve --project 7 --iid 3 --discussion 12 [--unresolve] # スレッドの解決（人だけ。エージェントのトークンは拒否）
 ```
 
 `--iid` はプロジェクトの中の番号（`!3`）。ブランチ名・タイトル・説明は JSON の本文で送り、パスには入れない。

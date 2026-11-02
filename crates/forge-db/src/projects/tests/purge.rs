@@ -150,6 +150,27 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                 "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id) \
                  SELECT id, project_id FROM forge.merge_requests WHERE project_id = {id} AND iid = 1"
             ),
+            // M3 R3: a version, an inline discussion on it and its note go
+            // with them (notes, then discussions, then versions).
+            format!(
+                "INSERT INTO forge.merge_request_versions (merge_request_id, project_id, \
+                 version_no, head_sha) SELECT id, project_id, 1, repeat('a', 40) \
+                 FROM forge.merge_requests WHERE project_id = {id} AND iid = 1"
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_discussions (merge_request_id, project_id, \
+                 kind, version_no, path, side, line, started_by) SELECT id, project_id, \
+                 'inline', 1, 'src/lib.rs', 'new', 3, {b} \
+                 FROM forge.merge_requests WHERE project_id = {id} AND iid = 1",
+                b = bob.user_id.get()
+            ),
+            format!(
+                "INSERT INTO forge.merge_request_notes (discussion_id, merge_request_id, \
+                 project_id, author_id, body) SELECT d.id, d.merge_request_id, d.project_id, \
+                 {b}, 'synthetic note' FROM forge.merge_request_discussions d \
+                 WHERE d.project_id = {id}",
+                b = bob.user_id.get()
+            ),
         ],
     )
     .await;
@@ -256,6 +277,9 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
         "merge_requests",
         "merge_request_counters",
         "merge_request_mergeability",
+        "merge_request_versions",
+        "merge_request_discussions",
+        "merge_request_notes",
     ] {
         let rows = count(
             &mut su,

@@ -52,6 +52,50 @@ pub fn check_description(description: &str) -> Result<(), ForgeError> {
     Ok(())
 }
 
+/// A note body is at most 60 KiB (M3 R3 review): the request body's JSON
+/// cap is 64 KiB (`forge_web::body::MAX_JSON_BODY_BYTES`), and the note
+/// with its JSON envelope and a 4 KiB path must fit in it, so every note
+/// this rule accepts can be sent. The table allows 64 KiB (the backstop,
+/// migration 20261109100000).
+pub const MAX_NOTE_BYTES: usize = 60 * 1024;
+/// A position's path is at most 4 KiB.
+pub const MAX_PATH_BYTES: usize = 4096;
+
+/// A note body (M3 R3): plain text / Markdown stored as written — not
+/// blank, at most 64 KiB, no control character but tab and line breaks.
+/// Never rendered by the server, so no HTML is stripped or escaped here.
+pub fn check_note_body(body: &str) -> Result<(), ForgeError> {
+    if body.trim().is_empty() {
+        return Err(invalid("body", "empty"));
+    }
+    if body.len() > MAX_NOTE_BYTES {
+        return Err(invalid("body", "too_long").with_context("bytes", body.len()));
+    }
+    if has_control(body, true) {
+        return Err(invalid("body", "control_character"));
+    }
+    Ok(())
+}
+
+/// An inline position's shape (whether it is in the diff is
+/// FG-REVIEW-0004's): a positive version, a path of 1..=4096 bytes without
+/// control characters, a positive line.
+pub fn check_position_shape(version: i64, path: &str, line: i64) -> Result<(), ForgeError> {
+    if version < 1 {
+        return Err(invalid("version", "not_positive"));
+    }
+    if path.is_empty() || path.len() > MAX_PATH_BYTES {
+        return Err(invalid("path", "length").with_context("bytes", path.len()));
+    }
+    if has_control(path, false) {
+        return Err(invalid("path", "control_character"));
+    }
+    if line < 1 {
+        return Err(invalid("line", "not_positive"));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +138,42 @@ mod tests {
         assert_eq!(
             rule(check_description("a\0b").expect_err("nul")),
             "control_character"
+        );
+    }
+
+    #[test]
+    fn note_bodies_and_positions_follow_the_table_checks() {
+        check_note_body("Looks good <b>kept as is</b>\n- [ ] item").expect("markdown as is");
+        check_note_body(&"x".repeat(MAX_NOTE_BYTES)).expect("at the cap");
+        assert_eq!(rule(check_note_body(" \n ").expect_err("blank")), "empty");
+        assert_eq!(
+            rule(check_note_body(&"x".repeat(MAX_NOTE_BYTES + 1)).expect_err("long")),
+            "too_long"
+        );
+        assert_eq!(
+            rule(check_note_body("a\u{1b}[31m").expect_err("escape")),
+            "control_character"
+        );
+        check_position_shape(1, "src/lib.rs", 1).expect("plain");
+        assert_eq!(
+            rule(check_position_shape(0, "a", 1).expect_err("v")),
+            "not_positive"
+        );
+        assert_eq!(
+            rule(check_position_shape(1, "", 1).expect_err("p")),
+            "length"
+        );
+        assert_eq!(
+            rule(check_position_shape(1, &"a".repeat(MAX_PATH_BYTES + 1), 1).expect_err("p")),
+            "length"
+        );
+        assert_eq!(
+            rule(check_position_shape(1, "a\nb", 1).expect_err("p")),
+            "control_character"
+        );
+        assert_eq!(
+            rule(check_position_shape(1, "a", 0).expect_err("l")),
+            "not_positive"
         );
     }
 }

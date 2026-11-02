@@ -239,7 +239,13 @@ fn content_app(script: &Arc<Script>) -> axum::Router {
 }
 
 fn reporter() -> Principal {
-    Principal::authenticated(UserId::new(5), false, true, Credential::Session)
+    Principal::authenticated(
+        UserId::new(5),
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn request(method: &str, uri: &str, principal: Option<Principal>) -> Request<Body> {
@@ -639,7 +645,13 @@ async fn authentication_comes_before_any_lookup() {
     for path in ["/acme/visible/-/raw/main/f", "/acme/nothing/-/raw/main/f"] {
         let anonymous = send(content_app(&script), request("GET", path, None)).await;
         assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED, "{path}");
-        let disabled = Principal::authenticated(UserId::new(5), false, false, Credential::Session);
+        let disabled = Principal::authenticated(
+            UserId::new(5),
+            false,
+            false,
+            Credential::Session,
+            forge_auth::AccountKind::Human,
+        );
         let disabled = send(content_app(&script), request("GET", path, Some(disabled))).await;
         assert_eq!(disabled.code(), ErrorCode::AccountDisabled.id(), "{path}");
     }
@@ -732,6 +744,7 @@ async fn a_token_without_the_scope_is_refused_by_authorize() {
         false,
         true,
         Credential::Token(vec![Scope::ReadApi]),
+        forge_auth::AccountKind::Human,
     );
     let visible = send(
         content_app(&script),
@@ -968,6 +981,7 @@ async fn path_resolve_denials_are_identical_and_cost_one_lookup() {
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
+        forge_auth::AccountKind::Human,
     );
     let a = send(
         product(&script),

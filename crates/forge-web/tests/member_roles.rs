@@ -80,7 +80,13 @@ async fn manage_members(
     let roles = load_group_roles(&t.db, on.group_id, caller)
         .await
         .expect("load roles");
-    let principal = Principal::authenticated(caller, false, true, Credential::Session);
+    let principal = Principal::authenticated(
+        caller,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let resource = Resource::Membership {
         scope: MembershipScope::Group { role: roles.native },
         change,

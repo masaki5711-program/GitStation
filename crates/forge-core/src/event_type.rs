@@ -126,11 +126,18 @@ pub enum EventType {
     /// merged". Deduplicated by
     /// `merge_request_conflict_resolved:<merge_request_id>:<check_seq>`.
     MergeRequestConflictResolved,
+    /// `merge_request.commented` (M3 R3, ADR-0024 §6): a note was added to
+    /// a discussion, or a discussion was resolved or unresolved
+    /// (`data.action` = `note_added` / `thread_resolved` /
+    /// `thread_unresolved`). Deduplicated by
+    /// `merge_request_note_added:<note_id>` or
+    /// `merge_request_thread_resolved|unresolved:<discussion_id>:<revision>`.
+    MergeRequestCommented,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 26] = [
+    pub const ALL: [EventType; 27] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -157,6 +164,7 @@ impl EventType {
         EventType::MergeRequestPushed,
         EventType::MergeRequestConflictDetected,
         EventType::MergeRequestConflictResolved,
+        EventType::MergeRequestCommented,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -188,6 +196,7 @@ impl EventType {
             EventType::MergeRequestPushed => "merge_request.pushed",
             EventType::MergeRequestConflictDetected => "merge_request.conflict_detected",
             EventType::MergeRequestConflictResolved => "merge_request.conflict_resolved",
+            EventType::MergeRequestCommented => "merge_request.commented",
         }
     }
 
@@ -212,7 +221,8 @@ impl EventType {
             | EventType::MergeRequestReopened
             | EventType::MergeRequestPushed
             | EventType::MergeRequestConflictDetected
-            | EventType::MergeRequestConflictResolved => VisibilityClass::Integration,
+            | EventType::MergeRequestConflictResolved
+            | EventType::MergeRequestCommented => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged

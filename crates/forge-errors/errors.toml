@@ -1404,3 +1404,30 @@ diagnosis = "The event `forge.review.mergeability_not_checked` carries `reason`,
 fix = "Fix the cause the job's own error code names (its runbook). The merge request is checked again by its next push, retarget or reopen, and the worker's sweep re-requests rows that are `unchecked` with no live job; a check_failed row blocks merging (mergeability_unknown) until then. Never edit forge.merge_request_mergeability by hand outside an approved runbook step."
 runbook = "merge-request-mergeability"
 test = "a_stale_checking_row_is_reaped_as_job_stale"
+
+# ── M3 R3: merge request discussions (ADR-0024 §12; registration order) ──
+[[error]]
+code = "FG-REVIEW-0004"
+name = "DiscussionPositionInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "コメントの位置がこの版の差分にありません。差分を表示し直して、変更された行を選んでください。"
+user_message_en = "The comment's position is not in this version's diff. Reload the diff and choose a changed line."
+user_message_id = "Posisi komentar tidak ada dalam diff versi ini. Muat ulang diff dan pilih baris yang berubah."
+cause = "An inline discussion was to be started (`POST /api/v1/projects/{id}/merge-requests/{iid}/discussions` with a `position`) on a place that is not in the named version's diff (`merge_base_sha..head_sha`, ADR-0024 R2): reason=version_unknown (the merge request has no such version), version_purged (its refs were removed, secret removal), version_base_pending (the version job has not recorded its bases yet), path_not_in_diff (no file of the diff has that path on that side), diff_truncated (the path is not among the files listed and the diff was cut by a cap, so it cannot be shown to be there), no_patch (the file is binary or its patch was left out by a size cap: it has no lines to comment on) or line_out_of_range (the line is in no hunk of the file on that side). Nothing was written."
+diagnosis = "The log event carries `reason`, `project_id`, `iid`, `version`, `side` and `line` (never the path or the body). List the versions (`gstn mr versions IID --project ID`) and show the version's diff (`gstn mr diff IID --project ID --version N --patch`): the hunk headers `@@ -a,b +c,d @@` give the commentable lines (old side a..a+b-1, new side c..c+d-1)."
+fix = "Start the discussion on a line inside a hunk of a listed file of an existing, unpurged version (or start a general discussion without a position)."
+test = "an_inline_discussion_outside_the_diff_is_refused"
+
+[[error]]
+code = "FG-REVIEW-0005"
+name = "DiscussionLimitReached"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストのスレッドかコメントが上限に達しました。既存のスレッドで続けるか、新しいマージリクエストに分けてください。"
+user_message_en = "This merge request has reached its limit of discussions or comments. Continue in an existing discussion, or split the work into a new merge request."
+user_message_id = "Merge request ini telah mencapai batas diskusi atau komentar. Lanjutkan di diskusi yang ada, atau pisahkan pekerjaan ke merge request baru."
+cause = "A discussion was to be started or a note added (`POST /api/v1/projects/{id}/merge-requests/{iid}/discussions`, `…/discussions/{discussion_id}/notes`) while the merge request already holds the most the server keeps (M3 R3 review): reason=discussions_per_merge_request (500 discussions), notes_per_merge_request (5 000 notes) or notes_per_discussion (200 notes in one discussion). The counts are taken under the merge request's row lock, so concurrent writers cannot pass the cap. The caps equal the list's caps, so a list never leaves anything out. Nothing was written."
+diagnosis = "The log event carries `reason`, `limit`, `project_id`, `iid` and `merge_request_id` (and `discussion_id` for notes_per_discussion). Count read-only: SELECT count(*) FROM forge.merge_request_discussions WHERE merge_request_id = <id>; SELECT discussion_id, count(*) FROM forge.merge_request_notes WHERE merge_request_id = <id> GROUP BY discussion_id ORDER BY 2 DESC LIMIT 5."
+fix = "Continue in an existing discussion (or resolve and summarize), or split the work into a new merge request. The caps are constants (forge_db::review::MAX_DISCUSSIONS / MAX_NOTES / MAX_NOTES_PER_DISCUSSION); raising them is a code change that must raise the list's caps together."
+test = "a_full_discussion_or_merge_request_refuses_more"

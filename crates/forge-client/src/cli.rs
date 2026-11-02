@@ -609,6 +609,70 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+    /// List a merge request's discussions with their notes (and whether a
+    /// later version changed an inline thread's line).
+    Discussions {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Start a discussion (general, or on a line of a version's diff with
+    /// --version/--path/--line), or reply to one with --discussion.
+    Comment {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The note: plain text / Markdown (stored as written).
+        #[arg(long, value_parser = parse_description)]
+        body: String,
+        /// Reply to this discussion instead of starting one.
+        #[arg(long, value_parser = parse_id, value_name = "DISCUSSION", conflicts_with_all = ["version", "path", "line", "side"])]
+        discussion: Option<i64>,
+        /// The version whose diff the line is in (an inline discussion).
+        #[arg(long, value_parser = parse_id, value_name = "N", requires_all = ["path", "line"])]
+        version: Option<i64>,
+        /// The file's path on that side of the diff.
+        #[arg(long, value_parser = parse_text, value_name = "PATH", requires = "version")]
+        path: Option<String>,
+        /// The line (inside a hunk of that file on that side).
+        #[arg(long, value_parser = parse_id, value_name = "LINE", requires = "version")]
+        line: Option<i64>,
+        /// The side of the diff (default new: the version's head).
+        #[arg(long, value_enum, requires = "version")]
+        side: Option<DiffSide>,
+    },
+    /// Resolve a discussion (or open it again with --unresolve).
+    Resolve {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        #[arg(long, value_parser = parse_id, value_name = "DISCUSSION")]
+        discussion: i64,
+        /// Open a resolved discussion again.
+        #[arg(long)]
+        unresolve: bool,
+    },
+}
+
+/// The side of a diff an inline discussion sits on.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffSide {
+    /// The version's merge base.
+    Old,
+    /// The version's head.
+    New,
+}
+
+impl DiffSide {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Old => "old",
+            Self::New => "new",
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]

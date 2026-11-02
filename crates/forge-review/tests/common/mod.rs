@@ -90,7 +90,13 @@ pub fn request(id: &str) -> ReviewRequest {
 }
 
 pub fn session(user: UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 pub fn branch(name: &str) -> RefName {

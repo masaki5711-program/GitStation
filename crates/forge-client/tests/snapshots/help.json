@@ -2674,6 +2674,207 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr discussions --project 7 --iid 3 --json"
+      ],
+      "name": "mr discussions",
+      "output": {
+        "properties": {
+          "discussions": {
+            "items": {
+              "required": [
+                "id",
+                "kind",
+                "position",
+                "outdated",
+                "started_by",
+                "resolved",
+                "resolved_by",
+                "resolved_at",
+                "created_at",
+                "notes"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "iid",
+          "discussions",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/discussions"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a merge request's discussions with their notes, oldest first; an inline thread is `outdated` when a later version rewrote its line."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The note: plain text / Markdown, stored as written (at most 60 KiB).",
+          "kind": "option",
+          "name": "--body",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Reply to this discussion.",
+          "kind": "option",
+          "name": "--discussion",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An inline discussion: the version whose diff the line is in.",
+          "kind": "option",
+          "name": "--version",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An inline discussion: the file's path on that side.",
+          "kind": "option",
+          "name": "--path",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An inline discussion: a line inside a hunk of that file.",
+          "kind": "option",
+          "name": "--line",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An inline discussion: old (merge base) or new (head, the default).",
+          "kind": "option",
+          "name": "--side",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr comment --project 7 --iid 3 --body 'Looks good'",
+        "gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 --body 'Rename this'",
+        "gstn mr comment --project 7 --iid 3 --discussion 12 --body 'Done' --json"
+      ],
+      "name": "mr comment",
+      "output": {
+        "required": [
+          "id",
+          "kind",
+          "position",
+          "outdated",
+          "started_by",
+          "resolved",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Start a discussion — general, or inline on a line of a version's diff (--version, --path, --line, --side) — or reply to one (--discussion). Agents' tokens may comment."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The discussion's id.",
+          "kind": "option",
+          "name": "--discussion",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Open a resolved discussion again.",
+          "kind": "flag",
+          "name": "--unresolve",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr resolve --project 7 --iid 3 --discussion 12",
+        "gstn mr resolve --project 7 --iid 3 --discussion 12 --unresolve --json"
+      ],
+      "name": "mr resolve",
+      "output": {
+        "required": [
+          "id",
+          "resolved",
+          "resolved_by",
+          "resolved_at",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve",
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Resolve a discussion, or open it again with --unresolve (people only: its starter, or a Developer who is not the merge request's author; agents' and service accounts' tokens are refused)."
+    },
+    {
+      "args": [
+        {
           "description": "The full path, e.g. team/app.",
           "kind": "positional",
           "name": "path",

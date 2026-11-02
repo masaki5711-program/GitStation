@@ -64,8 +64,8 @@
 //!
 //! ```
 //! use forge_auth::{
-//!     prove, Action, Credential, InstanceCtx, LoadedProject, Principal, ProjectCtx, Role,
-//!     Visibility,
+//!     prove, AccountKind, Action, Credential, InstanceCtx, LoadedProject, Principal,
+//!     ProjectCtx, Role, Visibility,
 //! };
 //! use forge_core::{ProjectId, UserId};
 //! let Ok(proof) = prove(&Principal::anonymous(), Action::Health, InstanceCtx) else {
@@ -79,7 +79,8 @@
 //!     role: Some(Role::Reporter),
 //!     pending_deletion: false,
 //! });
-//! let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
+//! let me =
+//!     Principal::authenticated(UserId::new(1), false, true, Credential::Session, AccountKind::Human);
 //! let Ok(proof) = prove(&me, Action::ProjectRead, ctx) else { panic!("reporter reads") };
 //! assert_eq!(proof.id(), &ProjectId::new(2));
 //! ```
@@ -185,6 +186,8 @@ impl<R: ResourceCtx> Authorized<R> {
                 account.is_admin,
                 account.active,
                 self.principal.credential().clone(), // clone: the new proof owns its principal
+                // The kind of an account never changes (users.kind).
+                self.principal.account_kind(),
             )
             .as_agent(self.principal.is_agent()),
             None => Principal::anonymous(),

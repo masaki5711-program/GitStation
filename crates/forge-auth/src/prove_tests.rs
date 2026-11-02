@@ -24,7 +24,13 @@ impl ResourceCtx for RowCtx {
 }
 
 fn session() -> Principal {
-    Principal::authenticated(ME, false, true, Credential::Session)
+    Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    )
 }
 
 fn private(role: Option<Role>) -> ProjectView {
@@ -107,7 +113,7 @@ fn a_context_decides_on_the_row_its_id_comes_from() {
 fn prove_denies_exactly_like_authorize() {
     let mut seen_actors: Vec<Actor> = Vec::new();
     let mut seen_fixtures: Vec<Fixture> = Vec::new();
-    for r in ROWS {
+    for r in ROWS.iter() {
         if !seen_actors.contains(&r.actor) {
             seen_actors.push(r.actor);
         }
@@ -167,8 +173,20 @@ fn webshell_is_public_and_needs_no_scope() {
     assert!(Action::WebShell.is_public());
     assert_eq!(Action::WebShell.required_scope(), None);
     assert!(!Action::WebShell.is_git_operation());
-    let empty_token = Principal::authenticated(ME, false, true, Credential::Token(vec![]));
-    let disabled = Principal::authenticated(ME, false, false, Credential::Session);
+    let empty_token = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![]),
+        crate::AccountKind::Human,
+    );
+    let disabled = Principal::authenticated(
+        ME,
+        false,
+        false,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     for p in [Principal::anonymous(), empty_token, disabled] {
         let proof = prove(&p, Action::WebShell, InstanceCtx).expect("public");
         assert_eq!(proof.action(), Action::WebShell);
@@ -188,13 +206,26 @@ fn repo_token() -> Principal {
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
+        crate::AccountKind::Human,
     )
 }
 
 #[test]
 fn unresolved_is_not_found_with_its_reason_for_every_active_caller() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
-    let api_token = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]));
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
+    let api_token = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        crate::AccountKind::Human,
+    );
     for &reason in UnresolvedReason::ALL {
         for p in [session(), admin.clone(), api_token.clone()] {
             let err =
@@ -260,7 +291,13 @@ fn a_wrong_scope_token_gets_the_same_403_for_every_path() {
 fn unresolved_is_not_found_for_every_non_public_action() {
     // No existence oracle: an absent path gets the same 404 as an invisible
     // project, whatever action a route decides it with.
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
         for &reason in UnresolvedReason::ALL {
             for p in [session(), admin.clone()] {
@@ -314,14 +351,26 @@ fn groups_and_personal_namespaces_resolve_for_every_signed_in_user() {
 
 #[test]
 fn an_administrator_resolves_an_invisible_project() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let ctx = resolved(3, ResolvedVia::Moved, NamespaceView::Project(private(None)));
     assert!(prove(&admin, Action::PathResolve, ctx).is_ok());
 }
 
 #[test]
 fn resolved_fits_only_path_resolve() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let resource = Resource::Resolved {
         via: ResolvedVia::Live,
         view: NamespaceView::User,
@@ -503,7 +552,13 @@ fn reconfirm_decides_again_on_the_fresh_row_with_the_fresh_account() {
 
 #[test]
 fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let proof = prove(&admin, Action::GroupCreateTopLevel, InstanceCtx).expect("admin");
     let demoted = crate::AccountFacts {
         active: true,
@@ -515,7 +570,13 @@ fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
     assert_eq!(err.code(), ErrorCode::Forbidden);
     // A token keeps its scopes: an admin flag alone grants nothing to an
     // `api` token without the `admin` scope.
-    let token = Principal::authenticated(ME, true, true, Credential::Token(vec![Scope::Api]));
+    let token = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        crate::AccountKind::Human,
+    );
     let proof = prove(
         &token,
         Action::SubgroupCreate,
@@ -534,8 +595,14 @@ fn reconfirm_uses_the_fresh_admin_flag_and_keeps_the_credential() {
 
 #[test]
 fn reconfirm_keeps_the_agent_flag() {
-    let agent = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]))
-        .as_agent(true);
+    let agent = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        crate::AccountKind::Human,
+    )
+    .as_agent(true);
     let proof = prove(&agent, Action::ProjectUpdate, project(2, Some(Role::Owner)))
         .expect("agents update projects");
     let again = proof
@@ -576,7 +643,13 @@ fn d5_contexts_bind_source_and_target() {
     .expect("owner to a group they maintain");
     assert_eq!(proof.id(), &(ProjectId::new(9), Some(NamespaceId::new(5))));
     let hidden = crate::LoadedTransferTarget::NotVisible;
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let err = prove(
         &admin,
         Action::ProjectTransfer,

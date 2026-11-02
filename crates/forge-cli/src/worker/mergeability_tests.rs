@@ -147,7 +147,13 @@ impl World {
     }
 
     fn principal(&self) -> forge_auth::Principal {
-        forge_auth::Principal::authenticated(self.alice, false, true, Credential::Session)
+        forge_auth::Principal::authenticated(
+            self.alice,
+            false,
+            true,
+            Credential::Session,
+            forge_auth::AccountKind::Human,
+        )
     }
 
     fn request(n: &str) -> ReviewRequest {

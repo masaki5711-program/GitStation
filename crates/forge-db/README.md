@@ -284,6 +284,28 @@ connection, mapping driver errors to registered codes, migrations
   `repository.pushed` for the open merge requests from the moved branches, or every open one
   when `refs_truncated`. The project purge deletes the versions. Tests
   `review/version_tests.rs`.
+- **Discussions** (`review/discussions/`, M3 R3, ADR-0024 §6, §12; migration
+  20261109100000): `merge_request_discussions` (kind general / inline; an inline one's
+  version — a composite foreign key to the versions —, path, side old / new and line;
+  `started_by`, `resolved` / `resolved_by` / `resolved_at`, `revision` +1 per resolve /
+  unresolve) and `merge_request_notes` (author, body 1 character..64 KiB, never updated).
+  Audited on the project; guards `merge_request_discussions_guard` (identity and position
+  fixed, revision +1 per change) and `merge_request_notes_guard` (no UPDATE). Commands
+  `start_discussion_mr_decided`, `add_note_mr_decided`, `resolve_discussion_mr_decided`
+  (decide on the locked facts; one `merge_request.commented` audit row and event each,
+  `data.action` = `note_added` / `thread_resolved` / `thread_unresolved`, dedup
+  `merge_request_note_added:<note_id>` or `merge_request_thread_(un)resolved:<id>:<revision>`;
+  an unknown version is FG-REVIEW-0004 `version_unknown` by the foreign key). Reads
+  `discussions` (at most 500 discussions / 5 000 notes, `truncated`) and `discussion`. Caps
+  checked under the merge request's row lock (review round 1): 500 discussions and 5 000 notes
+  per merge request, 200 notes per discussion (`MAX_DISCUSSIONS`, `MAX_NOTES`,
+  `MAX_NOTES_PER_DISCUSSION`; FG-REVIEW-0005 DiscussionLimitReached). Migration 20261109100100
+  adds composite foreign keys (a thread's project is its merge request's; a note's discussion,
+  merge request and project agree). The steps the commands share are `discussions/steps.rs`. The
+  project purge deletes notes, then discussions, before the versions. The token and
+  session authenticators now read `users.kind` (`TokenIdentity.kind`,
+  `SessionIdentity.kind`; `users::parse_kind`, never a default). Tests
+  `review/discussion_tests.rs`.
 - **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
   `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
   can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked

@@ -6,7 +6,10 @@
 //! (`MergeRequestVersionRefsPurge`: a web session only, ADR-0024 §2;
 //! runbook `secret-removal`), and (M3 R2, `versions.rs`) the reads
 //! `GET …/{iid}/versions`, `…/versions/{version}/diff`, `…/compare` and
-//! `…/mergeability` (`MergeRequestRead`). Reading and listing are
+//! `…/mergeability` (`MergeRequestRead`), and (M3 R3, `discussions.rs`)
+//! the discussions: `GET|POST …/{iid}/discussions`, `POST
+//! …/discussions/{discussion_id}/notes` (`MergeRequestComment`) and
+//! `…/resolve`, `…/unresolve` (`DiscussionResolve`). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -39,14 +42,25 @@ use crate::body::param_invalid;
 use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
+mod discussion_loaders;
+mod discussions;
 mod loaders;
 mod mergeability;
 mod versions;
 
+pub use discussion_loaders::{
+    DiscussionToReply, DiscussionToResolve, DiscussionToStart, TO_RESOLVE, TO_UNRESOLVE,
+};
+pub use discussions::{
+    list as discussions, reply as reply_to_discussion, resolve as resolve_discussion,
+    start as start_discussion, unresolve as unresolve_discussion, AddNote, DiscussionBody,
+    DiscussionsBody, NoteBody, PositionBody, StartDiscussion, DISCUSSIONS, DISCUSSIONS_SUFFIX,
+    MAX_BODY as DISCUSSION_MAX_BODY, NOTES, RESOLVE, UNRESOLVE,
+};
 pub use loaders::{
     MergeRequestOf, MergeRequestRead, MergeRequestToClose, MergeRequestToPurge,
     MergeRequestToReopen, MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest, VersionDiffOf,
-    COMPARE_OF, MERGEABILITY_OF, VERSIONS_OF,
+    COMPARE_OF, DISCUSSIONS_OF, MERGEABILITY_OF, VERSIONS_OF,
 };
 pub use mergeability::{mergeability, MergeabilityBody};
 pub use versions::{

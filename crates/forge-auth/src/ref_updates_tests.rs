@@ -9,7 +9,13 @@ use crate::{
 };
 
 fn user(admin: bool) -> Principal {
-    Principal::authenticated(UserId::new(7), admin, true, Credential::Session)
+    Principal::authenticated(
+        UserId::new(7),
+        admin,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    )
 }
 
 fn project(role: Option<Role>) -> ProjectCtx {

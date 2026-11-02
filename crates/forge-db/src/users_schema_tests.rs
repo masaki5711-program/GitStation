@@ -67,6 +67,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // M3 R3: their discussions and notes, on the project.
+            AuditedTable {
+                name: "merge_request_discussions".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "merge_request_notes".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             // M3 R1b: their versions, on the project.
             AuditedTable {
                 name: "merge_request_versions".into(),

@@ -513,6 +513,63 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["iid","status","reason","stale","head_sha","checked_head_sha","checked_target_sha","checked_at","conflicts","conflicts_truncated"],"properties":{"status":{"type":"string","enum":["unchecked","checking","can_be_merged","cannot_be_merged","check_failed"]},"conflicts":{"type":"array","items":{"type":"string"}}}}"#,
     },
     CommandSpec {
+        name: "mr discussions",
+        summary: "List a merge request's discussions with their notes, oldest first; an inline thread is `outdated` when a later version rewrote its line.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr discussions --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/discussions"],
+        output: r#"{"type":"object","required":["iid","discussions","truncated"],"properties":{"discussions":{"type":"array","items":{"type":"object","required":["id","kind","position","outdated","started_by","resolved","resolved_by","resolved_at","created_at","notes"]}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "mr comment",
+        summary: "Start a discussion — general, or inline on a line of a version's diff (--version, --path, --line, --side) — or reply to one (--discussion). Agents' tokens may comment.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--body", "option", true, "The note: plain text / Markdown, stored as written (at most 60 KiB)."),
+            arg("--discussion", "option", false, "Reply to this discussion."),
+            arg("--version", "option", false, "An inline discussion: the version whose diff the line is in."),
+            arg("--path", "option", false, "An inline discussion: the file's path on that side."),
+            arg("--line", "option", false, "An inline discussion: a line inside a hunk of that file."),
+            arg("--side", "option", false, "An inline discussion: old (merge base) or new (head, the default)."),
+        ],
+        examples: &[
+            "gstn mr comment --project 7 --iid 3 --body 'Looks good'",
+            "gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 --body 'Rename this'",
+            "gstn mr comment --project 7 --iid 3 --discussion 12 --body 'Done' --json",
+        ],
+        scopes: &["api"],
+        routes: &[
+            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions",
+            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
+        ],
+        output: r#"{"type":"object","required":["id","kind","position","outdated","started_by","resolved","notes"]}"#,
+    },
+    CommandSpec {
+        name: "mr resolve",
+        summary: "Resolve a discussion, or open it again with --unresolve (people only: its starter, or a Developer who is not the merge request's author; agents' and service accounts' tokens are refused).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--discussion", "option", true, "The discussion's id."),
+            arg("--unresolve", "flag", false, "Open a resolved discussion again."),
+        ],
+        examples: &[
+            "gstn mr resolve --project 7 --iid 3 --discussion 12",
+            "gstn mr resolve --project 7 --iid 3 --discussion 12 --unresolve --json",
+        ],
+        scopes: &["api"],
+        routes: &[
+            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve",
+            "POST /api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve",
+        ],
+        output: r#"{"type":"object","required":["id","resolved","resolved_by","resolved_at","notes"]}"#,
+    },
+    CommandSpec {
         name: "namespace resolve",
         summary: "Which project, group or user a full path names (and its ids).",
         args: &[arg("path", "positional", true, "The full path, e.g. team/app.")],

@@ -35,6 +35,11 @@
 //!    or reopened, an edit of the target or the draft flag needs it open
 //!    (`merged`, `not_open`), another's draft flag needs Maintainer
 //!    (`foreign_draft`);
+//!    discussions (M3 R3): commenting needs Reporter by membership;
+//!    resolving is people only (`agent_token`, `service_account`, `bot`
+//!    — the account kind joined the actions kept for people here), the
+//!    thread's starter or a Developer who is not the merge request's
+//!    author (`author_foreign_discussion`, administrators included);
 //! 7. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, and `FG-GIT-0008` below the minimum push role
@@ -44,9 +49,9 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
 use crate::model::{
-    AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestState,
-    NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope,
-    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, AdmissionAccount, Credential, MembershipChange, MembershipScope,
+    MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia,
+    Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -178,11 +183,18 @@ pub fn authorize(
     // Actions kept for people (ADR-0017 amendments MR7a, MR8, D5): an
     // agent's credential is refused whatever its role, administrators
     // included. Checked after visibility and scope, before roles.
+    // Since M3 R3 (ADR-0024 §8.4) also a service account's or a bot's
+    // credential (`reason=service_account|bot`, from `users.kind`).
     let people_only = || -> Result<(), ForgeError> {
         if principal.is_agent() {
-            Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"))
-        } else {
-            Ok(())
+            return Err(deny(ErrorCode::Forbidden).with_context("reason", "agent_token"));
+        }
+        match principal.account_kind() {
+            AccountKind::Human => Ok(()),
+            AccountKind::ServiceAccount => {
+                Err(deny(ErrorCode::Forbidden).with_context("reason", "service_account"))
+            }
+            AccountKind::Bot => Err(deny(ErrorCode::Forbidden).with_context("reason", "bot")),
         }
     };
     // A refusal on the request's shape or the target's state (merge
@@ -644,6 +656,43 @@ pub fn authorize(
             branches(source_branch, target_branch).map_err(refused)
         }
 
+        // --- discussions (M3 R3, ADR-0024 §12) ---
+        // Commenting: Reporter and above by membership (an internal
+        // project's non-member reads but does not write); an agent's token
+        // and a service account may (a comment is no merge condition).
+        (
+            Action::MergeRequestComment,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Reporter, project.role)?;
+            branches(source_branch, target_branch).map_err(refused)
+        }
+        // Resolving: people only; one's own thread (Reporter), another's
+        // only a Developer who is not the merge request's author — the
+        // author never clears another's thread, administrators included.
+        (
+            Action::DiscussionResolve,
+            Resource::Discussion {
+                project,
+                mr_author,
+                started_by,
+            },
+        ) => {
+            people_only()?;
+            if *started_by == user {
+                return need(Role::Reporter, project.role);
+            }
+            if *mr_author == user {
+                return Err(refused("author_foreign_discussion"));
+            }
+            need(Role::Developer, project.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -700,6 +749,8 @@ pub fn authorize(
             | Action::MergeRequestClose
             | Action::MergeRequestReopen
             | Action::MergeRequestVersionRefsPurge
+            | Action::MergeRequestComment
+            | Action::DiscussionResolve
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -718,7 +769,8 @@ pub fn authorize(
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
             | Resource::Resolved { .. }
-            | Resource::MergeRequest { .. },
+            | Resource::MergeRequest { .. }
+            | Resource::Discussion { .. },
         ) => wrong_resource(),
     }
 }
@@ -757,7 +809,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         Resource::Transfer { source, .. } => live(source),
         Resource::RefProtectionChange { project, .. }
         | Resource::VisibilityChange { project, .. }
-        | Resource::MergeRequest { project, .. } => live(project),
+        | Resource::MergeRequest { project, .. }
+        | Resource::Discussion { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -830,7 +883,8 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Admission { .. }
         | Resource::Unresolved(_)
         | Resource::Resolved { .. }
-        | Resource::MergeRequest { .. } => None,
+        | Resource::MergeRequest { .. }
+        | Resource::Discussion { .. } => None,
     }
 }
 

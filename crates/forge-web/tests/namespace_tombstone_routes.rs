@@ -208,7 +208,13 @@ async fn world() -> World {
 }
 
 fn session(user: UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 struct Answer {

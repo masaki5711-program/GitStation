@@ -8,7 +8,9 @@
 //! administrator's [`purge_mr_version_refs_decided`]) and the
 //! `merge-request-refresh` subscriber (`refresh.rs`); M3 R2: the
 //! mergeability status and its job's SQL (`mergeability.rs`), the bases of
-//! a version ([`record_version_bases`]).
+//! a version ([`record_version_bases`]); M3 R3: the discussions and their
+//! notes (`discussions.rs`: [`start_discussion_mr_decided`],
+//! [`add_note_mr_decided`], [`resolve_discussion_mr_decided`]).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -33,12 +35,19 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::{read_query_error, Db};
 
 mod commands;
+pub mod discussions;
 pub mod mergeability;
 mod refresh;
 mod version_bases;
 mod version_refs;
 pub mod versions;
 
+pub use discussions::{
+    add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,
+    start_discussion_mr_decided, DiscussionFacts, DiscussionPage, DiscussionPosition,
+    NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote, MAX_DISCUSSIONS, MAX_NOTES,
+    MAX_NOTES_PER_DISCUSSION,
+};
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
     mergeability, mergeability_job, mergeability_payload, mergeability_written, not_checked,
@@ -214,6 +223,8 @@ pub async fn list(
     rows.into_iter().map(Row::parse).collect()
 }
 
+#[cfg(test)]
+mod discussion_tests;
 #[cfg(test)]
 mod race_tests;
 #[cfg(test)]

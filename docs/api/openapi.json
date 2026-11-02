@@ -20,6 +20,20 @@
         ],
         "type": "object"
       },
+      "AddNote": {
+        "additionalProperties": false,
+        "description": "`POST …/discussions/{discussion_id}/notes`.",
+        "properties": {
+          "body": {
+            "description": "Plain text / Markdown, 1 character to 60 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "type": "object"
+      },
       "AdminUser": {
         "additionalProperties": false,
         "description": "One user as the administration sees it (no e-mail or other personal\nidentifiers: the read pool never has them).",
@@ -798,6 +812,113 @@
         ],
         "type": "object"
       },
+      "DiscussionBody": {
+        "additionalProperties": false,
+        "description": "One discussion of a merge request.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`general` or `inline`.",
+            "type": "string"
+          },
+          "notes": {
+            "description": "Oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/NoteBody"
+            },
+            "type": "array"
+          },
+          "outdated": {
+            "description": "A later version rewrote (or moved) the line — or whether it did\ncould not be computed (`outdated_unknown`): look again.",
+            "type": "boolean"
+          },
+          "outdated_unknown": {
+            "description": "`outdated` could not be computed (git busy or failed, a purged\nversion, unrecorded bases, too many diffs for one read): it is\nshown as `true`.",
+            "type": "boolean"
+          },
+          "position": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PositionBody",
+                "description": "Set exactly for an inline discussion."
+              }
+            ]
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_by": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "position",
+          "outdated",
+          "outdated_unknown",
+          "started_by",
+          "resolved",
+          "resolved_by",
+          "resolved_at",
+          "created_at",
+          "notes"
+        ],
+        "type": "object"
+      },
+      "DiscussionsBody": {
+        "additionalProperties": false,
+        "description": "The discussions of a merge request, oldest first.",
+        "properties": {
+          "discussions": {
+            "items": {
+              "$ref": "#/components/schemas/DiscussionBody"
+            },
+            "type": "array"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "More than 500 discussions or 5 000 notes: the rest are not listed.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "iid",
+          "discussions",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "EntryBody": {
         "additionalProperties": false,
         "description": "One tree entry.",
@@ -1304,6 +1425,70 @@
           "tombstones",
           "projects",
           "reclaimed_tombstones"
+        ],
+        "type": "object"
+      },
+      "NoteBody": {
+        "additionalProperties": false,
+        "description": "One note of a discussion.",
+        "properties": {
+          "author_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "body": {
+            "description": "As written (never rendered by the server).",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "author_id",
+          "body",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "PositionBody": {
+        "additionalProperties": false,
+        "description": "Where an inline discussion sits: a line of one side of one version's\ndiff (`GET …/versions/{version}/diff`).",
+        "properties": {
+          "line": {
+            "description": "A line inside a hunk of that file on that side (1-based).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "description": "The file's path on that side (as the diff lists it).",
+            "type": "string"
+          },
+          "side": {
+            "description": "`old` (the version's merge base) or `new` (its head).",
+            "type": "string"
+          },
+          "version": {
+            "description": "The version's number.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "path",
+          "side",
+          "line"
         ],
         "type": "object"
       },
@@ -1857,6 +2042,31 @@
         },
         "required": [
           "visibility"
+        ],
+        "type": "object"
+      },
+      "StartDiscussion": {
+        "additionalProperties": false,
+        "description": "`POST …/discussions`.",
+        "properties": {
+          "body": {
+            "description": "The first note: plain text / Markdown, 1 character to 60 KiB.",
+            "type": "string"
+          },
+          "position": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PositionBody",
+                "description": "Absent: a general discussion on the merge request."
+              }
+            ]
+          }
+        },
+        "required": [
+          "body"
         ],
         "type": "object"
       },
@@ -4103,6 +4313,301 @@
         },
         "summary": "Compare two versions of a merge request, head to head (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_discussions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a merge request's discussions with their notes and whether a later version changed their line (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_discussions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartDiscussion"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Start a discussion, general or on a line of a version's diff (Reporter; agents' tokens too)",
+        "x-forge-action": "MergeRequestComment",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_notes",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "discussion_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddNote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Reply to a discussion (Reporter; agents' tokens too)",
+        "x-forge-action": "MergeRequestComment",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_resolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "discussion_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Resolve a discussion (people only: its starter, or a Developer who is not the merge request's author)",
+        "x-forge-action": "DiscussionResolve"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_unresolve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "discussion_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscussionBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Unresolve a discussion (as resolving)",
+        "x-forge-action": "DiscussionResolve"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {

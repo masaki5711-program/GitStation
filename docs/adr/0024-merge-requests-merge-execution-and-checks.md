@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -600,7 +600,8 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | FG-REVIEW-0001（R1a で登録済み） | DuplicateOpenMergeRequest | 409 | info | — | R1 |
 | 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
 | 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
-| 仮（登録の順に決める） | DiscussionPositionInvalid | 422 | info | — | R3 |
+| FG-REVIEW-0004（R3 で登録） | DiscussionPositionInvalid | 422 | info | — | R3 |
+| FG-REVIEW-0005（R3 のレビューで登録） | DiscussionLimitReached（スレッド・コメントの上限） | 409 | info | — | R3 |
 | 仮（登録の順に決める） | MergeMethodNotAllowed | 409 | info | — | R4 |
 | 仮（登録の順に決める） | CheckNamespaceDenied | 403 | info | — | C1 |
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
@@ -837,3 +838,102 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   その行を飛ばし warn。生きているとはみなさない）。doctor の `review.mergeability` は、head が違う決定の件数と、1 時間確かめられていない
   決定の件数も数える。`record_check` が「確認の途中で MR が閉じた」ために書かないときは、行を `unchecked`（ジョブなし）に戻し、
   見回りの `job_stale`（と偽の FG-REVIEW-0003）を出さない。見回りは開いている MR の行だけを終わらせる。
+
+## 実装で決めたこと（R3 `feat/core-merge-request-discussions`、2026-11-02）
+
+本文（§6・§8 の 4・§12）と違えたところは **逸脱** と書いた。
+
+- **表**（追記のマイグレーション 20261109100000）: `merge_request_discussions`（`kind` = `general` / `inline`、inline は
+  `version_no`・`path`・`side`（`old` = 版の merge base、`new` = 版の head）・`line` をすべて持ち、general はすべて持たない
+  （CHECK）。`(merge_request_id, version_no)` は版の表への複合の外部キー。`started_by`、`resolved` / `resolved_by` /
+  `resolved_at`、`revision`（作成で 1、解決・解決の取り消しごとに + 1））と `merge_request_notes`（`author_id`、本文 1 文字〜
+  64 KiB、`created_at`）。どちらもプロジェクトに監査される状態（`tables.toml` の `audited`、resource `project`）。ガード
+  `merge_request_discussions_guard`（スレッドの同一性と位置は変わらない、変更ごとに `revision + 1`）と
+  `merge_request_notes_guard`（コメントの UPDATE をすべて拒む）を guarded object と doctor の期待値に足した。プロジェクトの
+  purge はコメント → スレッド → 版の順に消す。
+- **コメントの編集は R3 に入れない**: 編集の権限（`NoteEdit`）・履歴・監査の形を決める前に入れると、表と Action を後で
+  作り直すことになる。コメントは不変（ガードで固定）。編集の列は入れる MR で追記のマイグレーションで足す。
+- **イベント**: §6 の表のとおり 1 つの型 `merge_request.commented` で、`data.action` は `note_added` / `thread_resolved` /
+  `thread_unresolved`（§6 の値をそのまま使う。新しいスレッドか返信かは `discussion_started: bool` で見分ける）。ペイロードは
+  ID・`kind`・フラグだけで、本文とパスは入れない（衝突のイベントと同じ）。dedup の鍵はサーバーの ID だけ:
+  `merge_request_note_added:<note_id>`、`merge_request_thread_resolved|unresolved:<discussion_id>:<revision>`（解決 →
+  取り消し → 解決が別のイベントになる）。`MergeRequestTransition::Comment` を 1 つ足し、
+  `every_merge_request_transition_emits_exactly_one_event` に含めた。既に同じ状態への解決・取り消しは何も書かない
+  （`ResolveOutcome::Unchanged`、イベントなし）。返信はスレッドの解決の状態を変えない。
+- **位置の検査**: inline の位置は、トランザクションの前に forge-review が **その版の差分**（`merge_base..head`。共通の履歴が
+  なければ `base..head`。R2 の `merge_request_compare` を `DiffProbe` 越しに使い、新しい git の呼び出しはない）に対して確かめる。
+  行は、その側にそのパスを持つファイルの **hunk の中**（変更の行と文脈の行。差分に見える行）でなければならない。理由は
+  `version_unknown` / `version_purged` / `version_base_pending` / `path_not_in_diff` / `diff_truncated`（上限で切れた差分に
+  無い: 有ると示せないので拒む）/ `no_patch`（バイナリ・上限で省かれたパッチ）/ `line_out_of_range`。**FG-REVIEW-0004**
+  DiscussionPositionInvalid（422、info）。ログにはパスと本文を出さない。外部キーが、版の行が無いときの最後の守り（同じ
+  FG-REVIEW-0004 `version_unknown`）。
+- **`outdated` は読むときに計算する**（記録しない）: 版を記録するジョブで書くと、push のたびにすべてのスレッドの行を
+  書き換え、ジョブに git の差分を足すことになる（版のジョブは MR ごとのロックを持つので重くしたくない）。読むときは、
+  スレッドの側のコミット（`new` = その版の head、`old` = その版の merge base）から、今の版（MR の `head_sha` の版）の同じ側の
+  コミットへの差分を 1 回だけ取り（同じ組はキャッシュ）、その行が `-` の行か、ファイルが削除・名前の変更・種類の変更か、
+  行ごとに読めない（バイナリ・省かれたパッチ・切れた差分に隠れうる）なら `outdated: true`。Purge 済みの版・base の未記録も
+  `true`（見直しを促す側に倒す）。差分の取得の失敗は読み取りの失敗にする（「古くない」にしない）。今の版のスレッドと
+  general のスレッドは常に `false`。
+- **権限**（§12）: `MergeRequestComment` は `Resource::MergeRequest` で判定し、**所属のロールで Reporter 以上**（逸脱ではないが
+  解釈: internal のプロジェクトの所属していない利用者は読めるがコメントできない。書き込みはどれも所属が要る、に揃えた）。
+  エージェントのトークンとサービスアカウントは可。`DiscussionResolve` は `Resource::Discussion { project, mr_author,
+  started_by }`（**逸脱**: §12 の「MR と同じ形」ではなく、判定に使う 3 つだけ。MR の状態は入力にしない — どの状態でも
+  解決できる）。人だけ → 自分が始めたスレッドは Reporter 以上 → 他人のスレッドは MR の作成者なら `author_foreign_discussion`
+  （管理者でも）→ Developer 以上。返信は MR で判定し、スレッドがその MR に無ければ判定の後で FG-REPO-0005
+  `resource=discussion`（判定の前に存在を漏らさない）。
+- **AccountKind**（§8 の 4。R1b で R5 に送ったものを R3 で入れた）: `forge_auth::AccountKind` は forge-core の `UserKind` の
+  再輸出。`Principal::authenticated` の 5 つ目の引数（既定値なし）。トークンとセッションの認証が `users.kind` を読み
+  （`TokenIdentity.kind` / `SessionIdentity.kind`、読めない値は FG-SYS-0001 `unknown_user_kind`）、`reconfirm` は種類を
+  そのまま保つ（変わらない値）。**人だけの arm は既存の人だけの Action すべてで** サービスアカウント（`service_account`）と
+  ボット（`bot`）も拒む（閉じる側。それまで種類は判定の入力でなかった）。行列の行に `ServiceAccountTokenApi` /
+  `BotTokenApi` を足した。行は `matrix_rows_discussion.rs`（`ROWS` は基本の行とこの行を合わせた一覧）。
+- **ルート**: `GET|POST …/{iid}/discussions`、`POST …/discussions/{discussion_id}/notes`、`POST …/resolve` / `…/unresolve`
+  （閉じる・再オープンと同じく POST）。本文の上限はレジストリの JSON の上限 64 KiB（MR の説明と同じく、上限ちょうどの
+  コメントが JSON のエスケープで超えると FG-WEB-0009 RequestTooLarge）。一覧は 500 スレッド・5 000 コメントまで（`truncated`）。本文は
+  書かれたまま保存して返し、サーバーは描画しない（画面が安全に描画する、U1）。gstn は `mr discussions` / `mr comment`
+  （`--discussion` で返信、`--version --path --line [--side]` で行）/ `mr resolve [--unresolve]`。
+
+### R3 の独立レビュー（1 回目）で決めたこと（2026-11-02）
+
+上の R3 の節と違えたところは **改訂** と書いた。
+
+- **人だけの Action の行（HIGH）**: 人だけの arm が既存の人だけの Action でもサービスアカウントとボットを拒むようになったのに、
+  行は `DiscussionResolve` にしか無かった（arm を消しても行列が赤くならない）。`Action::is_people_only` に一覧を置き、各 Action に
+  サービスアカウントとボットの deny の行を置いた（`matrix_rows_people.rs`）。どの行も、同じロール・スコープ・管理者の印の **人**
+  （`Actor::human_twin`）なら allow であることをテストで確かめ（拒否の理由が種類だけであること）、逆に人だけでない Action の
+  allow の行は種類を変えても allow であることを確かめる。ボットは自分のロールの範囲でコメントできる（allow の行）。
+- **書き込みの応答で失敗しない（HIGH、改訂）**: 書き込みのルートはコミットの後に `outdated` の差分を取っていたため、git の失敗
+  （busy・時間切れ・届かないコミット）で保存済みのコメントに 4xx / 5xx を返し、再試行で重複を招いた。`outdated` を
+  `Outdated::{No, Yes, Unknown}` にし、計算できないもの（今の版が無い、Purge 済みの版、base の未記録、1 回の読み取りで
+  **20 組**（`MAX_DIFFS_PER_READ`）を超える差分、差分の失敗、書き込みの後の版の読み取りの失敗）は `Unknown`。API では
+  `outdated: true` と `outdated_unknown: true`。読み取りごとに warn `forge.review.discussion_outdated_unknown` を 1 回
+  （件数・理由・最初の差分の失敗の `error_code`）。**一覧の読み取りも差分の失敗で失敗させない**（上の「差分の取得の失敗は
+  読み取りの失敗にする」を改訂。DB の読み取りの失敗だけが失敗）。今の版は MR の `head_sha` の版で、無ければ `Unknown`
+  （「古くない」にしない）。
+- **上限（FG-REVIEW-0005 DiscussionLimitReached、409）**: MR ごとに 500 スレッド・5 000 コメント、スレッドごとに 200 コメント。
+  MR の行のロックの下で数える（書き込みはどれもこのロックを持つ）。一覧の上限と同じなので、一覧が切れることは無い。
+  1 スレッドのコメントの読み取りにも LIMIT。
+- **コメントの上限を 60 KiB に（改訂）**: リクエストの JSON の上限が 64 KiB なので、64 KiB のコメントは送れなかった。規則が
+  受け付けるコメントは、包みと 4 KiB のパスを足しても上限に収まる（表は 64 KiB のまま、最後の守り）。
+- **合成の外部キー**（追記のマイグレーション 20261109100100）: スレッドの `(merge_request_id, project_id)` →
+  `merge_requests (id, project_id)`、コメントの `(discussion_id, merge_request_id, project_id)` → スレッドの同じ組。
+- **クローズ・マージ済みの MR**: コメントも解決もできる（解決は記録の整理で、マージを止めるのは `evaluate_merge()`）。
+  `Resource::Discussion` は MR の状態を入力にしないので行列の行では表せず、HTTP のテストで固定した。
+- **コピー**: old 側の位置はコピーの項目に解決しない（コピーの元は変わらずに残っている）。
+- テスト: `check_inline` の理由（`version_base_pending`・`version_purged`・`no_patch`（バイナリ）・`diff_truncated`（ファイル数の
+  上限））を実リポジトリで、本文の規則・別の MR / 別のプロジェクトのスレッドの ID（同じ 404、何も書かない）・サービス
+  アカウントの解決の拒否・同じ解決の繰り返し（イベントは増えない）・hunk の境界・gstn の終了コードを HTTP / CLI で。
+
+### R3 の再レビューで決めたこと（2026-11-02）
+
+- **`outdated` の時間の予算**: 1 回の読み取り（と書き込みの応答の表示）が `outdated` の差分に使う時間は合計 **8 秒**
+  （`OUTDATED_BUDGET`、要求の時間切れ 30 秒より十分短く、書き込みの経路の余裕を残す）。期限を過ぎたら残りの組は git を
+  動かさずに `Unknown`（`reason=deadline`）、実行中の差分は期限で打ち切る。古い版への行のコメントの書き込みも、コミットの
+  後に要求の時間切れを超えない。
+- **ログの重さ**: `version_purged` / `version_base_pending` は日常の状態なので debug（`error_code` なし）。warn は診断の
+  失敗だけで、`diff_failed` / `versions_unreadable` は `error_code` と `error_reason`（失敗の context の `reason`）を持つ。
+  `deadline` / `diff_cap` / `no_current_version` / `version_unknown` は warn で `error_code` なし。
+- **既にデータのある表への UNIQUE の追加**: 20261109100100 の `merge_requests_id_project` は `ALTER TABLE … ADD CONSTRAINT …
+  UNIQUE` で入れた（R3 の時点では行が少ない）。今後、行の多い表に UNIQUE を足すときは、書き込みを止めないように
+  `CREATE UNIQUE INDEX CONCURRENTLY`（トランザクションの外の別のマイグレーション）で索引を作り、`ALTER TABLE … ADD
+  CONSTRAINT … UNIQUE USING INDEX` で制約にする。

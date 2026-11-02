@@ -425,6 +425,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a merge request's discussions with their notes and whether a later version changed their line (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_discussions"];
+        put?: never;
+        /** Start a discussion, general or on a line of a version's diff (Reporter; agents' tokens too) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_discussions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reply to a discussion (Reporter; agents' tokens too) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_notes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve a discussion (people only: its starter, or a Developer who is not the merge request's author) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_resolve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Unresolve a discussion (as resolving) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_unresolve"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/mergeability": {
         parameters: {
             query?: never;
@@ -914,6 +983,11 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        /** @description `POST …/discussions/{discussion_id}/notes`. */
+        AddNote: {
+            /** @description Plain text / Markdown, 1 character to 60 KiB. */
+            body: string;
+        };
         /**
          * @description One user as the administration sees it (no e-mail or other personal
          *     identifiers: the read pool never has them).
@@ -1203,6 +1277,43 @@ export interface components {
             /** Format: int64 */
             user_id: number;
         };
+        /** @description One discussion of a merge request. */
+        DiscussionBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            id: number;
+            /** @description `general` or `inline`. */
+            kind: string;
+            /** @description Oldest first. */
+            notes: components["schemas"]["NoteBody"][];
+            /**
+             * @description A later version rewrote (or moved) the line — or whether it did
+             *     could not be computed (`outdated_unknown`): look again.
+             */
+            outdated: boolean;
+            /**
+             * @description `outdated` could not be computed (git busy or failed, a purged
+             *     version, unrecorded bases, too many diffs for one read): it is
+             *     shown as `true`.
+             */
+            outdated_unknown: boolean;
+            position: null | components["schemas"]["PositionBody"];
+            resolved: boolean;
+            resolved_at: string | null;
+            /** Format: int64 */
+            resolved_by: number | null;
+            /** Format: int64 */
+            started_by: number;
+        };
+        /** @description The discussions of a merge request, oldest first. */
+        DiscussionsBody: {
+            discussions: components["schemas"]["DiscussionBody"][];
+            /** Format: int64 */
+            iid: number;
+            /** @description More than 500 discussions or 5 000 notes: the rest are not listed. */
+            truncated: boolean;
+        };
         /** @description One tree entry. */
         EntryBody: {
             /** @description The octal mode as git prints it (`100644`, `040000`, …). */
@@ -1404,6 +1515,37 @@ export interface components {
              *     callers who may read the project, a push through it is refused.
              */
             tombstones: number;
+        };
+        /** @description One note of a discussion. */
+        NoteBody: {
+            /** Format: int64 */
+            author_id: number;
+            /** @description As written (never rendered by the server). */
+            body: string;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            id: number;
+        };
+        /**
+         * @description Where an inline discussion sits: a line of one side of one version's
+         *     diff (`GET …/versions/{version}/diff`).
+         */
+        PositionBody: {
+            /**
+             * Format: int64
+             * @description A line inside a hunk of that file on that side (1-based).
+             */
+            line: number;
+            /** @description The file's path on that side (as the diff lists it). */
+            path: string;
+            /** @description `old` (the version's merge base) or `new` (its head). */
+            side: string;
+            /**
+             * Format: int64
+             * @description The version's number.
+             */
+            version: number;
         };
         /** @description A project as the API shows it. */
         ProjectBody: {
@@ -1617,6 +1759,12 @@ export interface components {
         /** @description `PUT /api/v1/projects/{id}/visibility`. */
         SetVisibility: {
             visibility: components["schemas"]["VisibilityName"];
+        };
+        /** @description `POST …/discussions`. */
+        StartDiscussion: {
+            /** @description The first note: plain text / Markdown, 1 character to 60 KiB. */
+            body: string;
+            position?: null | components["schemas"]["PositionBody"];
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {
@@ -2981,6 +3129,177 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionCompareBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_discussions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscussionsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_discussions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartDiscussion"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscussionBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                discussion_id: number;
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddNote"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscussionBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_resolve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                discussion_id: number;
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscussionBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_discussions_discussion_id_unresolve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                discussion_id: number;
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscussionBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

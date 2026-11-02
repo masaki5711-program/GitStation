@@ -330,6 +330,46 @@
   {
     "action": "MergeRequestRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestComment",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestComment",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DiscussionResolve",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "DiscussionResolve",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
     "public": false,
     "scope": "fixed",

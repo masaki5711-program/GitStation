@@ -283,6 +283,32 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
         Coverage::Command("mr mergeability"),
     ),
+    // M3 R3 (ADR-0024 §6, §12): discussions.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+        Coverage::Command("mr discussions"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/discussions",
+        Coverage::Command("mr comment"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/notes",
+        Coverage::Command("mr comment"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/resolve",
+        Coverage::Command("mr resolve"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve",
+        Coverage::Command("mr resolve"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (
