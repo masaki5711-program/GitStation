@@ -3,6 +3,7 @@
 
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+use crate::merge_request::MergeRequestChange;
 use crate::move_details::{MoveSummary, TombstoneKind};
 use crate::push::{push_json, PushReplay, PushedRef, AUDIT_BUDGET, EVENT_BUDGET};
 use crate::repository::RepositoryState;
@@ -276,9 +277,17 @@ pub enum AuditDetails {
         redirects_ended: i64,
         members_removed: i64,
         protected_refs_removed: i64,
+        /// Merge request rows deleted with the project (M3 R1a, plan 11
+        /// §11.8).
+        merge_requests_removed: i64,
         storage_removed: bool,
     },
     // ── end D5 MR4 ──
+    /// `merge_request.*` (M3 R1a, ADR-0024 §6): one transition of one merge
+    /// request, audited on its project (resource `project`, like
+    /// `protected_ref.*`) and published as the transition's event
+    /// (integration class). The shapes: [`MergeRequestChange::to_value`].
+    MergeRequest(MergeRequestChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -427,6 +436,7 @@ impl AuditDetails {
             Self::SessionsPurged { .. } => "session.purged",
             Self::UserCreatedOnLogin { .. } => "user.created",
             Self::UserIdentityLinked { .. } => "user.identity_linked",
+            Self::MergeRequest(change) => change.action(),
         }
     }
 
@@ -472,6 +482,7 @@ impl AuditDetails {
             // D5 MR4: the start is audit-only; the end is the one event.
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
+            Self::MergeRequest(change) => Some(change.transition().event_type()),
             // ADR-0021 §5: sessions are audit rows, never domain events.
             Self::SessionCreated { .. }
             | Self::SessionRevoked { .. }
@@ -516,7 +527,8 @@ impl AuditDetails {
     /// RepositoryPurgeStarted `{"project_id","repository_id","from"}`,
     /// ProjectPurged `{"project_id","repository_id","namespace_id","deleted_at",
     /// "purge_after","deleted_by","tombstone_id","redirects_ended","members_removed",
-    /// "protected_refs_removed","storage_removed"}`,
+    /// "protected_refs_removed","merge_requests_removed","storage_removed"}`,
+    /// MergeRequest: [`MergeRequestChange::to_value`],
     /// ProjectMoved `{"project_id"}` + [`MoveSummary`]'s fields,
     /// ProjectMovedWithAncestor `{"project_id","namespace_id","moved_namespace_id"}`,
     /// GroupMoved `{"group_id"}` + the summary, UserRenamed `{"user_id"}` +
@@ -746,6 +758,7 @@ impl AuditDetails {
                 redirects_ended,
                 members_removed,
                 protected_refs_removed,
+                merge_requests_removed,
                 storage_removed,
             } => serde_json::json!({
                 "project_id": project_id.get(),
@@ -758,6 +771,7 @@ impl AuditDetails {
                 "redirects_ended": redirects_ended,
                 "members_removed": members_removed,
                 "protected_refs_removed": protected_refs_removed,
+                "merge_requests_removed": merge_requests_removed,
                 "storage_removed": storage_removed,
             }),
             Self::GroupMoved { group_id, summary } => with_id("group_id", group_id.get(), summary),
@@ -819,6 +833,7 @@ impl AuditDetails {
                 "issuer": issuer,
                 "via": via.as_str(),
             }),
+            Self::MergeRequest(change) => change.to_value(),
         }
     }
 
@@ -885,7 +900,8 @@ impl AuditDetails {
             | Self::SessionsRevoked { .. }
             | Self::SessionsPurged { .. }
             | Self::UserCreatedOnLogin { .. }
-            | Self::UserIdentityLinked { .. } => self.to_value(),
+            | Self::UserIdentityLinked { .. }
+            | Self::MergeRequest(_) => self.to_value(),
         }
     }
 }

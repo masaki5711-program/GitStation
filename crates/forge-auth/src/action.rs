@@ -63,6 +63,23 @@ actions! {
     /// `GET /api/v1/projects/{id}/protected-refs`: the protection rules
     /// (M1 phase 8b MR8), as `ProjectRead`.
     ProtectedRefList,
+    // --- REST API: merge requests (M3 R1a, ADR-0024 §12) ---
+    /// `POST /api/v1/projects/{id}/merge-requests`: open a merge request
+    /// (Developer and above, like `RepoPush`; opening one is not a push, so
+    /// the source branch's protection is not consulted, plan 11 §11.7).
+    MergeRequestCreate,
+    /// `GET /api/v1/projects/{id}/merge-requests/{iid}`: as `RepoBrowse`.
+    MergeRequestRead,
+    /// `GET /api/v1/projects/{id}/merge-requests`: as `RepoBrowse`.
+    MergeRequestList,
+    /// `PATCH …/merge-requests/{iid}`: title, description, draft, target.
+    /// The author or Developer and above; another's draft flag only the
+    /// author or Maintainer and above.
+    MergeRequestUpdate,
+    /// `POST …/merge-requests/{iid}/close`: the author or Developer and above.
+    MergeRequestClose,
+    /// `POST …/merge-requests/{iid}/reopen`: as close; a merged one never.
+    MergeRequestReopen,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -230,6 +247,8 @@ impl Action {
             | Action::AuditRead
             | Action::UserSelfRead
             | Action::PathResolve
+            | Action::MergeRequestRead
+            | Action::MergeRequestList
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -248,7 +267,11 @@ impl Action {
             | Action::TokenRevoke
             | Action::AdminSessionRevoke
             | Action::UserCreate
-            | Action::UserDisable => Some(Scope::Api),
+            | Action::UserDisable
+            | Action::MergeRequestCreate
+            | Action::MergeRequestUpdate
+            | Action::MergeRequestClose
+            | Action::MergeRequestReopen => Some(Scope::Api),
         }
     }
 }

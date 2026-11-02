@@ -219,6 +219,8 @@ pub(crate) enum Fixture {
         access_role: bool,
         account: AdmissionAccount,
     },
+    /// A merge request (M3 R1a, ADR-0024 §12): `matrix_review.rs`.
+    Mr(crate::matrix_review::MrFixture),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -556,6 +558,7 @@ impl Fixture {
                 access_role,
                 account,
             },
+            Fixture::Mr(mr) => mr.resource(role),
         }
     }
 }

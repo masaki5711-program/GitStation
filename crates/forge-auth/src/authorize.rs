@@ -29,7 +29,13 @@
 //!    `ProtectedRefManage`, and every D5 action: `ProjectTransfer`,
 //!    `GroupTransfer`, `UserRename`, `NamespaceTombstoneRelease`,
 //!    `ProjectDelete`, `ProjectRestore`);
-//! 6. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
+//! 6. merge requests (M3 R1a, ADR-0024 §12): both branches `refs/heads/*`
+//!    and different, or `FG-AUTH-0003` (`not_a_branch`,
+//!    `source_equals_target`) in every arm; a merged one is never closed
+//!    or reopened, an edit of the target or the draft flag needs it open
+//!    (`merged`, `not_open`), another's draft flag needs Maintainer
+//!    (`foreign_draft`);
+//! 7. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, and `FG-GIT-0008` below the minimum push role
 //!    (administrators pass the minimum role).
@@ -38,9 +44,9 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::action::Action;
 use crate::model::{
-    AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
-    ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease,
-    TransferTarget, UnresolvedReason, Visibility,
+    AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestState,
+    NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia, Resource, Role, Scope,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -181,6 +187,18 @@ pub fn authorize(
     };
     // A resource of the wrong shape for the action is a programming error in
     // the caller; deny rather than guess.
+    // A refusal on the request's shape or the target's state (merge
+    // requests, ADR-0024 §12): 403 with the log `reason`.
+    let refused = |reason: &'static str| deny(ErrorCode::Forbidden).with_context("reason", reason);
+    // Who acts on an existing merge request: its author (who still reads
+    // the project) or Developer and above (ADR-0024 §12).
+    let author_or_developer = |own: bool, project: &ProjectView| -> Result<(), ForgeError> {
+        if own {
+            need(Role::Reporter, read_role(project))
+        } else {
+            need(Role::Developer, project.role)
+        }
+    };
     let wrong_resource = || {
         Err(ForgeError::new(ErrorCode::Internal)
             .with_context("action", action.name())
@@ -526,6 +544,88 @@ pub fn authorize(
         // `ProjectRead` / `GroupRead` (M1 phase 8b MR7b, never in SQL).
         (Action::ProjectList | Action::GroupList, Resource::Instance) => Ok(()),
 
+        // --- merge requests (M3 R1a, ADR-0024 §12) ---
+        // Listing and reading as the repository browse API.
+        (Action::MergeRequestList, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        (
+            Action::MergeRequestRead,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Reporter, read_role(project))?;
+            branches(source_branch, target_branch).map_err(refused)
+        }
+        // Opening one: Developer, like a push (not the source branch's
+        // protection: opening is not a push, plan 11 §11.7), for oneself.
+        (
+            Action::MergeRequestCreate,
+            Resource::MergeRequest {
+                project,
+                author,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Developer, project.role)?;
+            if *author != user {
+                return Err(refused("foreign_author"));
+            }
+            branches(source_branch, target_branch).map_err(refused)
+        }
+        (
+            Action::MergeRequestUpdate,
+            Resource::MergeRequest {
+                project,
+                author,
+                state,
+                draft,
+                source_branch,
+                target_branch,
+                edit,
+            },
+        ) => {
+            let own = *author == user;
+            author_or_developer(own, project)?;
+            let target = edit.target_branch.as_ref().unwrap_or(target_branch);
+            branches(source_branch, target).map_err(refused)?;
+            let toggles = edit.draft.is_some_and(|d| d != *draft);
+            let changes_branch = target != target_branch;
+            if (toggles || changes_branch) && *state != MergeRequestState::Open {
+                return Err(refused("not_open"));
+            }
+            // Another's draft flag: the author or Maintainer (ADR-0024 §12,
+            // plan 11 §4.3 "他人のドラフトの変更").
+            if toggles && !own {
+                need(Role::Maintainer, project.role)
+                    .map_err(|e| e.with_context("reason", "foreign_draft"))?;
+            }
+            Ok(())
+        }
+        (
+            Action::MergeRequestClose | Action::MergeRequestReopen,
+            Resource::MergeRequest {
+                project,
+                author,
+                state,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            author_or_developer(*author == user, project)?;
+            branches(source_branch, target_branch).map_err(refused)?;
+            // `merged` is final (ADR-0024 §6): never closed, never reopened.
+            if *state == MergeRequestState::Merged {
+                return Err(refused("merged"));
+            }
+            Ok(())
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -575,6 +675,12 @@ pub fn authorize(
             | Action::SessionContinue
             | Action::SessionLogout
             | Action::PathResolve
+            | Action::MergeRequestCreate
+            | Action::MergeRequestRead
+            | Action::MergeRequestList
+            | Action::MergeRequestUpdate
+            | Action::MergeRequestClose
+            | Action::MergeRequestReopen
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -592,7 +698,8 @@ pub fn authorize(
             | Resource::Session { .. }
             | Resource::TokenRequest { .. }
             | Resource::Admission { .. }
-            | Resource::Resolved { .. },
+            | Resource::Resolved { .. }
+            | Resource::MergeRequest { .. },
         ) => wrong_resource(),
     }
 }
@@ -630,7 +737,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         Resource::Ref { project, .. } => live(project),
         Resource::Transfer { source, .. } => live(source),
         Resource::RefProtectionChange { project, .. }
-        | Resource::VisibilityChange { project, .. } => live(project),
+        | Resource::VisibilityChange { project, .. }
+        | Resource::MergeRequest { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -702,7 +810,23 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::TokenRequest { .. }
         | Resource::Admission { .. }
         | Resource::Unresolved(_)
-        | Resource::Resolved { .. } => None,
+        | Resource::Resolved { .. }
+        | Resource::MergeRequest { .. } => None,
+    }
+}
+
+/// A merge request's branches (ADR-0024 §1): both `refs/heads/*`, never
+/// the same. The denial's log `reason` otherwise.
+fn branches(
+    source: &forge_core::RefName,
+    target: &forge_core::RefName,
+) -> Result<(), &'static str> {
+    if RefKind::of(source) != RefKind::Branch || RefKind::of(target) != RefKind::Branch {
+        Err("not_a_branch")
+    } else if source == target {
+        Err("source_equals_target")
+    } else {
+        Ok(())
     }
 }
 

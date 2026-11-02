@@ -109,6 +109,9 @@ pub mod members;
 // ── D5 MR2: namespace moves and tombstone releases ──
 pub mod tombstones;
 // ── end D5 MR2 ──
+// ── M3 R1a: merge requests (ADR-0024; the SQL of forge-review) ──
+pub mod review;
+// ── end M3 R1a ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

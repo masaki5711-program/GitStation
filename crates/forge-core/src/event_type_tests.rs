@@ -113,7 +113,12 @@ fn all_lists_every_event_type_once() {
             "project.purged",
             "project.moved",
             "group.moved",
-            "user.renamed"
+            "user.renamed",
+            "merge_request.opened",
+            "merge_request.updated",
+            "merge_request.draft_changed",
+            "merge_request.closed",
+            "merge_request.reopened"
         ]
     );
 }
@@ -196,4 +201,21 @@ fn repository_pushed_is_integration_class() {
         EventType::RepositoryPushed.visibility_class(),
         VisibilityClass::Integration
     );
+}
+
+/// M3 R1a (ADR-0024 §6): the merge request events are integration class
+/// (kanflow follows them), and each R1a transition names exactly one.
+#[test]
+fn merge_request_events_are_integration_class_one_per_transition() {
+    use crate::MergeRequestTransition;
+    let mut seen = std::collections::HashSet::new();
+    for t in MergeRequestTransition::ALL {
+        let e = t.event_type();
+        assert_eq!(e.visibility_class(), VisibilityClass::Integration, "{t:?}");
+        assert!(e.as_str().starts_with("merge_request."), "{t:?}");
+        assert!(
+            seen.insert(e),
+            "{t:?} shares its event with another transition"
+        );
+    }
 }
