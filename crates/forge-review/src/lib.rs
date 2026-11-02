@@ -1,0 +1,460 @@
+//! forge-review: merge requests (M3 R1a, ADR-0024). A feature crate
+//! (ADR-0024 §11): forge-web / forge-cli → forge-review → forge-auth /
+//! forge-git / forge-db; it runs no SQL of its own (the SQL is
+//! `forge_db::review`) and depends on no other feature crate.
+//!
+//! **Every command is decided twice by the one decision point, and the
+//! second decision binds the write** (as forge-hosting): the route registry
+//! proves the action on what its loader read; the command takes that
+//! `Authorized<MergeRequestCtx>`, opens the write transaction through a
+//! forge-db review command, which locks the project row, the merge request
+//! row and the caller's roles and account, and calls `decide` — here
+//! [`forge_auth::Authorized::reconfirm`] on those facts. A role removed, a
+//! demotion or a disable committed in between is seen (denied, nothing
+//! written). A proof for another action is `FG-SYS-0001
+//! reason=proof_action_mismatch`; a create's proof (no iid) driving an
+//! update, or the reverse, is `proof_shape_mismatch`.
+//!
+//! Before the transaction, a create checks both branches exist (and a
+//! retarget the new target, a reopen both) through [`BranchProbe`] — in
+//! `forge serve` the browse API's ref list (`forge_git::browse::Browser`,
+//! no new git plumbing): `FG-REPO-0023 reason=ref_not_found` with
+//! `branch=source_branch|target_branch`. A branch deleted later leaves the
+//! merge request in place (ADR-0024 §1).
+
+use std::sync::Arc;
+
+use forge_auth::{
+    AccountFacts, Action, Authorized, Credential, LoadedMergeRequest, LoadedProject,
+    MergeRequestCtx, Principal,
+};
+use forge_core::namespace_resolver::LookupFuture;
+use forge_core::{
+    MergeRequestState, ProjectId, ProjectRepository, RefName, RepoId, RepositoryState, RequestId,
+    UserId,
+};
+use forge_db::access::Account;
+use forge_db::change::{Actor, ChangeContext};
+use forge_db::projects::ProjectAccessFacts;
+use forge_db::review::{self, MergeRequestFacts, MergeRequestPatch, NewMergeRequest};
+use forge_db::Db;
+use forge_errors::{ErrorCode, ForgeError};
+
+pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
+
+mod fields;
+
+pub use fields::{check_description, check_title, MAX_DESCRIPTION_BYTES, MAX_TITLE_CHARS};
+
+/// Whether a branch exists in a repository, for the commands that name
+/// one (create, retarget, reopen). `Ok(())` when it does; `FG-REPO-0023
+/// reason=ref_not_found` when it does not; the lookup's own error
+/// (`FG-GIT-0002` / `FG-GIT-0004`, …) otherwise — never "exists" on a
+/// failure.
+pub trait BranchProbe: Send + Sync {
+    /// `caller` is the caller's key (`user:<id>`) for the browse limits.
+    fn branch_exists<'a>(
+        &'a self,
+        repo: RepoId,
+        branch: &'a RefName,
+        caller: &'a str,
+    ) -> LookupFuture<'a, ()>;
+}
+
+/// The browse API's ref resolution (`resolve_ref` on the full
+/// `refs/heads/…` name: only a branch of that exact name answers).
+impl BranchProbe for forge_git::browse::Browser {
+    fn branch_exists<'a>(
+        &'a self,
+        repo: RepoId,
+        branch: &'a RefName,
+        caller: &'a str,
+    ) -> LookupFuture<'a, ()> {
+        Box::pin(async move {
+            self.resolve_ref(repo, branch.as_str(), caller)
+                .await
+                .map(drop)
+        })
+    }
+}
+
+/// The request a write belongs to (the audit row's request id and token).
+#[derive(Debug, Clone)]
+pub struct ReviewRequest {
+    pub request_id: RequestId,
+    /// The personal access token the request authenticated with (`None`
+    /// for a session).
+    pub credential_id: Option<i64>,
+}
+
+/// A new merge request's free-text fields (the branches and the draft flag
+/// are the proof's).
+#[derive(Debug, Clone)]
+pub struct NewFields {
+    pub title: String,
+    pub description: String,
+}
+
+/// An edit's free-text fields (`None` = unchanged; the draft flag and the
+/// target are the proof's).
+#[derive(Debug, Clone, Default)]
+pub struct EditFields {
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+/// The merge request commands on the database.
+#[derive(Clone)]
+pub struct Review {
+    db: Db,
+    branches: Arc<dyn BranchProbe>,
+}
+
+impl std::fmt::Debug for Review {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Review").finish_non_exhaustive()
+    }
+}
+
+/// `FG-SYS-0001 reason=proof_action_mismatch` unless the proof is for
+/// `expected`.
+fn require(action: Action, expected: Action) -> Result<(), ForgeError> {
+    if action == expected {
+        return Ok(());
+    }
+    Err(ForgeError::new(ErrorCode::Internal)
+        .with_context("reason", "proof_action_mismatch")
+        .with_context("command_action", expected.name())
+        .with_context("proof_action", action.name()))
+}
+
+/// `FG-SYS-0001 reason=proof_shape_mismatch`: a create's proof (no iid)
+/// driving a change of a stored merge request, or the reverse.
+fn shape_mismatch(command: &'static str) -> ForgeError {
+    ForgeError::new(ErrorCode::Internal)
+        .with_context("reason", "proof_shape_mismatch")
+        .with_context("command", command)
+}
+
+/// The caller the proof was decided for (a non-public action has one).
+fn caller(proof: &Authorized<MergeRequestCtx>) -> Result<UserId, ForgeError> {
+    proof.principal().user().ok_or_else(|| {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "proof_without_user")
+            .with_context("action", proof.action().name())
+    })
+}
+
+/// The change context of a write by `principal`: actor `user`, the
+/// request id, the token and its scopes.
+fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) -> ChangeContext {
+    let mut ctx = ChangeContext::new(Actor::User(user), request.request_id.clone());
+    ctx.credential_id = request.credential_id;
+    ctx.effective_scope = match principal.credential() {
+        Credential::Session => Vec::new(),
+        Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
+    };
+    ctx
+}
+
+fn account(a: Account) -> AccountFacts {
+    AccountFacts {
+        active: a.active,
+        is_admin: a.is_admin,
+    }
+}
+
+/// forge-auth's loaded project from the transaction's facts.
+fn loaded(facts: &ProjectAccessFacts) -> LoadedProject {
+    LoadedProject {
+        id: facts.project,
+        visibility: facts.access.visibility,
+        role: facts.access.role,
+        pending_deletion: facts.access.pending_deletion,
+    }
+}
+
+/// forge-auth's loaded merge request from a stored row (the route loaders
+/// and the commands build it the same way).
+pub fn loaded_merge_request(mr: &StoredMergeRequest) -> LoadedMergeRequest {
+    LoadedMergeRequest {
+        iid: Some(mr.iid),
+        author: mr.author,
+        state: mr.state,
+        draft: mr.draft,
+        source_branch: mr.source_branch.clone(), // clone: the context owns its names
+        target_branch: mr.target_branch.clone(),
+    }
+}
+
+/// `FG-REPO-0005 resource=merge_request`: the row went away between the
+/// proof and the lock (never in R1a: only the purge deletes rows).
+fn absent() -> ForgeError {
+    ForgeError::new(ErrorCode::NotFound)
+        .with_context("resource", "merge_request")
+        .with_context("reason", "absent")
+}
+
+/// The repository must exist on disk to look a branch up (`FG-REPO-0016`).
+fn ready(project: ProjectId, repo: ProjectRepository) -> Result<RepoId, ForgeError> {
+    if repo.state == RepositoryState::Ready {
+        return Ok(repo.id);
+    }
+    Err(ForgeError::new(ErrorCode::RepositoryNotReady)
+        .with_context("repo_id", repo.id.get())
+        .with_context("project_id", project.get())
+        .with_context("state", repo.state.as_str()))
+}
+
+impl Review {
+    pub fn new(db: Db, branches: Arc<dyn BranchProbe>) -> Self {
+        Self { db, branches }
+    }
+
+    /// Each of `names` exists in `repo` (`which` names it in the error).
+    async fn require_branches(
+        &self,
+        project: ProjectId,
+        repo: ProjectRepository,
+        user: UserId,
+        names: &[(&'static str, &RefName)],
+    ) -> Result<(), ForgeError> {
+        let id = ready(project, repo)?;
+        let key = format!("user:{}", user.get());
+        for (which, name) in names {
+            self.branches
+                .branch_exists(id, name, &key)
+                .await
+                .map_err(|e| e.with_context("branch", *which))?;
+        }
+        Ok(())
+    }
+
+    // ── reads for the route loaders and the list (read pool) ──
+
+    /// Merge request `iid` of `project` (`None` = absent).
+    pub async fn merge_request(
+        &self,
+        project: ProjectId,
+        iid: i64,
+    ) -> Result<Option<StoredMergeRequest>, ForgeError> {
+        review::get(&self.db, project, iid).await
+    }
+
+    /// One page of `project`'s merge requests, newest first.
+    pub async fn merge_requests(
+        &self,
+        project: ProjectId,
+        state: Option<MergeRequestState>,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<StoredMergeRequest>, ForgeError> {
+        review::list(&self.db, project, state, before, limit).await
+    }
+
+    // ── writes, each decided again inside its transaction ──
+
+    /// `POST /api/v1/projects/{id}/merge-requests` (`MergeRequestCreate`):
+    /// the branches and draft flag the proof was decided for, by the
+    /// proof's caller. The fields are checked first (`FG-WEB-0006`), then
+    /// the branches' existence (`FG-REPO-0016`, `FG-REPO-0023`), then the
+    /// transaction (`FG-REVIEW-0001`, the reconfirmed decision).
+    pub async fn open(
+        &self,
+        request: &ReviewRequest,
+        proof: &Authorized<MergeRequestCtx>,
+        repo: ProjectRepository,
+        fields: &NewFields,
+    ) -> Result<StoredMergeRequest, ForgeError> {
+        require(proof.action(), Action::MergeRequestCreate)?;
+        let (project, None) = *proof.id() else {
+            return Err(shape_mismatch("merge_request_open"));
+        };
+        check_title(&fields.title)?;
+        check_description(&fields.description)?;
+        let user = caller(proof)?;
+        let wanted = proof.ctx().merge_request();
+        self.require_branches(
+            project,
+            repo,
+            user,
+            &[
+                ("source_branch", &wanted.source_branch),
+                ("target_branch", &wanted.target_branch),
+            ],
+        )
+        .await?;
+        let ctx = change_context(request, proof.principal(), user);
+        let new = NewMergeRequest {
+            title: fields.title.clone(), // clone: forge-db owns its request
+            description: fields.description.clone(), // clone: forge-db owns its request
+            source_branch: wanted.source_branch.clone(), // clone: forge-db owns its request
+            target_branch: wanted.target_branch.clone(), // clone: forge-db owns its request
+            draft: wanted.draft,
+        };
+        let (stored, ()) = review::open_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
+            let fresh = MergeRequestCtx::new(loaded(&facts.project), wanted.clone()); // clone: the fresh context owns it
+            proof.reconfirm(account(facts.account), fresh).map(drop)
+        })
+        .await?;
+        Ok(stored)
+    }
+
+    /// `PATCH /api/v1/projects/{id}/merge-requests/{iid}`
+    /// (`MergeRequestUpdate`): the free-text `fields`, and the draft flag
+    /// and target the proof was decided for. A new target must exist; it is
+    /// checked whenever one is asked for — not only when the proof's view of
+    /// the current target differs — so a concurrent retarget can never let
+    /// an unchecked branch through. Returns the outcome and the row as it
+    /// stands after the transaction.
+    pub async fn edit(
+        &self,
+        request: &ReviewRequest,
+        proof: &Authorized<MergeRequestCtx>,
+        repo: ProjectRepository,
+        fields: &EditFields,
+    ) -> Result<(EditOutcome, StoredMergeRequest), ForgeError> {
+        require(proof.action(), Action::MergeRequestUpdate)?;
+        let (project, Some(iid)) = *proof.id() else {
+            return Err(shape_mismatch("merge_request_edit"));
+        };
+        if let Some(title) = &fields.title {
+            check_title(title)?;
+        }
+        if let Some(description) = &fields.description {
+            check_description(description)?;
+        }
+        let user = caller(proof)?;
+        let edit = proof.ctx().edit();
+        if let Some(target) = &edit.target_branch {
+            self.require_branches(project, repo, user, &[("target_branch", target)])
+                .await?;
+        }
+        let ctx = change_context(request, proof.principal(), user);
+        let patch = MergeRequestPatch {
+            title: fields.title.clone(), // clone: forge-db owns its request
+            description: fields.description.clone(), // clone: forge-db owns its request
+            draft: edit.draft,
+            target_branch: edit.target_branch.clone(), // clone: forge-db owns its request
+        };
+        let (outcome, stored, ()) =
+            review::edit_mr_decided(&self.db, &ctx, project, iid, user, &patch, |facts| {
+                let mr = locked(facts)?;
+                let fresh = MergeRequestCtx::edited(loaded(&facts.project), mr, edit.clone()); // clone: the fresh context owns it
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok((outcome, stored))
+    }
+
+    /// `POST …/merge-requests/{iid}/close` (`MergeRequestClose`): the
+    /// outcome and the row after the transaction.
+    pub async fn close(
+        &self,
+        request: &ReviewRequest,
+        proof: &Authorized<MergeRequestCtx>,
+    ) -> Result<(StateOutcome, StoredMergeRequest), ForgeError> {
+        require(proof.action(), Action::MergeRequestClose)?;
+        let (project, Some(iid)) = *proof.id() else {
+            return Err(shape_mismatch("merge_request_close"));
+        };
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        let (outcome, stored, ()) =
+            review::close_mr_decided(&self.db, &ctx, project, iid, user, |facts| {
+                let fresh = MergeRequestCtx::new(loaded(&facts.project), locked(facts)?);
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await?;
+        Ok((outcome, stored))
+    }
+
+    /// `POST …/merge-requests/{iid}/reopen` (`MergeRequestReopen`): both
+    /// branches must still exist (a merge request whose branch was deleted
+    /// stays closed). The branches are checked from the row as read just
+    /// before the transaction, and the transaction refuses to go on when
+    /// the row it locks is closed with branches other than the ones checked
+    /// (or was not closed when read): it re-reads and checks again, at most
+    /// [`STALE_ATTEMPTS`] times, then `FG-DB-0002
+    /// reason=merge_request_changed_concurrently` (retryable). A concurrent
+    /// close or retarget therefore never skips the check.
+    pub async fn reopen(
+        &self,
+        request: &ReviewRequest,
+        proof: &Authorized<MergeRequestCtx>,
+        repo: ProjectRepository,
+    ) -> Result<(StateOutcome, StoredMergeRequest), ForgeError> {
+        require(proof.action(), Action::MergeRequestReopen)?;
+        let (project, Some(iid)) = *proof.id() else {
+            return Err(shape_mismatch("merge_request_reopen"));
+        };
+        let user = caller(proof)?;
+        let ctx = change_context(request, proof.principal(), user);
+        for _ in 0..STALE_ATTEMPTS {
+            let current = self.merge_request(project, iid).await?.ok_or_else(absent)?;
+            // The branches of a closed merge request, checked to exist.
+            let checked = if current.state == MergeRequestState::Closed {
+                self.require_branches(
+                    project,
+                    repo,
+                    user,
+                    &[
+                        ("source_branch", &current.source_branch),
+                        ("target_branch", &current.target_branch),
+                    ],
+                )
+                .await?;
+                Some((current.source_branch, current.target_branch))
+            } else {
+                None
+            };
+            let attempt = review::reopen_mr_decided(&self.db, &ctx, project, iid, user, |facts| {
+                let mr = locked(facts)?;
+                let unchecked = mr.state == MergeRequestState::Closed
+                    && checked.as_ref().is_none_or(|(source, target)| {
+                        *source != mr.source_branch || *target != mr.target_branch
+                    });
+                if unchecked {
+                    return Err(changed_concurrently(iid));
+                }
+                let fresh = MergeRequestCtx::new(loaded(&facts.project), mr);
+                proof.reconfirm(account(facts.account), fresh).map(drop)
+            })
+            .await;
+            match attempt {
+                Err(e) if is_changed_concurrently(&e) => continue,
+                Err(e) => return Err(e),
+                Ok((outcome, stored, ())) => return Ok((outcome, stored)),
+            }
+        }
+        Err(changed_concurrently(iid))
+    }
+}
+
+/// How often a reopen re-reads and re-checks a row that changed under it.
+pub const STALE_ATTEMPTS: usize = 3;
+
+/// `FG-DB-0002 reason=merge_request_changed_concurrently` (retryable): the
+/// row changed between the branch check and the lock.
+fn changed_concurrently(iid: i64) -> ForgeError {
+    ForgeError::new(ErrorCode::DbQueryFailed)
+        .with_context("reason", "merge_request_changed_concurrently")
+        .with_context("retryable", true)
+        .with_context("iid", iid)
+}
+
+fn is_changed_concurrently(e: &ForgeError) -> bool {
+    e.code() == ErrorCode::DbQueryFailed
+        && e.context()
+            .iter()
+            .any(|(k, v)| *k == "reason" && v == "merge_request_changed_concurrently")
+}
+
+/// The merge request as the transaction locked it.
+fn locked(facts: &MergeRequestFacts) -> Result<LoadedMergeRequest, ForgeError> {
+    facts
+        .merge_request
+        .as_ref()
+        .map(loaded_merge_request)
+        .ok_or_else(absent)
+}

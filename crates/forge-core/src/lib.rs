@@ -9,6 +9,7 @@ pub mod dedup_key;
 pub mod event_type;
 pub mod ids;
 pub mod list_page;
+pub mod merge_request;
 pub mod move_details;
 pub mod namespace_path;
 pub mod namespace_resolver;
@@ -36,8 +37,13 @@ pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, To
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use event_type::{EventType, VisibilityClass};
-pub use ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+pub use ids::{
+    GroupId, MergeRequestId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
+};
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
+pub use merge_request::{
+    MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
+};
 pub use move_details::{MoveSummary, RoleChange, TombstoneKind};
 pub use namespace_path::{LookupPath, NamespacePath, PathSegment};
 pub use namespace_resolver::{
@@ -69,6 +75,8 @@ mod cursor_tests;
 mod dedup_key_tests;
 #[cfg(test)]
 mod event_type_tests;
+#[cfg(test)]
+mod merge_request_tests;
 #[cfg(test)]
 mod namespace_path_tests;
 #[cfg(test)]

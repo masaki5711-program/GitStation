@@ -7,8 +7,8 @@
 
 // Role, Visibility (D2) and Scope (D3) live in forge-core (forge-db stores and loads
 // them); re-exported here so the authorization API is unchanged.
+pub use forge_core::{MergeRequestState, Role, Scope, Visibility};
 use forge_core::{RefName, UserId};
-pub use forge_core::{Role, Scope, Visibility};
 
 /// How the caller authenticated.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,12 +297,38 @@ pub enum Resource {
     /// A path that resolved to nothing (`PathResolve`): `FG-REPO-0005` for
     /// every signed-in, active caller.
     Unresolved(UnresolvedReason),
+    /// One merge request (M3 R1a, ADR-0024 §12): `MergeRequestRead`,
+    /// `MergeRequestUpdate`, `MergeRequestClose`, `MergeRequestReopen` on a
+    /// stored one, `MergeRequestCreate` on the one about to be opened
+    /// (`author` = the caller). Both branch names are `refs/heads/*` and
+    /// differ, or every arm denies (`not_a_branch`,
+    /// `source_equals_target`). `state` and `draft` are read only by the
+    /// Update / Close / Reopen arms; `edit` only by Update. ADR-0024's
+    /// `target_protection` joins with `MergeRequestMerge` (R4).
+    MergeRequest {
+        project: ProjectView,
+        author: UserId,
+        state: MergeRequestState,
+        draft: bool,
+        source_branch: RefName,
+        target_branch: RefName,
+        edit: MergeRequestEdit,
+    },
     /// A path that resolved to a namespace (`PathResolve`), decided by
     /// whether the caller can see it — not by a read role (ADR-0015).
     Resolved {
         via: ResolvedVia,
         view: NamespaceView,
     },
+}
+
+/// What a `MergeRequestUpdate` changes besides the title and the
+/// description (which are not authorization inputs): a new target branch,
+/// a new draft flag. `Default` = neither.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MergeRequestEdit {
+    pub target_branch: Option<RefName>,
+    pub draft: Option<bool>,
 }
 
 /// The account a signed-in identity belongs to, as the login's linking step

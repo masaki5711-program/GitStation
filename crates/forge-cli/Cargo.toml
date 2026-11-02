@@ -20,6 +20,8 @@ clap = { workspace = true, features = ["env"] }
 forge-git.workspace = true
 forge-web.workspace = true
 forge-hosting.workspace = true
+# M3 R1a: merge requests (ADR-0024 §11).
+forge-review.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

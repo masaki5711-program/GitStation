@@ -15,17 +15,21 @@ mod action;
 mod authorize;
 mod contexts;
 pub mod matrix;
+mod matrix_review;
 mod matrix_rows;
+mod merge_request_ctx;
 mod model;
 mod prove;
 mod ref_updates;
 
 pub use action::Action;
 pub use authorize::authorize;
+pub use merge_request_ctx::{LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
-    AdmissionAccount, Credential, MembershipChange, MembershipScope, NamespaceView, Principal,
-    ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope,
-    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AdmissionAccount, Credential, MembershipChange, MembershipScope, MergeRequestEdit,
+    MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefProtection, RefUpdate,
+    ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason,
+    Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,
@@ -44,6 +48,9 @@ mod tests;
 #[cfg(test)]
 #[path = "prove_tests.rs"]
 mod prove_tests;
+
+#[cfg(test)]
+mod merge_request_tests;
 
 #[cfg(test)]
 #[path = "ref_updates_tests.rs"]

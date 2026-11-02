@@ -1,0 +1,31 @@
+[package]
+name = "forge-review"
+description = "forge merge requests: the review commands, each authorized again inside its own transaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (ADR-0024 §11): forge-web / forge-cli → forge-review →
+# forge-auth / forge-git / forge-db → forge-core → forge-errors. It never
+# runs SQL itself (the db-write-boundary gate): forge-db's review commands
+# open the transaction and hand the facts to `authorize()` here. It never
+# depends on another feature crate (forge-hosting, forge-checks).
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+forge-git.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+serde_json.workspace = true
+# tests/real_browser.rs: a real bare repository under a temporary storage root.
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

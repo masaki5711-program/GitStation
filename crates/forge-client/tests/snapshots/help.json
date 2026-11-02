@@ -1770,6 +1770,677 @@
     {
       "args": [
         {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The source branch (feature/x or refs/heads/feature/x).",
+          "kind": "option",
+          "name": "--source",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The target branch (another branch than the source).",
+          "kind": "option",
+          "name": "--target",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "1 to 255 characters.",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Free text (may be empty).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Open it as a draft.",
+          "kind": "flag",
+          "name": "--draft",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr create --project 7 --source feature/login --target main --title 'Add the login form' --json"
+      ],
+      "name": "mr create",
+      "output": {
+        "properties": {
+          "author_id": {
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "merged",
+              "closed"
+            ]
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "closed_by"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Open a merge request from one existing branch into another (Developer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "open | closed | merged | all (default open).",
+          "kind": "option",
+          "name": "--state",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Rows per page, 1..=100.",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Continue below this next_before iid.",
+          "kind": "option",
+          "name": "--before",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Follow next_before and merge every page (bounded).",
+          "kind": "flag",
+          "name": "--all",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr list --project 7 --json",
+        "gstn mr list --project 7 --state all --all"
+      ],
+      "name": "mr list",
+      "output": {
+        "properties": {
+          "merge_requests": {
+            "items": {
+              "required": [
+                "project_id",
+                "iid",
+                "title",
+                "state",
+                "draft",
+                "source_branch",
+                "target_branch",
+                "author_id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "merge_requests",
+          "next_before"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "List a project's merge requests, newest first (open by default)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr view --project 7 --iid 3 --json"
+      ],
+      "name": "mr view",
+      "output": {
+        "properties": {
+          "author_id": {
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "merged",
+              "closed"
+            ]
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "closed_by"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show one merge request."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "A new title.",
+          "kind": "option",
+          "name": "--title",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A new description (may be empty).",
+          "kind": "option",
+          "name": "--description",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A new target branch (only while open).",
+          "kind": "option",
+          "name": "--target",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Mark it a draft (only while open).",
+          "kind": "flag",
+          "name": "--draft",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Mark it ready (only while open).",
+          "kind": "flag",
+          "name": "--ready",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr edit --project 7 --iid 3 --ready",
+        "gstn mr edit --project 7 --iid 3 --title 'Add the sign-in form'"
+      ],
+      "name": "mr edit",
+      "output": {
+        "properties": {
+          "author_id": {
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "merged",
+              "closed"
+            ]
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "closed_by"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/projects/{id}/merge-requests/{iid}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a merge request's title, description, target or draft flag (the author or Developer; another's draft flag: Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr close --project 7 --iid 3"
+      ],
+      "name": "mr close",
+      "output": {
+        "properties": {
+          "author_id": {
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "merged",
+              "closed"
+            ]
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "closed_by"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/close"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Close a merge request (the author or Developer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr reopen --project 7 --iid 3"
+      ],
+      "name": "mr reopen",
+      "output": {
+        "properties": {
+          "author_id": {
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "source_branch": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "merged",
+              "closed"
+            ]
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "head_sha",
+          "created_at",
+          "updated_at",
+          "closed_at",
+          "closed_by"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/reopen"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Reopen a closed merge request; its branches must still exist (never a merged one)."
+    },
+    {
+      "args": [
+        {
           "description": "The full path, e.g. team/app.",
           "kind": "positional",
           "name": "path",

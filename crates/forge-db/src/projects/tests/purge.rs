@@ -130,6 +130,21 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                 "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
                  VALUES ({id}, 'refs/heads/main', 'maintainer')"
             ),
+            // M3 R1a: a merge request and the project's iid counter.
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({id}, 2)"
+            ),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch) VALUES ({id}, 1, 'synthetic', {}, \
+                 'refs/heads/feature', 'refs/heads/main')",
+                bob.user_id.get()
+            ),
+            // ... and a closed one (every state goes with the project).
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id,                  source_branch, target_branch, state, closed_at, closed_by) VALUES ({id}, 2,                  'synthetic', {b}, 'refs/heads/fix', 'refs/heads/main', 'closed', now(), {b})",
+                b = bob.user_id.get()
+            ),
         ],
     )
     .await;
@@ -231,6 +246,15 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
     assert_eq!(audit.1, Some(id));
     assert_eq!(audit.2["members_removed"], json!(2));
     assert_eq!(audit.2["protected_refs_removed"], json!(1));
+    assert_eq!(audit.2["merge_requests_removed"], json!(2));
+    for table in ["merge_requests", "merge_request_counters"] {
+        let rows = count(
+            &mut su,
+            &format!("SELECT count(*) FROM forge.{table} WHERE project_id = {id}"),
+        )
+        .await;
+        assert_eq!(rows, 0, "{table}");
+    }
     assert_eq!(audit.2["storage_removed"], json!(true));
     assert_eq!(audit.2["deleted_by"], json!(alice.user_id.get()));
     assert_eq!(audit.2["tombstone_id"], json!(purged.tombstone_id.get()));

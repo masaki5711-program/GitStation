@@ -169,6 +169,20 @@ admitted proof.
   responds_no_content`); a duplicate pattern is `FG-REPO-0017` (409), a bad
   one `FG-REPO-0013` (400, parsed after the decision), a non-member
   `FG-REPO-0010 not_member` (409), an absent rule `FG-REPO-0005`.
+- Routes (M3 R1a, `src/routes/merge_requests.rs`, ADR-0024): `GET|POST
+  /api/v1/projects/{id}/merge-requests` (`MergeRequestList`, `read_api`; `state` open
+  (default) | closed | merged | all, `limit` 1..=100, `before` = the previous
+  `next_before`; `MergeRequestCreate`, `api`), `GET|PATCH
+  /api/v1/projects/{id}/merge-requests/{iid}` (`MergeRequestRead` / `MergeRequestUpdate`)
+  and `POST …/{iid}/close`, `…/{iid}/reopen`. The loader reads the project (with its
+  repository) and the row by iid; an invisible project and a missing iid answer the same
+  `FG-REPO-0005`. Branch names (`name` or `refs/heads/name`) are checked before any lookup
+  (`FG-WEB-0006` `not_a_branch` / `source_equals_target` / `invalid_ref_name`); forge-review
+  (`AppState::with_review`, `review_unconfigured` without it) decides again inside the
+  transaction and checks the branches exist (`FG-REPO-0023`). Answers: the merge request
+  re-read (`201` for a create, `200` otherwise, also when nothing changed);
+  `FG-REVIEW-0001` (409) for a second open one between the same branches. Tests
+  `tests/merge_request_routes.rs`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body

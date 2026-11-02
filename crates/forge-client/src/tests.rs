@@ -376,6 +376,10 @@ fn client_depends_only_on_forge_errors() {
             "forge-hosting",
             include_str!("../../forge-hosting/Cargo.toml"),
         ),
+        (
+            "forge-review",
+            include_str!("../../forge-review/Cargo.toml"),
+        ),
         ("forge-web", include_str!("../../forge-web/Cargo.toml")),
         ("forge-cli", include_str!("../../forge-cli/Cargo.toml")),
     ] {

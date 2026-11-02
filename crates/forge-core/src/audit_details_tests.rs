@@ -643,6 +643,7 @@ fn purge_details_are_ids_and_counts_and_an_admin_event() {
         redirects_ended: 2,
         members_removed: 1,
         protected_refs_removed: 0,
+        merge_requests_removed: 4,
         storage_removed: true,
     };
     assert_eq!(purged.action(), "project.purged");
@@ -656,7 +657,8 @@ fn purge_details_are_ids_and_counts_and_an_admin_event() {
         json!({"project_id": 21, "repository_id": 5, "namespace_id": 40,
                "deleted_at": "2026-11-01T09:00:00Z", "purge_after": "2026-11-08T09:00:00Z",
                "deleted_by": 7, "tombstone_id": 3, "redirects_ended": 2,
-               "members_removed": 1, "protected_refs_removed": 0, "storage_removed": true})
+               "members_removed": 1, "protected_refs_removed": 0, "merge_requests_removed": 4,
+               "storage_removed": true})
     );
     assert_eq!(purged.event_payload(), purged.to_value());
     for details in [&started, &purged] {

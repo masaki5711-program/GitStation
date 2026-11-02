@@ -365,6 +365,16 @@ pub const MEMBER_PAGES: PageShape = PageShape {
     has_more: false,
 };
 
+/// `{merge_requests, next_before}` with `?before=<iid>` (merge requests,
+/// newest first).
+pub const MR_PAGES: PageShape = PageShape {
+    items_key: "merge_requests",
+    next_key: "next_before",
+    param: "before",
+    numeric: true,
+    has_more: false,
+};
+
 fn kind(e: &reqwest::Error) -> &'static str {
     if e.is_timeout() {
         "timeout"

@@ -79,7 +79,21 @@ gstn namespace resolve team/app                          # パスから project 
 
 id は正の整数。破壊的な操作（`project delete` / `member remove` / `protected-ref remove`）は
 `--yes` が必須で、無いときは何も送らずに終了コード 2 で終わる（`gstn` は対話で確認しない）。
-`--all` は `next_cursor`（member は `next_after`）を、件数・サイズ・ページ数の上限つきで辿る。
+`--all` は `next_cursor`（member は `next_after`、mr は `next_before`）を、件数・サイズ・ページ数の上限つきで辿る。
+
+### マージリクエストのコマンド（M3 R1a）
+
+```
+gstn mr create --project 7 --source feature/login --target main --title 'ログイン画面' [--description …] [--draft]
+gstn mr list --project 7 [--state open|closed|merged|all] [--limit N] [--before IID | --all]   # 新しい順。既定は open
+gstn mr view --project 7 --iid 3
+gstn mr edit --project 7 --iid 3 [--title …] [--description …] [--target BRANCH] [--draft | --ready]
+gstn mr close --project 7 --iid 3
+gstn mr reopen --project 7 --iid 3
+```
+
+`--iid` はプロジェクトの中の番号（`!3`）。ブランチ名・タイトル・説明は JSON の本文で送り、パスには入れない。
+同じ source / target の開いている MR が既にあると FG-REVIEW-0001（終了コード 5）。
 
 ## 開発者向けメモ
 

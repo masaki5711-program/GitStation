@@ -280,6 +280,54 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestList",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestCreate",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestClose",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/close",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestReopen",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProtectedRefList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/protected-refs",

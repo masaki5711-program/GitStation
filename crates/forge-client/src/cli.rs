@@ -57,6 +57,12 @@ pub enum Command {
         #[command(subcommand)]
         command: ProtectedRefCommand,
     },
+    /// Merge requests of a project: create, list, view, edit, close, reopen.
+    #[command(disable_help_subcommand = true)]
+    Mr {
+        #[command(subcommand)]
+        command: MrCommand,
+    },
     /// Namespace paths.
     #[command(disable_help_subcommand = true)]
     Namespace {
@@ -467,6 +473,106 @@ pub enum ProtectedRefCommand {
         /// Confirm the removal (gstn never prompts).
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// The states `mr list --state` filters on.
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MrState {
+    Open,
+    Closed,
+    Merged,
+    All,
+}
+
+impl MrState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::Merged => "merged",
+            Self::All => "all",
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MrCommand {
+    /// Open a merge request from one existing branch into another.
+    Create {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The source branch (`feature/x` or `refs/heads/feature/x`).
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        source: String,
+        /// The target branch (another branch than the source).
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        target: String,
+        #[arg(long, value_parser = parse_text)]
+        title: String,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+        /// Open it as a draft.
+        #[arg(long)]
+        draft: bool,
+    },
+    /// List a project's merge requests, newest first (open by default).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_enum)]
+        state: Option<MrState>,
+        /// Rows per page, 1..=100 (server default 20; 100 with --all).
+        #[arg(long, value_parser = parse_limit, value_name = "N")]
+        limit: Option<u32>,
+        /// Continue below this `next_before` iid (from a previous page).
+        #[arg(long, value_parser = parse_id, value_name = "IID", conflicts_with = "all")]
+        before: Option<i64>,
+        /// Follow next_before and merge every page (bounded).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show one merge request.
+    View {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The merge request's number in the project.
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Change a merge request's title, description, target or draft flag.
+    Edit {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        #[arg(long, value_parser = parse_text)]
+        title: Option<String>,
+        #[arg(long, value_parser = parse_description)]
+        description: Option<String>,
+        /// A new target branch.
+        #[arg(long, value_parser = parse_text, value_name = "BRANCH")]
+        target: Option<String>,
+        /// Mark it a draft.
+        #[arg(long, conflicts_with = "ready")]
+        draft: bool,
+        /// Mark it ready (not a draft).
+        #[arg(long)]
+        ready: bool,
+    },
+    /// Close a merge request.
+    Close {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Reopen a closed merge request (its branches must still exist).
+    Reopen {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
     },
 }
 

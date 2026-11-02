@@ -20,6 +20,7 @@ pub mod gitcfg;
 pub mod hosting;
 pub mod http;
 pub mod registry;
+pub mod review;
 pub mod store;
 
 #[cfg(test)]

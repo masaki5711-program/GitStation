@@ -67,6 +67,10 @@ pub struct AppState {
     /// 8b MR7a; `forge serve` always sets it; without it those routes
     /// answer `FG-SYS-0001 reason=hosting_unconfigured`).
     pub hosting: Option<Arc<forge_hosting::Hosting>>,
+    /// The merge request commands and reads (M3 R1a, ADR-0024; `forge
+    /// serve` always sets them; without them those routes answer
+    /// `FG-SYS-0001 reason=review_unconfigured`).
+    pub review: Option<Arc<forge_review::Review>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -124,6 +128,7 @@ impl AppState {
             lookup_timeout: Duration::from_secs(5),
             smart_http: None,
             hosting: None,
+            review: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -159,6 +164,13 @@ impl AppState {
     #[must_use]
     pub fn with_hosting(mut self, hosting: forge_hosting::Hosting) -> Self {
         self.hosting = Some(Arc::new(hosting));
+        self
+    }
+
+    /// The merge request commands (M3 R1a).
+    #[must_use]
+    pub fn with_review(mut self, review: forge_review::Review) -> Self {
+        self.review = Some(Arc::new(review));
         self
     }
 
@@ -398,7 +410,7 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::QUERY,
         );
     account_routes(history_routes(browse_routes(git_routes(shell_routes(
-        member_routes(move_routes(hosting_routes(fixed))),
+        merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
     )))))
 }
 
@@ -759,6 +771,72 @@ fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
             pr::delete,
         )
         .responds_no_content(Verb::Delete, pr::ONE)
+}
+
+/// Merge requests (M3 R1a, ADR-0024): the list decided on the project,
+/// every other route proved on the merge request as loaded (or the one
+/// about to be opened) and, for a write, decided again inside its
+/// transaction (forge-review).
+fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::merge_requests as mr;
+    registry
+        .route_with(
+            Verb::Get,
+            mr::COLLECTION,
+            Action::MergeRequestList,
+            "List a project's merge requests, newest first (as the repository browse API)",
+            mr::MergeRequestsOf,
+            mr::list,
+        )
+        .responds::<mr::MergeRequestPage>(Verb::Get, mr::COLLECTION)
+        .queries(Verb::Get, mr::COLLECTION, mr::QUERY)
+        .route_with_body(
+            Verb::Post,
+            mr::COLLECTION,
+            Action::MergeRequestCreate,
+            "Open a merge request between two existing branches (Developer)",
+            mr::MAX_BODY,
+            mr::NewMergeRequest,
+            mr::create,
+        )
+        .responds_created::<mr::MergeRequestBody>(Verb::Post, mr::COLLECTION)
+        .route_with(
+            Verb::Get,
+            mr::ONE,
+            Action::MergeRequestRead,
+            "Read a merge request (as the repository browse API)",
+            mr::MergeRequestOf,
+            mr::view,
+        )
+        .responds::<mr::MergeRequestBody>(Verb::Get, mr::ONE)
+        .route_with_body(
+            Verb::Patch,
+            mr::ONE,
+            Action::MergeRequestUpdate,
+            "Change a merge request's title, description, draft flag or target (the author or Developer)",
+            mr::MAX_BODY,
+            mr::MergeRequestToUpdate,
+            mr::update,
+        )
+        .responds::<mr::MergeRequestBody>(Verb::Patch, mr::ONE)
+        .route_with(
+            Verb::Post,
+            mr::CLOSE,
+            Action::MergeRequestClose,
+            "Close a merge request (the author or Developer)",
+            mr::MergeRequestToClose,
+            mr::close,
+        )
+        .responds::<mr::MergeRequestBody>(Verb::Post, mr::CLOSE)
+        .route_with(
+            Verb::Post,
+            mr::REOPEN,
+            Action::MergeRequestReopen,
+            "Reopen a closed merge request (the author or Developer; never a merged one)",
+            mr::MergeRequestToReopen,
+            mr::reopen,
+        )
+        .responds::<mr::MergeRequestBody>(Verb::Post, mr::REOPEN)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

@@ -443,6 +443,22 @@ async fn finish_steps(
         "projects.purge.finish.protected_refs",
     )
     .await?;
+    // M3 R1a (plan 11 §11.8): the merge requests and their counter go
+    // with the project (the project.purged row covers the audited deletes).
+    let merge_requests_removed = delete_rows(
+        tx,
+        "DELETE FROM forge.merge_requests WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_requests",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_counters WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_counters",
+    )
+    .await?;
     delete_one(
         tx,
         "DELETE FROM forge.repositories WHERE id = $1",
@@ -502,6 +518,7 @@ async fn finish_steps(
         redirects_ended,
         members_removed,
         protected_refs_removed,
+        merge_requests_removed,
         storage_removed,
     };
     let mut record = super::evented_record(&details, project)?;

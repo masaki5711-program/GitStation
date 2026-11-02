@@ -56,6 +56,11 @@ id_type!(
     /// A row of forge.namespace_tombstones (a released-until path block).
     TombstoneId
 );
+id_type!(
+    /// A row of forge.merge_requests (M3 R1a). Never shown as the merge
+    /// request's number: that is its per-project `iid`.
+    MergeRequestId
+);
 
 #[cfg(test)]
 mod tests {

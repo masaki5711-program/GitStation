@@ -481,6 +481,37 @@
         ],
         "type": "object"
       },
+      "CreateMergeRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/merge-requests`.",
+        "properties": {
+          "description": {
+            "description": "At most 64 KiB; empty when absent.",
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "source_branch": {
+            "description": "A branch: `feature/x` or `refs/heads/feature/x`; it must exist.",
+            "type": "string"
+          },
+          "target_branch": {
+            "description": "A branch other than the source; it must exist.",
+            "type": "string"
+          },
+          "title": {
+            "description": "1..=255 characters.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "source_branch",
+          "target_branch"
+        ],
+        "type": "object"
+      },
       "CreateProject": {
         "additionalProperties": false,
         "description": "`POST /api/v1/projects`.",
@@ -1034,6 +1065,113 @@
         "required": [
           "members",
           "next_after"
+        ],
+        "type": "object"
+      },
+      "MergeRequestBody": {
+        "additionalProperties": false,
+        "description": "One merge request as the API shows it.",
+        "properties": {
+          "author_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "closed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "closed_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head_sha": {
+            "description": "The head commit of the latest version (`null` until versions are\nrecorded).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "description": "The project's own number of it.",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_branch": {
+            "description": "The branch name without `refs/heads/`.",
+            "type": "string"
+          },
+          "state": {
+            "description": "`open`, `merged` or `closed`.",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "iid",
+          "title",
+          "description",
+          "state",
+          "draft",
+          "source_branch",
+          "target_branch",
+          "author_id",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "MergeRequestPage": {
+        "additionalProperties": false,
+        "description": "One page of a project's merge requests, newest first.",
+        "properties": {
+          "merge_requests": {
+            "items": {
+              "$ref": "#/components/schemas/MergeRequestBody"
+            },
+            "type": "array"
+          },
+          "next_before": {
+            "description": "Pass as `before` for the next page; `null` on the last page.",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "merge_requests"
         ],
         "type": "object"
       },
@@ -1812,6 +1950,39 @@
             ]
           },
           "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdateMergeRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH …/merge-requests/{iid}`: every field optional (absent =\nunchanged).",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "draft": {
+            "description": "Only the author or a Maintainer changes another's flag; only while\nopen.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "target_branch": {
+            "description": "A branch other than the source; it must exist; only while open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
             "type": [
               "string",
               "null"
@@ -3294,6 +3465,333 @@
         "summary": "Change a direct project member's role (Maintainer; never above the caller's role)",
         "x-forge-action": "MemberManage",
         "x-forge-max-body-bytes": 1024
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "open (default), closed, merged or all",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Merge requests per page, 1..=100 (default 20)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous page's next_before (an iid): merge requests with a smaller iid",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's merge requests, newest first (as the repository browse API)",
+        "x-forge-action": "MergeRequestList"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Open a merge request between two existing branches (Developer)",
+        "x-forge-action": "MergeRequestCreate",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read a merge request (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_projects_id_merge_requests_iid",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a merge request's title, description, draft flag or target (the author or Developer)",
+        "x-forge-action": "MergeRequestUpdate",
+        "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/close": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_close",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Close a merge request (the author or Developer)",
+        "x-forge-action": "MergeRequestClose"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_reopen",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Reopen a closed merge request (the author or Developer; never a merged one)",
+        "x-forge-action": "MergeRequestReopen"
       }
     },
     "/api/v1/projects/{id}/protected-refs": {

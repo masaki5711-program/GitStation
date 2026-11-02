@@ -5,9 +5,11 @@ use forge_errors::ErrorCode as E;
 
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Expect::Allow, Fixture as F, Row};
+use crate::matrix_review::{MrBranches as MB, MrFixture as MF, MrProject as MP, MrTarget as MT};
 use crate::model::{
     AdmissionAccount as AA, MembershipChange as M, RefKind, RefUpdate as U, Role as R,
 };
+use forge_core::MergeRequestState as S;
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
     Row {
@@ -47,6 +49,52 @@ const fn adm(access_role: bool, account: AA) -> F {
         access_role,
         account,
     }
+}
+
+// M3 R1a: merge requests (ADR-0024 §12).
+const OTHER_MR: F = F::Mr(MF::other());
+const OWN_MR: F = F::Mr(MF::own());
+
+/// Another's merge request in `state`.
+const fn other_in(state: S) -> F {
+    F::Mr(MF {
+        state,
+        ..MF::other()
+    })
+}
+
+/// The caller's merge request in `state`.
+const fn own_in(state: S) -> F {
+    F::Mr(MF { state, ..MF::own() })
+}
+
+/// Another's open merge request on a project of another kind.
+const fn other_on(project: MP) -> F {
+    F::Mr(MF {
+        project,
+        ..MF::other()
+    })
+}
+
+/// The caller's new merge request with these branches (a create).
+const fn new_mr(branches: MB) -> F {
+    F::Mr(MF {
+        branches,
+        ..MF::own()
+    })
+}
+
+/// An update of a merge request (`own`, its state and draft flag) asking
+/// for `set_draft` and `target`.
+const fn edit(own: bool, state: S, draft: bool, set_draft: Option<bool>, target: MT) -> F {
+    F::Mr(MF {
+        own,
+        state,
+        draft,
+        set_draft,
+        target,
+        ..MF::other()
+    })
 }
 
 #[rustfmt::skip]
@@ -890,6 +938,95 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::WebShell, W::Anonymous, F::Instance, Allow),
     row(A::WebShell, W::Disabled, F::Instance, Allow),
     row(A::WebShell, W::DevTokenReadRepository, F::Instance, Allow),
+    // --- MergeRequestList (as RepoBrowse, M3 R1a) ---
+    row(A::MergeRequestList, W::Reporter, F::PrivateProject, Allow),
+    row(A::MergeRequestList, W::NonMember, F::InternalProject, Allow),
+    row(A::MergeRequestList, W::OwnerTokenReadApi, F::PrivateProject, Allow),
+    row(A::MergeRequestList, W::AgentTokenReadApi, F::PrivateProject, Allow),
+    row(A::MergeRequestList, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
+    row(A::MergeRequestList, W::Guest, F::PrivateProject, deny(E::Forbidden)),
+    row(A::MergeRequestList, W::NonMember, F::PrivateProject, deny(E::NotFound)),
+    row(A::MergeRequestList, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
+    row(A::MergeRequestList, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::MergeRequestList, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
+    // --- MergeRequestRead (as RepoBrowse; an invisible project is 404 like a missing iid) ---
+    row(A::MergeRequestRead, W::Reporter, OTHER_MR, Allow),
+    row(A::MergeRequestRead, W::NonMember, other_on(MP::Internal), Allow),
+    row(A::MergeRequestRead, W::Admin, OTHER_MR, Allow),
+    row(A::MergeRequestRead, W::AgentTokenReadApi, OTHER_MR, Allow),
+    row(A::MergeRequestRead, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestRead, W::Disabled, OTHER_MR, deny(E::AccountDisabled)),
+    row(A::MergeRequestRead, W::NonMember, OTHER_MR, deny(E::NotFound)),
+    row(A::MergeRequestRead, W::Guest, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestRead, W::DevTokenReadRepository, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestRead, W::Developer, other_on(MP::Deleted), deny(E::PendingDeletion)),
+    // --- MergeRequestCreate (Developer, for oneself; branches only, never the same) ---
+    row(A::MergeRequestCreate, W::Developer, OWN_MR, Allow),
+    row(A::MergeRequestCreate, W::Maintainer, OWN_MR, Allow),
+    row(A::MergeRequestCreate, W::DevTokenApi, OWN_MR, Allow),
+    // opening a merge request is not kept for people (an agent proposes changes)
+    row(A::MergeRequestCreate, W::AgentTokenApi, OWN_MR, Allow),
+    row(A::MergeRequestCreate, W::Admin, OWN_MR, Allow),
+    row(A::MergeRequestCreate, W::Reporter, OWN_MR, deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Guest, OWN_MR, deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::NonMember, OWN_MR, deny(E::NotFound)),
+    row(A::MergeRequestCreate, W::NonMember, F::Mr(MF { project: MP::Internal, ..MF::own() }), deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Anonymous, OWN_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestCreate, W::OwnerTokenReadApi, OWN_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestCreate, W::Developer, F::Mr(MF { project: MP::Deleted, ..MF::own() }), deny(E::PendingDeletion)),
+    row(A::MergeRequestCreate, W::Developer, new_mr(MB::Same), deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Developer, new_mr(MB::TagTarget), deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Developer, new_mr(MB::ReservedSource), deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Admin, new_mr(MB::Same), deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Developer, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Disabled, OWN_MR, deny(E::AccountDisabled)),
+    // --- MergeRequestUpdate (the author or Developer; another's draft flag: Maintainer) ---
+    row(A::MergeRequestUpdate, W::Reporter, OWN_MR, Allow),
+    row(A::MergeRequestUpdate, W::Developer, OTHER_MR, Allow),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, false, None, MT::Release), Allow),
+    row(A::MergeRequestUpdate, W::Reporter, edit(true, S::Open, false, Some(true), MT::Unchanged), Allow),
+    row(A::MergeRequestUpdate, W::Maintainer, edit(false, S::Open, true, Some(false), MT::Unchanged), Allow),
+    // the flag it already has is no toggle
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, false, Some(false), MT::Unchanged), Allow),
+    // the title of a closed one
+    row(A::MergeRequestUpdate, W::Developer, other_in(S::Closed), Allow),
+    row(A::MergeRequestUpdate, W::AgentTokenApi, OTHER_MR, Allow),
+    row(A::MergeRequestUpdate, W::Reporter, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Guest, OWN_MR, deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, false, Some(true), MT::Unchanged), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, true, Some(false), MT::Unchanged), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, false, None, MT::Source), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Open, false, None, MT::Tag), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(false, S::Closed, false, None, MT::Release), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::Developer, edit(true, S::Merged, false, Some(true), MT::Unchanged), deny(E::Forbidden)),
+    row(A::MergeRequestUpdate, W::NonMember, OTHER_MR, deny(E::NotFound)),
+    row(A::MergeRequestUpdate, W::OwnerTokenReadApi, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestUpdate, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestUpdate, W::Disabled, OWN_MR, deny(E::AccountDisabled)),
+    row(A::MergeRequestUpdate, W::Developer, other_on(MP::Deleted), deny(E::PendingDeletion)),
+    // --- MergeRequestClose (the author or Developer; never a merged one) ---
+    row(A::MergeRequestClose, W::Reporter, OWN_MR, Allow),
+    row(A::MergeRequestClose, W::Developer, OTHER_MR, Allow),
+    row(A::MergeRequestClose, W::Developer, other_in(S::Closed), Allow),
+    row(A::MergeRequestClose, W::Admin, OTHER_MR, Allow),
+    row(A::MergeRequestClose, W::Reporter, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestClose, W::Developer, other_in(S::Merged), deny(E::Forbidden)),
+    row(A::MergeRequestClose, W::Admin, other_in(S::Merged), deny(E::Forbidden)),
+    row(A::MergeRequestClose, W::NonMember, OTHER_MR, deny(E::NotFound)),
+    row(A::MergeRequestClose, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestClose, W::DevTokenReadRepository, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestClose, W::Developer, other_on(MP::Deleted), deny(E::PendingDeletion)),
+    row(A::MergeRequestClose, W::Guest, OWN_MR, deny(E::Forbidden)),
+    // --- MergeRequestReopen (as close; merged never comes back) ---
+    row(A::MergeRequestReopen, W::Developer, other_in(S::Closed), Allow),
+    row(A::MergeRequestReopen, W::Reporter, own_in(S::Closed), Allow),
+    row(A::MergeRequestReopen, W::Developer, other_in(S::Merged), deny(E::Forbidden)),
+    row(A::MergeRequestReopen, W::Reporter, other_in(S::Closed), deny(E::Forbidden)),
+    row(A::MergeRequestReopen, W::NonMember, other_in(S::Closed), deny(E::NotFound)),
+    row(A::MergeRequestReopen, W::Developer, F::Mr(MF { project: MP::Deleted, state: S::Closed, ..MF::other() }), deny(E::PendingDeletion)),
+    row(A::MergeRequestReopen, W::OwnerTokenReadApi, other_in(S::Closed), deny(E::InsufficientScope)),
+    row(A::MergeRequestReopen, W::Guest, own_in(S::Closed), deny(E::Forbidden)),
+    row(A::MergeRequestReopen, W::Anonymous, other_in(S::Closed), deny(E::Unauthenticated)),
     // --- Operations ---
     row(A::Health, W::Anonymous, F::Instance, Allow),
     row(A::Metrics, W::Admin, F::Instance, Allow),

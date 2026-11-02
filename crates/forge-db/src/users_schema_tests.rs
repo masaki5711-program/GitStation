@@ -59,6 +59,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["updated_at"]),
                 txn_audited_columns: vec![],
             },
+            // M3 R1a: merge requests and their iid counter, on the project.
+            AuditedTable {
+                name: "merge_request_counters".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "merge_requests".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "namespace_tombstones".into(),
                 audit_resource: AuditResource::Column("cause_type".into()),

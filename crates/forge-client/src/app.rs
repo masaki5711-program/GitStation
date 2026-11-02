@@ -197,6 +197,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::Group { command } => hosting::group(cli, command, env, io),
         Command::Member { command } => hosting::member(cli, command, env, io),
         Command::ProtectedRef { command } => hosting::protected_ref(cli, command, env, io),
+        Command::Mr { command } => crate::review::mr(cli, command, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),
         Command::Token { command } => hosting::token(cli, command, env, io),

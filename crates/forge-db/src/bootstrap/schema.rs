@@ -34,6 +34,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.web_sessions_revocation_guard()",
     // ── M2 MR6: sessions are deleted only 30 days after they ended (20261105100000) ──
     "forge.web_sessions_purge_guard()",
+    // ── M3 R1a: merged is final (20261106100000) ──
+    "forge.merge_requests_state_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -59,6 +61,13 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "repositories_state_forward",
         "CREATE TRIGGER repositories_state_forward BEFORE UPDATE ON forge.repositories \
          FOR EACH ROW EXECUTE FUNCTION forge.repositories_state_guard()",
+    ),
+    // ── M3 R1a: merged is final (20261106100000) ──
+    (
+        "merge_requests",
+        "merge_requests_state_forward",
+        "CREATE TRIGGER merge_requests_state_forward BEFORE UPDATE ON forge.merge_requests \
+         FOR EACH ROW EXECUTE FUNCTION forge.merge_requests_state_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -475,6 +484,10 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             .concat(),
         ),
         // ── end M2 MR3 ──
+        // ── M3 R1a: merge requests, DELETE for the purge (20261106100000) ──
+        ("forge.merge_requests", operational()),
+        ("forge.merge_request_counters", operational()),
+        // ── end M3 R1a ──
     ]
 }
 
@@ -607,6 +620,10 @@ const LATER_TABLES: &[&str] = &[
     "web_sessions",
     "user_identities",
     // ── end M2 MR3 ──
+    // ── M3 R1a: merge requests (migration 20261106100000) ──
+    "merge_requests",
+    "merge_request_counters",
+    // ── end M3 R1a ──
 ];
 
 /// Every table the first migration creates.

@@ -231,6 +231,37 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/protected-refs/{rule_id}",
         Coverage::Command("protected-ref remove"),
     ),
+    // M3 R1a: merge requests.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests",
+        Coverage::Command("mr list"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests",
+        Coverage::Command("mr create"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}",
+        Coverage::Command("mr view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/projects/{id}/merge-requests/{iid}",
+        Coverage::Command("mr edit"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/close",
+        Coverage::Command("mr close"),
+    ),
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
+        Coverage::Command("mr reopen"),
+    ),
     (
         "PUT",
         "/api/v1/projects/{id}/visibility",
