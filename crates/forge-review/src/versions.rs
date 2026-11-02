@@ -10,10 +10,17 @@
 //! 3. [`forge_db::review::record_mr_version`]: the version row FIRST, its
 //!    number drawn under the merge request's lock, plus
 //!    `merge_request.pushed` (dedup `merge_request_pushed:<id>:<head>`);
-//! 4. [`VersionRefs::sync`]: `refs/merge-requests/<iid>/v<n>` for every
-//!    version that was not purged, and `…/head` at the merge request's
-//!    head, written from the committed rows in ONE `update-ref`
-//!    transaction while the rows are locked `FOR SHARE`.
+//! 4. [`VersionRefs::sync_locked`]: `refs/merge-requests/<iid>/v<n>` for
+//!    every version that was not purged, and `…/head` at the merge
+//!    request's head, written from the committed rows in ONE `update-ref`
+//!    transaction.
+//!
+//! The whole run holds the merge request's refs lock
+//! (`forge_db::review::lock_version_refs`, review: two runs could
+//! otherwise interleave and move `head` back), bounded by
+//! `REFS_LOCK_HOLD`: each git call gets what is left of it. A commit the
+//! source branch pointed at only between two runs (pushed, then
+//! force-pushed away before the job read the tip) gets no version.
 //!
 //! Every step is idempotent: a rerun finds the head already recorded
 //! (nothing written, no second event) and the refs already in place (git
@@ -37,7 +44,7 @@ use std::time::{Duration, Instant};
 use forge_core::ids::MergeRequestId;
 use forge_core::{ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::review::{self, RefreshRequest, VersionOutcome, VersionsSnapshot};
+use forge_db::review::{self, RefreshRequest, RefsLock, VersionOutcome, VersionsSnapshot};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 use forge_git::browse::Browser;
@@ -48,9 +55,6 @@ use forge_git::{Git, RefChange, RefUpdateResult, StorageRoot};
 
 /// The longest single git call of a refresh or a sync.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(20);
-/// The longest a sync holds the version rows' locks (one read of the refs
-/// and one `update-ref`).
-pub const SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 /// The audit label of the version job's changes.
 const ACTOR_LABEL: &str = "forge-worker";
 
@@ -155,36 +159,54 @@ impl VersionRefs {
         self
     }
 
-    /// The tip of `branch` in `repo` (`None`: the branch does not exist).
+    /// The tip of `branch` in `repo` (`None`: the branch does not exist),
+    /// the git call bounded by `deadline` too.
     pub async fn branch_tip(
         &self,
         repo: RepoId,
         branch: &RefName,
+        deadline: Deadline,
     ) -> Result<Option<ObjectId>, ForgeError> {
+        let timeout = git_budget(deadline, "branch_tip")?;
         self.git
-            .read_ref(&self.storage, repo, branch, GIT_TIMEOUT)
+            .read_ref(&self.storage, repo, branch, timeout)
             .await
     }
 
+    /// One plan and write under `lock`: every git call gets what is left of
+    /// the hold (at most [`GIT_TIMEOUT`]), so a slow git fails as
+    /// FG-GIT-0002, and the lock is proven alive right before the write.
     async fn sync_once(
         &self,
+        lock: &mut RefsLock,
         repo: RepoId,
-        snapshot: VersionsSnapshot,
         request_id: &RequestId,
-    ) -> Result<SyncReport, ForgeError> {
+    ) -> Result<Option<SyncReport>, ForgeError> {
+        let deadline = lock.deadline();
+        let Some(snapshot) = review::versions_snapshot(lock).await? else {
+            return Ok(None);
+        };
         let current = self
             .git
             .read_refs(
                 &self.storage,
                 repo,
                 &refs_pattern(snapshot.iid)?,
-                GIT_TIMEOUT,
+                git_budget(deadline, "read_refs")?,
             )
             .await?;
         let plan = plan_ref_changes(&snapshot, &current)?;
+        if !plan.changes.is_empty() {
+            lock.alive().await?;
+        }
         let applied = self
             .git
-            .update_refs(&self.storage, repo, &plan.changes, GIT_TIMEOUT)
+            .update_refs(
+                &self.storage,
+                repo,
+                &plan.changes,
+                git_budget(deadline, "update_refs")?,
+            )
             .await?;
         for name in &plan.reclaimed {
             tracing::info!(
@@ -206,18 +228,44 @@ impl VersionRefs {
                 browser.invalidate(repo);
             }
         }
-        Ok(SyncReport {
+        Ok(Some(SyncReport {
             changes,
             reclaimed: plan.reclaimed.len(),
-        })
+        }))
+    }
+
+    /// [`Self::sync`] under a lock the caller holds (the version job holds
+    /// it for its whole run). A refused transaction (a ref moved between
+    /// the read and the write — by hand, or a run whose lock was lost) is
+    /// logged once at warn and planned again from fresh reads; a second
+    /// refusal is returned (`FG-GIT-0003`, the job retries).
+    pub async fn sync_locked(
+        &self,
+        lock: &mut RefsLock,
+        repo: RepoId,
+        request_id: &RequestId,
+    ) -> Result<Option<SyncReport>, ForgeError> {
+        match self.sync_once(lock, repo, request_id).await {
+            Err(e) if e.code() == ErrorCode::GitProcessFailed => {
+                tracing::warn!(
+                    target: "forge_review",
+                    event = "forge.review.version_refs_retry",
+                    request_id = %request_id,
+                    error_code = e.code().id(),
+                    repo_id = repo.get(),
+                    merge_request_id = lock.merge_request().get(),
+                    error = %e,
+                    "the version ref transaction was refused; planning again"
+                );
+                self.sync_once(lock, repo, request_id).await
+            }
+            other => other,
+        }
     }
 
     /// Make the hidden refs of merge request `mr` (in `repo`) match its
-    /// committed versions (module docs, step 4). A refused transaction (a
-    /// concurrent writer moved a ref between the read and the write) is
-    /// planned again once from fresh reads; a second refusal is returned
-    /// (`FG-GIT-0003`, the job retries). `Ok(None)`: the merge request is
-    /// gone.
+    /// committed versions (module docs, step 4), under its lock (taken and
+    /// released here). `Ok(None)`: the merge request is gone.
     pub async fn sync(
         &self,
         db: &Db,
@@ -225,21 +273,27 @@ impl VersionRefs {
         mr: MergeRequestId,
         request_id: &RequestId,
     ) -> Result<Option<SyncReport>, ForgeError> {
-        let mut last = None;
-        for _ in 0..2 {
-            let attempt = review::with_versions_locked(db, mr, SYNC_TIMEOUT, |snapshot| {
-                self.sync_once(repo, snapshot, request_id)
-            })
-            .await;
-            match attempt {
-                Err(e) if e.code() == ErrorCode::GitProcessFailed => last = Some(e),
-                other => return other,
-            }
-        }
-        Err(last.unwrap_or_else(|| {
-            ForgeError::new(ErrorCode::Internal).with_context("reason", "sync_without_attempt")
-        }))
+        let mut lock = review::lock_version_refs(db, mr).await?;
+        let synced = self.sync_locked(&mut lock, repo, request_id).await;
+        lock.release().await;
+        synced
     }
+}
+
+/// The end of a locked run (`RefsLock::deadline`).
+pub type Deadline = tokio::time::Instant;
+
+/// What is left before `deadline`, at most [`GIT_TIMEOUT`];
+/// `FG-GIT-0002 operation=version_refs` when nothing is.
+fn git_budget(deadline: Deadline, step: &'static str) -> Result<Duration, ForgeError> {
+    let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if left.is_zero() {
+        return Err(ForgeError::new(ErrorCode::GitTimeout)
+            .with_context("operation", "version_refs")
+            .with_context("step", step)
+            .with_context("timeout_ms", review::REFS_LOCK_HOLD.as_millis()));
+    }
+    Ok(left.min(GIT_TIMEOUT))
 }
 
 /// What [`refresh`] found and did (the job's log line).
@@ -263,13 +317,29 @@ fn outcome_name(outcome: &VersionOutcome) -> (&'static str, Option<i64>) {
     }
 }
 
-/// The version job (module docs). Errors: forge-git's (`FG-GIT-0002` /
-/// `0003` / `0004`, `FG-REPO-0003` storage), forge-db's (`FG-DB-0001` /
-/// `0002`), `FG-REPO-0016` for a repository not ready yet; each is the
-/// job's failure (the worker logs it once with the job's request id).
+/// The version job (module docs). The whole run holds the merge request's
+/// refs lock, so two runs never interleave (tip read, version row and
+/// sync are one step for every other run). Errors: forge-git's
+/// (`FG-GIT-0002` / `0003` / `0004`, `FG-REPO-0003` storage), forge-db's
+/// (`FG-DB-0001` / `0002`, a lock held longer than `REFS_LOCK_WAIT`),
+/// `FG-REPO-0016` for a repository not ready yet; each is the job's
+/// failure (the worker logs it once with the job's request id).
 pub async fn refresh(
     db: &Db,
     refs: &VersionRefs,
+    request: RefreshRequest,
+    request_id: &RequestId,
+) -> Result<RefreshReport, ForgeError> {
+    let mut lock = review::lock_version_refs(db, request.merge_request).await?;
+    let report = refresh_locked(db, refs, &mut lock, request, request_id).await;
+    lock.release().await;
+    report
+}
+
+async fn refresh_locked(
+    db: &Db,
+    refs: &VersionRefs,
+    lock: &mut RefsLock,
     request: RefreshRequest,
     request_id: &RequestId,
 ) -> Result<RefreshReport, ForgeError> {
@@ -290,12 +360,27 @@ pub async fn refresh(
     let repo = target.repository;
     let stored = &target.merge_request;
     let (outcome, version) = if stored.state == forge_core::MergeRequestState::Open {
-        match refs.branch_tip(repo, &stored.source_branch).await? {
+        match refs
+            .branch_tip(repo, &stored.source_branch, lock.deadline())
+            .await?
+        {
             None => ("source_missing", None),
             Some(tip) => {
                 let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
                 ctx.actor_label = Some(ACTOR_LABEL.to_owned());
                 let done = review::record_mr_version(db, &ctx, mr, &tip, request.pushed_by).await?;
+                if let VersionOutcome::PurgedHead { version } = done {
+                    tracing::warn!(
+                        target: "forge_review",
+                        event = "forge.review.purged_head_pushed",
+                        request_id = %request_id,
+                        merge_request_id = mr.get(),
+                        project_id = stored.project_id.get(),
+                        iid = stored.iid,
+                        version,
+                        "the source branch was pushed back to a purged version; it stays out (runbook secret-removal)"
+                    );
+                }
                 outcome_name(&done)
             }
         }
@@ -304,7 +389,7 @@ pub async fn refresh(
     };
     // Also for a closed one: refs of versions recorded by an earlier
     // attempt that stopped before its sync are written now.
-    let synced = refs.sync(db, repo, mr, request_id).await?;
+    let synced = refs.sync_locked(lock, repo, request_id).await?;
     tracing::info!(
         target: "forge_review",
         event = "forge.review.version_refreshed",

@@ -367,3 +367,113 @@ async fn purged_version_refs_are_never_recreated() {
     assert_eq!(stored.last().map(|v| &v.head_sha), Some(&tip));
     w.t.drop_now().await;
 }
+
+async fn open_feature(w: &World) -> forge_review::StoredMergeRequest {
+    let proof = open_proof(
+        &w.t,
+        &session(w.owner),
+        w.project,
+        ("feature", "main"),
+        false,
+    )
+    .await
+    .expect("open proof");
+    w.review
+        .open(
+            &request("req-open"),
+            &proof,
+            ready(w.repo),
+            &NewFields {
+                title: "Feature".to_owned(),
+                description: String::new(),
+            },
+        )
+        .await
+        .expect("open")
+}
+
+/// Review (rust + database): two runs of one merge request never
+/// interleave. While another holder has the refs lock a run waits; runs
+/// racing while the branch moves end with the database head, the `head`
+/// ref and the branch tip all equal — never moved back.
+#[tokio::test]
+async fn concurrent_refreshes_of_one_merge_request_end_at_the_latest_tip() {
+    let w = world().await;
+    let base = commit(&w.path, "base\n");
+    let c1 = commit(&w.path, "first\n");
+    set_branch(&w.path, "main", &base);
+    set_branch(&w.path, "feature", &c1);
+    let mr = open_feature(&w).await;
+    let spawn = |request: String| {
+        let db = w.t.db.clone(); // clone: the task owns its pool handle
+        let refs = w.refs.clone(); // clone: the task owns its handles
+        tokio::spawn(async move {
+            refresh(
+                &db,
+                &refs,
+                RefreshRequest {
+                    merge_request: mr.id,
+                    pushed_by: None,
+                },
+                &RequestId::parse(&request).expect("id"),
+            )
+            .await
+        })
+    };
+
+    let held = forge_db::review::lock_version_refs(&w.t.db, mr.id)
+        .await
+        .expect("lock");
+    let waiting = spawn("req-wait".to_owned());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "a run waits for the lock");
+    assert!(list_versions(&w.t.db, mr.id)
+        .await
+        .expect("versions")
+        .is_empty());
+    held.release().await;
+    let done = waiting.await.expect("join").expect("refresh");
+    assert_eq!(done.outcome, "added");
+
+    // Pairs of runs racing a branch move (two at a time: each waiting run
+    // holds a pool connection, as the worker's one-job-at-a-time does).
+    let mut tip = c1.clone();
+    for round in 0..4 {
+        let first = spawn(format!("req-race-{round}-a"));
+        tip = commit(
+            &w.path,
+            &format!(
+                "round {round}
+"
+            ),
+        );
+        set_branch(&w.path, "feature", &tip);
+        let second = spawn(format!("req-race-{round}-b"));
+        for task in [first, second] {
+            task.await.expect("join").expect("refresh");
+        }
+    }
+    // The last tip is recorded once every run has seen it.
+    w.refresh(mr.id, "req-final").await;
+    let row = w
+        .review
+        .merge_request(w.project, mr.iid)
+        .await
+        .expect("load")
+        .expect("row");
+    assert_eq!(row.head_sha.as_deref(), Some(tip.as_str()), "database head");
+    let refs = hidden(&w.path);
+    assert!(refs.contains(&pair("head", &tip)), "head ref: {refs:?}");
+    let versions = list_versions(&w.t.db, mr.id).await.expect("versions");
+    let numbers: Vec<i64> = versions.iter().map(|v| v.version_no).collect();
+    let expected: Vec<i64> = (1..=i64::try_from(versions.len()).expect("small")).collect();
+    assert_eq!(numbers, expected, "dense numbering");
+    for v in &versions {
+        assert!(
+            refs.contains(&pair(&format!("v{}", v.version_no), v.head_sha.as_str())),
+            "v{}: {refs:?}",
+            v.version_no
+        );
+    }
+    w.t.drop_now().await;
+}

@@ -4,7 +4,7 @@
 //! (`commands.rs`): [`open_mr_decided`], [`edit_mr_decided`],
 //! [`close_mr_decided`], [`reopen_mr_decided`]; M3 R1b: the versions
 //! (`versions.rs`: the version job's [`record_mr_version`]), their hidden
-//! refs (`version_refs.rs`: [`with_versions_locked`] and the
+//! refs (`version_refs.rs`: the per merge request lock [`lock_version_refs`] and the
 //! administrator's [`purge_mr_version_refs_decided`]) and the
 //! `merge-request-refresh` subscriber (`refresh.rs`).
 //!
@@ -37,7 +37,8 @@ pub mod versions;
 
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use version_refs::{
-    purge_mr_version_refs_decided, with_versions_locked, PurgeOutcome, VersionsSnapshot,
+    lock_version_refs, purge_mr_version_refs_decided, versions_snapshot, PurgeOutcome, RefsLock,
+    VersionsSnapshot, REFS_LOCK_HOLD, REFS_LOCK_WAIT,
 };
 pub use versions::{
     list_versions, record_mr_version, refresh_job, refresh_payload, refresh_target, RefreshRequest,
