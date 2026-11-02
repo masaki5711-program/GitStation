@@ -3,6 +3,7 @@
 // expression. Reads the lockfile and node_modules/*/package.json only.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ALLOWED = new Set([
   'MIT',
@@ -21,7 +22,9 @@ const ALLOWED = new Set([
   'MPL-2.0', // axe-core (a11y checks in vitest and the Playwright journey; dev only, file-level copyleft, unmodified, never shipped; reviewed for M2 MR9)
 ]);
 
-const root = new URL('..', import.meta.url).pathname;
+// fileURLToPath, not URL#pathname: on Windows the pathname is `/D:/...`,
+// which join() turns into `D:\D:\...` (ENOENT).
+const root = fileURLToPath(new URL('..', import.meta.url));
 const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
 
 /** `(MIT OR Apache-2.0)`: allowed when one alternative is; `AND`: all. */
