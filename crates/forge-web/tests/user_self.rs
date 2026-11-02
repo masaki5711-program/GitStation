@@ -41,6 +41,7 @@ fn identity(user: i64, is_admin: bool, is_agent: bool, scopes: &[Scope]) -> Toke
         is_admin,
         scopes: scopes.to_vec(),
         is_agent,
+        kind: forge_core::UserKind::Human,
     }
 }
 

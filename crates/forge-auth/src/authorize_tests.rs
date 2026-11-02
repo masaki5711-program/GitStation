@@ -17,7 +17,13 @@ fn decide(action: Action, actor: Actor, fixture: Fixture) -> Expect {
 }
 
 fn session() -> Principal {
-    Principal::authenticated(ME, false, true, Credential::Session)
+    Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    )
 }
 
 fn project(role: Option<Role>) -> ProjectView {
@@ -66,7 +72,7 @@ fn every_action_has_matrix_rows() {
 #[test]
 fn rows_are_unique() {
     let mut seen = BTreeSet::new();
-    for r in ROWS {
+    for r in ROWS.iter() {
         let key = format!("{:?}|{:?}|{:?}", r.action, r.actor, r.fixture);
         assert!(seen.insert(key.clone()), "duplicate row {key}");
     }
@@ -90,7 +96,13 @@ fn anonymous_is_unauthenticated() {
 
 #[test]
 fn disabled_account_is_denied() {
-    let p = Principal::authenticated(ME, true, false, Credential::Session);
+    let p = Principal::authenticated(
+        ME,
+        true,
+        false,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let err = authorize(&p, Action::UserCreate, &Resource::Instance).expect_err("disabled");
     assert_eq!(err.code(), ErrorCode::AccountDisabled);
 }
@@ -189,7 +201,13 @@ fn pending_deletion_blocks_everything_but_restore() {
 #[test]
 fn token_scope_narrows_role() {
     // An Owner with a read_api token may read but not change anything.
-    let p = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::ReadApi]));
+    let p = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::ReadApi]),
+        crate::AccountKind::Human,
+    );
     let owned = Resource::Project(project(Some(Role::Owner)));
     assert!(authorize(&p, Action::ProjectRead, &owned).is_ok());
     let err = authorize(&p, Action::ProjectDelete, &owned).expect_err("needs api scope");
@@ -206,6 +224,7 @@ fn scope_cannot_exceed_role() {
         false,
         true,
         Credential::Token(vec![Scope::Api, Scope::WriteRepository]),
+        crate::AccountKind::Human,
     );
     let err = authorize(
         &p,
@@ -218,7 +237,13 @@ fn scope_cannot_exceed_role() {
 
 #[test]
 fn empty_scope_list_denies_everything_that_needs_a_scope() {
-    let p = Principal::authenticated(ME, true, true, Credential::Token(vec![]));
+    let p = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(vec![]),
+        crate::AccountKind::Human,
+    );
     for &action in Action::ALL.iter().filter(|a| a.required_scope().is_some()) {
         let err = authorize(&p, action, &Resource::Instance).expect_err("no scope");
         assert!(
@@ -231,12 +256,19 @@ fn empty_scope_list_denies_everything_that_needs_a_scope() {
 
 #[test]
 fn admin_rights_through_a_token_need_the_admin_scope() {
-    let api_only = Principal::authenticated(ME, true, true, Credential::Token(vec![Scope::Api]));
+    let api_only = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        crate::AccountKind::Human,
+    );
     let with_admin = Principal::authenticated(
         ME,
         true,
         true,
         Credential::Token(vec![Scope::Api, Scope::Admin]),
+        crate::AccountKind::Human,
     );
     assert!(!api_only.admin_rights());
     assert!(with_admin.admin_rights());
@@ -275,7 +307,13 @@ fn a_token_cannot_mint_tokens() {
         vec![Scope::Api],
         vec![Scope::Api, Scope::Admin, Scope::WriteRepository],
     ] {
-        let p = Principal::authenticated(ME, true, true, Credential::Token(scopes));
+        let p = Principal::authenticated(
+            ME,
+            true,
+            true,
+            Credential::Token(scopes),
+            crate::AccountKind::Human,
+        );
         let err = authorize(
             &p,
             Action::TokenCreate,
@@ -312,7 +350,13 @@ fn only_admins_create_admin_scoped_tokens() {
             .contains("reason=admin_scope_requires_admin"),
         "{err}"
     );
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     assert!(authorize(&admin, Action::TokenCreate, &request(vec![Scope::Admin])).is_ok());
 }
 
@@ -367,7 +411,13 @@ fn the_last_owner_cannot_be_removed_even_by_an_admin() {
         change: MembershipChange::Remove { from: Role::Owner },
         removes_last_owner: true,
     };
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     for p in [session(), admin] {
         let err = authorize(&p, Action::MemberManage, &last).expect_err("last owner");
         assert!(err.to_string().contains("reason=last_owner"), "{err}");
@@ -407,7 +457,13 @@ fn reserved_ref_namespace_is_rejected_even_for_admins() {
 
 #[test]
 fn force_push_to_protected_is_denied_even_for_admin() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let err = authorize(
         &admin,
         Action::RepoPush,
@@ -465,7 +521,13 @@ fn delete_protected_ref_is_denied() {
 
 #[test]
 fn mismatched_resource_is_an_internal_error_not_an_allow() {
-    let admin = Principal::authenticated(ME, true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     for &action in Action::ALL.iter().filter(|a| !a.is_public()) {
         // A token resource fits only the token actions.
         if matches!(
@@ -535,7 +597,13 @@ fn a_mislabelled_reserved_ref_is_still_rejected() {
         forge_core::RefName::parse("refs/replace/0123456789abcdef0123456789abcdef01234567")
             .expect("valid ref");
     let err = authorize(
-        &Principal::authenticated(ME, true, true, Credential::Session),
+        &Principal::authenticated(
+            ME,
+            true,
+            true,
+            Credential::Session,
+            crate::AccountKind::Human,
+        ),
         Action::RepoPush,
         &Resource::Ref {
             project: project(Some(Role::Owner)),
@@ -563,13 +631,25 @@ fn an_agent_token_is_refused_the_visibility_change_only() {
         } else {
             vec![Scope::Api]
         };
-        let agent = Principal::authenticated(ME, admin, true, Credential::Token(scopes.clone()))
-            .as_agent(true);
+        let agent = Principal::authenticated(
+            ME,
+            admin,
+            true,
+            Credential::Token(scopes.clone()),
+            crate::AccountKind::Human,
+        )
+        .as_agent(true);
         let err = authorize(&agent, Action::ProjectVisibilityChange, &make_internal)
             .expect_err("agents never change visibility");
         assert_eq!(err.code(), ErrorCode::Forbidden);
         assert!(err.to_string().contains("reason=agent_token"), "{err}");
-        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        let human = Principal::authenticated(
+            ME,
+            admin,
+            true,
+            Credential::Token(scopes),
+            crate::AccountKind::Human,
+        );
         assert!(authorize(&human, Action::ProjectVisibilityChange, &make_internal).is_ok());
         assert!(authorize(
             &agent,
@@ -613,7 +693,13 @@ fn an_agent_token_is_refused_member_and_protection_changes() {
         } else {
             vec![Scope::Api]
         };
-        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        let human = Principal::authenticated(
+            ME,
+            admin,
+            true,
+            Credential::Token(scopes),
+            crate::AccountKind::Human,
+        );
         let agent = human.clone().as_agent(true);
         for (action, resource) in [
             (Action::MemberManage, add(role)),
@@ -683,7 +769,13 @@ fn self_elevation_is_denied() {
 }
 
 fn admin_session() -> Principal {
-    Principal::authenticated(ME, true, true, Credential::Session)
+    Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    )
 }
 
 fn admin_token() -> Principal {
@@ -692,6 +784,7 @@ fn admin_token() -> Principal {
         true,
         true,
         Credential::Token(vec![Scope::Api, Scope::Admin]),
+        crate::AccountKind::Human,
     )
 }
 
@@ -822,7 +915,13 @@ fn former_owner_cannot_release_deleted_tombstone() {
     );
     let err = authorize(&session(), release, &deleted(None)).expect_err("left the parent");
     assert_eq!(err.code(), ErrorCode::NotFound);
-    let disabled = Principal::authenticated(ME, false, false, Credential::Session);
+    let disabled = Principal::authenticated(
+        ME,
+        false,
+        false,
+        Credential::Session,
+        crate::AccountKind::Human,
+    );
     let err = authorize(&disabled, release, &deleted(Some(Role::Owner))).expect_err("disabled");
     assert_eq!(err.code(), ErrorCode::AccountDisabled);
     // Another Owner of the parent is not the recorded owner.
@@ -850,8 +949,14 @@ fn former_owner_cannot_release_deleted_tombstone() {
         "{err}"
     );
     // An agent gets the same 404 as a person on a tombstone it cannot see.
-    let agent = Principal::authenticated(ME, false, true, Credential::Token(vec![Scope::Api]))
-        .as_agent(true);
+    let agent = Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Token(vec![Scope::Api]),
+        crate::AccountKind::Human,
+    )
+    .as_agent(true);
     assert_eq!(
         authorize(&agent, release, &deleted(None))
             .expect_err("agent")
@@ -938,7 +1043,13 @@ fn agent_token_cannot_delete_transfer_or_release() {
         } else {
             vec![Scope::Api]
         };
-        let human = Principal::authenticated(ME, admin, true, Credential::Token(scopes));
+        let human = Principal::authenticated(
+            ME,
+            admin,
+            true,
+            Credential::Token(scopes),
+            crate::AccountKind::Human,
+        );
         let agent = human.clone().as_agent(true);
         let all = cases.iter().chain(admin.then_some(&rename));
         for (action, resource) in all {
@@ -960,7 +1071,13 @@ fn a_session_only_action_refuses_every_token_with_session_required() {
         .filter(|a| a.is_session_only())
         .all(|a| a.required_scope().is_none() && !a.is_public()));
     let all = vec![Scope::ReadApi, Scope::Api, Scope::Admin];
-    let token = Principal::authenticated(ME, true, true, Credential::Token(all));
+    let token = Principal::authenticated(
+        ME,
+        true,
+        true,
+        Credential::Token(all),
+        crate::AccountKind::Human,
+    );
     let err = authorize(&token, Action::SessionRead, &Resource::Instance).expect_err("token");
     assert_eq!(err.code(), ErrorCode::InsufficientScope);
     assert!(err.to_string().contains("reason=session_required"), "{err}");

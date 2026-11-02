@@ -170,7 +170,13 @@ async fn get(router: &axum::Router, uri: &str, who: Option<Principal>) -> Answer
 }
 
 fn session(user: UserId) -> Principal {
-    Principal::authenticated(user, false, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn uri(path: &str) -> String {
@@ -292,6 +298,7 @@ async fn the_prefix_parameter_and_path_are_checked_and_the_scope_applies() {
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
+        forge_auth::AccountKind::Human,
     );
     let refused = get(&r, &uri("acme/web/pull/3"), Some(repo)).await;
     assert_eq!(refused.status, StatusCode::FORBIDDEN);

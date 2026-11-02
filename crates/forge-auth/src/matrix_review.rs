@@ -122,3 +122,35 @@ impl MrFixture {
         }
     }
 }
+
+/// One discussion of a merge request as a row sees it (M3 R3, ADR-0024
+/// §12): the project, whether the caller authored the merge request and
+/// whether the caller started the thread; the role comes from the actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DiscussionFixture {
+    pub project: MrProject,
+    /// The caller is the merge request's author.
+    pub own_mr: bool,
+    /// The caller started the thread.
+    pub own_thread: bool,
+}
+
+impl DiscussionFixture {
+    #[cfg(test)]
+    pub(crate) fn resource(self, role: Option<Role>) -> Resource {
+        let (visibility, pending_deletion) = match self.project {
+            MrProject::Private => (Visibility::Private, false),
+            MrProject::Internal => (Visibility::Internal, false),
+            MrProject::Deleted => (Visibility::Private, true),
+        };
+        Resource::Discussion {
+            project: ProjectView {
+                visibility,
+                role,
+                pending_deletion,
+            },
+            mr_author: if self.own_mr { ME } else { OTHER },
+            started_by: if self.own_thread { ME } else { OTHER },
+        }
+    }
+}

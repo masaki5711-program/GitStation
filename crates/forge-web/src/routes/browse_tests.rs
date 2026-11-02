@@ -223,7 +223,13 @@ pub(crate) fn router(repo: &Repo, facts: Facts, limits: BrowseLimits) -> axum::R
 }
 
 pub(crate) fn session() -> Principal {
-    Principal::authenticated(UserId::new(5), false, true, Credential::Session)
+    Principal::authenticated(
+        UserId::new(5),
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 pub(crate) fn token(scopes: &[Scope]) -> Principal {
@@ -232,6 +238,7 @@ pub(crate) fn token(scopes: &[Scope]) -> Principal {
         false,
         true,
         Credential::Token(scopes.to_vec()),
+        forge_auth::AccountKind::Human,
     )
 }
 
@@ -698,7 +705,13 @@ async fn commit_id_lookups_are_limited_per_caller_on_the_routes() {
     )
     .await;
     assert_eq!(name.status, StatusCode::OK, "names do not count");
-    let other = Principal::authenticated(UserId::new(6), false, true, Credential::Session);
+    let other = Principal::authenticated(
+        UserId::new(6),
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let a = send(app, "GET", &by_id, Some(other)).await;
     assert_eq!(a.status, StatusCode::OK, "another caller");
 }

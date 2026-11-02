@@ -87,6 +87,16 @@ actions! {
     /// service accounts hold only tokens (the sign-in admits people only,
     /// `not_human`), so they never reach it.
     MergeRequestVersionRefsPurge,
+    /// `POST …/merge-requests/{iid}/discussions` and `…/discussions/{d}/notes`
+    /// (M3 R3, ADR-0024 §12): start a discussion or reply to one. Reporter
+    /// and above by membership; agents' tokens and service accounts too (a
+    /// comment is no merge condition; resolving is `DiscussionResolve`).
+    MergeRequestComment,
+    /// `POST …/discussions/{d}/resolve` and `…/unresolve` (M3 R3,
+    /// `Resource::Discussion`): people only (agents, service accounts and
+    /// bots are refused); the thread's starter, or a Developer and above
+    /// who is not the merge request's author (administrators included).
+    DiscussionResolve,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -280,7 +290,9 @@ impl Action {
             | Action::MergeRequestCreate
             | Action::MergeRequestUpdate
             | Action::MergeRequestClose
-            | Action::MergeRequestReopen => Some(Scope::Api),
+            | Action::MergeRequestReopen
+            | Action::MergeRequestComment
+            | Action::DiscussionResolve => Some(Scope::Api),
         }
     }
 }

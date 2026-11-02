@@ -144,6 +144,7 @@ async fn get(router: axum::Router, uri: &str, who: UserId) -> Answer {
         false,
         true,
         Credential::Session,
+        forge_auth::AccountKind::Human,
     ));
     let res = router.oneshot(req).await.expect("infallible");
     let status = res.status();

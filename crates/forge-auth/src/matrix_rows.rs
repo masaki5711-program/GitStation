@@ -98,7 +98,7 @@ const fn edit(own: bool, state: S, draft: bool, set_draft: Option<bool>, target:
 }
 
 #[rustfmt::skip]
-pub(crate) const ROWS: &[Row] = &[
+pub(crate) const BASE_ROWS: &[Row] = &[
     // --- RepoRead (git clone / fetch) ---
     row(A::RepoRead, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
     row(A::RepoRead, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),

@@ -12,8 +12,8 @@ use crate::model::{AdmissionAccount, MembershipChange, RefKind, RefUpdate, Role}
 // Turning rows into principals and resources is only needed by the tests.
 #[cfg(test)]
 use crate::model::{
-    Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection, ResolvedVia,
-    Resource, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, Credential, MembershipScope, NamespaceView, Principal, ProjectView, RefProtection,
+    ResolvedVia, Resource, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 #[cfg(test)]
 use forge_core::UserId;
@@ -65,6 +65,11 @@ pub(crate) enum Actor {
     AdminTokenApi,
     /// Administrator with an `api` + `admin` token.
     AdminTokenAdmin,
+    /// Developer with an `api` token on a service account (M3 R3,
+    /// ADR-0024 §8.4: `users.kind = service_account`).
+    ServiceAccountTokenApi,
+    /// Developer with an `api` token on a bot account (`users.kind = bot`).
+    BotTokenApi,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -221,6 +226,8 @@ pub(crate) enum Fixture {
     },
     /// A merge request (M3 R1a, ADR-0024 §12): `matrix_review.rs`.
     Mr(crate::matrix_review::MrFixture),
+    /// A discussion of a merge request (M3 R3): `matrix_review.rs`.
+    Discussion(crate::matrix_review::DiscussionFixture),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,11 +254,13 @@ pub(crate) const OTHER: UserId = UserId::new(2);
 #[cfg(test)]
 impl Actor {
     pub(crate) fn principal(self) -> Principal {
-        let session =
-            |admin, active| Principal::authenticated(ME, admin, active, Credential::Session);
-        let token = |admin, scopes: &[Scope]| {
-            Principal::authenticated(ME, admin, true, Credential::Token(scopes.to_vec()))
+        let session = |admin, active| {
+            Principal::authenticated(ME, admin, active, Credential::Session, AccountKind::Human)
         };
+        let token_of = |kind, admin, scopes: &[Scope]| {
+            Principal::authenticated(ME, admin, true, Credential::Token(scopes.to_vec()), kind)
+        };
+        let token = |admin, scopes: &[Scope]| token_of(AccountKind::Human, admin, scopes);
         match self {
             Actor::Anonymous => Principal::anonymous(),
             Actor::Disabled => session(false, false),
@@ -275,6 +284,10 @@ impl Actor {
             Actor::AgentAdminTokenAdmin => token(true, &[Scope::Api, Scope::Admin]).as_agent(true),
             Actor::AgentMaintainerTokenApi => token(false, &[Scope::Api]).as_agent(true),
             Actor::MaintainerTokenApi => token(false, &[Scope::Api]),
+            Actor::ServiceAccountTokenApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::Api])
+            }
+            Actor::BotTokenApi => token_of(AccountKind::Bot, false, &[Scope::Api]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -295,7 +308,9 @@ impl Actor {
             | Actor::AgentTokenWriteRepository
             | Actor::AgentTokenReadApi
             | Actor::AgentTokenApi
-            | Actor::DevTokenApi => Some(Role::Developer),
+            | Actor::DevTokenApi
+            | Actor::ServiceAccountTokenApi
+            | Actor::BotTokenApi => Some(Role::Developer),
             Actor::Maintainer | Actor::AgentMaintainerTokenApi | Actor::MaintainerTokenApi => {
                 Some(Role::Maintainer)
             }
@@ -559,6 +574,7 @@ impl Fixture {
                 account,
             },
             Fixture::Mr(mr) => mr.resource(role),
+            Fixture::Discussion(d) => d.resource(role),
         }
     }
 }
@@ -574,7 +590,16 @@ fn ref_name(kind: RefKind) -> forge_core::RefName {
     forge_core::RefName::parse(name).expect("fixture ref names are valid")
 }
 
-pub(crate) use crate::matrix_rows::ROWS;
+/// Every row: the base rows (`matrix_rows.rs`) and the discussion rows
+/// (`matrix_rows_discussion.rs`, M3 R3), one list for the tests and the
+/// gate summary.
+pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new(|| {
+    [
+        crate::matrix_rows::BASE_ROWS,
+        crate::matrix_rows_discussion::DISCUSSION_ROWS,
+    ]
+    .concat()
+});
 
 /// Per-action counts for the `authz-coverage` gate.
 #[derive(Debug, Clone, PartialEq, Eq)]

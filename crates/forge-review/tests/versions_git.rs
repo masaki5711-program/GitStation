@@ -167,7 +167,13 @@ impl World {
     }
 
     fn admin(&self) -> Principal {
-        Principal::authenticated(self.owner, true, true, Credential::Session)
+        Principal::authenticated(
+            self.owner,
+            true,
+            true,
+            Credential::Session,
+            forge_auth::AccountKind::Human,
+        )
     }
 
     async fn proof(&self, action: Action) -> forge_auth::Authorized<forge_auth::MergeRequestCtx> {

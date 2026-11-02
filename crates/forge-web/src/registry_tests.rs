@@ -56,7 +56,13 @@ fn a_proof_for_another_action_is_refused() {
     assert!(text.contains("route_action=UserCreate"), "{text}");
     assert!(text.contains("proof_action=WebShell"), "{text}");
 
-    let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        UserId::new(1),
+        true,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let proof = prove(&admin, Action::UserCreate, InstanceCtx).expect("admin");
     let Err(err) = admit(Action::Metrics, proof, admitted(), ()) else {
         panic!("a UserCreate proof must not admit a Metrics route");
@@ -589,7 +595,13 @@ fn body_routes_that_do_not_fit_are_a_startup_error() {
         ""
     );
 
-    let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        UserId::new(1),
+        true,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let proof = prove(&admin, Action::UserSelfRead, InstanceCtx).expect("signed in");
     let input = Change {
         name: "synthetic".into(),

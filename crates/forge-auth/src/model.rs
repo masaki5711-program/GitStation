@@ -8,6 +8,13 @@
 // Role, Visibility (D2) and Scope (D3) live in forge-core (forge-db stores and loads
 // them); re-exported here so the authorization API is unchanged.
 pub use forge_core::{MergeRequestState, Role, Scope, Visibility};
+
+/// The kind of the caller's account (ADR-0024 §8.4, M3 R3): `human`,
+/// `service_account` or `bot` — forge-core's `UserKind`, the CHECK of
+/// `forge.users.kind`. Set only by [`Principal::authenticated`] from the
+/// account row, never defaulted and never changed afterwards. The actions
+/// kept for people (`people_only` in `authorize()`) refuse the other two.
+pub use forge_core::UserKind as AccountKind;
 use forge_core::{RefName, UserId};
 
 /// How the caller authenticated.
@@ -30,6 +37,9 @@ pub struct Principal {
     /// The credential was issued for an AI agent (ADR-0017 §4.0; an
     /// authorization input since M1 phase 8b MR7a).
     agent: bool,
+    /// The account's kind (`users.kind`, ADR-0024 §8.4). The anonymous
+    /// principal has `Human` but no user, so it is refused first.
+    kind: AccountKind,
 }
 
 impl Principal {
@@ -41,15 +51,19 @@ impl Principal {
             active: false,
             credential: Credential::Session,
             agent: false,
+            kind: AccountKind::Human,
         }
     }
 
-    /// A signed-in user. `active` is `false` for disabled or locked accounts.
+    /// A signed-in user. `active` is `false` for disabled or locked
+    /// accounts; `kind` is the account's `users.kind` as read with it (no
+    /// default: every caller states it, ADR-0024 §8.4).
     pub fn authenticated(
         user: UserId,
         is_admin: bool,
         active: bool,
         credential: Credential,
+        kind: AccountKind,
     ) -> Self {
         Self {
             user: Some(user),
@@ -57,7 +71,13 @@ impl Principal {
             active,
             credential,
             agent: false,
+            kind,
         }
+    }
+
+    /// The account's kind (ADR-0024 §8.4).
+    pub fn account_kind(&self) -> AccountKind {
+        self.kind
     }
 
     /// The same caller, with a credential issued for an AI agent
@@ -313,6 +333,16 @@ pub enum Resource {
         source_branch: RefName,
         target_branch: RefName,
         edit: MergeRequestEdit,
+    },
+    /// One discussion of a merge request (M3 R3, ADR-0024 §12):
+    /// `DiscussionResolve`. `mr_author` is the merge request's author,
+    /// `started_by` the author of the thread's first note. The merge
+    /// request's state is no input (resolving is allowed in every state;
+    /// what blocks a merge is `evaluate_merge()`'s).
+    Discussion {
+        project: ProjectView,
+        mr_author: UserId,
+        started_by: UserId,
     },
     /// A path that resolved to a namespace (`PathResolve`), decided by
     /// whether the caller can see it — not by a read role (ADR-0015).

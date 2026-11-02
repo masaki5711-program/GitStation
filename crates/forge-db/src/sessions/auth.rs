@@ -36,6 +36,7 @@ struct Row {
     display_name: String,
     idle_expires_at: String,
     absolute_expires_at: String,
+    kind: String,
 }
 
 fn rejected(reason: &'static str) -> ForgeError {
@@ -102,7 +103,7 @@ pub async fn authenticate_with(
              (s.oidc_issuer IS NOT NULL AND s.refresh_token_enc IS NOT NULL \
               AND (s.refresh_checked_at IS NULL \
                    OR s.refresh_checked_at < now() - interval '300 seconds')) AS refresh_due, \
-             u.is_admin, u.state = 'active' AS active, u.username, u.display_name, ",
+             u.is_admin, u.state = 'active' AS active, u.username, u.display_name, u.kind, ",
             utc!("s.idle_expires_at"),
             " AS idle_expires_at, ",
             utc!("s.absolute_expires_at"),
@@ -142,6 +143,7 @@ pub async fn authenticate_with(
         if row.expired {
             return Err(rejected("session_expired").with_context("public_id", public_id));
         }
+        let kind = crate::users::parse_kind(row.user_id, &row.kind)?;
         let mut idle_expires_at = row.idle_expires_at;
         let deferred = policy == TouchPolicy::AfterRefreshCheck && row.refresh_due;
         if row.stale && !deferred {
@@ -159,6 +161,7 @@ pub async fn authenticate_with(
             idle_expires_at,
             absolute_expires_at: row.absolute_expires_at,
             refresh_due: row.refresh_due,
+            kind,
         })
     })
     .await

@@ -197,7 +197,13 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
         .and_then(serde_json::Value::as_i64)
         .expect("alice");
     let alice = forge_core::UserId::new(alice);
-    let principal = forge_auth::Principal::authenticated(alice, false, true, Credential::Session);
+    let principal = forge_auth::Principal::authenticated(
+        alice,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let record =
         t.db.load_project(web.project_id, Some(alice))
             .await

@@ -10,7 +10,7 @@ use std::pin::Pin;
 
 use forge_errors::ForgeError;
 
-use crate::{RequestId, Scope, UserId};
+use crate::{RequestId, Scope, UserId, UserKind};
 
 /// Who a valid token stands for. The owner is active: a disabled owner's
 /// token is refused by the authenticator itself (`FG-AUTH-0004`).
@@ -28,6 +28,10 @@ pub struct TokenIdentity {
     pub scopes: Vec<Scope>,
     /// Issued for an AI agent (ADR-0017 §4.0; reaches `Credential` in W1).
     pub is_agent: bool,
+    /// The owner's account kind (`users.kind`; an authorization input
+    /// since M3 R3, ADR-0024 §8.4: the actions kept for people refuse
+    /// service accounts and bots).
+    pub kind: UserKind,
 }
 
 /// The future an authenticator returns (boxed: stored as a trait object).
@@ -72,6 +76,10 @@ pub struct SessionIdentity {
     /// refresh check (`forge_oidc::RefreshingSessions`) runs on this
     /// request. Never an authorization input by itself.
     pub refresh_due: bool,
+    /// The user's account kind (`users.kind`, ADR-0024 §8.4). Always
+    /// `human` today (the sign-in admits people only, `not_human`), read
+    /// rather than assumed.
+    pub kind: UserKind,
 }
 
 /// The future a session authenticator returns.

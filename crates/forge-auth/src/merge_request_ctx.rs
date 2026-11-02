@@ -12,7 +12,7 @@
 //! }
 //! ```
 
-use forge_core::{MergeRequestState, ProjectId, RefName, UserId};
+use forge_core::{DiscussionId, MergeRequestState, ProjectId, RefName, UserId};
 
 use crate::model::{MergeRequestEdit, ProjectView, Resource};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
@@ -86,5 +86,68 @@ impl ResourceCtx for MergeRequestCtx {
     }
     fn id(&self) -> (ProjectId, Option<i64>) {
         (self.project.id, self.mr.iid)
+    }
+}
+
+/// One discussion as loaded (its row): who started it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadedDiscussion {
+    pub id: DiscussionId,
+    pub started_by: UserId,
+}
+
+/// A discussion of a stored merge request (`DiscussionResolve`, M3 R3).
+/// The id is the project, the merge request's `iid` and the discussion
+/// together, so a proof for one thread cannot resolve another. Sealed like
+/// every [`ResourceCtx`]: built from one loaded project, merge request and
+/// discussion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscussionCtx {
+    project: LoadedProject,
+    mr: LoadedMergeRequest,
+    discussion: LoadedDiscussion,
+}
+
+impl DiscussionCtx {
+    pub fn new(
+        project: LoadedProject,
+        mr: LoadedMergeRequest,
+        discussion: LoadedDiscussion,
+    ) -> Self {
+        Self {
+            project,
+            mr,
+            discussion,
+        }
+    }
+
+    /// The merge request as decided on.
+    pub fn merge_request(&self) -> &LoadedMergeRequest {
+        &self.mr
+    }
+
+    /// The discussion as decided on.
+    pub fn discussion(&self) -> LoadedDiscussion {
+        self.discussion
+    }
+}
+
+impl sealed::Sealed for DiscussionCtx {}
+
+impl ResourceCtx for DiscussionCtx {
+    type Id = (ProjectId, Option<i64>, DiscussionId);
+    fn resource(&self) -> Resource {
+        Resource::Discussion {
+            project: ProjectView {
+                visibility: self.project.visibility,
+                role: self.project.role,
+                pending_deletion: self.project.pending_deletion,
+            },
+            mr_author: self.mr.author,
+            started_by: self.discussion.started_by,
+        }
+    }
+    fn id(&self) -> (ProjectId, Option<i64>, DiscussionId) {
+        (self.project.id, self.mr.iid, self.discussion.id)
     }
 }

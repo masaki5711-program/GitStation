@@ -91,7 +91,13 @@ fn app(counting: &Arc<Counting>, config: AppConfig) -> axum::Router {
 }
 
 fn member() -> Principal {
-    Principal::authenticated(UserId::new(5), false, true, Credential::Session)
+    Principal::authenticated(
+        UserId::new(5),
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 struct Answer {
@@ -317,7 +323,13 @@ async fn oversized_request_body_is_request_too_large() {
 #[tokio::test]
 async fn authentication_comes_before_the_body() {
     let counting = Arc::new(Counting::default());
-    let disabled = Principal::authenticated(UserId::new(5), false, false, Credential::Session);
+    let disabled = Principal::authenticated(
+        UserId::new(5),
+        false,
+        false,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     for (who, code) in [
         (None, ErrorCode::Unauthenticated),
         (Some(disabled), ErrorCode::AccountDisabled),
@@ -339,6 +351,7 @@ async fn authentication_comes_before_the_body() {
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
+        forge_auth::AccountKind::Human,
     );
     let answer = send(
         app(&counting, AppConfig::default()),

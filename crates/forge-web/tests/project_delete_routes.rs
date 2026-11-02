@@ -100,7 +100,13 @@ async fn call(
 }
 
 fn session(user: UserId, admin: bool) -> Principal {
-    Principal::authenticated(user, admin, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        admin,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 fn code(a: &Answer) -> &str {
@@ -245,8 +251,14 @@ async fn delete_and_restore_follow_the_matrix_for_roles_tokens_and_agents() {
     let restore = format!("{one}/restore");
     let r = || router(&t.db);
     let token = |scope: Scope, agent: bool| {
-        Principal::authenticated(alice.user_id, false, true, Credential::Token(vec![scope]))
-            .as_agent(agent)
+        Principal::authenticated(
+            alice.user_id,
+            false,
+            true,
+            Credential::Token(vec![scope]),
+            forge_auth::AccountKind::Human,
+        )
+        .as_agent(agent)
     };
 
     // A Maintainer: 403. A read-only token of the Owner: 403 scope. An

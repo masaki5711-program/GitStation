@@ -332,7 +332,13 @@ fn req_as(principal: Principal) -> Request<Body> {
 #[tokio::test]
 async fn an_allowed_principal_reaches_the_guarded_handler() {
     let (router, entered) = guarded();
-    let admin = Principal::authenticated(UserId::new(1), true, true, Credential::Session);
+    let admin = Principal::authenticated(
+        UserId::new(1),
+        true,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let res = router.oneshot(req_as(admin)).await.expect("infallible");
     assert_eq!(res.status(), StatusCode::OK);
     assert!(entered.load(Ordering::SeqCst), "handler must run");
@@ -344,7 +350,13 @@ async fn the_registry_authorizes_before_the_handler() {
     // ADR-0015 MR4): an active non-administrator is denied UserCreate by
     // the registry and the handler never runs.
     let (router, entered) = guarded();
-    let me = Principal::authenticated(UserId::new(1), false, true, Credential::Session);
+    let me = Principal::authenticated(
+        UserId::new(1),
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let (status, _, body) = call(router, req_as(me)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error_code"], ErrorCode::Forbidden.id());
@@ -363,7 +375,13 @@ async fn anonymous_principal_is_unauthenticated() {
 #[tokio::test]
 async fn disabled_account_is_rejected_before_the_handler() {
     let (router, entered) = guarded();
-    let disabled = Principal::authenticated(UserId::new(1), true, false, Credential::Session);
+    let disabled = Principal::authenticated(
+        UserId::new(1),
+        true,
+        false,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let (status, _, body) = call(router, req_as(disabled)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body["error_code"], ErrorCode::AccountDisabled.id());

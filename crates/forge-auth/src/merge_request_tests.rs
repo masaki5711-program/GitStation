@@ -16,7 +16,13 @@ fn branch(raw: &str) -> RefName {
 }
 
 fn session() -> Principal {
-    Principal::authenticated(ME, false, true, Credential::Session)
+    Principal::authenticated(
+        ME,
+        false,
+        true,
+        Credential::Session,
+        crate::AccountKind::Human,
+    )
 }
 
 fn mr(role: Option<Role>, author: UserId, state: MergeRequestState) -> Resource {

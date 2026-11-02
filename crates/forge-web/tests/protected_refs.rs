@@ -70,7 +70,13 @@ async fn push(
         .await
         .expect("levels");
     let protection = RefProtection::effective(levels);
-    let principal = Principal::authenticated(caller, false, true, Credential::Session);
+    let principal = Principal::authenticated(
+        caller,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     let resource = Resource::Ref {
         project: ProjectView {
             visibility: Visibility::Private,

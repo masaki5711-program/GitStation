@@ -75,7 +75,13 @@ pub async fn project(
 }
 
 pub fn session(user: UserId, is_admin: bool) -> Principal {
-    Principal::authenticated(user, is_admin, true, Credential::Session)
+    Principal::authenticated(
+        user,
+        is_admin,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 /// The registry's proof, built the way its loaders build it: from what

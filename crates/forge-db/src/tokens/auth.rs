@@ -30,6 +30,7 @@ struct Row {
     stale: bool,
     username: String,
     display_name: String,
+    kind: String,
 }
 
 fn rejected(reason: &'static str) -> ForgeError {
@@ -66,7 +67,7 @@ pub async fn authenticate(
              t.revoked_at IS NOT NULL AS revoked, t.expires_at <= now() AS expired, u.is_admin, \
              u.state = 'active' AS active, \
              (t.last_used_at IS NULL OR t.last_used_at < now() - interval '10 minutes') AS stale, \
-             u.username, u.display_name \
+             u.username, u.display_name, u.kind \
              FROM forge.tokens t JOIN forge.users u ON u.id = t.user_id \
              WHERE t.public_id = $1",
         )
@@ -87,6 +88,7 @@ pub async fn authenticate(
             stale,
             username,
             display_name,
+            kind,
         }) = row
         else {
             // Equal work for a miss; black_box keeps the comparison from
@@ -112,6 +114,7 @@ pub async fn authenticate(
                 .with_context("public_id", public_id));
         }
         let scopes = parse_scopes(id, public_id, &scopes)?;
+        let kind = crate::users::parse_kind(user_id, &kind)?;
         if stale {
             touch(&mut conn, request_id, id).await;
         }
@@ -123,6 +126,7 @@ pub async fn authenticate(
             is_admin,
             scopes,
             is_agent,
+            kind,
         })
     })
     .await

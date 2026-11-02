@@ -164,7 +164,13 @@ async fn group(t: &FreshDb, segment: &str, owner: UserId) -> CreatedGroup {
 }
 
 fn session(who: UserId) -> Principal {
-    Principal::authenticated(who, false, true, Credential::Session)
+    Principal::authenticated(
+        who,
+        false,
+        true,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    )
 }
 
 async fn get(router: axum::Router, uri: &str, who: Option<Principal>) -> (StatusCode, Value) {
@@ -486,8 +492,15 @@ async fn bad_limits_anonymous_and_repository_tokens_are_refused_before_any_load(
         false,
         true,
         Credential::Token(vec![Scope::ReadRepository]),
+        forge_auth::AccountKind::Human,
     );
-    let disabled = Principal::authenticated(alice.user_id, false, false, Credential::Session);
+    let disabled = Principal::authenticated(
+        alice.user_id,
+        false,
+        false,
+        Credential::Session,
+        forge_auth::AccountKind::Human,
+    );
     for path in ["/api/v1/projects", "/api/v1/groups"] {
         let (status, body) = get(app(&counting, 1000), path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
