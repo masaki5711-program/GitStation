@@ -882,7 +882,15 @@ async fn a_timeout_before_the_fence_is_retried_then_cleaned_up() {
 /// reconciler of `an_executing_merge_whose_ref_state_is_unknown_is_failed` has no grace, so the attempt
 /// is past its bound at once (the guard keeps `executing_at` set once).
 async fn stuck_executing(w: &mut World, moved_to: Option<&str>) -> (StoredMerge, String) {
-    let attempt = w.ask(None, false).await.expect("queued");
+    stuck_executing_with(w, moved_to, false).await
+}
+
+async fn stuck_executing_with(
+    w: &mut World,
+    moved_to: Option<&str>,
+    delete_source: bool,
+) -> (StoredMerge, String) {
+    let attempt = w.ask(None, delete_source).await.expect("queued");
     // A commit the worker would have made (the merge's tree is irrelevant).
     let new_sha = commit(&w.path, &[("README.md", "merged\n")], Some(&w.base));
     let step = merges::GateStep::Prepare {
@@ -970,6 +978,35 @@ async fn an_executing_merge_whose_ref_state_is_unknown_is_failed() {
     let report = reconciler(&w).reconcile(&rid).await.expect("reconcile");
     assert_eq!(report.superseded, 1, "{report:?}");
     assert_eq!(w.attempt(stale.id).await.reason.as_deref(), Some("stale"));
+    w.t.drop_now().await;
+}
+
+/// A job that stopped after the ref moved but before tx2 and the source
+/// deletion: its retry asks git, records the merge and then deletes the
+/// source branch the request asked to delete (step 10 after the record);
+/// another retry finds it finished and deletes nothing twice.
+#[tokio::test]
+async fn a_retry_records_a_landed_merge_and_finishes_the_source_deletion() {
+    let mut w = world().await;
+    w.checked().await;
+    let (attempt, new_sha) = stuck_executing_with(&mut w, Some("new"), true).await;
+    let report = w.merger.execute(attempt.id).await.expect("retry");
+    assert_eq!(report.outcome, "applied");
+    assert_eq!(w.tip("main").as_deref(), Some(new_sha.as_str()));
+    let done = w.attempt(attempt.id).await;
+    assert_eq!(done.state, MergeState::Applied);
+    assert_eq!(
+        done.source_outcome,
+        Some(forge_core::SourceOutcome::Deleted)
+    );
+    assert_eq!(w.tip("feature"), None);
+    let again = w.merger.execute(attempt.id).await.expect("again");
+    assert_eq!(again.outcome, "finished");
+    assert_eq!(
+        w.events("merge_request.source_branch_deleted").await.len(),
+        1
+    );
+    assert_eq!(w.events("merge_request.merged").await.len(), 1);
     w.t.drop_now().await;
 }
 

@@ -265,6 +265,13 @@ impl Merger {
                     .with_context("merge_id", merge_id)
             })?;
         if !attempt.state.is_live() {
+            // A run that stopped between tx2 and the source deletion: the
+            // retry deletes it (the outcome is still unset).
+            if wants_source_deletion(&attempt) {
+                if let Some(subject) = self.subject(&attempt).await? {
+                    self.delete_source(&attempt, &subject).await;
+                }
+            }
             return Ok(MergeReport::of("finished", attempt.state));
         }
         let Some(subject) = self.subject(&attempt).await? else {
@@ -297,9 +304,7 @@ impl Merger {
         log_completed(&attempt, &report);
         if report.outcome == "applied" || report.outcome == "already_applied" {
             let done = merges::merge_attempt(&self.db, merge_id).await?;
-            if let Some(done) =
-                done.filter(|d| d.delete_source_branch && d.source_outcome.is_none())
-            {
+            if let Some(done) = done.filter(wants_source_deletion) {
                 self.delete_source(&done, &subject).await;
             }
         }
@@ -961,6 +966,14 @@ impl Merger {
             }],
         }
     }
+}
+
+/// An applied attempt that asked for the source branch's deletion and has
+/// no outcome yet.
+pub(super) fn wants_source_deletion(attempt: &StoredMerge) -> bool {
+    attempt.state == MergeState::Applied
+        && attempt.delete_source_branch
+        && attempt.source_outcome.is_none()
 }
 
 /// Whether a fast-forward is known possible for a prepared attempt: its

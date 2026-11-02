@@ -21,7 +21,7 @@ use forge_core::{telemetry, MergeState, ObjectId, RequestId};
 use forge_db::review::merges::{self, StoredMerge};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::execute::{execution_failed, RECONCILE_BATCH};
+use super::execute::{execution_failed, wants_source_deletion, RECONCILE_BATCH};
 use super::Merger;
 
 /// The wait for a repository's lock during a reconciliation (a busy one is
@@ -96,6 +96,16 @@ impl Merger {
         };
         let settled = self.reconcile_locked(listed.id, &subject).await;
         lock.release().await;
+        if matches!(settled, Ok(Settled::Applied)) {
+            // The job stopped before the source deletion (ADR-0024 §4.2
+            // step 10 comes after the record): do it now.
+            if let Some(done) = merges::merge_attempt(&self.db, listed.id)
+                .await?
+                .filter(wants_source_deletion)
+            {
+                self.delete_source(&done, &subject).await;
+            }
+        }
         settled
     }
 
