@@ -1274,3 +1274,35 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   `a_pruned_cut_tip_no_ref_points_at_is_dropped`。
 - **見えない文字（LOW、改訂）**: 結合文字は選んだブロックではなく、Unicode の一般カテゴリ Mn / Me（と Cf）で判定する。表はすでに依存の木に
   ある `unicode-properties`（sqlx の stringprep が使う。MIT / Apache-2.0）を `general-category` だけで直接の依存にした。
+
+### R5 の再レビュー（4 回目）で決めたこと（2026-11-03）— コミッターの規則の作り直し
+
+**改訂（R5 の節と 1〜3 回目の到達可能性の設計を置き換える）**: 監査の行（ref 100 件・ref ごとのコミット 20 件までの一覧）から push の
+中身を組み立て直し、一覧が切れたところを git の到達の判定で補う設計は、上限・予算・prune のたびに「安い操作で 1 つのリポジトリの承認を
+すべて止める」新しい穴を生んだ（タグの作成・削除の繰り返しで行数の上限、無関係な 51 000 コミットの孤立したブランチでグラフの上限、
+切れた先端の prune で B1 のすり抜けの再発）。コーディネーターの判断で、§8 の 3 の規則の実装を次のとおり作り直した。
+
+- **push を受けた時点で記録する**: 新しい表 `push_commits`（追記のマイグレーション 20261111100300。`repository_id`・`commit_sha`・
+  `pusher_id`・`project_id`・`request_id`（その push の監査の行と結ぶ。監査の行の id はコミットの時に決まるので）・`first_pushed_at`。
+  主キー (repository_id, commit_sha, pusher_id)、`ON CONFLICT DO NOTHING`、プロジェクトに監査される表、更新はガードで禁止、削除は purge だけ）。
+  push の経路（forge-web）は ref が動いた後に、push がそれまでどの ref からも届かなかったコミットを持ち込んだ集合を 1 回の
+  `rev-list --stdin <new>… --not --exclude=<更新した ref> --glob=refs/*`（と各 `^<old>`）で全部読み（forge-git `introduced_commits`。
+  切り詰めない。1 回の push に上限 1 000 000 コミット・30 秒）、push の記録と同じトランザクションで (コミット, push した人) ごとに書く。
+  既にあるコミットにタグ・ブランチを作るだけの更新、削除、木や blob のタグは行を書かない。上限・時間切れ・git の失敗は監査の行に
+  `push_commits_incomplete: true` を付け、一覧に入らなかったコミットは行を持たない。マージは自分のマージコミット（または squash の
+  コミット）を要求者の行として記録する（早送りは書かない）。git の一覧を持たない記録（runbook の再生、テスト）は、監査の行の一覧が
+  完全なとき（どの ref も切れていない）だけその一覧を、そうでなければ不完全として扱う。
+- **MR のコミッター** = `SELECT pusher_id FROM push_commits WHERE repository_id = $1 AND commit_sha = ANY(<範囲>)`（1 文、索引つき）。
+  範囲は従来どおり `head ^<target の先端>`（最大 1 000、超えたら `committers_unknown`）。**範囲のコミットに 1 つでも行が無ければ
+  `committers_unknown`**（表の前の履歴、`update-ref` の取り込み、不完全な push。閉じる側）。監査の行を読まず、履歴をたどらず、無関係な
+  履歴の量に上限が効かず、オブジェクトが残っているかにも依らない（prune に左右されない）。
+- **消したもの**: 監査の行からの組み立て（`push_coverage`）、一覧の切れた push の到達の判定（`commit_graph`・`reach_in`・16 件の上限・
+  50 000 の上限）、消えた先端の確かめ（`missing_objects` / `referenced_objects`）、印 `unlisted_kept` と表 `push_unlisted_refs` への書き込み。
+  **表 `push_unlisted_refs` は残す**（追記だけの履歴。読み手も書き手も無い。後のマイグレーションで消してよい、と tables.toml にも書いた）。
+  **索引 `audit_log_pushes` は消した**（20261111100300 で `DROP INDEX`。ほかに読み手が無い）。
+- **テスト**（実際の git と DB）: Bob が B1..B21 を push し Alice が B1 で `feature` を作る → Bob はコミッター（prune の後も同じ）、
+  ref 101 本の最後に head → コミッター、ブランチ 101 本の削除・タグ 12 000 個・タグの作成と削除の繰り返し・無関係な 51 000 コミットの
+  push → 止めない、`update-ref` で入れたコミット → `committers_unknown`、上限で不完全な push → その push の一覧に無いコミットを範囲に
+  持つ MR だけが止まる。forge-git で「既にあるコミットへのタグ・ブランチ・早送り・削除は何も持ち込まない」「上限で不完全」。
+- **残る設計上の制約**: 3 回目までに挙がった「子を 17 個タグ付けすると 1 つの MR を止められる」は、一覧の切れた push の扱いが無くなった
+  ので **もう無い**。代わりに、表の前の履歴を範囲に持つ MR は（ルールがあれば）止まる（作成者が push し直せば解ける）。

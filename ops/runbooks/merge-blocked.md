@@ -24,27 +24,28 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 | `not_human` | 承認者がサービスアカウント・ボット | 人の承認（承認の Action 自体が人だけ） |
 | `role_insufficient` | 承認者のプロジェクトでの今のロールが Developer 未満（所属の削除・引き下げ） | 別の人の承認、またはロールを戻す |
 | `author` | MR の作成者（承認の Action が拒むので通常は出ない） | — |
-| `committer` | 承認者が **MR の範囲（`head ^<target の先端>`: マージが持ち込むコミット）のコミットを運んだ push** をしたことがある。別名のブランチへの push、MR の作成前の push も含む。一覧が切れた（21 件以上の）push は、その `new` が範囲に届くだけで運んだとみなす（範囲のコミットが別の記録に載っていても）。`committer_push_audit_id` がその push の監査の行 | 別のレビュアーの承認。push の記録を確かめる（下の Diagnose 2） |
+| `committer` | 承認者が **MR の範囲（`head ^<target の先端>`: マージが持ち込むコミット）のコミットを、push で初めて持ち込んだ** ことがある（`forge.push_commits` にその (コミット, push した人) の行がある。別名のブランチへの push、MR の作成前の push も含む。既にあるコミットにブランチやタグを作っただけの push は行を書かない）。`committer_push_audit_id` がその push の監査の行 | 別のレビュアーの承認。push の記録を確かめる（下の Diagnose 2） |
 | `committers_unknown` | **誰がコミットを push したかを示せない**（閉じる側に倒す。誰の承認も数えない） | 下の表 |
 | `not_in_rule` | 有効だが、どのルール・CODEOWNERS の行・設定のファイルの条件にも入っていない（数えても足しにならない） | ルールの承認できる人・CODEOWNERS の所有者に承認を頼む |
 
 ### `committers_unknown` の内訳（ログ `forge.review.approval_input_unread` と評価の入力）
 
-| 原因 | 典型 |
-|---|---|
-| push の記録が無いコミットがある（`push_record_missing`） | 監査の保存期間を過ぎた古いコミット、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、push の記録が始まる前・バックアップから戻したリポジトリ、`update-ref` で手で動かした ref |
-| ref の一覧が切れた push で、一覧に無い ref を残していない記録（`push_record_truncated`。表 `push_unlisted_refs` ができる前（マイグレーション 20261111100200 より前）に 100 を超える ref を 1 回で push した）| 古い大きな取り込み。新しい push は一覧に無い ref を `push_unlisted_refs` に残すので、この理由にならない |
-| 一覧の切れた push の先端から先の履歴が 50 000 コミットを超える（`push_graph_too_large`）、消えた先端のコミットに ref が向いている（`push_tip_missing`。リポジトリの破損、runbook repo-storage） | 長い別の履歴の一括の push。消えた先端に ref が向いていなければ届かないとみなす（prune の後。runbook merge-request-mergeability） |
-| push の記録の項目が 200 000 件を超える（`push_records_over_cap`。正気の上限） | 極端に多い ref の push の積み重ね |
-| 範囲に届く一覧の切れた push が 16 件を超える（`too_many_partial_pushes`）、届くかを確かめる git が失敗した・予算が尽きた（`push_reach_unknown`） | 長い履歴の一括の push。リポジトリ全体の一覧の切れた push のうち、範囲に届かないものは数えない |
-| 評価の読み取りの予算が尽きた（`timeout`。要求 20 秒・64 回、`GET …/approvals` 10 秒・32 回、ジョブはロックの残り。一覧の切れた push の数によらず、届くかの確認は git 1 回） | 大きなリポジトリ・遅いディスク。もう一度要求する |
-| 範囲が 1 000 コミットを超える（`range_too_long`）、git の失敗（`git_failed`） | 長く分岐したブランチ |
+R5 の 4 回目から、コミッターは push を受けた時点で記録する（表 `forge.push_commits`: push がそれまでどの ref からも届かなかったコミットを
+持ち込んだら、(コミット, push した人) ごとに 1 行）。MR の範囲のコミットに 1 つでも行の無いものがあれば、誰の承認も数えない（閉じる側）。
+
+| 原因 | 典型 | 対処 |
+|---|---|---|
+| 範囲のコミットに `push_commits` の行が無い（`push_record_missing`） | 表ができる前（マイグレーション 20261111100300 より前）に push されたコミット、`update-ref` で手で動かした ref・ファイルで取り込んだリポジトリ、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、1 回の push が 1 000 000 コミットを超えた・一覧の 30 秒の時間切れ・git の失敗（その push の監査の行に `push_commits_incomplete: true`。その push の一覧に入らなかったコミットを範囲に持つ MR だけが止まる） | 作成者がブランチを rebase して push し直す（新しいコミットは行を持つ）。push の記録の再生（`forge admin repo record-push`）は git の一覧を持たないので、記録の行の一覧が完全な小さな push だけ行を書く |
+| 範囲が 1 000 コミットを超える（`range_too_long`）、範囲を読む git の失敗（`git_failed`）・時間切れ（`timeout`） | 長く分岐したブランチ、遅いディスク | ブランチを分ける。もう一度要求する |
+
+タグの作成・削除、既にあるコミットへのブランチ、ほかの無関係な大きな push、prune（オブジェクトの削除）は、この判定に影響しない
+（行を読むだけで履歴をたどらない）。
 
 ## Diagnose（読み取りのみ）
 
 1. `gstn mr approvals --project <id> --iid <n> --json` で `approvals`・`rules`・`codeowners`・`blocked_by` を見る。
-2. `committer` の証拠: `SELECT id, occurred_at, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE id = <committer_push_audit_id>;`
-   （その push の `new` か `commits` に MR の範囲のコミットがある）。
+2. `committer` の証拠: `SELECT commit_sha, pusher_id, request_id, first_pushed_at FROM forge.push_commits WHERE repository_id = <repo_id> AND pusher_id = <user_id> AND commit_sha = ANY('{<範囲のコミット>}');`
+   と、その push の監査の行 `SELECT id, occurred_at, actor_user_id FROM forge.audit_log WHERE id = <committer_push_audit_id>;`。
 3. `committers_unknown`: MR の範囲を git で読み、push の記録と突き合わせる:
    `git --git-dir <repo> rev-list <head> ^<target の先端>` と
    `SELECT id, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE project_id = <id> AND action = 'repository.pushed' ORDER BY id DESC LIMIT 50;`

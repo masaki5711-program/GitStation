@@ -114,6 +114,12 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   head, cap, timeout) -> Option<Vec<ObjectId>>` (`rev-list -n <cap+1>`), `Git::codeowners_file(…,
   commit, max_bytes, timeout) -> CodeownersFile` (`.forge/CODEOWNERS`, else `CODEOWNERS`;
   `ls-tree -z` + `cat-file blob`; `TooLarge` / `NotAFile`). Tests `review_inputs_tests.rs`.
+- **Introduced commits** (`push_introduced`, M3 R5 round 4, ADR-0024 §8.3): `Git::introduced_commits(storage,
+  id, updates, principal, cap, timeout) -> Introduced` — every commit a push made reachable that
+  no ref reached before (`rev-list --stdin <new>… --not --exclude=<updated refs> --glob=refs/*`
+  with `^<old>`), streamed, at most `cap` (`complete: false` past it or the deadline); tags and
+  branches on existing commits and deletes bring none. The push path records them in
+  `push_commits` (the committer rule). Tests `push_introduced_tests.rs`.
 - **Commit** (`commit`, M3 R4, ADR-0024 §4.1): `Git::commit_tree(&StorageRoot, RepoId,
   &NewCommit { tree, parents, message, author, committer }, timeout) -> ObjectId` —
   `-c core.hooksPath=<empty> commit-tree -p <id>… -F - --end-of-options <tree>`, the message on

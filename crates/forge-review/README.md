@@ -128,11 +128,11 @@ merge request in place (ADR-0024 §1).
   `inactive`, `not_human`, `role_insufficient`, `author`, `committer`, `committers_unknown`,
   `not_in_rule` — and the block reasons `approvals_missing`, `codeowner_approval_missing`,
   `codeowners_invalid`, `config_change_needs_maintainer_approval`, `changed_paths_unknown`;
-  `is_config_path`), `committers::committers_of` (the push records naming a range commit; cut
-  lists checked with git; anything unprovable unknown). `ReviewGit::new(git, storage)` reads
-  the changed paths (the target tip against the trial merge's tree, `diff-tree --no-renames`,
-  10 000 paths), the range (`head ^<tip>`, 1 000 commits, with its bottoms), whether cut pushes
-  reach it, and the **target tip's** CODEOWNERS (owners resolved, matched in a blocking task
+  `is_config_path`), `committers::committers_of` (R5 round 4: the pushers of the range's
+  commits as recorded at receive time in `push_commits`; a range commit without a row is
+  unknown). `ReviewGit::new(git, storage)` reads the changed paths (the target tip against the
+  trial merge's tree, `diff-tree --no-renames`, 10 000 paths), the range (`head ^<tip>`, 1 000
+  commits) and its pushers (one indexed statement), and the **target tip's** CODEOWNERS (owners resolved, matched in a blocking task
   within 5 s), all under one `Budget` (20 s / 64 calls on a request, 10 s / 32 on the state
   route, the lock's hold in the job); a git failure is an unknown fact (warn
   `forge.review.approval_input_unread`; CODEOWNERS: one `forge.review.codeowners_invalid`). `Review::with_review_git`,
