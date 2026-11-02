@@ -54,6 +54,7 @@ fn built(
         source_branch: branch(source),
         target_branch: branch(target),
         edit,
+        target_protection: None,
     }
 }
 

@@ -1431,3 +1431,83 @@ cause = "A discussion was to be started or a note added (`POST /api/v1/projects/
 diagnosis = "The log event carries `reason`, `limit`, `project_id`, `iid` and `merge_request_id` (and `discussion_id` for notes_per_discussion). Count read-only: SELECT count(*) FROM forge.merge_request_discussions WHERE merge_request_id = <id>; SELECT discussion_id, count(*) FROM forge.merge_request_notes WHERE merge_request_id = <id> GROUP BY discussion_id ORDER BY 2 DESC LIMIT 5."
 fix = "Continue in an existing discussion (or resolve and summarize), or split the work into a new merge request. The caps are constants (forge_db::review::MAX_DISCUSSIONS / MAX_NOTES / MAX_NOTES_PER_DISCUSSION); raising them is a code change that must raise the list's caps together."
 test = "a_full_discussion_or_merge_request_refuses_more"
+
+# ── M3 R4: merge execution (ADR-0024 §4; registration order) ──
+[[error]]
+code = "FG-REVIEW-0006"
+name = "MergeRequestConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "マージの直前の確認で、ソースブランチとターゲットブランチが衝突していました。衝突を解消して push し直してから、もう一度マージしてください。"
+user_message_en = "When the merge was about to run, the source and target branches conflicted. Resolve the conflict, push again, then merge again."
+user_message_id = "Saat merge akan dijalankan, branch sumber dan tujuan berkonflik. Selesaikan konflik, push lagi, lalu merge lagi."
+cause = "The merge job (M3 R4, ADR-0024 §4.2 step 4) computed the trial merge of the merge request's head into the target's live tip under the repository's merge lock (`git merge-tree --write-tree`, never the stored mergeability status) and it conflicted: the target moved since the last mergeability check, or the check was stale. The merge attempt was set to `superseded`; no commit was made and no ref moved."
+diagnosis = "The job's log event `forge.review.merge_completed` carries `outcome=superseded`, `error_code=FG-REVIEW-0006`, `merge_id`, `merge_request_id`, `head_sha`, `target_sha`, `conflict_files` (count) and `files_truncated` (paths stay out of the event). Read the attempt: SELECT id, state, reason, error_code, head_sha, expected_old FROM forge.merge_request_merges WHERE id = <merge_id>; `gstn mr merge-status --project ID --iid N` shows the same. `gstn mr mergeability` shows the conflicted paths once the next check ran."
+fix = "Merge the target into the source branch (or rebase it), resolve the conflicts, push, and ask for the merge again with the new head."
+test = "a_merge_whose_trial_merge_conflicts_is_superseded"
+
+[[error]]
+code = "FG-REVIEW-0007"
+name = "MergeBlocked"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストはまだマージできません。止めている理由を確認してください。"
+user_message_en = "This merge request cannot be merged yet. Check what is blocking it."
+user_message_id = "Merge request ini belum dapat digabungkan. Periksa apa yang memblokirnya."
+cause = "evaluate_merge() (ADR-0024 §7) returned at least one blocking reason, at the merge request (`POST /api/v1/projects/{id}/merge-requests/{iid}/merge`, nothing written) or again inside the merge job under the lock (the attempt was set to `superseded`, no ref moved). The reasons M3 R4 knows: not_open, draft, merge_in_progress, source_branch_missing, mergeability_unknown (the stored check is not a decision for the live head and target tip; a new check was requested), conflict (the stored check found a conflict), ff_not_possible (fast_forward and the target is not an ancestor of the head). Approvals, CODEOWNERS, required checks and discussions join with R5 / R6."
+diagnosis = "The log event carries `reasons` (the names, in the fixed order of ADR-0024 §7), `merge_request_id`, `head_sha` and, inside the job, `merge_id`. The HTTP answer's request_id finds the line. `gstn mr view` / `gstn mr mergeability` show the state, draft flag and the check."
+fix = "Remove the first reason: mark the merge request ready, wait for the mergeability check (a request with mergeability_unknown queued one), resolve the conflict, or choose the merge_commit / squash method; then merge again."
+test = "a_merge_request_that_is_not_ready_is_refused_with_its_reasons"
+
+[[error]]
+code = "FG-REVIEW-0008"
+name = "HeadChanged"
+http_status = 409
+severity = "info"
+user_message_ja = "マージリクエストかターゲットブランチが、確認した後に更新されました。最新の内容を確認してから、もう一度マージしてください。"
+user_message_en = "The merge request or its target branch changed after you looked. Review the latest changes, then merge again."
+user_message_id = "Merge request atau branch tujuannya berubah setelah Anda melihatnya. Tinjau perubahan terbaru, lalu merge lagi."
+cause = "A merge saw a head or a target tip other than the one it was decided for (ADR-0024 §4.2): reason=stale_view (the request's `sha` is not the merge request's current head: the requester did not see this version; nothing written), source_moved (the source branch's tip, or the merge request's recorded head, moved away from the requested head between the request and the job's check under the lock), target_moved (someone pushed to the target between the job's trial merge and its `update-ref`: the compare-and-swap lost). In the job the attempt was set to `superseded`; the target ref never moved for this attempt. Not an alert: a busy branch."
+diagnosis = "The log event carries `reason`, `expected` and `actual` (SHAs), `merge_request_id` and in the job `merge_id`; for target_moved also `forge.review.merge_completed outcome=superseded`. Read the attempt: SELECT state, reason, expected_old, new_sha FROM forge.merge_request_merges WHERE id = <merge_id>."
+fix = "Look at the merge request's latest head (`gstn mr view`) and merge again with that `sha`; for target_moved simply merge again (a new trial merge on the new target)."
+test = "a_concurrent_push_to_the_target_loses_the_compare_and_swap"
+
+[[error]]
+code = "FG-REVIEW-0009"
+name = "MergeExecutionFailed"
+http_status = 500
+severity = "alert"
+user_message_ja = "マージの実行中に問題が起きました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "A problem occurred while the merge was running. Contact the administrator with the request ID."
+user_message_id = "Terjadi masalah saat merge dijalankan. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "The merge job could not finish a merge whose ref may have moved (ADR-0024 §4.2 steps 7, 9 and the reconciliation): reason=update_ref_failed (`git update-ref` failed although the target was still at `expected_old` and no `<ref>.lock` existed, or the ref could not be read back, or git timed out), record_failed (the ref moved and `forge.review.merge_applied` was logged, but the `merged` transaction failed), ref_state_unknown (the reconciliation found an `executing` attempt whose target is neither `new_sha` (or a descendant) nor `expected_old`: the attempt was set to `failed` for a person). For update_ref_failed and record_failed the attempt stays `executing`: the job's retry and the reconciliation (forge serve, every minute, after the update-ref timeout plus the grace) finish it by asking git."
+diagnosis = "Runbook merge-execution. The event carries `reason`, `merge_id`, `merge_request_id`, `repo_id`, `target`, `expected_old`, `new_sha`. Find the job's lines by its request_id; `forge.review.merge_applied` with the same `merge_id` means the ref moved. Read (read-only): SELECT id, state, reason, error_code, expected_old, new_sha, executing_at FROM forge.merge_request_merges WHERE id = <merge_id>; and the target tip: git --git-dir <repo> rev-parse <target>."
+fix = "Follow runbook merge-execution: never edit the row by hand. For record_failed / update_ref_failed wait for the reconciliation (it records `applied` when the tip is `new_sha` or its descendant, `superseded` when it is `expected_old`); for ref_state_unknown a person compares the tip with `new_sha` and decides (approved runbook step)."
+runbook = "merge-execution"
+test = "an_executing_merge_whose_ref_state_is_unknown_is_failed"
+
+[[error]]
+code = "FG-REVIEW-0010"
+name = "MergeMethodNotAllowed"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトでは、その方法でマージできません。許可された方法（マージコミットかスカッシュ）を選んでください。"
+user_message_en = "This project does not allow that merge method. Choose an allowed method (merge commit or squash)."
+user_message_id = "Proyek ini tidak mengizinkan metode merge tersebut. Pilih metode yang diizinkan (merge commit atau squash)."
+cause = "A merge asked for a method the project's merge settings do not allow (ADR-0024 §4.1; M3 R4 uses the defaults of ADR-0024: merge_commit and squash allowed, default merge_commit; fast_forward is not allowed until a project setting allows it). Nothing was written."
+diagnosis = "The log event carries `method`, `allowed` and `merge_request_id`."
+fix = "Merge with merge_commit or squash (`gstn mr merge --method merge_commit|squash`), or omit the method to use the default."
+test = "a_merge_method_the_project_does_not_allow_is_refused"
+
+[[error]]
+code = "FG-REVIEW-0011"
+name = "MergeInProgress"
+http_status = 409
+severity = "info"
+user_message_ja = "このマージリクエストはマージを実行中です。終わるまで待ってから確認してください。"
+user_message_en = "This merge request is being merged. Wait for it to finish, then check again."
+user_message_id = "Merge request ini sedang digabungkan. Tunggu hingga selesai, lalu periksa lagi."
+cause = "A second merge, a close, a retarget or a draft toggle reached a merge request that has a merge attempt in progress (`queued`, `prepared` or `executing` in forge.merge_request_merges; ADR-0024 §4.2). At most one attempt per merge request is live (checked under the merge request's row lock; the partial unique index merge_request_merges_one_live is the backstop). Nothing was written."
+diagnosis = "The log event carries `merge_request_id`, `merge_id` (the live attempt), `state` and `action`. `gstn mr merge-status --project ID --iid N` shows the attempt; an attempt that stays `executing` is runbook merge-execution."
+fix = "Wait for the merge to finish (`gstn mr merge-status --wait`); if it was superseded, merge again."
+test = "two_merges_of_one_merge_request_at_once_let_exactly_one_win"

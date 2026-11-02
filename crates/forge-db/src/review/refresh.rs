@@ -314,7 +314,9 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestPushed
                 | EventType::MergeRequestConflictDetected
                 | EventType::MergeRequestConflictResolved
-                | EventType::MergeRequestCommented => Ok(()),
+                | EventType::MergeRequestCommented
+                | EventType::MergeRequestMerged
+                | EventType::MergeRequestSourceBranchDeleted => Ok(()),
             }
         })
     }

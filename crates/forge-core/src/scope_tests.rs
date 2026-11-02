@@ -1,11 +1,12 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 5] = [
+const ALL: [(Scope, &str); 6] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
     (Scope::Api, "api"),
     (Scope::Admin, "admin"),
+    (Scope::MergeExecute, "merge_execute"),
 ];
 
 #[test]
@@ -44,4 +45,27 @@ fn scope_satisfies_is_unchanged_after_the_move() {
             );
         }
     }
+}
+
+/// ADR-0024 §8.5 (M3 R4): a merge scope is satisfied only by itself — not
+/// by `api`, not by `admin` — and satisfies no other scope (it never stands
+/// in for `api` / `read_api`). The whole `ALL × ALL` table.
+#[test]
+fn merge_scopes_are_satisfied_only_by_themselves() {
+    for held in Scope::ALL {
+        for required in Scope::ALL {
+            let merge = [held, required].contains(&Scope::MergeExecute);
+            if merge {
+                assert_eq!(
+                    held.satisfies(required),
+                    held == required,
+                    "{held:?} vs {required:?}"
+                );
+            }
+        }
+    }
+    assert!(!Scope::Api.satisfies(Scope::MergeExecute));
+    assert!(!Scope::Admin.satisfies(Scope::MergeExecute));
+    assert!(!Scope::MergeExecute.satisfies(Scope::Api));
+    assert!(!Scope::MergeExecute.satisfies(Scope::ReadApi));
 }

@@ -10,6 +10,7 @@ pub mod discussion;
 pub mod event_type;
 pub mod ids;
 pub mod list_page;
+pub mod merge;
 pub mod merge_request;
 pub mod move_details;
 pub mod namespace_path;
@@ -44,6 +45,7 @@ pub use ids::{
     TombstoneId, UserId,
 };
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
+pub use merge::{MergeMethod, MergeState, SourceOutcome};
 pub use merge_request::{
     CheckReason, MergeRequestChange, MergeRequestField, MergeRequestState, MergeRequestTransition,
     MergeRequestVersionChange, MergeabilityStatus,

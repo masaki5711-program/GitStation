@@ -599,6 +599,7 @@ pub fn authorize(
                 source_branch,
                 target_branch,
                 edit,
+                target_protection: _,
             },
         ) => {
             let own = *author == user;
@@ -654,6 +655,31 @@ pub fn authorize(
             people_only()?;
             admin_only()?;
             branches(source_branch, target_branch).map_err(refused)
+        }
+
+        // Merging (M3 R4, ADR-0024 §4.3, §12): people only; the target's
+        // minimum push role (Developer when unprotected), administrators
+        // too. The direct-push ban of a protected branch (R6) is not read:
+        // merge requests are how such a branch changes. Readiness (open,
+        // draft, conflicts, …) is `evaluate_merge()`'s, never decided here.
+        (
+            Action::MergeRequestMerge,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                target_protection,
+                ..
+            },
+        ) => {
+            people_only()?;
+            branches(source_branch, target_branch).map_err(refused)?;
+            let required = target_protection
+                .map_or(Role::Developer, |p| p.push_min_role().max(Role::Developer));
+            need(required, project.role).map_err(|e| match target_protection {
+                Some(p) => e.with_context("protection", p.push_min_role().as_str()),
+                None => e,
+            })
         }
 
         // --- discussions (M3 R3, ADR-0024 §12) ---
@@ -751,6 +777,7 @@ pub fn authorize(
             | Action::MergeRequestVersionRefsPurge
             | Action::MergeRequestComment
             | Action::DiscussionResolve
+            | Action::MergeRequestMerge
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }

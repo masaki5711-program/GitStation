@@ -414,15 +414,115 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                 .await
                 .expect("comment");
             }
+            // M3 R4: the merge job's record (tx2) after the request, the
+            // gate and the fence; the target's repository.pushed comes with
+            // it in the same transaction (ADR-0024 §4.2 step 9).
+            MergeRequestTransition::Merge => {
+                let oid =
+                    |c: char| forge_core::ObjectId::parse(&c.to_string().repeat(40)).expect("oid");
+                let ask = merges::NewMerge {
+                    method: forge_core::MergeMethod::MergeCommit,
+                    head_sha: oid('a'),
+                    message: None,
+                    delete_source_branch: true,
+                    credential: merges::CredentialRef::Session(1),
+                };
+                let (attempt, ()) = merges::request_merge_mr_decided(
+                    &t.db,
+                    &ctx("req-merge-ask"),
+                    (p, drafted.iid),
+                    alice,
+                    &ask,
+                    |_| Ok(()),
+                )
+                .await
+                .expect("ask");
+                let step = merges::GateStep::Prepare {
+                    expected_old: oid('b'),
+                    new_sha: oid('c'),
+                };
+                let prepared = merges::merge_gate_decided(
+                    &t.db,
+                    &system("req-merge-prepare"),
+                    attempt.id,
+                    step,
+                    |_| Ok(()),
+                )
+                .await
+                .expect("prepare");
+                assert!(matches!(prepared, merges::GateOutcome::Decided(())));
+                assert!(merges::fence_merge(&t.db, attempt.id).await.expect("fence"));
+                let attempt = merges::merge_attempt(&t.db, attempt.id)
+                    .await
+                    .expect("read")
+                    .expect("row");
+                let push = forge_core::PushRecord {
+                    repository_id: web.repository_id,
+                    updates: vec![forge_core::PushedRef {
+                        name: branch("main"),
+                        old: oid('b'),
+                        new: oid('c'),
+                        kind: forge_core::PushUpdateKind::FastForward,
+                        commits: vec![oid('c')],
+                        total_commits: 1,
+                        total_commits_partial: false,
+                    }],
+                };
+                let done = merges::finish_merge(&t.db, &ctx(&request), &attempt, &push)
+                    .await
+                    .expect("finish");
+                assert!(matches!(done, merges::MergeFinished::Recorded(_)));
+                let again = merges::finish_merge(&t.db, &ctx("req-merge-again"), &attempt, &push)
+                    .await
+                    .expect("again");
+                assert_eq!(again, merges::MergeFinished::AlreadyApplied);
+            }
+            MergeRequestTransition::SourceBranchDelete => {
+                let attempt = merges::latest_merge(&t.db, drafted.id)
+                    .await
+                    .expect("read")
+                    .expect("the merge above");
+                let deletion = merges::SourceDeletion {
+                    repo: web.repository_id,
+                    source_branch: drafted.source_branch.clone(),
+                    old: forge_core::ObjectId::parse(&"a".repeat(40)).expect("oid"),
+                };
+                merges::record_source_deleted(
+                    &t.db,
+                    &ctx(&request),
+                    &attempt,
+                    drafted.iid,
+                    &deletion,
+                )
+                .await
+                .expect("deleted");
+            }
         }
         let events = events_of(&t, &request).await;
-        let types: Vec<&str> = events.iter().map(|e| e.0.as_str()).collect();
+        // M3 R4: a merge and a source deletion also record the ref update
+        // (`repository.pushed`, its own aggregate); exactly one event of the
+        // merge request.
+        let pushes = events.iter().filter(|e| e.0 == "repository.pushed").count();
+        let carries_push = matches!(
+            transition,
+            MergeRequestTransition::Merge | MergeRequestTransition::SourceBranchDelete
+        );
+        assert_eq!(pushes, usize::from(carries_push), "{transition:?}");
+        let types: Vec<&str> = events
+            .iter()
+            .map(|e| e.0.as_str())
+            .filter(|t| *t != "repository.pushed")
+            .collect();
         assert_eq!(
             types,
             [transition.event_type().as_str()],
             "{transition:?} must emit exactly one event"
         );
-        assert_eq!(audit_of(&t, &request).await.len(), 1, "{transition:?}");
+        assert_eq!(
+            audit_of(&t, &request).await.len(),
+            1 + usize::from(carries_push),
+            "{transition:?}"
+        );
     }
     t.drop_now().await;
 }

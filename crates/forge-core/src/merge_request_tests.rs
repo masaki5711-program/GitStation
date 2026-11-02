@@ -136,9 +136,52 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.pushed",
             "merge_request.conflict_detected",
             "merge_request.conflict_resolved",
-            "merge_request.commented"
+            "merge_request.commented",
+            "merge_request.merged",
+            "merge_request.source_branch_deleted"
         ]
     );
+}
+
+/// M3 R4: the merge and the source branch deletion are transitions with
+/// their own events, deduplicated by the merge attempt (ADR-0024 §4.2
+/// steps 9 and 10); the payload carries ids, names and SHAs only.
+#[test]
+fn merged_and_source_deleted_are_transitions_keyed_by_the_merge() {
+    use crate::{MergeMethod, ObjectId, RefName};
+    let mr = MergeRequestId::new(9);
+    let oid = |c: &str| ObjectId::parse(&c.repeat(40)).expect("oid");
+    let merged = MergeRequestChange::Merged {
+        merge_request: mr,
+        iid: 3,
+        merge_id: 17,
+        method: MergeMethod::Squash,
+        target_branch: RefName::parse("refs/heads/main").expect("ref"),
+        target_sha: oid("a"),
+        merged_sha: oid("b"),
+        head_sha: oid("c"),
+        merged_by: UserId::new(4),
+    };
+    assert_eq!(merged.transition(), MergeRequestTransition::Merge);
+    assert_eq!(merged.dedup_prefix(), "merge_request_merged");
+    assert_eq!(merged.action(), "merge_request.merged");
+    let value = merged.to_value();
+    assert_eq!(value["method"], "squash");
+    assert_eq!(value["merged_by"], 4);
+    assert_eq!(value["merge_id"], 17);
+    let deleted = MergeRequestChange::SourceBranchDeleted {
+        merge_request: mr,
+        iid: 3,
+        merge_id: 17,
+        source_branch: RefName::parse("refs/heads/feature").expect("ref"),
+        old: oid("c"),
+    };
+    assert_eq!(
+        deleted.transition(),
+        MergeRequestTransition::SourceBranchDelete
+    );
+    assert_eq!(deleted.dedup_prefix(), "merge_source_deleted");
+    assert_eq!(deleted.to_value()["source_branch"], "refs/heads/feature");
 }
 
 /// M3 R1b: a push is the `merge_request.pushed` transition; its event is

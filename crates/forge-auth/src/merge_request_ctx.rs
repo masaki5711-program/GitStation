@@ -14,7 +14,7 @@
 
 use forge_core::{DiscussionId, MergeRequestState, ProjectId, RefName, UserId};
 
-use crate::model::{MergeRequestEdit, ProjectView, Resource};
+use crate::model::{MergeRequestEdit, ProjectView, RefProtection, Resource};
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
 /// One merge request as loaded (one row): `iid` is `None` for the one a
@@ -37,6 +37,9 @@ pub struct MergeRequestCtx {
     project: LoadedProject,
     mr: LoadedMergeRequest,
     edit: MergeRequestEdit,
+    /// The target branch's protection (`MergeRequestMerge`, M3 R4);
+    /// `None` for every other action and for an unprotected target.
+    target_protection: Option<RefProtection>,
 }
 
 impl MergeRequestCtx {
@@ -46,12 +49,40 @@ impl MergeRequestCtx {
             project,
             mr,
             edit: MergeRequestEdit::default(),
+            target_protection: None,
         }
     }
 
     /// A merge request an update changes (`MergeRequestUpdate`).
     pub fn edited(project: LoadedProject, mr: LoadedMergeRequest, edit: MergeRequestEdit) -> Self {
-        Self { project, mr, edit }
+        Self {
+            project,
+            mr,
+            edit,
+            target_protection: None,
+        }
+    }
+
+    /// A merge request about to be merged (`MergeRequestMerge`, M3 R4):
+    /// `target_protection` is the protection in effect on its target branch
+    /// (`RefProtection::effective` of the rules matching it, loaded with
+    /// the push path's `ProtectionLoader`).
+    pub fn merging(
+        project: LoadedProject,
+        mr: LoadedMergeRequest,
+        target_protection: Option<RefProtection>,
+    ) -> Self {
+        Self {
+            project,
+            mr,
+            edit: MergeRequestEdit::default(),
+            target_protection,
+        }
+    }
+
+    /// The target branch's protection decided on (merges only).
+    pub fn target_protection(&self) -> Option<RefProtection> {
+        self.target_protection
     }
 
     /// The merge request as decided on.
@@ -82,6 +113,7 @@ impl ResourceCtx for MergeRequestCtx {
             source_branch: self.mr.source_branch.clone(), // clone: the resource owns its names
             target_branch: self.mr.target_branch.clone(),
             edit: self.edit.clone(),
+            target_protection: self.target_protection,
         }
     }
     fn id(&self) -> (ProjectId, Option<i64>) {

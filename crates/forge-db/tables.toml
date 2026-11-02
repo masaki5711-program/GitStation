@@ -42,6 +42,8 @@ guarded_functions = [
     # M3 R3: a discussion's identity and position never change; notes are final.
     "merge_request_discussions_guard",
     "merge_request_notes_guard",
+    # M3 R4: a merge attempt only moves forward; final states never change.
+    "merge_request_merges_guard",
 ]
 
 [tables.events]
@@ -295,6 +297,14 @@ guarded = false
 kind = "derived"
 ro_columns = ["*"]
 # ── end M3 R2 ──
+
+# ── M3 R4: merge attempts (ADR-0024 §4.2), the merge job's operational record;
+# the merge itself is audited on the project (merge_request.merged) ──
+[tables.merge_request_merges]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 R4 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

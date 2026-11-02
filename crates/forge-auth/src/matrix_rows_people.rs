@@ -38,9 +38,11 @@ const MAINTAINER: (W, W) = (
 );
 const ADMIN_TOKEN: (W, W) = (W::ServiceAccountAdminTokenAdmin, W::BotAdminTokenAdmin);
 const ADMIN_SESSION: (W, W) = (W::ServiceAccountAdminSession, W::BotAdminSession);
+/// M3 R4: a merge needs `merge_execute`, so the twins hold that scope.
+const MERGER: (W, W) = (W::ServiceAccountTokenMergeExecute, W::BotTokenMergeExecute);
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 12] = [
+const GROUPS: [[Row; 2]; 13] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -54,6 +56,7 @@ const GROUPS: [[Row; 2]; 12] = [
     both!(A::AdminSessionRevoke, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Session { own: false }),
     // Session only: the twin is the administrator's session.
     both!(A::MergeRequestVersionRefsPurge, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Mr(MF::other())),
+    both!(A::MergeRequestMerge, MERGER.0, MERGER.1, F::Mr(MF::other())),
 ];
 
 /// The rows, flattened (`matrix::ROWS` appends them), and the Owner

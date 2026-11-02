@@ -41,6 +41,8 @@ pub async fn close_mr_decided<P>(
             MergeRequestState::Merged => return Err(state_invariant("close_merged", &current)),
             MergeRequestState::Open => {}
         }
+        // M3 R4 (ADR-0024 §4.2): a close waits for a merge in progress.
+        crate::review::merges::refuse_live_merge(&mut tx, current.id, ACTION).await?;
         let id = current.id;
         let row: Row = tx
             .step(|c| async move {

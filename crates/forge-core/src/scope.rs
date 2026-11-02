@@ -16,16 +16,21 @@ pub enum Scope {
     /// Lets an administrator's token use administrator rights. Without it a
     /// token of an administrator acts as a normal user.
     Admin,
+    /// Merge a merge request (M3 R4, ADR-0024 §8.5, ADR-0017 §4.0). A merge
+    /// scope is satisfied only by itself: `api` and `admin` do not satisfy
+    /// it, and it satisfies nothing else.
+    MergeExecute,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 5] = [
+    pub const ALL: [Scope; 6] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
         Scope::Api,
         Scope::Admin,
+        Scope::MergeExecute,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -40,10 +45,13 @@ impl Scope {
             Scope::ReadApi => "read_api",
             Scope::Api => "api",
             Scope::Admin => "admin",
+            Scope::MergeExecute => "merge_execute",
         }
     }
 
-    /// Whether holding `self` satisfies a requirement of `required`.
+    /// Whether holding `self` satisfies a requirement of `required`. The
+    /// merge scope (`MergeExecute`) is satisfied only by itself and
+    /// implies nothing (ADR-0024 §8.5: `api` / `admin` never merge).
     pub fn satisfies(self, required: Scope) -> bool {
         self == required
             || matches!(
