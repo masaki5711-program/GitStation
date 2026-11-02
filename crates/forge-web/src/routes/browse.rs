@@ -43,7 +43,7 @@ use serde::Serialize;
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{Dispatched, LoadFuture, Loader, Lookup, QueryParam};
-use crate::routes::git::SmartHttp;
+use crate::routes::git::{principal_key, SmartHttp};
 use crate::routes::namespaces::percent_decode;
 use crate::routes::projects::{self, PREFIX as PROJECT_PREFIX};
 use crate::routes::write::{absent, id_in};
@@ -401,6 +401,9 @@ pub(crate) struct Target {
     pub(crate) smart: Arc<SmartHttp>,
     pub(crate) project: ProjectId,
     pub(crate) repository: ProjectRepository,
+    /// The caller's key (`user:<id>`): the per-caller limit of commit-id
+    /// lookups (M3 P6).
+    pub(crate) principal: String,
 }
 
 impl Target {
@@ -425,10 +428,12 @@ impl Target {
                 .with_context("project_id", project.get())
                 .with_context("state", repository.state.as_str()));
         }
+        let principal = principal_key(request)?;
         Ok(Self {
             smart: Arc::clone(smart),
             project,
             repository,
+            principal,
         })
     }
 }
@@ -498,7 +503,7 @@ pub async fn resolve(state: AppState, request: Dispatched<ProjectCtx>) -> Respon
         let resolved = t
             .smart
             .browse
-            .resolve_spec(t.repository.id, &segments)
+            .resolve_spec(t.repository.id, &segments, &t.principal)
             .await?;
         Ok(ResolveBody {
             rev: rev_body(&resolved.rev),
@@ -515,7 +520,11 @@ pub async fn tree(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         let rev_name = required(&params, "ref")?;
         let path = path_param(&params)?;
         let repo = t.repository.id;
-        let rev = t.smart.browse.resolve_ref(repo, rev_name).await?;
+        let rev = t
+            .smart
+            .browse
+            .resolve_ref(repo, rev_name, &t.principal)
+            .await?;
         let tree = t
             .smart
             .browse
@@ -534,7 +543,11 @@ pub async fn blob(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         let rev_name = required(&params, "ref")?;
         let path = path_param(&params)?;
         let repo = t.repository.id;
-        let rev = t.smart.browse.resolve_ref(repo, rev_name).await?;
+        let rev = t
+            .smart
+            .browse
+            .resolve_ref(repo, rev_name, &t.principal)
+            .await?;
         let blob = t
             .smart
             .browse

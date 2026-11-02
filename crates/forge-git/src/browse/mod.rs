@@ -21,6 +21,11 @@
 //!   Archives and large raw files stream (idle 60 s, total 10 min) through
 //!   [`crate::GitStream`]: a client that goes away kills git's process
 //!   tree.
+//! - **Reachability** (M3 P6, `reach.rs`): a commit named by id resolves
+//!   only when a branch or a tag reaches it; anything else an id lookup
+//!   finds is answered like an id that does not exist (`FG-REPO-0023
+//!   reason=ref_not_found`). Every id lookup counts against its caller
+//!   (token bucket and concurrent slots, `FG-GIT-0004`).
 //! - **Caps**: tree entries and blob bytes are truncated at their limit
 //!   (git is killed at the cap, `truncated: true`), never buffered whole;
 //!   at most [`BrowseLimits::max_per_repo`] captured browse calls run per
@@ -38,7 +43,6 @@
 //!   invalidation happened is not stored.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -54,6 +58,7 @@ mod content;
 mod diff;
 mod history;
 mod path;
+mod reach;
 mod refs;
 mod tree;
 
@@ -62,6 +67,7 @@ pub use content::{ArchiveFormat, Blob, RawBlob, RawBody};
 pub use diff::{Diff, DiffFile, DiffStatus, PatchOmitted};
 pub use history::{CommitDetail, CommitInfo, CommitPage, Comparison, LogCursor};
 pub use path::RepoPath;
+pub use reach::ReachRoots;
 pub use refs::{RefEntry, RefKind, RefList, ResolvedRev, ResolvedSpec, Target};
 pub use tree::{EntryKind, Tree, TreeEntry};
 
@@ -109,6 +115,22 @@ pub struct BrowseLimits {
     pub max_file_patch_bytes: usize,
     /// Lines of one blame; more marks it `truncated`.
     pub max_blame_lines: usize,
+    /// One reachability check of a commit named by id (`reach.rs`; never
+    /// longer than what is left of the operation's deadline).
+    pub reach_timeout: Duration,
+    /// Reachability answers kept at once (0: none kept).
+    pub max_cached_reach: usize,
+    /// Commit-id lookups one caller runs at once (`reach.rs`; ADR-0024
+    /// #37). More wait up to `reach_caller_wait`, then `FG-GIT-0004
+    /// reason=caller_reach`.
+    pub reach_per_caller: usize,
+    /// How long a caller's lookup waits for one of its slots.
+    pub reach_caller_wait: Duration,
+    /// Commit-id lookups one caller may make in a burst (its token
+    /// bucket); an empty bucket is `FG-GIT-0004 reason=caller_reach_rate`.
+    pub reach_caller_burst: u32,
+    /// One token comes back per this interval.
+    pub reach_caller_refill: Duration,
 }
 
 impl Default for BrowseLimits {
@@ -133,6 +155,12 @@ impl Default for BrowseLimits {
             max_diff_bytes: 2 * 1024 * 1024,
             max_file_patch_bytes: 256 * 1024,
             max_blame_lines: 10_000,
+            reach_timeout: Duration::from_secs(5),
+            max_cached_reach: 4_096,
+            reach_per_caller: 2,
+            reach_caller_wait: Duration::from_secs(2),
+            reach_caller_burst: 60,
+            reach_caller_refill: Duration::from_millis(250),
         }
     }
 }
@@ -160,14 +188,18 @@ pub struct Browser {
     limits: BrowseLimits,
     slots: Arc<Mutex<HashMap<RepoId, usize>>>,
     cache: Arc<RefCache>,
+    reach: Arc<reach::ReachCache>,
 }
 
 #[derive(Debug, Default)]
 struct RefCache {
     entries: Mutex<HashMap<RepoId, Cached>>,
-    /// Bumped by every invalidation: a load that saw another value at its
-    /// start does not store its list (it may predate a push).
-    epoch: AtomicU64,
+    /// Per repository, bumped by every invalidation of that repository: a
+    /// load (ref list, reachability answer) that saw another value at its
+    /// start does not store its result (it may predate a push). One `u64`
+    /// per repository ever invalidated; a push to one repository leaves
+    /// every other repository's caches alone.
+    epochs: Mutex<HashMap<RepoId, u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +269,7 @@ impl Browser {
             limits,
             slots: Arc::new(Mutex::new(HashMap::new())),
             cache: Arc::new(RefCache::default()),
+            reach: Arc::new(reach::ReachCache::default()),
         }
     }
 
@@ -244,15 +277,37 @@ impl Browser {
         &self.limits
     }
 
-    /// Drop `repo`'s cached ref list (a push changed its refs).
+    /// Drop `repo`'s cached ref list and reachability answers (a push
+    /// changed its refs; the epoch makes every older answer stale).
     pub fn invalidate(&self, repo: RepoId) {
-        self.cache.epoch.fetch_add(1, Ordering::SeqCst);
-        let mut entries = self
+        {
+            let mut epochs = self
+                .cache
+                .epochs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let epoch = epochs.entry(repo).or_insert(0);
+            *epoch = epoch.wrapping_add(1);
+        }
+        {
+            let mut entries = self
+                .cache
+                .entries
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            entries.remove(&repo);
+        }
+        self.reach.forget(repo);
+    }
+
+    /// `repo`'s cache generation (see [`RefCache`]).
+    fn epoch(&self, repo: RepoId) -> u64 {
+        let epochs = self
             .cache
-            .entries
+            .epochs
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        entries.remove(&repo);
+        epochs.get(&repo).copied().unwrap_or(0)
     }
 
     fn claim(&self, repo: RepoId) -> Result<RepoSlot, ForgeError> {
@@ -274,6 +329,9 @@ impl Browser {
 
 #[cfg(test)]
 mod history_tests;
+
+#[cfg(test)]
+mod reach_tests;
 
 #[cfg(test)]
 use forge_core::RefName;

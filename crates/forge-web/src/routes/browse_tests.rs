@@ -556,3 +556,149 @@ async fn the_browse_api_needs_read_api_and_a_reader() {
         assert_eq!(a.code(), ErrorCode::RequestInvalid.id(), "{route}");
     }
 }
+
+/// The error body without its per-request id (the rest must match).
+fn without_request_id(a: &Answer) -> Value {
+    let mut body = a.json();
+    if let Some(map) = body.as_object_mut() {
+        map.remove("request_id");
+    }
+    body
+}
+
+/// M3 P6 (ADR-0024 §2, closing table #25): a commit no branch or tag
+/// reaches — a deleted branch's, a force-pushed-away one, one made by
+/// `commit-tree` only — is answered by every browse route exactly like
+/// an id the repository does not have; a reachable id still reads.
+#[tokio::test]
+async fn unreachable_commits_answer_like_unknown_ones_on_every_browse_route() {
+    let r = repo().await;
+    let p = r.path.as_path();
+    let secret = blob(p, b"synthetic-secret-value\n");
+    let tree = plumb(
+        p,
+        &["mktree"],
+        Some(format!("100644 blob {secret}\tREADME.md\n").as_bytes()),
+    );
+    let gone = plumb(
+        p,
+        &["commit-tree", &tree, "-p", &r.commit, "-m", "gone"],
+        None,
+    );
+    plumb(p, &["update-ref", "refs/heads/leak", &gone], None);
+    plumb(p, &["update-ref", "-d", "refs/heads/leak"], None);
+    let dangling = plumb(
+        p,
+        &["commit-tree", &tree, "-p", &r.commit, "-m", "dangling"],
+        None,
+    );
+    let unknown = "0".repeat(40);
+    let routes = |id: &str| {
+        vec![
+            format!("{API}/tree?ref={id}"),
+            format!("{API}/blob?ref={id}&path=README.md"),
+            format!("{API}/resolve?spec={id}/README.md"),
+            format!("{API}/commits?ref={id}"),
+            format!("{API}/commits/{id}"),
+            format!("{API}/compare?from={}&to={id}", r.commit),
+            format!("{API}/blame?ref={id}&path=README.md"),
+            format!("/acme/app/-/raw/{id}/README.md"),
+            format!("/acme/app/-/archive/{id}.zip"),
+        ]
+    };
+    let expected: Vec<(StatusCode, Value)> = {
+        let mut v = Vec::new();
+        for uri in routes(&unknown) {
+            let a = get(&r, &uri).await;
+            assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}: {:?}", a.json());
+            assert_eq!(a.code(), ErrorCode::RepositoryPathNotResolved.id(), "{uri}");
+            v.push((a.status, without_request_id(&a)));
+        }
+        v
+    };
+    for id in [&gone, &dangling] {
+        for (uri, want) in routes(id).iter().zip(&expected) {
+            let a = get(&r, uri).await;
+            assert_eq!((a.status, without_request_id(&a)), *want, "{uri}");
+            reason_logged_never(&a, id);
+            reason_logged_never(&a, "synthetic-secret-value");
+        }
+    }
+    // The reachable commit, by id: read as before.
+    for uri in routes(&r.commit) {
+        let a = get(&r, &uri).await;
+        assert_eq!(a.status, StatusCode::OK, "{uri}: {:?}", a.json());
+    }
+}
+
+/// Review of P6 (MEDIUM 1): an id that names a tree or a blob answers
+/// every id route exactly like an id the repository does not have.
+#[tokio::test]
+async fn an_id_of_a_tree_or_blob_answers_like_an_unknown_id() {
+    let r = repo().await;
+    let p = r.path.as_path();
+    let tree = plumb(p, &["rev-parse", &format!("{}^{{tree}}", r.commit)], None);
+    let readme = blob(p, b"# synthetic\n");
+    let unknown = "0".repeat(40);
+    let routes = |id: &str| {
+        vec![
+            format!("{API}/tree?ref={id}"),
+            format!("{API}/blob?ref={id}&path=README.md"),
+            format!("{API}/commits/{id}"),
+            format!("/acme/app/-/raw/{id}/README.md"),
+        ]
+    };
+    let mut expected = Vec::new();
+    for uri in routes(&unknown) {
+        let a = get(&r, &uri).await;
+        assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}");
+        expected.push(without_request_id(&a));
+    }
+    for id in [&tree, &readme] {
+        for (uri, want) in routes(id).iter().zip(&expected) {
+            let a = get(&r, uri).await;
+            assert_eq!(a.status, StatusCode::NOT_FOUND, "{uri}");
+            assert_eq!(without_request_id(&a), *want, "{uri}");
+        }
+    }
+}
+
+/// Review of P6 (HIGH, ADR-0024 #37): commit-id lookups are limited per
+/// caller on the routes; one caller over the limit is `FG-GIT-0004`, a
+/// name still reads, and another caller is not affected.
+#[tokio::test]
+async fn commit_id_lookups_are_limited_per_caller_on_the_routes() {
+    let r = repo().await;
+    let limits = BrowseLimits {
+        reach_caller_burst: 2,
+        reach_caller_refill: std::time::Duration::from_secs(3600),
+        ..BrowseLimits::default()
+    };
+    let app = router(&r, Facts::default(), limits);
+    let by_id = format!("{API}/tree?ref={}", r.commit);
+    for _ in 0..2 {
+        let a = send(app.clone(), "GET", &by_id, Some(session())).await;
+        assert_eq!(a.status, StatusCode::OK, "{:?}", a.json());
+    }
+    let over = send(app.clone(), "GET", &by_id, Some(session())).await;
+    assert_eq!(over.code(), ErrorCode::GitBusy.id(), "{:?}", over.json());
+    let raw = send(
+        app.clone(),
+        "GET",
+        &format!("/acme/app/-/raw/{}/README.md", r.commit),
+        Some(session()),
+    )
+    .await;
+    assert_eq!(raw.code(), ErrorCode::GitBusy.id(), "raw counts too");
+    let name = send(
+        app.clone(),
+        "GET",
+        &format!("{API}/tree?ref=main"),
+        Some(session()),
+    )
+    .await;
+    assert_eq!(name.status, StatusCode::OK, "names do not count");
+    let other = Principal::authenticated(UserId::new(6), false, true, Credential::Session);
+    let a = send(app, "GET", &by_id, Some(other)).await;
+    assert_eq!(a.status, StatusCode::OK, "another caller");
+}

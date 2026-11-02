@@ -226,10 +226,10 @@ async fn refs_over_the_cap_are_truncated_and_resolution_still_finds_the_rest() {
     assert!(list.truncated);
     assert_eq!(list.refs.len(), 2);
     // `main` sorts after the first two refs: found by asking git directly.
-    let r = b.resolve_ref(f.id, "main").await.expect("main");
+    let r = b.resolve_ref(f.id, "main", "user:1").await.expect("main");
     assert_eq!(r.commit, h.c2);
     let s = b
-        .resolve_spec(f.id, &segs("v1/README.md"))
+        .resolve_spec(f.id, &segs("v1/README.md"), "user:1")
         .await
         .expect("v1");
     assert_eq!(s.rev.commit, h.c1);
@@ -242,7 +242,7 @@ async fn specs_resolve_by_id_then_longest_branch_then_longest_tag() {
     let b = f.browser(BrowseLimits::default());
 
     let s = b
-        .resolve_spec(f.id, &segs("main/src/lib.rs"))
+        .resolve_spec(f.id, &segs("main/src/lib.rs"), "user:1")
         .await
         .expect("main");
     assert_eq!(
@@ -254,7 +254,7 @@ async fn specs_resolve_by_id_then_longest_branch_then_longest_tag() {
 
     // `feature/x` is a branch with a `/`: the longest match.
     let s = b
-        .resolve_spec(f.id, &segs("feature/x/README.md"))
+        .resolve_spec(f.id, &segs("feature/x/README.md"), "user:1")
         .await
         .expect("feature");
     assert_eq!(s.rev.display_name(), "feature/x");
@@ -263,7 +263,7 @@ async fn specs_resolve_by_id_then_longest_branch_then_longest_tag() {
     // Branch `a` and tag `a/b`: the kind decides before the length (D/F
     // keeps a branch `a/b` from existing next to `a`).
     let s = b
-        .resolve_spec(f.id, &segs("a/b/README.md"))
+        .resolve_spec(f.id, &segs("a/b/README.md"), "user:1")
         .await
         .expect("a");
     assert_eq!(s.rev.kind(), "branch");
@@ -271,25 +271,28 @@ async fn specs_resolve_by_id_then_longest_branch_then_longest_tag() {
     assert_eq!(s.path.as_str(), "b/README.md");
 
     // An annotated tag peels to its commit.
-    let s = b.resolve_spec(f.id, &segs("v1")).await.expect("v1");
+    let s = b
+        .resolve_spec(f.id, &segs("v1"), "user:1")
+        .await
+        .expect("v1");
     assert_eq!(s.rev.kind(), "tag");
     assert_eq!(s.rev.commit, h.c1);
     assert!(s.path.is_root());
 
     // A full id first: the branch named like c2's id (pointing at c1) loses.
     let s = b
-        .resolve_spec(f.id, &segs(&format!("{}/README.md", h.c2)))
+        .resolve_spec(f.id, &segs(&format!("{}/README.md", h.c2)), "user:1")
         .await
         .expect("id");
     assert_eq!(s.rev.target, Target::Commit);
     assert_eq!(s.rev.commit, h.c2);
     let upper = h.c2.to_ascii_uppercase();
     let s = b
-        .resolve_spec(f.id, &segs(&upper))
+        .resolve_spec(f.id, &segs(&upper), "user:1")
         .await
         .expect("upper-case id");
     assert_eq!(s.rev.commit, h.c2);
-    let r = b.resolve_ref(f.id, &h.c2).await.expect("ref=id");
+    let r = b.resolve_ref(f.id, &h.c2, "user:1").await.expect("ref=id");
     assert_eq!(r.target, Target::Commit);
 }
 
@@ -304,36 +307,40 @@ async fn an_unknown_ref_or_path_is_repository_path_not_resolved() {
         reason(&e)
     };
     assert_eq!(
-        not(b.resolve_spec(f.id, &segs("nope/x")).await),
+        not(b.resolve_spec(f.id, &segs("nope/x"), "user:1").await),
         "ref_not_found"
     );
     // A 64-hex id (SHA-256 length) in this SHA-1 repository: an id, missing.
     assert_eq!(
-        not(b.resolve_spec(f.id, &segs(&"a".repeat(64))).await),
+        not(b.resolve_spec(f.id, &segs(&"a".repeat(64)), "user:1").await),
         "ref_not_found"
     );
     // 39 / 41 hex digits are no id: names that match no ref.
     for n in [39, 41] {
         assert_eq!(
-            not(b.resolve_spec(f.id, &segs(&"a".repeat(n))).await),
+            not(b.resolve_spec(f.id, &segs(&"a".repeat(n)), "user:1").await),
             "ref_not_found"
         );
     }
     let missing = "0".repeat(40);
     assert_eq!(
-        not(b.resolve_spec(f.id, &segs(&missing)).await),
+        not(b.resolve_spec(f.id, &segs(&missing), "user:1").await),
         "ref_not_found"
     );
     assert_eq!(
-        not(b.resolve_spec(f.id, &segs(&h.tree1)).await),
-        "not_a_commit"
+        not(b.resolve_spec(f.id, &segs(&h.tree1), "user:1").await),
+        // An id answers like a missing one (M3 P6 review, MEDIUM 1).
+        "ref_not_found"
     );
     assert_eq!(
-        not(b.resolve_spec(f.id, &segs("treetag")).await),
+        not(b.resolve_spec(f.id, &segs("treetag"), "user:1").await),
         "not_a_commit"
     );
     let empty: [&str; 0] = [];
-    assert_eq!(not(b.resolve_spec(f.id, &empty).await), "ref_not_found");
+    assert_eq!(
+        not(b.resolve_spec(f.id, &empty, "user:1").await),
+        "ref_not_found"
+    );
 
     let e = b
         .tree(f.id, &h.c2, &RepoPath::parse("nope").unwrap())
@@ -364,7 +371,7 @@ async fn an_unknown_ref_or_path_is_repository_path_not_resolved() {
         .expect_err("root");
     assert_eq!(reason(&e), "not_a_blob");
     let e = b
-        .resolve_ref(f.id, "refs/heads/nope")
+        .resolve_ref(f.id, "refs/heads/nope", "user:1")
         .await
         .expect_err("full");
     assert_eq!(reason(&e), "ref_not_found");
@@ -377,11 +384,14 @@ async fn option_like_refs_and_paths_are_only_names() {
     let h = history(&f.path);
     let b = f.browser(BrowseLimits::default());
     for spec in ["-n/README.md", "--output=x", "--all", "-"] {
-        let e = b.resolve_spec(f.id, &segs(spec)).await.expect_err(spec);
+        let e = b
+            .resolve_spec(f.id, &segs(spec), "user:1")
+            .await
+            .expect_err(spec);
         assert_eq!(e.code(), ErrorCode::RepositoryPathNotResolved, "{spec}");
     }
     for r in ["--output=x", "-n", "--all", "refs/heads/-x"] {
-        let e = b.resolve_ref(f.id, r).await.expect_err(r);
+        let e = b.resolve_ref(f.id, r, "user:1").await.expect_err(r);
         assert_eq!(e.code(), ErrorCode::RepositoryPathNotResolved, "{r}");
     }
     // The files named `-n` and `--output=x` are read as files.
@@ -490,18 +500,27 @@ async fn the_ref_list_is_cached_until_a_push_invalidates_it() {
     let h = history(&f.path);
     let b = f.browser(BrowseLimits::default());
     assert_eq!(
-        b.resolve_ref(f.id, "main").await.expect("main").commit,
+        b.resolve_ref(f.id, "main", "user:1")
+            .await
+            .expect("main")
+            .commit,
         h.c2
     );
     update_ref(&f.path, "refs/heads/main", &h.c1);
     // Within the TTL the cached list answers.
     assert_eq!(
-        b.resolve_ref(f.id, "main").await.expect("cached").commit,
+        b.resolve_ref(f.id, "main", "user:1")
+            .await
+            .expect("cached")
+            .commit,
         h.c2
     );
     b.invalidate(f.id);
     assert_eq!(
-        b.resolve_ref(f.id, "main").await.expect("fresh").commit,
+        b.resolve_ref(f.id, "main", "user:1")
+            .await
+            .expect("fresh")
+            .commit,
         h.c1
     );
 
@@ -514,7 +533,7 @@ async fn the_ref_list_is_cached_until_a_push_invalidates_it() {
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(
         short
-            .resolve_ref(f.id, "main")
+            .resolve_ref(f.id, "main", "user:1")
             .await
             .expect("expired")
             .commit,
@@ -530,7 +549,7 @@ async fn an_empty_repository_has_no_refs_and_resolves_nothing() {
     assert!(list.refs.is_empty());
     assert_eq!(list.default_branch, None);
     let e = b
-        .resolve_spec(f.id, &segs("main"))
+        .resolve_spec(f.id, &segs("main"), "user:1")
         .await
         .expect_err("empty");
     assert_eq!(reason(&e), "ref_not_found");
@@ -877,7 +896,10 @@ async fn git_answers_forge_cannot_trust_are_git_process_failed() {
         "cat > /dev/null",
     );
     let b = f.browser_with_bin(&bin, BrowseLimits::default());
-    let e = b.resolve_ref(f.id, &h.c2).await.expect_err("empty");
+    let e = b
+        .resolve_ref(f.id, &h.c2, "user:1")
+        .await
+        .expect_err("empty");
     assert_eq!(e.code(), ErrorCode::GitProcessFailed);
     assert_eq!(reason(&e), "batch_check_empty");
 

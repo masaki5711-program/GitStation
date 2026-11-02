@@ -172,6 +172,15 @@ impl GitCommand {
         self
     }
 
+    /// `--glob=<pattern>` (rev-list: every ref matching the pattern). Only
+    /// forge-built `refs/…/*` patterns (never user input) reach it.
+    #[must_use]
+    pub(crate) fn ref_glob(mut self, pattern: &str) -> Self {
+        self.options
+            .push(OsString::from(format!("--glob={pattern}")));
+        self
+    }
+
     /// A revision (ref or object id), placed after `--end-of-options`.
     #[must_use]
     pub fn revision(mut self, rev: impl Into<Revision>) -> Self {

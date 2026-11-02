@@ -102,13 +102,31 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   - `refs(repo) -> Arc<RefList>` (`for-each-ref` of `refs/heads/` + `refs/tags/` only, NUL-separated
     fields, tags peeled one level, `default_branch` from `%(HEAD)`, ≤ `max_refs` 5 000 else
     `truncated`); cached per repository for `refs_ttl` (5 s), at most `max_cached_repos` (256);
-    `invalidate(repo)` (every push) drops it, and a list loaded across an invalidation is not stored.
+    `invalidate(repo)` (every push; every other ref writer must call it too) drops it and that
+    repository's reachability answers (the generation is per repository), and a list loaded across an
+    invalidation is not stored.
   - `resolve_ref(repo, "<oid | refs/heads/… | refs/tags/… | short>")` and
     `resolve_spec(repo, &segments) -> ResolvedSpec { rev, path }` in ADR-0015's order (40 / 64-hex
     commit id of any case first, then the longest branch, then the longest tag; candidates are
     `RefName`-valid prefixes only, so `-n`, `--output=x` never match). A truncated ref list falls back
     to `for-each-ref --end-of-options <exact candidates>`. Unknown → `FG-REPO-0023`
     (`ref_not_found`, `not_a_commit`).
+  - Reachability (M3 P6, `browse/reach.rs`, ADR-0024 §2): a commit named by id (`resolve_*`, a
+    history cursor's tip, `commit(repo, oid, caller)`) resolves only when a branch or tag reaches it —
+    `echo <id> | rev-list --max-count=1 --stdin --not --branches --tags [--glob=<extra>]`, empty =
+    reachable. Everything else an id lookup finds (missing, tree / blob, unreachable, a check that
+    timed out or found no slot) is `FG-REPO-0023 ref_not_found`, like a missing id (log: `object`,
+    `unreachable`, `reach_error`; an undecided check is logged once as
+    `forge.git.browse.reach_undecided` with its FG-GIT code). Every id lookup first counts against its
+    `caller` (`user:<id>`): a token bucket (`reach_caller_burst` 60, one back per
+    `reach_caller_refill` 250 ms) and `reach_per_caller` (2) at once, waited for `reach_caller_wait`
+    (2 s) — `FG-GIT-0004 reason=caller_reach_rate` / `caller_reach`. The check has its own limit
+    `reach_timeout` (5 s) and takes one `max_per_repo` slot; a tip of the cached ref list needs no
+    git; answers are cached per `(repo, id, ReachRoots)` with the repository's push generation for
+    `refs_ttl`, at most `max_cached_reach` (4 096, oldest dropped first). `ReachRoots` is branches +
+    tags (`branches_and_tags()`); M3 R1 adds a merge request's version refs. Names never pay for the
+    check or count against the caller. Known residual: response time can tell a missing id from an
+    existing unreachable one (bounded by the per-caller limit).
   - `tree(repo, commit, &RepoPath)` (`ls-tree -z --long --full-tree --end-of-options <commit> --
     <path>` for the entry, then `ls-tree -z --long <tree id>`; ≤ `max_tree_entries` 5 000),
     `blob(…)` (`cat-file blob <blob id>`, ≤ `max_blob_bytes` 1 MiB), `raw_entry(…)`, `raw(…,

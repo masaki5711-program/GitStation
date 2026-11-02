@@ -165,9 +165,10 @@ async fn raw_inner(
         e.with_context("project_id", project_id)
             .with_context("repo_id", repo_id)
     };
+    let principal = principal_key(&request)?;
     let spec = smart
         .browse
-        .resolve_spec(repository.id, request.tail().as_slice())
+        .resolve_spec(repository.id, request.tail().as_slice(), &principal)
         .await
         .map_err(ids)?;
     let commit = spec.rev.commit.clone(); // clone: logged with a failure
@@ -190,7 +191,6 @@ async fn raw_inner(
             ));
         }
     }
-    let principal = principal_key(&request)?;
     let raw = browse
         .raw(repository.id, &commit, &path, &principal)
         .await
@@ -262,9 +262,10 @@ async fn archive_inner(
     };
     let mut segments: Vec<&str> = rest.iter().map(String::as_str).collect();
     segments.push(stem);
+    let principal = principal_key(&request)?;
     let spec = smart
         .browse
-        .resolve_spec(repository.id, &segments)
+        .resolve_spec(repository.id, &segments, &principal)
         .await
         .map_err(ids)?;
     if !spec.path.is_root() {
@@ -293,7 +294,6 @@ async fn archive_inner(
             Body::empty(),
         ));
     }
-    let principal = principal_key(&request)?;
     let stream = smart
         .browse
         .archive(
