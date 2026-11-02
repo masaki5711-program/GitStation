@@ -92,7 +92,7 @@ flowchart LR
 
 | リポジトリ | ブランチ | コミット | 出典 |
 |---|---|---|---|
-| GitStation | `claude/brave-cray-w62c35` | `f1a9e503aa316d85e072df3f56000902ec0f5864`（M2 の実装 + ADR-0023 で文書ポータルと `kind` を削除） | `git log -1` で確認（この文書の作成時） |
+| GitStation | `claude/brave-cray-w62c35` | `58d783380e7999d3081b27d09912383db21a6b0d`（M2 の実装 + ADR-0023 で文書ポータルと `kind` を削除 + `/` の修正と予行演習の反映） | `git log -1` で確認（この文書の作成時） |
 | Kanflow | `claude/brave-cray-w62c35` | `21e8804e6e2d41482d2e6ae8295657dcc1127c4e`（PBI の機密フラグ D-5 まで + テストサーバーの案内の文書） | 同上 |
 
 - GitStation の `main` はこのブランチの祖先（`8fea414`）で古い。**ブランチ `claude/brave-cray-w62c35` の先端を使う**。
@@ -146,7 +146,7 @@ flowchart LR
 
 ```bash
 cd <GITSTATION_SRC>
-git checkout --detach f1a9e503aa316d85e072df3f56000902ec0f5864   # 提案: 固定
+git checkout --detach 58d783380e7999d3081b27d09912383db21a6b0d   # 提案: 固定
 
 # (a) 画面 (SPA) — 先にビルドする。build.rs は web/dist が無いと失敗する
 cd web
@@ -755,7 +755,7 @@ cargo run -q -p forge-web --bin gen-authz -- --check
 - 同時に複数の全体テストを走らせない（dev の Postgres が落ちた実績。CLAUDE.md）。DB に繋がらないときは**黙ってスキップせず失敗**する。
 - 一部だけ回す例（MR8 の確認と同じ形）: `FORGE_TEST_DATABASE_URL=… cargo nextest run -p forge-web -p forge-git -p forge-auth -p forge-core -p forge-errors -p forge-client -j 2`（761 件通過・1 件 skip が記録）(出典: `docs/handoff/2026-11-01-m2-mr8.md` §4)。
 - Web の UI: `cd web && npm ci --ignore-scripts && npm run lint && npm run typecheck && npm test`。`npm run smoke` は Chromium が要る (出典: `web/README.md`)。
-- 直近の完全な全体テストの記録: 2026-11-01、`e99b691`（ADR-0023 のコードの変更まで。デプロイの版との差は文書だけ）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**、web は `npx vitest run` → **362 件合格**（文書ポータルの削除でテストが減った）（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
+- 直近の完全な全体テストの記録: 2026-11-01、`1c042e2`（`/` の修正まで。デプロイの版との差は文書だけ）で `cargo nextest run --workspace -j 4` → **1607 件合格・1 件 skip**、web は `npx vitest run` → **362 件合格**（文書ポータルの削除でテストが減った）（この環境の PostgreSQL 16、`FORGE_TEST_DATABASE_URL=postgres://forge_dev@127.0.0.1:55432/forge_dev`）。それ以前の MR3・MR4・MR7 の統合時にもそれぞれ全体のテストを通している（1425 / 1515 / 1468 件）。
 
 #### Kanflow（vitest / Playwright）
 
@@ -803,6 +803,8 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 | ログ | `serve.log` を `request_id` で検索 | `error_code` と `request_id` が同じ行に出る（`FG-GIT-0009`、`FG-AUTH-0018` ほか）。`http.request` 行に `method`、`path`、`status`、`duration_ms`。エラー本文に内部パス・SQL・git の stderr は無い |
 | 設定の誤り | 秘密ファイルを `0644` にして `doctor` / `serve` | `FG-SYS-0002 config_key=database.password_file reason=insecure_permissions`（利用者向けは「サーバーの設定に問題があります…[FG-SYS-0002] (問い合わせ番号: …)」だけ）。`FORGE_WEB_BASE_URL=http://example.test` は `reason=insecure_http` |
 
+**修正後の確認（2026-11-02）**: `/` の修正を入れた release ビルド（`--features embed-ui`）を実 `forge serve` で起動し、`GET /` → 200 `text/html`・CSP は G5 のとおり。ヘッドレスの Chromium で `/` を開くとログインの画面（「Please sign in」）が描かれ、CSP の違反なし（コンソールのエラーはログイン前のセッション確認の 401 だけ）。
+
 **予行演習で見つかり、この文書を直した点**: G5 の `GET /` の 404（製品の不具合。同日に直した）、`project view` にリポジトリの状態が出ない、`browse` の `--ref` が必須、`create` に渡すのは `namespace_id`、マイグレーションは 23 本（21 は誤り）、初回 migrate の WARN 約 230 行、秘密ファイルの所有者（サービスユーザー）、`forge admin` は `forge_app` で動く、トークンは stdout に出る、keyring 警告、bootstrap の接続オプション、G10 の具体的なコード、raw / archive の URL。
 
 **ここでは確認できなかったこと**: Keycloak でのログインとその後の画面（SPA は HTTP で配ることまで。ブラウザでの表示・操作は未実行）、`access` ロール無しの拒否（`FG-AUTH-0013`）、TLS リバースプロキシ越しの動作（`base_url` の https、`Origin` の通過、`max_connections_per_peer`、大きな push の上限・タイムアウト）、systemd のユニットとサービスユーザーの権限分離（`db-migrate.pw` を読めない設定）、DB の TLS（`verify-full`、社内 CA）、2 人目の利用者と権限不足の push 拒否、Kanflow との連携（未実装。Kanflow 側は §6.2 を本演習では実行していない）、`forge_maint` を使う設定。
@@ -824,7 +826,7 @@ E2E_BASE_URL=http://localhost:3001 E2E_ALLOW_WRITE=1 E2E_USER=<E2E_EMAIL> E2E_PA
 | Kanflow 連携 | §5.1 のとおり未実装 | 計画 02 §13 |
 | GitHub Actions の CI | **一度も動いていない**。main か PR で 1 回動かすのが MR2 の CI 追加の前提 | `docs/plan/10-m2-plan.md` §8、`docs/ci.md` |
 | Keycloak の E2E（本物の Keycloak と通す）、realm JSON の実機での取り込み | **未実行**（realm の JSON は構文確認のみ） | `docs/handoff/2026-11-01-m2-mr4.md` §6 |
-| ワークスペース全体のテスト | `e99b691` で Rust **1607 件合格・1 件 skip**、web 362 件合格（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
+| ワークスペース全体のテスト | `1c042e2` で Rust **1607 件合格・1 件 skip**、web 362 件合格（§6 参照）。テストサーバー上では未実行 | この文書 §6 |
 | MR4 のレビュー | security / rust（エラー契約・握りつぶしを含む）/ database / authz-matrix を実施。CRITICAL・HIGH なし。MEDIUM の指摘を `4e1c861` で修正し、指摘した評価役の再レビューで承認のうえ統合 | `docs/handoff/2026-11-01-m2-mr4.md`、`git log` |
 | MR7・MR8 のレビュー | MR7: git-protocol / security / authz-matrix / rust を実施、HIGH 1 件を `c1cb52d` で修正し再レビューで承認。MR8: git-protocol / rust / authz-matrix を実施、HIGH 3 件を `2c9b15e` で修正し再レビューで承認。どちらも承認後に統合 | `docs/handoff/…-mr7.md`、`…-mr8.md`、`git log` |
 | 持ち越し | OIDC の discovery にキャッシュ期限が無い（Keycloak 側のエンドポイント変更時は再起動）／state Cookie のサーバー側の 1 回限りは未実装／Keycloak イメージの digest 固定／秘密の走査の許可リスト／`web.hsts` の設定キー未実装／深いカーソル（`--skip`）は O(n²)（上限と時間切れで抑制）／木の項目名が UTF-8 でないものの扱い／3 ドットの比較・`--follow` なし／`git.browse.*` の設定なし | `docs/handoff/2026-11-01-m2-mr4.md` §7、`…-mr8.md` §6、`docs/adr/0022-…` |
