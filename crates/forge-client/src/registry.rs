@@ -51,6 +51,8 @@ const MEMBER_SCHEMA: &str = r#"{"type":"object","required":["user_id","username"
 const MOVE_SCHEMA: &str = r#"{"type":"object","required":["id","kind","namespace_id","old_path","path","tombstones","projects","reclaimed_tombstones"],"properties":{"id":{"type":"integer"},"kind":{"enum":["project","group","user"]},"namespace_id":{"type":"integer"},"old_path":{"type":"string"},"path":{"type":"string"},"tombstones":{"type":"integer"},"projects":{"type":"integer"},"reclaimed_tombstones":{"type":"integer"}}}"#;
 const PROTECTED_REF_SCHEMA: &str = r#"{"type":"object","required":["id","pattern","push_min_role","created_at","updated_at"],"properties":{"id":{"type":"integer"},"pattern":{"type":"string"},"push_min_role":{"type":"string"},"created_at":{"type":"string"},"updated_at":{"type":"string"}}}"#;
 
+const MR_SCHEMA: &str = r#"{"type":"object","required":["project_id","iid","title","description","state","draft","source_branch","target_branch","author_id","head_sha","created_at","updated_at","closed_at","closed_by"],"properties":{"project_id":{"type":"integer"},"iid":{"type":"integer"},"title":{"type":"string"},"description":{"type":"string"},"state":{"enum":["open","merged","closed"]},"draft":{"type":"boolean"},"source_branch":{"type":"string"},"target_branch":{"type":"string"},"author_id":{"type":"integer"},"head_sha":{"type":["string","null"]},"created_at":{"type":"string"},"updated_at":{"type":"string"},"closed_at":{"type":["string","null"]},"closed_by":{"type":["integer","null"]}}}"#;
+
 const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","message","diff"],"properties":{"commit":{"type":"object","required":["oid","parents","author_name","author_email","authored_at","committer_name","committer_email","committed_at","subject"]},"message":{"type":"string"},"diff":{"type":"object","required":["files","truncated"],"properties":{"files":{"type":"array","items":{"type":"object","required":["status","old_path","new_path","old_mode","new_mode","old_oid","new_oid","similarity","binary","patch","omitted"],"properties":{"status":{"enum":["added","modified","deleted","renamed","copied","type_changed"]},"patch":{"type":["string","null"]},"omitted":{"enum":["too_large","total_cap","not_utf8",null]}}}},"truncated":{"type":"boolean"}}}}}"#;
 
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
@@ -379,6 +381,90 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["DELETE /api/v1/projects/{id}/protected-refs/{rule_id}"],
         output: r#"{"type":"object","required":["removed","project_id","rule_id"],"properties":{"removed":{"const":true},"project_id":{"type":"integer"},"rule_id":{"type":"integer"}}}"#,
+    },
+    CommandSpec {
+        name: "mr create",
+        summary: "Open a merge request from one existing branch into another (Developer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--source", "option", true, "The source branch (feature/x or refs/heads/feature/x)."),
+            arg("--target", "option", true, "The target branch (another branch than the source)."),
+            arg("--title", "option", true, "1 to 255 characters."),
+            arg("--description", "option", false, "Free text (may be empty)."),
+            arg("--draft", "flag", false, "Open it as a draft."),
+        ],
+        examples: &["gstn mr create --project 7 --source feature/login --target main --title 'Add the login form' --json"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests"],
+        output: MR_SCHEMA,
+    },
+    CommandSpec {
+        name: "mr list",
+        summary: "List a project's merge requests, newest first (open by default).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--state", "option", false, "open | closed | merged | all (default open)."),
+            arg("--limit", "option", false, "Rows per page, 1..=100."),
+            arg("--before", "option", false, "Continue below this next_before iid."),
+            arg("--all", "flag", false, "Follow next_before and merge every page (bounded)."),
+        ],
+        examples: &["gstn mr list --project 7 --json", "gstn mr list --project 7 --state all --all"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests"],
+        output: r#"{"type":"object","required":["merge_requests","next_before"],"properties":{"merge_requests":{"type":"array","items":{"type":"object","required":["project_id","iid","title","state","draft","source_branch","target_branch","author_id"]}},"next_before":{"type":["integer","null"]}}}"#,
+    },
+    CommandSpec {
+        name: "mr view",
+        summary: "Show one merge request.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr view --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}"],
+        output: MR_SCHEMA,
+    },
+    CommandSpec {
+        name: "mr edit",
+        summary: "Change a merge request's title, description, target or draft flag (the author or Developer; another's draft flag: Maintainer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--title", "option", false, "A new title."),
+            arg("--description", "option", false, "A new description (may be empty)."),
+            arg("--target", "option", false, "A new target branch (only while open)."),
+            arg("--draft", "flag", false, "Mark it a draft (only while open)."),
+            arg("--ready", "flag", false, "Mark it ready (only while open)."),
+        ],
+        examples: &["gstn mr edit --project 7 --iid 3 --ready", "gstn mr edit --project 7 --iid 3 --title 'Add the sign-in form'"],
+        scopes: &["api"],
+        routes: &["PATCH /api/v1/projects/{id}/merge-requests/{iid}"],
+        output: MR_SCHEMA,
+    },
+    CommandSpec {
+        name: "mr close",
+        summary: "Close a merge request (the author or Developer).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr close --project 7 --iid 3"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/close"],
+        output: MR_SCHEMA,
+    },
+    CommandSpec {
+        name: "mr reopen",
+        summary: "Reopen a closed merge request; its branches must still exist (never a merged one).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr reopen --project 7 --iid 3"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/merge-requests/{iid}/reopen"],
+        output: MR_SCHEMA,
     },
     CommandSpec {
         name: "namespace resolve",
