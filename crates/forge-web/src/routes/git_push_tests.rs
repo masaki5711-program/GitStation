@@ -97,6 +97,8 @@ fn receiver(dir: &std::path::Path, recorder: Arc<dyn PushRecorder>) -> Receiver 
         rewriter: ReportRewriter::new(false, BTreeSet::new(), RewriteTexts::default()),
         answer: None,
         bytes_in: 0,
+        before: Ok(RefSnapshot::default()),
+        snapshot_ms: 0,
     }
 }
 
@@ -337,4 +339,53 @@ async fn a_finished_push_task_drops_the_browse_ref_cache() {
     assert_eq!(browse.refs(id).await.expect("cached").refs.len(), 3);
     drop(RefsChanged(browse.clone(), id)); // clone: the test keeps its handle
     assert_eq!(browse.refs(id).await.expect("fresh").refs.len(), 2);
+}
+
+/// R5 review round 5: an incomplete listing (here: the ref snapshot before
+/// the push failed) logs one FG-GIT-0016 warn with its reason, the rows
+/// listed and the push's request id, and is recorded incomplete; every
+/// listing logs the ref count and its durations.
+#[tokio::test]
+async fn an_incomplete_listing_logs_one_warn_with_its_reason() {
+    let dir = tempfile::tempdir().expect("dir");
+    let flaky = Arc::new(Flaky {
+        fail: 0,
+        then: PushRecorded::Recorded,
+        calls: AtomicU32::new(0),
+        seen: Mutex::new(Vec::new()),
+    });
+    let mut r = receiver(dir.path(), Arc::clone(&flaky) as Arc<dyn PushRecorder>);
+    r.before =
+        Err(ForgeError::new(ErrorCode::GitTimeout).with_context("subcommand", "for-each-ref"));
+    r.snapshot_ms = 7;
+    let (buf, _guard) = capture();
+    let commits = r.introduced(&record()).await;
+    assert_eq!(commits, forge_core::PushedCommits::unknown());
+    let events = buf.events();
+    let warns: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["error_code"] == ErrorCode::PushCommitsIncomplete.id())
+        .collect();
+    assert_eq!(warns.len(), 1, "{events:?}");
+    let w = warns[0];
+    assert_eq!(w["level"], "WARN");
+    assert_eq!(w["request_id"], "req-push-unit");
+    let text = w.to_string();
+    for want in [
+        "reason=snapshot_failed".to_owned(),
+        format!("cause_code={}", ErrorCode::GitTimeout.id()),
+        "listed=0".to_owned(),
+        "refs=0".to_owned(),
+    ] {
+        assert!(text.contains(&want), "{want}: {text}");
+    }
+    let listed: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["message"] == "forge.git.push_commits_listed")
+        .collect();
+    assert_eq!(listed.len(), 1, "{events:?}");
+    assert_eq!(listed[0]["snapshot_ms"], 7);
+    assert_eq!(listed[0]["complete"], false);
+    assert!(listed[0]["listing_ms"].is_u64());
+    assert!(listed[0]["refs"].is_u64());
 }

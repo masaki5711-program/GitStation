@@ -373,7 +373,15 @@ pub enum PushRecorded {
 
 /// The most commits one push records as introduced (M3 R5 round 4); past
 /// it the record is `push_commits_incomplete` and the rest have no row.
-pub const MAX_PUSHED_COMMITS: usize = 1_000_000;
+/// Measured (review round 5): writing this many rows with their audit
+/// trigger takes well under a third of [`PUSH_RECORD_BUDGET`]
+/// (`the_largest_listing_is_recorded_within_a_third_of_the_budget`), so a
+/// push at the cap never loses its audit row to the deadline.
+pub const MAX_PUSHED_COMMITS: usize = 50_000;
+
+/// The common budget of the attempts to record one applied push (the push
+/// path, forge-web).
+pub const PUSH_RECORD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The commits a push introduced: every commit its updates made reachable
 /// that no ref reached before (M3 R5 round 4, ADR-0024 §8.3: the committer

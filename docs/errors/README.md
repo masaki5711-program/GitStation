@@ -64,6 +64,7 @@
 | [FG-GIT-0013](FG-GIT-0013.md) | 413 | info | A Smart HTTP request body went over a forge limit: the decompressed size of a gzip request body (`Content-Encoding: gzip`), or a body or command-list limit of the route |
 | [FG-GIT-0014](FG-GIT-0014.md) | 400 | info | A Smart HTTP request broke the Git wire protocol before git was started, or forge refused a protocol feature or an object the request wants (an object no ref reaches: removed by a force push or a deleted branch) |
 | [FG-GIT-0015](FG-GIT-0015.md) | 499 | info | The client went away (or the request was cancelled) while a streaming git subprocess was running; forge killed git together with its helpers (process group / Job Object) and reaped it |
+| [FG-GIT-0016](FG-GIT-0016.md) | 500 | warn | After an applied push, forge lists the commits it introduced (every commit no ref reached before the push, against a snapshot of the ref tips read before receive-pack started; ADR-0024 §8.3) to write one `push_commits` row per commit for the committer rule |
 | [FG-WEB-0001](FG-WEB-0001.md) | 404 | info | No registered route matches the request path: no fixed route, and the dispatcher (ADR-0015) refused the raw path by its string rules or found no scoped route for its word and method. |
 | [FG-WEB-0002](FG-WEB-0002.md) | 503 | warn | A request exceeded the server's request timeout and was cancelled. |
 | [FG-SYS-0004](FG-SYS-0004.md) | 500 | alert | forge serve could not bind its listen address (address in use, permission denied for a privileged port, or an invalid address). |

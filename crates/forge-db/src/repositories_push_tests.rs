@@ -488,3 +488,77 @@ async fn a_replay_names_the_operator_and_checks_the_log_against_the_database() {
     );
     t.drop_now().await;
 }
+
+/// R5 review round 5: the largest listing a push records (the cap) is
+/// written, audit trigger included, within a third of the push path's
+/// record budget; a listing past the cap keeps the cap's rows and is
+/// marked incomplete.
+#[tokio::test]
+async fn the_largest_listing_is_recorded_within_a_third_of_the_budget() {
+    let t = FreshDb::migrated().await;
+    let (p, alice) = project(&t, "alice").await;
+    let push = PushRecord {
+        repository_id: p.repository_id,
+        updates: vec![update("refs/heads/main", '0', 'b', PushUpdateKind::Create)],
+    };
+    let cap = forge_core::MAX_PUSHED_COMMITS;
+    let all = |n: usize| PushedCommits {
+        commits: (0..n)
+            .map(|i| ObjectId::parse(&format!("{i:040x}")).expect("oid"))
+            .collect(),
+        complete: true,
+    };
+    let started = std::time::Instant::now();
+    let done = record_push_with_commits(
+        &t.db,
+        &push_context(&pusher(alice, "req-push-cap")),
+        &push,
+        &all(cap),
+    )
+    .await
+    .expect("recorded");
+    let took = started.elapsed();
+    eprintln!("push_commits: {cap} rows recorded in {took:?}");
+    assert_eq!(done, PushRecorded::Recorded);
+    assert!(
+        took < forge_core::PUSH_RECORD_BUDGET / 3,
+        "{cap} rows took {took:?}"
+    );
+    let mut su = t.superuser().await;
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM forge.push_commits")
+        .fetch_one(&mut su)
+        .await
+        .expect("rows");
+    assert_eq!(rows, cap as i64);
+    let audits = audit_rows(&mut su).await;
+    assert_eq!(audits[0].6.get("push_commits_incomplete"), None);
+
+    // Past the cap: the cap's rows, the marker.
+    let (q, bob) = project(&t, "bob").await;
+    let over = PushRecord {
+        repository_id: q.repository_id,
+        ..push
+    };
+    let mut more = all(cap + 3);
+    more.commits.rotate_left(3); // other ids first: they are the ones written
+    let over_done = record_push_with_commits(
+        &t.db,
+        &push_context(&pusher(bob, "req-push-over")),
+        &over,
+        &more,
+    )
+    .await
+    .expect("recorded");
+    assert_eq!(over_done, PushRecorded::Recorded);
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM forge.push_commits WHERE repository_id = $1")
+            .bind(q.repository_id.get())
+            .fetch_one(&mut su)
+            .await
+            .expect("rows");
+    assert_eq!(rows, cap as i64);
+    let audits = audit_rows(&mut su).await;
+    assert_eq!(audits[1].6["push_commits_incomplete"], true);
+    t.drop_now().await;
+}
+

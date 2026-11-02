@@ -970,7 +970,13 @@ async fn record(
         (None, Actor::System | Actor::Anonymous) => None,
     };
     let mut audit_details = details.to_value();
-    let complete = commits.complete && pusher.is_some();
+    // Never more rows than the cap (the listing stops there; a caller
+    // that passes more gets the cap and the marker).
+    let list = commits
+        .commits
+        .get(..forge_core::MAX_PUSHED_COMMITS)
+        .unwrap_or(&commits.commits);
+    let complete = commits.complete && pusher.is_some() && list.len() == commits.commits.len();
     if !complete {
         if let Some(map) = audit_details.as_object_mut() {
             map.insert(
@@ -979,9 +985,8 @@ async fn record(
             );
         }
     }
-    if let (Some(pusher), false) = (pusher, commits.commits.is_empty()) {
+    if let (Some(pusher), false) = (pusher, list.is_empty()) {
         let request_id = ctx.request_id.as_str().to_owned();
-        let list = &commits.commits;
         tx.step(|c| async move {
             insert_push_commits(c, (project_id, repo), &request_id, pusher, list).await
         })

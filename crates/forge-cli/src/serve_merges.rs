@@ -147,6 +147,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::GitRequestTooLarge
         | ErrorCode::GitProtocolInvalid
         | ErrorCode::GitClientDisconnected
+        | ErrorCode::PushCommitsIncomplete
         | ErrorCode::RouteNotFound
         | ErrorCode::RequestTimeout
         | ErrorCode::ServerBindFailed

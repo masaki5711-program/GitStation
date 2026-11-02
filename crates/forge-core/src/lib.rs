@@ -60,7 +60,7 @@ pub use namespace_resolver::{
 };
 pub use push::{
     ObjectId, PushRecord, PushRecorded, PushRecorder, PushReplay, PushUpdateKind, PushedCommits,
-    PushedRef, Pusher, MAX_PUSHED_COMMITS,
+    PushedRef, Pusher, MAX_PUSHED_COMMITS, PUSH_RECORD_BUDGET,
 };
 pub use push_log::{PushApplied, PushAppliedRef, PUSH_APPLIED_EVENT};
 pub use ref_name::RefName;

@@ -77,6 +77,7 @@ use forge_core::{
     PushUpdateKind, PushedRef, Pusher, RefName, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError, Lang};
+use forge_git::push_introduced::RefSnapshot;
 use forge_git::receive_report::{refusal_report, ReportRewriter, RewriteTexts};
 use forge_git::receive_request::{
     check_unambiguous, CommandParser, Parsed, ReceivePackRequest, MAX_COMMAND_SECTION,
@@ -106,7 +107,7 @@ pub const PUSH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 pub const INTRODUCED_TIMEOUT: Duration = Duration::from_secs(30);
 /// Recording an applied push: attempts and their common budget.
 pub const RECORD_ATTEMPTS: u32 = 3;
-pub const RECORD_BUDGET: Duration = Duration::from_secs(30);
+pub const RECORD_BUDGET: Duration = forge_core::PUSH_RECORD_BUDGET;
 /// Waits between record attempts.
 const RECORD_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
 /// Chunks of git's answer queued for the client.
@@ -294,6 +295,22 @@ async fn receive_pack_inner(
         return refuse(&log, &parsed, decided, drained.err());
     }
 
+    // 4a'. The ref tips before receive-pack runs (M3 R5 review round 5,
+    // ADR-0024 §8.3): the commits the push introduces are listed against
+    // them, never against the live refs. A failure does not stop the push:
+    // its listing is recorded incomplete (one FG-GIT-0016 warn then).
+    let snapshot_started = Instant::now();
+    let before = smart
+        .git
+        .ref_snapshot(
+            &smart.storage,
+            repository.id,
+            &principal,
+            PUSH_CHECK_TIMEOUT,
+        )
+        .await;
+    let snapshot_ms = u64::try_from(snapshot_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
     // 4. receive-pack gets the original bytes (`atomic` added above).
     let mut cmd = smart.git.receive_pack(
         &smart.storage,
@@ -347,6 +364,8 @@ async fn receive_pack_inner(
         rewriter: ReportRewriter::new(parsed.sideband, protected, texts),
         answer: Some(answer_tx),
         bytes_in: 0,
+        before,
+        snapshot_ms,
     };
     // Counted before the spawn: `wait_idle` never sees 0 in between.
     let guard = smart.push_tasks.start();
@@ -628,6 +647,10 @@ struct Receiver {
     answer: Option<mpsc::Sender<Result<Bytes, io::Error>>>,
     /// Request body bytes (raw), once the handler finished it.
     bytes_in: u64,
+    /// The ref tips read before receive-pack started (taken by the listing).
+    before: Result<RefSnapshot, ForgeError>,
+    /// How long the snapshot took.
+    snapshot_ms: u64,
 }
 
 impl Receiver {
@@ -883,7 +906,7 @@ impl Receiver {
 
     /// Step 6, for the updates git applied (`source`: `report`, or the
     /// reconciliation's reason).
-    async fn after_push(self, applied: Vec<(String, String, String)>, source: &'static str) {
+    async fn after_push(mut self, applied: Vec<(String, String, String)>, source: &'static str) {
         if applied.is_empty() {
             return;
         }
@@ -938,11 +961,15 @@ impl Receiver {
 
     /// The commits the push introduced (M3 R5 round 4, ADR-0024 §8.3: the
     /// committer rule's `push_commits` rows): every commit no ref reached
-    /// before the push, at most [`forge_core::MAX_PUSHED_COMMITS`]. A git
-    /// failure is logged once and recorded as incomplete (no rows: the
-    /// merge requests whose range holds those commits have unknown
-    /// committers).
-    async fn introduced(&self, record: &PushRecord) -> forge_core::PushedCommits {
+    /// before the push (the snapshot read before receive-pack), at most
+    /// [`forge_core::MAX_PUSHED_COMMITS`]. Every listing logs
+    /// `forge.git.push_commits_listed` (refs, rows, durations); an
+    /// incomplete one (cap, deadline, snapshot or git failure) logs one
+    /// FG-GIT-0016 warn and is recorded incomplete (the merge requests whose
+    /// range holds an unlisted commit have unknown committers).
+    async fn introduced(&mut self, record: &PushRecord) -> forge_core::PushedCommits {
+        let before = std::mem::replace(&mut self.before, Ok(RefSnapshot::default()));
+        let refs = before.as_ref().map_or(0, |b| b.refs);
         let queries: Vec<CommitQuery> = record
             .updates
             .iter()
@@ -952,29 +979,64 @@ impl Receiver {
                 new: u.new.as_str().to_owned(),
             })
             .collect();
-        match self
-            .smart
-            .git
-            .introduced_commits(
-                &self.smart.storage,
-                self.repository.id,
-                &queries,
-                &self.principal,
-                forge_core::MAX_PUSHED_COMMITS,
-                INTRODUCED_TIMEOUT,
-            )
-            .await
-        {
-            Ok(found) => forge_core::PushedCommits {
-                commits: found.commits,
-                complete: found.complete,
-            },
-            Err(err) => {
-                self.log
-                    .failure(err.with_context("phase", "push_introduced_commits"));
-                forge_core::PushedCommits::unknown()
+        let started = Instant::now();
+        let listed = match before {
+            Err(err) => Err(("snapshot_failed", err)),
+            Ok(snapshot) => self
+                .smart
+                .git
+                .introduced_commits(
+                    &self.smart.storage,
+                    self.repository.id,
+                    &snapshot,
+                    &queries,
+                    &self.principal,
+                    forge_core::MAX_PUSHED_COMMITS,
+                    INTRODUCED_TIMEOUT,
+                )
+                .await
+                .map_err(|err| ("git_failed", err)),
+        };
+        let listing_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let (commits, incomplete) = match listed {
+            Ok(found) => (
+                forge_core::PushedCommits {
+                    commits: found.commits,
+                    complete: found.complete,
+                },
+                (!found.complete).then(|| (found.reason.unwrap_or("deadline"), None)),
+            ),
+            Err((reason, err)) => (
+                forge_core::PushedCommits::unknown(),
+                Some((reason, Some(err))),
+            ),
+        };
+        tracing::info!(
+            target: "forge_web::git",
+            request_id = %self.log.request_id,
+            repo_id = self.log.repo_id,
+            refs,
+            listed = commits.commits.len(),
+            complete = commits.complete,
+            snapshot_ms = self.snapshot_ms,
+            listing_ms,
+            "forge.git.push_commits_listed"
+        );
+        if let Some((reason, cause)) = incomplete {
+            let mut err = ForgeError::new(ErrorCode::PushCommitsIncomplete)
+                .with_context("reason", reason)
+                .with_context("listed", commits.commits.len())
+                .with_context("refs", refs)
+                .with_context("listing_ms", listing_ms)
+                .with_context("phase", "push_introduced_commits");
+            if let Some(cause) = cause {
+                err = err
+                    .with_context("cause_code", cause.code().id())
+                    .with_source(cause);
             }
+            self.log.failure(err);
         }
+        commits
     }
 
     /// The record of the applied updates: kinds and commits from git.

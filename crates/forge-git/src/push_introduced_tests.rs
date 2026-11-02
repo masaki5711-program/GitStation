@@ -87,9 +87,32 @@ fn query(name: &str, old: &str, new: &str) -> CommitQuery {
 
 const ZERO: &str = "0000000000000000000000000000000000000000";
 
+async fn snapshot(f: &Fixture) -> RefSnapshot {
+    f.git
+        .ref_snapshot(&f.root, f.id, "user:0", T)
+        .await
+        .expect("snapshot")
+}
+
+async fn listed(
+    f: &Fixture,
+    before: &RefSnapshot,
+    updates: &[CommitQuery],
+    cap: usize,
+) -> Introduced {
+    f.git
+        .introduced_commits(&f.root, f.id, before, updates, "user:1", cap, T)
+        .await
+        .expect("listed")
+}
+
+fn ids(got: &Introduced) -> Vec<&str> {
+    got.commits.iter().map(ObjectId::as_str).collect()
+}
+
 /// R5 round 4: the commits a push made reachable that no ref reached
 /// before; a tag or a branch on an existing commit and a delete bring none;
-/// past the cap the listing is incomplete.
+/// past the cap the listing is incomplete (`reason=cap`).
 #[tokio::test]
 async fn a_push_introduces_only_commits_no_ref_reached_before() {
     let f = fixture().await;
@@ -97,57 +120,143 @@ async fn a_push_introduces_only_commits_no_ref_reached_before() {
     plumb(&f.path, &["update-ref", "refs/heads/main", &base], None);
     let b1 = commit(&f.path, "1", Some(&base));
     let b2 = commit(&f.path, "2", Some(&b1));
-    // The push of `bob` at b2 has been applied (refs move before the record).
+    // The snapshot before receive-pack, then the push of `bob` at b2.
+    let before = snapshot(&f).await;
     plumb(&f.path, &["update-ref", "refs/heads/bob", &b2], None);
-    let bob = [query("refs/heads/bob", ZERO, &b2)];
-    let got = f
-        .git
-        .introduced_commits(&f.root, f.id, &bob, "user:1", 100, T)
-        .await
-        .expect("listed");
-    assert!(got.complete);
-    let ids: Vec<&str> = got.commits.iter().map(ObjectId::as_str).collect();
-    assert_eq!(ids, [b2.as_str(), b1.as_str()]);
+    let got = listed(&f, &before, &[query("refs/heads/bob", ZERO, &b2)], 100).await;
+    assert!(got.complete && got.reason.is_none());
+    assert_eq!(ids(&got), [b2.as_str(), b1.as_str()]);
     // Alice creates `feature` at b1 and a tag at b2: nothing new.
+    let before = snapshot(&f).await;
     plumb(&f.path, &["update-ref", "refs/heads/feature", &b1], None);
     plumb(&f.path, &["update-ref", "refs/tags/v1", &b2], None);
     let alice = [
         query("refs/heads/feature", ZERO, &b1),
         query("refs/tags/v1", ZERO, &b2),
     ];
-    let got = f
-        .git
-        .introduced_commits(&f.root, f.id, &alice, "user:2", 100, T)
-        .await
-        .expect("listed");
+    let got = listed(&f, &before, &alice, 100).await;
     assert!(got.complete && got.commits.is_empty(), "{got:?}");
     // A fast-forward of main onto b2: nothing new either.
+    let before = snapshot(&f).await;
     plumb(&f.path, &["update-ref", "refs/heads/main", &b2], None);
-    let ff = [query("refs/heads/main", &base, &b2)];
-    let got = f
-        .git
-        .introduced_commits(&f.root, f.id, &ff, "user:2", 100, T)
-        .await
-        .expect("listed");
+    let got = listed(&f, &before, &[query("refs/heads/main", &base, &b2)], 100).await;
     assert!(got.complete && got.commits.is_empty(), "{got:?}");
     // A delete: nothing.
-    let del = [query("refs/heads/feature", &b1, ZERO)];
-    let got = f
-        .git
-        .introduced_commits(&f.root, f.id, &del, "user:2", 100, T)
-        .await
-        .expect("listed");
+    let before = snapshot(&f).await;
+    let got = listed(&f, &before, &[query("refs/heads/feature", &b1, ZERO)], 100).await;
     assert!(got.complete && got.commits.is_empty());
     // The cap: incomplete.
     let b3 = commit(&f.path, "3", Some(&b2));
     let b4 = commit(&f.path, "4", Some(&b3));
+    let before = snapshot(&f).await;
     plumb(&f.path, &["update-ref", "refs/heads/bob", &b4], None);
-    let more = [query("refs/heads/bob", &b2, &b4)];
-    let got = f
-        .git
-        .introduced_commits(&f.root, f.id, &more, "user:1", 1, T)
-        .await
-        .expect("listed");
+    let got = listed(&f, &before, &[query("refs/heads/bob", &b2, &b4)], 1).await;
     assert!(!got.complete);
+    assert_eq!(got.reason, Some("cap"));
     assert_eq!(got.commits.len(), 1);
+}
+
+/// R5 review round 5 (TOCTOU): a second ref to the pushed commit created
+/// between receive-pack and the listing (another pusher's concurrent push
+/// of the same commit) hides nothing — both pushers get rows.
+#[tokio::test]
+async fn a_concurrent_second_ref_to_the_pushed_commit_hides_nothing() {
+    let f = fixture().await;
+    let base = commit(&f.path, "0", None);
+    plumb(&f.path, &["update-ref", "refs/heads/main", &base], None);
+    let b1 = commit(&f.path, "1", Some(&base));
+    // Both pushes start before either applies: one snapshot each.
+    let bob_before = snapshot(&f).await;
+    let alice_before = snapshot(&f).await;
+    plumb(&f.path, &["update-ref", "refs/heads/bob", &b1], None);
+    plumb(&f.path, &["update-ref", "refs/heads/alice", &b1], None);
+    let bob = listed(&f, &bob_before, &[query("refs/heads/bob", ZERO, &b1)], 100).await;
+    let alice = listed(
+        &f,
+        &alice_before,
+        &[query("refs/heads/alice", ZERO, &b1)],
+        100,
+    )
+    .await;
+    assert_eq!(ids(&bob), [b1.as_str()]);
+    assert_eq!(ids(&alice), [b1.as_str()]);
+}
+
+/// R5 review round 5: a merge request's version pin (a hidden ref) written
+/// right after the push still leaves the pushed commits listed.
+#[tokio::test]
+async fn a_version_pin_after_the_push_still_lists_its_commits() {
+    let f = fixture().await;
+    let base = commit(&f.path, "0", None);
+    plumb(&f.path, &["update-ref", "refs/heads/main", &base], None);
+    let b1 = commit(&f.path, "1", Some(&base));
+    let b2 = commit(&f.path, "2", Some(&b1));
+    let before = snapshot(&f).await;
+    plumb(&f.path, &["update-ref", "refs/heads/bob", &b2], None);
+    plumb(
+        &f.path,
+        &["update-ref", "refs/merge-requests/1/versions/1", &b2],
+        None,
+    );
+    plumb(
+        &f.path,
+        &["update-ref", "refs/merge-requests/1/head", &b2],
+        None,
+    );
+    let got = listed(&f, &before, &[query("refs/heads/bob", ZERO, &b2)], 100).await;
+    assert!(got.complete);
+    assert_eq!(ids(&got), [b2.as_str(), b1.as_str()]);
+}
+
+/// R5 review round 5: hidden refs are part of the snapshot (a commit a
+/// merge request pin held before is not new), symbolic refs are not (a
+/// symbolic ref resolving to the pushed branch hides nothing).
+#[tokio::test]
+async fn the_snapshot_reads_hidden_refs_and_skips_symbolic_refs() {
+    let f = fixture().await;
+    let base = commit(&f.path, "0", None);
+    plumb(&f.path, &["update-ref", "refs/heads/main", &base], None);
+    let pinned = commit(&f.path, "p", Some(&base));
+    plumb(
+        &f.path,
+        &["update-ref", "refs/merge-requests/7/head", &pinned],
+        None,
+    );
+    // An annotated tag (peeled to its commit) and a symbolic ref.
+    plumb(&f.path, &["tag", "-a", "-m", "t", "v0", &base], None);
+    plumb(
+        &f.path,
+        &["symbolic-ref", "refs/heads/alias", "refs/heads/bob"],
+        None,
+    );
+    let before = snapshot(&f).await;
+    let mut tips: Vec<&str> = before.tips().iter().map(String::as_str).collect();
+    tips.sort_unstable();
+    let mut want = vec![base.as_str(), pinned.as_str()];
+    want.sort_unstable();
+    assert_eq!(tips, want, "each commit once, the symbolic ref left out");
+    let b1 = commit(&f.path, "1", Some(&pinned));
+    plumb(&f.path, &["update-ref", "refs/heads/bob", &b1], None);
+    // `alias` now resolves to b1; the snapshot never read it.
+    let got = listed(&f, &before, &[query("refs/heads/bob", ZERO, &b1)], 100).await;
+    assert_eq!(ids(&got), [b1.as_str()], "the pinned commit is not new");
+}
+
+#[test]
+fn snapshot_lines_contribute_commits_only() {
+    let c = "a".repeat(40);
+    let t = "b".repeat(40);
+    assert_eq!(snapshot_tip(&format!("{c} commit   ")), Some(c.as_str()));
+    assert_eq!(
+        snapshot_tip(&format!("{t} tag {c} commit ")),
+        Some(c.as_str())
+    );
+    assert_eq!(snapshot_tip(&format!("{t} tag {c} tree ")), None);
+    assert_eq!(snapshot_tip(&format!("{t} tree   ")), None);
+    assert_eq!(
+        snapshot_tip(&format!("{c} commit   refs/heads/main")),
+        None,
+        "symbolic"
+    );
+    assert_eq!(snapshot_tip("garbage"), None);
 }
