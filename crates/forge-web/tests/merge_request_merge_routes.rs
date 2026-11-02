@@ -518,3 +518,257 @@ async fn the_merge_route_refuses_with_its_codes_and_writes_nothing() {
     );
     w.t.drop_now().await;
 }
+
+// ── M3 R5: approvals and approval rules (ADR-0024 §8, §12) ──
+
+impl World {
+    /// olga (the project's Owner) in a web session of her own.
+    async fn owner(&self) -> Caller {
+        let id = self
+            .t
+            .json_rows("SELECT id FROM forge.users WHERE username = 'olga'")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .map(UserId::new)
+            .expect("olga");
+        let session = forge_db::sessions::issue(
+            &self.t.db,
+            &ctx("req-session-olga"),
+            &forge_db::sessions::NewSession {
+                user: id,
+                idle: Duration::from_secs(3600),
+                absolute: Duration::from_secs(8 * 3600),
+                oidc: None,
+            },
+        )
+        .await
+        .expect("session")
+        .session_id;
+        Caller {
+            principal: Principal::authenticated(
+                id,
+                false,
+                true,
+                Credential::Session,
+                forge_auth::AccountKind::Human,
+            ),
+            session: Some(session),
+        }
+    }
+
+    fn rules_uri(&self, tail: &str) -> String {
+        format!("/api/v1/projects/{}/approval-rules{tail}", self.project)
+    }
+}
+
+/// Approve, read the evaluation, withdraw — and the refusals: the author
+/// (FG-REVIEW-0013), a stale head (FG-REVIEW-0008), an agent's token and an
+/// `api`-only token, an outsider (404).
+#[tokio::test]
+async fn the_approval_routes_approve_evaluate_and_withdraw() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        w.dev.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-REVIEW-0013"),
+        "{body}"
+    );
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        olga.clone(),
+        Some(json!({"sha": "a".repeat(40)})),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0008"),
+        "{body}"
+    );
+    for (who, expected) in [
+        (
+            token(w.dev_id, &[Scope::MergeApprove], true),
+            "FG-AUTH-0003",
+        ),
+        (token(w.dev_id, &[Scope::Api], false), "FG-AUTH-0002"),
+    ] {
+        let (status, body) = send(
+            w.router.clone(),
+            "POST",
+            &w.uri("/approve"),
+            who,
+            Some(json!({"sha": w.head})),
+        )
+        .await;
+        assert_eq!(code(&body), expected, "{status} {body}");
+    }
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        w.outsider.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        olga.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["outcome"], "approved");
+    assert_eq!(body["approval"]["head_sha"], w.head);
+    let (status, state) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/approvals"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["approvals"][0]["username"], "olga");
+    assert_eq!(state["blocked_by"], json!([]));
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/unapprove"),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, &body["outcome"]),
+        (StatusCode::OK, &json!("withdrawn")),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}
+
+/// Rules: a Maintainer+ person puts and deletes; a Developer is refused; a
+/// rule blocks the merge route with `approvals_missing` until an approval.
+#[tokio::test]
+async fn the_approval_rule_routes_manage_rules_that_block_the_merge() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let rule = json!({"target_pattern": "refs/heads/main", "required_approvals": 1});
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/review"),
+        w.dev.clone(),
+        Some(rule.clone()),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/review"),
+        olga.clone(),
+        Some(rule.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["name"], "review");
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/Bad%20Name"),
+        olga.clone(),
+        Some(rule),
+    )
+    .await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    let (status, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.rules_uri(""),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["rules"][0]["required_approvals"], 1);
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0007"),
+        "{body}"
+    );
+    // Without a push record nobody can be shown not to be a committer
+    // (committers_unknown, fail closed): record dave's push of the branch.
+    let repo =
+        w.t.json_rows("SELECT id FROM forge.repositories")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .map(forge_core::RepoId::new)
+            .expect("repository");
+    let head = forge_core::ObjectId::parse(&w.head).expect("oid");
+    let recorded = repositories::record_push(
+        &w.t.db,
+        &ChangeContext::new(
+            Actor::User(w.dev_id),
+            RequestId::parse("req-push-dave").expect("id"),
+        ),
+        &forge_core::PushRecord {
+            repository_id: repo,
+            updates: vec![forge_core::PushedRef {
+                name: forge_core::RefName::parse("refs/heads/feature").expect("ref"),
+                old: forge_core::ObjectId::parse(&"0".repeat(40)).expect("oid"),
+                new: head.clone(),
+                kind: forge_core::PushUpdateKind::Create,
+                commits: vec![head],
+                total_commits: 1,
+                total_commits_partial: false,
+            }],
+        },
+    )
+    .await
+    .expect("push record");
+    assert_eq!(recorded, forge_core::PushRecorded::Recorded);
+    let (status, _) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        olga.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let (status, _) = send(
+        w.router.clone(),
+        "DELETE",
+        &w.rules_uri("/review"),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    w.t.drop_now().await;
+}

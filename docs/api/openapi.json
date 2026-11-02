@@ -103,6 +103,270 @@
         ],
         "type": "object"
       },
+      "ApprovalAnswerBody": {
+        "additionalProperties": false,
+        "description": "What an approve or unapprove did.",
+        "properties": {
+          "approval": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApprovalBody"
+              }
+            ]
+          },
+          "counted": {
+            "description": "Approve: whether the approval counts now (never read it as final:\nwhat may merge is `blocked_by` of `GET …/approvals`).",
+            "type": "boolean"
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`approved`, `withdrawn` or `unchanged`.",
+            "type": "string"
+          },
+          "uncounted_reason": {
+            "description": "Why it does not count (`committer`, `committers_unknown`,\n`not_in_rule`, …); `null` when it counts or for an unapprove.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "counted",
+          "uncounted_reason",
+          "approval"
+        ],
+        "type": "object"
+      },
+      "ApprovalBody": {
+        "additionalProperties": false,
+        "description": "One approval.",
+        "properties": {
+          "approval_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "approver_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "head_sha": {
+            "description": "The head and target branch (without `refs/heads/`) it was given for.",
+            "type": "string"
+          },
+          "target_branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval_id",
+          "approver_id",
+          "head_sha",
+          "target_branch",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ApprovalRuleBody": {
+        "additionalProperties": false,
+        "description": "One approval rule.",
+        "properties": {
+          "approval_rule_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "group_ids": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required_approvals": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "target_pattern": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_ids": {
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "approval_rule_id",
+          "name",
+          "target_pattern",
+          "required_approvals",
+          "user_ids",
+          "group_ids"
+        ],
+        "type": "object"
+      },
+      "ApprovalRulesBody": {
+        "additionalProperties": false,
+        "description": "`GET …/approval-rules`.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRuleBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
+      "ApprovalStateBody": {
+        "additionalProperties": false,
+        "description": "`GET …/approvals`.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalStatusBody"
+            },
+            "type": "array"
+          },
+          "blocked_by": {
+            "items": {
+              "$ref": "#/components/schemas/BlockBody"
+            },
+            "type": "array"
+          },
+          "codeowners": {
+            "items": {
+              "$ref": "#/components/schemas/CodeownerStatusBody"
+            },
+            "type": "array"
+          },
+          "config_change_approved": {
+            "description": "A configuration path changed: whether a Maintainer's counted\napproval is there (`null`: none changed).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "description": "The merge request's head (`null` before its first version: nothing\nto approve, nothing evaluated).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RuleStatusBody"
+            },
+            "type": "array"
+          },
+          "target_branch": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "head_sha",
+          "target_branch",
+          "approvals",
+          "rules",
+          "codeowners",
+          "config_change_approved",
+          "blocked_by"
+        ],
+        "type": "object"
+      },
+      "ApprovalStatusBody": {
+        "additionalProperties": false,
+        "description": "One live approval as evaluated now.",
+        "properties": {
+          "approval_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "approver_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "committer_push_audit_id": {
+            "description": "`committer`: the audit row of a push by the approver that carried a\ncommit of the merge request (runbook merge-blocked).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "counted": {
+            "type": "boolean"
+          },
+          "uncounted_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approval_id",
+          "approver_id",
+          "username",
+          "counted",
+          "uncounted_reason",
+          "committer_push_audit_id"
+        ],
+        "type": "object"
+      },
+      "ApproveMergeRequest": {
+        "additionalProperties": false,
+        "description": "`POST …/approve`.",
+        "properties": {
+          "sha": {
+            "description": "The head commit the approver reviewed (required): another head is\nrefused (FG-REVIEW-0008 stale_view).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "type": "object"
+      },
       "BlameBody": {
         "additionalProperties": false,
         "description": "A blamed file.",
@@ -295,6 +559,27 @@
         ],
         "type": "object"
       },
+      "BlockBody": {
+        "additionalProperties": false,
+        "description": "One reason the merge is blocked on the approval side.",
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "`approvals_missing`, `codeowner_approval_missing`,\n`codeowners_invalid`, `config_change_needs_maintainer_approval` or\n`changed_paths_unknown`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "detail"
+        ],
+        "type": "object"
+      },
       "ChangeMember": {
         "additionalProperties": false,
         "description": "`PATCH …/members/{user_id}`: the member's new direct role.",
@@ -318,6 +603,41 @@
         },
         "required": [
           "push_min_role"
+        ],
+        "type": "object"
+      },
+      "CodeownerStatusBody": {
+        "additionalProperties": false,
+        "description": "One CODEOWNERS rule the changed paths need.",
+        "properties": {
+          "line": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owners": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paths": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "satisfied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "line",
+          "pattern",
+          "owners",
+          "paths",
+          "satisfied"
         ],
         "type": "object"
       },
@@ -1812,6 +2132,42 @@
         },
         "type": "object"
       },
+      "PutApprovalRule": {
+        "additionalProperties": false,
+        "description": "`PUT …/approval-rules/{name}`.",
+        "properties": {
+          "groups": {
+            "description": "Group full paths whose direct members may approve for the rule\n(no users and no groups: any eligible person).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "required_approvals": {
+            "description": "1..=20.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "target_pattern": {
+            "description": "A protected-ref pattern (`refs/heads/main`, `refs/heads/release/*`);\nabsent: every target.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "users": {
+            "description": "Usernames who may approve for the rule.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "required_approvals"
+        ],
+        "type": "object"
+      },
       "RefBody": {
         "additionalProperties": false,
         "description": "One branch or tag.",
@@ -2054,6 +2410,36 @@
           "owner"
         ],
         "type": "string"
+      },
+      "RuleStatusBody": {
+        "additionalProperties": false,
+        "description": "One approval rule's state on this merge request.",
+        "properties": {
+          "applies": {
+            "description": "The rule's target pattern matches the merge request's target.",
+            "type": "boolean"
+          },
+          "counted": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "applies",
+          "required",
+          "counted"
+        ],
+        "type": "object"
       },
       "SessionBody": {
         "additionalProperties": false,
@@ -3916,6 +4302,147 @@
         "x-forge-max-body-bytes": 16384
       }
     },
+    "/api/v1/projects/{id}/approval-rules": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_approval_rules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRulesBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a project's approval rules (as reading the project)",
+        "x-forge-action": "ProjectRead"
+      }
+    },
+    "/api/v1/projects/{id}/approval-rules/{name}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_approval_rules_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Delete an approval rule (people only; Maintainer)",
+        "x-forge-action": "ApprovalRuleManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_approval_rules_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutApprovalRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalRuleBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create or replace an approval rule (people only; Maintainer)",
+        "x-forge-action": "ApprovalRuleManage",
+        "x-forge-max-body-bytes": 16384
+      }
+    },
     "/api/v1/projects/{id}/members": {
       "get": {
         "operationId": "get_api_v1_projects_id_members",
@@ -4360,6 +4887,115 @@
         "summary": "Change a merge request's title, description, draft flag or target (the author or Developer)",
         "x-forge-action": "MergeRequestUpdate",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/approvals": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_approvals",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalStateBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Evaluate a merge request's approvals now: how each counts, the rules, the CODEOWNERS rules its changes need, and what blocks the merge (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/approve": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveMergeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalAnswerBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Approve a merge request's head (people only; Developer; never the author; a token needs merge_approve)",
+        "x-forge-action": "MergeRequestApprove",
+        "x-forge-max-body-bytes": 16384
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/close": {
@@ -4980,6 +5616,55 @@
         },
         "summary": "Reopen a closed merge request (the author or Developer; never a merged one)",
         "x-forge-action": "MergeRequestReopen"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/unapprove": {
+      "post": {
+        "operationId": "post_api_v1_projects_id_merge_requests_iid_unapprove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalAnswerBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Withdraw one's own approval of a merge request (as approving)",
+        "x-forge-action": "MergeRequestUnapprove"
       }
     },
     "/api/v1/projects/{id}/merge-requests/{iid}/version-refs/purge": {

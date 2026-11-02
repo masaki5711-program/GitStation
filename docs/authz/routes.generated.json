@@ -248,6 +248,30 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/approval-rules",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ApprovalRuleManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/approval-rules/{name}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ApprovalRuleManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/approval-rules/{name}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MemberList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/members",
@@ -307,6 +331,22 @@
     "action": "MergeRequestUpdate",
     "method": "PATCH",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestApprove",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/approve",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -395,6 +435,14 @@
     "action": "MergeRequestReopen",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/reopen",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestUnapprove",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/unapprove",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
