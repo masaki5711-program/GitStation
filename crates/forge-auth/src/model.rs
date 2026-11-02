@@ -80,6 +80,15 @@ impl Principal {
         self.kind
     }
 
+    /// The same principal with another account kind — tests only (the
+    /// matrix checks that the kind is decisive exactly for the people-only
+    /// actions); production code has no way to change the kind.
+    #[cfg(test)]
+    pub(crate) fn with_kind(mut self, kind: AccountKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
     /// The same caller, with a credential issued for an AI agent
     /// (`tokens.is_agent`, ADR-0017 §4.0). Agents are denied the actions
     /// ADR-0017 keeps for people (`ProjectVisibilityChange` since M1 phase

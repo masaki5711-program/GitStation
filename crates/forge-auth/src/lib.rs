@@ -18,6 +18,7 @@ pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
 mod matrix_rows_discussion;
+mod matrix_rows_people;
 mod merge_request_ctx;
 mod model;
 mod prove;

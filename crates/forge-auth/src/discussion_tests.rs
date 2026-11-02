@@ -163,3 +163,85 @@ fn a_discussion_proof_names_its_thread_and_reconfirms_with_the_same_kind() {
     assert_eq!(reason(&err), "service_account");
     assert_eq!(proof.principal().account_kind(), AccountKind::Human);
 }
+
+/// ADR-0024 §8.4 (M3 R3 review): every action kept for people has a
+/// service account AND a bot deny row in the matrix.
+#[test]
+fn every_people_only_action_denies_service_accounts_and_bots() {
+    use crate::matrix::{Expect, ROWS};
+    let mut missing = Vec::new();
+    for &action in Action::ALL.iter().filter(|a| a.is_people_only()) {
+        for kind in [AccountKind::ServiceAccount, AccountKind::Bot] {
+            let found = ROWS.iter().any(|r| {
+                r.action == action && r.actor.kind() == kind && matches!(r.expect, Expect::Deny(_))
+            });
+            if !found {
+                missing.push(format!("{} × {}", action.name(), kind.as_str()));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "people-only actions without deny rows: {missing:?}"
+    );
+}
+
+/// Each service account / bot deny row of a people-only action is allowed
+/// for the person with the same role and scopes, and denied with the
+/// kind's own reason: the denial comes from the account kind alone, so
+/// removing `people_only` turns the matrix red.
+#[test]
+fn people_only_rows_are_allowed_for_the_human_twin() {
+    use crate::matrix::{Expect, ROWS};
+    let mut checked = 0;
+    for r in ROWS.iter() {
+        let Some(twin) = r.actor.human_twin() else {
+            continue;
+        };
+        if !r.action.is_people_only() || r.expect != Expect::Deny(ErrorCode::Forbidden) {
+            continue;
+        }
+        let denied = authorize(&r.actor.principal(), r.action, &r.fixture.resource(r.actor))
+            .expect_err("a deny row");
+        assert_eq!(reason(&denied), r.actor.kind().as_str(), "{r:?}");
+        assert!(
+            authorize(&twin.principal(), r.action, &r.fixture.resource(twin)).is_ok(),
+            "{:?} {:?}: the human twin {twin:?} must be allowed",
+            r.action,
+            r.fixture
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 26,
+        "every people-only action × 2 kinds ({checked})"
+    );
+}
+
+/// The reverse direction: on every allowed row of an action not kept for
+/// people, a service account or a bot with the same role and scopes is
+/// allowed too (the kind decides nothing there; commenting stays open).
+#[test]
+fn only_people_only_actions_refuse_by_account_kind() {
+    use crate::matrix::{Expect, ROWS};
+    let mut checked = 0;
+    for r in ROWS
+        .iter()
+        .filter(|r| !r.action.is_people_only() && r.expect == Expect::Allow)
+    {
+        for kind in [AccountKind::ServiceAccount, AccountKind::Bot] {
+            let principal = r.actor.principal().with_kind(kind);
+            let resource = r.fixture.resource(r.actor);
+            assert!(
+                authorize(&principal, r.action, &resource).is_ok(),
+                "{:?} {:?} {:?} refused for {}",
+                r.action,
+                r.actor,
+                r.fixture,
+                kind.as_str()
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "{checked}");
+}

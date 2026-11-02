@@ -225,6 +225,31 @@ impl Action {
         )
     }
 
+    /// Kept for people (ADR-0017 §4.0 amendments, ADR-0024 §8.4): an
+    /// agent's token, a service account and a bot are refused whatever
+    /// their role (`authorize()`'s `people_only`, `reason=agent_token` /
+    /// `service_account` / `bot`). The matrix holds a service account and
+    /// a bot deny row for each, allowed for the same person
+    /// (`every_people_only_action_denies_service_accounts_and_bots`).
+    pub fn is_people_only(self) -> bool {
+        matches!(
+            self,
+            Action::ProjectVisibilityChange
+                | Action::ProtectedRefManage
+                | Action::ProjectTransfer
+                | Action::GroupTransfer
+                | Action::UserRename
+                | Action::NamespaceTombstoneRelease
+                | Action::ProjectDelete
+                | Action::ProjectRestore
+                | Action::MemberManage
+                | Action::UserDisable
+                | Action::AdminSessionRevoke
+                | Action::MergeRequestVersionRefsPurge
+                | Action::DiscussionResolve
+        )
+    }
+
     /// Also performed through the git protocol (Smart HTTP). `RepoRead` is
     /// an HTTP route too (`/-/raw`, `/-/archive`, ADR-0015): `true` means
     /// "git does it as well", not "only git" (M1 phase 8 MR4).

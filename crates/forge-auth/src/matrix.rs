@@ -70,6 +70,21 @@ pub(crate) enum Actor {
     ServiceAccountTokenApi,
     /// Developer with an `api` token on a bot account (`users.kind = bot`).
     BotTokenApi,
+    /// Owner with an `api` token (a person; the twin of the service
+    /// account / bot Owner actors, M3 R3 review).
+    OwnerTokenApi,
+    /// The service account / bot twins of `OwnerTokenApi`,
+    /// `MaintainerTokenApi`, `AdminTokenAdmin` and `Admin` (a session: the
+    /// sign-in never gives them one, but `authorize()` must refuse them on
+    /// its own — ADR-0024 §8.4, M3 R3 review).
+    ServiceAccountOwnerTokenApi,
+    ServiceAccountMaintainerTokenApi,
+    ServiceAccountAdminTokenAdmin,
+    ServiceAccountAdminSession,
+    BotOwnerTokenApi,
+    BotMaintainerTokenApi,
+    BotAdminTokenAdmin,
+    BotAdminSession,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -288,6 +303,31 @@ impl Actor {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::Api])
             }
             Actor::BotTokenApi => token_of(AccountKind::Bot, false, &[Scope::Api]),
+            Actor::OwnerTokenApi => token(false, &[Scope::Api]),
+            Actor::ServiceAccountOwnerTokenApi | Actor::ServiceAccountMaintainerTokenApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::Api])
+            }
+            Actor::BotOwnerTokenApi | Actor::BotMaintainerTokenApi => {
+                token_of(AccountKind::Bot, false, &[Scope::Api])
+            }
+            Actor::ServiceAccountAdminTokenAdmin => token_of(
+                AccountKind::ServiceAccount,
+                true,
+                &[Scope::Api, Scope::Admin],
+            ),
+            Actor::BotAdminTokenAdmin => {
+                token_of(AccountKind::Bot, true, &[Scope::Api, Scope::Admin])
+            }
+            Actor::ServiceAccountAdminSession => Principal::authenticated(
+                ME,
+                true,
+                true,
+                Credential::Session,
+                AccountKind::ServiceAccount,
+            ),
+            Actor::BotAdminSession => {
+                Principal::authenticated(ME, true, true, Credential::Session, AccountKind::Bot)
+            }
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -311,12 +351,17 @@ impl Actor {
             | Actor::DevTokenApi
             | Actor::ServiceAccountTokenApi
             | Actor::BotTokenApi => Some(Role::Developer),
-            Actor::Maintainer | Actor::AgentMaintainerTokenApi | Actor::MaintainerTokenApi => {
-                Some(Role::Maintainer)
-            }
-            Actor::Owner | Actor::OwnerTokenReadApi | Actor::AgentOwnerTokenApi => {
-                Some(Role::Owner)
-            }
+            Actor::Maintainer
+            | Actor::AgentMaintainerTokenApi
+            | Actor::MaintainerTokenApi
+            | Actor::ServiceAccountMaintainerTokenApi
+            | Actor::BotMaintainerTokenApi => Some(Role::Maintainer),
+            Actor::Owner
+            | Actor::OwnerTokenReadApi
+            | Actor::AgentOwnerTokenApi
+            | Actor::OwnerTokenApi
+            | Actor::ServiceAccountOwnerTokenApi
+            | Actor::BotOwnerTokenApi => Some(Role::Owner),
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
@@ -325,8 +370,63 @@ impl Actor {
             | Actor::Admin
             | Actor::AdminTokenApi
             | Actor::AdminTokenAdmin
-            | Actor::AgentAdminTokenAdmin => None,
+            | Actor::AgentAdminTokenAdmin
+            | Actor::ServiceAccountAdminTokenAdmin
+            | Actor::ServiceAccountAdminSession
+            | Actor::BotAdminTokenAdmin
+            | Actor::BotAdminSession => None,
         }
+    }
+
+    /// The person with the same role, scopes and administrator flag as a
+    /// service account / bot actor (`None` for every other actor): the
+    /// matrix tests check that each of their denied people-only rows is
+    /// allowed for the twin, so the denial comes from the account kind.
+    pub(crate) fn human_twin(self) -> Option<Actor> {
+        match self {
+            Actor::ServiceAccountTokenApi | Actor::BotTokenApi => Some(Actor::DevTokenApi),
+            Actor::ServiceAccountOwnerTokenApi | Actor::BotOwnerTokenApi => {
+                Some(Actor::OwnerTokenApi)
+            }
+            Actor::ServiceAccountMaintainerTokenApi | Actor::BotMaintainerTokenApi => {
+                Some(Actor::MaintainerTokenApi)
+            }
+            Actor::ServiceAccountAdminTokenAdmin | Actor::BotAdminTokenAdmin => {
+                Some(Actor::AdminTokenAdmin)
+            }
+            Actor::ServiceAccountAdminSession | Actor::BotAdminSession => Some(Actor::Admin),
+            Actor::Anonymous
+            | Actor::Disabled
+            | Actor::DisabledAdmin
+            | Actor::NonMember
+            | Actor::Guest
+            | Actor::Reporter
+            | Actor::Developer
+            | Actor::Maintainer
+            | Actor::Owner
+            | Actor::Admin
+            | Actor::DevTokenReadRepository
+            | Actor::DevTokenWriteRepository
+            | Actor::AgentTokenWriteRepository
+            | Actor::AgentTokenReadApi
+            | Actor::AgentTokenApi
+            | Actor::AgentOwnerTokenApi
+            | Actor::AgentAdminTokenAdmin
+            | Actor::AgentMaintainerTokenApi
+            | Actor::MaintainerTokenApi
+            | Actor::DevTokenApi
+            | Actor::OwnerTokenReadApi
+            | Actor::NonMemberTokenReadApi
+            | Actor::GuestTokenReadApi
+            | Actor::AdminTokenApi
+            | Actor::AdminTokenAdmin
+            | Actor::OwnerTokenApi => None,
+        }
+    }
+
+    /// The account kind the actor's principal carries.
+    pub(crate) fn kind(self) -> AccountKind {
+        self.principal().account_kind()
     }
 }
 
@@ -597,6 +697,8 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
     [
         crate::matrix_rows::BASE_ROWS,
         crate::matrix_rows_discussion::DISCUSSION_ROWS,
+        crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
+        crate::matrix_rows_people::OWNER_TOKEN_ROWS,
     ]
     .concat()
 });

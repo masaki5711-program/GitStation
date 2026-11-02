@@ -84,6 +84,9 @@ pub(crate) const DISCUSSION_ROWS: &[Row] = &[
     row(A::MergeRequestComment, W::DevTokenApi, OTHER_MR, Allow),
     row(A::MergeRequestComment, W::AgentTokenApi, OTHER_MR, Allow),
     row(A::MergeRequestComment, W::ServiceAccountTokenApi, OTHER_MR, Allow),
+    // A bot comments within its role too (MergeRequestComment is not kept
+    // for people; only resolving is).
+    row(A::MergeRequestComment, W::BotTokenApi, OTHER_MR, Allow),
     row(A::MergeRequestComment, W::Guest, OTHER_MR, deny(E::Forbidden)),
     row(A::MergeRequestComment, W::NonMember, mr_on(MP::Internal), deny(E::Forbidden)),
     row(A::MergeRequestComment, W::NonMember, OTHER_MR, deny(E::NotFound)),
@@ -106,6 +109,7 @@ pub(crate) const DISCUSSION_ROWS: &[Row] = &[
     row(A::DiscussionResolve, W::ServiceAccountTokenApi, MINE, deny(E::Forbidden)),
     row(A::DiscussionResolve, W::ServiceAccountTokenApi, THEIRS, deny(E::Forbidden)),
     row(A::DiscussionResolve, W::BotTokenApi, MINE, deny(E::Forbidden)),
+    row(A::DiscussionResolve, W::BotTokenApi, THEIRS, deny(E::Forbidden)),
     row(A::DiscussionResolve, W::Reporter, THEIRS, deny(E::Forbidden)),
     row(A::DiscussionResolve, W::Developer, THEIRS_ON_MY_MR, deny(E::Forbidden)),
     row(A::DiscussionResolve, W::Maintainer, THEIRS_ON_MY_MR, deny(E::Forbidden)),
