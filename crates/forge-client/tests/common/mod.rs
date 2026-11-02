@@ -170,7 +170,10 @@ impl Sandbox {
             "GSTN_CONFIG_DIR".into(),
             self.path().to_string_lossy().to_string(),
         );
-        env.insert("GSTN_CREDENTIAL_STORE".into(), "file".into());
+        // Windows refuses the real `file` store (no 0600 protection), so the
+        // tests use the `test-file` store of the `test-support` feature there.
+        let store = if cfg!(windows) { "test-file" } else { "file" };
+        env.insert("GSTN_CREDENTIAL_STORE".into(), store.into());
         if !host.is_empty() {
             env.insert("GSTN_HOST".into(), host.into());
         }

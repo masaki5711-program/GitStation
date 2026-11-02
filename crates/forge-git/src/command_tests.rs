@@ -96,10 +96,23 @@ fn option_lookalike_cannot_become_a_revision() {
 async fn revision_operand_selects_the_ref_in_real_git_log() {
     let (_h, g) = git();
     let dir = tempfile::tempdir().expect("repo");
-    let sha = repo_with_commit(&g, dir.path()).await;
+    let sha = repo_with_commit(&g, &dir.path().join("work")).await;
+    // Production repositories are bare. Running inside the `.git` of a
+    // working copy makes git take that directory as the work tree, where the
+    // loose ref file `refs/heads/main` makes the operand ambiguous (seen with
+    // git 2.53 on Windows), so read through a bare clone like production.
+    let bare = dir.path().join("bare.git");
+    g.command("clone")
+        .arg("--bare")
+        .arg("--quiet")
+        .path(dir.path().join("work"))
+        .path(&bare)
+        .output()
+        .await
+        .expect("clone --bare");
     let out = g
         .command("log")
-        .repo(dir.path().join(".git"))
+        .repo(&bare)
         .arg("--format=%H")
         .revision(&RefName::parse("refs/heads/main").expect("ref"))
         .output()

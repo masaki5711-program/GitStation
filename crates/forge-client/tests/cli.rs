@@ -124,6 +124,32 @@ fn not_logged_in_exits_3() {
     assert!(srv.seen().is_empty(), "no request without a token");
 }
 
+#[cfg(windows)]
+#[test]
+fn file_credential_store_is_refused_on_windows() {
+    let srv = user_server();
+    let sb = Sandbox::new();
+    let o = sb.run_env(
+        &srv.url,
+        &["auth", "status", "--json"],
+        "",
+        &[("GSTN_CREDENTIAL_STORE", "file")],
+    );
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    let e = o.err_json();
+    assert_eq!(e["error_code"], "FG-CLI-0005");
+    assert!(
+        e["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("reason=file_unsupported_on_windows")),
+        "{e}"
+    );
+    assert!(
+        srv.seen().is_empty(),
+        "no request when the store is refused"
+    );
+}
+
 #[test]
 fn gstn_token_env_is_used_and_reported_as_its_source() {
     let srv = user_server();

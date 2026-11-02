@@ -22,7 +22,10 @@ async fn assert_refused(root: &StorageRoot, git: &Git, raw: i64, token: Uuid, re
 
 fn append_include(repo: &Path, section: &str, included: &Path) {
     let mut config = std::fs::read_to_string(repo.join("config")).expect("read config");
-    config.push_str(&format!("[{section}]\n\tpath = {}\n", included.display()));
+    // git config reads `\` as an escape: a raw Windows path is a bad config
+    // line. git accepts `/` separators on every OS.
+    let path = included.display().to_string().replace('\\', "/");
+    config.push_str(&format!("[{section}]\n\tpath = {path}\n"));
     std::fs::write(repo.join("config"), config).expect("write config");
 }
 
