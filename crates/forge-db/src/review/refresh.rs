@@ -10,7 +10,9 @@
 //! - When the list was cut (`refs_truncated = true`, more than
 //!   `MAX_LISTED_REFS` refs), EVERY open merge request of the project is
 //!   re-checked: nothing is missed silently (a job whose branch did not
-//!   move writes nothing).
+//!   move writes nothing). One push enqueues at most
+//!   [`MAX_REFRESH_FANOUT`] jobs (most recently updated first); more is
+//!   logged at warn (`forge.review.refresh_fanout_capped`).
 //!
 //! Each job's dedup key is `mr_refresh:<merge_request_id>:push:<seq>`: a
 //! retried step never doubles a job, and each push gets its own. The pusher
@@ -27,6 +29,11 @@ use super::versions::{refresh_job, RefreshRequest, RefreshTrigger};
 use crate::jobs::enqueue_on;
 use crate::query_error;
 use crate::subscribers::{DerivedTx, HandleFuture, Ordering, SourceEvent, Subscriber};
+
+/// The most version jobs one push enqueues (the most recently updated open
+/// merge requests); beyond it `forge.review.refresh_fanout_capped` is
+/// logged at warn.
+pub const MAX_REFRESH_FANOUT: i64 = 500;
 
 /// The subscriber's name (its row in forge.event_subscribers).
 pub const REFRESH_SUBSCRIBER: &str = "merge-request-refresh";
@@ -84,15 +91,36 @@ impl MergeRequestRefresh {
         if moved.as_ref().is_some_and(Vec::is_empty) {
             return Ok(());
         }
-        let ids: Vec<i64> = sqlx::query_scalar(
+        let truncated = moved.is_none();
+        let cap = usize::try_from(MAX_REFRESH_FANOUT).unwrap_or(usize::MAX);
+        let mut ids: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM forge.merge_requests WHERE project_id = $1 AND state = 'open' \
-             AND ($2::text[] IS NULL OR source_branch = ANY($2)) ORDER BY id",
+             AND ($2::text[] IS NULL OR source_branch = ANY($2)) \
+             ORDER BY updated_at DESC, id LIMIT $3",
         )
         .bind(project.get())
         .bind(moved)
+        .bind(MAX_REFRESH_FANOUT + 1)
         .fetch_all(tx.conn())
         .await
         .map_err(|e| query_error("review.refresh_targets", e))?;
+        if ids.len() > cap {
+            ids.truncate(cap);
+            // Never silent: the rest are refreshed by their next push, open
+            // or reopen (ADR-0024, R1b notes).
+            tracing::warn!(
+                target: "forge_db",
+                event = "forge.review.refresh_fanout_capped",
+                request_id = %event.request_id,
+                project_id = project.get(),
+                source_seq = event.seq,
+                refs_truncated = truncated,
+                enqueued = ids.len(),
+                "more open merge requests than one push re-checks; the most recently updated were enqueued"
+            );
+        }
+        // The job order does not matter; keep it stable for the logs.
+        ids.sort_unstable();
         let pushed_by = (event.actor_kind == "user")
             .then_some(event.actor_user_id)
             .flatten()
