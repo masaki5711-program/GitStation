@@ -284,6 +284,22 @@ connection, mapping driver errors to registered codes, migrations
   `repository.pushed` for the open merge requests from the moved branches, or every open one
   when `refs_truncated`. The project purge deletes the versions. Tests
   `review/version_tests.rs`.
+- **Merges** (`review/merges/`, M3 R4, ADR-0024 §4; migration 20261110100000, which also
+  widens `tokens_scopes_known` with `merge_execute`): `merge_request_merges` (derived: one row
+  per attempt — method, state queued / prepared / executing / applied / superseded / failed,
+  the requester and the credential's kind and id only, the head asked for, `expected_old` /
+  `new_sha` / `executing_at` set once, `reason` / `error_code`, `source_outcome`; guard
+  `merge_request_merges_guard`; one live attempt per merge request, partial unique index
+  `merge_request_merges_one_live`). `request_merge_mr_decided` (decide on the locked facts
+  plus the protection rules, the stored mergeability, the live attempt and the credential —
+  `MergeGate` —, then the `queued` row and the job `merge_request.merge`, dedup
+  `mr_merge:<merge_id>`, FG-REVIEW-0011 for a live one), `merge_gate_decided` (tx1a / tx1b; a
+  refusal supersedes in the same transaction), `fence_merge`, `executing_elapsed`,
+  `finish_merge` (tx2: applied, the merge request merged, `merge_request.merged` +
+  `repository.pushed`, dedup by the merge id), `record_source_deleted`, `end_merge`,
+  `set_source_outcome`, `stuck_merges`, `lock_merges` (`merge:<repo_id>`, alive by `pg_locks`),
+  `account_identity`; close / retarget / draft toggle refuse a live merge. Tests
+  `review/merge_tests.rs`.
 - **Discussions** (`review/discussions/`, M3 R3, ADR-0024 §6, §12; migration
   20261109100000): `merge_request_discussions` (kind general / inline; an inline one's
   version — a composite foreign key to the versions —, path, side old / new and line;

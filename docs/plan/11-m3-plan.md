@@ -443,7 +443,7 @@ ADR-0024 と、R1 の実装の地図（code-explorer）で決めた。計画の 
 9. **承認**（R5）は (head_sha, target_branch) に結ぶ（ターゲットを変えて承認を流用させない）。承認とマージには新しいトークンのスコープ `merge_approve` / `merge_execute` が要る（ADR-0017 §4.0、`api` では足りない。互いにも満たさない。スコープの CHECK を広げる追記のマイグレーションは変種を足す MR と同じ: R4 が `merge_execute`、R5 が `merge_approve`）。コミットした人の承認は数えない（既定で有効）、`.forge/**` と CODEOWNERS を変える MR は Maintainer の承認が要る（ADR-0017）。
 10. **マージ**（R4）: tx1a（再判定）→ トランザクションの外で `merge-tree`・`commit-tree` → tx1b（再判定・`prepared` の行）→ フェンス（ロックの確認、`prepared → executing`）→ `update-ref` の CAS → tx2（`merged`・監査・`repository.pushed`・`merge_request.merged`、dedup は `merge_id`）。`prepared` / `executing` のまま残ったものは確かめ直すジョブが片づける（`executing` は git に聞く。ADR-0024 §4.2）。`update-ref` と `commit-tree` も `core.hooksPath` を空のディレクトリに固定する。
 11. **作業項目のリンク**のマージ条件は、I1 が `work_items` を入れるまで設定できない（R6 では選べない形にする）。
-12. **未決（ADR-0024 に記載）**: ADR-0008 が M3 に送った pre-receive / post-receive のフックに MR が無い（X8 だけ）。M3 後半の X8 で扱うか、R4 のマージの経路の判定で足りるかを R4 の前に決める。
+12. **決定（R4、ADR-0024「実装で決めたこと（R4）」）**: マージの経路はサーバーのフックに頼らない。R4 はロックの下で、push の経路と同じ保護 ref の判定（`authorize()` と保護の規則）と、記録した head・target の先端を生きた値と照らし直す。push の経路の pre-receive / post-receive のフック（ADR-0008 が M3 に送ったもの）は M3 後半の X8 で扱う。
 13. **M3-0 に MR を足す**（設計レビュー、ADR-0024 末尾の表の 25）: P6 `fix/git-browse-reachability`（R1 必須、R1a の前。評価役 `git-protocol-reviewer`・`security-reviewer`・`rust-reviewer`）。閲覧の API の SHA の指定に到達可能性の検査を足す。§5.1 の表に行を足した。
 14. **実績から作るスケジュール（2026-11-02 追加）**: ロジックを含めて計画 12（`12-schedule-from-actuals.md`）に分けた。M3 と並行するのは Kanflow の E0（テンプレートの `key` と基準の保存）だけで、E1〜E5 は M3 後半〜M4、E6 は M5。GitStation の G1（開発状況 API の MR の時刻と規模）は I1 の後。
 15. **L-5（衝突とブロックの解消案）を M5 へ前倒し（2026-11-02）**: 計画 01 §6 の L-5 を Must・M5 にし、止まっている理由（必須チェックの失敗・承認の不足・古いブランチ）の解消案まで広げた。適用はすべて人が判断する。
