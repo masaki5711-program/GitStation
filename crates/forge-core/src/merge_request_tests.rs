@@ -135,7 +135,8 @@ fn every_transition_maps_to_its_own_event() {
             "merge_request.updated",
             "merge_request.pushed",
             "merge_request.conflict_detected",
-            "merge_request.conflict_resolved"
+            "merge_request.conflict_resolved",
+            "merge_request.commented"
         ]
     );
 }
@@ -325,4 +326,53 @@ fn check_reasons_round_trip_and_only_deterministic_ones_answer_a_pair() {
             "no_version"
         ]
     );
+}
+
+/// M3 R3 (ADR-0024 §6): comments and thread resolution are one transition
+/// (`merge_request.commented`) whose `data.action` tells them apart; ids
+/// and flags only, never the body or the path. A note dedups on its id, a
+/// resolution on the discussion and its revision.
+#[test]
+fn comments_are_one_transition_with_an_action_and_ids_only() {
+    use crate::{CommentAction, DiscussionId, DiscussionKind, NoteId};
+    let added = MergeRequestChange::Commented {
+        merge_request: MergeRequestId::new(7),
+        iid: 3,
+        action: CommentAction::NoteAdded,
+        discussion: DiscussionId::new(11),
+        kind: DiscussionKind::Inline,
+        note: Some(NoteId::new(21)),
+        discussion_started: true,
+        revision: 1,
+    };
+    assert_eq!(added.transition(), MergeRequestTransition::Comment);
+    assert_eq!(added.action(), "merge_request.commented");
+    assert_eq!(added.dedup_prefix(), "merge_request_note_added");
+    assert_eq!(
+        added.to_value(),
+        json!({
+            "merge_request_id": 7,
+            "iid": 3,
+            "action": "note_added",
+            "discussion_id": 11,
+            "kind": "inline",
+            "note_id": 21,
+            "discussion_started": true,
+        })
+    );
+    let resolved = MergeRequestChange::Commented {
+        merge_request: MergeRequestId::new(7),
+        iid: 3,
+        action: CommentAction::ThreadResolved,
+        discussion: DiscussionId::new(11),
+        kind: DiscussionKind::General,
+        note: None,
+        discussion_started: false,
+        revision: 2,
+    };
+    assert_eq!(resolved.dedup_prefix(), "merge_request_thread_resolved");
+    assert_eq!(resolved.to_value()["note_id"], serde_json::Value::Null);
+    let details = AuditDetails::MergeRequest(resolved);
+    assert_eq!(details.event_type(), Some(EventType::MergeRequestCommented));
+    assert_eq!(details.event_payload(), details.to_value());
 }

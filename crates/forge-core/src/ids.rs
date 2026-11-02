@@ -61,6 +61,15 @@ id_type!(
     /// request's number: that is its per-project `iid`.
     MergeRequestId
 );
+id_type!(
+    /// A row of forge.merge_request_discussions (M3 R3): one thread of a
+    /// merge request, general or on a line of a version's diff.
+    DiscussionId
+);
+id_type!(
+    /// A row of forge.merge_request_notes (M3 R3): one comment in a thread.
+    NoteId
+);
 
 #[cfg(test)]
 mod tests {

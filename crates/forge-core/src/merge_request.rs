@@ -11,8 +11,9 @@
 //! `conflict_resolved` (the mergeability job, [`MergeabilityStatus`]);
 //! `merged` and the rest join with their writers.
 
+use crate::discussion::{CommentAction, DiscussionKind};
 use crate::event_type::EventType;
-use crate::ids::{MergeRequestId, UserId};
+use crate::ids::{DiscussionId, MergeRequestId, NoteId, UserId};
 use crate::push::ObjectId;
 use crate::ref_name::RefName;
 
@@ -84,6 +85,9 @@ pub enum MergeRequestTransition {
     ConflictDetect,
     /// The mergeability check flipped cannot -> can be merged (M3 R2).
     ConflictResolve,
+    /// A note was added to a discussion, or a discussion was resolved or
+    /// unresolved (M3 R3: one event type, `data.action` tells which).
+    Comment,
 }
 
 impl MergeRequestTransition {
@@ -97,6 +101,7 @@ impl MergeRequestTransition {
         Self::Push,
         Self::ConflictDetect,
         Self::ConflictResolve,
+        Self::Comment,
     ];
 
     /// The one event the transition publishes.
@@ -110,6 +115,7 @@ impl MergeRequestTransition {
             Self::Push => EventType::MergeRequestPushed,
             Self::ConflictDetect => EventType::MergeRequestConflictDetected,
             Self::ConflictResolve => EventType::MergeRequestConflictResolved,
+            Self::Comment => EventType::MergeRequestCommented,
         }
     }
 }
@@ -187,6 +193,21 @@ pub enum MergeRequestChange {
         head_sha: ObjectId,
         target_sha: ObjectId,
     },
+    /// `merge_request.commented` (M3 R3): `action` on discussion
+    /// `discussion` (`note`: the note added, `None` for a resolution;
+    /// `discussion_started`: the note opened the discussion). `revision` is
+    /// the discussion's revision after the change (the dedup key of a
+    /// resolution). Ids and flags only: never the body or the path.
+    Commented {
+        merge_request: MergeRequestId,
+        iid: i64,
+        action: CommentAction,
+        discussion: DiscussionId,
+        kind: DiscussionKind,
+        note: Option<NoteId>,
+        discussion_started: bool,
+        revision: i64,
+    },
 }
 
 impl MergeRequestChange {
@@ -201,6 +222,7 @@ impl MergeRequestChange {
             Self::Pushed { .. } => MergeRequestTransition::Push,
             Self::ConflictDetected { .. } => MergeRequestTransition::ConflictDetect,
             Self::ConflictResolved { .. } => MergeRequestTransition::ConflictResolve,
+            Self::Commented { .. } => MergeRequestTransition::Comment,
         }
     }
 
@@ -214,7 +236,8 @@ impl MergeRequestChange {
             | Self::Reopened { merge_request, .. }
             | Self::Pushed { merge_request, .. }
             | Self::ConflictDetected { merge_request, .. }
-            | Self::ConflictResolved { merge_request, .. } => *merge_request,
+            | Self::ConflictResolved { merge_request, .. }
+            | Self::Commented { merge_request, .. } => *merge_request,
         }
     }
 
@@ -227,7 +250,8 @@ impl MergeRequestChange {
     /// (`<prefix>:<merge_request_id>:<revision>`, server ids only;
     /// `merge_request_pushed:<merge_request_id>:<head_sha>` for a push,
     /// ADR-0024 §6; `<prefix>:<merge_request_id>:<check_seq>` for a
-    /// conflict flip, M3 R2).
+    /// conflict flip, M3 R2; [`CommentAction::dedup_prefix`] for a
+    /// comment or a resolution, M3 R3).
     pub fn dedup_prefix(&self) -> &'static str {
         match self {
             Self::Opened { .. } => "merge_request_opened",
@@ -238,6 +262,7 @@ impl MergeRequestChange {
             Self::Pushed { .. } => "merge_request_pushed",
             Self::ConflictDetected { .. } => "merge_request_conflict_detected",
             Self::ConflictResolved { .. } => "merge_request_conflict_resolved",
+            Self::Commented { action, .. } => action.dedup_prefix(),
         }
     }
 
@@ -248,7 +273,9 @@ impl MergeRequestChange {
     /// `{"merge_request_id","iid","version","head_sha","previous_head","pushed_by"}`,
     /// ConflictDetected `{"merge_request_id","iid","check_seq","head_sha","target_sha",
     /// "conflict_files","files_truncated"}`, ConflictResolved
-    /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`.
+    /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`, Commented
+    /// `{"merge_request_id","iid","action","discussion_id","kind","note_id",
+    /// "discussion_started"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -339,6 +366,24 @@ impl MergeRequestChange {
                 "check_seq": check_seq,
                 "head_sha": head_sha.as_str(),
                 "target_sha": target_sha.as_str(),
+            }),
+            Self::Commented {
+                merge_request,
+                iid,
+                action,
+                discussion,
+                kind,
+                note,
+                discussion_started,
+                revision: _,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "action": action.as_str(),
+                "discussion_id": discussion.get(),
+                "kind": kind.as_str(),
+                "note_id": note.map(NoteId::get),
+                "discussion_started": discussion_started,
             }),
         }
     }
