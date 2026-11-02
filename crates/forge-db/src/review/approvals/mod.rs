@@ -6,8 +6,8 @@
 //!   the live approvals with each approver's facts **as they are now** —
 //!   active, kind, role on the project, direct groups — and the project's
 //!   rules), [`approval_facts`] (the same on the read pool, the approval
-//!   state route), [`approval_rules`], [`push_coverage`] (the push records
-//!   that carried a range's commits, ADR-0024 §8.3) and [`owners`] (the
+//!   state route), [`approval_rules`], [`range_pushers`] (the pushers of a range's commits
+//!   from `push_commits`, ADR-0024 §8.3) and [`owners`] (the
 //!   users and groups a CODEOWNERS file names).
 //! - Commands (`commands.rs`): [`approve_mr_decided`] /
 //!   [`unapprove_mr_decided`], decided inside their transaction like every
@@ -282,167 +282,64 @@ pub async fn approval_rules(
     .await
 }
 
-/// One ref update of a push record that may have carried a range's
-/// commits (ADR-0024 §8.3).
+/// One pusher of a commit (M3 R5 round 4: a `push_commits` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PushedEntry {
-    /// The audit row (the evidence shown with `committer`).
-    pub audit_id: i64,
-    /// Who pushed (the replayed pusher for a runbook replay).
-    pub pusher: Option<UserId>,
-    /// The ref's new commit (`None` for a delete).
-    pub new: Option<ObjectId>,
-    /// The new commits the record lists for the ref.
-    pub commits: Vec<ObjectId>,
-    /// The record does not list every new commit of the ref.
-    pub commits_truncated: bool,
+pub struct CommitPusher {
+    pub commit: ObjectId,
+    pub pusher: UserId,
+    /// The `repository.pushed` audit row of the push (the evidence shown
+    /// with `committer`; `None` when it cannot be found).
+    pub audit_id: Option<i64>,
 }
 
-/// What the push records say about a range of commits.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PushCoverage {
-    /// The ref updates that name a range commit (`new` or listed) or whose
-    /// list is cut.
-    pub entries: Vec<PushedEntry>,
-    /// A record whose refs were cut (`refs_truncated`) and whose unlisted
-    /// ref updates were not kept (written before push_unlisted_refs): some
-    /// ref updates are unknown.
-    pub refs_truncated: bool,
-    /// More matching entries than the cap: the coverage is incomplete.
-    pub over_cap: bool,
-}
-
-/// The most entries [`push_coverage`] reads from each source (the listed
-/// ref updates, and the distinct (tip, pusher) pairs of the unlisted ones).
-/// The cut pushes of the whole repository are among them; git filters them
-/// by reach in one call before the 16-entry cap of the committer rule
-/// applies, so tag or branch churn counts only here (R5 round 3: a sanity
-/// bound far above real repositories — past it the committers are
-/// unknown). Listed commits are returned only when they are in the range,
-/// so an entry stays small. Read through the partial index
-/// `audit_log_pushes` (migration 20261111100100).
-pub const MAX_PUSH_ENTRIES: i64 = 200_000;
-
-#[derive(sqlx::FromRow)]
-struct EntryRow {
-    id: i64,
-    pusher: Option<i64>,
-    refs_truncated: Option<bool>,
-    new: Option<String>,
-    commits_truncated: Option<bool>,
-    commits: Vec<String>,
-}
-
-/// The `repository.pushed` records of repository `repo` of `project` whose
-/// ref updates name one of `range` (as `new` or a listed commit), or whose
-/// commit list or ref list is cut (ADR-0024 §8.3; the evaluation decides
-/// what they mean). One statement on the read pool (the audit log's
-/// `(project_id, occurred_at)` index narrows it to the project).
-pub async fn push_coverage(
+/// The pushers of the commits of `range` in repository `repo` of `project`
+/// (ADR-0024 §8.3, M3 R5 round 4): one indexed statement on the read pool
+/// over `push_commits`, whatever the repository's other history. A range
+/// commit with no row is absent from the answer (the caller fails closed).
+pub async fn range_pushers(
     db: &Db,
     project: ProjectId,
     repo: RepoId,
     range: &[ObjectId],
-) -> Result<PushCoverage, ForgeError> {
-    const QUERY: &str = "review.push_coverage";
-    let range: Vec<&str> = range.iter().map(ObjectId::as_str).collect();
-    let rows: Vec<EntryRow> = db
+) -> Result<Vec<CommitPusher>, ForgeError> {
+    const QUERY: &str = "review.range_pushers";
+    if range.is_empty() {
+        return Ok(Vec::new());
+    }
+    let shas: Vec<&str> = range.iter().map(ObjectId::as_str).collect();
+    let rows: Vec<(String, i64, Option<i64>)> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT a.id, \
-                   COALESCE((a.details -> 'replayed_from' ->> 'user_id')::bigint, a.actor_user_id) \
-                     AS pusher, \
-                   ((a.details ->> 'refs_truncated')::boolean \
-                     AND NOT COALESCE((a.details ->> 'unlisted_kept')::boolean, false)) \
-                     AS refs_truncated, \
-                   r.value ->> 'new' AS new, \
-                   (r.value ->> 'commits_truncated')::boolean AS commits_truncated, \
-                   ARRAY(SELECT c FROM jsonb_array_elements_text(COALESCE(r.value -> 'commits', '[]')) \
-                     AS c WHERE c = ANY($3)) AS commits \
-                 FROM forge.audit_log a \
-                 LEFT JOIN LATERAL jsonb_array_elements(COALESCE(a.details -> 'refs', '[]')) r \
-                   ON true \
-                 WHERE a.project_id = $1 AND a.action = 'repository.pushed' \
-                   AND a.outcome = 'succeeded' \
-                   AND (a.details ->> 'repository_id')::bigint = $2 \
-                   AND ((r.value ->> 'new') = ANY($3) \
-                     OR COALESCE(r.value -> 'commits', '[]') ?| $3 \
-                     OR COALESCE((r.value ->> 'commits_truncated')::boolean, true) \
-                     OR COALESCE((a.details ->> 'refs_truncated')::boolean, false)) \
-                 ORDER BY a.id LIMIT $4",
+                "SELECT p.commit_sha, p.pusher_id, \
+                   (SELECT min(a.id) FROM forge.audit_log a \
+                    WHERE a.request_id = p.request_id AND a.project_id = $1 \
+                      AND a.action = 'repository.pushed') \
+                 FROM forge.push_commits p \
+                 WHERE p.repository_id = $2 AND p.commit_sha = ANY($3)",
             )
             .bind(project.get())
             .bind(repo.get())
-            .bind(&range)
-            .bind(MAX_PUSH_ENTRIES + 1)
+            .bind(&shas)
             .fetch_all(db.pool().executor())
             .await
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    // M3 R5 re-review round 2: the ref updates a record did not list
-    // (push_unlisted_refs) are entries too, with an unknown commit list.
-    const UNLISTED: &str = "review.push_coverage_unlisted";
-    let unlisted: Vec<(Option<i64>, Option<i64>, String)> = db
-        .within(UNLISTED, async {
-            sqlx::query_as(
-                "SELECT (SELECT min(a.id) FROM forge.audit_log a \
-                   WHERE a.project_id = $1 AND a.request_id = min(u.request_id) \
-                     AND a.action = 'repository.pushed'), \
-                   u.pusher_id, u.new_sha \
-                 FROM forge.push_unlisted_refs u \
-                 WHERE u.project_id = $1 AND u.repository_id = $2 \
-                 GROUP BY u.new_sha, u.pusher_id ORDER BY min(u.id) LIMIT $3",
-            )
-            .bind(project.get())
-            .bind(repo.get())
-            .bind(MAX_PUSH_ENTRIES + 1)
-            .fetch_all(db.pool().executor())
-            .await
-            .map_err(|e| read_query_error(UNLISTED, e))
+    rows.into_iter()
+        .map(|(sha, pusher, audit_id)| {
+            Ok(CommitPusher {
+                commit: ObjectId::parse(&sha).map_err(|_| {
+                    ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "stored_push_commit_invalid")
+                })?,
+                pusher: UserId::new(pusher),
+                audit_id,
+            })
         })
-        .await?;
-    let over_cap = rows.len() as i64 > MAX_PUSH_ENTRIES || unlisted.len() as i64 > MAX_PUSH_ENTRIES;
-    let mut coverage = PushCoverage {
-        over_cap,
-        ..PushCoverage::default()
-    };
-    for (audit_id, pusher, new) in unlisted.into_iter().take(MAX_PUSH_ENTRIES as usize) {
-        coverage.entries.push(PushedEntry {
-            audit_id: audit_id.unwrap_or(0),
-            pusher: pusher.map(UserId::new),
-            new: ObjectId::parse(&new).ok().filter(|n| !n.is_zero()),
-            commits: Vec::new(),
-            commits_truncated: true,
-        });
-    }
-    for row in rows.into_iter().take(MAX_PUSH_ENTRIES as usize) {
-        coverage.refs_truncated |= row.refs_truncated.unwrap_or(false);
-        if row.new.is_none() && row.commits.is_empty() {
-            // A record with no listed ref (its flag is all it says).
-            continue;
-        }
-        let new = row
-            .new
-            .as_deref()
-            .and_then(|n| ObjectId::parse(n).ok())
-            .filter(|n| !n.is_zero());
-        coverage.entries.push(PushedEntry {
-            audit_id: row.id,
-            pusher: row.pusher.map(UserId::new),
-            new,
-            commits: row
-                .commits
-                .iter()
-                .filter_map(|c| ObjectId::parse(c).ok())
-                .collect(),
-            commits_truncated: row.commits_truncated.unwrap_or(true),
-        });
-    }
-    Ok(coverage)
+        .collect()
 }
 
-/// The users and groups a CODEOWNERS file names, resolved now.
+// The users and groups a CODEOWNERS file names, resolved now.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Owners {
     /// username → user, active users only (R5 review: a disabled account

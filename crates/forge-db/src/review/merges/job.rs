@@ -445,10 +445,30 @@ pub async fn finish_merge(
             method: locked.method,
             target_branch: locked.target_branch.clone(), // clone: the change owns its name
             target_sha: expected_old,
-            merged_sha: new_sha,
+            merged_sha: new_sha.clone(), // clone: the push commits row below needs it too
             head_sha: locked.head_sha.clone(), // clone: the change owns its id
             merged_by: locked.requested_by,
         };
+        // M3 R5 round 4 (ADR-0024 §8.3): a merge or squash commit is a
+        // commit this "push" introduced, by the requester (the head's
+        // commits were pushed before and keep their rows).
+        if locked.method != forge_core::MergeMethod::FastForward {
+            let (project, repo, user) =
+                (attempt.project_id, push.repository_id, locked.requested_by);
+            let request_id = ctx.request_id.as_str().to_owned();
+            let merged = std::slice::from_ref(&new_sha);
+            tx.step(|c| async move {
+                crate::repositories::insert_push_commits(
+                    c,
+                    (project, repo),
+                    &request_id,
+                    user,
+                    merged,
+                )
+                .await
+            })
+            .await?;
+        }
         let pushed = AuditDetails::RepositoryPushed {
             project_id: attempt.project_id,
             repository_id: push.repository_id,

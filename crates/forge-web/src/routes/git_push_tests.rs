@@ -132,7 +132,8 @@ async fn run(fail: u32, then: PushRecorded) -> (u32, Vec<Value>) {
         .with_writer(move || writer.clone())
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
-    r.record(&record()).await;
+    r.record(&record(), &forge_core::PushedCommits::unknown())
+        .await;
     (flaky.calls.load(Ordering::SeqCst), buf.events())
 }
 

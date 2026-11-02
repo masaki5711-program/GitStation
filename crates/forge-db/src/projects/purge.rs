@@ -455,6 +455,13 @@ async fn finish_steps(
     // unlisted ref updates (re-review round 2).
     delete_rows(
         tx,
+        "DELETE FROM forge.push_commits WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_commits",
+    )
+    .await?;
+    delete_rows(
+        tx,
         "DELETE FROM forge.push_unlisted_refs WHERE project_id = $1",
         project.get(),
         "projects.purge.finish.push_unlisted_refs",

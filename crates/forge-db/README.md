@@ -316,7 +316,9 @@ connection, mapping driver errors to registered codes, migrations
   every live approval in their transaction (one `merge_request.unapproved` each),
   `put_approval_rule_mr_decided` / `remove_approval_rule_mr_decided` (audit only),
   `approval_facts` (approvers' active / kind / role / direct groups now; also in `MergeGate`),
-  `push_coverage` (the `repository.pushed` audit rows naming a range's commits),
+  `range_pushers` (M3 R5 round 4: the pushers of a range's commits from `push_commits`,
+  which the push record fills with every commit a push introduced — `record_push_with_commits`;
+  `listed_commits` for callers without git; a merge records its own commit),
   `owners` (CODEOWNERS names → users / groups). Tests `review/approval_tests.rs`.
 - **Discussions** (`review/discussions/`, M3 R3, ADR-0024 §6, §12; migration
   20261109100000): `merge_request_discussions` (kind general / inline; an inline one's

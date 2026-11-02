@@ -48,6 +48,8 @@ guarded_functions = [
     "merge_request_approvals_guard",
     # M3 R5 re-review: a push's unlisted ref updates are never changed.
     "push_unlisted_refs_guard",
+    # M3 R5 round 4: the commits a push introduced are never changed.
+    "push_commits_guard",
 ]
 
 [tables.events]
@@ -338,6 +340,17 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 
+# M3 R5 round 4: the commits each push introduced (the committer rule's source).
+[tables.push_commits]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# M3 R5 round 2, unused since round 4 (no reader, no writer; kept append-only).
 [tables.push_unlisted_refs]
 guarded = false
 kind = "audited"

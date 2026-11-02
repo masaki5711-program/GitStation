@@ -101,6 +101,9 @@ pub const DRAIN_MAX: u64 = 64 * 1024 * 1024;
 /// The fast-forward check before git runs, and each of the two reads after
 /// the push (kinds, commits).
 pub const PUSH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// The bound of listing the commits a push introduced (M3 R5 round 4); past
+/// it the record is `push_commits_incomplete`.
+pub const INTRODUCED_TIMEOUT: Duration = Duration::from_secs(30);
 /// Recording an applied push: attempts and their common budget.
 pub const RECORD_ATTEMPTS: u32 = 3;
 pub const RECORD_BUDGET: Duration = Duration::from_secs(30);
@@ -929,7 +932,49 @@ impl Receiver {
         if let Err(err) = line.log_as("final", source) {
             self.log.failure(err);
         }
-        self.record(&record).await;
+        let commits = self.introduced(&record).await;
+        self.record(&record, &commits).await;
+    }
+
+    /// The commits the push introduced (M3 R5 round 4, ADR-0024 §8.3: the
+    /// committer rule's `push_commits` rows): every commit no ref reached
+    /// before the push, at most [`forge_core::MAX_PUSHED_COMMITS`]. A git
+    /// failure is logged once and recorded as incomplete (no rows: the
+    /// merge requests whose range holds those commits have unknown
+    /// committers).
+    async fn introduced(&self, record: &PushRecord) -> forge_core::PushedCommits {
+        let queries: Vec<CommitQuery> = record
+            .updates
+            .iter()
+            .map(|u| CommitQuery {
+                name: u.name.clone(), // clone: the query owns its copy
+                old: u.old.as_str().to_owned(),
+                new: u.new.as_str().to_owned(),
+            })
+            .collect();
+        match self
+            .smart
+            .git
+            .introduced_commits(
+                &self.smart.storage,
+                self.repository.id,
+                &queries,
+                &self.principal,
+                forge_core::MAX_PUSHED_COMMITS,
+                INTRODUCED_TIMEOUT,
+            )
+            .await
+        {
+            Ok(found) => forge_core::PushedCommits {
+                commits: found.commits,
+                complete: found.complete,
+            },
+            Err(err) => {
+                self.log
+                    .failure(err.with_context("phase", "push_introduced_commits"));
+                forge_core::PushedCommits::unknown()
+            }
+        }
     }
 
     /// The record of the applied updates: kinds and commits from git.
@@ -1073,7 +1118,7 @@ impl Receiver {
 
     /// `record_push`, [`RECORD_ATTEMPTS`] within [`RECORD_BUDGET`];
     /// `FG-GIT-0012` when every attempt failed.
-    async fn record(&self, record: &PushRecord) {
+    async fn record(&self, record: &PushRecord, commits: &forge_core::PushedCommits) {
         let deadline = Instant::now() + RECORD_BUDGET;
         let mut attempts = 0;
         let mut last = None;
@@ -1090,15 +1135,18 @@ impl Receiver {
             }
             attempts += 1;
             let left = deadline.saturating_duration_since(Instant::now());
-            let outcome =
-                match tokio::time::timeout(left, self.recorder.record_push(&self.pusher, record))
-                    .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
-                        .with_context("reason", "record_budget_exhausted")
-                        .with_context("timeout_ms", RECORD_BUDGET.as_millis())),
-                };
+            let outcome = match tokio::time::timeout(
+                left,
+                self.recorder
+                    .record_push_with_commits(&self.pusher, record, commits),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                    .with_context("reason", "record_budget_exhausted")
+                    .with_context("timeout_ms", RECORD_BUDGET.as_millis())),
+            };
             match outcome {
                 Ok(recorded) => {
                     tracing::info!(

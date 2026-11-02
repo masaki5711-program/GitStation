@@ -139,6 +139,16 @@ struct World {
 /// ahead (`head_files`), pushed by dave (a push record, so the committers
 /// are known); dave opens the merge request.
 async fn world(main_files: &[(&str, &str)], head_files: &[(&str, &str)]) -> World {
+    world_with(main_files, head_files, true).await
+}
+
+/// [`world`]; `record_head`: false leaves the head without a push record
+/// (an `update-ref` import: no `push_commits` row).
+async fn world_with(
+    main_files: &[(&str, &str)],
+    head_files: &[(&str, &str)],
+    record_head: bool,
+) -> World {
     let t = FreshDb::migrated().await;
     let owner = user(&t, "olga").await;
     let dave = user(&t, "dave").await;
@@ -194,8 +204,10 @@ async fn world(main_files: &[(&str, &str)], head_files: &[(&str, &str)]) -> Worl
         base,
         head,
     };
-    w0.record_push(dave, "feature", None, &w0.head.clone(), "req-push-dave")
-        .await;
+    if record_head {
+        w0.record_push(dave, "feature", None, &w0.head.clone(), "req-push-dave")
+            .await;
+    }
     let proof = open_proof(
         &w0.t,
         &session(dave),
@@ -724,72 +736,6 @@ async fn an_agent_token_cannot_approve() {
     w.t.drop_now().await;
 }
 
-/// R5 review HIGH: rita (playing Bob) pushes 21 commits in one push whose
-/// list holds only the 20 newest; the oldest is the merge request's head,
-/// which dave's own record names. Rita's cut push reaches it, so she is a
-/// committer and her approval does not count.
-#[tokio::test]
-async fn a_cut_push_reaching_the_range_makes_its_pusher_a_committer() {
-    let w = world(
-        &[(
-            "README.md",
-            "base
-",
-        )],
-        &[
-            (
-                "README.md",
-                "base
-",
-            ),
-            (
-                "f.txt", "f
-",
-            ),
-        ],
-    )
-    .await;
-    let mut chain = vec![w.head.clone()];
-    for n in 2..=21 {
-        let parent = chain.last().expect("parent").clone();
-        chain.push(commit(
-            &w.path,
-            &[
-                (
-                    "README.md",
-                    "base
-",
-                ),
-                (
-                    "f.txt",
-                    &format!(
-                        "f{n}
-"
-                    ),
-                ),
-            ],
-            Some(&parent),
-        ));
-    }
-    let tip = chain.last().expect("tip").clone();
-    plumb(&w.path, &["update-ref", "refs/heads/bob", &tip], None);
-    let listed: Vec<&str> = chain.iter().rev().take(20).map(String::as_str).collect();
-    w.record_push_listing(w.rita, "bob", (None, &tip), (&listed, 21), "req-push-bob")
-        .await;
-    w.rule(1, &[]).await;
-    let answer = w.approve(w.rita).await.expect("approve");
-    assert_eq!(
-        answer.outcome,
-        ApproveOutcome::Approved {
-            counted: false,
-            uncounted_reason: Some(UncountedReason::Committer)
-        }
-    );
-    w.approve(w.mara).await.expect("approve");
-    w.ask().await.expect("mara counts");
-    w.t.drop_now().await;
-}
-
 /// R5 review MEDIUM: a criss-cross history has two merge bases; the paths
 /// the merge changes are the target tip against the trial merge's tree,
 /// so a path already on the target (b.txt) needs none of its owners.
@@ -982,38 +928,6 @@ async fn missing_and_disabled_accounts_answer_alike() {
 }
 
 impl World {
-    /// One push record of `updates` (ref, new) by `who`, each listing its
-    /// new commit (`total` new commits each: more than one cuts the list).
-    async fn record_push_refs(
-        &self,
-        who: UserId,
-        updates: &[(String, String)],
-        total: u64,
-        request_id: &str,
-    ) {
-        let zero = "0".repeat(40);
-        let push = PushRecord {
-            repository_id: self.repo,
-            updates: updates
-                .iter()
-                .map(|(name, new)| PushedRef {
-                    name: RefName::parse(&format!("refs/heads/{name}")).expect("ref"),
-                    old: oid(&zero),
-                    new: oid(new),
-                    kind: PushUpdateKind::Create,
-                    commits: vec![oid(new)],
-                    total_commits: total,
-                    total_commits_partial: false,
-                })
-                .collect(),
-        };
-        let ctx = ChangeContext::new(Actor::User(who), RequestId::parse(request_id).expect("id"));
-        let recorded = repositories::record_push(&self.t.db, &ctx, &push)
-            .await
-            .expect("push record");
-        assert_eq!(recorded, forge_core::PushRecorded::Recorded);
-    }
-
     async fn state(&self) -> forge_review::approvals::ApprovalState {
         self.review
             .approval_state(
@@ -1027,72 +941,6 @@ impl World {
             .await
             .expect("state")
     }
-}
-
-/// R5 re-review round 2 (HIGH): rita pushes 101 refs in one push; the last
-/// one (by name) points at the merge request's head, so the record's list
-/// of 100 refs leaves it out. dave's own record names the head. Rita's
-/// approval must not count.
-#[tokio::test]
-async fn a_ref_beyond_the_listed_hundred_still_makes_a_committer() {
-    let w = world(
-        &[("README.md", "base\n")],
-        &[("README.md", "base\n"), ("f.txt", "f\n")],
-    )
-    .await;
-    let mut updates: Vec<(String, String)> = (0..100)
-        .map(|n| (format!("a{n:03}"), w.base.clone()))
-        .collect();
-    updates.push(("zzz".to_owned(), w.head.clone()));
-    w.record_push_refs(w.rita, &updates, 1, "req-push-many-refs")
-        .await;
-    w.rule(1, &[]).await;
-    let answer = w.approve(w.rita).await.expect("approve");
-    assert_eq!(
-        answer.outcome,
-        ApproveOutcome::Approved {
-            counted: false,
-            uncounted_reason: Some(UncountedReason::Committer)
-        }
-    );
-    w.t.drop_now().await;
-}
-
-/// R5 re-review round 2 (HIGH): 41 large (cut) pushes of unrelated
-/// branches cost one git call, not one per push: the state route's budget
-/// (32 calls) holds and rita's approval counts.
-#[tokio::test]
-async fn many_large_pushes_do_not_exhaust_the_budget() {
-    let w = world(
-        &[("README.md", "base\n")],
-        &[("README.md", "base\n"), ("f.txt", "f\n")],
-    )
-    .await;
-    for n in 0..41 {
-        let side = commit(
-            &w.path,
-            &[("README.md", "base\n"), ("side.txt", &format!("{n}\n"))],
-            Some(&w.base),
-        );
-        plumb(
-            &w.path,
-            &["update-ref", &format!("refs/heads/side{n}"), &side],
-            None,
-        );
-        w.record_push_refs(
-            w.dave,
-            &[(format!("side{n}"), side)],
-            25,
-            &format!("req-push-side-{n}"),
-        )
-        .await;
-    }
-    w.rule(1, &[]).await;
-    w.approve(w.rita).await.expect("approve");
-    let report = w.state().await.report.expect("report");
-    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
-    assert!(report.approvals[0].counted);
-    w.t.drop_now().await;
 }
 
 /// R5 re-review round 2 (HIGH): a changed path over 4 KiB is never matched:
@@ -1232,25 +1080,293 @@ async fn many_tags_do_not_block_approvals() {
     w.t.drop_now().await;
 }
 
-/// R5 round 3 (MEDIUM): a cut push whose tip is no longer in the repository
-/// (pruned) and that no ref points at reaches nothing; it no longer makes
-/// every evaluation fail.
+// ── M3 R5 round 4: the committer rule reads push_commits ──
+
+impl World {
+    /// One push record of `updates` (`(ref, old, new)`) by `who`, with the
+    /// commits git would list as introduced (`introduced`, `complete`):
+    /// what the push path records (forge-git's listing is tested on its
+    /// own).
+    async fn record_introduced(
+        &self,
+        who: UserId,
+        updates: &[(String, String, String)],
+        introduced: &[String],
+        complete: bool,
+        request_id: &str,
+    ) {
+        let zero = "0".repeat(40);
+        let push = PushRecord {
+            repository_id: self.repo,
+            updates: updates
+                .iter()
+                .map(|(name, old, new)| PushedRef {
+                    name: RefName::parse(name).expect("ref"),
+                    old: oid(old),
+                    new: oid(new),
+                    kind: if *new == zero {
+                        PushUpdateKind::Delete
+                    } else if *old == zero {
+                        PushUpdateKind::Create
+                    } else {
+                        PushUpdateKind::FastForward
+                    },
+                    commits: Vec::new(),
+                    total_commits: 0,
+                    total_commits_partial: false,
+                })
+                .collect(),
+        };
+        let commits = forge_core::PushedCommits {
+            commits: introduced.iter().map(|c| oid(c)).collect(),
+            complete,
+        };
+        let ctx = ChangeContext::new(Actor::User(who), RequestId::parse(request_id).expect("id"));
+        let recorded = repositories::record_push_with_commits(&self.t.db, &ctx, &push, &commits)
+            .await
+            .expect("push record");
+        assert_eq!(recorded, forge_core::PushRecorded::Recorded);
+    }
+
+    /// B1 = the merge request's head; B2..B21 on top, pushed by `who` to
+    /// `bob` in one push (introducing all 21).
+    async fn bob_pushes_b1_to_b21(&self, who: UserId) -> Vec<String> {
+        let mut chain = vec![self.head.clone()];
+        for n in 2..=21 {
+            let parent = chain.last().expect("parent").clone();
+            chain.push(commit(
+                &self.path,
+                &[("README.md", "base\n"), ("f.txt", &format!("f{n}\n"))],
+                Some(&parent),
+            ));
+        }
+        let tip = chain.last().expect("tip").clone();
+        plumb(&self.path, &["update-ref", "refs/heads/bob", &tip], None);
+        let zero = "0".repeat(40);
+        self.record_introduced(
+            who,
+            &[("refs/heads/bob".to_owned(), zero, tip)],
+            &chain,
+            true,
+            "req-push-bob",
+        )
+        .await;
+        chain
+    }
+}
+
+/// R5 round 4: Bob pushes B1..B21 in one push; Alice creates `feature` at
+/// B1 (no new commit, no row). B1's row names Bob: his approval does not
+/// count. After the `bob` branch is deleted and its objects pruned, the
+/// rows (and the answer) stay.
 #[tokio::test]
-async fn a_pruned_cut_tip_no_ref_points_at_is_dropped() {
+async fn a_pusher_of_a_range_commit_is_a_committer_whatever_ref_names_it() {
+    let w = world_with(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+        false,
+    )
+    .await;
+    let _chain = w.bob_pushes_b1_to_b21(w.rita).await;
+    let zero = "0".repeat(40);
+    w.record_introduced(
+        w.dave,
+        &[(
+            "refs/heads/feature".to_owned(),
+            zero.clone(),
+            w.head.clone(),
+        )],
+        &[],
+        true,
+        "req-push-alice",
+    )
+    .await;
+    w.rule(1, &[]).await;
+    let answer = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        answer.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::Committer)
+        }
+    );
+    // Prune: delete `bob`, drop its unreachable objects; the answer is the
+    // same (no object is read).
+    plumb(&w.path, &["update-ref", "-d", "refs/heads/bob"], None);
+    plumb(
+        &w.path,
+        &["reflog", "expire", "--expire=now", "--all"],
+        None,
+    );
+    plumb(&w.path, &["prune", "--expire=now"], None);
+    let report = w.state().await.report.expect("report");
+    assert_eq!(
+        report.approvals[0].uncounted_reason,
+        Some(UncountedReason::Committer)
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 round 4: 101 refs in one push, the head on the last one (past the
+/// audit row's 100-ref list): the push introduced the head, so its pusher
+/// is a committer.
+#[tokio::test]
+async fn a_ref_past_the_listed_hundred_still_makes_a_committer() {
+    let w = world_with(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+        false,
+    )
+    .await;
+    let zero = "0".repeat(40);
+    let mut updates: Vec<(String, String, String)> = (0..100)
+        .map(|n| (format!("refs/heads/a{n:03}"), zero.clone(), w.base.clone()))
+        .collect();
+    updates.push(("refs/heads/zzz".to_owned(), zero, w.head.clone()));
+    w.record_introduced(
+        w.rita,
+        &updates,
+        std::slice::from_ref(&w.head),
+        true,
+        "req-push-many",
+    )
+    .await;
+    w.rule(1, &[]).await;
+    let answer = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        answer.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::Committer)
+        }
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 round 4: a commit no push recorded (an `update-ref` import, history
+/// before push_commits) makes the committers unknown: no approval counts.
+#[tokio::test]
+async fn an_imported_commit_makes_the_committers_unknown() {
+    let w = world_with(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+        false,
+    )
+    .await;
+    w.rule(1, &[]).await;
+    let answer = w.approve(w.rita).await.expect("approve");
+    assert_eq!(
+        answer.outcome,
+        ApproveOutcome::Approved {
+            counted: false,
+            uncounted_reason: Some(UncountedReason::CommittersUnknown)
+        }
+    );
+    w.t.drop_now().await;
+}
+
+/// R5 round 4: an unrelated orphan branch of 51 000 commits (rows only:
+/// the rule never walks history) changes nothing for other merge requests.
+#[tokio::test]
+async fn a_huge_unrelated_push_does_not_block_other_merge_requests() {
     let w = world(
         &[("README.md", "base\n")],
         &[("README.md", "base\n"), ("f.txt", "f\n")],
     )
     .await;
-    let gone = "e".repeat(40);
-    w.record_push_listing(
+    let orphan: Vec<String> = (0..51_000u64).map(|n| format!("{n:040x}")).collect();
+    let tip = orphan.last().expect("tip").clone();
+    let zero = "0".repeat(40);
+    w.record_introduced(
         w.dave,
-        "gone",
-        (None, &gone),
-        (&[gone.as_str()], 25),
-        "req-push-gone",
+        &[("refs/heads/orphan".to_owned(), zero, tip)],
+        &orphan,
+        true,
+        "req-push-orphan",
     )
     .await;
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    w.t.drop_now().await;
+}
+
+/// R5 round 4: a push past its per-push cap is incomplete — marked on its
+/// record — and blocks only the merge requests whose range holds one of
+/// its unlisted commits.
+#[tokio::test]
+async fn an_incomplete_push_blocks_only_ranges_holding_its_unlisted_commits() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let zero = "0".repeat(40);
+    let other = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("o.txt", "o\n")],
+        Some(&w.base),
+    );
+    w.record_introduced(
+        w.mara,
+        &[("refs/heads/other".to_owned(), zero, other)],
+        &[],
+        false,
+        "req-push-incomplete",
+    )
+    .await;
+    let marked: i64 = count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.audit_log WHERE request_id = 'req-push-incomplete' \
+         AND (details ->> 'push_commits_incomplete')::boolean",
+    )
+    .await;
+    assert_eq!(marked, 1);
+    // This merge request's range is dave's commit, recorded: unaffected.
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    let report = w.state().await.report.expect("report");
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    w.t.drop_now().await;
+}
+
+/// R5 round 4: tag churn — creating and deleting thousands of tags on
+/// commits that already exist — writes no row and blocks nothing.
+#[tokio::test]
+async fn tag_churn_does_not_block_approvals() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let zero = "0".repeat(40);
+    for round in 0..3 {
+        let create: Vec<(String, String, String)> = (0..1000)
+            .map(|n| {
+                (
+                    format!("refs/tags/c{round}.{n}"),
+                    zero.clone(),
+                    w.base.clone(),
+                )
+            })
+            .collect();
+        w.record_introduced(w.dave, &create, &[], true, &format!("req-tags-{round}"))
+            .await;
+        let delete: Vec<(String, String, String)> = (0..1000)
+            .map(|n| {
+                (
+                    format!("refs/tags/c{round}.{n}"),
+                    w.base.clone(),
+                    zero.clone(),
+                )
+            })
+            .collect();
+        w.record_introduced(w.dave, &delete, &[], true, &format!("req-untags-{round}"))
+            .await;
+    }
+    let rows: i64 = count(&w.t, "SELECT count(*) AS n FROM forge.push_commits").await;
+    assert_eq!(rows, 1, "only dave's head");
     w.rule(1, &[]).await;
     w.approve(w.rita).await.expect("approve");
     let report = w.state().await.report.expect("report");

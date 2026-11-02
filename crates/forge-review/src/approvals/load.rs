@@ -1,7 +1,7 @@
 //! The git (and push record) reads of one approval evaluation, under one
 //! [`Budget`] (module docs of `approvals`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use forge_core::ObjectId;
@@ -187,114 +187,17 @@ impl ReviewGit {
                 return Ok(Committers::Unknown(git_reason(&e)));
             }
         };
-        // The push records, bounded by the budget's time (the merge job:
-        // the lock's hold).
-        let read = review::push_coverage(db, asker.project, asker.repo, &range.commits);
-        let coverage = match tokio::time::timeout(budget.left(), read).await {
-            Ok(coverage) => coverage?,
+        // The pushers of the range's commits, recorded at receive time
+        // (M3 R5 round 4), bounded by the budget's time.
+        let read = review::range_pushers(db, asker.project, asker.repo, &range.commits);
+        let pushers = match tokio::time::timeout(budget.left(), read).await {
+            Ok(pushers) => pushers?,
             Err(_) => {
-                spent(asker, mr, "push_coverage", "deadline");
+                spent(asker, mr, "range_pushers", "deadline");
                 return Ok(Committers::Unknown("timeout"));
             }
         };
-        let cut = committers::cut_entries(&coverage);
-        if cut.is_empty() {
-            return Ok(committers::committers_of(
-                &range.commits,
-                &coverage,
-                &BTreeMap::new(),
-            ));
-        }
-        // One git call for every cut update (R5 re-review round 2): what
-        // their tips reach beyond the target tip, decided in memory.
-        let tips: Vec<ObjectId> = cut
-            .iter()
-            .filter_map(|i| coverage.entries.get(*i).and_then(|e| e.new.clone())) // clone: the call owns its tips
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        // R5 round 3: a cut tip no longer in the repository (pruned) that no
-        // ref points at reaches nothing now; a missing tip a ref points at is
-        // a broken repository (unknown). Otherwise the graph call would fail
-        // on every evaluation once one historical tip is pruned.
-        let tips = match self.present_tips(asker, mr, tips, budget).await {
-            Ok(tips) => tips,
-            Err(reason) => return Ok(Committers::Unknown(reason)),
-        };
-        let Ok(timeout) = budget.next() else {
-            spent(asker, mr, "push_reach", "budget");
-            return Ok(Committers::Unknown("timeout"));
-        };
-        let graph = match self
-            .git
-            .commit_graph(
-                &self.storage,
-                asker.repo,
-                &tips,
-                tip,
-                committers::MAX_GRAPH_COMMITS,
-                timeout,
-            )
-            .await
-        {
-            Ok(Some(graph)) => graph,
-            Ok(None) => return Ok(Committers::Unknown("push_graph_too_large")),
-            Err(e) => {
-                warn_unread(asker, mr, "push_reach", &e);
-                return Ok(Committers::Unknown(git_reason(&e)));
-            }
-        };
-        let reach = committers::reach_in(&graph, &range.commits, &coverage);
-        Ok(committers::committers_of(&range.commits, &coverage, &reach))
-    }
-
-    /// `tips` without the ones not in the repository that no ref points at
-    /// (two git calls, only when some are missing); `Err(reason)` when a
-    /// call fails or a missing tip is still referenced.
-    async fn present_tips(
-        &self,
-        asker: Asker<'_>,
-        mr: &StoredMergeRequest,
-        tips: Vec<ObjectId>,
-        budget: &mut Budget,
-    ) -> Result<Vec<ObjectId>, &'static str> {
-        let Ok(timeout) = budget.next() else {
-            spent(asker, mr, "push_reach", "budget");
-            return Err("timeout");
-        };
-        let missing = match self
-            .git
-            .missing_objects(&self.storage, asker.repo, &tips, timeout)
-            .await
-        {
-            Ok(missing) => missing,
-            Err(e) => {
-                warn_unread(asker, mr, "push_reach", &e);
-                return Err(git_reason(&e));
-            }
-        };
-        if missing.is_empty() {
-            return Ok(tips);
-        }
-        let Ok(timeout) = budget.next() else {
-            spent(asker, mr, "push_reach", "budget");
-            return Err("timeout");
-        };
-        let referenced = match self
-            .git
-            .referenced_objects(&self.storage, asker.repo, timeout)
-            .await
-        {
-            Ok(referenced) => referenced,
-            Err(e) => {
-                warn_unread(asker, mr, "push_reach", &e);
-                return Err(git_reason(&e));
-            }
-        };
-        if missing.iter().any(|m| referenced.contains(m)) {
-            return Err("push_tip_missing");
-        }
-        Ok(tips.into_iter().filter(|t| !missing.contains(t)).collect())
+        Ok(committers::committers_of(&range.commits, &pushers))
     }
 
     /// The target tip's CODEOWNERS, resolved and matched against the

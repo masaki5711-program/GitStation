@@ -37,8 +37,8 @@ use std::time::Duration;
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::namespace_resolver::LookupFuture;
 use forge_core::{
-    AuditDetails, DedupKey, DedupPart, PushRecord, PushRecorded, PushReplay, Pusher,
-    RepositoryState, RequestId,
+    AuditDetails, DedupKey, DedupPart, ObjectId, PushRecord, PushRecorded, PushReplay,
+    PushedCommits, Pusher, RepositoryState, RequestId,
 };
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
@@ -894,7 +894,18 @@ pub async fn record_push(
     ctx: &ChangeContext,
     push: &PushRecord,
 ) -> Result<PushRecorded, ForgeError> {
-    record(db, ctx, push, None).await
+    record(db, ctx, push, None, &listed_commits(push)).await
+}
+
+/// [`record_push`] with the commits the push introduced as git listed them
+/// (the push path, M3 R5 round 4): one `push_commits` row per commit.
+pub async fn record_push_with_commits(
+    db: &Db,
+    ctx: &ChangeContext,
+    push: &PushRecord,
+    commits: &PushedCommits,
+) -> Result<PushRecorded, ForgeError> {
+    record(db, ctx, push, None, commits).await
 }
 
 /// Record a push from its `forge.git.push_applied` log line (the runbook
@@ -914,7 +925,14 @@ pub async fn replay_push(
     replay: PushReplay,
     push: &PushRecord,
 ) -> Result<PushRecorded, ForgeError> {
-    record(db, ctx, push, Some((logged_project, replay))).await
+    record(
+        db,
+        ctx,
+        push,
+        Some((logged_project, replay)),
+        &listed_commits(push),
+    )
+    .await
 }
 
 async fn record(
@@ -922,6 +940,7 @@ async fn record(
     ctx: &ChangeContext,
     push: &PushRecord,
     replay: Option<(ProjectId, PushReplay)>,
+    commits: &PushedCommits,
 ) -> Result<PushRecorded, ForgeError> {
     push.check()?;
     let dedup_key = push_dedup_key(&ctx.request_id, push)?;
@@ -940,8 +959,10 @@ async fn record(
     let event_type = details
         .event_type()
         .ok_or_else(|| constant("audit_only_event"))?;
-    // M3 R5 re-review round 2: the ref updates the audit row does not list
-    // (`refs_truncated`) are kept for the committer rule (ADR-0024 §8.3).
+    // M3 R5 round 4 (ADR-0024 §8.3): the commits the push introduced, one
+    // row per (commit, pusher), in this transaction; an incomplete listing
+    // is marked on the audit row (its unlisted commits have no row: a merge
+    // request whose range holds one has unknown committers).
     let pusher = match (replay, &ctx.actor) {
         (Some((_, who)), _) => Some(who.pusher),
         (None, Actor::User(u) | Actor::ServiceAccount(u)) => Some(*u),
@@ -949,17 +970,20 @@ async fn record(
         (None, Actor::System | Actor::Anonymous) => None,
     };
     let mut audit_details = details.to_value();
-    let unlisted = unlisted_updates(&audit_details, push);
-    // R5 round 3: every new record says its unlisted ref updates were kept
-    // (none when they are all deletions, which reach nothing), so only a
-    // record written before push_unlisted_refs reads as "legacy cut".
-    if let Some(map) = audit_details.as_object_mut() {
-        map.insert("unlisted_kept".to_owned(), serde_json::Value::Bool(true));
+    let complete = commits.complete && pusher.is_some();
+    if !complete {
+        if let Some(map) = audit_details.as_object_mut() {
+            map.insert(
+                "push_commits_incomplete".to_owned(),
+                serde_json::Value::Bool(true),
+            );
+        }
     }
-    if !unlisted.is_empty() {
+    if let (Some(pusher), false) = (pusher, commits.commits.is_empty()) {
         let request_id = ctx.request_id.as_str().to_owned();
+        let list = &commits.commits;
         tx.step(|c| async move {
-            insert_unlisted(c, (project_id, repo), &request_id, pusher, &unlisted).await
+            insert_push_commits(c, (project_id, repo), &request_id, pusher, list).await
         })
         .await?;
     }
@@ -990,52 +1014,59 @@ async fn record(
     })
 }
 
-/// The ref updates of `push` (deletes aside) the record's JSON `value`
-/// does not list (its `refs` were cut by the 100-ref or byte budget).
-fn unlisted_updates(value: &serde_json::Value, push: &PushRecord) -> Vec<(String, String)> {
-    let listed: std::collections::BTreeSet<&str> = value
-        .get("refs")
-        .and_then(serde_json::Value::as_array)
-        .map(|refs| {
-            refs.iter()
-                .filter_map(|r| r.get("ref").and_then(serde_json::Value::as_str))
-                .collect()
-        })
-        .unwrap_or_default();
-    push.updates
+/// The commits a caller without git can vouch for: the union of the
+/// listed commits when every update lists all of its new commits (none cut,
+/// no partial count); otherwise unknown (M3 R5 round 4). The runbook replay
+/// and tests record through this; the push path passes git's full listing.
+pub fn listed_commits(push: &PushRecord) -> PushedCommits {
+    let complete = push.updates.iter().all(|u| {
+        u.new.is_zero() || (!u.total_commits_partial && u.total_commits == u.commits.len() as u64)
+    });
+    if !complete {
+        return PushedCommits::unknown();
+    }
+    let mut commits: Vec<ObjectId> = push
+        .updates
         .iter()
-        .filter(|u| !u.new.is_zero() && !listed.contains(u.name.as_str()))
-        .map(|u| (u.name.as_str().to_owned(), u.new.as_str().to_owned()))
-        .collect()
+        .flat_map(|u| u.commits.iter().cloned()) // clone: the list owns its ids
+        .collect();
+    commits.sort();
+    commits.dedup();
+    PushedCommits {
+        commits,
+        complete: true,
+    }
 }
 
-/// Insert the unlisted ref updates of one push record (one statement).
-async fn insert_unlisted(
+/// The most rows one statement inserts.
+const PUSH_COMMITS_BATCH: usize = 10_000;
+
+/// Insert one row per commit for `pusher` (`ON CONFLICT DO NOTHING`), in
+/// batches.
+pub(crate) async fn insert_push_commits(
     conn: &mut sqlx::postgres::PgConnection,
     (project, repo): (ProjectId, RepoId),
     request_id: &str,
-    pusher: Option<forge_core::UserId>,
-    unlisted: &[(String, String)],
+    pusher: forge_core::UserId,
+    commits: &[ObjectId],
 ) -> Result<(), ForgeError> {
-    let (names, news): (Vec<&str>, Vec<&str>) = unlisted
-        .iter()
-        .map(|(n, s)| (n.as_str(), s.as_str()))
-        .unzip();
-    sqlx::query(
-        "INSERT INTO forge.push_unlisted_refs (project_id, repository_id, request_id, \
-         pusher_id, ref_name, new_sha) SELECT $1, $2, $3, $4, r.name, r.new \
-         FROM unnest($5::text[], $6::text[]) AS r(name, new)",
-    )
-    .bind(project.get())
-    .bind(repo.get())
-    .bind(request_id)
-    .bind(pusher.map(forge_core::UserId::get))
-    .bind(&names)
-    .bind(&news)
-    .execute(conn)
-    .await
-    .map(drop)
-    .map_err(|e| query_error("repositories.push_unlisted_refs", e))
+    for chunk in commits.chunks(PUSH_COMMITS_BATCH) {
+        let shas: Vec<&str> = chunk.iter().map(ObjectId::as_str).collect();
+        sqlx::query(
+            "INSERT INTO forge.push_commits (repository_id, commit_sha, pusher_id, project_id, \
+             request_id) SELECT $1, c, $2, $3, $4 FROM unnest($5::text[]) AS c \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(repo.get())
+        .bind(pusher.get())
+        .bind(project.get())
+        .bind(request_id)
+        .bind(&shas)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| query_error("repositories.push_commits", e))?;
+    }
+    Ok(())
 }
 
 /// The change context of a push by `pusher`: actor `user`, the push
@@ -1057,6 +1088,17 @@ impl forge_core::PushRecorder for Db {
         push: &'a PushRecord,
     ) -> LookupFuture<'a, PushRecorded> {
         Box::pin(async move { record_push(self, &push_context(pusher), push).await })
+    }
+
+    fn record_push_with_commits<'a>(
+        &'a self,
+        pusher: &'a Pusher,
+        push: &'a PushRecord,
+        commits: &'a PushedCommits,
+    ) -> LookupFuture<'a, PushRecorded> {
+        Box::pin(async move {
+            record_push_with_commits(self, &push_context(pusher), push, commits).await
+        })
     }
 }
 
