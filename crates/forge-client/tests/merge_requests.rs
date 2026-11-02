@@ -391,3 +391,185 @@ fn mr_versions_diff_and_mergeability_call_their_routes() {
     }
     assert_eq!(srv.seen().len(), before);
 }
+
+const DISCUSSION: &str = r#"{"id":12,"kind":"inline","position":{"version":2,"path":"src/lib.rs","side":"new","line":10},"outdated":true,"started_by":12,"resolved":true,"resolved_by":14,"resolved_at":"2026-11-02T03:00:00Z","created_at":"2026-11-02T02:00:00Z","notes":[{"id":40,"author_id":12,"body":"Rename this\n\u001b[31mred\nthird","created_at":"2026-11-02T02:00:00Z"}]}"#;
+
+/// M3 R3: `mr comment` starts a general or an inline discussion or
+/// replies; `mr resolve` resolves or unresolves; `mr discussions` lists.
+/// Each calls its route with its body; note bodies are printed line by
+/// line, sanitized.
+#[test]
+fn mr_comment_resolve_and_discussions_call_their_routes() {
+    let srv = Mock::start(|r| {
+        if r.method == "GET" {
+            ok(&format!(
+                r#"{{"iid":3,"discussions":[{DISCUSSION}],"truncated":false}}"#
+            ))
+        } else if r.target.ends_with("resolve") {
+            ok(DISCUSSION)
+        } else {
+            Resp::json(201, DISCUSSION)
+        }
+    });
+    let sb = Sandbox::new();
+    let base = "/api/v1/projects/7/merge-requests/3/discussions";
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "comment",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--body",
+            "Looks good",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!((r.method.as_str(), r.target.as_str()), ("POST", base));
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"body": "Looks good"})
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "comment",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--version",
+            "2",
+            "--path",
+            "src/lib.rs",
+            "--line",
+            "10",
+            "--body",
+            "Rename this",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"body": "Rename this", "position":
+               {"version": 2, "path": "src/lib.rs", "line": 10, "side": "new"}})
+    );
+    assert!(
+        o.stdout.contains("#12 inline src/lib.rs:10 (new, v2)"),
+        "{}",
+        o.stdout
+    );
+    assert!(o.stdout.contains("[outdated]"), "{}", o.stdout);
+    assert!(
+        !o.stdout.contains('\u{1b}'),
+        "terminal escapes are sanitized"
+    );
+    assert!(
+        o.stdout.contains("    third"),
+        "every line is printed: {}",
+        o.stdout
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "comment",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--discussion",
+            "12",
+            "--body",
+            "Done",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(r.target, format!("{base}/12/notes"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"body": "Done"})
+    );
+    for (extra, verb) in [(None, "resolve"), (Some("--unresolve"), "unresolve")] {
+        let mut args = vec![
+            "mr",
+            "resolve",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--discussion",
+            "12",
+        ];
+        args.extend(extra);
+        let o = gstn(&sb, &srv, &args);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        let r = srv.seen().pop().expect("a request");
+        assert_eq!(
+            (r.method.as_str(), r.target.as_str()),
+            ("POST", format!("{base}/12/{verb}").as_str())
+        );
+    }
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "discussions",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!((r.method.as_str(), r.target.as_str()), ("GET", base));
+    assert_eq!(o.json()["discussions"][0]["id"], 12);
+    // A reply never carries a position; an inline comment needs its line.
+    let before = srv.seen().len();
+    for args in [
+        vec![
+            "mr",
+            "comment",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--body",
+            "x",
+            "--discussion",
+            "1",
+            "--line",
+            "2",
+        ],
+        vec![
+            "mr",
+            "comment",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--body",
+            "x",
+            "--version",
+            "1",
+            "--path",
+            "a",
+        ],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_ne!(o.code, 0, "{args:?}");
+    }
+    assert_eq!(srv.seen().len(), before, "refused before any request");
+}

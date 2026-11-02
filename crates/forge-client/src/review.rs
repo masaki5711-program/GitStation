@@ -224,6 +224,39 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             let h = mergeability_human(&body);
             emit(io, cli, body, &h)
         }
+        // M3 R3: discussions (`mr_discussions.rs`).
+        MrCommand::Discussions { project, iid } => {
+            crate::mr_discussions::list(cli, (*project, *iid), env, io)
+        }
+        MrCommand::Comment {
+            project,
+            iid,
+            body,
+            discussion,
+            version,
+            path,
+            line,
+            side,
+        } => {
+            let position = match (version, path, line) {
+                (Some(v), Some(p), Some(l)) => Some((*v, p.as_str(), *l, *side)),
+                _ => None,
+            };
+            let what = crate::mr_discussions::Comment {
+                body,
+                discussion: *discussion,
+                position,
+            };
+            crate::mr_discussions::comment(cli, (*project, *iid), &what, env, io)
+        }
+        MrCommand::Resolve {
+            project,
+            iid,
+            discussion,
+            unresolve,
+        } => {
+            crate::mr_discussions::resolve(cli, (*project, *iid), *discussion, *unresolve, env, io)
+        }
     }
 }
 
