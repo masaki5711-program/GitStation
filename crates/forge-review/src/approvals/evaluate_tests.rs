@@ -202,7 +202,7 @@ fn owned(text: &str, owners: &[(&str, OwnerRef)], paths: &ChangedPathsFact) -> C
     let file = parse(text.as_bytes()).expect("valid");
     let matched = match paths {
         ChangedPathsFact::Known(p) => file.owned_lines(p, None).expect("no deadline"),
-        ChangedPathsFact::Unknown(_) => BTreeMap::new(),
+        ChangedPathsFact::Conflict | ChangedPathsFact::Unknown(_) => BTreeMap::new(),
     };
     CodeownersFact::Valid {
         path: "CODEOWNERS",
@@ -327,4 +327,15 @@ fn unknown_changed_paths_block_and_never_mean_no_owners() {
             reason: "too_many_paths"
         }]
     );
+}
+
+/// A trial merge that conflicts cannot land: the conflict blocks it (the
+/// mergeability check, the job's own trial merge: FG-REVIEW-0006), so the
+/// approval half adds no `changed_paths_unknown` of its own and the job
+/// keeps its conflict code (R5 review round 1 regression).
+#[test]
+fn a_conflicting_merge_adds_no_changed_paths_reason() {
+    let mut i = inputs(vec![approver(BOB, Role::Developer)], Vec::new());
+    i.changed = ChangedPathsFact::Conflict;
+    assert!(evaluate(&i).blocks.is_empty());
 }

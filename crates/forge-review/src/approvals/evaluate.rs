@@ -43,12 +43,18 @@ pub enum Committers {
     Unknown(&'static str),
 }
 
-/// Every path changed between the merge base and the head.
+/// Every path the merge changes on the target (the target tip against the
+/// trial merge's tree).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangedPathsFact {
     Known(Vec<String>),
+    /// The trial merge conflicts: nothing can land, and the conflict blocks
+    /// the merge on its own (the mergeability check, the job's trial merge,
+    /// FG-REVIEW-0006). CODEOWNERS and the configuration rule are not
+    /// evaluated and add no reason.
+    Conflict,
     /// `too_many_paths`, `timeout`, `git_failed`, `non_utf8_path`,
-    /// `no_merge_base`, `target_missing`.
+    /// `target_missing`.
     Unknown(&'static str),
 }
 
@@ -290,7 +296,9 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                 .iter()
                 .any(|a| a.role.is_some_and(|r| r >= Role::Maintainer)),
         ),
-        ChangedPathsFact::Known(_) | ChangedPathsFact::Unknown(_) => None,
+        ChangedPathsFact::Known(_) | ChangedPathsFact::Conflict | ChangedPathsFact::Unknown(_) => {
+            None
+        }
     };
     if config_change == Some(false) {
         blocks.push(BlockReason::ConfigChangeNeedsMaintainerApproval);

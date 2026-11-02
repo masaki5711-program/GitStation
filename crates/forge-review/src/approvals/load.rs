@@ -98,7 +98,7 @@ impl ReviewGit {
             Ok(MergeTree::Clean { tree }) => tree,
             // A conflict blocks the merge on its own; what it would change
             // is not known.
-            Ok(MergeTree::Conflicted { .. }) => return ChangedPathsFact::Unknown("conflict"),
+            Ok(MergeTree::Conflicted { .. }) => return ChangedPathsFact::Conflict,
             Err(e) => {
                 warn_unread(asker, mr, "merge_tree", &e);
                 return ChangedPathsFact::Unknown(git_reason(&e));
@@ -328,7 +328,7 @@ impl ReviewGit {
             Ok((file, owners)) => {
                 let paths = match changed {
                     ChangedPathsFact::Known(paths) => paths.clone(), // clone: moved to the blocking task
-                    ChangedPathsFact::Unknown(_) => Vec::new(),
+                    ChangedPathsFact::Conflict | ChangedPathsFact::Unknown(_) => Vec::new(),
                 };
                 match matched(file.clone(), paths, budget.deadline()).await {
                     // clone: the task owns its copy
