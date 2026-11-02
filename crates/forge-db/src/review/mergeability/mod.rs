@@ -23,7 +23,9 @@
 //!   request still open and its head still the one checked.
 //!   [`fail_check`] ends a run that failed for good (`job_failed`);
 //!   [`reap_stale_checks`] ends rows left `checking` with no live job
-//!   (`job_stale`).
+//!   (`job_stale`). The sweep also verifies decided rows against the live
+//!   tips (`confirm.rs`: [`decided_candidates`], [`confirm_live`]) and
+//!   re-requests those whose pair moved.
 //! - **Flips** (ADR-0024 §3, §6): `merge_request.conflict_detected` /
 //!   `.conflict_resolved` only when a decision (can / cannot) differs from
 //!   `last_decided` — never to or from an undecided status, never on the
@@ -44,15 +46,19 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::jobs::{self, JobKind, JobTimeout, MaxAttempts, NewJob};
 use crate::{query_error, read_query_error, Db};
 
+mod confirm;
 mod request;
 mod run;
 mod stale;
 
+pub use confirm::{confirm_live, decided_candidates, DecidedRow};
 pub use request::DEFER_MAX;
 pub(crate) use request::{defer_checks_on, downgrade_on, request_check_on};
 pub use request::{request_check, sweep_unchecked, SWEEP_BATCH};
 pub use run::{begin_check, record_check, CheckResult, CheckStart, CheckSubject, Recorded};
-pub use stale::{fail_check, health, reap_stale_checks, MergeabilityHealth, STALE_AFTER};
+pub use stale::{
+    fail_check, health, reap_stale_checks, MergeabilityHealth, STALE_AFTER, UNVERIFIED_AFTER,
+};
 
 /// The kind of the mergeability job.
 pub const MERGEABILITY_JOB: &str = "merge_request.mergeability";
@@ -237,6 +243,12 @@ const LIVE_JOB: &str = "EXISTS (SELECT 1 FROM forge.jobs j \
      WHERE j.kind = 'merge_request.mergeability' \
      AND j.dedup_key = 'mr_mergeability:' || g.merge_request_id || ':' || g.check_seq \
      AND j.state IN ('queued', 'running'))";
+
+/// The deterministic `check_failed` reasons (`CheckReason::is_deterministic`
+/// besides `conflict`, which is `cannot_be_merged`).
+pub(super) const ANSWERING: &str = "(g.status IN ('can_be_merged', 'cannot_be_merged') \
+     OR (g.status = 'check_failed' AND g.reason IN \
+     ('target_missing', 'unrelated_histories', 'no_version')))";
 
 #[cfg(test)]
 mod tests;

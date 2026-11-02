@@ -27,7 +27,8 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 2. 行を読む: `SELECT merge_request_id, status, reason, check_seq, checked_head_sha, checked_target_sha, checked_at, updated_at FROM forge.merge_request_mergeability WHERE merge_request_id = <id>;`
 3. ジョブを読む: `SELECT id, state, attempts, last_error_code, last_error, created_at FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND dedup_key LIKE 'mr_mergeability:<id>:%' ORDER BY id DESC LIMIT 5;`
    最新の `check_seq` の鍵（`mr_mergeability:<id>:<check_seq>`）のジョブが `queued` / `running` なら待つだけでよい。
-4. `forge doctor --json` の `review.mergeability`（`checking_stale`、`unchecked_unqueued` の件数）と `jobs.*`（worker が動いているか）。
+4. `forge doctor --json` の `review.mergeability`（`checking_stale`、`unchecked_unqueued`、`decided_stale_head`（head が違う決定）、
+   `decided_unverified`（1 時間確かめられていない決定）の件数）と `jobs.*`（worker が動いているか）。
 5. 判定の成功は `forge.review.mergeability_checked`（info。衝突なら件数と最大 100 件のパス）、決まらない結果（`check_failed`）は
    同じイベントを warn で出す（`reason`）。
 
@@ -48,7 +49,8 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 
 1. 原因（ジョブの失敗のコード）を、そのコードの Runbook で直す。
 2. 判定のやり直しは、その MR の次の push・target の変更・再オープンで起きる。worker の定期の見回り（30 秒ごと）が、生きている
-   ジョブの無い `unchecked` の行を最大 50 件ずつ確かめ直す。`check_failed reason=job_failed|job_stale` の行を `unchecked` に戻すには
+   ジョブの無い `unchecked` の行を最大 50 件ずつ確かめ直し、決まっている行も最大 50 件ずつ target の生きた先端と比べて、
+   動いていれば確かめ直す（`confirmed_at` が古い順）。`check_failed reason=job_failed|job_stale` の行を `unchecked` に戻すには
    `[MUTATING — needs approval]` 利用者がその MR の target を一度変えて戻すか、ソースに push する（戻し: 不要。判定が書き直す）。
 3. 表を手で書き換えない（承認された手順の外では行わない）。
 

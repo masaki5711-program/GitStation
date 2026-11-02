@@ -204,10 +204,25 @@ pub async fn record_check(
             return Ok(crate::change::Settle::Discard(Recorded::Superseded));
         };
         let checked_head = result.head.as_ref().map(ObjectId::as_str);
-        if latest != seq
-            || state != MergeRequestState::Open.as_str()
-            || head.as_deref() != checked_head
-        {
+        if latest == seq && state != MergeRequestState::Open.as_str() {
+            // Closed or merged mid-run: no row may stay `checking` for the
+            // reaper (re-review LOW); `unchecked`, no job (a reopen asks).
+            tx.step(|c| async move {
+                sqlx::query(
+                    "UPDATE forge.merge_request_mergeability SET status = 'unchecked', \
+                     reason = NULL, conflicts = '{}', conflicts_truncated = false, \
+                     updated_at = now() WHERE merge_request_id = $1",
+                )
+                .bind(mr.get())
+                .execute(c)
+                .await
+                .map(drop)
+                .map_err(|e| query_error("review.mergeability_closed", e))
+            })
+            .await?;
+            return Ok(crate::change::Settle::CommitDerived(Recorded::Superseded));
+        }
+        if latest != seq || head.as_deref() != checked_head {
             return Ok(crate::change::Settle::Discard(Recorded::Superseded));
         }
         let last = last_decided
@@ -222,7 +237,7 @@ pub async fn record_check(
             sqlx::query(
                 "UPDATE forge.merge_request_mergeability SET status = $2, reason = $3, \
                  checked_head_sha = $4, checked_target_sha = $5, checked_at = now(), \
-                 conflicts = $6, conflicts_truncated = $7, \
+                 conflicts = $6, conflicts_truncated = $7, confirmed_at = now(), \
                  last_decided = COALESCE($8, last_decided), updated_at = now() \
                  WHERE merge_request_id = $1",
             )

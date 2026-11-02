@@ -197,6 +197,9 @@ struct Shared {
     // ── D5 MR4 ──
     purge: Option<PurgeTask>,
     // ── end D5 MR4 ──
+    /// The repositories (M3 R2: the mergeability sweep reads target tips;
+    /// `None` in the loop tests, which then skip that part).
+    storage: Option<Storage>,
 }
 
 impl Task {
@@ -271,7 +274,9 @@ impl Task {
                     .with_context("reason", "purge_unconfigured")),
             },
             Self::SessionPurge => session_purge::run_session_purge(db).await,
-            Self::MergeabilitySweep => mergeability_sweep::run_mergeability_sweep(db).await,
+            Self::MergeabilitySweep => {
+                mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
+            }
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")
@@ -329,7 +334,7 @@ pub(crate) async fn run(
         registry(review)?,
         jobs::SHUTDOWN_GRACE,
         keys,
-        purge,
+        (purge, Some(storage.clone())), // clone: the sweep's own handles
         shutdown,
     )
     .await
@@ -346,7 +351,7 @@ pub(crate) async fn run_with(
     keys: Arc<SealKeys>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
-    run_all(db, runner, registry, grace, keys, None, shutdown).await
+    run_all(db, runner, registry, grace, keys, (None, None), shutdown).await
 }
 
 async fn run_all(
@@ -355,7 +360,8 @@ async fn run_all(
     registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
-    purge: Option<PurgeTask>,
+    // The purge (D5 MR4) and the repositories (M3 R2 sweep), when given.
+    (purge, storage): (Option<PurgeTask>, Option<Storage>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -372,6 +378,7 @@ async fn run_all(
         seal_draining: Arc::new(AtomicBool::new(false)),
         registry,
         purge,
+        storage,
     };
     let runners = tasks(&shared.registry, shared.purge.as_ref())
         .into_iter()

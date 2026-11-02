@@ -306,8 +306,11 @@ connection, mapping driver errors to registered codes, migrations
   own transaction (`downgrade_on`); a purge of the checked version resets the row; `fail_check`
   (`job_failed`), `reap_stale_checks` (`checking` past `STALE_AFTER` with no live job →
   `job_stale`), `sweep_unchecked` (open `unchecked` rows with no live job, oldest first, 50 per
-  run), `defer_checks_on` bounded by `DEFER_MAX` (5 000, id order), `health` (doctor
-  `review.mergeability`); all log FG-REVIEW-0003 MergeabilityNotChecked (warn, runbook
+  run), `defer_checks_on` bounded by `DEFER_MAX` (5 000, id order), `decided_candidates` /
+  `confirm_live` (decided rows verified against the live tips by the sweep, least recently
+  verified first; column `confirmed_at`, migration 20261108100100), `health` (doctor
+  `review.mergeability`, also `decided_stale_head` / `decided_unverified`); a run refused because
+  the merge request closed resets the row to `unchecked`; all log FG-REVIEW-0003 MergeabilityNotChecked (warn, runbook
   `merge-request-mergeability`). Reasons are `forge_core::CheckReason`. Tests
   `review/mergeability/tests.rs`.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's

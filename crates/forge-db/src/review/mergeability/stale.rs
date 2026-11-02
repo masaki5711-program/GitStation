@@ -1,6 +1,7 @@
 //! Ending checks that will not finish (review HIGH): a run that failed for
 //! good ([`fail_check`], `job_failed`), rows left `checking` with no live
-//! job ([`reap_stale_checks`], `job_stale`), and doctor's counts
+//! job of an open merge request ([`reap_stale_checks`], `job_stale`), and
+//! doctor's counts (also decided rows whose pair is stale or unverified)
 //! ([`health`]). See the module documentation of `mergeability`.
 
 use std::time::Duration;
@@ -8,7 +9,7 @@ use std::time::Duration;
 use forge_core::ids::MergeRequestId;
 use forge_errors::ForgeError;
 
-use super::{not_checked, LIVE_JOB, MERGEABILITY_TIMEOUT};
+use super::{not_checked, ANSWERING, LIVE_JOB, MERGEABILITY_TIMEOUT};
 use crate::jobs::LEASE_SLACK;
 use crate::{query_error, Db};
 
@@ -68,7 +69,8 @@ pub async fn reap_stale_checks(
                  reason = 'job_stale', conflicts = '{{}}', conflicts_truncated = false, \
                  updated_at = now() WHERE merge_request_id IN ( \
                  SELECT g.merge_request_id FROM forge.merge_request_mergeability g \
-                 WHERE g.status = 'checking' \
+                 JOIN forge.merge_requests m ON m.id = g.merge_request_id \
+                 WHERE g.status = 'checking' AND m.state = 'open' \
                  AND g.updated_at < now() - make_interval(secs => $1::double precision / 1000) \
                  AND NOT {LIVE_JOB} ORDER BY g.merge_request_id LIMIT $2 \
                  FOR UPDATE OF g SKIP LOCKED) RETURNING merge_request_id, check_seq"
@@ -108,17 +110,34 @@ pub struct MergeabilityHealth {
     /// Open merge requests `unchecked` for longer than [`STALE_AFTER`] with
     /// no live job (the sweep re-requests them, 50 per run).
     pub unchecked_unqueued: i64,
+    /// Decided rows of open merge requests whose checked head is not the
+    /// merge request's head, for longer than [`STALE_AFTER`] with no live job.
+    pub decided_stale_head: i64,
+    /// Decided rows of open merge requests whose pair nobody verified
+    /// against the live tips for longer than [`UNVERIFIED_AFTER`] (the
+    /// sweep verifies 50 per run; a count means it does not keep up or
+    /// does not run).
+    pub decided_unverified: i64,
 }
 
+/// How long a decided row may go without the sweep verifying its pair.
+pub const UNVERIFIED_AFTER: Duration = Duration::from_secs(3_600);
+
 impl MergeabilityHealth {
-    /// `FG-REVIEW-0003 reason=undecided` when either count is not 0.
+    /// `FG-REVIEW-0003 reason=undecided` when any count is not 0.
     pub fn check(&self) -> Result<(), ForgeError> {
-        if self.checking_stale == 0 && self.unchecked_unqueued == 0 {
+        if self.checking_stale == 0
+            && self.unchecked_unqueued == 0
+            && self.decided_stale_head == 0
+            && self.decided_unverified == 0
+        {
             return Ok(());
         }
         Err(not_checked("undecided")
             .with_context("checking_stale", self.checking_stale)
-            .with_context("unchecked_unqueued", self.unchecked_unqueued))
+            .with_context("unchecked_unqueued", self.unchecked_unqueued)
+            .with_context("decided_stale_head", self.decided_stale_head)
+            .with_context("decided_unverified", self.decided_unverified))
     }
 }
 
@@ -138,19 +157,35 @@ pub async fn health(db: &Db) -> Result<Option<MergeabilityHealth>, ForgeError> {
         }
         let (checking_stale, unchecked_unqueued): (i64, i64) = sqlx::query_as(&format!(
             "SELECT count(*) FILTER (WHERE g.status = 'checking'), \
-             count(*) FILTER (WHERE g.status = 'unchecked' AND m.state = 'open') \
+             count(*) FILTER (WHERE g.status = 'unchecked') \
              FROM forge.merge_request_mergeability g \
              JOIN forge.merge_requests m ON m.id = g.merge_request_id \
-             WHERE g.status IN ('checking', 'unchecked') \
+             WHERE g.status IN ('checking', 'unchecked') AND m.state = 'open' \
              AND g.updated_at < now() - make_interval(secs => $1) AND NOT {LIVE_JOB}"
         ))
         .bind(STALE_AFTER.as_secs_f64())
         .fetch_one(db.pool().executor())
         .await
         .map_err(|e| crate::read_query_error(QUERY, e))?;
+        let (decided_stale_head, decided_unverified): (i64, i64) = sqlx::query_as(&format!(
+            "SELECT count(*) FILTER (WHERE g.checked_head_sha IS DISTINCT FROM m.head_sha \
+             AND g.updated_at < now() - make_interval(secs => $1) AND NOT {LIVE_JOB}), \
+             count(*) FILTER (WHERE COALESCE(g.confirmed_at, g.checked_at) \
+             < now() - make_interval(secs => $2)) \
+             FROM forge.merge_request_mergeability g \
+             JOIN forge.merge_requests m ON m.id = g.merge_request_id \
+             WHERE m.state = 'open' AND {ANSWERING}"
+        ))
+        .bind(STALE_AFTER.as_secs_f64())
+        .bind(UNVERIFIED_AFTER.as_secs_f64())
+        .fetch_one(db.pool().executor())
+        .await
+        .map_err(|e| crate::read_query_error(QUERY, e))?;
         Ok(Some(MergeabilityHealth {
             checking_stale,
             unchecked_unqueued,
+            decided_stale_head,
+            decided_unverified,
         }))
     })
     .await

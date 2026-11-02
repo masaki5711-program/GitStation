@@ -799,6 +799,17 @@ async fn a_new_head_downgrades_and_a_result_for_an_old_head_is_superseded() {
         .await
         .expect("record");
     assert_eq!(closed, Recorded::Superseded);
+    // Re-review (LOW): no `checking` row is left for the reaper.
+    let after = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(after.status, MergeabilityStatus::Unchecked);
+    kill_jobs(&t, mr.id).await;
+    let reaped = reap_stale_checks(&t.db, std::time::Duration::ZERO, 10)
+        .await
+        .expect("reap");
+    assert!(reaped.is_empty(), "no spurious job_stale for a closed one");
     t.drop_now().await;
 }
 
@@ -855,5 +866,51 @@ async fn concurrent_bases_writes_record_once() {
     );
     let written = [one.expect("one"), two.expect("two")];
     assert_eq!(written.iter().filter(|w| **w).count(), 1, "{written:?}");
+    t.drop_now().await;
+}
+
+/// Re-review (MEDIUM): doctor counts decided rows of open merge requests
+/// whose checked head is not the head, and those nobody verified for an
+/// hour; the sweep's candidates are the least recently verified first.
+#[tokio::test]
+async fn doctor_counts_stale_and_unverified_decisions_and_the_sweep_visits_them() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let _ready = crate::repositories::mark_ready(&t.db, &system("req-ready"), web.repository_id)
+        .await
+        .expect("ready");
+    let mr = open_at_a(&t, alice, p, "feature", "main").await;
+    run(&t, mr.id, MergeabilityStatus::CanBeMerged, 0).await;
+    let fresh = mergeability_health(&t.db)
+        .await
+        .expect("health")
+        .expect("migrated");
+    fresh.check().expect("just decided");
+    // The run's job finished (here: marked dead; it was never claimed).
+    kill_jobs(&t, mr.id).await;
+    // Head moved without the downgrade (written behind its back), and the
+    // pair was last verified long ago.
+    t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET checked_head_sha = '{}', \
+         confirmed_at = now() - interval '2 hours', checked_at = now() - interval '2 hours', \
+         updated_at = now() - interval '2 hours'",
+        "f".repeat(40)
+    ))
+    .await;
+    let h = mergeability_health(&t.db)
+        .await
+        .expect("health")
+        .expect("migrated");
+    assert_eq!((h.decided_stale_head, h.decided_unverified), (1, 1));
+    assert_eq!(
+        h.check().expect_err("stale").code(),
+        forge_errors::ErrorCode::MergeabilityNotChecked
+    );
+    let rows = decided_candidates(&t.db, 10).await.expect("candidates");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].merge_request, mr.id);
+    assert!(!rows[0].is_live(Some(&oid('b'))), "the head moved");
+    assert_eq!(confirm_live(&t.db, &[mr.id]).await.expect("confirm"), 1);
     t.drop_now().await;
 }

@@ -70,6 +70,7 @@ struct World {
     project: forge_core::ProjectId,
     alice: UserId,
     pushes: usize,
+    storage: crate::worker::provision::Storage,
 }
 
 impl World {
@@ -115,6 +116,8 @@ impl World {
             registry,
             review,
             browser,
+            // clone: the sweep's own handles
+            storage: storage.clone(),
             path,
             repo: web.repository_id,
             project: web.project_id,
@@ -540,7 +543,7 @@ async fn the_sweep_task_ends_stale_runs_and_requests_deferred_checks() {
         mr.id.get()
     ))
     .await;
-    let next = super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db)
+    let next = super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db, Some(&w.storage))
         .await
         .expect("sweep");
     assert!(matches!(next, crate::worker::supervise::Next::AfterPeriod));
@@ -556,10 +559,54 @@ async fn the_sweep_task_ends_stale_runs_and_requests_deferred_checks() {
         mr.id.get()
     ))
     .await;
-    super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db)
+    super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db, Some(&w.storage))
         .await
         .expect("sweep");
     w.drain().await;
     assert_eq!(w.status(&mr).await.status, MergeabilityStatus::CanBeMerged);
+    w.t.drop_now().await;
+}
+
+/// Re-review (MEDIUM): a decided status whose target moved without a push
+/// event reaching the subscriber (dead-lettered, or past the deferral
+/// bound) is verified by the sweep against the live tip and checked again;
+/// a pair that is still live is only marked verified.
+#[tokio::test]
+async fn the_sweep_rechecks_a_decided_status_whose_target_moved_silently() {
+    let w = World::new().await;
+    let (_base, _c1, clash) = w.histories().await;
+    let mr = w.open("feature", "main").await;
+    w.drain().await;
+    assert_eq!(w.status(&mr).await.status, MergeabilityStatus::CanBeMerged);
+    // Still live: verified, nothing requested.
+    let jobs_before =
+        w.t.json_rows("SELECT id FROM forge.jobs WHERE kind = 'merge_request.mergeability'")
+            .await
+            .len();
+    super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db, Some(&w.storage))
+        .await
+        .expect("sweep");
+    let confirmed =
+        w.t.json_rows("SELECT confirmed_at IS NOT NULL AS c FROM forge.merge_request_mergeability")
+            .await;
+    assert_eq!(confirmed[0]["c"], true);
+    let jobs_after =
+        w.t.json_rows("SELECT id FROM forge.jobs WHERE kind = 'merge_request.mergeability'")
+            .await
+            .len();
+    assert_eq!(jobs_after, jobs_before, "a live pair is not re-requested");
+    // The target moves behind the subscriber's back (no push event).
+    plumb(&w.path, &["update-ref", "refs/heads/main", &clash], None);
+    w.t.exec_superuser(
+        "UPDATE forge.merge_request_mergeability SET confirmed_at = now() - interval '2 hours'",
+    )
+    .await;
+    super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db, Some(&w.storage))
+        .await
+        .expect("sweep");
+    w.drain().await;
+    let s = w.status(&mr).await;
+    assert_eq!(s.status, MergeabilityStatus::CannotBeMerged, "{s:?}");
+    assert_eq!(s.checked_target_sha, Some(oid(&clash)));
     w.t.drop_now().await;
 }

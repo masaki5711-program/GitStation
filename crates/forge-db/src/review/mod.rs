@@ -40,11 +40,11 @@ mod version_refs;
 pub mod versions;
 
 pub use mergeability::{
-    begin_check, fail_check, health as mergeability_health, mergeability, mergeability_job,
-    mergeability_payload, mergeability_written, not_checked, reap_stale_checks, record_check,
-    request_check, sweep_unchecked, CheckResult, CheckStart, CheckSubject, MergeabilityHealth,
-    MergeabilityRequest, Recorded, StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT,
-    STALE_AFTER, SWEEP_BATCH,
+    begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
+    mergeability, mergeability_job, mergeability_payload, mergeability_written, not_checked,
+    reap_stale_checks, record_check, request_check, sweep_unchecked, CheckResult, CheckStart,
+    CheckSubject, DecidedRow, MergeabilityHealth, MergeabilityRequest, Recorded,
+    StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, STALE_AFTER, SWEEP_BATCH,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
 pub use version_bases::record_version_bases;
