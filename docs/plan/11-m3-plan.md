@@ -251,7 +251,7 @@ R1〜R6 で `merge_request.opened`・`draft_changed`・`pushed`・`updated`・`r
 | FG-REVIEW-0005 | DuplicateOpenMergeRequest | 409 | info | — |
 | FG-REVIEW-0006 | SelfApprovalRefused | 403 | info | — |
 | FG-REVIEW-0007 | CodeownersInvalid（target のブランチのファイルを解析できない。黙って無視せず条件未達にする） | 422 | warn | `codeowners` |
-| FG-REVIEW-0008 | DiscussionPositionInvalid | 422 | info | — |
+| FG-REVIEW-0004（R3 で登録。番号は登録の順、§11.4） | DiscussionPositionInvalid | 422 | info | — |
 | FG-REVIEW-0009 | MergeMethodNotAllowed | 409 | info | — |
 | FG-REVIEW-0010 | CheckNamespaceDenied | 403 | info | — |
 | FG-REVIEW-0011 | CheckPayloadInvalid（注釈の上限超えなど） | 422 | info | — |

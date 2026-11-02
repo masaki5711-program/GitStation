@@ -296,7 +296,12 @@ connection, mapping driver errors to registered codes, migrations
   `data.action` = `note_added` / `thread_resolved` / `thread_unresolved`, dedup
   `merge_request_note_added:<note_id>` or `merge_request_thread_(un)resolved:<id>:<revision>`;
   an unknown version is FG-REVIEW-0004 `version_unknown` by the foreign key). Reads
-  `discussions` (at most 500 discussions / 5 000 notes, `truncated`) and `discussion`. The
+  `discussions` (at most 500 discussions / 5 000 notes, `truncated`) and `discussion`. Caps
+  checked under the merge request's row lock (review round 1): 500 discussions and 5 000 notes
+  per merge request, 200 notes per discussion (`MAX_DISCUSSIONS`, `MAX_NOTES`,
+  `MAX_NOTES_PER_DISCUSSION`; FG-REVIEW-0005 DiscussionLimitReached). Migration 20261109100100
+  adds composite foreign keys (a thread's project is its merge request's; a note's discussion,
+  merge request and project agree). The steps the commands share are `discussions/steps.rs`. The
   project purge deletes notes, then discussions, before the versions. The token and
   session authenticators now read `users.kind` (`TokenIdentity.kind`,
   `SessionIdentity.kind`; `users::parse_kind`, never a default). Tests

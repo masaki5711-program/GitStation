@@ -201,7 +201,10 @@ admitted proof.
   …/discussions/{discussion_id}/resolve` / `…/unresolve` as `DiscussionResolve` (loader
   `DiscussionToResolve`: project, merge request and thread; any missing is FG-REPO-0005).
   Bodies are stored and returned as written (never rendered); FG-REVIEW-0004 (422) for a
-  position outside the version's diff. Tests `tests/merge_request_discussion_routes.rs`.
+  position outside the version's diff; FG-REVIEW-0005 (409) past a cap. Every thread carries
+  `outdated` and `outdated_unknown`; a write's answer never fails after its commit (an
+  `outdated` that cannot be computed is `outdated_unknown`). Tests
+  `tests/merge_request_discussion_routes.rs`.
 - OpenAPI (phase 8b MR6): request / response schemas come from the Rust
   types through utoipa (`RouteDef::request` / `response`, `SchemaDoc`):
   `ProjectBody` (the `project_view` shape), `UserSelf`, `Resolution`; body

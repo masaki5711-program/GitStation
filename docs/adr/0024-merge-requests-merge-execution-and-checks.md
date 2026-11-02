@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -601,6 +601,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
 | 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
 | FG-REVIEW-0004（R3 で登録） | DiscussionPositionInvalid | 422 | info | — | R3 |
+| FG-REVIEW-0005（R3 のレビューで登録） | DiscussionLimitReached（スレッド・コメントの上限） | 409 | info | — | R3 |
 | 仮（登録の順に決める） | MergeMethodNotAllowed | 409 | info | — | R4 |
 | 仮（登録の順に決める） | CheckNamespaceDenied | 403 | info | — | C1 |
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
@@ -891,3 +892,34 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   コメントが JSON のエスケープで超えると FG-WEB-0009 RequestTooLarge）。一覧は 500 スレッド・5 000 コメントまで（`truncated`）。本文は
   書かれたまま保存して返し、サーバーは描画しない（画面が安全に描画する、U1）。gstn は `mr discussions` / `mr comment`
   （`--discussion` で返信、`--version --path --line [--side]` で行）/ `mr resolve [--unresolve]`。
+
+### R3 の独立レビュー（1 回目）で決めたこと（2026-11-02）
+
+上の R3 の節と違えたところは **改訂** と書いた。
+
+- **人だけの Action の行（HIGH）**: 人だけの arm が既存の人だけの Action でもサービスアカウントとボットを拒むようになったのに、
+  行は `DiscussionResolve` にしか無かった（arm を消しても行列が赤くならない）。`Action::is_people_only` に一覧を置き、各 Action に
+  サービスアカウントとボットの deny の行を置いた（`matrix_rows_people.rs`）。どの行も、同じロール・スコープ・管理者の印の **人**
+  （`Actor::human_twin`）なら allow であることをテストで確かめ（拒否の理由が種類だけであること）、逆に人だけでない Action の
+  allow の行は種類を変えても allow であることを確かめる。ボットは自分のロールの範囲でコメントできる（allow の行）。
+- **書き込みの応答で失敗しない（HIGH、改訂）**: 書き込みのルートはコミットの後に `outdated` の差分を取っていたため、git の失敗
+  （busy・時間切れ・届かないコミット）で保存済みのコメントに 4xx / 5xx を返し、再試行で重複を招いた。`outdated` を
+  `Outdated::{No, Yes, Unknown}` にし、計算できないもの（今の版が無い、Purge 済みの版、base の未記録、1 回の読み取りで
+  **20 組**（`MAX_DIFFS_PER_READ`）を超える差分、差分の失敗、書き込みの後の版の読み取りの失敗）は `Unknown`。API では
+  `outdated: true` と `outdated_unknown: true`。読み取りごとに warn `forge.review.discussion_outdated_unknown` を 1 回
+  （件数・理由・最初の差分の失敗の `error_code`）。**一覧の読み取りも差分の失敗で失敗させない**（上の「差分の取得の失敗は
+  読み取りの失敗にする」を改訂。DB の読み取りの失敗だけが失敗）。今の版は MR の `head_sha` の版で、無ければ `Unknown`
+  （「古くない」にしない）。
+- **上限（FG-REVIEW-0005 DiscussionLimitReached、409）**: MR ごとに 500 スレッド・5 000 コメント、スレッドごとに 200 コメント。
+  MR の行のロックの下で数える（書き込みはどれもこのロックを持つ）。一覧の上限と同じなので、一覧が切れることは無い。
+  1 スレッドのコメントの読み取りにも LIMIT。
+- **コメントの上限を 60 KiB に（改訂）**: リクエストの JSON の上限が 64 KiB なので、64 KiB のコメントは送れなかった。規則が
+  受け付けるコメントは、包みと 4 KiB のパスを足しても上限に収まる（表は 64 KiB のまま、最後の守り）。
+- **合成の外部キー**（追記のマイグレーション 20261109100100）: スレッドの `(merge_request_id, project_id)` →
+  `merge_requests (id, project_id)`、コメントの `(discussion_id, merge_request_id, project_id)` → スレッドの同じ組。
+- **クローズ・マージ済みの MR**: コメントも解決もできる（解決は記録の整理で、マージを止めるのは `evaluate_merge()`）。
+  `Resource::Discussion` は MR の状態を入力にしないので行列の行では表せず、HTTP のテストで固定した。
+- **コピー**: old 側の位置はコピーの項目に解決しない（コピーの元は変わらずに残っている）。
+- テスト: `check_inline` の理由（`version_base_pending`・`version_purged`・`no_patch`（バイナリ）・`diff_truncated`（ファイル数の
+  上限））を実リポジトリで、本文の規則・別の MR / 別のプロジェクトのスレッドの ID（同じ 404、何も書かない）・サービス
+  アカウントの解決の拒否・同じ解決の繰り返し（イベントは増えない）・hunk の境界・gstn の終了コードを HTTP / CLI で。

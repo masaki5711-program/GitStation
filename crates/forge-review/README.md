@@ -86,12 +86,17 @@ merge request in place (ADR-0024 §1).
   `merge_request_compare`, implemented for `Browser`). An inline position must be in a hunk
   of a file the version's diff (`merge_base..head`) lists on that side
   (`position::check_position`, FG-REVIEW-0004); `outdated` is computed when read
-  (`position::line_changed` on the diff from the thread's side commit to the current
-  version's: a `-` line at its number, or its file deleted / renamed / unreadable). Field
-  checks `check_note_body` / `check_position_shape` (FG-WEB-0006). Tests
+  (`src/outdated.rs`: `Outdated::{No, Yes, Unknown}` from `position::line_changed` on the
+  diff from the thread's side commit to the current version's — a `-` line at its number,
+  or its file deleted / renamed / unreadable). Unknown (no current version, a purged
+  version, bases pending, more than `MAX_DIFFS_PER_READ` = 20 diffs, a failed diff) is shown
+  as outdated and logged once (`forge.review.discussion_outdated_unknown`); neither the list
+  nor `view` (a committed write's answer) ever fails on git. Field checks `check_note_body`
+  (at most 60 KiB) / `check_position_shape` (FG-WEB-0006). Tests
   `tests/discussions_git.rs` (`an_inline_discussion_outside_the_diff_is_refused`).
 
-**Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
+**Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
+DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
 `merge_requests_one_open` is the backstop); FG-REVIEW-0002
 PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,
