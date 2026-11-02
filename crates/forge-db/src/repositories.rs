@@ -948,7 +948,14 @@ async fn record(
         (None, Actor::UserViaServiceAccount { user, .. }) => Some(*user),
         (None, Actor::System | Actor::Anonymous) => None,
     };
-    let unlisted = unlisted_updates(&details.to_value(), push);
+    let mut audit_details = details.to_value();
+    let unlisted = unlisted_updates(&audit_details, push);
+    // R5 round 3: every new record says its unlisted ref updates were kept
+    // (none when they are all deletions, which reach nothing), so only a
+    // record written before push_unlisted_refs reads as "legacy cut".
+    if let Some(map) = audit_details.as_object_mut() {
+        map.insert("unlisted_kept".to_owned(), serde_json::Value::Bool(true));
+    }
     if !unlisted.is_empty() {
         let request_id = ctx.request_id.as_str().to_owned();
         tx.step(|c| async move {
@@ -964,7 +971,7 @@ async fn record(
             resource_id: Some(project_id.get()),
             project_id: Some(project_id),
             error_code: None,
-            details: details.to_value(),
+            details: audit_details,
         },
         affected: Vec::new(),
         events: vec![DomainEvent {

@@ -223,8 +223,16 @@ async fn every_push_writes_one_audit_row_and_one_event() {
     let hash = expected.as_str().strip_prefix(&prefix).expect("prefix");
     assert_eq!(hash.len(), 64);
     assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
-    // Small push: the payload is the details.
-    assert_eq!(payload, details);
+    // Small push: the payload is the details, but for the audit row's own
+    // marker that its unlisted ref updates were kept (M3 R5 round 3).
+    let mut audit_only = details.clone();
+    assert_eq!(
+        audit_only
+            .as_object_mut()
+            .and_then(|m| m.remove("unlisted_kept")),
+        Some(serde_json::Value::Bool(true))
+    );
+    assert_eq!(*payload, audit_only);
     t.drop_now().await;
 }
 
