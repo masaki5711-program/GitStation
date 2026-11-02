@@ -289,6 +289,20 @@ async fn purge_of_an_open_merge_requests_current_head_is_refused() {
         .await
         .expect("back");
     assert_eq!(back, VersionOutcome::PurgedHead { version: 1 });
+    let trace = count(
+        &t,
+        "SELECT count(*) FROM forge.audit_log WHERE request_id = $1 \
+         AND action = 'merge_request.purged_head_pushed'",
+        "req-back",
+    )
+    .await;
+    assert_eq!(trace, 1, "the purged head pushed back leaves an audit row");
+    let row = get(&t.db, p, mr.iid).await.expect("get").expect("row");
+    assert_eq!(
+        row.head_sha.as_deref(),
+        Some("b".repeat(40).as_str()),
+        "head unchanged"
+    );
     let marks: Vec<bool> = list_versions(&t.db, mr.id)
         .await
         .expect("versions")

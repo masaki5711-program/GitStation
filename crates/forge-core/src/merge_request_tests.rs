@@ -181,6 +181,15 @@ fn pushed_is_a_transition_and_version_changes_are_audit_only() {
     });
     assert_eq!(purged.event_type(), None);
     assert_eq!(purged.action(), "merge_request.version_refs_purged");
+    let back = AuditDetails::MergeRequestVersion(MergeRequestVersionChange::PurgedHeadPushed {
+        merge_request: mr,
+        iid: 3,
+        version: 1,
+        head_sha: ObjectId::parse(&"d".repeat(40)).expect("oid"),
+    });
+    assert_eq!(back.event_type(), None);
+    assert_eq!(back.action(), "merge_request.purged_head_pushed");
+    assert_eq!(back.to_value()["version"], 1);
     assert_eq!(
         purged.to_value(),
         json!({"merge_request_id": 9, "iid": 3, "versions": [1, 2]})

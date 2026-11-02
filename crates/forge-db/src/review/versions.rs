@@ -240,9 +240,9 @@ pub enum VersionOutcome {
     Restored { version: i64 },
     /// `head` already is the merge request's head: nothing written.
     AlreadyHead { version: Option<i64> },
-    /// `head` is a version whose refs were purged: nothing written (the
-    /// purged commit never becomes the head again; runbook
-    /// `secret-removal`).
+    /// `head` is a version whose refs were purged: it never becomes the
+    /// head again; only the audit-only `merge_request.purged_head_pushed`
+    /// is written (runbook `secret-removal`).
     PurgedHead { version: i64 },
     /// The merge request is not open: nothing written.
     NotOpen(MergeRequestState),
@@ -313,9 +313,27 @@ pub async fn record_mr_version(
             .transpose()?;
         if let Some(v) = existing {
             if v.refs_purged {
-                return Ok(crate::change::Settle::Discard(VersionOutcome::PurgedHead {
-                    version: v.version_no,
-                }));
+                // Never the head again; leave a trace (security review):
+                // the purged commit was pushed back.
+                let details = AuditDetails::MergeRequestVersion(
+                    MergeRequestVersionChange::PurgedHeadPushed {
+                        merge_request: mr,
+                        iid: current.iid,
+                        version: v.version_no,
+                        head_sha: head.clone(), // clone: the details own their values
+                    },
+                );
+                let record = ChangeRecord {
+                    audit: audit_entry(current.project_id, &details),
+                    affected: Vec::new(),
+                    events: Vec::new(),
+                };
+                return Ok(crate::change::Settle::Commit(
+                    record,
+                    VersionOutcome::PurgedHead {
+                        version: v.version_no,
+                    },
+                ));
             }
             let version = v.version_no;
             move_head(&mut tx, mr, head).await?;

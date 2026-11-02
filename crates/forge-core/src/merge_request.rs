@@ -287,6 +287,16 @@ pub enum MergeRequestVersionChange {
         head_sha: ObjectId,
         previous_head: Option<ObjectId>,
     },
+    /// `merge_request.purged_head_pushed`: the source branch was moved
+    /// (force-pushed) back to the head commit of a version whose refs were
+    /// purged; it does not become the head again (the merge request keeps
+    /// its recorded head; R4's merge refuses a branch tip other than it).
+    PurgedHeadPushed {
+        merge_request: MergeRequestId,
+        iid: i64,
+        version: i64,
+        head_sha: ObjectId,
+    },
     /// `merge_request.version_refs_purged`: an administrator removed the
     /// hidden refs of these versions (secret removal, runbook
     /// `secret-removal`); they are never written again.
@@ -301,6 +311,7 @@ impl MergeRequestVersionChange {
     pub fn merge_request(&self) -> MergeRequestId {
         match self {
             Self::HeadRestored { merge_request, .. }
+            | Self::PurgedHeadPushed { merge_request, .. }
             | Self::VersionRefsPurged { merge_request, .. } => *merge_request,
         }
     }
@@ -309,11 +320,13 @@ impl MergeRequestVersionChange {
     pub fn action(&self) -> &'static str {
         match self {
             Self::HeadRestored { .. } => "merge_request.head_restored",
+            Self::PurgedHeadPushed { .. } => "merge_request.purged_head_pushed",
             Self::VersionRefsPurged { .. } => "merge_request.version_refs_purged",
         }
     }
 
     /// HeadRestored `{"merge_request_id","iid","version","head_sha","previous_head"}`,
+    /// PurgedHeadPushed `{"merge_request_id","iid","version","head_sha"}`,
     /// VersionRefsPurged `{"merge_request_id","iid","versions"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
@@ -329,6 +342,17 @@ impl MergeRequestVersionChange {
                 "version": version,
                 "head_sha": head_sha.as_str(),
                 "previous_head": previous_head.as_ref().map(ObjectId::as_str),
+            }),
+            Self::PurgedHeadPushed {
+                merge_request,
+                iid,
+                version,
+                head_sha,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "version": version,
+                "head_sha": head_sha.as_str(),
             }),
             Self::VersionRefsPurged {
                 merge_request,
