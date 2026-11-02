@@ -27,6 +27,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::{read_query_error, Db};
 
 mod commands;
+mod steps;
 
 pub use commands::{
     add_note_mr_decided, resolve_discussion_mr_decided, start_discussion_mr_decided,
