@@ -442,3 +442,175 @@ async fn the_list_returns_discussions_with_their_notes_oldest_first() {
     assert_eq!(one.map(|d| d.started_by), Some(alice));
     t.drop_now().await;
 }
+
+fn reason_of(err: &ForgeError) -> String {
+    err.context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default()
+}
+
+/// FG-REVIEW-0005's test (review round 1): a discussion holds at most
+/// `MAX_NOTES_PER_DISCUSSION` notes, a merge request `MAX_NOTES` notes and
+/// `MAX_DISCUSSIONS` discussions — counted under the merge request's lock;
+/// nothing is written past a cap.
+#[tokio::test]
+async fn a_full_discussion_or_merge_request_refuses_more() {
+    let t = FreshDb::migrated().await;
+    let (alice, web, mr) = seeded(&t).await;
+    let p = web.project_id;
+    let seed_notes = |discussion: DiscussionId, n: usize| {
+        format!(
+            "INSERT INTO forge.merge_request_notes \
+             (discussion_id, merge_request_id, project_id, author_id, body) \
+             SELECT d.id, d.merge_request_id, d.project_id, d.started_by, 'seed ' || g \
+             FROM forge.merge_request_discussions d, generate_series(1, {n}) g \
+             WHERE d.id = {}",
+            discussion.get()
+        )
+    };
+    let reply = |request: &'static str, d: DiscussionId| {
+        let db = t.db.clone();
+        async move {
+            add_note_mr_decided(
+                &db,
+                &as_user(alice, request),
+                p,
+                mr.iid,
+                d,
+                alice,
+                "one more",
+                |_| Ok(()),
+            )
+            .await
+            .map(drop)
+        }
+    };
+    let d1 = start(&t, alice, p, mr.iid, "req-d1", &general("first"))
+        .await
+        .expect("d1");
+    t.commit_audited(
+        ("project", p.get()),
+        &[seed_notes(d1.id, MAX_NOTES_PER_DISCUSSION - 1)],
+    )
+    .await;
+    let err = reply("req-full-thread", d1.id)
+        .await
+        .expect_err("thread full");
+    assert_eq!(err.code(), ErrorCode::DiscussionLimitReached);
+    assert_eq!(reason_of(&err), "notes_per_discussion");
+    assert!(events_of(&t, "req-full-thread").await.is_empty());
+    let d2 = start(&t, alice, p, mr.iid, "req-d2", &general("second"))
+        .await
+        .expect("another thread is fine");
+    // 200 + 1 notes so far: fill the merge request to MAX_NOTES.
+    t.commit_audited(
+        ("project", p.get()),
+        &[seed_notes(d2.id, MAX_NOTES - MAX_NOTES_PER_DISCUSSION - 1)],
+    )
+    .await;
+    let err = start(&t, alice, p, mr.iid, "req-full-notes", &general("third"))
+        .await
+        .expect_err("notes full");
+    assert_eq!(reason_of(&err), "notes_per_merge_request");
+    // A second merge request with MAX_DISCUSSIONS threads.
+    let new = NewMergeRequest {
+        title: "Another".to_owned(),
+        description: String::new(),
+        source_branch: branch("other"),
+        target_branch: branch("main"),
+        draft: false,
+    };
+    let (other, ()) = open_mr_decided(&t.db, &as_user(alice, "req-open-2"), p, alice, &new, |_| {
+        Ok(())
+    })
+    .await
+    .expect("open");
+    t.commit_audited(
+        ("project", p.get()),
+        &[format!(
+            "INSERT INTO forge.merge_request_discussions \
+             (merge_request_id, project_id, kind, started_by) \
+             SELECT {}, {}, 'general', {} FROM generate_series(1, {MAX_DISCUSSIONS})",
+            other.id.get(),
+            p.get(),
+            alice.get()
+        )],
+    )
+    .await;
+    let err = start(
+        &t,
+        alice,
+        p,
+        other.iid,
+        "req-full-threads",
+        &general("too many"),
+    )
+    .await
+    .expect_err("discussions full");
+    assert_eq!(reason_of(&err), "discussions_per_merge_request");
+    t.drop_now().await;
+}
+
+/// Review round 1 (database): a thread's project is its merge request's,
+/// and a note's discussion, merge request and project agree — composite
+/// foreign keys, not the application alone.
+#[tokio::test]
+async fn threads_and_notes_cannot_name_another_project_or_merge_request() {
+    let t = FreshDb::migrated().await;
+    let (alice, web, mr) = seeded(&t).await;
+    let bob = users::create(
+        &t.db,
+        &system("req-user-bob"),
+        &NewUser::human("bob", "bob", "bob@example.test"),
+    )
+    .await
+    .expect("bob");
+    let other = projects::create(
+        &t.db,
+        &system("req-project-other"),
+        &NewProject::new("other", bob.namespace_id, "Other", bob.user_id),
+    )
+    .await;
+    let d = start(&t, alice, web.project_id, mr.iid, "req-d", &general("x"))
+        .await
+        .expect("thread");
+    let Ok(other) = other else {
+        panic!("second project");
+    };
+    let mut su = t.superuser().await;
+    let thread = sqlx::query(
+        "INSERT INTO forge.merge_request_discussions \
+         (merge_request_id, project_id, kind, started_by) VALUES ($1, $2, 'general', $3)",
+    )
+    .bind(mr.id.get())
+    .bind(other.project_id.get())
+    .bind(alice.get())
+    .execute(&mut su)
+    .await
+    .expect_err("a thread of another project");
+    assert!(
+        thread
+            .to_string()
+            .contains("merge_request_discussions_merge_request_project"),
+        "{thread}"
+    );
+    let note = sqlx::query(
+        "INSERT INTO forge.merge_request_notes \
+         (discussion_id, merge_request_id, project_id, author_id, body) VALUES ($1, $2, $3, $4, 'x')",
+    )
+    .bind(d.id.get())
+    .bind(mr.id.get())
+    .bind(other.project_id.get())
+    .bind(alice.get())
+    .execute(&mut su)
+    .await
+    .expect_err("a note of another project");
+    assert!(
+        note.to_string()
+            .contains("merge_request_notes_discussion_scope"),
+        "{note}"
+    );
+    t.drop_now().await;
+}

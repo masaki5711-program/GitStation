@@ -46,6 +46,7 @@ pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,
     start_discussion_mr_decided, DiscussionFacts, DiscussionPage, DiscussionPosition,
     NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote, MAX_DISCUSSIONS, MAX_NOTES,
+    MAX_NOTES_PER_DISCUSSION,
 };
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,

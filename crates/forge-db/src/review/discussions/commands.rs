@@ -13,7 +13,7 @@ use sqlx::postgres::PgConnection;
 
 use super::{
     attach, discussion_columns, note_columns, DiscussionPosition, DiscussionRow, NoteRow,
-    StoredDiscussion,
+    StoredDiscussion, MAX_DISCUSSIONS, MAX_NOTES, MAX_NOTES_PER_DISCUSSION,
 };
 use crate::change::{
     AuditEntry, ChangeContext, ChangeRecord, ChangeTx, DomainEvent, Outcome, Settle,
@@ -121,13 +121,69 @@ async fn lock_discussion(
 /// The notes of discussion `id`, oldest first.
 async fn notes_of(conn: &mut PgConnection, id: DiscussionId) -> Result<Vec<NoteRow>, ForgeError> {
     sqlx::query_as(&format!(
-        "SELECT {} FROM forge.merge_request_notes WHERE discussion_id = $1 ORDER BY id",
+        "SELECT {} FROM forge.merge_request_notes WHERE discussion_id = $1 ORDER BY id LIMIT $2",
         note_columns()
     ))
     .bind(id.get())
+    .bind(i64::try_from(MAX_NOTES_PER_DISCUSSION).unwrap_or(i64::MAX))
     .fetch_all(conn)
     .await
     .map_err(|e| query_error("review.discussion_notes", e))
+}
+
+/// (discussions, notes) of merge request `mr` and the notes of
+/// `discussion` (`0` without one), counted under the merge request's row
+/// lock (every discussion write holds it).
+async fn counts(
+    conn: &mut PgConnection,
+    mr: i64,
+    discussion: Option<DiscussionId>,
+) -> Result<(i64, i64, i64), ForgeError> {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM forge.merge_request_discussions WHERE merge_request_id = $1), \
+                (SELECT count(*) FROM forge.merge_request_notes WHERE merge_request_id = $1), \
+                (SELECT count(*) FROM forge.merge_request_notes WHERE discussion_id = $2)",
+    )
+    .bind(mr)
+    .bind(discussion.map(DiscussionId::get))
+    .fetch_one(conn)
+    .await
+    .map_err(|e| query_error("review.discussion_counts", e))
+}
+
+/// `FG-REVIEW-0005` when one more discussion (`new_discussion`) or note
+/// would pass a cap.
+async fn refuse_full(
+    tx: &mut ChangeTx,
+    mr: &StoredMergeRequest,
+    discussion: Option<DiscussionId>,
+) -> Result<(), ForgeError> {
+    let mr_id = mr.id.get();
+    let (discussions, notes, in_discussion) = tx
+        .step(|c| async move { counts(c, mr_id, discussion).await })
+        .await?;
+    let full = |reason: &'static str, limit: usize| {
+        ForgeError::new(ErrorCode::DiscussionLimitReached)
+            .with_context("reason", reason)
+            .with_context("limit", limit)
+            .with_context("project_id", mr.project_id.get())
+            .with_context("iid", mr.iid)
+            .with_context("merge_request_id", mr_id)
+    };
+    let at = |count: i64, limit: usize| usize::try_from(count).map_or(true, |n| n >= limit);
+    if discussion.is_none() && at(discussions, MAX_DISCUSSIONS) {
+        return Err(full("discussions_per_merge_request", MAX_DISCUSSIONS));
+    }
+    if at(notes, MAX_NOTES) {
+        return Err(full("notes_per_merge_request", MAX_NOTES));
+    }
+    if let Some(d) = discussion {
+        if at(in_discussion, MAX_NOTES_PER_DISCUSSION) {
+            return Err(full("notes_per_discussion", MAX_NOTES_PER_DISCUSSION)
+                .with_context("discussion_id", d.get()));
+        }
+    }
+    Ok(())
 }
 
 /// Insert a note by `author` into `discussion`; its id.
@@ -242,6 +298,7 @@ pub async fn start_discussion_mr_decided<P>(
         let decided = decide(&facts)?;
         let mr = locked_mr(&facts)?;
         let (mr_id, mr_iid) = (mr.id, mr.iid);
+        refuse_full(&mut tx, mr, None).await?;
         let kind = match new.position {
             None => DiscussionKind::General,
             Some(_) => DiscussionKind::Inline,
@@ -319,6 +376,7 @@ pub async fn add_note_mr_decided<P>(
             .step(|c| async move { lock_discussion(c, mr_id, discussion).await })
             .await?
             .ok_or_else(discussion_absent)?;
+        refuse_full(&mut tx, mr, Some(current.id)).await?;
         let body = body.to_owned();
         let target = current.clone(); // clone: moved into the step
         let note = tx

@@ -33,10 +33,15 @@ pub use commands::{
     DiscussionFacts, NewDiscussion, ResolveOutcome,
 };
 
-/// The most discussions one list returns (`truncated` beyond).
+/// The most discussions a merge request holds (FG-REVIEW-0005
+/// `discussions_per_merge_request`, checked under its row lock) and one
+/// list returns (`truncated` beyond: never, while the cap holds).
 pub const MAX_DISCUSSIONS: usize = 500;
-/// The most notes one list returns over all its discussions.
+/// The most notes a merge request holds over all its discussions
+/// (`notes_per_merge_request`) and one list returns.
 pub const MAX_NOTES: usize = 5_000;
+/// The most notes one discussion holds (`notes_per_discussion`).
+pub const MAX_NOTES_PER_DISCUSSION: usize = 200;
 
 /// Where an inline discussion sits: a line of one side of one version's
 /// diff (`merge_base..head`).
