@@ -62,7 +62,7 @@ pub use fields::{
     MAX_NOTE_BYTES, MAX_PATH_BYTES, MAX_TITLE_CHARS,
 };
 pub use forge_db::review::{DiscussionPosition, ResolveOutcome, StoredDiscussion, StoredNote};
-pub use outdated::{DiscussionList, DiscussionView, Outdated, MAX_DIFFS_PER_READ};
+pub use outdated::{DiscussionList, DiscussionView, Outdated, MAX_DIFFS_PER_READ, OUTDATED_BUDGET};
 
 /// A branch's head commit in a repository, for the commands that name one
 /// (create, retarget, reopen — M3 R1b: the reopen also compares it with
@@ -136,6 +136,9 @@ pub struct Review {
     /// M3 R3: where inline positions and `outdated` read diffs (`None`:
     /// `FG-SYS-0001 reason=diffs_unconfigured` when one is needed).
     diffs: Option<Arc<dyn DiffProbe>>,
+    /// M3 R3 re-review: the time one read (or a write's answer) may spend
+    /// on `outdated` diffs (`outdated::OUTDATED_BUDGET` unless set).
+    outdated_budget: std::time::Duration,
 }
 
 impl std::fmt::Debug for Review {
@@ -241,6 +244,7 @@ impl Review {
             branches,
             refs: None,
             diffs: None,
+            outdated_budget: outdated::OUTDATED_BUDGET,
         }
     }
 

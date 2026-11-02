@@ -33,7 +33,8 @@ use forge_review::{DiffProbe, Outdated};
 use forge_review::{
     DiscussionPosition, NewFields, ResolveOutcome, Review, StoredDiscussion, StoredMergeRequest,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
     use std::io::Write as _;
@@ -100,6 +101,8 @@ struct Switchable {
     browser: Arc<Browser>,
     fail: AtomicBool,
     calls: AtomicUsize,
+    /// Each diff waits this long first (a slow git).
+    delay_ms: AtomicU64,
 }
 
 impl DiffProbe for Switchable {
@@ -115,7 +118,13 @@ impl DiffProbe for Switchable {
         if self.fail.load(Ordering::SeqCst) {
             return Box::pin(async { Err(ForgeError::new(ErrorCode::GitBusy)) });
         }
-        self.browser.merge_request_diff(repo, iid, from, to, caller)
+        let delay = Duration::from_millis(self.delay_ms.load(Ordering::SeqCst));
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            self.browser
+                .merge_request_diff(repo, iid, from, to, caller)
+                .await
+        })
     }
 }
 
@@ -197,6 +206,7 @@ async fn world() -> World {
         browser: browser.clone(), // clone: the probe shares the browse caches
         fail: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
+        delay_ms: AtomicU64::new(0),
     });
     let review = Review::new(t.db.clone(), browser).with_diffs(diffs.clone());
     let proof = open_proof(
@@ -837,5 +847,83 @@ async fn check_inline_names_every_reason_it_refuses() {
         .await
         .expect_err("purged");
     assert_eq!(reason(&err), "version_purged");
+    w.t.drop_now().await;
+}
+
+/// Re-review: one read (and a write's answer) spends at most its time
+/// budget on diffs. With 1.5 s and a git that takes 1 s per diff, the
+/// first pair is answered, the second is cut at the deadline and the third
+/// never runs git; all past the deadline are `Unknown`.
+#[tokio::test]
+async fn the_outdated_computation_stops_at_its_deadline() {
+    let w = world().await;
+    let alice = session(w.alice);
+    let mut threads = vec![w
+        .start(&alice, "req-t1", at(1, "lib.rs", DiscussionSide::New, 10))
+        .await
+        .expect("v1")];
+    for n in 2..=3 {
+        w.version_on_base(n, &format!("ten v{n}")).await;
+        threads.push(
+            w.start(
+                &alice,
+                &format!("req-t{n}"),
+                at(n, "lib.rs", DiscussionSide::New, 10),
+            )
+            .await
+            .expect("thread"),
+        );
+    }
+    w.version_on_base(4, "ten last").await;
+    let budget = Duration::from_millis(1500);
+    let review = Review::new(w.t.db.clone(), w.diffs.browser.clone())
+        .with_diffs(w.diffs.clone())
+        .with_outdated_budget(budget);
+    w.diffs.delay_ms.store(1000, Ordering::SeqCst);
+    let before = w.diffs.calls.load(Ordering::SeqCst);
+    let started = Instant::now();
+    let list = review
+        .discussions(
+            &w.current().await,
+            ready(w.repo),
+            "user:1",
+            &rid("req-slow"),
+        )
+        .await
+        .expect("a read never fails on git");
+    assert!(
+        started.elapsed() < budget + Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        w.diffs.calls.load(Ordering::SeqCst) - before,
+        2,
+        "the third pair runs no git"
+    );
+    let states: Vec<Outdated> = threads.iter().map(|d| state_of(&list, d.id)).collect();
+    assert_eq!(
+        states,
+        [Outdated::Yes, Outdated::Unknown, Outdated::Unknown]
+    );
+    // A write's answer is bounded the same way: a git slower than the
+    // whole budget is cut at the deadline.
+    w.diffs.delay_ms.store(5000, Ordering::SeqCst);
+    let started = Instant::now();
+    let view = review
+        .view(
+            &w.current().await,
+            ready(w.repo),
+            "user:1",
+            &rid("req-view"),
+            threads[0].clone(),
+        )
+        .await;
+    assert!(
+        started.elapsed() < budget + Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(view.outdated, Outdated::Unknown);
     w.t.drop_now().await;
 }

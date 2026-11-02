@@ -6,13 +6,22 @@
 //! (review round 1): a thread whose answer cannot be computed — the
 //! merge request has no current version, a purged version or unrecorded
 //! bases, more distinct diffs than [`MAX_DIFFS_PER_READ`], or a diff that
-//! failed (busy, timeout, unreachable commits) — is [`Outdated::Unknown`]:
-//! shown as outdated (look again) and flagged as unknown. A read with
-//! unknown threads logs one warn event,
-//! `forge.review.discussion_outdated_unknown`, with the counts, the reason
-//! and the first diff failure's `error_code`.
+//! failed (busy, timeout, unreachable commits), or the read's time budget
+//! ([`OUTDATED_BUDGET`], 8 s: well under the request timeout, so a write's
+//! answer after its commit stays inside it) ran out — is
+//! [`Outdated::Unknown`]: shown as outdated (look again) and flagged as
+//! unknown. Past the deadline no git runs at all; a diff in flight is cut
+//! at it. A read with unknown threads logs once,
+//! `forge.review.discussion_outdated_unknown`: at warn for a diagnosis
+//! failure (`diff_failed` / `versions_unreadable` with `error_code` and
+//! `error_reason`; `deadline`, `diff_cap`, `no_current_version`,
+//! `version_unknown` without a code), at debug for the routine states
+//! (`version_purged`, `version_base_pending`).
 
 use std::collections::HashMap;
+use std::time::Duration;
+
+use tokio::time::Instant;
 
 use forge_core::{DiscussionSide, ObjectId, ProjectRepository, RequestId};
 use forge_db::review::{self, DiscussionPosition, StoredDiscussion, StoredVersion};
@@ -25,6 +34,10 @@ use crate::{ready, Review, StoredMergeRequest};
 /// The most distinct pairs of commits one read diffs; the threads that
 /// would need more are `Unknown`.
 pub const MAX_DIFFS_PER_READ: usize = 20;
+
+/// The time one read — or a write's answer — spends on `outdated` diffs
+/// at most (`Review::with_outdated_budget`).
+pub const OUTDATED_BUDGET: Duration = Duration::from_secs(8);
 
 /// Whether a later version changed a thread's line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,20 +94,68 @@ pub(crate) fn side_commit(v: &StoredVersion, side: DiscussionSide) -> Option<&Ob
     }
 }
 
+/// The first failure behind a diagnosis `Unknown`: its code and its
+/// context `reason` (a label the failing code chose, never user data).
+#[derive(Clone)]
+struct Failure {
+    code: ErrorCode,
+    reason: Option<String>,
+}
+
+impl Failure {
+    fn of(e: &ForgeError) -> Self {
+        Self {
+            code: e.code(),
+            reason: e
+                .context()
+                .iter()
+                .find(|(k, _)| *k == "reason")
+                .map(|(_, v)| v.clone()), // clone: the log keeps the label
+        }
+    }
+}
+
+/// Routine states: a purged version or bases not recorded yet (debug).
+fn is_routine(reason: &str) -> bool {
+    matches!(reason, "version_purged" | "version_base_pending")
+}
+
 /// What one read did, for its single log line.
-#[derive(Default)]
 struct Tally {
     /// Diff results by (from, to); a failure keeps its code.
     diffs: HashMap<(String, String), Result<Diff, ErrorCode>>,
+    /// Unknown threads for a diagnosis reason, and the first such reason.
     unknown: usize,
     reason: Option<&'static str>,
-    first_error: Option<ErrorCode>,
+    /// Unknown threads for a routine reason, and the first one.
+    routine: usize,
+    routine_reason: Option<&'static str>,
+    first_error: Option<Failure>,
+    /// No diff starts after this; one in flight is cut here.
+    deadline: Instant,
 }
 
 impl Tally {
+    fn new(budget: Duration) -> Self {
+        Self {
+            diffs: HashMap::new(),
+            unknown: 0,
+            reason: None,
+            routine: 0,
+            routine_reason: None,
+            first_error: None,
+            deadline: Instant::now() + budget,
+        }
+    }
+
     fn unknown(&mut self, reason: &'static str) -> Outdated {
-        self.unknown += 1;
-        self.reason.get_or_insert(reason);
+        if is_routine(reason) {
+            self.routine += 1;
+            self.routine_reason.get_or_insert(reason);
+        } else {
+            self.unknown += 1;
+            self.reason.get_or_insert(reason);
+        }
         Outdated::Unknown
     }
 }
@@ -140,10 +201,19 @@ impl Read<'_> {
             if tally.diffs.len() >= MAX_DIFFS_PER_READ {
                 return tally.unknown("diff_cap");
             }
-            let diff = self.diff(&pair).await.map_err(|e| e.code());
-            if let Err(code) = &diff {
-                tally.first_error.get_or_insert(*code);
+            let left = tally.deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return tally.unknown("deadline");
             }
+            let Ok(diff) = tokio::time::timeout(left, self.diff(&pair)).await else {
+                // Cut at the deadline: not stored, so no later thread waits
+                // on it either (they meet the deadline above).
+                return tally.unknown("deadline");
+            };
+            let diff = diff.map_err(|e| {
+                tally.first_error.get_or_insert(Failure::of(&e));
+                e.code()
+            });
             tally.diffs.insert(pair.clone(), diff); // clone: the key is looked up again below
         }
         match tally.diffs.get(&pair) {
@@ -164,22 +234,33 @@ impl Read<'_> {
 
 /// One warn line for a read that left threads unknown.
 fn log_unknown(request_id: &RequestId, mr: &StoredMergeRequest, tally: &Tally) {
-    if tally.unknown == 0 {
-        return;
+    if tally.unknown > 0 {
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.discussion_outdated_unknown",
+            request_id = %request_id,
+            merge_request_id = mr.id.get(),
+            project_id = mr.project_id.get(),
+            iid = mr.iid,
+            unknown = tally.unknown,
+            routine = tally.routine,
+            diffs = tally.diffs.len(),
+            reason = tally.reason.unwrap_or("unknown"),
+            error_code = tally.first_error.as_ref().map(|f| f.code.id()),
+            error_reason = tally.first_error.as_ref().and_then(|f| f.reason.as_deref()),
+            "discussion outdated state could not be computed; shown as outdated"
+        );
+    } else if tally.routine > 0 {
+        tracing::debug!(
+            target: "forge_review",
+            event = "forge.review.discussion_outdated_unknown",
+            request_id = %request_id,
+            merge_request_id = mr.id.get(),
+            routine = tally.routine,
+            reason = tally.routine_reason.unwrap_or("unknown"),
+            "discussion outdated state not computable for a routine reason"
+        );
     }
-    tracing::warn!(
-        target: "forge_review",
-        event = "forge.review.discussion_outdated_unknown",
-        request_id = %request_id,
-        merge_request_id = mr.id.get(),
-        project_id = mr.project_id.get(),
-        iid = mr.iid,
-        unknown = tally.unknown,
-        diffs = tally.diffs.len(),
-        reason = tally.reason.unwrap_or("unknown"),
-        error_code = tally.first_error.map(ErrorCode::id),
-        "discussion outdated state could not be computed; shown as outdated"
-    );
 }
 
 impl Review {
@@ -206,7 +287,7 @@ impl Review {
             key,
             versions,
         };
-        let mut tally = Tally::default();
+        let mut tally = Tally::new(self.outdated_budget());
         let mut out = Vec::with_capacity(page.discussions.len());
         for d in page.discussions {
             let outdated = match &d.position {
@@ -236,7 +317,7 @@ impl Review {
         request_id: &RequestId,
         discussion: StoredDiscussion,
     ) -> DiscussionView {
-        let mut tally = Tally::default();
+        let mut tally = Tally::new(self.outdated_budget());
         let outdated = match &discussion.position {
             None => Outdated::No,
             Some(p) => match review::read_versions(&self.db, mr.id).await {
@@ -251,7 +332,7 @@ impl Review {
                     read.outdated(p, &mut tally).await
                 }
                 Err(e) => {
-                    tally.first_error = Some(e.code());
+                    tally.first_error = Some(Failure::of(&e));
                     tally.unknown("versions_unreadable")
                 }
             },

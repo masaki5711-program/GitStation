@@ -109,6 +109,18 @@ impl Review {
         self
     }
 
+    /// The time one read may spend on `outdated` diffs (tests shorten it;
+    /// `forge serve` keeps [`crate::OUTDATED_BUDGET`]).
+    #[must_use]
+    pub fn with_outdated_budget(mut self, budget: std::time::Duration) -> Self {
+        self.outdated_budget = budget;
+        self
+    }
+
+    pub(crate) fn outdated_budget(&self) -> std::time::Duration {
+        self.outdated_budget
+    }
+
     pub(crate) fn diffs(&self) -> Result<&dyn DiffProbe, ForgeError> {
         self.diffs.as_deref().ok_or_else(unconfigured)
     }
