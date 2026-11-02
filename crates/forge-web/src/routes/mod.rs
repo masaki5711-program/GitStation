@@ -15,6 +15,7 @@ pub mod health;
 pub mod history;
 pub mod lists;
 pub mod members;
+pub mod merge_requests;
 pub mod moves;
 pub mod namespaces;
 pub mod project_writes;

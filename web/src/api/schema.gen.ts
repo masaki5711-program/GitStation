@@ -4,6 +4,24 @@
  */
 
 export interface paths {
+    "/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** SPA shell: home */
+        get: operations["get_"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** SPA shell: home */
+        head: operations["head_"];
+        patch?: never;
+        trace?: never;
+    };
     "/-/auth/backchannel-logout": {
         parameters: {
             query?: never;
@@ -335,6 +353,76 @@ export interface paths {
         head?: never;
         /** Change a direct project member's role (Maintainer; never above the caller's role) */
         patch: operations["patch_api_v1_projects_id_members_user_id"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's merge requests, newest first (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests"];
+        put?: never;
+        /** Open a merge request between two existing branches (Developer) */
+        post: operations["post_api_v1_projects_id_merge_requests"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a merge request (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a merge request's title, description, draft flag or target (the author or Developer) */
+        patch: operations["patch_api_v1_projects_id_merge_requests_iid"];
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close a merge request (the author or Developer) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_close"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen a closed merge request (the author or Developer; never a merged one) */
+        post: operations["post_api_v1_projects_id_merge_requests_iid_reopen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/projects/{id}/protected-refs": {
@@ -904,6 +992,18 @@ export interface components {
              */
             path: string;
         };
+        /** @description `POST …/merge-requests`. */
+        CreateMergeRequest: {
+            /** @description At most 64 KiB; empty when absent. */
+            description?: string;
+            draft?: boolean;
+            /** @description A branch: `feature/x` or `refs/heads/feature/x`; it must exist. */
+            source_branch: string;
+            /** @description A branch other than the source; it must exist. */
+            target_branch: string;
+            /** @description 1..=255 characters. */
+            title: string;
+        };
         /** @description `POST /api/v1/projects`. */
         CreateProject: {
             description?: string | null;
@@ -1110,6 +1210,46 @@ export interface components {
              * @description Pass as `after` for the next page; `null` on the last page.
              */
             next_after: number | null;
+        };
+        /** @description One merge request as the API shows it. */
+        MergeRequestBody: {
+            /** Format: int64 */
+            author_id: number;
+            closed_at?: string | null;
+            /** Format: int64 */
+            closed_by?: number | null;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            description: string;
+            draft: boolean;
+            /**
+             * @description The head commit of the latest version (`null` until versions are
+             *     recorded).
+             */
+            head_sha?: string | null;
+            /**
+             * Format: int64
+             * @description The project's own number of it.
+             */
+            iid: number;
+            /** Format: int64 */
+            project_id: number;
+            /** @description The branch name without `refs/heads/`. */
+            source_branch: string;
+            /** @description `open`, `merged` or `closed`. */
+            state: string;
+            target_branch: string;
+            title: string;
+            updated_at: string;
+        };
+        /** @description One page of a project's merge requests, newest first. */
+        MergeRequestPage: {
+            merge_requests: components["schemas"]["MergeRequestBody"][];
+            /**
+             * Format: int64
+             * @description Pass as `before` for the next page; `null` on the last page.
+             */
+            next_before?: number | null;
         };
         /** @description A move as it was written. */
         MoveBody: {
@@ -1423,6 +1563,21 @@ export interface components {
             description?: string | null;
             display_name?: string | null;
         };
+        /**
+         * @description `PATCH …/merge-requests/{iid}`: every field optional (absent =
+         *     unchanged).
+         */
+        UpdateMergeRequest: {
+            description?: string | null;
+            /**
+             * @description Only the author or a Maintainer changes another's flag; only while
+             *     open.
+             */
+            draft?: boolean | null;
+            /** @description A branch other than the source; it must exist; only while open. */
+            target_branch?: string | null;
+            title?: string | null;
+        };
         /** @description `PATCH /api/v1/projects/{id}`: at least one field. */
         UpdateProject: {
             description?: string | null;
@@ -1466,6 +1621,46 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    head_: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_auth_backchannel_logout: {
         parameters: {
             query?: never;
@@ -2376,6 +2571,211 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests: {
+        parameters: {
+            query?: {
+                /** @description open (default), closed, merged or all */
+                state?: string;
+                /** @description Merge requests per page, 1..=100 (default 20) */
+                limit?: number;
+                /** @description The previous page's next_before (an iid): merge requests with a smaller iid */
+                before?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestPage"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_projects_id_merge_requests_iid: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_close: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_merge_requests_iid_reopen: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

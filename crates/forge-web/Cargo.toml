@@ -23,6 +23,9 @@ forge-git.workspace = true
 forge-hosting.workspace = true
 # M2 MR4: the OIDC sign-in (web → oidc → auth / db, ADR-0021 §2).
 forge-oidc.workspace = true
+# M3 R1a: the merge request commands (web → review → auth / git / db,
+# ADR-0024 §11).
+forge-review.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).
