@@ -4,7 +4,9 @@
 name: forge-dev
 services:
   postgres:
-    image: postgres:16
+    # Same engine and version as the IoT platform (PostgreSQL 16 + TimescaleDB
+    # 2.28.1, IoT_platform_spec 10-pfs/01 §19). forge does not use the extension.
+    image: timescale/timescaledb:2.28.1-pg16
     command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: forge_dev
