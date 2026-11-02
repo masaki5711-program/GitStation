@@ -300,8 +300,16 @@ connection, mapping driver errors to registered codes, migrations
   `Settle::CommitDerived`, a derived-only commit), `mergeability` (read pool) /
   `mergeability_written`. `record_version_bases` sets a version's `base_sha` /
   `merge_base_sha` once (audit-only `merge_request.version_bases_recorded`);
-  `read_versions` (read pool). The project purge deletes the rows. Tests
-  `review/mergeability_tests.rs`.
+  `read_versions` (read pool). The project purge deletes the rows. Review fixes: the module is
+  `review/mergeability/{mod,request,run,stale}.rs`; `record_check` also refuses a closed merge
+  request or a head other than the one checked; a new version downgrades a decided status in its
+  own transaction (`downgrade_on`); a purge of the checked version resets the row; `fail_check`
+  (`job_failed`), `reap_stale_checks` (`checking` past `STALE_AFTER` with no live job →
+  `job_stale`), `sweep_unchecked` (open `unchecked` rows with no live job, oldest first, 50 per
+  run), `defer_checks_on` bounded by `DEFER_MAX` (5 000, id order), `health` (doctor
+  `review.mergeability`); all log FG-REVIEW-0003 MergeabilityNotChecked (warn, runbook
+  `merge-request-mergeability`). Reasons are `forge_core::CheckReason`. Tests
+  `review/mergeability/tests.rs`.
 - **Event scope rule** (`ChangeTx`, ADR-0016 Amendment D4): every event's
   `project_id` equals the audit row's — a project event needs an audit row naming
   that project, an audit row without a project publishes only instance-wide events

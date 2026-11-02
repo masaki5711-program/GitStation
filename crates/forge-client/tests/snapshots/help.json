@@ -2653,6 +2653,7 @@
           "iid",
           "status",
           "reason",
+          "stale",
           "head_sha",
           "checked_head_sha",
           "checked_target_sha",

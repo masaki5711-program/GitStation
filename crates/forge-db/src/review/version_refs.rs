@@ -322,6 +322,25 @@ pub async fn purge_mr_version_refs_decided<P>(
             .map_err(|e| query_error("review.version_refs_purge", e))
         })
         .await?;
+        // M3 R2: a stored check of a purged head names a commit nobody may
+        // read any more: back to `unchecked`, its conflict list emptied.
+        let numbers = purged.clone(); // clone: the outcome keeps the list too
+        tx.step(|c| async move {
+            sqlx::query(
+                "UPDATE forge.merge_request_mergeability g SET status = 'unchecked', \
+                 reason = NULL, conflicts = '{}', conflicts_truncated = false, \
+                 updated_at = now() FROM forge.merge_request_versions v \
+                 WHERE g.merge_request_id = $1 AND v.merge_request_id = $1 \
+                 AND v.version_no = ANY($2) AND g.checked_head_sha = v.head_sha",
+            )
+            .bind(id.get())
+            .bind(&numbers)
+            .execute(c)
+            .await
+            .map(drop)
+            .map_err(|e| query_error("review.version_refs_purge_mergeability", e))
+        })
+        .await?;
         let details =
             AuditDetails::MergeRequestVersion(MergeRequestVersionChange::VersionRefsPurged {
                 merge_request: id,

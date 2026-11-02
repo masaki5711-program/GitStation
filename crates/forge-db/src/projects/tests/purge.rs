@@ -147,7 +147,8 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
             ),
             // M3 R2: a derived mergeability row goes with them.
             format!(
-                "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id)                  SELECT id, project_id FROM forge.merge_requests WHERE project_id = {id} AND iid = 1"
+                "INSERT INTO forge.merge_request_mergeability (merge_request_id, project_id) \
+                 SELECT id, project_id FROM forge.merge_requests WHERE project_id = {id} AND iid = 1"
             ),
         ],
     )

@@ -1222,11 +1222,15 @@
             "type": "integer"
           },
           "reason": {
-            "description": "Why: `conflict`, `target_missing`, `unrelated_histories`,\n`no_version`, `git_timeout`, `git_busy`, `git_failed` (`null` when\nmergeable or not checked yet).",
+            "description": "Why: `conflict`, `target_missing`, `unrelated_histories`,\n`no_version`, `git_timeout`, `git_busy`, `git_failed`, `job_failed`,\n`job_stale` (`null` when mergeable or not checked yet).",
             "type": [
               "string",
               "null"
             ]
+          },
+          "stale": {
+            "description": "The stored result is about another head or target tip than the\ncurrent ones: `status` says `unchecked` until the next check.",
+            "type": "boolean"
           },
           "status": {
             "description": "`unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or\n`check_failed`. Only `can_be_merged` lets a merge go ahead; every\nstatus but the two decisions means \"unknown\".",
@@ -1237,6 +1241,7 @@
           "iid",
           "status",
           "reason",
+          "stale",
           "head_sha",
           "checked_head_sha",
           "checked_target_sha",

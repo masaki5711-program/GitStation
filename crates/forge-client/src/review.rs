@@ -299,6 +299,9 @@ fn mergeability_human(body: &Value) -> String {
     if let Some(reason) = body.get("reason").and_then(Value::as_str) {
         out.push_str(&format!(" ({})", crate::error::sanitize(reason)));
     }
+    if body.get("stale") == Some(&Value::Bool(true)) {
+        out.push_str(" (the last check is for another head or target tip)");
+    }
     out.push_str(&format!(
         "\nhead: {}\nchecked: head {} target {} at {}",
         text(body, "head_sha"),

@@ -510,7 +510,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn mr mergeability --project 7 --iid 3 --json"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/mergeability"],
-        output: r#"{"type":"object","required":["iid","status","reason","head_sha","checked_head_sha","checked_target_sha","checked_at","conflicts","conflicts_truncated"],"properties":{"status":{"type":"string","enum":["unchecked","checking","can_be_merged","cannot_be_merged","check_failed"]},"conflicts":{"type":"array","items":{"type":"string"}}}}"#,
+        output: r#"{"type":"object","required":["iid","status","reason","stale","head_sha","checked_head_sha","checked_target_sha","checked_at","conflicts","conflicts_truncated"],"properties":{"status":{"type":"string","enum":["unchecked","checking","can_be_merged","cannot_be_merged","check_failed"]},"conflicts":{"type":"array","items":{"type":"string"}}}}"#,
     },
     CommandSpec {
         name: "namespace resolve",

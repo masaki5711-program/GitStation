@@ -40,6 +40,7 @@ use crate::registry::{Dispatched, QueryParam, WriteParts};
 use crate::routes::write::{bounded, json, no_store};
 
 mod loaders;
+mod mergeability;
 mod versions;
 
 pub use loaders::{
@@ -47,10 +48,10 @@ pub use loaders::{
     MergeRequestToReopen, MergeRequestToUpdate, MergeRequestsOf, NewMergeRequest, VersionDiffOf,
     COMPARE_OF, MERGEABILITY_OF, VERSIONS_OF,
 };
+pub use mergeability::{mergeability, MergeabilityBody};
 pub use versions::{
-    compare, mergeability, version_diff, versions, MergeabilityBody, VersionBody,
-    VersionCompareBody, VersionDiffBody, VersionsBody, COMPARE, COMPARE_QUERY, MERGEABILITY,
-    VERSIONS, VERSION_DIFF,
+    compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,
+    VersionsBody, COMPARE, COMPARE_QUERY, MERGEABILITY, VERSIONS, VERSION_DIFF,
 };
 
 /// `GET` / `POST` a project's merge requests.

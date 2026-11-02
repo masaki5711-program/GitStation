@@ -301,24 +301,33 @@ impl World {
     }
 }
 
-#[tokio::test]
-async fn the_worker_keeps_mergeability_current_through_every_trigger() {
-    let mut w = World::new().await;
-    let base = commit_on(&w.path, None, &[("README", "base\n")]);
-    // The head adds `feature.txt`; the conflicting target adds it too.
-    let c1 = commit_on(
-        &w.path,
-        Some(&base),
-        &[("README", "base\n"), ("feature.txt", "head\n")],
-    );
-    let clash = commit_on(
-        &w.path,
-        Some(&base),
-        &[("README", "base\n"), ("feature.txt", "target\n")],
-    );
-    plumb(&w.path, &["update-ref", "refs/heads/main", &base], None);
-    plumb(&w.path, &["update-ref", "refs/heads/feature", &c1], None);
+impl World {
+    /// `main` at a base, `feature` adding `feature.txt` on it; `clash` (not
+    /// on a branch) adds the same file differently.
+    async fn histories(&self) -> (String, String, String) {
+        let base = commit_on(&self.path, None, &[("README", "base\n")]);
+        // The head adds `feature.txt`; the conflicting target adds it too.
+        let c1 = commit_on(
+            &self.path,
+            Some(&base),
+            &[("README", "base\n"), ("feature.txt", "head\n")],
+        );
+        let clash = commit_on(
+            &self.path,
+            Some(&base),
+            &[("README", "base\n"), ("feature.txt", "target\n")],
+        );
+        plumb(&self.path, &["update-ref", "refs/heads/main", &base], None);
+        plumb(&self.path, &["update-ref", "refs/heads/feature", &c1], None);
 
+        (base, c1, clash)
+    }
+}
+
+#[tokio::test]
+async fn target_moves_and_new_versions_are_checked_and_flip_once_each() {
+    let mut w = World::new().await;
+    let (base, c1, clash) = w.histories().await;
     // Open: version 1 with its bases, then checked: mergeable. The first
     // decision is not a flip.
     let mr = w.open("feature", "main").await;
@@ -336,7 +345,10 @@ async fn the_worker_keeps_mergeability_current_through_every_trigger() {
     w.push("main", Some(&clash)).await;
     let s = w.status(&mr).await;
     assert_eq!(s.status, MergeabilityStatus::CannotBeMerged, "{s:?}");
-    assert_eq!(s.reason.as_deref(), Some("conflict"));
+    assert_eq!(
+        s.reason.map(forge_core::CheckReason::as_str),
+        Some("conflict")
+    );
     assert_eq!(s.conflicts, ["feature.txt"]);
     assert_eq!(s.checked_target_sha, Some(oid(&clash)));
     // Version 1 keeps the bases it was recorded with.
@@ -380,6 +392,19 @@ async fn the_worker_keeps_mergeability_current_through_every_trigger() {
         "detected, resolved, detected, resolved"
     );
 
+    w.t.drop_now().await;
+}
+
+/// A retarget re-checks (`unchecked` at once, then decided against the new
+/// target), a deleted target is `target_missing`; undecided statuses never
+/// flip.
+#[tokio::test]
+async fn a_retarget_and_a_deleted_target_are_checked_without_flips() {
+    let mut w = World::new().await;
+    let (_base, _c1, _clash) = w.histories().await;
+    let mr = w.open("feature", "main").await;
+    w.drain().await;
+    assert_eq!(w.status(&mr).await.status, MergeabilityStatus::CanBeMerged);
     // Retarget to a branch whose tip has no common history: `unchecked`
     // in the edit's transaction, then `check_failed unrelated_histories`.
     let orphan = commit_on(&w.path, None, &[("elsewhere", "x\n")]);
@@ -400,14 +425,141 @@ async fn the_worker_keeps_mergeability_current_through_every_trigger() {
     w.drain().await;
     let s = w.status(&mr).await;
     assert_eq!(s.status, MergeabilityStatus::CheckFailed, "{s:?}");
-    assert_eq!(s.reason.as_deref(), Some("unrelated_histories"));
+    assert_eq!(
+        s.reason.map(forge_core::CheckReason::as_str),
+        Some("unrelated_histories")
+    );
 
     // The target is deleted: checked again, `target_missing`.
     w.push("release", None).await;
     let s = w.status(&mr).await;
     assert_eq!(s.status, MergeabilityStatus::CheckFailed, "{s:?}");
-    assert_eq!(s.reason.as_deref(), Some("target_missing"));
+    assert_eq!(
+        s.reason.map(forge_core::CheckReason::as_str),
+        Some("target_missing")
+    );
     // Undecided statuses never flip.
-    assert_eq!(w.flips().await.len(), 4);
+    assert!(w.flips().await.is_empty());
+    w.t.drop_now().await;
+}
+
+/// Review (silent-failure HIGH, dead letter): a run that fails on its last
+/// attempt (here: the repository is still provisioning, a retryable
+/// failure) ends its request as `check_failed reason=job_failed`; an
+/// earlier attempt leaves it to the retry.
+#[tokio::test]
+async fn a_last_failed_attempt_ends_the_request_as_job_failed() {
+    use forge_core::CheckReason;
+    use forge_db::jobs::{ClaimedJob, JobHandler, JobId, JobKind, JobTimeout, Lease};
+    use forge_db::review::{request_check, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT};
+
+    let t = FreshDb::migrated().await;
+    let (_dir, storage) = storage();
+    // Not provisioned: no job ran, the repository is not ready.
+    let web = project(&t, "alice").await;
+    let alice = t
+        .json_rows("SELECT id FROM forge.users WHERE username = 'alice'")
+        .await
+        .first()
+        .and_then(|r| r["id"].as_i64())
+        .expect("alice");
+    let p = web.project_id.get();
+    t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "INSERT INTO forge.merge_request_counters (project_id, last_iid) VALUES ({p}, 1)"
+            ),
+            format!(
+                "INSERT INTO forge.merge_requests (project_id, iid, title, author_id, \
+                 source_branch, target_branch) VALUES ({p}, 1, 'synthetic', {alice}, \
+                 'refs/heads/feature', 'refs/heads/main')"
+            ),
+        ],
+    )
+    .await;
+    let mr = forge_core::ids::MergeRequestId::new(
+        t.json_rows("SELECT id FROM forge.merge_requests")
+            .await
+            .first()
+            .and_then(|r| r["id"].as_i64())
+            .expect("mr"),
+    );
+    let seq = request_check(&t.db, mr, RequestId::parse("req-q").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    let handler = super::MergeabilityHandler::new(&t.db, &storage).expect("handler");
+    let claimed = |attempt: i32| ClaimedJob {
+        lease: Lease {
+            job_id: JobId::new(1),
+            worker_id: WorkerId::generate(),
+            attempt,
+        },
+        kind: JobKind::parse(MERGEABILITY_JOB).expect("kind"),
+        payload: serde_json::json!({"merge_request_id": mr.get(), "check_seq": seq}),
+        max_attempts: 2,
+        timeout: JobTimeout::new(MERGEABILITY_TIMEOUT).expect("timeout"),
+        origin_request_id: "req-job".to_owned(),
+        origin_event_seq: None,
+    };
+    assert!(handler.run(claimed(1)).await.is_err(), "not ready");
+    let s = mergeability_written(&t.db, mr)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(s.status, MergeabilityStatus::Checking, "left to the retry");
+    assert!(handler.run(claimed(2)).await.is_err(), "still not ready");
+    let s = mergeability_written(&t.db, mr)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(
+        (s.status, s.reason),
+        (
+            MergeabilityStatus::CheckFailed,
+            Some(CheckReason::JobFailed)
+        )
+    );
+    t.drop_now().await;
+}
+
+/// The sweep task ends a row left `checking` with no live job and
+/// re-requests an `unchecked` one whose job died.
+#[tokio::test]
+async fn the_sweep_task_ends_stale_runs_and_requests_deferred_checks() {
+    use forge_core::CheckReason;
+    let w = World::new().await;
+    let _histories = w.histories().await;
+    let mr = w.open("feature", "main").await;
+    w.drain().await;
+    // A run that crashed mid-check: `checking`, its job dead, long ago.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET status = 'checking', \
+         updated_at = now() - interval '1 hour' WHERE merge_request_id = {}",
+        mr.id.get()
+    ))
+    .await;
+    let next = super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db)
+        .await
+        .expect("sweep");
+    assert!(matches!(next, crate::worker::supervise::Next::AfterPeriod));
+    let s = w.status(&mr).await;
+    assert_eq!(
+        (s.status, s.reason),
+        (MergeabilityStatus::CheckFailed, Some(CheckReason::JobStale))
+    );
+    // Deferred: `unchecked`, no live job (its job died) → swept and checked.
+    w.t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET status = 'unchecked' \
+         WHERE merge_request_id = {}",
+        mr.id.get()
+    ))
+    .await;
+    super::super::mergeability_sweep::run_mergeability_sweep(&w.t.db)
+        .await
+        .expect("sweep");
+    w.drain().await;
+    assert_eq!(w.status(&mr).await.status, MergeabilityStatus::CanBeMerged);
     w.t.drop_now().await;
 }

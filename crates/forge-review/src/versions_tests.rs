@@ -1,7 +1,12 @@
 #![allow(clippy::expect_used)] // tests may fail loudly
 
+use std::collections::BTreeMap;
+
 use super::*;
-use forge_db::review::StoredVersion;
+use forge_core::ids::MergeRequestId;
+use forge_core::{ObjectId, RefName};
+use forge_db::review::{StoredVersion, VersionsSnapshot};
+use forge_git::RefChange;
 
 fn oid(c: char) -> ObjectId {
     ObjectId::parse(&c.to_string().repeat(40)).expect("oid")

@@ -35,23 +35,27 @@ use crate::{read_query_error, Db};
 mod commands;
 pub mod mergeability;
 mod refresh;
+mod version_bases;
 mod version_refs;
 pub mod versions;
 
 pub use mergeability::{
-    begin_check, mergeability, mergeability_job, mergeability_payload, mergeability_written,
-    record_check, request_check, CheckResult, CheckStart, CheckSubject, MergeabilityRequest,
-    Recorded, StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT,
+    begin_check, fail_check, health as mergeability_health, mergeability, mergeability_job,
+    mergeability_payload, mergeability_written, not_checked, reap_stale_checks, record_check,
+    request_check, sweep_unchecked, CheckResult, CheckStart, CheckSubject, MergeabilityHealth,
+    MergeabilityRequest, Recorded, StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT,
+    STALE_AFTER, SWEEP_BATCH,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
+pub use version_bases::record_version_bases;
 pub use version_refs::{
     lock_version_refs, purge_mr_version_refs_decided, versions_snapshot, PurgeOutcome, RefsLock,
     VersionsSnapshot, REFS_LOCK_HOLD, REFS_LOCK_WAIT,
 };
 pub use versions::{
-    list_versions, read_versions, record_mr_version, record_version_bases, refresh_job,
-    refresh_payload, refresh_target, RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion,
-    VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+    list_versions, read_versions, record_mr_version, refresh_job, refresh_payload, refresh_target,
+    RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion, VersionOutcome, REFRESH_JOB,
+    REFRESH_TIMEOUT,
 };
 
 pub use commands::{
@@ -210,8 +214,6 @@ pub async fn list(
     rows.into_iter().map(Row::parse).collect()
 }
 
-#[cfg(test)]
-mod mergeability_tests;
 #[cfg(test)]
 mod race_tests;
 #[cfg(test)]

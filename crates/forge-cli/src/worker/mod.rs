@@ -18,7 +18,9 @@
 //! every `hosting.purge_interval_secs`, at once again after a full batch),
 //! and the purge of web sessions 30 days past their end (`session_purge`,
 //! M2 MR6: every `web.session_purge_interval_secs`, at once again after a
-//! full batch).
+//! full batch), and the mergeability sweep (`mergeability_sweep`, M3 R2:
+//! every 30 s, stale `checking` rows ended and deferred `unchecked` rows
+//! re-requested).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -52,6 +54,9 @@ pub(crate) mod purge;
 // ── M3 R1b: merge request versions ──
 mod review;
 // ── end M3 R1b ──
+// ── M3 R2: stale and deferred mergeability checks ──
+mod mergeability_sweep;
+// ── end M3 R2 ──
 mod seal;
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -124,6 +129,8 @@ enum Task {
     // ── end D5 MR4 ──
     /// The purge of ended web sessions (`session_purge`, M2 MR6).
     SessionPurge,
+    /// Stale and deferred mergeability checks (`mergeability_sweep`, M3 R2).
+    MergeabilitySweep,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -142,6 +149,8 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
         Task::JobRunner,
         Task::JobReaper,
         Task::AuditSeal,
+        // M3 R2: needs only the database.
+        Task::MergeabilitySweep,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -200,6 +209,7 @@ impl Task {
             Self::Subscribers => subscribers::NAME,
             Self::Purge => purge::NAME,
             Self::SessionPurge => session_purge::NAME,
+            Self::MergeabilitySweep => mergeability_sweep::NAME,
         }
     }
 
@@ -219,6 +229,7 @@ impl Task {
                 .purge
                 .as_ref()
                 .map_or(MAX_BACKOFF, |purge| purge.session_interval),
+            Self::MergeabilitySweep => mergeability_sweep::PERIOD,
         }
     }
 
@@ -260,6 +271,7 @@ impl Task {
                     .with_context("reason", "purge_unconfigured")),
             },
             Self::SessionPurge => session_purge::run_session_purge(db).await,
+            Self::MergeabilitySweep => mergeability_sweep::run_mergeability_sweep(db).await,
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")

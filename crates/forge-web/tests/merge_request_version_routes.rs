@@ -122,6 +122,25 @@ fn commit_on(repo: &std::path::Path, parent: Option<&str>, files: &[(&str, &str)
     plumb(repo, &args, None)
 }
 
+/// The product router over `t`, `git` and `storage` (fresh browse caches).
+fn build_router(t: &FreshDb, git: &Git, storage: &StorageRoot, refs: &VersionRefs) -> axum::Router {
+    // clone: the router owns its handles
+    let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
+    let smart = SmartHttp::new(git.clone(), storage.clone(), GitHttpLimits::default());
+    let state = AppState::new(
+        "test",
+        Vec::new(),
+        Arc::new(NoTokens),
+        Lookups {
+            namespaces: Arc::new(t.db.clone()),
+            projects: Arc::new(t.db.clone()),
+        },
+    )
+    .with_smart_http(smart)
+    .with_review(Review::new(t.db.clone(), Arc::new(browser)).with_version_refs(refs.clone()));
+    forge_web::app(state, AppConfig::default()).expect("router")
+}
+
 struct World {
     t: FreshDb,
     _home: tempfile::TempDir,
@@ -130,6 +149,8 @@ struct World {
     router: axum::Router,
     refs: VersionRefs,
     checker: Mergeability,
+    git: Git,
+    storage: StorageRoot,
     dev: UserId,
     outsider: UserId,
     admin: UserId,
@@ -199,20 +220,7 @@ async fn world() -> World {
     plumb(&path, &["update-ref", "refs/heads/feature", &c1], None);
     let refs = VersionRefs::new(git.clone(), storage.clone()); // clone: shared handles
     let checker = Mergeability::new(git.clone(), storage.clone()); // clone: as refs
-    let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default()); // clone: as refs
-    let smart = SmartHttp::new(git, storage, GitHttpLimits::default());
-    let state = AppState::new(
-        "test",
-        Vec::new(),
-        Arc::new(NoTokens),
-        Lookups {
-            namespaces: Arc::new(t.db.clone()),
-            projects: Arc::new(t.db.clone()),
-        },
-    )
-    .with_smart_http(smart)
-    .with_review(Review::new(t.db.clone(), Arc::new(browser)).with_version_refs(refs.clone()));
-    let router = forge_web::app(state, AppConfig::default()).expect("router");
+    let router = build_router(&t, &git, &storage, &refs);
     let p = web.project_id.get();
     let (status, opened) = send(
         router.clone(),
@@ -237,6 +245,8 @@ async fn world() -> World {
         router,
         refs,
         checker,
+        git,
+        storage,
         dev: dev.user_id,
         outsider: outsider.user_id,
         admin: admin.user_id,
@@ -249,6 +259,10 @@ async fn world() -> World {
 }
 
 impl World {
+    fn fresh_router(&self) -> axum::Router {
+        build_router(&self.t, &self.git, &self.storage, &self.refs)
+    }
+
     fn uri(&self, tail: &str) -> String {
         format!("/api/v1/projects/{}/merge-requests/1{tail}", self.project)
     }
@@ -425,5 +439,91 @@ async fn versions_diffs_compare_and_mergeability_are_read_by_members_only() {
     let (status, body) = w.get("/versions", me()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["versions"][0]["refs_purged"], true);
+    w.t.drop_now().await;
+}
+
+const READS: [&str; 4] = [
+    "/versions",
+    "/versions/1/diff",
+    "/compare?from=1&to=2",
+    "/mergeability",
+];
+
+/// Review (pr-test): nobody signed in is FG-AUTH-0001 (401) on every read;
+/// a token without a REST read scope (git-only) is FG-AUTH-0002 (403).
+#[tokio::test]
+async fn reads_refuse_anonymous_callers_and_tokens_without_a_read_scope() {
+    let w = world().await;
+    for tail in READS {
+        let (status, body) = w.get(tail, Principal::anonymous()).await;
+        assert_eq!(
+            (status, body["error_code"].as_str()),
+            (StatusCode::UNAUTHORIZED, Some("FG-AUTH-0001")),
+            "{tail}: {body}"
+        );
+        for scopes in [vec![Scope::WriteRepository], vec![]] {
+            let token =
+                Principal::authenticated(w.dev, false, true, Credential::Token(scopes.clone()));
+            let (status, body) = w.get(tail, token).await;
+            assert_eq!(
+                (status, body["error_code"].as_str()),
+                (StatusCode::FORBIDDEN, Some("FG-AUTH-0002")),
+                "{tail} {scopes:?}: {body}"
+            );
+        }
+    }
+    w.t.drop_now().await;
+}
+
+/// Review (pr-test): a version whose bases the version job has not
+/// recorded yet has no diff: FG-REPO-0023 (`version_base=pending` in the
+/// log only), like an unknown version.
+#[tokio::test]
+async fn diff_of_a_version_without_bases_is_not_found_pending() {
+    let w = world().await;
+    forge_db::review::record_mr_version(
+        &w.t.db,
+        &ctx("req-v1"),
+        w.mr,
+        &forge_core::ObjectId::parse(&w.c1).expect("oid"),
+        None,
+    )
+    .await
+    .expect("v1 without bases");
+    let (status, body) = w.get("/versions/1/diff", session(w.dev)).await;
+    assert_eq!(
+        (status, body["error_code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("FG-REPO-0023")),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review (stale decisions): when the target moves after a check, the API
+/// reports `unchecked` with `stale: true` — never the old decision — and
+/// the stored pair stays visible.
+#[tokio::test]
+async fn a_decision_for_an_old_target_tip_is_reported_unchecked_and_stale() {
+    let w = world().await;
+    w.worker("req-v1").await;
+    let (_, body) = w.get("/mergeability", session(w.dev)).await;
+    assert_eq!(body["status"], "can_be_merged", "{body}");
+    assert_eq!(body["stale"], false);
+    let moved = commit_on(&w.path, Some(&w.base), &[("README", "moved\n")]);
+    plumb(&w.path, &["update-ref", "refs/heads/main", &moved], None);
+    // The browse ref list is cached for 5 s: a fresh router reads it anew.
+    let (status, body) = send(
+        w.fresh_router(),
+        "GET",
+        &w.uri("/mergeability"),
+        session(w.dev),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "unchecked", "{body}");
+    assert_eq!(body["stale"], true);
+    assert_eq!(body["reason"], Value::Null);
+    assert_eq!(body["checked_target_sha"], w.base.as_str());
     w.t.drop_now().await;
 }

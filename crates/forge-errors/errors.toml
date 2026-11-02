@@ -1390,3 +1390,17 @@ diagnosis = "The log event carries `reason`, `project_id`, `iid` and `merge_requ
 fix = "Close the merge request (or force-push the source branch without the secret, which adds a new version), then purge again; to reopen a purged merge request, first move the source branch away from the purged commit."
 test = "purge_of_an_open_merge_requests_current_head_is_refused"
 runbook = "secret-removal"
+
+[[error]]
+code = "FG-REVIEW-0003"
+name = "MergeabilityNotChecked"
+http_status = 500
+severity = "warn"
+user_message_ja = "マージできるかをまだ確かめられていません。しばらくしてからもう一度確認してください。"
+user_message_en = "Whether this merge request can be merged has not been checked yet. Check again later."
+user_message_id = "Apakah merge request ini dapat digabungkan belum diperiksa. Periksa lagi nanti."
+cause = "A merge request's mergeability (ADR-0024 §3, M3 R2) is not being decided as it should. reason=job_failed: the mergeability job failed for good (its last attempt, or a failure that can never succeed) before it stored a result; the row was set to check_failed reason=job_failed. reason=job_stale: a row stayed `checking` longer than the job's time limit with no queued or running job (the worker crashed, the run hit its timeout and the job died, or the job row was removed); the worker's periodic sweep set it to check_failed reason=job_stale. reason=fanout_deferred: one push to a target branch had more open merge requests than review.mergeability_fanout_max and more than the deferral cap (5 000): the rest kept their old status; the periodic sweep and the API's staleness rule cover them. Never a user request's failure: logged by the worker (and reported by forge doctor review.mergeability)."
+diagnosis = "The event `forge.review.mergeability_not_checked` carries `reason`, `merge_request_id`, `check_seq` (job_failed / job_stale) or `project_id`, `targets`, `skipped` (fanout_deferred), and the request_id of the job or the push. For job_failed, the job runner logged the cause just before, under its own error_code with the same request_id (`job_id`, `kind=merge_request.mergeability`). Read the row (read-only): SELECT merge_request_id, status, reason, check_seq, checked_head_sha, checked_target_sha, updated_at FROM forge.merge_request_mergeability WHERE merge_request_id = <id>; and the jobs: SELECT id, state, attempts, last_error_code FROM forge.jobs WHERE kind = 'merge_request.mergeability' AND dedup_key LIKE 'mr_mergeability:<id>:%' ORDER BY id DESC LIMIT 5. Run `forge doctor --json` (review.mergeability)."
+fix = "Fix the cause the job's own error code names (its runbook). The merge request is checked again by its next push, retarget or reopen, and the worker's sweep re-requests rows that are `unchecked` with no live job; a check_failed row blocks merging (mergeability_unknown) until then. Never edit forge.merge_request_mergeability by hand outside an approved runbook step."
+runbook = "merge-request-mergeability"
+test = "a_stale_checking_row_is_reaped_as_job_stale"

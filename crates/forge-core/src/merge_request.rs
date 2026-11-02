@@ -517,3 +517,76 @@ impl MergeabilityStatus {
         }
     }
 }
+
+/// Why the mergeability check stored what it stored (M3 R2; the
+/// `reason` column of `forge.merge_request_mergeability`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckReason {
+    /// `cannot_be_merged`: the trial merge conflicted.
+    Conflict,
+    /// The target branch does not exist.
+    TargetMissing,
+    /// The head and the target share no history.
+    UnrelatedHistories,
+    /// The merge request has no version yet.
+    NoVersion,
+    /// git ran out of time (`FG-GIT-0002`).
+    GitTimeout,
+    /// No git slot was free (`FG-GIT-0004`).
+    GitBusy,
+    /// git failed otherwise (`FG-GIT-0003` and the rest).
+    GitFailed,
+    /// The job failed for good (dead-lettered) before it stored a result.
+    JobFailed,
+    /// The row stayed `checking` past the job's time limit with no live
+    /// job (a crashed or timed-out run): the reaper ended it.
+    JobStale,
+}
+
+impl CheckReason {
+    pub const ALL: &'static [CheckReason] = &[
+        Self::Conflict,
+        Self::TargetMissing,
+        Self::UnrelatedHistories,
+        Self::NoVersion,
+        Self::GitTimeout,
+        Self::GitBusy,
+        Self::GitFailed,
+        Self::JobFailed,
+        Self::JobStale,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Conflict => "conflict",
+            Self::TargetMissing => "target_missing",
+            Self::UnrelatedHistories => "unrelated_histories",
+            Self::NoVersion => "no_version",
+            Self::GitTimeout => "git_timeout",
+            Self::GitBusy => "git_busy",
+            Self::GitFailed => "git_failed",
+            Self::JobFailed => "job_failed",
+            Self::JobStale => "job_stale",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|r| r.as_str() == raw)
+    }
+
+    /// The same (head, target) pair always gives this answer again: a
+    /// stored result with this reason answers that pair. A transient
+    /// reason (git or job trouble) never does — it is checked again.
+    pub fn is_deterministic(self) -> bool {
+        match self {
+            Self::Conflict | Self::TargetMissing | Self::UnrelatedHistories | Self::NoVersion => {
+                true
+            }
+            Self::GitTimeout
+            | Self::GitBusy
+            | Self::GitFailed
+            | Self::JobFailed
+            | Self::JobStale => false,
+        }
+    }
+}

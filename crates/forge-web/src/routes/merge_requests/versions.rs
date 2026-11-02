@@ -14,7 +14,10 @@
 //! - `GET …/mergeability` — the stored status of the mergeability check
 //!   (a separate route rather than part of the merge request body: the
 //!   list and the writes do not pay for it, and its answer changes on its
-//!   own). Reading never enqueues a check.
+//!   own). A stored result counts only while its checked pair is the
+//!   current head and the target's live tip (read by name from the ref
+//!   list); otherwise `unchecked` with `stale: true`. Reading never
+//!   enqueues a check.
 //!
 //! Every commit id goes through the browse API's merge request view
 //! (`Browser::merge_request_commit` / `merge_request_compare`): reachable
@@ -27,9 +30,9 @@
 use axum::http::StatusCode;
 use axum::response::Response;
 use forge_auth::MergeRequestCtx;
-use forge_core::{parse_positive_id, MergeRequestId, ObjectId, ProjectId, UserId};
+use forge_core::{parse_positive_id, ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::{StoredMergeability, StoredVersion};
+use forge_review::{StoredMergeRequest, StoredVersion};
 use serde::Serialize;
 
 use super::loaders::version_ids;
@@ -144,37 +147,6 @@ pub struct VersionCompareBody {
     pub diff: DiffBody,
 }
 
-/// What the mergeability check last stored.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct MergeabilityBody {
-    #[schema(minimum = 1)]
-    pub iid: i64,
-    /// `unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or
-    /// `check_failed`. Only `can_be_merged` lets a merge go ahead; every
-    /// status but the two decisions means "unknown".
-    pub status: String,
-    /// Why: `conflict`, `target_missing`, `unrelated_histories`,
-    /// `no_version`, `git_timeout`, `git_busy`, `git_failed` (`null` when
-    /// mergeable or not checked yet).
-    #[schema(required = true)]
-    pub reason: Option<String>,
-    /// The merge request's current head (`null` before its first version).
-    #[schema(required = true)]
-    pub head_sha: Option<String>,
-    /// The head and target tip the last finished check looked at.
-    #[schema(required = true)]
-    pub checked_head_sha: Option<String>,
-    #[schema(required = true)]
-    pub checked_target_sha: Option<String>,
-    /// UTC, RFC 3339.
-    #[schema(required = true)]
-    pub checked_at: Option<String>,
-    /// The conflicted paths (at most 100; `conflicts_truncated` beyond).
-    pub conflicts: Vec<String>,
-    pub conflicts_truncated: bool,
-}
-
 fn version_body(v: &StoredVersion) -> VersionBody {
     VersionBody {
         version: v.version_no,
@@ -197,7 +169,9 @@ fn not_found(version: i64, why: &'static str) -> ForgeError {
 }
 
 /// The proof's ids (a read route always names a stored merge request).
-fn proof_ids(request: &Dispatched<MergeRequestCtx>) -> Result<(ProjectId, i64), ForgeError> {
+pub(super) fn proof_ids(
+    request: &Dispatched<MergeRequestCtx>,
+) -> Result<(ProjectId, i64), ForgeError> {
     match *request.proof().id() {
         (project, Some(iid)) => Ok((project, iid)),
         (_, None) => {
@@ -207,12 +181,12 @@ fn proof_ids(request: &Dispatched<MergeRequestCtx>) -> Result<(ProjectId, i64), 
 }
 
 /// The merge request's id (read again after the decision).
-async fn merge_request_id(
+pub(super) async fn merge_request(
     state: &AppState,
     project: ProjectId,
     iid: i64,
-) -> Result<(MergeRequestId, Option<String>), ForgeError> {
-    let stored = bounded(
+) -> Result<StoredMergeRequest, ForgeError> {
+    bounded(
         state,
         "merge_request_load",
         review(state)?.merge_request(project, iid),
@@ -222,8 +196,7 @@ async fn merge_request_id(
         ForgeError::new(ErrorCode::Internal)
             .with_context("reason", "decided_merge_request_missing")
             .with_context("iid", iid)
-    })?;
-    Ok((stored.id, stored.head_sha))
+    })
 }
 
 async fn versions_of(
@@ -231,7 +204,7 @@ async fn versions_of(
     project: ProjectId,
     iid: i64,
 ) -> Result<Vec<StoredVersion>, ForgeError> {
-    let (id, _) = merge_request_id(state, project, iid).await?;
+    let id = merge_request(state, project, iid).await?.id;
     bounded(state, "merge_request_versions", review(state)?.versions(id)).await
 }
 
@@ -352,59 +325,4 @@ pub async fn compare(state: AppState, request: Dispatched<MergeRequestCtx>) -> R
         },
     )
     .await
-}
-
-fn mergeability_body(
-    iid: i64,
-    head: Option<String>,
-    stored: Option<StoredMergeability>,
-) -> MergeabilityBody {
-    let oid = |o: Option<ObjectId>| o.map(|o| o.as_str().to_owned());
-    match stored {
-        None => MergeabilityBody {
-            iid,
-            status: forge_core::MergeabilityStatus::Unchecked
-                .as_str()
-                .to_owned(),
-            reason: None,
-            head_sha: head,
-            checked_head_sha: None,
-            checked_target_sha: None,
-            checked_at: None,
-            conflicts: Vec::new(),
-            conflicts_truncated: false,
-        },
-        Some(s) => MergeabilityBody {
-            iid,
-            status: s.status.as_str().to_owned(),
-            reason: s.reason,
-            head_sha: head,
-            checked_head_sha: oid(s.checked_head_sha),
-            checked_target_sha: oid(s.checked_target_sha),
-            checked_at: s.checked_at,
-            conflicts: s.conflicts,
-            conflicts_truncated: s.conflicts_truncated,
-        },
-    }
-}
-
-/// `GET …/mergeability` → `200` the stored status (never enqueues).
-pub async fn mergeability(state: AppState, request: Dispatched<MergeRequestCtx>) -> Response {
-    let ids = proof_ids(&request);
-    // Owned before the first await: the request (its body) is not `Sync`.
-    let params = query(request.raw_query(), &[]).map(drop);
-    let built = async {
-        let (project, iid) = ids?;
-        params?;
-        let (id, head) = merge_request_id(&state, project, iid).await?;
-        let stored = bounded(
-            &state,
-            "merge_request_mergeability",
-            review(&state)?.mergeability(id),
-        )
-        .await?;
-        json(mergeability_body(iid, head, stored))
-    }
-    .await;
-    respond(request.ctx(), StatusCode::OK, built)
 }

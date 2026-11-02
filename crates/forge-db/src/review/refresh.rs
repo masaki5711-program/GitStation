@@ -38,7 +38,7 @@ use forge_core::ids::{MergeRequestId, UserId};
 use forge_core::{EventType, RequestId};
 use forge_errors::{ErrorCode, ForgeError};
 
-use super::mergeability::{defer_checks_on, request_check_on};
+use super::mergeability::{defer_checks_on, not_checked, request_check_on};
 use super::versions::{refresh_job, RefreshRequest, RefreshTrigger};
 use crate::jobs::enqueue_on;
 use crate::query_error;
@@ -172,10 +172,10 @@ impl MergeRequestRefresh {
             )
             .await?;
         }
-        let deferred = defer_checks_on(tx.conn(), project, targets, &ids).await?;
+        let (deferred, skipped) = defer_checks_on(tx.conn(), project, targets, &ids).await?;
         if deferred > 0 {
-            // Never silent: they stay `unchecked` (merge blocked) until
-            // their next push, retarget or reopen (ADR-0024 §3).
+            // Never silent: they stay `unchecked` (merge blocked); the
+            // worker's sweep requests them, the longest waiting first.
             tracing::warn!(
                 target: "forge_db",
                 event = "forge.review.mergeability_deferred",
@@ -185,7 +185,25 @@ impl MergeRequestRefresh {
                 targets = ?targets,
                 enqueued = ids.len(),
                 deferred,
-                "more open merge requests target the pushed branches than one push checks; the rest are unchecked"
+                "more open merge requests target the pushed branches than one push checks; the rest are unchecked and swept"
+            );
+        }
+        if skipped > 0 {
+            // Past even the deferral bound: their status is stale (readers
+            // compare the checked target with the live tip; the sweep only
+            // sees `unchecked` rows, so a push or retarget re-checks them).
+            let e = not_checked("fanout_deferred");
+            tracing::error!(
+                target: "forge_db",
+                event = "forge.review.mergeability_not_checked",
+                error_code = e.code().id(),
+                reason = "fanout_deferred",
+                request_id = %event.request_id,
+                project_id = project.get(),
+                source_seq = event.seq,
+                targets = ?targets,
+                skipped,
+                "too many open merge requests target the pushed branches to mark them all"
             );
         }
         Ok(())

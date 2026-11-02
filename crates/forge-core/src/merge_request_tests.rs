@@ -302,3 +302,27 @@ fn mergeability_statuses_are_the_check_values_and_only_two_decide() {
         .collect();
     assert_eq!(decided, ["can_be_merged", "cannot_be_merged"]);
 }
+
+/// M3 R2: the reasons are the stored values; only the ones a rerun on the
+/// same pair repeats answer that pair.
+#[test]
+fn check_reasons_round_trip_and_only_deterministic_ones_answer_a_pair() {
+    use crate::CheckReason;
+    for r in CheckReason::ALL {
+        assert_eq!(CheckReason::parse(r.as_str()), Some(*r));
+    }
+    let answering: Vec<&str> = CheckReason::ALL
+        .iter()
+        .filter(|r| r.is_deterministic())
+        .map(|r| r.as_str())
+        .collect();
+    assert_eq!(
+        answering,
+        [
+            "conflict",
+            "target_missing",
+            "unrelated_histories",
+            "no_version"
+        ]
+    );
+}

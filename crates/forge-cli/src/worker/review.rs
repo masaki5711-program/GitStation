@@ -8,7 +8,9 @@
 //! run of [`forge_review::check`] — the trial merge of the recorded head
 //! into the target's tip, stored only while its `check_seq` is the latest.
 //! A git failure is stored as `check_failed` by forge-review and retried
-//! here like the version job's.
+//! here like the version job's; on the last attempt, or a failure that can
+//! never succeed, the request is ended as `check_failed reason=job_failed`
+//! (`forge_review::mergeability::fail`) before the job dies.
 //!
 //! Success is logged once by forge-review (`forge.review.version_refreshed`
 //! with the job's request id); a failure is returned to the job runner,
@@ -136,16 +138,23 @@ impl JobHandler for MergeabilityHandler {
         Box::pin(async move {
             let request = mergeability_payload(&job.payload).map_err(JobFailure::permanent)?;
             let request_id = job.request_id();
-            forge_review::check(&inner.db, &inner.checker, request, &request_id)
-                .await
-                .map(drop)
-                .map_err(|e| {
-                    if retryable(&e) {
-                        JobFailure::retry(e)
-                    } else {
-                        JobFailure::permanent(e)
-                    }
-                })
+            let ran = forge_review::check(&inner.db, &inner.checker, request, &request_id).await;
+            let Err(e) = ran else {
+                return Ok(());
+            };
+            let last = job.lease.attempt >= job.max_attempts;
+            if retryable(&e) && !last {
+                return Err(JobFailure::retry(e));
+            }
+            // Failed for good (dead after this): never leave the request
+            // `checking` (review HIGH). A timeout or crash never gets here;
+            // the sweep ends those rows (`job_stale`).
+            forge_review::mergeability::fail(&inner.db, request, &request_id, &e).await;
+            Err(if retryable(&e) {
+                JobFailure::retry(e)
+            } else {
+                JobFailure::permanent(e)
+            })
         })
     }
 }

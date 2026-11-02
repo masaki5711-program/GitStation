@@ -1,5 +1,6 @@
 //! Whether a merge request can be merged (M3 R2, ADR-0024 §3): the body of
-//! the job `merge_request.mergeability` (`forge worker` runs it).
+//! the job `merge_request.mergeability` (`forge worker` runs it), its
+//! end-of-life path, and the version job's request after a version.
 //!
 //! 1. [`forge_db::review::begin_check`]: a run whose `check_seq` is no
 //!    longer the latest stops (`superseded`, nothing written — the newer
@@ -17,18 +18,23 @@
 //!      paths (at most [`MAX_STORED_FILES`] and [`MAX_STORED_BYTES`];
 //!      `conflicts_truncated` beyond).
 //! 3. [`forge_db::review::record_check`] stores it while the seq is still
-//!    the latest; a can ⇄ cannot flip writes `merge_request.conflict_*`.
+//!    the latest, the merge request open and its head the one checked; a
+//!    can ⇄ cannot flip writes `merge_request.conflict_*`.
 //!
 //! A git failure (`FG-GIT-0002` timeout, `0004` busy, `0003` process) is
 //! stored as `check_failed` with `reason=git_timeout|git_busy|git_failed`
 //! and returned: the worker logs it once with its code and retries with
-//! backoff (never "mergeable" meanwhile). Success is logged once here
-//! (`forge.review.mergeability_checked`), with the conflicted paths — the
-//! only place they appear besides the status.
+//! backoff. A run that fails for good ([`fail`]: a permanent failure or
+//! the last attempt) ends its request as `check_failed reason=job_failed`
+//! and logs `FG-REVIEW-0003`; a run that never returns (timeout, crash) is
+//! ended by the worker's sweep (`reap_stale_checks`, `job_stale`). A
+//! decision is logged once at info, an undecided result at warn
+//! (`forge.review.mergeability_checked`, with the stored — capped — paths
+//! and the full count).
 
 use std::time::{Duration, Instant};
 
-use forge_core::{MergeabilityStatus, ObjectId, RequestId};
+use forge_core::{CheckReason, MergeabilityStatus, ObjectId, RefName, RepoId, RequestId};
 use forge_db::change::{Actor, ChangeContext};
 use forge_db::review::{self, CheckResult, CheckStart, MergeabilityRequest, Recorded};
 use forge_db::Db;
@@ -36,15 +42,17 @@ use forge_errors::{ErrorCode, ForgeError};
 use forge_git::mergeability::{MergeTree, MergeTreeLimits};
 use forge_git::{Git, StorageRoot};
 
-/// Conflicted paths stored at most (the rest only in the log line).
+use crate::versions::ACTOR_LABEL;
+
+pub(crate) use crate::after_version::after_version;
+
+/// Conflicted paths stored at most (the log line carries the count).
 pub const MAX_STORED_FILES: usize = 100;
 /// Bytes of stored paths at most (one path is cut to fit, never stored
 /// half; the table's CHECK allows 64 KiB).
 pub const MAX_STORED_BYTES: usize = 16 * 1024;
 /// The ref read and `merge-base` of a check.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
-/// The audit label of the job's flips.
-const ACTOR_LABEL: &str = "forge-worker";
 
 /// Where the check runs: git, the storage, the trial merge's limits.
 #[derive(Clone)]
@@ -68,7 +76,7 @@ pub struct CheckReport {
     /// `checked`, `superseded`, `not_open` or `gone`.
     pub outcome: &'static str,
     pub status: Option<MergeabilityStatus>,
-    pub reason: Option<&'static str>,
+    pub reason: Option<CheckReason>,
     pub flip: Option<forge_core::EventType>,
 }
 
@@ -98,25 +106,26 @@ pub fn stored_files(files: &[String]) -> (Vec<String>, bool) {
     (kept, false)
 }
 
-/// The `reason` a git failure is stored with.
-fn git_reason(e: &ForgeError) -> &'static str {
+/// The reason a git failure is stored with.
+pub fn git_reason(e: &ForgeError) -> CheckReason {
     let code = e.code();
     if code == ErrorCode::GitTimeout {
-        "git_timeout"
+        CheckReason::GitTimeout
     } else if code == ErrorCode::GitBusy {
-        "git_busy"
+        CheckReason::GitBusy
     } else {
-        "git_failed"
+        CheckReason::GitFailed
     }
 }
 
-/// What the git part decided, or the git failure.
+/// What the git part decided (with how many paths git listed in all), or
+/// the git failure.
 enum Computed {
-    Done(CheckResult),
+    Done { result: CheckResult, files: usize },
     Failed(CheckResult, ForgeError),
 }
 
-fn failed(reason: &'static str, head: Option<&ObjectId>, target: Option<&ObjectId>) -> CheckResult {
+fn failed(reason: CheckReason, head: Option<&ObjectId>, target: Option<&ObjectId>) -> CheckResult {
     CheckResult {
         status: MergeabilityStatus::CheckFailed,
         reason: Some(reason),
@@ -125,6 +134,10 @@ fn failed(reason: &'static str, head: Option<&ObjectId>, target: Option<&ObjectI
         conflicts: Vec::new(),
         conflicts_truncated: false,
     }
+}
+
+fn done(result: CheckResult) -> Computed {
+    Computed::Done { result, files: 0 }
 }
 
 impl Mergeability {
@@ -144,26 +157,20 @@ impl Mergeability {
     }
 
     /// The git part (module docs, step 2) for `head` against `target`.
-    async fn compute(
-        &self,
-        repo: forge_core::RepoId,
-        head: Option<&ObjectId>,
-        target_branch: &forge_core::RefName,
-        all_files: &mut Vec<String>,
-    ) -> Computed {
+    async fn compute(&self, repo: RepoId, head: Option<&ObjectId>, target: &RefName) -> Computed {
         let Some(head) = head else {
-            return Computed::Done(failed("no_version", None, None));
+            return done(failed(CheckReason::NoVersion, None, None));
         };
         let tip = match self
             .git
-            .read_ref(&self.storage, repo, target_branch, READ_TIMEOUT)
+            .read_ref(&self.storage, repo, target, READ_TIMEOUT)
             .await
         {
             Ok(tip) => tip,
             Err(e) => return Computed::Failed(failed(git_reason(&e), Some(head), None), e),
         };
         let Some(tip) = tip else {
-            return Computed::Done(failed("target_missing", Some(head), None));
+            return done(failed(CheckReason::TargetMissing, Some(head), None));
         };
         match self
             .git
@@ -172,7 +179,11 @@ impl Mergeability {
         {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Computed::Done(failed("unrelated_histories", Some(head), Some(&tip)));
+                return done(failed(
+                    CheckReason::UnrelatedHistories,
+                    Some(head),
+                    Some(&tip),
+                ));
             }
             Err(e) => {
                 return Computed::Failed(failed(git_reason(&e), Some(head), Some(&tip)), e);
@@ -183,7 +194,7 @@ impl Mergeability {
             .merge_tree(&self.storage, repo, &tip, head, self.limits)
             .await
         {
-            Ok(MergeTree::Clean { .. }) => Computed::Done(CheckResult {
+            Ok(MergeTree::Clean { .. }) => done(CheckResult {
                 status: MergeabilityStatus::CanBeMerged,
                 reason: None,
                 head: Some(head.clone()), // clone: the result owns its ids
@@ -196,19 +207,27 @@ impl Mergeability {
                 files_truncated,
             }) => {
                 let (conflicts, cut) = stored_files(&files);
-                *all_files = files;
-                Computed::Done(CheckResult {
-                    status: MergeabilityStatus::CannotBeMerged,
-                    reason: Some("conflict"),
-                    head: Some(head.clone()), // clone: as above
-                    target: Some(tip),
-                    conflicts,
-                    conflicts_truncated: files_truncated || cut,
-                })
+                Computed::Done {
+                    files: files.len(),
+                    result: CheckResult {
+                        status: MergeabilityStatus::CannotBeMerged,
+                        reason: Some(CheckReason::Conflict),
+                        head: Some(head.clone()), // clone: as above
+                        target: Some(tip),
+                        conflicts,
+                        conflicts_truncated: files_truncated || cut,
+                    },
+                }
             }
             Err(e) => Computed::Failed(failed(git_reason(&e), Some(head), Some(&tip)), e),
         }
     }
+}
+
+pub(crate) fn system(request_id: &RequestId) -> ChangeContext {
+    let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
+    ctx.actor_label = Some(ACTOR_LABEL.to_owned());
+    ctx
 }
 
 /// The mergeability job (module docs). Errors: forge-db's (`FG-DB-0001` /
@@ -238,23 +257,18 @@ pub async fn check(
             .with_context("repo_id", target.repository.get())
             .with_context("merge_request_id", mr.get()));
     }
-    let repo = target.repository;
-    let mut all_files = Vec::new();
     let computed = checker
         .compute(
-            repo,
+            target.repository,
             subject.head.as_ref(),
             &subject.target_branch,
-            &mut all_files,
         )
         .await;
-    let (result, git_error) = match computed {
-        Computed::Done(result) => (result, None),
-        Computed::Failed(result, e) => (result, Some(e)),
+    let (result, files, git_error) = match computed {
+        Computed::Done { result, files } => (result, files, None),
+        Computed::Failed(result, e) => (result, 0, Some(e)),
     };
-    let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
-    ctx.actor_label = Some(ACTOR_LABEL.to_owned());
-    let recorded = review::record_check(db, &ctx, mr, seq, &result).await;
+    let recorded = review::record_check(db, &system(request_id), mr, seq, &result).await;
     let recorded = match (recorded, git_error) {
         (Ok(_), Some(e)) => {
             return Err(e
@@ -272,26 +286,51 @@ pub async fn check(
         Recorded::Superseded => ("superseded", None),
         Recorded::Stored { flip } => ("checked", flip),
     };
-    tracing::info!(
-        target: "forge_review",
-        event = "forge.review.mergeability_checked",
-        request_id = %request_id,
-        merge_request_id = mr.get(),
-        project_id = subject.project.get(),
-        iid = subject.iid,
-        check_seq = seq,
-        outcome,
-        status = result.status.as_str(),
-        reason = result.reason,
-        head_sha = result.head.as_ref().map(ObjectId::as_str),
-        target_sha = result.target.as_ref().map(ObjectId::as_str),
-        conflict_files = all_files.len(),
-        conflicts_truncated = result.conflicts_truncated,
-        files = ?all_files,
-        flip = flip.map(forge_core::EventType::as_str),
-        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "merge request mergeability checked"
-    );
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let reason = result.reason.map(CheckReason::as_str);
+    let head_sha = result.head.as_ref().map(ObjectId::as_str);
+    let target_sha = result.target.as_ref().map(ObjectId::as_str);
+    if result.status.is_decided() || outcome == "superseded" {
+        tracing::info!(
+            target: "forge_review",
+            event = "forge.review.mergeability_checked",
+            request_id = %request_id,
+            merge_request_id = mr.get(),
+            project_id = subject.project.get(),
+            iid = subject.iid,
+            check_seq = seq,
+            outcome,
+            status = result.status.as_str(),
+            reason,
+            head_sha,
+            target_sha,
+            conflict_files = files,
+            conflicts_truncated = result.conflicts_truncated,
+            files = ?result.conflicts,
+            flip = flip.map(forge_core::EventType::as_str),
+            duration_ms,
+            "merge request mergeability checked"
+        );
+    } else {
+        // Undecided (target missing, unrelated, no version): the merge is
+        // blocked on it; say why at warn.
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.mergeability_checked",
+            request_id = %request_id,
+            merge_request_id = mr.get(),
+            project_id = subject.project.get(),
+            iid = subject.iid,
+            check_seq = seq,
+            outcome,
+            status = result.status.as_str(),
+            reason,
+            head_sha,
+            target_sha,
+            duration_ms,
+            "merge request mergeability could not be decided"
+        );
+    }
     Ok(CheckReport {
         outcome,
         status: Some(result.status),
@@ -299,3 +338,51 @@ pub async fn check(
         flip,
     })
 }
+
+/// The job failed for good (`cause`: its last error): end its request as
+/// `check_failed reason=job_failed` and log `FG-REVIEW-0003` once (the
+/// worker logs `cause` itself). A request already superseded or decided is
+/// left alone. A failure to write is logged here and not returned: the
+/// sweep's reaper ends the row later (`job_stale`).
+pub async fn fail(
+    db: &Db,
+    request: MergeabilityRequest,
+    request_id: &RequestId,
+    cause: &ForgeError,
+) {
+    let MergeabilityRequest {
+        merge_request: mr,
+        check_seq: seq,
+    } = request;
+    match review::fail_check(db, mr, seq).await {
+        Ok(true) => {
+            let e = review::not_checked("job_failed");
+            tracing::warn!(
+                target: "forge_review",
+                event = "forge.review.mergeability_not_checked",
+                error_code = e.code().id(),
+                request_id = %request_id,
+                reason = "job_failed",
+                merge_request_id = mr.get(),
+                check_seq = seq,
+                cause_code = cause.code().id(),
+                "the mergeability job failed for good; stored check_failed"
+            );
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.mergeability_fail_unrecorded",
+            error_code = e.code().id(),
+            request_id = %request_id,
+            merge_request_id = mr.get(),
+            check_seq = seq,
+            error = %e,
+            "could not store job_failed; the sweep ends the row as job_stale"
+        ),
+    }
+}
+
+#[cfg(test)]
+#[path = "mergeability_tests.rs"]
+mod tests;

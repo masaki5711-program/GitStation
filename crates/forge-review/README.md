@@ -70,13 +70,20 @@ merge request in place (ADR-0024 §1).
   `forge.review.mergeability_checked` with the paths). The version job now also records the
   head version's bases once and requests a check unless the stored status answers the
   current (head, target tip) pair (`RefreshReport::check_requested`). Reads
-  `Review::versions(mr)` and `Review::mergeability(mr)` (never enqueue).
+  `Review::versions(mr)` and `Review::mergeability(mr)` (never enqueue). Review fixes:
+  `mergeability::fail(&Db, request, &RequestId, &cause)` ends a request whose job failed for good as
+  `check_failed reason=job_failed` (FG-REVIEW-0003 logged); `after_version.rs` holds the version
+  job's request (a `check_failed` answers the pair only for a deterministic `CheckReason`);
+  `version_refs.rs` holds `VersionRefs` / `plan_ref_changes` (re-exported from `versions`). Tests
+  `tests/mergeability_git.rs` (`check_maps_git_timeout_and_no_version_to_check_failed`).
 
 **Error codes owned**: FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
 `merge_requests_one_open` is the backstop); FG-REVIEW-0002
 PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,
-`reopen_at_purged_head`; runbook `secret-removal`). Reused: FG-AUTH-0002 / 0003 (with
+`reopen_at_purged_head`; runbook `secret-removal`); FG-REVIEW-0003 MergeabilityNotChecked
+(warn, M3 R2: `job_failed` here, `job_stale` / `fanout_deferred` / `undecided` from forge-db;
+runbook `merge-request-mergeability`). Reused: FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid
 alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023

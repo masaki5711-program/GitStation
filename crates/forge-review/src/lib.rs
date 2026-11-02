@@ -42,9 +42,11 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
 
+mod after_version;
 mod fields;
 pub mod mergeability;
 mod purge;
+mod version_refs;
 pub mod versions;
 
 pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, StoredVersion};

@@ -3,14 +3,15 @@
 //! retargets, target pushes with the fan-out cap, deleted targets, and the
 //! bases of a version.
 
+use forge_core::ids::{MergeRequestId, ProjectId, UserId};
 use forge_core::{
-    EventType, MergeabilityStatus, ObjectId, PushRecord, PushRecorder, PushUpdateKind, PushedRef,
-    Pusher, RequestId,
+    CheckReason, EventType, MergeabilityStatus, ObjectId, PushRecord, PushRecorder, PushUpdateKind,
+    PushedRef, Pusher, RefName, RequestId,
 };
 
-use super::*;
 use crate::change::{Actor, ChangeContext};
 use crate::projects::{self, CreatedProject, NewProject};
+use crate::review::*;
 use crate::subscribers::{self, Progress, Start};
 use crate::test_support::*;
 use crate::users::{self, NewUser};
@@ -82,6 +83,28 @@ async fn open_to(
     .expect("open")
 }
 
+/// [`open_to`], then version 1 at head `a` (what every result names).
+async fn open_at_a(
+    t: &FreshDb,
+    who: UserId,
+    p: ProjectId,
+    source: &str,
+    target: &str,
+) -> StoredMergeRequest {
+    let mr = open_to(t, who, p, source, target).await;
+    let done = record_mr_version(
+        &t.db,
+        &system(&format!("req-v-{source}")),
+        mr.id,
+        &oid('a'),
+        None,
+    )
+    .await
+    .expect("version");
+    assert_eq!(done, VersionOutcome::Added { version: 1 });
+    mr
+}
+
 /// (dedup_key, payload) of the mergeability jobs, oldest first.
 async fn checks(t: &FreshDb) -> Vec<(String, serde_json::Value)> {
     sqlx::query_as(
@@ -114,8 +137,10 @@ async fn audit_count(t: &FreshDb, action: &str) -> i64 {
 
 fn result(status: MergeabilityStatus, head: char, target: char) -> CheckResult {
     let (reason, conflicts) = match status {
-        MergeabilityStatus::CannotBeMerged => (Some("conflict"), vec!["README".to_owned()]),
-        MergeabilityStatus::CheckFailed => (Some("git_timeout"), Vec::new()),
+        MergeabilityStatus::CannotBeMerged => {
+            (Some(CheckReason::Conflict), vec!["README".to_owned()])
+        }
+        MergeabilityStatus::CheckFailed => (Some(CheckReason::GitTimeout), Vec::new()),
         MergeabilityStatus::Unchecked
         | MergeabilityStatus::Checking
         | MergeabilityStatus::CanBeMerged => (None, Vec::new()),
@@ -158,7 +183,7 @@ async fn conflict_events_are_emitted_once_per_flip() {
     use MergeabilityStatus::{CanBeMerged as Can, CannotBeMerged as Cannot, CheckFailed as Failed};
     let t = FreshDb::migrated().await;
     let (alice, web) = web(&t).await;
-    let mr = open_to(&t, alice, web.project_id, "feature", "main").await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
     let steps = [
         (Cannot, None),
         (Cannot, None),
@@ -275,7 +300,7 @@ async fn a_retarget_resets_to_unchecked_and_enqueues_a_check() {
     let t = FreshDb::migrated().await;
     let (alice, web) = web(&t).await;
     let p = web.project_id;
-    let mr = open_to(&t, alice, p, "feature", "main").await;
+    let mr = open_at_a(&t, alice, p, "feature", "main").await;
     run(&t, mr.id, MergeabilityStatus::CanBeMerged, 0).await;
     let before = checks(&t).await.len();
     let title = MergeRequestPatch {
@@ -562,4 +587,273 @@ fn a_mergeability_payload_round_trips_and_garbage_is_refused() {
     ] {
         assert!(mergeability_payload(&bad).is_err(), "{bad}");
     }
+}
+
+/// Start a run: a request and its `begin_check` (status `checking`).
+async fn checking(t: &FreshDb, mr: MergeRequestId) -> i64 {
+    let seq = request_check(&t.db, mr, RequestId::parse("req-c").expect("id"))
+        .await
+        .expect("request")
+        .expect("open");
+    let start = begin_check(&t.db, mr, seq).await.expect("begin");
+    assert!(matches!(start, CheckStart::Check(_)), "{start:?}");
+    seq
+}
+
+/// The jobs of `mr` are gone for good (as after a dead letter).
+async fn kill_jobs(t: &FreshDb, mr: MergeRequestId) {
+    t.exec_superuser(&format!(
+        "UPDATE forge.jobs SET state = 'dead', finished_at = now(), \
+         last_error_code = 'FG-DB-0007' \
+         WHERE kind = 'merge_request.mergeability' \
+         AND dedup_key LIKE 'mr_mergeability:{}:%'",
+        mr.get()
+    ))
+    .await;
+}
+
+/// Review (silent-failure HIGH): a row left `checking` — the job hit its
+/// time limit and died, or the worker crashed — is ended as `check_failed
+/// reason=job_stale` once no live job holds it, logged with FG-REVIEW-0003;
+/// doctor's counts see it first. A live job keeps the row.
+#[tokio::test]
+async fn a_stale_checking_row_is_reaped_as_job_stale() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
+    let seq = checking(&t, mr.id).await;
+    let none = reap_stale_checks(&t.db, std::time::Duration::ZERO, 10)
+        .await
+        .expect("reap");
+    assert!(none.is_empty(), "a queued job still holds it");
+    kill_jobs(&t, mr.id).await;
+    t.exec_superuser(
+        "UPDATE forge.merge_request_mergeability SET updated_at = now() - interval '1 hour'",
+    )
+    .await;
+    let health = mergeability_health(&t.db)
+        .await
+        .expect("health")
+        .expect("migrated");
+    assert_eq!(health.checking_stale, 1);
+    let err = health.check().expect_err("stale");
+    assert_eq!(err.code(), forge_errors::ErrorCode::MergeabilityNotChecked);
+    let reaped = reap_stale_checks(&t.db, STALE_AFTER, 10)
+        .await
+        .expect("reap");
+    assert_eq!(reaped, [(mr.id, seq)]);
+    let stored = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(stored.status, MergeabilityStatus::CheckFailed);
+    assert_eq!(stored.reason, Some(CheckReason::JobStale));
+    let health = mergeability_health(&t.db)
+        .await
+        .expect("health")
+        .expect("migrated");
+    health.check().expect("nothing left undecided");
+    t.drop_now().await;
+}
+
+/// A run that failed for good (dead letter, permanent failure) ends its own
+/// request as `job_failed` — never an older request's, never a decision.
+#[tokio::test]
+async fn a_job_that_failed_for_good_leaves_check_failed_job_failed() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
+    let old = checking(&t, mr.id).await;
+    let seq = checking(&t, mr.id).await;
+    assert!(
+        !fail_check(&t.db, mr.id, old).await.expect("old"),
+        "superseded"
+    );
+    assert!(fail_check(&t.db, mr.id, seq).await.expect("fail"));
+    let stored = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(
+        (stored.status, stored.reason),
+        (
+            MergeabilityStatus::CheckFailed,
+            Some(CheckReason::JobFailed)
+        )
+    );
+    run(&t, mr.id, MergeabilityStatus::CanBeMerged, 1).await;
+    let decided = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert!(!fail_check(&t.db, mr.id, decided.check_seq)
+        .await
+        .expect("decided"));
+    t.drop_now().await;
+}
+
+/// Review (fan-out starvation): the sweep re-requests open merge requests
+/// `unchecked` with no live job, the longest waiting first, a batch at a
+/// time; closed ones and rows with a live job are left alone.
+#[tokio::test]
+async fn the_sweep_requests_unchecked_rows_without_a_live_job_oldest_first() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let first = open_to(&t, alice, p, "a", "main").await;
+    let second = open_to(&t, alice, p, "b", "main").await;
+    let live = open_to(&t, alice, p, "c", "main").await;
+    let closed = open_to(&t, alice, p, "d", "main").await;
+    let origin = || RequestId::parse("req-r").expect("id");
+    for mr in [&first, &second, &live, &closed] {
+        request_check(&t.db, mr.id, origin())
+            .await
+            .expect("request")
+            .expect("open");
+    }
+    for mr in [&first, &second, &closed] {
+        kill_jobs(&t, mr.id).await;
+    }
+    t.exec_superuser(&format!(
+        "UPDATE forge.merge_request_mergeability SET updated_at = now() - interval '2 hours' \
+         WHERE merge_request_id = {}",
+        first.id.get()
+    ))
+    .await;
+    let _closed = close_mr_decided(
+        &t.db,
+        &as_user(alice, "req-close"),
+        p,
+        closed.iid,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    let sweep = RequestId::parse("req-sweep").expect("id");
+    let one = sweep_unchecked(&t.db, 1, &sweep).await.expect("sweep");
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].0, first.id, "the longest waiting first");
+    let two = sweep_unchecked(&t.db, 10, &sweep).await.expect("sweep");
+    let swept: Vec<MergeRequestId> = two.iter().map(|(m, _)| *m).collect();
+    assert_eq!(swept, [second.id], "live and closed ones are not swept");
+    let three = sweep_unchecked(&t.db, 10, &sweep).await.expect("sweep");
+    assert!(three.is_empty(), "every swept row has a live job now");
+    t.drop_now().await;
+}
+
+/// Review (stale decisions): a new version marks a decided status
+/// `unchecked` in its own transaction; a result for a head that moved
+/// since the run started, or for a merge request closed meanwhile, is not
+/// stored.
+#[tokio::test]
+async fn a_new_head_downgrades_and_a_result_for_an_old_head_is_superseded() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let mr = open_at_a(&t, alice, p, "feature", "main").await;
+    run(&t, mr.id, MergeabilityStatus::CanBeMerged, 0).await;
+    let seq = checking(&t, mr.id).await;
+    record_mr_version(&t.db, &system("req-v2"), mr.id, &oid('b'), None)
+        .await
+        .expect("v2");
+    let late = record_check(
+        &t.db,
+        &system("req-late"),
+        mr.id,
+        seq,
+        &result(MergeabilityStatus::CanBeMerged, 'a', 'c'),
+    )
+    .await
+    .expect("record");
+    assert_eq!(late, Recorded::Superseded, "the head moved");
+    // A decided status for `b`, then version `c`: downgraded at once.
+    let seq = checking(&t, mr.id).await;
+    let ok = result(MergeabilityStatus::CanBeMerged, 'b', 'c');
+    let stored = record_check(&t.db, &system("req-b"), mr.id, seq, &ok)
+        .await
+        .expect("record");
+    assert_eq!(stored, Recorded::Stored { flip: None });
+    record_mr_version(&t.db, &system("req-v3"), mr.id, &oid('c'), None)
+        .await
+        .expect("v3");
+    let now = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(now.status, MergeabilityStatus::Unchecked);
+    // Closed while checking: the result is not stored.
+    let seq = checking(&t, mr.id).await;
+    let _closed = close_mr_decided(
+        &t.db,
+        &as_user(alice, "req-close"),
+        p,
+        mr.iid,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    let c = result(MergeabilityStatus::CanBeMerged, 'c', 'd');
+    let closed = record_check(&t.db, &system("req-c-late"), mr.id, seq, &c)
+        .await
+        .expect("record");
+    assert_eq!(closed, Recorded::Superseded);
+    t.drop_now().await;
+}
+
+/// Review (LOW): purging the version a stored check names resets the
+/// status and empties its conflict list (nobody may read that commit).
+#[tokio::test]
+async fn purging_the_checked_version_resets_the_mergeability() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let p = web.project_id;
+    let mr = open_at_a(&t, alice, p, "feature", "main").await;
+    run(&t, mr.id, MergeabilityStatus::CannotBeMerged, 0).await;
+    let _closed = close_mr_decided(
+        &t.db,
+        &as_user(alice, "req-close"),
+        p,
+        mr.iid,
+        alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("close");
+    let _purged = purge_mr_version_refs_decided(
+        &t.db,
+        &as_user(alice, "req-purge"),
+        p,
+        mr.iid,
+        alice,
+        Some(&[1]),
+        |_| Ok(()),
+    )
+    .await
+    .expect("purge");
+    let stored = mergeability_written(&t.db, mr.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(stored.status, MergeabilityStatus::Unchecked);
+    assert!(stored.conflicts.is_empty());
+    t.drop_now().await;
+}
+
+/// Two runs recording the same version's bases at once: one writes.
+#[tokio::test]
+async fn concurrent_bases_writes_record_once() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    let mr = open_at_a(&t, alice, web.project_id, "feature", "main").await;
+    let (c1, c2) = (system("req-b1"), system("req-b2"));
+    let (b1, b2) = (oid('b'), oid('c'));
+    let (one, two) = tokio::join!(
+        record_version_bases(&t.db, &c1, mr.id, 1, &b1, Some(&b1)),
+        record_version_bases(&t.db, &c2, mr.id, 1, &b2, None),
+    );
+    let written = [one.expect("one"), two.expect("two")];
+    assert_eq!(written.iter().filter(|w| **w).count(), 1, "{written:?}");
+    t.drop_now().await;
 }

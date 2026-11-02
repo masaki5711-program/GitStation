@@ -1352,10 +1352,15 @@ export interface components {
             iid: number;
             /**
              * @description Why: `conflict`, `target_missing`, `unrelated_histories`,
-             *     `no_version`, `git_timeout`, `git_busy`, `git_failed` (`null` when
-             *     mergeable or not checked yet).
+             *     `no_version`, `git_timeout`, `git_busy`, `git_failed`, `job_failed`,
+             *     `job_stale` (`null` when mergeable or not checked yet).
              */
             reason: string | null;
+            /**
+             * @description The stored result is about another head or target tip than the
+             *     current ones: `status` says `unchecked` until the next check.
+             */
+            stale: boolean;
             /**
              * @description `unchecked`, `checking`, `can_be_merged`, `cannot_be_merged` or
              *     `check_failed`. Only `can_be_merged` lets a merge go ahead; every
