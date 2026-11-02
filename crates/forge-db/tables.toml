@@ -46,6 +46,8 @@ guarded_functions = [
     "merge_request_merges_guard",
     # M3 R5: an approval's identity never changes; it ends once.
     "merge_request_approvals_guard",
+    # M3 R5 re-review: a push's unlisted ref updates are never changed.
+    "push_unlisted_refs_guard",
 ]
 
 [tables.events]
@@ -328,6 +330,15 @@ unaudited_columns = []
 txn_audited_columns = []
 
 [tables.approval_rule_approvers]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.push_unlisted_refs]
 guarded = false
 kind = "audited"
 ro_columns = ["*"]

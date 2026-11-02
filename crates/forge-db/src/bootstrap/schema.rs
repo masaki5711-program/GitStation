@@ -45,6 +45,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.merge_request_merges_guard()",
     // ── M3 R5: an approval ends once (20261111100000) ──
     "forge.merge_request_approvals_guard()",
+    // ── M3 R5 re-review: unlisted ref updates never change (20261111100200) ──
+    "forge.push_unlisted_refs_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -117,6 +119,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER merge_request_approvals_end_once BEFORE UPDATE ON \
          forge.merge_request_approvals FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_approvals_guard()",
+    ),
+    // ── M3 R5 re-review: unlisted ref updates never change (20261111100200) ──
+    (
+        "push_unlisted_refs",
+        "push_unlisted_refs_immutable",
+        "CREATE TRIGGER push_unlisted_refs_immutable BEFORE UPDATE ON \
+         forge.push_unlisted_refs FOR EACH ROW EXECUTE FUNCTION \
+         forge.push_unlisted_refs_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -550,6 +560,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.merge_request_approvals", operational()),
         ("forge.approval_rules", operational()),
         ("forge.approval_rule_approvers", operational()),
+        ("forge.push_unlisted_refs", operational()),
     ]
 }
 
@@ -699,6 +710,8 @@ const LATER_TABLES: &[&str] = &[
     "merge_request_approvals",
     "approval_rules",
     "approval_rule_approvers",
+    // ── M3 R5 re-review (migration 20261111100200) ──
+    "push_unlisted_refs",
 ];
 
 /// Every table the first migration creates.

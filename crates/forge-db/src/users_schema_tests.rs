@@ -154,6 +154,13 @@ async fn every_audited_table_has_its_audit_trigger() {
                 txn_audited_columns: vec![],
             },
             AuditedTable {
+                name: "push_unlisted_refs".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
                 name: "repositories".into(),
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "project_id".into(),

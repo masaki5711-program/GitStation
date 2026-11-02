@@ -451,7 +451,15 @@ async fn finish_steps(
     // discussions (they reference the versions and the merge requests);
     // M3 R4: the merge attempts (derived; they reference the merge requests).
     // M3 R5: the approvals (they reference the merge requests), then the
-    // approval rules' approvers before the rules.
+    // approval rules' approvers before the rules; the push records'
+    // unlisted ref updates (re-review round 2).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.push_unlisted_refs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.push_unlisted_refs",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_approvals WHERE project_id = $1",

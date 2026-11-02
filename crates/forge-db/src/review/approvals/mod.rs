@@ -304,8 +304,9 @@ pub struct PushCoverage {
     /// The ref updates that name a range commit (`new` or listed) or whose
     /// list is cut.
     pub entries: Vec<PushedEntry>,
-    /// A record whose refs were cut (`refs_truncated`): some ref updates
-    /// are not listed at all.
+    /// A record whose refs were cut (`refs_truncated`) and whose unlisted
+    /// ref updates were not kept (written before push_unlisted_refs): some
+    /// ref updates are unknown.
     pub refs_truncated: bool,
     /// More matching entries than the cap: the coverage is incomplete.
     pub over_cap: bool,
@@ -346,13 +347,17 @@ pub async fn push_coverage(
                 "SELECT a.id, \
                    COALESCE((a.details -> 'replayed_from' ->> 'user_id')::bigint, a.actor_user_id) \
                      AS pusher, \
-                   (a.details ->> 'refs_truncated')::boolean AS refs_truncated, \
+                   ((a.details ->> 'refs_truncated')::boolean AND NOT EXISTS ( \
+                     SELECT 1 FROM forge.push_unlisted_refs u \
+                     WHERE u.request_id = a.request_id AND u.repository_id = $2)) \
+                     AS refs_truncated, \
                    r.value ->> 'new' AS new, \
                    (r.value ->> 'commits_truncated')::boolean AS commits_truncated, \
                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(r.value -> 'commits', '[]'))) \
                      AS commits \
                  FROM forge.audit_log a \
-                 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(a.details -> 'refs', '[]')) r \
+                 LEFT JOIN LATERAL jsonb_array_elements(COALESCE(a.details -> 'refs', '[]')) r \
+                   ON true \
                  WHERE a.project_id = $1 AND a.action = 'repository.pushed' \
                    AND a.outcome = 'succeeded' \
                    AND (a.details ->> 'repository_id')::bigint = $2 \
@@ -371,13 +376,47 @@ pub async fn push_coverage(
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    let over_cap = rows.len() as i64 > MAX_PUSH_ENTRIES;
+    // M3 R5 re-review round 2: the ref updates a record did not list
+    // (push_unlisted_refs) are entries too, with an unknown commit list.
+    const UNLISTED: &str = "review.push_coverage_unlisted";
+    let unlisted: Vec<(i64, Option<i64>, String)> = db
+        .within(UNLISTED, async {
+            sqlx::query_as(
+                "SELECT (SELECT min(a.id) FROM forge.audit_log a \
+                   WHERE a.project_id = u.project_id AND a.request_id = u.request_id \
+                     AND a.action = 'repository.pushed'), \
+                   u.pusher_id, u.new_sha \
+                 FROM forge.push_unlisted_refs u \
+                 WHERE u.project_id = $1 AND u.repository_id = $2 ORDER BY u.id LIMIT $3",
+            )
+            .bind(project.get())
+            .bind(repo.get())
+            .bind(MAX_PUSH_ENTRIES + 1)
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(UNLISTED, e))
+        })
+        .await?;
+    let over_cap = rows.len() as i64 > MAX_PUSH_ENTRIES || unlisted.len() as i64 > MAX_PUSH_ENTRIES;
     let mut coverage = PushCoverage {
         over_cap,
         ..PushCoverage::default()
     };
+    for (audit_id, pusher, new) in unlisted.into_iter().take(MAX_PUSH_ENTRIES as usize) {
+        coverage.entries.push(PushedEntry {
+            audit_id,
+            pusher: pusher.map(UserId::new),
+            new: ObjectId::parse(&new).ok().filter(|n| !n.is_zero()),
+            commits: Vec::new(),
+            commits_truncated: true,
+        });
+    }
     for row in rows.into_iter().take(MAX_PUSH_ENTRIES as usize) {
         coverage.refs_truncated |= row.refs_truncated.unwrap_or(false);
+        if row.new.is_none() && row.commits.is_empty() {
+            // A record with no listed ref (its flag is all it says).
+            continue;
+        }
         let new = row
             .new
             .as_deref()

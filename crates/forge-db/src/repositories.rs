@@ -940,6 +940,22 @@ async fn record(
     let event_type = details
         .event_type()
         .ok_or_else(|| constant("audit_only_event"))?;
+    // M3 R5 re-review round 2: the ref updates the audit row does not list
+    // (`refs_truncated`) are kept for the committer rule (ADR-0024 §8.3).
+    let pusher = match (replay, &ctx.actor) {
+        (Some((_, who)), _) => Some(who.pusher),
+        (None, Actor::User(u) | Actor::ServiceAccount(u)) => Some(*u),
+        (None, Actor::UserViaServiceAccount { user, .. }) => Some(*user),
+        (None, Actor::System | Actor::Anonymous) => None,
+    };
+    let unlisted = unlisted_updates(&details.to_value(), push);
+    if !unlisted.is_empty() {
+        let request_id = ctx.request_id.as_str().to_owned();
+        tx.step(|c| async move {
+            insert_unlisted(c, (project_id, repo), &request_id, pusher, &unlisted).await
+        })
+        .await?;
+    }
     let record = ChangeRecord {
         audit: AuditEntry {
             action: details.action(),
@@ -965,6 +981,54 @@ async fn record(
         Committed::Recorded { .. } => PushRecorded::Recorded,
         Committed::Deduped => PushRecorded::Deduped,
     })
+}
+
+/// The ref updates of `push` (deletes aside) the record's JSON `value`
+/// does not list (its `refs` were cut by the 100-ref or byte budget).
+fn unlisted_updates(value: &serde_json::Value, push: &PushRecord) -> Vec<(String, String)> {
+    let listed: std::collections::BTreeSet<&str> = value
+        .get("refs")
+        .and_then(serde_json::Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|r| r.get("ref").and_then(serde_json::Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    push.updates
+        .iter()
+        .filter(|u| !u.new.is_zero() && !listed.contains(u.name.as_str()))
+        .map(|u| (u.name.as_str().to_owned(), u.new.as_str().to_owned()))
+        .collect()
+}
+
+/// Insert the unlisted ref updates of one push record (one statement).
+async fn insert_unlisted(
+    conn: &mut sqlx::postgres::PgConnection,
+    (project, repo): (ProjectId, RepoId),
+    request_id: &str,
+    pusher: Option<forge_core::UserId>,
+    unlisted: &[(String, String)],
+) -> Result<(), ForgeError> {
+    let (names, news): (Vec<&str>, Vec<&str>) = unlisted
+        .iter()
+        .map(|(n, s)| (n.as_str(), s.as_str()))
+        .unzip();
+    sqlx::query(
+        "INSERT INTO forge.push_unlisted_refs (project_id, repository_id, request_id, \
+         pusher_id, ref_name, new_sha) SELECT $1, $2, $3, $4, r.name, r.new \
+         FROM unnest($5::text[], $6::text[]) AS r(name, new)",
+    )
+    .bind(project.get())
+    .bind(repo.get())
+    .bind(request_id)
+    .bind(pusher.map(forge_core::UserId::get))
+    .bind(&names)
+    .bind(&news)
+    .execute(conn)
+    .await
+    .map(drop)
+    .map_err(|e| query_error("repositories.push_unlisted_refs", e))
 }
 
 /// The change context of a push by `pusher`: actor `user`, the push
