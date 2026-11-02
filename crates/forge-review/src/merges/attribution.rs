@@ -39,7 +39,7 @@ impl Merger {
         }
         let listing = self.timeouts.read.min(lock.left());
         if listing.is_zero() {
-            unattributed(attempt, "merge_lock_lost", None);
+            unattributed(attempt, subject, "merge_lock_lost", None);
             return None;
         }
         let range = match self
@@ -56,11 +56,11 @@ impl Merger {
         {
             Ok(Some(range)) => range,
             Ok(None) => {
-                unattributed(attempt, "range_too_long", None);
+                unattributed(attempt, subject, "range_too_long", None);
                 return None;
             }
             Err(e) => {
-                unattributed(attempt, "git_failed", Some(e));
+                unattributed(attempt, subject, "git_failed", Some(e));
                 return None;
             }
         };
@@ -69,18 +69,18 @@ impl Merger {
         let pushers = match tokio::time::timeout(listing, read).await {
             Ok(Ok(pushers)) => pushers,
             Ok(Err(e)) => {
-                unattributed(attempt, "db_failed", Some(e));
+                unattributed(attempt, subject, "db_failed", Some(e));
                 return None;
             }
             Err(_) => {
-                unattributed(attempt, "deadline", None);
+                unattributed(attempt, subject, "deadline", None);
                 return None;
             }
         };
         match committers_of(&range.commits, &pushers) {
             Committers::Known(map) => Some(map.into_keys().collect()),
             Committers::Unknown(reason) => {
-                unattributed(attempt, reason, None);
+                unattributed(attempt, subject, reason, None);
                 None
             }
         }
@@ -88,7 +88,12 @@ impl Merger {
 }
 
 /// The one warn of an unattributed merge commit.
-fn unattributed(attempt: &StoredMerge, reason: &'static str, cause: Option<ForgeError>) {
+fn unattributed(
+    attempt: &StoredMerge,
+    subject: &Subject,
+    reason: &'static str,
+    cause: Option<ForgeError>,
+) {
     tracing::warn!(
         target: "forge_review",
         event = "forge.review.merge_commit_unattributed",
@@ -96,6 +101,8 @@ fn unattributed(attempt: &StoredMerge, reason: &'static str, cause: Option<Forge
         request_id = %attempt.request_id,
         merge_id = attempt.id,
         project_id = attempt.project_id.get(),
+        repo_id = subject.repo.get(),
+        merge_request_id = attempt.merge_request.get(),
         reason = format!("merge_pushers_unknown:{reason}"),
         cause_code = cause.as_ref().map(|e| e.code().id()),
         cause = cause.as_ref().map(tracing::field::display),
