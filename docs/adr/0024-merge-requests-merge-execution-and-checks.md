@@ -1182,3 +1182,44 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   過ぎたことの通知）と `merge_settings`（`reset_approvals_on_push`・コミッターの規則の切り替え）。それまで CODEOWNERS の行き詰まりの逃げ道は
   target に push できる人の直接の push（runbook `codeowners`。R6 で保護ブランチへの直接の push の禁止を入れる前に切り替えを入れる）。
   代理の deny の行は ADR-0025。
+
+### R5 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（security・authz・database・rust）の HIGH 3 件と MEDIUM / LOW への対応。上の R5 の節と違えたところは **改訂** と書いた。
+
+- **一覧が切れた push のコミッター（HIGH、改訂）**: 一覧が切れた（21 件以上の）ref の更新は、その `new` が範囲に届けば（範囲にある、または範囲の
+  底（範囲に親を持たないコミット）を祖先に持つ。`merge-base --is-ancestor`）、**範囲のコミットが別の記録に載っていても** その actor をコミッターに
+  する（Bob が B1..B21 を 1 回で push して B1 が一覧から落ち、Alice が B1 で `feature` を作ったとき、Bob の承認を数えない。テスト
+  `a_cut_push_reaching_a_named_commit_still_makes_a_committer`・`a_cut_push_reaching_the_range_makes_its_pusher_a_committer`）。リポジトリ全体の
+  一覧の切れた push を読み（最大 10 000 件）、届かないものは数えない（無関係な push で `committers_unknown` にしない）。届くものが 16 件を超える・
+  届くかが分からないと `committers_unknown`。push の記録の読み取りに部分索引 `audit_log_pushes`（追記のマイグレーション 20261111100100。
+  **CONCURRENTLY ではない**: 守られた監査の表への DDL は db.migrate の行と同じトランザクションでしか認められない。`-- no-transaction` は 1 文で
+  その行を書けない。作る間は監査の書き込みが待つ）。
+- **範囲と変更されたパス（MEDIUM、改訂）**: 範囲は `head ^<target の先端>`（マージが持ち込むコミット）、変更されたパスは **target の先端と
+  試しのマージ（`merge-tree --write-tree`）の木の差分**（共通の祖先が複数ある criss-cross の履歴でも、target に着地する変更だけ。テスト
+  `criss_cross_histories_count_only_what_the_merge_changes`）。`merge-base` は呼ばない（その失敗を `no_merge_base` と読む誤りも消えた）。
+  衝突なら `changed_paths_unknown reason=conflict`（衝突でもともと止まる）。
+- **読み取りの予算（MEDIUM）**: 1 回の評価のすべての git の呼び出しと push の記録の読み取りを 1 つの期限と回数で抑える（`Budget`）。要求
+  （マージ・承認）は 20 秒・64 回、`GET …/approvals` は 10 秒・32 回、マージのジョブはロックの保持の残り・64 回。各呼び出しは最大 10 秒。
+  尽きたら「分からない」事実（`timeout`）で止める。
+- **CODEOWNERS の照合（HIGH、改訂）**: パターンは解析の時に要素へ分け、連続する `**` と `*` をまとめ、ワイルドカードは 1 パターン 16 個まで
+  （超えたら `pattern_invalid`、行番号つき）。照合は（要素 × パスの位置）の表と要素ごとの 2 点の glob で、指数的な後戻りをしない。照合は
+  ブロッキングのタスクで 5 秒まで（超えたら `codeowners_invalid reason=match_budget`）。結果（行 → パスの数）を評価の入力に持つ。
+- **見えない文字（HIGH）**: 先頭の UTF-8 の BOM は捨てる。注釈の外の Unicode の Cf（ゼロ幅・方向制御など）と ASCII でない空白（U+3000 など）は
+  `pattern_invalid`（行番号つき）。注釈の中は文字として扱う。
+- **大文字と小文字（MEDIUM）**: CODEOWNERS の照合と `is_config_path` は ASCII の大文字と小文字を区別しない（`.Forge/ci.yml`、`SRC/auth.rs`）。
+- **ログ（MEDIUM）**: 読めない CODEOWNERS は `forge.review.codeowners_invalid`（FG-REVIEW-0014）を評価ごとに 1 回だけ出す（git の失敗は同じ行の
+  `git_error_code`）。
+- **承認者の事実（MEDIUM）**: 承認者の数によらず 3 文（アカウント、利用者の一覧を渡す 1 つの chain の問い合わせによるロール、直接のグループ）。
+  `GET …/approvals` の読み取りは 1 つのスナップショットではない（READ COMMITTED の 1 トランザクション）: 表示だけで判定に使わず、マージは
+  ゲートのトランザクションでロックの下で読み直す。分離レベルの指定は `ChangeTx` だけに許す（db-write-boundary ゲート）ので、そう注記した。
+- **存在の問い合わせ（MEDIUM）**: ルールの承認できる人と CODEOWNERS の所有者は **有効な** 利用者と生きたグループだけを引く。存在しない名前と
+  無効化された利用者は同じ答え（ルールは FG-WEB-0006 `unknown_user`、CODEOWNERS は `unknown_owner`）。グループは内部の公開で、見えないグループは無い。
+- **LOW**: ルールの利用者・グループは重複を除いてから比べて書く。権限の表に `merge_execute` だけ・`api` の無い Maintainer のトークンでの
+  `ApprovalRuleManage` の deny と、`merge_approve` + `admin` の管理者のトークンでの承認の allow を足した。
+- **記録だけ（LOW）**: (1) 引き下げられた元の承認者（Reporter など）は `MergeRequestUnapprove` を拒まれる。その承認は評価の時点で
+  `role_insufficient` で数えられないので、取り消せなくてもマージの条件を満たさない（必要なら新しいコミットか target の変更で消える）。
+  (2) 所属の無い管理者の承認は **受け付けるが数えない**（`role_insufficient`）。`authorize()` は管理者の権限で承認を許す（管理者の印は
+  評価に使わない）。拒むより、表示で「数えない理由」を見せる方を選んだ。(3) `forge_app` の `merge_request_approvals`・`approval_rules`・
+  `approval_rule_approvers` への DELETE はプロジェクトの purge だけが使う（承認の終わりは `revoked_at` の UPDATE、ルールの置き換えは承認できる人の
+  行の DELETE と INSERT で、どれも監査の行と同じトランザクション）。

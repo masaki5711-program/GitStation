@@ -24,7 +24,7 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 | `not_human` | 承認者がサービスアカウント・ボット | 人の承認（承認の Action 自体が人だけ） |
 | `role_insufficient` | 承認者のプロジェクトでの今のロールが Developer 未満（所属の削除・引き下げ） | 別の人の承認、またはロールを戻す |
 | `author` | MR の作成者（承認の Action が拒むので通常は出ない） | — |
-| `committer` | 承認者が **MR の範囲（merge_base..head）のコミットを運んだ push** をしたことがある。別名のブランチへの push、MR の作成前の push も含む。`committer_push_audit_id` がその push の監査の行 | 別のレビュアーの承認。push の記録を確かめる（下の Diagnose 2） |
+| `committer` | 承認者が **MR の範囲（`head ^<target の先端>`: マージが持ち込むコミット）のコミットを運んだ push** をしたことがある。別名のブランチへの push、MR の作成前の push も含む。一覧が切れた（21 件以上の）push は、その `new` が範囲に届くだけで運んだとみなす（範囲のコミットが別の記録に載っていても）。`committer_push_audit_id` がその push の監査の行 | 別のレビュアーの承認。push の記録を確かめる（下の Diagnose 2） |
 | `committers_unknown` | **誰がコミットを push したかを示せない**（閉じる側に倒す。誰の承認も数えない） | 下の表 |
 | `not_in_rule` | 有効だが、どのルール・CODEOWNERS の行・設定のファイルの条件にも入っていない（数えても足しにならない） | ルールの承認できる人・CODEOWNERS の所有者に承認を頼む |
 
@@ -34,8 +34,9 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 |---|---|
 | push の記録が無いコミットがある（`push_record_missing`） | 監査の保存期間を過ぎた古いコミット、push の記録に失敗した push（FG-GIT-0012、runbook push-record-failed）、push の記録が始まる前・バックアップから戻したリポジトリ、`update-ref` で手で動かした ref |
 | ref の一覧が切れた push（`push_record_truncated`、1 回に 100 を超える ref）| 大きな取り込み |
-| 21 件以上の新しいコミットを 1 回で push し、一覧が切れた push が 16 件を超える（`too_many_partial_pushes`）、確かめる git が失敗した（`push_reach_unknown`） | 長い履歴の一括の push |
-| 範囲が 1 000 コミットを超える（`range_too_long`）、共通の履歴が無い（`no_merge_base`）、git の失敗（`git_failed`） | 長く分岐したブランチ |
+| 範囲に届く一覧の切れた push が 16 件を超える（`too_many_partial_pushes`）、届くかを確かめる git が失敗した・予算が尽きた（`push_reach_unknown`） | 長い履歴の一括の push。リポジトリ全体の一覧の切れた push のうち、範囲に届かないものは数えない |
+| 評価の読み取りの予算が尽きた（`timeout`。要求 20 秒・64 回、`GET …/approvals` 10 秒・32 回、ジョブはロックの残り） | 大きなリポジトリ・遅いディスク。もう一度要求する |
+| 範囲が 1 000 コミットを超える（`range_too_long`）、git の失敗（`git_failed`） | 長く分岐したブランチ |
 
 ## Diagnose（読み取りのみ）
 
@@ -43,7 +44,7 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 2. `committer` の証拠: `SELECT id, occurred_at, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE id = <committer_push_audit_id>;`
    （その push の `new` か `commits` に MR の範囲のコミットがある）。
 3. `committers_unknown`: MR の範囲を git で読み、push の記録と突き合わせる:
-   `git --git-dir <repo> rev-list <merge_base>..<head>` と
+   `git --git-dir <repo> rev-list <head> ^<target の先端>` と
    `SELECT id, actor_user_id, details -> 'refs' FROM forge.audit_log WHERE project_id = <id> AND action = 'repository.pushed' ORDER BY id DESC LIMIT 50;`
 4. 承認が消えた: `SELECT id, approver_id, head_sha, target_branch, revoked_at, revoked_reason FROM forge.merge_request_approvals WHERE merge_request_id = <mr_id> ORDER BY id;`
    （`new_commits` = 新しい版、`target_changed` = target の変更、`unapproved` = 本人の取り消し。イベント `merge_request.unapproved` も同じ）。

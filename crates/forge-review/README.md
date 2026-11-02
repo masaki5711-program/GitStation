@@ -130,9 +130,12 @@ merge request in place (ADR-0024 §1).
   `codeowners_invalid`, `config_change_needs_maintainer_approval`, `changed_paths_unknown`;
   `is_config_path`), `committers::committers_of` (the push records naming a range commit; cut
   lists checked with git; anything unprovable unknown). `ReviewGit::new(git, storage)` reads
-  the merge base, the changed paths (`diff-tree --no-renames`, 10 000 paths), the range (1 000
-  commits) and the **target tip's** CODEOWNERS with owners resolved, 10 s per git call; a git
-  failure is an unknown fact (warn `forge.review.approval_input_unread`). `Review::with_review_git`,
+  the changed paths (the target tip against the trial merge's tree, `diff-tree --no-renames`,
+  10 000 paths), the range (`head ^<tip>`, 1 000 commits, with its bottoms), whether cut pushes
+  reach it, and the **target tip's** CODEOWNERS (owners resolved, matched in a blocking task
+  within 5 s), all under one `Budget` (20 s / 64 calls on a request, 10 s / 32 on the state
+  route, the lock's hold in the job); a git failure is an unknown fact (warn
+  `forge.review.approval_input_unread`; CODEOWNERS: one `forge.review.codeowners_invalid`). `Review::with_review_git`,
   `approve(request, proof, repo, &sha)`, `unapprove`, `approval_state`, `approval_rules`,
   `put_approval_rule(request, &Authorized<ProjectCtx>, &RuleAsk)`, `remove_approval_rule`.
   `evaluate_merge()` takes `MergeFacts::approvals`; the request and every gate of the merge job
