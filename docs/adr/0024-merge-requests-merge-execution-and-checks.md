@@ -923,3 +923,17 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
 - テスト: `check_inline` の理由（`version_base_pending`・`version_purged`・`no_patch`（バイナリ）・`diff_truncated`（ファイル数の
   上限））を実リポジトリで、本文の規則・別の MR / 別のプロジェクトのスレッドの ID（同じ 404、何も書かない）・サービス
   アカウントの解決の拒否・同じ解決の繰り返し（イベントは増えない）・hunk の境界・gstn の終了コードを HTTP / CLI で。
+
+### R3 の再レビューで決めたこと（2026-11-02）
+
+- **`outdated` の時間の予算**: 1 回の読み取り（と書き込みの応答の表示）が `outdated` の差分に使う時間は合計 **8 秒**
+  （`OUTDATED_BUDGET`、要求の時間切れ 30 秒より十分短く、書き込みの経路の余裕を残す）。期限を過ぎたら残りの組は git を
+  動かさずに `Unknown`（`reason=deadline`）、実行中の差分は期限で打ち切る。古い版への行のコメントの書き込みも、コミットの
+  後に要求の時間切れを超えない。
+- **ログの重さ**: `version_purged` / `version_base_pending` は日常の状態なので debug（`error_code` なし）。warn は診断の
+  失敗だけで、`diff_failed` / `versions_unreadable` は `error_code` と `error_reason`（失敗の context の `reason`）を持つ。
+  `deadline` / `diff_cap` / `no_current_version` / `version_unknown` は warn で `error_code` なし。
+- **既にデータのある表への UNIQUE の追加**: 20261109100100 の `merge_requests_id_project` は `ALTER TABLE … ADD CONSTRAINT …
+  UNIQUE` で入れた（R3 の時点では行が少ない）。今後、行の多い表に UNIQUE を足すときは、書き込みを止めないように
+  `CREATE UNIQUE INDEX CONCURRENTLY`（トランザクションの外の別のマイグレーション）で索引を作り、`ALTER TABLE … ADD
+  CONSTRAINT … UNIQUE USING INDEX` で制約にする。

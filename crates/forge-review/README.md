@@ -90,7 +90,9 @@ merge request in place (ADR-0024 §1).
   diff from the thread's side commit to the current version's — a `-` line at its number,
   or its file deleted / renamed / unreadable). Unknown (no current version, a purged
   version, bases pending, more than `MAX_DIFFS_PER_READ` = 20 diffs, a failed diff) is shown
-  as outdated and logged once (`forge.review.discussion_outdated_unknown`); neither the list
+  as outdated and logged once (`forge.review.discussion_outdated_unknown`; routine states at
+  debug), within a time budget per read (`OUTDATED_BUDGET` = 8 s, `Review::with_outdated_budget`;
+  past it `reason=deadline` without running git); neither the list
   nor `view` (a committed write's answer) ever fails on git. Field checks `check_note_body`
   (at most 60 KiB) / `check_position_shape` (FG-WEB-0006). Tests
   `tests/discussions_git.rs` (`an_inline_discussion_outside_the_diff_is_refused`).
