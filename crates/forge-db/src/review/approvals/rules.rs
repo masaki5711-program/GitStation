@@ -183,6 +183,14 @@ pub async fn put_approval_rule_mr_decided<P>(
     if new.users.len() + new.groups.len() > MAX_RULE_APPROVERS {
         return Err(param_invalid("users", "too_many_approvers"));
     }
+    // R5 review: duplicates are dropped before the comparison and the
+    // inserts (the same user named twice is one approver).
+    let mut new = new.clone(); // clone: deduplicated locally
+    new.users.sort_unstable_by_key(|u| u.get());
+    new.users.dedup();
+    new.groups.sort_unstable_by_key(|g| g.get());
+    new.groups.dedup();
+    let new = &new;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
         let facts = facts(&mut tx, project, None, viewer).await?;

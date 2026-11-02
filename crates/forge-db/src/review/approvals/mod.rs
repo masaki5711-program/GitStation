@@ -169,44 +169,57 @@ pub(crate) async fn live_approvals_on(
     rows.into_iter().map(ApprovalRow::parse).collect()
 }
 
-/// One approver's facts now.
-async fn approver_on(
+/// The approvers' facts now: three statements whatever their number (R5
+/// review) — the accounts, the roles on the project, the direct groups.
+async fn approvers_on(
     conn: &mut PgConnection,
     project: ProjectId,
-    approval: StoredApproval,
-) -> Result<ApproverFacts, ForgeError> {
-    let user = approval.approver;
-    let row: Option<(String, bool, String)> =
-        sqlx::query_as("SELECT username, state = 'active', kind FROM forge.users WHERE id = $1")
-            .bind(user.get())
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| query_error("review.approver", e))?;
-    let Some((username, active, kind)) = row else {
-        return Err(ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "approver_missing")
-            .with_context("user_id", user.get()));
-    };
-    let kind = UserKind::parse(&kind).ok_or_else(|| {
-        ForgeError::new(ErrorCode::Internal)
-            .with_context("reason", "unknown_user_kind")
-            .with_context("user_id", user.get())
-    })?;
-    let role = crate::roles::project_role_on(&mut *conn, project, user).await?;
-    let groups: Vec<i64> =
-        sqlx::query_scalar("SELECT group_id FROM forge.group_members WHERE user_id = $1")
-            .bind(user.get())
+    live: Vec<StoredApproval>,
+) -> Result<Vec<ApproverFacts>, ForgeError> {
+    let ids: Vec<i64> = live.iter().map(|a| a.approver.get()).collect();
+    let accounts: Vec<(i64, String, bool, String)> = sqlx::query_as(
+        "SELECT id, username, state = 'active', kind FROM forge.users WHERE id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| query_error("review.approvers", e))?;
+    let users: Vec<UserId> = live.iter().map(|a| a.approver).collect();
+    let mut roles = crate::roles::project_roles_on(&mut *conn, project, &users).await?;
+    let memberships: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT user_id, group_id FROM forge.group_members WHERE user_id = ANY($1)")
+            .bind(&ids)
             .fetch_all(&mut *conn)
             .await
             .map_err(|e| query_error("review.approver_groups", e))?;
-    Ok(ApproverFacts {
-        approval,
-        username,
-        active,
-        kind,
-        role,
-        groups: groups.into_iter().map(GroupId::new).collect(),
-    })
+    let mut out = Vec::with_capacity(live.len());
+    for approval in live {
+        let user = approval.approver;
+        let Some((_, username, active, kind)) = accounts.iter().find(|(id, ..)| *id == user.get())
+        else {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "approver_missing")
+                .with_context("user_id", user.get()));
+        };
+        let kind = UserKind::parse(kind).ok_or_else(|| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "unknown_user_kind")
+                .with_context("user_id", user.get())
+        })?;
+        out.push(ApproverFacts {
+            approval,
+            username: username.clone(), // clone: each approver owns its name
+            active: *active,
+            kind,
+            role: roles.remove(&user).flatten(),
+            groups: memberships
+                .iter()
+                .filter(|(u, _)| *u == user.get())
+                .map(|(_, g)| GroupId::new(*g))
+                .collect(),
+        });
+    }
+    Ok(out)
 }
 
 /// The approval facts of merge request `mr` of `project` on `conn` (the
@@ -217,16 +230,20 @@ pub(crate) async fn approval_facts_on(
     mr: MergeRequestId,
 ) -> Result<ApprovalFacts, ForgeError> {
     let live = live_approvals_on(&mut *conn, mr).await?;
-    let mut approvals = Vec::with_capacity(live.len());
-    for approval in live {
-        approvals.push(approver_on(&mut *conn, project, approval).await?);
-    }
+    let approvals = approvers_on(&mut *conn, project, live).await?;
     let rules = rules::rules_on(&mut *conn, project).await?;
     Ok(ApprovalFacts { approvals, rules })
 }
 
 /// [`approval_facts_on`] in one transaction on the read pool (the approval
-/// state route; the read pool's role reads only).
+/// state route; the read pool's role reads only). Not one snapshot: the
+/// transaction runs at the pool's READ COMMITTED, so its five statements
+/// (approvals, accounts, roles, groups, rules) may each see a later commit.
+/// That is accepted for a display (R5 review): no decision is taken on it —
+/// a merge decides on the same facts read again inside its gate
+/// transaction under the merge request's lock — and transaction control
+/// (an isolation level) belongs to `ChangeTx` alone (ADR-0016 §6, the
+/// db-write-boundary gate).
 pub async fn approval_facts(
     db: &Db,
     project: ProjectId,
@@ -294,8 +311,11 @@ pub struct PushCoverage {
     pub over_cap: bool,
 }
 
-/// The most entries [`push_coverage`] reads.
-pub const MAX_PUSH_ENTRIES: i64 = 2_000;
+/// The most entries [`push_coverage`] reads (the cut pushes of the whole
+/// repository among them: git then filters them by reach before the 16-entry
+/// cap of the committer rule applies; R5 review). Read through the partial
+/// index `audit_log_pushes` (migration 20261111100100).
+pub const MAX_PUSH_ENTRIES: i64 = 10_000;
 
 #[derive(sqlx::FromRow)]
 struct EntryRow {
@@ -381,15 +401,18 @@ pub async fn push_coverage(
 /// The users and groups a CODEOWNERS file names, resolved now.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Owners {
-    /// username → user (active or not: an inactive owner simply never
-    /// approves validly).
+    /// username → user, active users only (R5 review: a disabled account
+    /// answers like a missing one — no existence oracle).
     pub users: Vec<(String, UserId)>,
     /// group full path → group.
     pub groups: Vec<(String, GroupId)>,
 }
 
-/// Resolve `usernames` and `group_paths` (one statement each, on the read
-/// pool). Names that do not resolve are absent from the answer.
+/// Resolve `usernames` (active users) and `group_paths` (live groups:
+/// the namespaces table holds no deleted or moved-away path — a tombstone
+/// is a row of its own table) — one statement each, on the read pool.
+/// Names that do not resolve are absent from the answer, whatever the
+/// reason (the callers answer missing and invisible alike).
 pub async fn owners(
     db: &Db,
     usernames: &[String],
@@ -398,7 +421,9 @@ pub async fn owners(
     const QUERY: &str = "review.codeowners_owners";
     db.within(QUERY, async {
         let users: Vec<(String, i64)> =
-            sqlx::query_as("SELECT username, id FROM forge.users WHERE username = ANY($1)")
+            sqlx::query_as(
+                "SELECT username, id FROM forge.users WHERE username = ANY($1)                  AND state = 'active'",
+            )
                 .bind(usernames)
                 .fetch_all(db.pool().executor())
                 .await

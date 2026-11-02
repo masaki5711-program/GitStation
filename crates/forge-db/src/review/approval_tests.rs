@@ -372,6 +372,12 @@ async fn approval_rules_are_put_replaced_and_removed() {
     assert_eq!(stored.users, vec![w.bob]);
     let (same, _) = put(rule(1, vec![w.bob]), "req-rule-2").await.expect("same");
     assert_eq!(same, RuleOutcome::Unchanged);
+    // R5 review: a user named twice is one approver (no new audit row).
+    let (twice, stored_twice) = put(rule(1, vec![w.bob, w.bob]), "req-rule-2b")
+        .await
+        .expect("twice");
+    assert_eq!(twice, RuleOutcome::Unchanged);
+    assert_eq!(stored_twice.users, vec![w.bob]);
     let (replaced, stored) = put(rule(2, Vec::new()), "req-rule-3")
         .await
         .expect("replace");
