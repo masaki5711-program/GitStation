@@ -491,3 +491,41 @@ Amendment M2 の 4 と §10 の実装。
    `tokens::issue` が持ち主の行のロックの下で状態と管理者の印を読み直す。無効化は `users::disable` のガード。管理者自身の権利を変更の中で
    読み直すことはしていない（HTTP で `is_admin` を変える経路がまだないため。作るときに `reconfirm` を足す）。
 
+## Amendment（2026-11-02、計画 11 P1: §8 の例外に `forge backup` / `forge restore` を足す）
+
+計画 11（承認 2026-11-02）§4.3 の決定。ここで決めるのは認可の扱いだけで、道具・順序・検証の細部は MR O1 で決める。
+
+- 対象: `forge backup`（DB を先、その後でリポジトリ。道具は計画 11 §10 Q11（推奨 pgBackRest + リポジトリのファイルの複写）を O1 で確定する。**未確認**）と
+  `forge restore`（`forge restore verify` を含む。DB の ref の期待値とリポジトリの比較、`git fsck --connectivity-only`、Outbox の `epoch` を進める）。
+- **`authorize()` を通らない理由**: 呼び出し元はホストの操作者（またはその OS の定期実行）で、HTTP / git の主体（`Principal`）がない。DB とリポジトリの全体を
+  扱い、プロジェクトのロールで判定できる対象がない。actor `system`、`actor_label = forge-cli:<OS のアカウント>`（§8 の他の例外と同じ。自己申告である点も
+  同じ。Amendment D3 MR2 の 12）。
+- **本番での実行**: `forge restore` は本番を変えるので、**人が承認した runbook `backup-restore` の手順** としてだけ実行する（CLAUDE.md §3.7）。
+  `forge backup` は製品の状態を変えないが、保管先と定期実行の設定は同じ runbook に載せる。
+- **HTTP から到達できない理由**: 入口は forge-cli のサブコマンドだけ。DB に書く部分（`epoch` を進める、監査の行）は actor が `system` でなければ
+  FG-SYS-0001 `reason=operator_not_system` で断る（`operator_*` の入口と同じ形）。forge-web と forge-hosting のソースがこの入口の名前を含まないことを、
+  `forge_web_never_names_the_operator_only_user_commands` と同じ形のテストで守る（O1）。`forge doctor` の `backup.last_success` は読み取りだけ。
+  HTTP にバックアップの操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
+- 監査の封印の `kind` は既に `restore` を受ける（`20261027130000_audit_seal.sql`）。復元をどう監査の行に残すかは O1 で決める。
+- **復元で失効した資格情報を生き返らせない**（2026-11-02 の設計レビュー、`security-reviewer` の HIGH。ADR-0024 末尾の表の 26）: バックアップの後に失効させた
+  資格情報、無効化した利用者、外した権限は、古い DB を戻すと有効に戻ってしまう（2 回目のレビューで、資格情報の全種類と権限の縮小まで広げた）。
+  そこで `forge restore` は、
+  1. 復元した DB の **すべての種類の資格情報を失効させる**: セッション、個人のトークン、**サービスアカウントのトークン**（`ci/gates`、kanflow など）、
+     **連携の秘密**（Webhook の署名の秘密、代理実行の HMAC の鍵、ミラーの資格情報）。復元の時点より前に発行されたものはすべて対象（`revoked_at` と
+     理由 `restore` を書き、監査の行を残す）。利用者はトークンを再発行してログインし直し、サービスアカウントと連携の秘密は runbook `backup-restore` の
+     **再発行の手順**（どの秘密を、どの相手（試験サーバーのゲート、kanflow、GitLab のミラー）に配り直すか）で入れ直す。`verify` が終わるまで
+     HTTP の受け付けを始めない。
+  2. **バックアップの後の権限の縮小を当て直す**: Keycloak の今の状態（無効な利用者）と、**バックアップの外に保管する監査の写し** から、バックアップの
+     時点より後に行われた次のすべてを当て直す — 利用者の無効化、**所属の削除、ロールの引き下げ、管理者の印の削除、保護 ref の強化**（規則の追加・
+     `push_min_role` の引き上げ）。当て直せなかった利用者（Keycloak に問い合わせられない、記録が無い）は無効のままにして一覧を出す（有効に倒さない）。
+     **監査の写しが使えないときは、すべての利用者の管理者の印を外し**、外した利用者の一覧を操作者に出す（操作者が確かめて付け直す。広い権限の側に
+     倒さない）。runbook `backup-restore` に人が確かめる手順を書く。
+  3. テスト（O1）: バックアップ → トークン（個人とサービスアカウント）を失効・利用者を無効化 → 復元 → その資格情報と利用者で認証できない
+     （`restore_does_not_resurrect_revoked_credentials`）。バックアップ → 所属の削除・ロールの引き下げ・管理者の印の削除・保護 ref の強化 → 復元 →
+     どれも当て直されている、監査の写しが無ければ管理者の印がすべて外れて一覧に出る（`restore_reapplies_post_backup_role_changes`）。
+- **バックアップの保護**: バックアップはトークンのハッシュ・利用者の情報・全ソースを含むので、**暗号化して保存** し（鍵はバックアップと別の場所。
+  鍵の置き場は O1 と runbook で決める）、ファイルの権限は forge の運用のアカウントだけに絞る（Unix は `0600` / ディレクトリ `0700`。Windows は同等の ACL）。
+  `forge backup` は権限が広い保存先を FG-SYS-0008（`reason=insecure_permissions`）で断る。
+- エラー: FG-SYS-0008 BackupFailed、FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`。番号は登録時に確かめる。計画 11 §4.4）。
+- CLAUDE.md の契約 4 の例外の一覧にも追記した（利用者が計画 11 を承認、2026-11-02）。
+- **最終の再レビュー（2026-11-02）で足した**: 当て直しは、監査の写しにある権限や条件を狭める設定の変更をすべて対象にする（`protected_ref_merge_rules`・`approval_rules`・`merge_settings`・`codeowners_enforced`・必須チェックを含む）。管理者の印をすべて外した後に付け直す `system` の `forge admin` のコマンドを runbook `backup-restore` に名指しで書く（無ければ O1 で足す）。ADR-0024 末尾の表 #41・#44。
