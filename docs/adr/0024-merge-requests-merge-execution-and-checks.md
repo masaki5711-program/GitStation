@@ -1198,7 +1198,7 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
 - **範囲と変更されたパス（MEDIUM、改訂）**: 範囲は `head ^<target の先端>`（マージが持ち込むコミット）、変更されたパスは **target の先端と
   試しのマージ（`merge-tree --write-tree`）の木の差分**（共通の祖先が複数ある criss-cross の履歴でも、target に着地する変更だけ。テスト
   `criss_cross_histories_count_only_what_the_merge_changes`）。`merge-base` は呼ばない（その失敗を `no_merge_base` と読む誤りも消えた）。
-  衝突なら `changed_paths_unknown reason=conflict`（衝突でもともと止まる）。
+  衝突なら承認の側の止める理由は足さない（`ChangedPathsFact::Conflict`。衝突は mergeability とジョブの試しのマージ（FG-REVIEW-0006）が止める。`changed_paths_unknown` にするとジョブの最初の判定が FG-REVIEW-0007 で先に止め、衝突のコードが失われた。全体のテストで見つけた）。
 - **読み取りの予算（MEDIUM）**: 1 回の評価のすべての git の呼び出しと push の記録の読み取りを 1 つの期限と回数で抑える（`Budget`）。要求
   （マージ・承認）は 20 秒・64 回、`GET …/approvals` は 10 秒・32 回、マージのジョブはロックの保持の残り・64 回。各呼び出しは最大 10 秒。
   尽きたら「分からない」事実（`timeout`）で止める。
