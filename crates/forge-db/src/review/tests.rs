@@ -396,6 +396,24 @@ async fn every_merge_request_transition_emits_exactly_one_event() {
                     }
                 );
             }
+            // M3 R3: a note (here the first of a general discussion).
+            MergeRequestTransition::Comment => {
+                let new = NewDiscussion {
+                    body: "synthetic".to_owned(),
+                    position: None,
+                };
+                start_discussion_mr_decided(
+                    &t.db,
+                    &ctx(&request),
+                    p,
+                    drafted.iid,
+                    alice,
+                    &new,
+                    |_| Ok(()),
+                )
+                .await
+                .expect("comment");
+            }
         }
         let events = events_of(&t, &request).await;
         let types: Vec<&str> = events.iter().map(|e| e.0.as_str()).collect();

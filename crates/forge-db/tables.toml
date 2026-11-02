@@ -39,6 +39,9 @@ guarded_functions = [
     "merge_requests_state_guard",
     # M3 R1b: a version's identity never changes; purge marks are final.
     "merge_request_versions_guard",
+    # M3 R3: a discussion's identity and position never change; notes are final.
+    "merge_request_discussions_guard",
+    "merge_request_notes_guard",
 ]
 
 [tables.events]
@@ -265,6 +268,26 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 R1b ──
+
+# ── M3 R3: merge request discussions and notes (ADR-0024 §6, §12), audited on their project ──
+[tables.merge_request_discussions]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+[tables.merge_request_notes]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 R3 ──
 
 # ── M3 R2: mergeability of a merge request (ADR-0024 §3), derived from git ──
 [tables.merge_request_mergeability]
