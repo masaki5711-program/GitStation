@@ -370,6 +370,22 @@
   {
     "action": "MergeRequestRead",
     "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestMerge",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeRequestRead",
+    "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/mergeability",
     "public": false,
     "scope": "fixed",

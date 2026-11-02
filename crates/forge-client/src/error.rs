@@ -63,7 +63,10 @@ impl ClientError {
             Exit::Usage
         } else if code == ErrorCode::CliNotLoggedIn {
             Exit::Auth
-        } else if code == ErrorCode::CliServerUnreachable {
+        } else if matches!(
+            code,
+            ErrorCode::CliServerUnreachable | ErrorCode::CliWaitTimedOut
+        ) {
             Exit::Retryable
         } else {
             Exit::Other
@@ -73,7 +76,10 @@ impl ClientError {
             code_id: code.id().to_string(),
             user_message: code.user_message(Lang::Ja).to_string(),
             request_id: None,
-            retryable: code == ErrorCode::CliServerUnreachable,
+            retryable: matches!(
+                code,
+                ErrorCode::CliServerUnreachable | ErrorCode::CliWaitTimedOut
+            ),
             exit,
             detail: (!detail.is_empty()).then(|| sanitize(&detail)),
         }

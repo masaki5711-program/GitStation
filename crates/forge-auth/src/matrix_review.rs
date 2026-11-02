@@ -9,7 +9,7 @@ use forge_core::RefName;
 #[cfg(test)]
 use crate::matrix::{ME, OTHER};
 #[cfg(test)]
-use crate::model::{MergeRequestEdit, ProjectView, Resource, Role, Visibility};
+use crate::model::{MergeRequestEdit, ProjectView, RefProtection, Resource, Role, Visibility};
 
 /// The project a merge request fixture lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +59,9 @@ pub(crate) struct MrFixture {
     /// The draft flag an update asks for (`None` = unchanged).
     pub set_draft: Option<bool>,
     pub target: MrTarget,
+    /// The target branch's minimum push role (`None` = unprotected; read
+    /// by `MergeRequestMerge` only, M3 R4).
+    pub protected: Option<crate::model::Role>,
 }
 
 impl MrFixture {
@@ -73,6 +76,7 @@ impl MrFixture {
             branches: MrBranches::FeatureToMain,
             set_draft: None,
             target: MrTarget::Unchanged,
+            protected: None,
         }
     }
 
@@ -119,6 +123,7 @@ impl MrFixture {
                 target_branch: new_target,
                 draft: self.set_draft,
             },
+            target_protection: RefProtection::effective(self.protected),
         }
     }
 }

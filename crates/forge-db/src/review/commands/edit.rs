@@ -105,6 +105,12 @@ pub async fn edit_mr_decided<P>(
         {
             return Err(state_invariant("edit_not_open", &current));
         }
+        // M3 R4 (ADR-0024 §4.2): a retarget or a draft toggle waits for a
+        // merge in progress (FG-REVIEW-0011); the title and description may
+        // change (they are no merge input once the attempt is queued).
+        if retargets || patch.draft.is_some_and(|d| d != current.draft) {
+            crate::review::merges::refuse_live_merge(&mut tx, current.id, ACTION).await?;
+        }
         let target = patch
             .target_branch
             .clone() // clone: bound into the statement below

@@ -332,8 +332,9 @@ pub enum Resource {
     /// (`author` = the caller). Both branch names are `refs/heads/*` and
     /// differ, or every arm denies (`not_a_branch`,
     /// `source_equals_target`). `state` and `draft` are read only by the
-    /// Update / Close / Reopen arms; `edit` only by Update. ADR-0024's
-    /// `target_protection` joins with `MergeRequestMerge` (R4).
+    /// Update / Close / Reopen arms; `edit` only by Update;
+    /// `target_protection` (the target branch's protection from the push
+    /// path's `ProtectionLoader` snapshot, M3 R4) only by Merge.
     MergeRequest {
         project: ProjectView,
         author: UserId,
@@ -342,6 +343,7 @@ pub enum Resource {
         source_branch: RefName,
         target_branch: RefName,
         edit: MergeRequestEdit,
+        target_protection: Option<RefProtection>,
     },
     /// One discussion of a merge request (M3 R3, ADR-0024 §12):
     /// `DiscussionResolve`. `mr_author` is the merge request's author,

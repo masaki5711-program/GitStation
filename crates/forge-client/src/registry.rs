@@ -513,6 +513,44 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["iid","status","reason","stale","head_sha","checked_head_sha","checked_target_sha","checked_at","conflicts","conflicts_truncated"],"properties":{"status":{"type":"string","enum":["unchecked","checking","can_be_merged","cannot_be_merged","check_failed"]},"conflicts":{"type":"array","items":{"type":"string"}}}}"#,
     },
     CommandSpec {
+        name: "mr merge",
+        summary: "Merge a merge request: queue the merge of the head you reviewed (--sha; another head is refused). People only; the target branch's push role; the token needs merge_execute (api does not merge). --wait waits until it is applied, or exits with the refusal's code (conflict, a moved target, …).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--sha", "option", true, "The head commit you reviewed (mr view shows head_sha)."),
+            arg("--method", "option", false, "merge_commit (default), squash, or fast_forward when the project allows it."),
+            arg("--delete-source-branch", "flag", false, "Delete the source branch after the merge (decided as your branch delete; a protected branch is kept)."),
+            arg("--message", "option", false, "The commit message (default: from the title and description)."),
+            arg("--wait", "flag", false, "Wait until the merge is applied, superseded or failed."),
+            arg("--wait-timeout", "option", false, "How long --wait waits, in seconds (default 300; FG-CLI-0008 when it passes)."),
+        ],
+        examples: &[
+            "gstn mr merge --project 7 --iid 3 --sha 0123456789abcdef0123456789abcdef01234567 --wait",
+            "gstn mr merge --project 7 --iid 3 --sha 0123456789abcdef0123456789abcdef01234567 --method squash --delete-source-branch --json",
+        ],
+        scopes: &["merge_execute", "read_api"],
+        routes: &[
+            "POST /api/v1/projects/{id}/merge-requests/{iid}/merge",
+            "GET /api/v1/projects/{id}/merge-requests/{iid}/merge",
+        ],
+        output: r#"{"type":"object","required":["merge_id","iid","state","method","head_sha","target_branch","delete_source_branch","expected_old","new_sha","reason","error_code","source_outcome","request_id","created_at","updated_at","finished_at"],"properties":{"state":{"type":"string","enum":["queued","prepared","executing","applied","superseded","failed"]},"method":{"type":"string","enum":["merge_commit","squash","fast_forward"]}}}"#,
+    },
+    CommandSpec {
+        name: "mr merge-status",
+        summary: "The latest merge attempt of a merge request (queued / prepared / executing / applied / superseded / failed, its reason and code); --wait waits until it is final.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--wait", "flag", false, "Wait until the latest attempt is final."),
+            arg("--wait-timeout", "option", false, "How long --wait waits, in seconds (default 300)."),
+        ],
+        examples: &["gstn mr merge-status --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/merge"],
+        output: r#"{"type":"object","required":["iid","merge"],"properties":{"merge":{"type":["object","null"]}}}"#,
+    },
+    CommandSpec {
         name: "mr discussions",
         summary: "List a merge request's discussions with their notes, oldest first; an inline thread is `outdated` when a later version rewrote its line.",
         args: &[

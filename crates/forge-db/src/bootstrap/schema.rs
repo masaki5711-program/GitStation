@@ -41,6 +41,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     // ── M3 R3: discussions keep their position, notes are final (20261109100000) ──
     "forge.merge_request_discussions_guard()",
     "forge.merge_request_notes_guard()",
+    // ── M3 R4: a merge attempt only moves forward (20261110100000) ──
+    "forge.merge_request_merges_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -96,6 +98,15 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER merge_request_notes_immutable BEFORE UPDATE ON \
          forge.merge_request_notes FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_notes_guard()",
+    ),
+    // ── M3 R4: a merge attempt starts queued and only moves forward
+    // (20261110100000, INSERT too since 20261110100100) ──
+    (
+        "merge_request_merges",
+        "merge_request_merges_forward",
+        "CREATE TRIGGER merge_request_merges_forward BEFORE INSERT OR UPDATE ON \
+         forge.merge_request_merges FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_merges_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -523,6 +534,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         // ── M3 R3: discussions and notes, DELETE for the purge (20261109100000) ──
         ("forge.merge_request_discussions", operational()),
         ("forge.merge_request_notes", operational()),
+        // ── M3 R4: merge attempts, DELETE for the purge (20261110100000) ──
+        ("forge.merge_request_merges", operational()),
     ]
 }
 
@@ -666,6 +679,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 R3: discussions and notes (migration 20261109100000) ──
     "merge_request_discussions",
     "merge_request_notes",
+    // ── M3 R4: merge attempts (migration 20261110100000) ──
+    "merge_request_merges",
 ];
 
 /// Every table the first migration creates.

@@ -2686,6 +2686,180 @@
           "name": "--iid",
           "repeatable": false,
           "required": true
+        },
+        {
+          "description": "The head commit you reviewed (mr view shows head_sha).",
+          "kind": "option",
+          "name": "--sha",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "merge_commit (default), squash, or fast_forward when the project allows it.",
+          "kind": "option",
+          "name": "--method",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Delete the source branch after the merge (decided as your branch delete; a protected branch is kept).",
+          "kind": "flag",
+          "name": "--delete-source-branch",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The commit message (default: from the title and description).",
+          "kind": "option",
+          "name": "--message",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Wait until the merge is applied, superseded or failed.",
+          "kind": "flag",
+          "name": "--wait",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "How long --wait waits, in seconds (default 300; FG-CLI-0008 when it passes).",
+          "kind": "option",
+          "name": "--wait-timeout",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr merge --project 7 --iid 3 --sha 0123456789abcdef0123456789abcdef01234567 --wait",
+        "gstn mr merge --project 7 --iid 3 --sha 0123456789abcdef0123456789abcdef01234567 --method squash --delete-source-branch --json"
+      ],
+      "name": "mr merge",
+      "output": {
+        "properties": {
+          "method": {
+            "enum": [
+              "merge_commit",
+              "squash",
+              "fast_forward"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "prepared",
+              "executing",
+              "applied",
+              "superseded",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "merge_id",
+          "iid",
+          "state",
+          "method",
+          "head_sha",
+          "target_branch",
+          "delete_source_branch",
+          "expected_old",
+          "new_sha",
+          "reason",
+          "error_code",
+          "source_outcome",
+          "request_id",
+          "created_at",
+          "updated_at",
+          "finished_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/merge-requests/{iid}/merge",
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/merge"
+      ],
+      "scopes": [
+        "merge_execute",
+        "read_api"
+      ],
+      "summary": "Merge a merge request: queue the merge of the head you reviewed (--sha; another head is refused). People only; the target branch's push role; the token needs merge_execute (api does not merge). --wait waits until it is applied, or exits with the refusal's code (conflict, a moved target, …)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Wait until the latest attempt is final.",
+          "kind": "flag",
+          "name": "--wait",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "How long --wait waits, in seconds (default 300).",
+          "kind": "option",
+          "name": "--wait-timeout",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn mr merge-status --project 7 --iid 3 --json"
+      ],
+      "name": "mr merge-status",
+      "output": {
+        "properties": {
+          "merge": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "iid",
+          "merge"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/merge"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The latest merge attempt of a merge request (queued / prepared / executing / applied / superseded / failed, its reason and code); --wait waits until it is final."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
         }
       ],
       "examples": [

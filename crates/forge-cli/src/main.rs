@@ -27,6 +27,7 @@ mod explain;
 mod oidc;
 mod runtime;
 mod serve;
+mod serve_merges;
 mod worker;
 
 #[derive(Parser)]

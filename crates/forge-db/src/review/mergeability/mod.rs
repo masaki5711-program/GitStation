@@ -148,6 +148,24 @@ pub async fn mergeability(
     row.map(|r| parse_row(r, mr)).transpose()
 }
 
+/// The stored status of `mr` inside a change (M3 R4: the merge reads it
+/// under the merge request's row lock).
+pub(crate) async fn mergeability_on(
+    conn: &mut sqlx::postgres::PgConnection,
+    mr: MergeRequestId,
+) -> Result<Option<StoredMergeability>, ForgeError> {
+    const QUERY: &str = "review.mergeability_on";
+    let row: Option<StatusRow> = sqlx::query_as(&format!(
+        "SELECT {STATUS_COLUMNS} FROM forge.merge_request_mergeability \
+         WHERE merge_request_id = $1"
+    ))
+    .bind(mr.get())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| query_error(QUERY, e))?;
+    row.map(|r| parse_row(r, mr)).transpose()
+}
+
 /// The same on the write pool (the version job compares what it just
 /// read; the tests read what was just committed).
 pub async fn mergeability_written(

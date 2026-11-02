@@ -87,7 +87,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "merge_requests_state_guard",
             "merge_request_versions_guard",
             "merge_request_discussions_guard",
-            "merge_request_notes_guard"
+            "merge_request_notes_guard",
+            "merge_request_merges_guard"
         ]
     );
 }

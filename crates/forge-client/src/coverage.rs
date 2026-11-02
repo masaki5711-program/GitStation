@@ -309,6 +309,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/discussions/{discussion_id}/unresolve",
         Coverage::Command("mr resolve"),
     ),
+    // M3 R4 (ADR-0024 §4): merging.
+    (
+        "POST",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+        Coverage::Command("mr merge"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/merge",
+        Coverage::Command("mr merge-status"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

@@ -448,7 +448,15 @@ async fn finish_steps(
     // M3 R1b: their versions first (they reference the merge requests; the
     // hidden refs go with the repository directory); M3 R2: the derived
     // mergeability rows before them too; M3 R3: the notes, then the
-    // discussions (they reference the versions and the merge requests).
+    // discussions (they reference the versions and the merge requests);
+    // M3 R4: the merge attempts (derived; they reference the merge requests).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_request_merges WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_request_merges",
+    )
+    .await?;
     delete_rows(
         tx,
         "DELETE FROM forge.merge_request_notes WHERE project_id = $1",

@@ -926,6 +926,28 @@ impl<S: DispatchState> Registry<S> {
         self
     }
 
+    /// Document the `202 Accepted` body of the fixed route `verb path` (work
+    /// queued for a job, M3 R4). An unknown route is a startup error.
+    #[must_use]
+    pub fn responds_accepted<T: utoipa::ToSchema>(
+        mut self,
+        verb: Verb,
+        path: &'static str,
+    ) -> Self {
+        match self
+            .defs
+            .iter_mut()
+            .find(|d| d.scope == RouteScope::Fixed && d.verb == verb && d.path == path)
+        {
+            Some(def) => def.response = Some((SchemaDoc::of::<T>(), 202)),
+            None => self.problems.push(format!(
+                "responds_accepted: no route {} {path}",
+                verb.as_str()
+            )),
+        }
+        self
+    }
+
     /// Document the `204 No Content` success of the fixed route `verb path`
     /// (a delete, M1 phase 8b MR8). An unknown route is a startup error.
     #[must_use]
@@ -1443,7 +1465,11 @@ pub fn openapi_json(defs: &[RouteDef], version: &str) -> String {
         let mut responses = Map::new();
         if let Some((doc, status)) = &d.response {
             let reference = add_schemas(doc);
-            let description = if *status == 201 { "Created" } else { "Success" };
+            let description = match *status {
+                201 => "Created",
+                202 => "Accepted",
+                _ => "Success",
+            };
             responses.insert(
                 status.to_string(),
                 json!({

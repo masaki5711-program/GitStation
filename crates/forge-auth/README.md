@@ -80,6 +80,11 @@ lands (M1 phase 5).
   (`Actor::human_twin`) is allowed, and the kind decides nothing elsewhere
   (`people_only_rows_are_allowed_for_the_human_twin`,
   `only_people_only_actions_refuse_by_account_kind`).
+- **Merge** (M3 R4, ADR-0024 §4.3, §8.5, §12): `MergeRequestMerge` — people only, the
+  target's `push_min_role` (Developer when unprotected; the direct-push ban is not read),
+  scope `merge_execute` (`Scope::MergeExecute` satisfies only itself: `api` / `admin` never
+  merge). `Resource::MergeRequest.target_protection`, set only by `MergeRequestCtx::merging`.
+  Rows `matrix_rows_merge.rs` and the service account / bot rows in `matrix_rows_people.rs`.
 - **Account kind** (M3 R3, ADR-0024 §8.4): `Principal::authenticated(user,
   is_admin, active, credential, kind)` takes `AccountKind` (forge-core's
   `UserKind`: `Human` / `ServiceAccount` / `Bot`, from `users.kind`; no default,

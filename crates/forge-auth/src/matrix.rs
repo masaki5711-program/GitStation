@@ -85,6 +85,19 @@ pub(crate) enum Actor {
     BotMaintainerTokenApi,
     BotAdminTokenAdmin,
     BotAdminSession,
+    /// Developer with a `merge_execute` token (M3 R4, ADR-0024 §8.5).
+    DevTokenMergeExecute,
+    /// Developer with a `merge_execute` token issued with `is_agent`.
+    AgentTokenMergeExecute,
+    /// The service account / bot twins of `DevTokenMergeExecute`.
+    ServiceAccountTokenMergeExecute,
+    BotTokenMergeExecute,
+    /// Administrator with a `merge_execute` + `admin` token (review round 1:
+    /// administrator rights apply on the merge as on a push).
+    AdminTokenMergeExecuteAdmin,
+    /// Administrator with a `merge_execute` token, no `admin` scope (acts as
+    /// a normal user: no role on the fixture's project).
+    AdminTokenMergeExecute,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -328,6 +341,16 @@ impl Actor {
             Actor::BotAdminSession => {
                 Principal::authenticated(ME, true, true, Credential::Session, AccountKind::Bot)
             }
+            Actor::DevTokenMergeExecute => token(false, &[Scope::MergeExecute]),
+            Actor::AgentTokenMergeExecute => token(false, &[Scope::MergeExecute]).as_agent(true),
+            Actor::ServiceAccountTokenMergeExecute => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::MergeExecute])
+            }
+            Actor::BotTokenMergeExecute => {
+                token_of(AccountKind::Bot, false, &[Scope::MergeExecute])
+            }
+            Actor::AdminTokenMergeExecuteAdmin => token(true, &[Scope::MergeExecute, Scope::Admin]),
+            Actor::AdminTokenMergeExecute => token(true, &[Scope::MergeExecute]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -350,7 +373,11 @@ impl Actor {
             | Actor::AgentTokenApi
             | Actor::DevTokenApi
             | Actor::ServiceAccountTokenApi
-            | Actor::BotTokenApi => Some(Role::Developer),
+            | Actor::BotTokenApi
+            | Actor::DevTokenMergeExecute
+            | Actor::AgentTokenMergeExecute
+            | Actor::ServiceAccountTokenMergeExecute
+            | Actor::BotTokenMergeExecute => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -374,7 +401,9 @@ impl Actor {
             | Actor::ServiceAccountAdminTokenAdmin
             | Actor::ServiceAccountAdminSession
             | Actor::BotAdminTokenAdmin
-            | Actor::BotAdminSession => None,
+            | Actor::BotAdminSession
+            | Actor::AdminTokenMergeExecuteAdmin
+            | Actor::AdminTokenMergeExecute => None,
         }
     }
 
@@ -395,6 +424,9 @@ impl Actor {
                 Some(Actor::AdminTokenAdmin)
             }
             Actor::ServiceAccountAdminSession | Actor::BotAdminSession => Some(Actor::Admin),
+            Actor::ServiceAccountTokenMergeExecute | Actor::BotTokenMergeExecute => {
+                Some(Actor::DevTokenMergeExecute)
+            }
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
@@ -420,7 +452,11 @@ impl Actor {
             | Actor::GuestTokenReadApi
             | Actor::AdminTokenApi
             | Actor::AdminTokenAdmin
-            | Actor::OwnerTokenApi => None,
+            | Actor::OwnerTokenApi
+            | Actor::DevTokenMergeExecute
+            | Actor::AgentTokenMergeExecute
+            | Actor::AdminTokenMergeExecuteAdmin
+            | Actor::AdminTokenMergeExecute => None,
         }
     }
 
@@ -697,6 +733,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
     [
         crate::matrix_rows::BASE_ROWS,
         crate::matrix_rows_discussion::DISCUSSION_ROWS,
+        crate::matrix_rows_merge::MERGE_ROWS,
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
     ]

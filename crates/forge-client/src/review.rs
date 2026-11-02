@@ -249,6 +249,38 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             };
             crate::mr_discussions::comment(cli, (*project, *iid), &what, env, io)
         }
+        // M3 R4: merging (`mr_merge.rs`).
+        MrCommand::Merge {
+            project,
+            iid,
+            sha,
+            method,
+            delete_source_branch,
+            message,
+            wait,
+            wait_timeout,
+        } => {
+            let args = crate::mr_merge::MergeArgs {
+                sha,
+                method: *method,
+                delete_source_branch: *delete_source_branch,
+                message: message.as_ref(),
+                wait: wait_for(*wait, *wait_timeout),
+            };
+            crate::mr_merge::merge(cli, (*project, *iid), &args, env, io)
+        }
+        MrCommand::MergeStatus {
+            project,
+            iid,
+            wait,
+            wait_timeout,
+        } => crate::mr_merge::status(
+            cli,
+            (*project, *iid),
+            wait_for(*wait, *wait_timeout),
+            env,
+            io,
+        ),
         MrCommand::Resolve {
             project,
             iid,
@@ -258,6 +290,11 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             crate::mr_discussions::resolve(cli, (*project, *iid), *discussion, *unresolve, env, io)
         }
     }
+}
+
+/// `--wait` with its timeout (default 300 s).
+fn wait_for(wait: bool, secs: Option<u64>) -> Option<std::time::Duration> {
+    wait.then(|| std::time::Duration::from_secs(secs.unwrap_or(300)))
 }
 
 /// `v<n>  <head>  base <merge base>  <created_at>` per version.

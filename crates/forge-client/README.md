@@ -94,6 +94,8 @@ gstn mr versions --project 7 --iid 3                      # 版の一覧（M3 R2
 gstn mr diff --project 7 --iid 3 --version 2 [--patch]     # 版の差分（merge-base..head）
 gstn mr diff --project 7 --iid 3 --from 1 --to 2 [--patch] # 版どうしの比較（head..head）
 gstn mr mergeability --project 7 --iid 3                  # マージできるか（最後の確認の結果。確認は始めない）
+gstn mr merge --project 7 --iid 3 --sha <head> [--method squash] [--delete-source-branch] [--wait]  # マージ（M3 R4。トークンは merge_execute）
+gstn mr merge-status --project 7 --iid 3 [--wait]         # 最新のマージの試行（queued〜applied / superseded / failed）
 gstn mr discussions --project 7 --iid 3                   # スレッドとコメントの一覧（M3 R3。古くなった行は [outdated]）
 gstn mr comment --project 7 --iid 3 --body '…'            # 全体へのコメント（新しいスレッド）
 gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 [--side old|new] --body '…'  # 行へのコメント

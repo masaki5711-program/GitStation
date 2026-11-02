@@ -119,6 +119,26 @@ fn parse_rows(
     rows.into_iter().map(parse_row).collect()
 }
 
+/// The project's rules as the push path's snapshot ([`rules_for`]), read
+/// inside a change after the project lock (M3 R4: the merge decides the
+/// target's protection on the same rules, ADR-0024 §4.3).
+pub(crate) async fn rules_on(
+    conn: &mut PgConnection,
+    project: ProjectId,
+) -> Result<ProtectionRules, ForgeError> {
+    Ok(ProtectionRules::for_project(
+        project,
+        rules_locked(conn, project)
+            .await?
+            .into_iter()
+            .map(|rule| ProtectionRule {
+                pattern: rule.pattern,
+                push_min_role: rule.push_min_role,
+            })
+            .collect(),
+    ))
+}
+
 /// The project's rules, read inside a change after the project lock.
 async fn rules_locked(
     conn: &mut PgConnection,

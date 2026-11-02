@@ -133,11 +133,17 @@ pub enum EventType {
     /// `merge_request_note_added:<note_id>` or
     /// `merge_request_thread_resolved|unresolved:<discussion_id>:<revision>`.
     MergeRequestCommented,
+    /// `merge_request.merged` (M3 R4, ADR-0024 §4.2): open → merged, by the
+    /// merge job. Deduplicated by `merge_request_merged:<merge_id>`.
+    MergeRequestMerged,
+    /// `merge_request.source_branch_deleted` (M3 R4): the merge deleted the
+    /// source branch. Deduplicated by `merge_source_deleted:<merge_id>`.
+    MergeRequestSourceBranchDeleted,
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 27] = [
+    pub const ALL: [EventType; 29] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -165,6 +171,8 @@ impl EventType {
         EventType::MergeRequestConflictDetected,
         EventType::MergeRequestConflictResolved,
         EventType::MergeRequestCommented,
+        EventType::MergeRequestMerged,
+        EventType::MergeRequestSourceBranchDeleted,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -197,6 +205,8 @@ impl EventType {
             EventType::MergeRequestConflictDetected => "merge_request.conflict_detected",
             EventType::MergeRequestConflictResolved => "merge_request.conflict_resolved",
             EventType::MergeRequestCommented => "merge_request.commented",
+            EventType::MergeRequestMerged => "merge_request.merged",
+            EventType::MergeRequestSourceBranchDeleted => "merge_request.source_branch_deleted",
         }
     }
 
@@ -222,7 +232,9 @@ impl EventType {
             | EventType::MergeRequestPushed
             | EventType::MergeRequestConflictDetected
             | EventType::MergeRequestConflictResolved
-            | EventType::MergeRequestCommented => VisibilityClass::Integration,
+            | EventType::MergeRequestCommented
+            | EventType::MergeRequestMerged
+            | EventType::MergeRequestSourceBranchDeleted => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged

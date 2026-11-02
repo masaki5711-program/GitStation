@@ -108,6 +108,14 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   to the empty directory, nothing on argv; a refused transaction is FG-GIT-0003 (nothing
   changed). Tests `refs_tests.rs` (one transaction, a refused change leaves every ref,
   `a_version_ref_keeps_a_force_pushed_commit_through_gc`).
+- **Commit** (`commit`, M3 R4, ADR-0024 §4.1): `Git::commit_tree(&StorageRoot, RepoId,
+  &NewCommit { tree, parents, message, author, committer }, timeout) -> ObjectId` —
+  `-c core.hooksPath=<empty> commit-tree -p <id>… -F - --end-of-options <tree>`, the message on
+  stdin (at most 64 KiB), the identity in `GIT_AUTHOR_*` / `GIT_COMMITTER_*` only
+  (`CommitIdentity::new(display_name, email, username)` refuses newline, NUL, `<`, `>`; an
+  empty name falls back to the username). `Git::ref_locked` tells a `<ref>.lock`. Tests
+  `commit_tests.rs` (`merge_plumbing_argv_on_git_2_38`, the three methods, identities, dashes,
+  timeout).
 - **Mergeability** (`mergeability`, M3 R2, ADR-0024 §3): `Git::merge_tree(&StorageRoot, RepoId,
   target, head, MergeTreeLimits { timeout 30 s, max_output_bytes 256 KiB, max_files 100 }) ->
   MergeTree::{Clean { tree }, Conflicted { files, files_truncated }}` (`merge-tree --write-tree

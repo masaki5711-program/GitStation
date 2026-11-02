@@ -14,6 +14,7 @@
 use crate::discussion::{CommentAction, DiscussionKind};
 use crate::event_type::EventType;
 use crate::ids::{DiscussionId, MergeRequestId, NoteId, UserId};
+use crate::merge::MergeMethod;
 use crate::push::ObjectId;
 use crate::ref_name::RefName;
 
@@ -88,6 +89,10 @@ pub enum MergeRequestTransition {
     /// A note was added to a discussion, or a discussion was resolved or
     /// unresolved (M3 R3: one event type, `data.action` tells which).
     Comment,
+    /// `open` → `merged` (M3 R4: the merge job's record).
+    Merge,
+    /// The source branch was deleted after a merge (M3 R4).
+    SourceBranchDelete,
 }
 
 impl MergeRequestTransition {
@@ -102,6 +107,8 @@ impl MergeRequestTransition {
         Self::ConflictDetect,
         Self::ConflictResolve,
         Self::Comment,
+        Self::Merge,
+        Self::SourceBranchDelete,
     ];
 
     /// The one event the transition publishes.
@@ -116,6 +123,8 @@ impl MergeRequestTransition {
             Self::ConflictDetect => EventType::MergeRequestConflictDetected,
             Self::ConflictResolve => EventType::MergeRequestConflictResolved,
             Self::Comment => EventType::MergeRequestCommented,
+            Self::Merge => EventType::MergeRequestMerged,
+            Self::SourceBranchDelete => EventType::MergeRequestSourceBranchDeleted,
         }
     }
 }
@@ -208,6 +217,32 @@ pub enum MergeRequestChange {
         discussion_started: bool,
         revision: i64,
     },
+    /// `merge_request.merged` (M3 R4, ADR-0024 §4.2 step 9): merge attempt
+    /// `merge_id` moved `target_branch` from `target_sha` to `merged_sha`
+    /// with `method`; `head_sha` is the merged head, `merged_by` the user
+    /// who asked (the job acts for them). Deduplicated by
+    /// `merge_request_merged:<merge_id>`.
+    Merged {
+        merge_request: MergeRequestId,
+        iid: i64,
+        merge_id: i64,
+        method: MergeMethod,
+        target_branch: RefName,
+        target_sha: ObjectId,
+        merged_sha: ObjectId,
+        head_sha: ObjectId,
+        merged_by: UserId,
+    },
+    /// `merge_request.source_branch_deleted` (M3 R4, ADR-0024 §4.2 step
+    /// 10): the merge of attempt `merge_id` deleted the source branch at
+    /// `old`. Deduplicated by `merge_source_deleted:<merge_id>`.
+    SourceBranchDeleted {
+        merge_request: MergeRequestId,
+        iid: i64,
+        merge_id: i64,
+        source_branch: RefName,
+        old: ObjectId,
+    },
 }
 
 impl MergeRequestChange {
@@ -223,6 +258,8 @@ impl MergeRequestChange {
             Self::ConflictDetected { .. } => MergeRequestTransition::ConflictDetect,
             Self::ConflictResolved { .. } => MergeRequestTransition::ConflictResolve,
             Self::Commented { .. } => MergeRequestTransition::Comment,
+            Self::Merged { .. } => MergeRequestTransition::Merge,
+            Self::SourceBranchDeleted { .. } => MergeRequestTransition::SourceBranchDelete,
         }
     }
 
@@ -237,7 +274,9 @@ impl MergeRequestChange {
             | Self::Pushed { merge_request, .. }
             | Self::ConflictDetected { merge_request, .. }
             | Self::ConflictResolved { merge_request, .. }
-            | Self::Commented { merge_request, .. } => *merge_request,
+            | Self::Commented { merge_request, .. }
+            | Self::Merged { merge_request, .. }
+            | Self::SourceBranchDeleted { merge_request, .. } => *merge_request,
         }
     }
 
@@ -263,6 +302,8 @@ impl MergeRequestChange {
             Self::ConflictDetected { .. } => "merge_request_conflict_detected",
             Self::ConflictResolved { .. } => "merge_request_conflict_resolved",
             Self::Commented { action, .. } => action.dedup_prefix(),
+            Self::Merged { .. } => "merge_request_merged",
+            Self::SourceBranchDeleted { .. } => "merge_source_deleted",
         }
     }
 
@@ -275,7 +316,9 @@ impl MergeRequestChange {
     /// "conflict_files","files_truncated"}`, ConflictResolved
     /// `{"merge_request_id","iid","check_seq","head_sha","target_sha"}`, Commented
     /// `{"merge_request_id","iid","action","discussion_id","kind","note_id",
-    /// "discussion_started"}`.
+    /// "discussion_started"}`, Merged `{"merge_request_id","iid","merge_id","method",
+    /// "target_branch","target_sha","merged_sha","head_sha","merged_by"}`,
+    /// SourceBranchDeleted `{"merge_request_id","iid","merge_id","source_branch","old"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Opened {
@@ -384,6 +427,40 @@ impl MergeRequestChange {
                 "kind": kind.as_str(),
                 "note_id": note.map(NoteId::get),
                 "discussion_started": discussion_started,
+            }),
+            Self::Merged {
+                merge_request,
+                iid,
+                merge_id,
+                method,
+                target_branch,
+                target_sha,
+                merged_sha,
+                head_sha,
+                merged_by,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "merge_id": merge_id,
+                "method": method.as_str(),
+                "target_branch": target_branch.as_str(),
+                "target_sha": target_sha.as_str(),
+                "merged_sha": merged_sha.as_str(),
+                "head_sha": head_sha.as_str(),
+                "merged_by": merged_by.get(),
+            }),
+            Self::SourceBranchDeleted {
+                merge_request,
+                iid,
+                merge_id,
+                source_branch,
+                old,
+            } => serde_json::json!({
+                "merge_request_id": merge_request.get(),
+                "iid": iid,
+                "merge_id": merge_id,
+                "source_branch": source_branch.as_str(),
+                "old": old.as_str(),
             }),
         }
     }

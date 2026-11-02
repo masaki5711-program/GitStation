@@ -589,23 +589,23 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
-| 仮（登録の順に決める） | MergeRequestConflict | 409 | info | — | R2 / R4 |
-| 仮（登録の順に決める） | MergeBlocked（`reasons`） | 409 | info | — | R6（入口は R4） |
-| 仮（登録の順に決める） | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
-| 仮（登録の順に決める） | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（新規） | R4 |
+| FG-REVIEW-0006（R4 で登録） | MergeRequestConflict | 409 | info | — | R4 |
+| FG-REVIEW-0007（R4 で登録） | MergeBlocked（`reasons`） | 409 | info | — | R4（理由は R5 / R6 で増える） |
+| FG-REVIEW-0008（R4 で登録） | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
+| FG-REVIEW-0009（R4 で登録） | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（R4 で作成） | R4 |
 | FG-REVIEW-0001（R1a で登録済み） | DuplicateOpenMergeRequest | 409 | info | — | R1 |
 | 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
 | 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
 | FG-REVIEW-0004（R3 で登録） | DiscussionPositionInvalid | 422 | info | — | R3 |
 | FG-REVIEW-0005（R3 のレビューで登録） | DiscussionLimitReached（スレッド・コメントの上限） | 409 | info | — | R3 |
-| 仮（登録の順に決める） | MergeMethodNotAllowed | 409 | info | — | R4 |
+| FG-REVIEW-0010（R4 で登録） | MergeMethodNotAllowed | 409 | info | — | R4 |
 | 仮（登録の順に決める） | CheckNamespaceDenied | 403 | info | — | C1 |
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
-| 仮（登録の順に決める） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
+| FG-REVIEW-0011（R4 で登録） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
 | FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
 | FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
@@ -624,9 +624,10 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 
 ## 未決
 
-- push の経路の pre-receive / post-receive のフック（ADR-0008 の Amendment 段階 9 MR4 が M3 に送ったもの）を M3 のどの MR で入れるか。計画 11 では
-  「push 時の検査（X8、M3 後半）」だけがフックに触れる。
-- マージのジョブの同時実行の上限、CODEOWNERS の大きさの上限の既定値（R4・R5 で決める）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
+- ~~push の経路の pre-receive / post-receive のフックを M3 のどの MR で入れるか~~ → **R4 で決めた**（末尾の「実装で決めたこと（R4）」）:
+  マージの経路はフックに頼らず、ロックの下で保護 ref の判定と生きた先端を照らし直す。push の経路のフックは X8（M3 後半）に残す。
+- CODEOWNERS の大きさの上限の既定値（R5 で決める）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
+  リポジトリごとのロックで直列」に決めた（末尾の R4 の節）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
 - 変更されたパスの件数の上限と時間切れ、`codeowners_enforced_off_until` の既定と上限（24 時間以内）、保守の prune の猶予
   （24 時間以上）の既定値（R5・O3 で決める）。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
@@ -937,3 +938,176 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
   UNIQUE` で入れた（R3 の時点では行が少ない）。今後、行の多い表に UNIQUE を足すときは、書き込みを止めないように
   `CREATE UNIQUE INDEX CONCURRENTLY`（トランザクションの外の別のマイグレーション）で索引を作り、`ALTER TABLE … ADD
   CONSTRAINT … UNIQUE USING INDEX` で制約にする。
+
+## 実装で決めたこと（R4 `feat/git-merge-execution`、2026-11-02）
+
+本文（§4・§7・§8 の 5・§12）と違えたところは **逸脱** と書いた。
+
+- **フックに頼らない（計画 11 の決定 12 を R4 で決めた）**: マージの経路は pre-receive / post-receive のフックを通らず、それに頼らない。
+  ロックの下で、push の経路と同じ保護 ref の判定（`authorize()` が target の `RefProtection` で `MergeRequestMerge` を判定。規則は
+  push と同じ `protected_refs` の行をトランザクションの中で読む）と、記録した head・ソースの先端・target の先端を生きた値と照らし直す。
+  `update-ref` と `commit-tree` は `core.hooksPath` を空のディレクトリに固定する。push の経路の pre-receive / post-receive のフックは
+  M3 後半の X8 に残す（上の「未決」から外した）。
+- **表**（追記のマイグレーション 20261110100000）: `merge_request_merges`（1 試行 1 行、`id` が `merge_id`）。**派生の表**
+  （`tables.toml` の `kind = "derived"`）にした: ジョブの運用の記録で、人の判断はマージが着地したとき（tx2）の
+  `merge_request.merged`（プロジェクトの監査の行）とソース削除の `merge_request.source_branch_deleted` に残る。状態機械は
+  ガード `merge_request_merges_guard`（`MergeState::may_become` と同じ遷移。終端は変わらない、`expected_old` / `new_sha` /
+  `executing_at` / `source_outcome` は一度だけ、試行の同一性は変わらない）。実行中の試行は MR ごとに 1 つ（部分一意索引
+  `merge_request_merges_one_live`）。プロジェクトの purge で消す。§4.2 の状態 `applied` の名前はそのまま。
+- **スコープ**: `Scope::MergeExecute`（`merge_execute`）と CHECK `tokens_scopes_known` の拡張を同じ MR で入れた。`satisfies` は
+  既存の規則（同じスコープか、`write_repository`→`read_repository` / `api`→`read_api` の含意）のままで「マージのスコープは自分だけが
+  満たす」が成り立つ（`merge_scopes_are_satisfied_only_by_themselves`）。`merge_approve` は R5。
+- **権限**: `MergeRequestMerge`（人だけ。`Action::is_people_only` に足したので、サービスアカウントとボットの deny の行は
+  `matrix_rows_people.rs`、`merge_execute` のトークンの人の双子で allow を確かめる）。必要なロールは target の
+  `push_min_role` と Developer の大きい方（保護なしは Developer）。状態・ドラフトは見ない。行は `matrix_rows_merge.rs`
+  （Developer × Maintainer の保護は deny、Maintainer × Owner の保護は deny、管理者 allow、エージェントの `merge_execute` は
+  `agent_token`、`api` だけ・`admin` だけ・`write_repository` だけのトークンは FG-AUTH-0002）。`merge_approve` だけのトークンの
+  行は R5（スコープが無い）。`Resource::MergeRequest` に `target_protection` を足し、`MergeRequestCtx::merging` だけが入れる。
+- **入口**（`POST …/{iid}/merge` → 202、`GET …/{iid}/merge` → 最新の試行）: 本文は `sha`（必須）・`method`・
+  `delete_source_branch`・`message`。順に、方式（FG-REVIEW-0010）→ メッセージ（FG-WEB-0006）→ `sha` と MR の head（FG-REVIEW-0008
+  `stale_view`）→ ソースと target の生きた先端（閲覧の API の ref 一覧。新しい git の呼び出しはない）→ レビューのロックの下で
+  再判定（ルートのローダーが読んだ保護ではなく、トランザクションの中で読み直した規則で `reconfirm`）→ 実行中の試行（FG-REVIEW-0011）
+  → `evaluate_merge()`（FG-REVIEW-0007、`reasons` はすべて）。`mergeability_unknown` のとき、確認が走っていなければ確かめ直しを
+  積む（R2 の「マージの要求のときに積むのは R4」）。資格情報は種類と ID だけを残す（セッションは `web_sessions.id`、トークンは
+  `tokens.id`）。本文の上限は登録の JSON の上限 64 KiB（64 KiB ちょうどのメッセージはエスケープで超えうる。説明と同じ）。
+- **`evaluate_merge()`**（§7）: R4 の入力にある理由だけを持つ（`not_open`・`draft`・`merge_in_progress`・
+  `source_branch_missing`・`mergeability_unknown`・`conflict`・`ff_not_possible`）。承認・CODEOWNERS（R5）、必須チェック・未解決の
+  スレッド（R6）は入力と一緒に変種を足す。保存された判定は、確かめた組が生きた (head, target の先端) と同じときだけ数える
+  （`stored_mergeable`）。ジョブの tx1a は判定を `None`（ロックの下で自分の試しのマージで決める）、tx1b は `Clean`。
+- **ジョブの置き場（逸脱: §4.2 は「ジョブ」とだけ書き、ADR-0016 §7 のジョブは worker が走らせる）**: `merge_request.merge` は
+  **`forge serve` が走らせる**（`forge-cli/src/serve_merges.rs`。`JobRunner` に 1 種類だけ登録し、1 秒ごと・ジョブの後はすぐ）。
+  マージの ref の書き込みが、次の要求が読む閲覧のキャッシュ（`Browser`、ref 一覧と到達の答え）と同じプロセスで `invalidate` を
+  呼べるようにするため（worker には閲覧のキャッシュが無く、別のプロセスのキャッシュは捨てられない）。worker はこの種類を登録しない
+  ので取らない。リースの切れたジョブは worker の reaper が戻す。停止のときは実行中のマージに 10 秒、その後ジョブを返す。
+- **主体の作り直し**（§5）: ジョブは試行の行の利用者 ID と資格情報（種類と ID）から、ロックの下で利用者の有効・管理者・種類と、
+  トークンのスコープ・`is_agent`・失効・期限（セッションは失効・期限）を読み、`Principal` を作り直して `prove` する。無い・失効・
+  期限切れは FG-AUTH-0003 `credential_revoked`（試行は `superseded`）。
+- **フェンスと窓**: リポジトリごとのロック `merge:<repo_id>`（`pg_advisory_xact_lock`、待ち 30 秒（超えたら FG-DB-0002 で
+  ジョブの再試行）、保持は最大 180 秒）。ref を動かす直前に (a) ロックの接続で `pg_locks` の自分の pid のロックを確かめる、
+  (b) `prepared → executing`（条件つき UPDATE）、(c) `now − executing_at`（DB の時計）が「照合の余裕 − `update-ref` の時間切れ」
+  （既定 600 − 30 = 570 秒）を超えていれば `update-ref` を起動しない（照合に任せる）。既定値: `update-ref` 30 秒、`commit-tree`
+  30 秒、ref の読み取り・`merge-base` 10 秒、`merge-tree` 30 秒（R2 と同じ、ロックの残りで抑える）、照合の余裕 10 分、
+  `queued` / `prepared` の放置 10 分。`余裕 > update-ref の時間切れ × 2` を起動時に確かめる（FG-SYS-0002
+  `review.merge_grace below_update_ref`）。
+- **CAS の負けの分類**（§4.2 の 7）: `update-ref` の失敗の後に ref を読み直す。`new_sha` なら記録へ（前の試行か git が動かした）、
+  `expected_old` 以外なら `superseded`（FG-REVIEW-0008 `target_moved`、alert にしない）、`expected_old` のままで `<ref>.lock` が
+  あれば再試行（`forge.review.merge_retry reason=ref_locked`）、それ以外は FG-REVIEW-0009 `update_ref_failed`（行は
+  `executing` のまま、ジョブの再試行は git に先に聞いてから、窓の中なら決め直して動かす）。`update-ref` の後は成否にかかわらず
+  `invalidate` を呼ぶ。
+- **照合**: `forge serve` が 60 秒ごとに `Merger::reconcile`（1 回 50 件まで）。ジョブと同じロックの下で行を読み直し、`queued` /
+  `prepared` で 10 分更新の無いものは `superseded`（`reason=stale`）、`executing` で `executing_at` から 10 分 30 秒を過ぎたものは
+  git に聞く（`new_sha` か、`new_sha` を祖先に持つ → tx2 で `applied`。`expected_old` → `superseded` `not_applied`。どちらでもない
+  → `failed`、FG-REVIEW-0009 `ref_state_unknown`）。§4.2 の照合のジョブ `merge_request.reconcile` は **作らなかった**（逸脱:
+  サーブの定期の処理にした。ロックの待ちが短く、空振りのジョブの行を増やさないため）。最後の試行で失敗したジョブは、フェンスを
+  通っていない試行を `superseded reason=job_failed`（原因のコード）にする（`Merger::give_up`）。
+- **コミット**: マージコミットの作成者とコミッターはマージした人、squash の作成者は MR の作成者・コミッターはマージした人（§4.1 の
+  表のとおり。forge のシステムの ID は使わない）。どれも DB の表示名とメール（クライアントの入力ではない）。メールの無い
+  アカウントは `<username>@users.noreply.invalid`。`commit-tree` の引数は `-p <id>… -F - --end-of-options <tree>`（2.38 で
+  parse-options のコマンドなので区切りを受け付ける。手元の git は 2.53）。既定のメッセージはマージコミットが
+  `Merge branch '<source>' into '<target>'` + タイトル + `Merge request !<iid>` + 説明、squash はタイトル + 説明（64 KiB で切る）。
+- **記録**（tx2）: `merge_request.merged`（監査の行が先）と target の `repository.pushed`（影響の行）、イベント 2 つ
+  （`merge_request_merged:<merge_id>`、`merge_pushed:<merge_id>`）。actor は要求者（資格情報の ID と、トークンならスコープ）。
+  push の記録のコミットの一覧は push と同じ `new_commits`（失敗は一覧なし・`commits_truncated`、warn）。ソースの削除は
+  記録の後に自分のトランザクションで `merge_request.source_branch_deleted` と削除の `repository.pushed`
+  （`merge_source_deleted:<merge_id>`、`merge_source_pushed:<merge_id>`。§4.2 の 10 の鍵は 2 つのイベントに分けた）。
+- **ソースブランチの削除**: 要求者の主体で `RepoPush`（`authorize_ref_updates`、`RefUpdate::Delete`、push と同じ規則）を判定し、
+  ソースの先端がマージした head のときだけ CAS で消す。保護・ロール・スコープ（`merge_execute` だけのトークンは
+  `write_repository` が無いので消さない）で断られたら `kept_refused`、先端が動いていたら `kept_moved`、失敗は `kept_failed`
+  （warn）。マージは取り消さない。
+  tx2 とソースの削除の間で止まったジョブは、再試行（試行が既に `applied` でも `source_outcome` が空なら）と照合（`applied` を記録した直後）が削除を続ける。
+- **マージの実行中の拒否**: クローズ、target の変更、ドラフトの切り替えは MR の行のロックの下で生きた試行を見て
+  FG-REVIEW-0011。タイトル・説明の変更は断らない（試行の入力ではない）。
+- **プロジェクトの `merge_settings`（逸脱: 計画 11 §4.1 は R4 に表を置く）**: R4 では表を作らず、すべてのプロジェクトで ADR の
+  既定（マージコミットと squash を許可、既定はマージコミット、ソースは残す）を使う（`forge_review::MergeSettings`）。設定を書く
+  `MergeSettingsManage` と表は、最初の書き手である R6（マージの条件の設定）で一緒に入れる（書き手の無い表を作らない）。
+  それまで `fast_forward` は FG-REVIEW-0010。
+- **新しいコード**（登録の順）: FG-REVIEW-0006 MergeRequestConflict、0007 MergeBlocked、0008 HeadChanged、0009
+  MergeExecutionFailed（alert、runbook `merge-execution`）、0010 MergeMethodNotAllowed、0011 MergeInProgress。`gstn` の
+  `--wait` の時間切れに FG-CLI-0008 CliWaitTimedOut（再試行できる、終了コード 6）。
+- **gstn**: `mr merge --sha <head> [--method] [--delete-source-branch] [--message] [--wait [--wait-timeout]]` と
+  `mr merge-status [--wait]`。`--wait` は 1 秒ごとに `GET …/merge` を読み、`superseded` / `failed` はその試行のコードと
+  マージの要求の `request_id` で終わる。`--sha` は必須（見ていない版をマージさせない。§4.2 の 1）。
+- **テスト**: 実際の git（`forge-review/tests/merges_git.rs`）で 3 方式の結果の木、衝突、同時の push での CAS の負け、同時の 2 つの
+  マージ、保護の引き上げ・トークンの失効のジョブでの拒否、ソースの削除（保護ありは残す）、時間切れの後始末、照合の 3 つの場合、
+  フェンスの後の再試行。閲覧が古い答えを返さないこと（マージとソース削除の直後の ref 一覧）。forge-db（`merge_tests.rs`）で
+  同時の要求、ガード、フェンス、ロック、資格情報の読み直し。forge-git（`commit_tests.rs`）で `merge_plumbing_argv_on_git_2_38`。
+
+### R4 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（git-protocol・security・database・rust・silent-failure）の HIGH 4 件と MEDIUM / LOW への対応。上の R4 の節と違えたところは
+**改訂** と書いた。
+
+- **照合はロックの取り合いだけを飛ばす（HIGH）**: マージのロックの待ちが尽きたこと（`55P03`、または自前の上限）は FG-DB-0002
+  `reason=merge_lock_busy`（`is_lock_busy`）として他の失敗と分けた。照合はそれだけを次の回へ回し、接続の喪失などほかの失敗は
+  エラーとして返して `error_code` つきで 1 回ログに出す。どちらの場合も試行は次の走査の後ろへ回す（追記のマイグレーション
+  20261110100100 の `reconcile_seen_at`。走査は `reconcile_seen_at NULLS FIRST, id` の順で、片付けられない数件が残りを止めない）。
+  1 回の走査は 45 秒まで。照合が `end_merge` に負けた（ほかが先に片付けた）ときは alert を出さない。`applied` を記録した後に試行を
+  読み直せなければ、マージは `applied` のまま warn を出す。
+- **serve のマージのタスクを見張る（HIGH、改訂）**: ジョブのランナーと照合を **別のタスク** にし（遅い照合がマージを待たせない）、
+  それぞれを監督するタスクが、停止の要求なしに終わった・panic したことを FG-SYS-0005 ServeFailed（`operation=merge_task_exited`、
+  `task`、`panicked`）で 1 回ログに出し、1 秒から倍々で 30 秒までの間隔で起動し直す。停止のときは両方に止まれと伝え、panic した・
+  時間内に終わらなかった監督のタスクもログに出す。照合の 1 回は 50 秒で打ち切り、停止の要求ですぐ止まる。毎回ハートビート（2 回目で info に改訂） `forge.serve.merge_reconcile_pass`（件数つき）を出す。ジョブを取れない失敗は 1 秒から 30 秒まで間隔を延ばし、
+  続く失敗は最初の 1 回とその後 1 分に 1 回だけ（件数つき）ログに出す。`retryable` は `ErrorCode` の全列挙の match にした
+  （新しいコードは分類するまでコンパイルできない）。
+- **`forge doctor` の `review.merges`（HIGH の一部）**: serve のプロセスの中の最終実行時刻は doctor（別のプロセス）から読めないので、
+  照合が止まっていることを **結果で** 見る: 照合の期限（放置 10 分、`executing` は 10 分 30 秒）をさらに 3 分過ぎた生きた試行の数
+  （照合が動いていないか、毎回失敗している）と、直近 7 日（2 回目で 24 時間に改訂）の `failed`（人の判断待ち）。どちらも FG-REVIEW-0009
+  （`reconcile_overdue` / `ref_state_unknown`）。
+- **既定のコミットメッセージは要求の時点で固める（HIGH、改訂）**: `message` が無い要求は、要求のトランザクションでロックした MR の
+  タイトルと説明から既定のメッセージを作り、試行の行の `message` に保存する。キューにある間のタイトル・説明の変更（許している）は
+  コミットに入らない。ジョブは保存されたメッセージを使う。
+- **gstn の `--wait`（HIGH）**: `merge: null` や別の試行の答えは終わりにしない。到達できない・5xx の答えは 1 秒から倍々で 8 秒までの
+  間隔で期限まで待ち直す。期限は FG-CLI-0008。
+- **ロックの下の git の時間（MEDIUM）**: ロックの下の git の呼び出し（ref の読み取り・`merge-base`・`commit-tree`・`update-ref`）は
+  どれも「その呼び出しの時間切れ」と「ロックの保持の残り」の短い方で抑え、残りが 0 なら起動しない（FG-DB-0002
+  `merge_lock_lost hold_exceeded`、再試行）。ソースブランチの削除は ADR §4.2 の 10 のとおりロックを放した後に行うので、自分の
+  時間切れ（ref の読み取り 10 秒・`update-ref` 30 秒）だけで抑える。
+- **`invalidate` の漏れ（MEDIUM）**: ジョブの再開で先端が既に `new_sha` だったとき、照合が「着地した」と判断したときも閲覧の
+  キャッシュを捨てる。
+- **ロックの取り方（MEDIUM）**: ロックのトランザクションは `statement_timeout` を待ちより 5 秒長く上げ（既定の 15 秒の文の
+  時間切れで 30 秒の待ちが切れないように）、取得の全体を自前の時間切れ（待ち + 10 秒）で包む。生きていることの確認は
+  `pg_locks` の `objsubid = 1` とデータベースも見る。
+- **MR が開いていない tx2（MEDIUM、改訂）**: ref が動いた後に MR が開いていない（不変条件の破れ。開いている MR を変える操作は
+  どれも生きた試行を断る）ときは、試行を `executing` のまま残さず、同じトランザクションで `failed`（FG-REVIEW-0009
+  `merge_request_not_open`、alert、runbook `merge-execution`）にする。版の ref の Purge も生きた試行があれば FG-REVIEW-0011 で
+  断る（マージが読む head の ref を消さない）。
+- **作成者の名前（MEDIUM、改訂）**: git は名前とメールの両端の「crud」（空白・`.` `,` `:` `;` `"` `\` `'`）を落とすので、crud だけの
+  表示名は「empty ident」で恒久的に失敗していた。名前は作るときに正規化する（制御文字は空白、`<` `>` は除く、両端の crud を落とす、
+  何も残らなければ username）。メールは直さずに断る: 制御文字・`<` `>`・crud だけのメールは **FG-REVIEW-0012**
+  MergeIdentityInvalid（422、新規）で、試行は `superseded`（FG-SYS-0001 にしない）。
+- **管理者のトークン（MEDIUM）**: `admin` と `merge_execute` を持つ管理者のトークンは、Owner で保護された target にもマージできる
+  （push の経路と同じく、管理者の権限は保護を越える）。`admin` の無い管理者のトークンは普通の利用者（行で固定）。ジョブの時点の
+  再判定（所属の削除・Reporter への引き下げ・無効化・種類が bot に・セッションの失効）をそれぞれ実際の git のテストで固定した。
+- **両方の証明（MEDIUM）**: `update_ref` は `Decided`（`Authorized` と `MergeClearance`）を引数に取る。再開の経路も同じ。
+- **ガード（MEDIUM、追記のマイグレーション 20261110100100）**: 試行は `queued` で始まる（INSERT もガードする。トリガーは
+  `BEFORE INSERT OR UPDATE`）。`applied` の試行は `source_outcome`（と `updated_at`）のほかは変わらない。
+- **tx1b と `update-ref` の間の残り（MEDIUM、§5 の補足）**: tx1b の再判定から `update-ref` までの間に権限が下がる・保護が上がる
+  ことは、push の経路（判定の後に git が ref を書く）と同じく残る窓として受け入れる。窓はロックの保持（最大 180 秒）とフェンスの
+  時刻の窓で抑えられ、照合の時刻の窓（570 秒）を超えては動かさない。
+- **小さな修正（LOW）**: `ref_locked` は `packed-refs.lock` も見る。push の記録で読めなかったコミットの ID は warn で数を出し、
+  一覧を `commits_truncated` にする。target が既に head の早送りは `MergeBlocked`（`nothing_to_merge`、新しい止める理由）。再開の
+  経路で ref を動かしたときの監査にトークンのスコープを残す（先端が既に動いていた再開と照合は資格情報を読み直さないので空）。
+- **今後のマイグレーションの注意**: 行の多い表の CHECK を広げるときは `ADD CONSTRAINT … NOT VALID` と `VALIDATE CONSTRAINT`
+  に分ける（書き込みを止めない）。R4 の `tokens_scopes_known` はトークンの行が少ないので一度に置き換えた。
+
+### R4 の再レビュー（2 回目）で決めたこと（2026-11-03）
+
+- **コードの誤記（HIGH）**: マージのタスクが止まったときのコードは **FG-SYS-0005** ServeFailed（FG-SYS-0003 は
+  UnknownErrorCode）。runbook・この ADR・FG-REVIEW-0009 の説明・serve_merges のコメント・forge-cli の README を直し、
+  FG-SYS-0005 の診断にマージの operation（`merge_task_exited`・`merge_supervisor_exited`・`merge_task_pending`・
+  `reconcile_pass_timeout`・`reconcile_attempt_timeout`）と runbook `merge-execution` を足した。
+- **照合の 1 件ごとの時間切れ**: 1 件の片付けは 20 秒まで（`ATTEMPT_TIMEOUT`）。超えたら FG-SYS-0005
+  `reconcile_attempt_timeout` を `merge_id` つきで 1 回ログに出し、その試行を次の走査の後ろへ回す（1 件が 45 秒の走査を
+  使い切らない）。
+- **doctor の `failed` は直近 24 時間（改訂: 上の 1 回目の節の「7 日」）**: 対処の済んだ失敗が doctor を長く赤くしないように、
+  新しい表は足さずに数える範囲を 24 時間にした。それより古い `failed` は runbook の SQL で見る。doctor の期限は serve と同じ
+  `MergeTimeouts::default()` から作る（R4 では設定の鍵が無い。鍵を足すときは serve とこの検査の両方がそれを読む）。
+- **ロックの下の git の読み取り**: `merge-tree`、CAS の負けの読み直し、照合の ref の読み取りと祖先の確認も、ロックの保持の残りで
+  抑え、残りが 0 なら起動しない（再試行）。ref が動いた後の記録（tx2）だけは保持の残りで断らない: push の記録のコミットの一覧は
+  残りの時間で取り、残りが無ければ一覧なし（`commits_truncated`、warn）で記録する。
+- **ハートビート**: `forge.serve.merge_reconcile_pass` を info（1 分に 1 回）にし、forge-review の同じ意味の debug のイベントは
+  消した。生きていることの信号はこのハートビートと doctor の `review.merges`。照合が何かを片付けた回の
+  `forge.review.merge_reconciled`（結果の件数）は別の意味なので残す。
+- **配布の注意**: 既定のメッセージを要求の時点で固める変更（1 回目）より前に積まれた試行は `message` が空で、ジョブの時点の
+  タイトルと説明を使う。配布の前にマージのキューを空にする（`queued` / `prepared` / `executing` の試行が無いことを確かめる）。
+  手順は runbook `merge-execution` の「配布の前に」。

@@ -97,6 +97,14 @@ actions! {
     /// bots are refused); the thread's starter, or a Developer and above
     /// who is not the merge request's author (administrators included).
     DiscussionResolve,
+    /// `POST …/merge-requests/{iid}/merge` (M3 R4, ADR-0024 §4.3, §12):
+    /// merge a merge request. People only (agents, service accounts and
+    /// bots are refused); the target branch's `push_min_role` and above
+    /// (Developer when unprotected) — the direct-push ban of a protected
+    /// branch (R6) does not stop it. A token needs `merge_execute` (`api`
+    /// does not satisfy it, ADR-0017 §4.0). Whether the merge request is
+    /// ready is `evaluate_merge()`'s, never a permission.
+    MergeRequestMerge,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -247,6 +255,7 @@ impl Action {
                 | Action::AdminSessionRevoke
                 | Action::MergeRequestVersionRefsPurge
                 | Action::DiscussionResolve
+                | Action::MergeRequestMerge
         )
     }
 
@@ -318,6 +327,8 @@ impl Action {
             | Action::MergeRequestReopen
             | Action::MergeRequestComment
             | Action::DiscussionResolve => Some(Scope::Api),
+            // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
+            Action::MergeRequestMerge => Some(Scope::MergeExecute),
         }
     }
 }

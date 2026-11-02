@@ -37,6 +37,7 @@ use crate::{read_query_error, Db};
 mod commands;
 pub mod discussions;
 pub mod mergeability;
+pub mod merges;
 mod refresh;
 mod version_bases;
 mod version_refs;
@@ -225,6 +226,8 @@ pub async fn list(
 
 #[cfg(test)]
 mod discussion_tests;
+#[cfg(test)]
+mod merge_tests;
 #[cfg(test)]
 mod race_tests;
 #[cfg(test)]

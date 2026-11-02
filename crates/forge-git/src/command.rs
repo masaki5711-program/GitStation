@@ -256,6 +256,16 @@ impl GitCommand {
         self
     }
 
+    /// A forge-set environment variable (M3 R4: the commit identity of a
+    /// merge, `commit.rs`). Crate-internal: only forge's own keys and
+    /// validated values reach it; the pinned variables (`HOME`,
+    /// `GIT_CONFIG_*`, `GIT_DIR`, …) are applied after and win.
+    #[must_use]
+    pub(crate) fn env(mut self, key: &'static str, value: OsString) -> Self {
+        self.envs.push((key, value));
+        self
+    }
+
     #[must_use]
     pub fn stdin(mut self, input: Vec<u8>) -> Self {
         self.stdin = Some(input);
@@ -331,7 +341,8 @@ impl GitCommand {
                 cmd.env(key, v);
             }
         }
-        // Caller-provided variables first (only GIT_PROTOCOL can get here);
+        // Caller-provided variables first (GIT_PROTOCOL, and the commit
+        // identity of a merge, `commit.rs`);
         // forge's pinned variables are applied after, so nothing overrides them.
         for (k, v) in &self.envs {
             cmd.env(k, v);

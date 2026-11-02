@@ -194,6 +194,13 @@ admitted proof.
   FG-REPO-0023 `ref_not_found` before any git; the M2 commit / diff bodies are reused
   (`history::commit_body` / `diff_body`); `browse::Target::of` / `answer` take any context
   whose loader read the project row. Tests `tests/merge_request_version_routes.rs`.
+  M3 R4 (`routes/merge_requests/merges.rs`): `POST …/{iid}/merge` (`MergeRequestMerge`,
+  loader `MergeRequestToMerge` with the target's protection; body `{ sha, method?,
+  delete_source_branch?, message? }`; `202` `MergeAttemptBody`; the handler stores the
+  request's session or token id) and `GET …/{iid}/merge` (`MergeRequestRead`,
+  `MergeStatusBody { iid, merge }`). The registry documents `202` (`responds_accepted`). The
+  merge job runs in `forge serve` (forge-cli `serve_merges.rs`). Tests
+  `tests/merge_request_merge_routes.rs`.
   M3 R3 (`routes/merge_requests/discussions.rs`): `GET …/{iid}/discussions`
   (`MergeRequestRead`; `DiscussionsBody`, each thread with `outdated`), `POST
   …/{iid}/discussions` (`StartDiscussion { body, position? { version, path, side, line } }`)

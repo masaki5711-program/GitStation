@@ -97,6 +97,32 @@ merge request in place (ADR-0024 §1).
   (at most 60 KiB) / `check_position_shape` (FG-WEB-0006). Tests
   `tests/discussions_git.rs` (`an_inline_discussion_outside_the_diff_is_refused`).
 
+- M3 R4 (merge execution, ADR-0024 §4, §7; `src/merges/`): `evaluate_merge(&MergeFacts) ->
+  Result<MergeClearance, Vec<BlockReason>>` (pure; every reason in the fixed order;
+  `MergeClearance` has no public constructor) and `stored_mergeable` (a stored decision counts
+  only for the live (head, target tip) pair). `Review::request_merge(request, CredentialRef,
+  &Authorized<MergeRequestCtx>, repo, &MergeAsk) -> StoredMerge` (`MergeRequestMerge`: the
+  method allowed by `MergeSettings` (defaults merge_commit + squash, default merge_commit), the
+  `sha` the requester saw, the decision again under the review locks with the target's
+  protection as stored, a live attempt refused, `evaluate_merge()` once; `mergeability_unknown`
+  requests a check) and `Review::latest_merge(mr)`. `Merger` (`new(db, git, storage)`,
+  `with_browser`, `with_settings`, `with_timeouts`) runs the job `merge_request.merge`:
+  `execute(merge_id) -> MergeReport` — the repository's merge lock, tx1a (the requester's
+  principal rebuilt from the database: kind, token scopes / agent flag / revocation, session
+  revocation; `authorize()` and `evaluate_merge()`; the recorded head and the source tip against
+  the requested head), `merge-tree` / `commit-tree` (author and committer from the database;
+  squash: author = the merge request's author), the descendant invariant, tx1b (`prepared`),
+  the fence (lock alive, `prepared → executing`, the update-ref window), `update-ref` CAS (a
+  lost CAS re-reads the ref: `target_moved` / `ref_locked` retry / FG-REVIEW-0009), tx2; then
+  the optional source branch deletion (a `RepoPush` delete through `authorize_ref_updates`, CAS
+  on the merged head). Every ref write calls `Browser::invalidate`. `give_up(merge_id, cause)`
+  ends an attempt that never passed the fence (`job_failed`); `reconcile(request_id) ->
+  ReconcileReport` settles stuck attempts by asking git. Tests `tests/merges_git.rs` (real git).
+  Review round 1: the default message is frozen at the request; every git call under the lock
+  is cut to the hold's rest; `update_ref` takes both proofs; the reconciliation skips only a busy
+  lock (`merge_lock_busy`), rotates what it cannot settle, has a 45 s pass budget; FF onto the
+  head is `nothing_to_merge`; an identity refusal (FG-REVIEW-0012) supersedes.
+
 **Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
 DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
@@ -104,7 +130,10 @@ forge-db under the project lock; the partial unique index
 PurgePreconditionFailed (409, M3 R1b: `purge_requires_closed_or_rewritten`,
 `reopen_at_purged_head`; runbook `secret-removal`); FG-REVIEW-0003 MergeabilityNotChecked
 (warn, M3 R2: `job_failed` here, `job_stale` / `fanout_deferred` / `undecided` from forge-db;
-runbook `merge-request-mergeability`). Reused: FG-AUTH-0002 / 0003 (with
+runbook `merge-request-mergeability`); M3 R4: FG-REVIEW-0006 MergeRequestConflict, 0007
+MergeBlocked (`reasons`), 0008 HeadChanged (`stale_view` / `source_moved` / `target_moved`),
+0009 MergeExecutionFailed (alert: `update_ref_failed` / `record_failed` / `ref_state_unknown`),
+0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db). Reused: FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid
 alike), FG-REPO-0006, FG-REPO-0016 (repository not ready), FG-REPO-0023
@@ -114,8 +143,8 @@ lookup), FG-DB-0001 / 0002, FG-SYS-0001 (`proof_action_mismatch`,
 `proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`),
 FG-DB-0002 (`merge_request_changed_concurrently`, retryable).
 
-**Runbooks**: `secret-removal` (R1b). `merge-execution`, `codeowners` and
-`merge-blocked` arrive with R4–R6.
+**Runbooks**: `secret-removal` (R1b), `merge-execution` (R4). `codeowners` and
+`merge-blocked` arrive with R5–R6.
 
 **Tests**: `tests/commands.rs` (the full flow through proofs, a role removed or a
 Maintainer demoted after the proof, missing branches, bad input and mismatched

@@ -21,6 +21,9 @@ fn review_commands() -> Vec<String> {
         "start_discussion_mr",
         "add_note_mr",
         "resolve_discussion_mr",
+        // M3 R4: the merge request and the merge job's gate.
+        "request_merge_mr",
+        "merge_gate",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))
