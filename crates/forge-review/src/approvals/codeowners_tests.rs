@@ -257,3 +257,69 @@ fn the_owners_are_listed_once() {
         vec![Owner::Name("a".to_owned()), Owner::Group("g/x".to_owned())]
     );
 }
+
+/// R5 review (HIGH): a hostile pattern against a deep path finishes at
+/// once (no exponential backtracking); too many wildcards are refused.
+#[test]
+fn an_adversarial_pattern_matches_in_bounded_time() {
+    let pattern = format!("{}b @a\n", "a*".repeat(8));
+    let c = parse(pattern.as_bytes()).expect("valid");
+    let deep = vec!["a".repeat(200); 60].join("/");
+    let started = std::time::Instant::now();
+    assert_eq!(owners_of(&c, &deep), None);
+    let many = parse(b"**/**/**/**/**/**/**/**/x @a\n").expect("collapsed");
+    assert_eq!(owners_of(&many, &deep), None);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    let wild = format!("{} @a\n", "?".repeat(MAX_WILDCARDS + 1));
+    assert_eq!(
+        err(&wild),
+        CodeownersError {
+            line: 1,
+            reason: "pattern_invalid"
+        }
+    );
+}
+
+/// R5 review (HIGH): a BOM is dropped; invisible format characters and
+/// non-ASCII blanks outside a comment are refused with their line.
+#[test]
+fn invisible_characters_fail_closed_and_a_bom_is_dropped() {
+    let c = parse("\u{FEFF}*.rs @a\n".as_bytes()).expect("bom");
+    assert_eq!(owners_of(&c, "x.rs"), Some(vec!["@a".to_owned()]));
+    assert_eq!(
+        err("*.rs\u{200B} @a\n"),
+        CodeownersError {
+            line: 1,
+            reason: "pattern_invalid"
+        }
+    );
+    assert_eq!(
+        err("# ok\n*.rs @a\u{202E}\n"),
+        CodeownersError {
+            line: 2,
+            reason: "pattern_invalid"
+        }
+    );
+    assert_eq!(
+        err("*.rs\u{3000}@a\n"),
+        CodeownersError {
+            line: 1,
+            reason: "pattern_invalid"
+        }
+    );
+    // In a comment they are only text.
+    parse("*.rs @a # 全角\u{3000}スペース\n".as_bytes()).expect("comment");
+}
+
+/// R5 review (MEDIUM): matching ignores ASCII case.
+#[test]
+fn matching_ignores_ascii_case() {
+    let c = parse(b"/src/ @a\n*.RS @b\n").expect("valid");
+    assert_eq!(owners_of(&c, "SRC/auth.rs"), Some(vec!["@b".to_owned()]));
+    let c = parse(b"/src/ @a\n").expect("valid");
+    assert_eq!(owners_of(&c, "SRC/auth.txt"), Some(vec!["@a".to_owned()]));
+}
