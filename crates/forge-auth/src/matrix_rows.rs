@@ -948,6 +948,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestList, W::NonMember, F::PrivateProject, deny(E::NotFound)),
     row(A::MergeRequestList, W::DevTokenReadRepository, F::PrivateProject, deny(E::InsufficientScope)),
     row(A::MergeRequestList, W::Developer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::MergeRequestList, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
     // --- MergeRequestRead (as RepoBrowse; an invisible project is 404 like a missing iid) ---
     row(A::MergeRequestRead, W::Reporter, OTHER_MR, Allow),
     row(A::MergeRequestRead, W::NonMember, other_on(MP::Internal), Allow),
@@ -978,6 +979,7 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestCreate, W::Developer, new_mr(MB::ReservedSource), deny(E::Forbidden)),
     row(A::MergeRequestCreate, W::Admin, new_mr(MB::Same), deny(E::Forbidden)),
     row(A::MergeRequestCreate, W::Developer, OTHER_MR, deny(E::Forbidden)),
+    row(A::MergeRequestCreate, W::Disabled, OWN_MR, deny(E::AccountDisabled)),
     // --- MergeRequestUpdate (the author or Developer; another's draft flag: Maintainer) ---
     row(A::MergeRequestUpdate, W::Reporter, OWN_MR, Allow),
     row(A::MergeRequestUpdate, W::Developer, OTHER_MR, Allow),
@@ -1000,6 +1002,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestUpdate, W::NonMember, OTHER_MR, deny(E::NotFound)),
     row(A::MergeRequestUpdate, W::OwnerTokenReadApi, OTHER_MR, deny(E::InsufficientScope)),
     row(A::MergeRequestUpdate, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
+    row(A::MergeRequestUpdate, W::Disabled, OWN_MR, deny(E::AccountDisabled)),
+    row(A::MergeRequestUpdate, W::Developer, other_on(MP::Deleted), deny(E::PendingDeletion)),
     // --- MergeRequestClose (the author or Developer; never a merged one) ---
     row(A::MergeRequestClose, W::Reporter, OWN_MR, Allow),
     row(A::MergeRequestClose, W::Developer, OTHER_MR, Allow),
@@ -1011,6 +1015,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestClose, W::NonMember, OTHER_MR, deny(E::NotFound)),
     row(A::MergeRequestClose, W::Anonymous, OTHER_MR, deny(E::Unauthenticated)),
     row(A::MergeRequestClose, W::DevTokenReadRepository, OTHER_MR, deny(E::InsufficientScope)),
+    row(A::MergeRequestClose, W::Developer, other_on(MP::Deleted), deny(E::PendingDeletion)),
+    row(A::MergeRequestClose, W::Guest, OWN_MR, deny(E::Forbidden)),
     // --- MergeRequestReopen (as close; merged never comes back) ---
     row(A::MergeRequestReopen, W::Developer, other_in(S::Closed), Allow),
     row(A::MergeRequestReopen, W::Reporter, own_in(S::Closed), Allow),
@@ -1019,6 +1025,8 @@ pub(crate) const ROWS: &[Row] = &[
     row(A::MergeRequestReopen, W::NonMember, other_in(S::Closed), deny(E::NotFound)),
     row(A::MergeRequestReopen, W::Developer, F::Mr(MF { project: MP::Deleted, state: S::Closed, ..MF::other() }), deny(E::PendingDeletion)),
     row(A::MergeRequestReopen, W::OwnerTokenReadApi, other_in(S::Closed), deny(E::InsufficientScope)),
+    row(A::MergeRequestReopen, W::Guest, own_in(S::Closed), deny(E::Forbidden)),
+    row(A::MergeRequestReopen, W::Anonymous, other_in(S::Closed), deny(E::Unauthenticated)),
     // --- Operations ---
     row(A::Health, W::Anonymous, F::Instance, Allow),
     row(A::Metrics, W::Admin, F::Instance, Allow),

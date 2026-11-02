@@ -185,8 +185,6 @@ pub fn authorize(
             Ok(())
         }
     };
-    // A resource of the wrong shape for the action is a programming error in
-    // the caller; deny rather than guess.
     // A refusal on the request's shape or the target's state (merge
     // requests, ADR-0024 §12): 403 with the log `reason`.
     let refused = |reason: &'static str| deny(ErrorCode::Forbidden).with_context("reason", reason);
@@ -199,6 +197,8 @@ pub fn authorize(
             need(Role::Developer, project.role)
         }
     };
+    // A resource of the wrong shape for the action is a programming error in
+    // the caller; deny rather than guess.
     let wrong_resource = || {
         Err(ForgeError::new(ErrorCode::Internal)
             .with_context("action", action.name())
