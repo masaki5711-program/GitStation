@@ -276,6 +276,39 @@ pub(crate) async fn iid_of(db: &Db, mr: MergeRequestId) -> Result<i64, ForgeErro
     .await
 }
 
+/// The names a commit identity is built from (ADR-0024 §4.1: the database's
+/// display name and e-mail, never the client's).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountIdentity {
+    pub username: String,
+    pub display_name: String,
+    /// `None`: the account has no e-mail.
+    pub email: Option<String>,
+}
+
+/// The identity of `user` (`None`: no such user). One statement on the
+/// write pool.
+pub async fn account_identity(
+    db: &Db,
+    user: UserId,
+) -> Result<Option<AccountIdentity>, ForgeError> {
+    const QUERY: &str = "review.merge_identity";
+    let row: Option<(String, String, Option<String>)> = db
+        .within(QUERY, async {
+            sqlx::query_as("SELECT username, display_name, email FROM forge.users WHERE id = $1")
+                .bind(user.get())
+                .fetch_optional(db.write_pool())
+                .await
+                .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(row.map(|(username, display_name, email)| AccountIdentity {
+        username,
+        display_name,
+        email,
+    }))
+}
+
 fn invalid_job(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
         .with_context("reason", reason)

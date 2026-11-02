@@ -46,6 +46,7 @@ mod after_version;
 pub mod discussions;
 mod fields;
 pub mod mergeability;
+pub mod merges;
 pub mod outdated;
 pub mod position;
 mod purge;
@@ -54,6 +55,10 @@ pub mod versions;
 
 pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, StoredVersion};
 pub use mergeability::{check, CheckReport, Mergeability};
+pub use merges::{
+    evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
+    MergeSettings, MergeTimeouts, Merger, ReconcileReport, StoredMerge,
+};
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
 pub use discussions::DiffProbe;
@@ -139,6 +144,9 @@ pub struct Review {
     /// M3 R3 re-review: the time one read (or a write's answer) may spend
     /// on `outdated` diffs (`outdated::OUTDATED_BUDGET` unless set).
     outdated_budget: std::time::Duration,
+    /// M3 R4: the merge methods allowed and the defaults (ADR-0024 §4.1;
+    /// the defaults for every project until R6 adds the setting).
+    merge_settings: merges::MergeSettings,
 }
 
 impl std::fmt::Debug for Review {
@@ -245,6 +253,7 @@ impl Review {
             refs: None,
             diffs: None,
             outdated_budget: outdated::OUTDATED_BUDGET,
+            merge_settings: merges::MergeSettings::default(),
         }
     }
 
