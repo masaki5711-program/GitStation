@@ -562,3 +562,65 @@ async fn the_largest_listing_is_recorded_within_a_third_of_the_budget() {
     t.drop_now().await;
 }
 
+/// R5 review round 5: the runbook's approved backfill (merge-blocked,
+/// Mitigate 2b), run verbatim, writes the rows with their audit row in one
+/// transaction; without the audit row the same insert is refused.
+#[tokio::test]
+async fn the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row() {
+    let t = FreshDb::migrated().await;
+    let (p, alice) = project(&t, "alice").await;
+    let runbook = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../ops/runbooks/merge-blocked.md"),
+    )
+    .expect("runbook");
+    let begin = runbook
+        .find("-- push_commits backfill (begin)")
+        .expect("begin marker");
+    let end = runbook
+        .find("-- push_commits backfill (end)")
+        .expect("end marker");
+    let shas = format!("{},{}", "a".repeat(40), "b".repeat(40));
+    let sql = runbook[begin..end]
+        .replace("<project_id>", &p.project_id.get().to_string())
+        .replace("<repo_id>", &p.repository_id.get().to_string())
+        .replace("<pusher_id>", &alice.get().to_string())
+        .replace("<change_id>", "chg-backfill-1")
+        .replace("<approver>", "synthetic approver")
+        .replace("<evidence>", "synthetic log")
+        .replace("<sha>", &shas);
+    let mut su = t.superuser().await;
+    sqlx::raw_sql(&sql)
+        .execute(&mut su)
+        .await
+        .expect("backfill");
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT commit_sha, pusher_id FROM forge.push_commits WHERE request_id = 'chg-backfill-1' \
+         ORDER BY commit_sha",
+    )
+    .fetch_all(&mut su)
+    .await
+    .expect("rows");
+    assert_eq!(
+        rows,
+        [("a".repeat(40), alice.get()), ("b".repeat(40), alice.get())]
+    );
+    let details: serde_json::Value = sqlx::query_scalar(
+        "SELECT details FROM forge.audit_log WHERE action = 'repository.push_commits_backfilled'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("audit row");
+    assert_eq!(details["commits"], 2);
+    // The insert alone (no audit row in its transaction) is refused.
+    let alone = sql[sql.find("INSERT INTO forge.push_commits").expect("insert")..]
+        .replace("COMMIT;", "")
+        .replace("chg-backfill-1", "chg-backfill-2")
+        .replace(&"a".repeat(40), &"c".repeat(40));
+    let refused = sqlx::raw_sql(&alone)
+        .execute(&mut su)
+        .await
+        .expect_err("an unaudited backfill must be refused");
+    assert!(refused.to_string().contains("no audit row"), "{refused}");
+    t.drop_now().await;
+}

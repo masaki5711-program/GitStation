@@ -1305,4 +1305,47 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   push → 止めない、`update-ref` で入れたコミット → `committers_unknown`、上限で不完全な push → その push の一覧に無いコミットを範囲に
   持つ MR だけが止まる。forge-git で「既にあるコミットへのタグ・ブランチ・早送り・削除は何も持ち込まない」「上限で不完全」。
 - **残る設計上の制約**: 3 回目までに挙がった「子を 17 個タグ付けすると 1 つの MR を止められる」は、一覧の切れた push の扱いが無くなった
-  ので **もう無い**。代わりに、表の前の履歴を範囲に持つ MR は（ルールがあれば）止まる（作成者が push し直せば解ける）。
+  ので **もう無い**。代わりに、表の前の履歴を範囲に持つ MR は（ルールがあれば）止まる。**解き方は 5 回目で訂正した**（下の節）:
+  同じコミットの push し直しでは解けない（もう届くコミットは「新しくない」ので行を書かない）。コミットの id を変えて push する。
+
+### R5 の再レビュー（5 回目）で決めたこと（2026-11-03）— push_commits の作り直しの見直し
+
+- **HIGH 1（「push の前に届いていた」の TOCTOU）**: 4 回目の一覧は push の **後** に生きた ref を `--glob=refs/*` で読み、更新した ref
+  だけを除いていた。receive-pack と一覧の間に別の ref が同じコミットを指すと（同じコミットの別の push、MR の版の固定 ref
+  `refs/merge-requests/<iid>/…` の書き込み）、そのコミットは「前から届いていた」に見え、どちらの push も行を書かなかった
+  （コミッターの見落とし = 承認のすり抜け）。**改訂**: forge-web は receive-pack を始める **前** に全 ref の先端を読む
+  （forge-git `ref_snapshot`: `for-each-ref`、隠し ref も含む、タグはコミットまで剥がす、シンボリック ref は飛ばす、各コミット 1 回、
+  上限 1 000 000 ref、10 秒）。一覧は `rev-list --stdin --end-of-options` に、新しい先端・`^<スナップショットの先端>`・`^<old>` を
+  **すべて標準入力で** 渡す。生きた ref の glob は使わない。スナップショットの失敗は push を止めず、その push の一覧を不完全にする
+  （下の FG-GIT-0016）。
+  - **過剰な帰属は安全と決めた**: スナップショットの後に別の push が持ち込んだコミット、同時に同じ新しいコミットを push した 2 人は、
+    どちらも行を持つ。コミッターが増えるのは「承認を数えにくくする」方向だけで、数えすぎにはならない。危ないのは見落としの方。
+  - テスト（forge-git、実際の git）: 受けた後・一覧の前に同じコミットへ 2 本目の ref → 両方の push が行を持つ、push の後の版の固定
+    （隠し ref）→ 一覧は変わらない、シンボリック ref は何も隠さない（スナップショットに入らない）、隠し ref はスナップショットに入る。
+- **HIGH 2（行の上限と記録の予算）**: 上限 1 000 000 行は、記録の 30 秒の予算（3 回の試行の共通）の中で書けず、push の監査の行ごと
+  失う（FG-GIT-0012）恐れがあった。**測った**: 50 000 行を監査のトリガーつきで書くのに約 3.5 秒（開発機、debug ビルド）。上限を
+  **50 000**（`forge_core::MAX_PUSHED_COMMITS`）に下げ、予算は `forge_core::PUSH_RECORD_BUDGET` として共有し、テスト
+  `the_largest_listing_is_recorded_within_a_third_of_the_budget` が「上限の行が予算の 1/3 未満で書ける」ことを確かめる。上限を超えた
+  一覧は上限で止め（それ以上の行は書かない。記録の側でも上限で切って `push_commits_incomplete`）、保持するのは高々 50 000 個の id。
+  - **監査のトリガーは行ごとのまま**にした: PostgreSQL の制約トリガー（`CREATE CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED`）は
+    `FOR EACH ROW` しか作れない。文ごとの遅延しないトリガーにすると、監査の行が同じトランザクションの後で書かれる ChangeTx の順と、
+    doctor の検査（`audited.rs`: `audited_change_present` は遅延の制約トリガーで ALWAYS）の両方を崩す。第 2 のトランザクションに分ける
+    案は、その行のための監査の行がもう 1 つ要り、失敗したときの「不完全」の印を不変の監査の行に後から付けられない。測った値が予算に
+    十分収まるので、どちらも採らなかった。
+- **MEDIUM 3（不完全な一覧の warn）**: 新しいコード **FG-GIT-0016 `PushCommitsIncomplete`**（warn、runbook merge-blocked）。不完全な
+  一覧ごとに 1 行、`reason`（`cap` / `deadline` / `snapshot_failed` / `git_failed`）・`listed`・`refs`・`listing_ms`・`request_id`、
+  失敗には `cause_code`。
+- **MEDIUM 4（解き方の訂正と補填の手順）**: runbook と ADR の「push し直せば解ける」は誤り。**コミットの id を変えて**（`git commit
+  --amend`、`git rebase --force-rebase <target>`）push する。作り直せない履歴には、承認の要る管理者の補填 SQL を runbook merge-blocked
+  の Mitigate 2b に置いた（監査の行と行を 1 トランザクションで。テスト
+  `the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row` が runbook の SQL をそのまま実行し、監査の行の無い挿入が拒まれる
+  ことも確かめる）。CLI は今は作らない。
+- **MEDIUM 5（squash がコミッターを洗い流す）**: マージ・squash のコミットは要求者だけでなく、**マージした範囲（`head ^<元の target>`）の
+  コミットを push した全員** の行を持つ（forge-review `merges/attribution.rs` が tx2 の前にロックの残り時間で範囲と push した人を読み、
+  forge-db `finish_merge` の `range_pushers` に渡す）。範囲の push した人が分からない（行の無いコミット、範囲が 1 000 超、git・DB の
+  失敗、時間切れ）ときは、マージのコミットに **行を書かない**（後でそれを含む範囲は `committers_unknown`。要求者だけを書くと見落としに
+  なる）。FG-GIT-0016 `reason=merge_pushers_unknown:<理由>` の warn を 1 行。再開・照合の経路も同じ関数を通る。早送りは新しいコミットが
+  無いので何も書かない。テスト: olga が dave の MR を squash した後の main → release の MR で dave はコミッター（承認は数えない）、
+  マージコミットも同じ、行の無い範囲の squash は行を持たない。
+- **MEDIUM 6（push の遅延）**: 毎回の一覧で `forge.git.push_commits_listed`（info）に `refs`（スナップショットの ref 数）・`listed`・
+  `complete`・`snapshot_ms`・`listing_ms` を出す。ref の多いリポジトリでの遅れはここで見える。
