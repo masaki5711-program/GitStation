@@ -348,3 +348,58 @@ fn an_exit_one_without_the_end_of_list_is_unexpected_output() {
     let err = conflicted_files(out.as_bytes(), false, 100).expect_err("no end");
     assert_eq!(err.code(), ErrorCode::GitProcessFailed);
 }
+
+/// Review (LOW): an output cut in git's messages, after the list ended, is
+/// a conflict whose list is complete.
+#[test]
+fn a_cut_after_the_end_of_the_list_keeps_the_list_whole() {
+    let tree = "a".repeat(40);
+    let out = format!("{tree}\0one\0two\0\0messages that were cu");
+    let got = conflicted_files(out.as_bytes(), true, 100).expect("cut");
+    assert_eq!(
+        got,
+        MergeTree::Conflicted {
+            files: vec!["one".to_owned(), "two".to_owned()],
+            files_truncated: false,
+        }
+    );
+}
+
+/// `merge-base` and `merge-base --is-ancestor` keep their time limit
+/// (FG-GIT-0002) and fail on an object the repository does not have
+/// (FG-GIT-0003) — never `None` / `false`.
+#[tokio::test]
+async fn merge_base_questions_time_out_and_refuse_missing_objects() {
+    let f = fixture().await;
+    let h = histories(&f.path);
+    let missing = ObjectId::parse(&"e".repeat(40)).expect("oid");
+    let err = f
+        .git
+        .merge_base(&f.root, f.id, &h.target, &h.clean, Duration::ZERO)
+        .await
+        .expect_err("timeout");
+    assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
+    let err = f
+        .git
+        .is_ancestor(&f.root, f.id, &h.base, &h.target, Duration::ZERO)
+        .await
+        .expect_err("timeout");
+    assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
+    let err = f
+        .git
+        .merge_base(&f.root, f.id, &h.target, &missing, T)
+        .await
+        .expect_err("missing");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed, "{err}");
+    let err = f
+        .git
+        .is_ancestor(&f.root, f.id, &missing, &h.target, T)
+        .await
+        .expect_err("missing");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed, "{err}");
+    let err = f
+        .trial(&h.target, &missing, MergeTreeLimits::default())
+        .await
+        .expect_err("missing");
+    assert_eq!(err.code(), ErrorCode::GitProcessFailed, "{err}");
+}

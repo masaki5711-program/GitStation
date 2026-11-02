@@ -20,8 +20,11 @@
 //! Every call has its caller's timeout (`FG-GIT-0002`) and takes a slot of
 //! the global git pool (`FG-GIT-0004`). Revisions are validated object ids
 //! after `--end-of-options`; nothing a user typed reaches argv. Each trial
-//! merge writes unreferenced trees and blobs; the scheduled maintenance
-//! prunes them with a grace period (ADR-0024 §3, plan 11 O3).
+//! merge writes unreferenced trees and blobs. Nothing prunes them yet:
+//! forge's repositories run with `gc.auto=0`, and the scheduled maintenance
+//! that prunes unreachable objects with a grace period is planned in plan
+//! 11 O3 (ADR-0024 §3). Until then they accumulate; runbook
+//! `merge-request-mergeability` has the manual `git prune --expire=<grace>`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -91,7 +94,8 @@ fn conflicted_files(stdout: &[u8], cut: bool, max_files: usize) -> Result<MergeT
         return Err(unexpected("merge-tree", "unexpected_output"));
     }
     let mut files = Vec::new();
-    let mut truncated = cut;
+    // A cut output is a cut list only if the cut came before the list's end.
+    let mut over_max = false;
     let mut ended = false;
     for record in records {
         if record.is_empty() {
@@ -101,7 +105,7 @@ fn conflicted_files(stdout: &[u8], cut: bool, max_files: usize) -> Result<MergeT
         if files.len() < max_files {
             files.push(String::from_utf8_lossy(record).into_owned());
         } else {
-            truncated = true;
+            over_max = true;
         }
     }
     if !ended && !cut {
@@ -110,7 +114,7 @@ fn conflicted_files(stdout: &[u8], cut: bool, max_files: usize) -> Result<MergeT
     }
     Ok(MergeTree::Conflicted {
         files,
-        files_truncated: truncated,
+        files_truncated: over_max || (cut && !ended),
     })
 }
 
