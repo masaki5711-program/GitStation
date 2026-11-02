@@ -85,6 +85,12 @@ lands (M1 phase 5).
   scope `merge_execute` (`Scope::MergeExecute` satisfies only itself: `api` / `admin` never
   merge). `Resource::MergeRequest.target_protection`, set only by `MergeRequestCtx::merging`.
   Rows `matrix_rows_merge.rs` and the service account / bot rows in `matrix_rows_people.rs`.
+- **Approvals** (M3 R5, ADR-0024 §8.3–§8.6, §12): `MergeRequestApprove` /
+  `MergeRequestUnapprove` — people only, Developer by membership, the author refused before
+  any role with FG-REVIEW-0013 (`reason=self_approval`, administrators included), scope
+  `merge_approve` (satisfied only by itself). `ApprovalRuleManage` on the project — people
+  only, Maintainer, `api`. Rows `matrix_rows_approval.rs` (with the `merge_approve`-only token
+  denied on `MergeRequestMerge`) and the service account / bot rows in `matrix_rows_people.rs`.
 - **Account kind** (M3 R3, ADR-0024 §8.4): `Principal::authenticated(user,
   is_admin, active, credential, kind)` takes `AccountKind` (forge-core's
   `UserKind`: `Human` / `ServiceAccount` / `Bot`, from `users.kind`; no default,

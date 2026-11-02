@@ -306,6 +306,18 @@ connection, mapping driver errors to registered codes, migrations
   `merge_lock_busy` (`is_lock_busy`) under its own bound; `finish_merge` sets `failed`
   (`merge_request_not_open`) when the merge request is no longer open; the version-ref purge
   refuses a live merge; `merges::health` feeds doctor `review.merges`.
+- **Approvals** (`review/approvals/`, M3 R5, ADR-0024 §8; migration 20261111100000, which also
+  widens `tokens_scopes_known` with `merge_approve`): `merge_request_approvals` (audited; bound
+  to `head_sha` / `target_branch`; ends once with `revoked_reason` unapproved / new_commits /
+  target_changed; guard `merge_request_approvals_end_once`; one live row per approver),
+  `approval_rules` + `approval_rule_approvers` (audited). `approve_mr_decided` /
+  `unapprove_mr_decided` (FG-REVIEW-0015 past 50 live approvals; `merge_request.approved`
+  carries the classification `classify` returns), the version job and the edit command revoke
+  every live approval in their transaction (one `merge_request.unapproved` each),
+  `put_approval_rule_mr_decided` / `remove_approval_rule_mr_decided` (audit only),
+  `approval_facts` (approvers' active / kind / role / direct groups now; also in `MergeGate`),
+  `push_coverage` (the `repository.pushed` audit rows naming a range's commits),
+  `owners` (CODEOWNERS names → users / groups). Tests `review/approval_tests.rs`.
 - **Discussions** (`review/discussions/`, M3 R3, ADR-0024 §6, §12; migration
   20261109100000): `merge_request_discussions` (kind general / inline; an inline one's
   version — a composite foreign key to the versions —, path, side old / new and line;

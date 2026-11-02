@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011**、R4 のレビューの MergeIdentityInvalid が **FG-REVIEW-0012**、R5 で登録した SelfApprovalRefused / CodeownersInvalid / ApprovalLimitReached が **FG-REVIEW-0013〜0015** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -598,8 +598,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | FG-REVIEW-0008（R4 で登録） | HeadChanged（`stale_view` / `source_moved` / `target_moved`） | 409 | info | — | R4 |
 | FG-REVIEW-0009（R4 で登録） | MergeExecutionFailed（`update_ref_failed` / `record_failed` / `ref_state_unknown`） | 500 | **alert** | `merge-execution`（R4 で作成） | R4 |
 | FG-REVIEW-0001（R1a で登録済み） | DuplicateOpenMergeRequest | 409 | info | — | R1 |
-| 仮（登録の順に決める） | SelfApprovalRefused | 403 | info | — | R5 |
-| 仮（登録の順に決める） | CodeownersInvalid | 422 | warn | `codeowners`（新規） | R5 |
+| FG-REVIEW-0013（R5 で登録） | SelfApprovalRefused | 403 | info | — | R5 |
+| FG-REVIEW-0014（R5 で登録） | CodeownersInvalid | 422 | warn | `codeowners`（R5 で作成） | R5 |
+| FG-REVIEW-0015（R5 で登録） | ApprovalLimitReached（MR ごとの生きた承認 50 件。版の記録の取り消しが 1 つの変更のイベント 100 件に収まるように） | 409 | info | — | R5 |
 | FG-REVIEW-0004（R3 で登録） | DiscussionPositionInvalid | 422 | info | — | R3 |
 | FG-REVIEW-0005（R3 のレビューで登録） | DiscussionLimitReached（スレッド・コメントの上限） | 409 | info | — | R3 |
 | FG-REVIEW-0010（R4 で登録） | MergeMethodNotAllowed | 409 | info | — | R4 |
@@ -626,10 +627,10 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 
 - ~~push の経路の pre-receive / post-receive のフックを M3 のどの MR で入れるか~~ → **R4 で決めた**（末尾の「実装で決めたこと（R4）」）:
   マージの経路はフックに頼らず、ロックの下で保護 ref の判定と生きた先端を照らし直す。push の経路のフックは X8（M3 後半）に残す。
-- CODEOWNERS の大きさの上限の既定値（R5 で決める）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
+- ~~CODEOWNERS の大きさの上限の既定値（R5 で決める）~~ → **R5 で決めた**（64 KiB・1 000 行・1 行 4 KiB・1 行の所有者 50。末尾の R5 の節）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
   リポジトリごとのロックで直列」に決めた（末尾の R4 の節）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
-- 変更されたパスの件数の上限と時間切れ、`codeowners_enforced_off_until` の既定と上限（24 時間以内）、保守の prune の猶予
-  （24 時間以上）の既定値（R5・O3 で決める）。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
+- 変更されたパスの件数の上限と時間切れは **R5 で決めた**（10 000 件・git の呼び出しごとに 10 秒）。`codeowners_enforced_off_until` の既定と上限
+  （24 時間以内）は **R6 に送った**（切り替えの Action と `merge_settings` と一緒。末尾の R5 の節）。保守の prune の猶予（24 時間以上）は O3。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
   契約 4 と ADR-0019 §8 の `forge admin …` / `forge backup` / `forge restore`）と実際の運用のコマンドの一致も確かめるようにする（[root] の MR）。
 
@@ -1111,3 +1112,73 @@ R4 へ: マージの要求で確かめ直しを積む・ロックの下での `m
 - **配布の注意**: 既定のメッセージを要求の時点で固める変更（1 回目）より前に積まれた試行は `message` が空で、ジョブの時点の
   タイトルと説明を使う。配布の前にマージのキューを空にする（`queued` / `prepared` / `executing` の試行が無いことを確かめる）。
   手順は runbook `merge-execution` の「配布の前に」。
+
+## 実装で決めたこと（R5 `feat/core-approval-rules-codeowners`、2026-11-03）
+
+本文（§6・§7・§8・§9・§12）と違えたところは **逸脱** と書いた。
+
+- **表**（追記のマイグレーション 20261111100000）: `tokens_scopes_known` に `merge_approve` を足した（変種と CHECK は同じ MR、§8 の 5）。
+  `merge_request_approvals`（`approver_id`・`head_sha`・`target_branch`・`created_at`・終わりの `revoked_at` / `revoked_reason` =
+  `unapproved` / `new_commits` / `target_changed`）。承認は 1 行 1 回で、終わった行は消さずに残す（履歴）。生きた承認は承認者と MR ごとに 1 つ
+  （部分一意索引 `merge_request_approvals_one_live`）。ガード `merge_request_approvals_end_once`（同一性は変わらない、終わりは一度だけ）。
+  `approval_rules`（名前 `[a-z0-9][a-z0-9_.-]{0,63}`、プロジェクトで一意、`target_pattern` は `RefPattern`、`required_approvals` 1〜20）と
+  `approval_rule_approvers`（利用者かグループのどちらか 1 つ、外部キーつき）。3 つともプロジェクトに監査される表で、プロジェクトの purge で消す。
+- **承認と取り消し**: `approve_mr_decided` は MR の行のロックの下で、`decide`（`reconfirm` と、要求の `sha` が今の head、target が git の事実を
+  読んだときと同じこと。違えば FG-REVIEW-0008 `stale_view`）の後に行を書く。同じ組の生きた承認があれば何も書かない（`unchanged`）。別の組の
+  生きた承認（通常は起きない）は終わらせて書き直す。生きた承認が 50 件で **FG-REVIEW-0015** ApprovalLimitReached（**新規**。版の記録が承認ごとに
+  `merge_request.unapproved` を出すので、1 つの変更のイベントの上限 100 件に収める）。`merge_request.approved` の `counted` /
+  `uncounted_reason` は、書いた直後に同じトランザクションで読んだ承認の事実と、トランザクションの前に読んだ git の事実で評価する（§6）。
+  dedup は `merge_request_approved:<approval_id>` / `merge_request_unapproved:<approval_id>`（行は一度だけ終わる）。
+- **取り消し**: 版の記録（新しい版、**A → B → A の戻りを含む**）が `new_commits`、target の変更が `target_changed` で、生きた承認をすべて
+  終わらせ、承認ごとに監査の `affected` の行とイベントを同じトランザクションで書く。**逸脱**: `reset_approvals_on_push = false` で承認を
+  写す設定と `may_carry_approvals` は R5 に入れていない（設定を持つ `merge_settings` は R6。それまですべてのプロジェクトで既定の「消す」）。
+- **だれが承認できるか**（§8 の 4、§12）: `MergeRequestApprove` / `MergeRequestUnapprove` は人だけ（`is_people_only` に足した。サービス
+  アカウント・ボットの行は `matrix_rows_people.rs`）、所属のロールで Developer 以上、作成者は **ロールより先に** FG-REVIEW-0013
+  （`reason=self_approval`、管理者も。`admin_author_self_approval_is_denied`）。スコープ `merge_approve`（`api`・`admin`・`merge_execute` は
+  満たさない）。R4 の宿題だった「`merge_approve` だけのトークンでマージ」の deny の行も入れた（`matrix_rows_approval.rs`）。取り消しも同じ arm
+  （作成者には取り消す承認が無い）。
+- **数えるか**（§8 の 3・6、評価の時点）: 今の head と target の承認（`stale`）、承認者が有効（`inactive`）、人（`not_human`）、
+  所属のロールが Developer 以上（`role_insufficient`。**管理者の印は数えない**: 所属の無い管理者の承認は数えられない）、作成者でない
+  （`author`）、コミッターでない（`committer`、示せなければ `committers_unknown`）。有効でも、適用されるルール・CODEOWNERS の行・設定の
+  ファイルの条件のどれにも入らなければ `not_in_rule`（要件がまったく無いときは数える）。「コミッターの承認を数えない」設定は R6 まで常に有効。
+- **コミッターの問い合わせ**（§8 の 3 の「正確な問い合わせは R5 で固定する」）: 範囲 `merge_base..head` を git で読み（最大 1 000 コミット）、
+  そのリポジトリの `repository.pushed` の監査の行のうち、ref の `new` か一覧のコミットが範囲にあるものの actor（再生の行は `replayed_from`）を
+  コミッターにする（MR の作成の前の push・他のブランチへの push・別名の push を含む。テスト `committers_include_pushes_before_mr_creation`、
+  `committers_include_pushes_to_other_branches`）。どの行にも名前の出ない範囲のコミットは、一覧が切れた（21 件以上の）ref の更新のうち `new` から
+  そのコミットに届くもの（git、最大 16 件）の actor を全員コミッターにする。届く更新が無い・ref の一覧が切れた記録がある・git が失敗した・
+  上限を超えた → `committers_unknown`。**逸脱**: 本文の「範囲のコミットを祖先に持つ push の actor 全員」は、一覧が切れた更新についてだけ
+  git で確かめる（すべての push の `new` の祖先を確かめると、リポジトリの push の数だけ git を動かす）。範囲のコミットを新しく運ばず、
+  その上に自分のコミットを積んで別名で push しただけの人はコミッターにならない。push の記録の無いコミット（取り込み・手の `update-ref`・
+  保存期間の外）があると、ルールのある MR は止まる（`committers_unknown`、runbook `merge-blocked`）。
+- **CODEOWNERS**（§9、計画 11 Q5）: target の先端（ジョブではロックの下で読んだ target の先端）の `.forge/CODEOWNERS`、無ければ `CODEOWNERS` を
+  `ls-tree` と `cat-file` で読む（シンボリックリンク・ディレクトリは `not_a_file`）。文法は本文のとおりで、`\#` と `\ ` のエスケープ、
+  `[` `]` `{` `}`・`***`・要素の一部の `**`・`.` / `..` は `pattern_invalid`、セクション・任意の承認・メール・否定は `unsupported`。
+  **先頭の `/` の無いパターンはどの深さでも一致**（`/` を含んでも。GitLab と同じく `**/` を前に付けた扱い）、パターンはそのパス自身と
+  その下のすべてに一致、末尾の `/` は下だけ。所有者は 1 要素の `@name` が利用者、無ければ最上位のグループ。`@a/b` はグループの全パス。
+  グループの所有者は **直接のメンバー**（下位グループのメンバーは含めない）。知らない所有者は最初にその名前を書いた行で `unknown_owner`。
+  **上限（未決を決めた）**: 64 KiB・1 000 行・1 行 4 KiB・1 行の所有者 50。解析できないファイルは `codeowners_invalid{line, reason}` で止め、
+  評価のたびに warn `forge.review.codeowners_invalid`（FG-REVIEW-0014）を 1 回出す。
+- **変更されたパス**: `diff-tree --no-renames -r -z --name-only <merge_base> <head>`（**上限 10 000 件**、出力の上限は件数 × 4 KiB、
+  **git の呼び出しごとに 10 秒**。ジョブではロックの保持の残りで抑える）。超過は `too_many_paths`、UTF-8 でないパスは `non_utf8_path`、
+  共通の履歴が無いと `no_merge_base`、target が無いと `target_missing`、git の失敗は `timeout` / `git_failed`（warn
+  `forge.review.approval_input_unread`、git のコード）。**逸脱**: 本文の `spawn_stream` ではなく、上限つきの取り込み（超えたら止めて
+  `too_many_paths`）にした。閉じる側に倒すことは同じ。
+- **設定のファイル**（§8 の 7）: `is_config_path` は `.forge/**`・`.forge-ci.yml`・直下の `CODEOWNERS`。保護パスと CI の読み込むファイルは
+  M4 まで空の集合（テスト `is_config_path_holds_no_protected_paths_or_ci_includes_until_m4`）。Maintainer 以上の数えられる承認が 1 つ要る。
+- **`evaluate_merge()`**: `BlockReason` にデータを持たせた（`Copy` ではなくなった）。並びは §7 のとおり `approvals_missing`（ルールの名前の順）→
+  `codeowner_approval_missing`（行の順）→ `codeowners_invalid` → `config_change_needs_maintainer_approval` → `changed_paths_unknown`。
+  FG-REVIEW-0007 の context に `details`（`approvals_missing:rule=… required=… counted=…;…`）を足した。入力の git の事実（変更されたパス・
+  範囲・target の CODEOWNERS）は、マージの要求ではトランザクションの前に、ジョブではロックの下で ref を読んだ直後に 1 回読み、tx1a・
+  tx1b・再開のすべての判定が使う。承認・ルール・承認者の事実はゲートのトランザクションの中で読む（`MergeGate.approvals`）。
+  git の失敗は判定の失敗ではなく「分からない」事実として止める（ジョブでは `superseded` の MergeBlocked。再試行はしない）。
+- **ルールの管理**: `ApprovalRuleManage`（人だけ、Maintainer 以上、`api`）。`PUT /api/v1/projects/{id}/approval-rules/{name}`（作成か置き換え。
+  承認できる人は利用者名とグループの全パスで受け取り、ID で保存）、`DELETE …/{name}`、一覧は `GET …/approval-rules`（`ProjectRead`）。
+  プロジェクトごとに 20 ルール、1 ルール 50 の利用者・グループまで（FG-WEB-0006）。監査だけ（`approval_rule.put` / `.removed`、イベントなし）。
+  ルールの変更は承認を消さない（テスト `a_rule_change_changes_evaluate_merge`）。保護ブランチの `protected_ref_merge_rules`（最低の数）は R6。
+- **ルート**: `POST …/{iid}/approve`（本文 `sha`）、`POST …/{iid}/unapprove`、`GET …/{iid}/approvals`（`MergeRequestRead`: 承認ごとの
+  `counted` / `uncounted_reason` / `committer_push_audit_id`、ルール、必要な CODEOWNERS の行、`config_change_approved`、`blocked_by`）。
+  gstn は `mr approve --sha` / `mr unapprove` / `mr approvals` と `approval-rule list|set|remove`。
+- **R6 へ送ったもの**: `codeowners_enforced` と期限つきの切り替え（`CodeownersEnforcementToggle`、`codeowners_enforced_off_until`、期限が
+  過ぎたことの通知）と `merge_settings`（`reset_approvals_on_push`・コミッターの規則の切り替え）。それまで CODEOWNERS の行き詰まりの逃げ道は
+  target に push できる人の直接の push（runbook `codeowners`。R6 で保護ブランチへの直接の push の禁止を入れる前に切り替えを入れる）。
+  代理の deny の行は ADR-0025。

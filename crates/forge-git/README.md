@@ -108,6 +108,12 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   to the empty directory, nothing on argv; a refused transaction is FG-GIT-0003 (nothing
   changed). Tests `refs_tests.rs` (one transaction, a refused change leaves every ref,
   `a_version_ref_keeps_a_force_pushed_commit_through_gc`).
+- **Review inputs** (`review_inputs`, M3 R5, ADR-0024 §8.3, §9): `Git::changed_paths(storage,
+  id, base, head, max_paths, timeout) -> ChangedPaths` (`diff-tree --no-renames -r -z
+  --name-only`; `TooMany` / `NonUtf8`, never cut silently), `Git::range_commits(…, base,
+  head, cap, timeout) -> Option<Vec<ObjectId>>` (`rev-list -n <cap+1>`), `Git::codeowners_file(…,
+  commit, max_bytes, timeout) -> CodeownersFile` (`.forge/CODEOWNERS`, else `CODEOWNERS`;
+  `ls-tree -z` + `cat-file blob`; `TooLarge` / `NotAFile`). Tests `review_inputs_tests.rs`.
 - **Commit** (`commit`, M3 R4, ADR-0024 §4.1): `Git::commit_tree(&StorageRoot, RepoId,
   &NewCommit { tree, parents, message, author, committer }, timeout) -> ObjectId` —
   `-c core.hooksPath=<empty> commit-tree -p <id>… -F - --end-of-options <tree>`, the message on

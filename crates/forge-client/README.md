@@ -96,6 +96,11 @@ gstn mr diff --project 7 --iid 3 --from 1 --to 2 [--patch] # 版どうしの比�
 gstn mr mergeability --project 7 --iid 3                  # マージできるか（最後の確認の結果。確認は始めない）
 gstn mr merge --project 7 --iid 3 --sha <head> [--method squash] [--delete-source-branch] [--wait]  # マージ（M3 R4。トークンは merge_execute）
 gstn mr merge-status --project 7 --iid 3 [--wait]         # 最新のマージの試行（queued〜applied / superseded / failed）
+gstn mr approve --project 7 --iid 3 --sha <head>          # 見た head を承認（M3 R5。トークンは merge_approve。数えるかを返す）
+gstn mr unapprove --project 7 --iid 3                     # 自分の承認の取り消し
+gstn mr approvals --project 7 --iid 3                     # 承認の評価（数えない理由、ルール、CODEOWNERS、止める理由）
+gstn approval-rule set --project 7 --name backend --required 2 [--target-pattern refs/heads/main] [--user U] [--group G]  # 承認のルール（Maintainer）
+gstn approval-rule list --project 7 / gstn approval-rule remove --project 7 --name backend --yes
 gstn mr discussions --project 7 --iid 3                   # スレッドとコメントの一覧（M3 R3。古くなった行は [outdated]）
 gstn mr comment --project 7 --iid 3 --body '…'            # 全体へのコメント（新しいスレッド）
 gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 [--side old|new] --body '…'  # 行へのコメント

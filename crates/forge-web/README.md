@@ -201,6 +201,12 @@ admitted proof.
   `MergeStatusBody { iid, merge }`). The registry documents `202` (`responds_accepted`). The
   merge job runs in `forge serve` (forge-cli `serve_merges.rs`). Tests
   `tests/merge_request_merge_routes.rs`.
+  M3 R5 (`routes/merge_requests/approvals.rs`): `POST …/{iid}/approve`
+  (`MergeRequestApprove`, body `{ sha }`, `ApprovalAnswerBody`), `POST …/{iid}/unapprove`
+  (`MergeRequestUnapprove`), `GET …/{iid}/approvals` (`MergeRequestRead`,
+  `ApprovalStateBody` with `blocked_by`), `GET /api/v1/projects/{id}/approval-rules`
+  (`ProjectRead`), `PUT|DELETE …/approval-rules/{name}` (`ApprovalRuleManage`). Tests in
+  `tests/merge_request_merge_routes.rs`.
   M3 R3 (`routes/merge_requests/discussions.rs`): `GET …/{iid}/discussions`
   (`MergeRequestRead`; `DiscussionsBody`, each thread with `outdated`), `POST
   …/{iid}/discussions` (`StartDiscussion { body, position? { version, path, side, line } }`)
