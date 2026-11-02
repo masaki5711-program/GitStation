@@ -1945,6 +1945,44 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/": {
+      "get": {
+        "operationId": "get_",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: home",
+        "x-forge-action": "WebShell"
+      },
+      "head": {
+        "operationId": "head_",
+        "responses": {
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "security": [],
+        "summary": "SPA shell: home",
+        "x-forge-action": "WebShell"
+      }
+    },
     "/-/auth/backchannel-logout": {
       "post": {
         "operationId": "post_auth_backchannel_logout",

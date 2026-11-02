@@ -352,6 +352,18 @@ async fn url_vectors_through_the_dispatcher() {
         })
         .map(|d| d.path)
         .collect();
+    // Fixed GET routes that answer the shell (the site root `/`): the
+    // namespace-path parser still rejects them, the router never asks it.
+    let fixed_shell: Vec<&str> = registry
+        .defs()
+        .iter()
+        .filter(|d| {
+            d.scope == crate::registry::RouteScope::Fixed
+                && d.verb == Verb::Get
+                && d.action == Action::WebShell
+        })
+        .map(|d| d.path)
+        .collect();
     for (list, accepted) in [("accept", true), ("reject", false)] {
         for v in doc[list].as_array().expect(list) {
             let Some(uri) = uri_of(v) else {
@@ -388,6 +400,9 @@ async fn url_vectors_through_the_dispatcher() {
                     ErrorCode::SmartHttpServiceUnsupported.id(),
                     "{name}"
                 );
+            } else if fixed_shell.contains(&uri.path()) {
+                assert_eq!(answer.status, StatusCode::OK, "{name}");
+                assert_eq!(answer.bytes, shell_html(), "{name}");
             } else if fixed_paths.contains(&uri.path()) {
                 // A fixed API route without a GET (`POST /api/v1/projects`,
                 // M1 phase 8b MR7a) answers 405 before the dispatcher.

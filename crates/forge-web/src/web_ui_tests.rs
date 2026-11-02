@@ -124,6 +124,8 @@ fn assert_common(a: &Answer, what: &str) {
 // ── the shell ────────────────────────────────────────────────────────────
 
 const SHELL_PATHS: &[&str] = &[
+    // The site root is the home page (2026-11-02 rehearsal: it was a 404).
+    "/",
     "/acme",
     "/acme/platform/forge-web",
     "/does/not/exist",

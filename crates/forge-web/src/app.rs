@@ -977,6 +977,9 @@ fn shell_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
     let shell = routes::shell::shell;
     for verb in [Verb::Get, Verb::Head] {
         registry = registry
+            // The site root is the home page; no scoped route matches `/`
+            // (found in the 2026-11-02 test-server rehearsal: it was a 404).
+            .route(verb, "/", Action::WebShell, "SPA shell: home", shell)
             .scoped(
                 RouteScope::Instance,
                 verb,
