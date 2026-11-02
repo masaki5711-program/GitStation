@@ -43,8 +43,10 @@ use forge_errors::{ErrorCode, ForgeError};
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, MAX_PAGE};
 
 mod after_version;
+pub mod discussions;
 mod fields;
 pub mod mergeability;
+pub mod position;
 mod purge;
 mod version_refs;
 pub mod versions;
@@ -53,7 +55,12 @@ pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, Sto
 pub use mergeability::{check, CheckReport, Mergeability};
 pub use versions::{refresh, RefreshReport, SyncReport, VersionRefs};
 
-pub use fields::{check_description, check_title, MAX_DESCRIPTION_BYTES, MAX_TITLE_CHARS};
+pub use discussions::{DiffProbe, DiscussionList, DiscussionView};
+pub use fields::{
+    check_description, check_note_body, check_position_shape, check_title, MAX_DESCRIPTION_BYTES,
+    MAX_NOTE_BYTES, MAX_PATH_BYTES, MAX_TITLE_CHARS,
+};
+pub use forge_db::review::{DiscussionPosition, ResolveOutcome, StoredDiscussion, StoredNote};
 
 /// A branch's head commit in a repository, for the commands that name one
 /// (create, retarget, reopen — M3 R1b: the reopen also compares it with
@@ -124,6 +131,9 @@ pub struct Review {
     /// M3 R1b: where the purge deletes version refs (`None`: the purge is
     /// `FG-SYS-0001 reason=version_refs_unconfigured`).
     refs: Option<VersionRefs>,
+    /// M3 R3: where inline positions and `outdated` read diffs (`None`:
+    /// `FG-SYS-0001 reason=diffs_unconfigured` when one is needed).
+    diffs: Option<Arc<dyn DiffProbe>>,
 }
 
 impl std::fmt::Debug for Review {
@@ -228,6 +238,7 @@ impl Review {
             db,
             branches,
             refs: None,
+            diffs: None,
         }
     }
 

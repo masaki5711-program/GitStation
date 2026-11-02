@@ -17,6 +17,10 @@ fn review_commands() -> Vec<String> {
         "close_mr",
         "reopen_mr",
         "purge_mr_version_refs",
+        // M3 R3: discussions.
+        "start_discussion_mr",
+        "add_note_mr",
+        "resolve_discussion_mr",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

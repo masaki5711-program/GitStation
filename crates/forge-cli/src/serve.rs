@@ -105,7 +105,10 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                         smart_http.storage.clone(), // clone: the root path
                     )
                     .with_browser(smart_http.browse.clone()), // clone: shares the ref cache
-                ),
+                )
+                // M3 R3: inline positions and `outdated` read the versions'
+                // diffs through the same browse API (reach checks, limits).
+                .with_diffs(Arc::new(smart_http.browse.clone())), // clone: shares the caches
             )
             .with_smart_http(smart_http)
             .with_lists(
