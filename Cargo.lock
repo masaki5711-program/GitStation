@@ -872,6 +872,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-review"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "forge-web"
 version = "0.1.0"
 dependencies = [

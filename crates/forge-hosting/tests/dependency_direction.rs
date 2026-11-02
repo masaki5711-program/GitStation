@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
-//! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting) →
+//! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
+//! forge-review, forge-oidc) →
 //! forge-auth / forge-git / forge-db → forge-core → forge-errors`. Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
@@ -27,6 +28,18 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // M3 R1a (ADR-0024 §11): merge requests, beside forge-hosting (and
+    // never depending on it, nor on forge-checks).
+    (
+        "forge-review",
+        &[
+            "forge-auth",
+            "forge-git",
+            "forge-db",
+            "forge-core",
+            "forge-errors",
+        ],
+    ),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",
@@ -37,6 +50,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &[
             "forge-oidc",
             "forge-hosting",
+            "forge-review",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -49,6 +63,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-web",
             "forge-oidc",
             "forge-hosting",
+            "forge-review",
             "forge-auth",
             "forge-git",
             "forge-db",
