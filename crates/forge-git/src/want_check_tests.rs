@@ -350,3 +350,74 @@ async fn the_object_walk_stops_early_and_non_commit_wants_are_capped() {
         .iter()
         .any(|(k, v)| *k == "reason" && v == "too_many_wants"));
 }
+
+fn strings(argv: &[std::ffi::OsString]) -> Vec<String> {
+    argv.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// M3 R1b (ADR-0024 §2, ADR-0007 amendment): both walks leave the hidden
+/// merge request refs out, with `--exclude` right before `--all` (git
+/// applies it to the next `--all` only), from the shared constant.
+#[test]
+fn want_walks_exclude_the_hidden_refs() {
+    let home = tempfile::tempdir().expect("home");
+    let git = Git::new(GitConfig::new("git", home.path()));
+    let exclude = format!("--exclude={}*", crate::hidden_refs::HIDDEN_REF_PREFIX);
+    assert_eq!(
+        strings(&git.commit_walk().argv()),
+        [
+            "rev-list",
+            "--max-count=1",
+            "--stdin",
+            "--not",
+            exclude.as_str(),
+            "--all"
+        ]
+    );
+    assert_eq!(
+        strings(&git.object_walk().argv()),
+        [
+            "rev-list",
+            "--objects",
+            exclude.as_str(),
+            "--all",
+            "--no-object-names"
+        ]
+    );
+}
+
+/// A commit (and its blob) that only a merge request version ref reaches is
+/// refused like an unreferenced one — through both walks (the commit by
+/// step 2, the blob and the tree by step 3) — while it stays in the
+/// repository (`refs/merge-requests/<iid>/v<n>` keeps it from gc).
+#[tokio::test]
+async fn objects_reachable_only_from_merge_request_refs_are_refused() {
+    let f = fixture().await;
+    let h = history(&f.path);
+    plumb(
+        &f.path,
+        &["update-ref", "refs/merge-requests/1/v1", &h.s1],
+        None,
+    );
+    plumb(
+        &f.path,
+        &["update-ref", "refs/merge-requests/1/head", &h.s1],
+        None,
+    );
+    let secret_tree = tree(&f.path, &h.secret);
+    for wants in [
+        vec![h.s1.as_str()],
+        vec![h.secret.as_str()],
+        vec![secret_tree.as_str()],
+        vec![h.c2.as_str(), h.s1.as_str()],
+    ] {
+        let check = f.check(&wants).await;
+        assert!(check.unreachable >= 1, "{wants:?}: {check:?}");
+        let err = check.into_result().expect_err("refused");
+        assert_eq!(err.code(), ErrorCode::GitProtocolInvalid);
+    }
+    // A branch-reachable object stays fetchable next to the hidden refs.
+    assert_eq!(f.check(&[&h.c2, &h.b1]).await.unreachable, 0);
+}

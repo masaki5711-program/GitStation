@@ -144,6 +144,9 @@ async fn upload_pack_argv_is_the_fixed_set() {
             "uploadpack.allowAnySHA1InWant=false",
             "-c",
             "uploadpack.filter.sparse:oid.allow=false",
+            // M3 R1b: merge request refs are hidden (ADR-0024 §2).
+            "-c",
+            "transfer.hideRefs=refs/merge-requests/",
             "-c",
             hooks.as_str(),
             "upload-pack",
@@ -182,6 +185,9 @@ async fn receive_pack_argv_is_the_fixed_set() {
             "receive.keepAlive=5",
             "-c",
             "receive.advertisePushOptions=false",
+            // M3 R1b: hidden from a pusher too (ADR-0024 §2).
+            "-c",
+            "transfer.hideRefs=refs/merge-requests/",
             "-c",
             "receive.maxInputSize=2147483648",
             "-c",
@@ -613,4 +619,74 @@ async fn receive_pack_applies_a_push_and_enforces_max_input_size() {
     )
     .await;
     assert_eq!(head, sha);
+}
+
+/// M3 R1b (ADR-0024 §2): neither advertisement (upload-pack v0 and v2
+/// `ls-refs`, receive-pack) shows `refs/merge-requests/*` or the object
+/// only such a ref names, while the branch is still there.
+#[tokio::test]
+async fn hidden_merge_request_refs_are_not_advertised() {
+    let f = fixture().await;
+    let (id, path) = f.repo(9).await;
+    let sha = commit(&f.git, &path, b"synthetic\n").await;
+    let secret = commit(&f.git, &path, b"synthetic secret\n").await;
+    // `commit` moved main to `secret`; put main back, hide `secret`.
+    for (name, value) in [
+        ("refs/heads/main", sha.as_str()),
+        ("refs/merge-requests/1/v1", secret.as_str()),
+        ("refs/merge-requests/1/head", secret.as_str()),
+    ] {
+        f.git
+            .command("update-ref")
+            .repo(&path)
+            .arg_owned(name)
+            .arg_owned(value)
+            .output()
+            .await
+            .expect("update-ref");
+    }
+    let mut seen = Vec::new();
+    let upload = f
+        .git
+        .upload_pack(&f.root, id, Phase::Advertise, None)
+        .expect("cmd");
+    seen.push(run(upload, Vec::new()).await);
+    let receive = f
+        .git
+        .receive_pack(&f.root, id, Phase::Advertise, None, nz(1 << 20))
+        .expect("cmd");
+    seen.push(run(receive, Vec::new()).await);
+    let v2 = f
+        .git
+        .upload_pack(&f.root, id, Phase::Rpc, Some("version=2"))
+        .expect("cmd");
+    let mut ls_refs = Vec::new();
+    crate::pkt_line::encode_data(
+        &mut ls_refs,
+        b"command=ls-refs
+",
+    )
+    .expect("cmd");
+    ls_refs.extend_from_slice(crate::pkt_line::DELIM);
+    crate::pkt_line::encode_data(
+        &mut ls_refs,
+        b"symrefs
+",
+    )
+    .expect("arg");
+    crate::pkt_line::encode_data(
+        &mut ls_refs,
+        b"ref-prefix refs/
+",
+    )
+    .expect("arg");
+    ls_refs.extend_from_slice(crate::pkt_line::FLUSH);
+    seen.push(run(v2, ls_refs).await);
+    for (out, res) in seen {
+        res.expect("exit 0");
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains(&sha), "the branch is advertised: {text}");
+        assert!(!text.contains("refs/merge-requests"), "{text}");
+        assert!(!text.contains(&secret), "{text}");
+    }
 }

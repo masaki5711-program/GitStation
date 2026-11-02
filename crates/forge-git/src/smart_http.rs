@@ -20,6 +20,7 @@ use forge_core::RepoId;
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::command::{Git, GitCommand};
+use crate::hidden_refs::HIDDEN_REF_PREFIX;
 use crate::pkt_line;
 use crate::storage::StorageRoot;
 
@@ -117,6 +118,9 @@ pub const UPLOAD_PACK_CONFIG: &[(&str, &str)] = &[
     // `sparse:oid=<blob>` reads a blob by id as the sparse pattern (an
     // unreachable one too); forge's parser refuses it first (MR3 review).
     ("uploadpack.filter.sparse:oid.allow", "false"),
+    // M3 R1b (ADR-0024 §2): merge request versions are not advertised; the
+    // want check leaves the same refs out (`hidden_refs`).
+    ("transfer.hideRefs", HIDDEN_REF_PREFIX),
 ];
 
 /// Fixed `-c` settings of receive-pack (push); `receive.maxInputSize` is
@@ -125,6 +129,9 @@ pub const RECEIVE_PACK_CONFIG: &[(&str, &str)] = &[
     ("receive.fsckObjects", "true"),
     ("receive.keepAlive", "5"),
     ("receive.advertisePushOptions", "false"),
+    // M3 R1b (ADR-0024 §2): not advertised to a pusher either, and git
+    // refuses updates of them (forge refuses first: FG-GIT-0010).
+    ("transfer.hideRefs", HIDDEN_REF_PREFIX),
 ];
 
 impl Git {
@@ -173,7 +180,7 @@ impl Git {
     /// is a real, empty directory (created if missing). No hook runs in
     /// Smart HTTP in phase 9 (ADR-0008 amendment): a hook found here would be
     /// a policy that nothing reviewed.
-    fn with_empty_hooks(&self, cmd: GitCommand) -> Result<GitCommand, ForgeError> {
+    pub(crate) fn with_empty_hooks(&self, cmd: GitCommand) -> Result<GitCommand, ForgeError> {
         let dir = self.config().empty_hooks_dir();
         ensure_empty_dir(&dir)?;
         let Some(value) = dir.to_str().filter(|_| dir.is_absolute()) else {

@@ -93,6 +93,21 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   (`FG-GIT-0002 operation=want_check`). `WantCheck::into_result()` → `FG-GIT-0014
   reason=want_unreachable` (`wants`, `commits`, `objects`, `unreachable`, `first_unreachable`,
   `check_ms`). Cost measured by the ignored `want_check_cost_with_many_refs` (ADR-0007 amendment MR3).
+  M3 R1b: both walks put `--exclude=refs/merge-requests/*` right before their `--all`
+  (`exclude_glob`, crate-internal), so an object only a hidden ref reaches is refused too.
+- **Hidden refs** (`hidden_refs`, M3 R1b, ADR-0024 §2, ADR-0007 amendment R1b):
+  `HIDDEN_REF_PREFIX` = `refs/merge-requests/` drives `transfer.hideRefs` in BOTH
+  `UPLOAD_PACK_CONFIG` and `RECEIVE_PACK_CONFIG` and the want check's glob (one constant,
+  `hidden_ref_settings_derive_from_one_prefix`); `merge_request_version_ref(iid, n)`,
+  `merge_request_head_ref(iid)`, `merge_request_ref_prefix(iid)` build the names.
+- **Ref reads and writes** (`refs`, M3 R1b): `Git::read_refs(&StorageRoot, RepoId, &RefName
+  pattern, timeout) -> BTreeMap<RefName, ObjectId>`, `Git::read_ref` (one exact ref),
+  `Git::update_refs(&StorageRoot, RepoId, &[RefChange], timeout) -> RefUpdateResult`: ONE
+  `update-ref -z --stdin` transaction (`start` … `prepare` / `commit`), `RefChange::{Create,
+  Update (CAS), Delete (CAS)}` with validated `RefName` / `ObjectId`, `core.hooksPath` pinned
+  to the empty directory, nothing on argv; a refused transaction is FG-GIT-0003 (nothing
+  changed). Tests `refs_tests.rs` (one transaction, a refused change leaves every ref,
+  `a_version_ref_keeps_a_force_pushed_commit_through_gc`).
 - **pkt-line** (`pkt_line`): `decode(buf, PktMode) -> Option<(Packet, used)>`, `decode_all`,
   `encode` / `encode_data`, `PktReader` (async, one packet ≤ 65520 bytes), `encode_sideband` /
   `decode_sideband` (`Band::{Data, Progress, Error}`, ≤ 65515 data bytes per packet). Invalid

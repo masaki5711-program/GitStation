@@ -22,11 +22,16 @@
 //!   archive routes (M2 MR7): refs (cached, dropped on push), resolution of
 //!   a ref and a path, trees, blobs, raw files and archives, with caps,
 //!   timeouts and a per-repository limit.
+//! - [`hidden_refs`] names the merge request refs (`refs/merge-requests/…`,
+//!   M3 R1b) that Smart HTTP hides and the want check leaves out;
+//!   [`Git::read_refs`] / [`Git::update_refs`] read and write them
+//!   (`update-ref --stdin` in one transaction, hooks pinned empty).
 
 pub mod browse;
 mod command;
 mod config;
 pub mod gzip;
+pub mod hidden_refs;
 pub mod pkt_line;
 mod process;
 mod process_tree;
@@ -34,6 +39,7 @@ mod push_check;
 pub mod receive_report;
 pub mod receive_request;
 mod redact;
+mod refs;
 mod revision;
 pub mod smart_http;
 pub mod storage;
@@ -44,6 +50,7 @@ mod want_check;
 
 pub use command::{Git, GitCommand, GitConfig, GitOutput};
 pub use push_check::{Ancestry, CommitList, CommitQuery};
+pub use refs::{RefChange, RefUpdateResult};
 pub use revision::Revision;
 pub use storage::{Provisioned, Removal, StorageRoot};
 pub use stream::{GitStdin, GitStdout, GitStream, StreamEnded, StreamStats};

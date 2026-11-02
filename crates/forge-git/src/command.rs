@@ -172,6 +172,17 @@ impl GitCommand {
         self
     }
 
+    /// `--exclude=<glob>` (rev-list: leave every ref matching the glob out
+    /// of the NEXT `--all` / `--branches` / `--glob`, so it must come right
+    /// before it). Only forge's own `&'static str` patterns reach it
+    /// (`hidden_refs::HIDDEN_REF_GLOB`).
+    #[must_use]
+    pub(crate) fn exclude_glob(mut self, glob: &'static str) -> Self {
+        self.options
+            .push(OsString::from(format!("--exclude={glob}")));
+        self
+    }
+
     /// `--glob=<pattern>` (rev-list: every ref matching the pattern). Only
     /// forge-built `refs/…/*` patterns (never user input) reach it.
     #[must_use]
