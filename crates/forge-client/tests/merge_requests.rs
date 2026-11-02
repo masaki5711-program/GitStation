@@ -611,3 +611,205 @@ fn mr_comment_errors_keep_their_code_and_exit_class() {
         assert_eq!(e["request_id"], "req-c");
     }
 }
+
+const SHA: &str = "2222222222222222222222222222222222222222";
+
+fn attempt(state: &str, extra: &str) -> String {
+    format!(
+        r#"{{"merge_id":41,"iid":3,"state":"{state}","method":"squash","head_sha":"{SHA}","target_branch":"main","delete_source_branch":true,"expected_old":null,"new_sha":null,"reason":null,"error_code":null,"source_outcome":null,"request_id":"req-merge-41","created_at":"2026-11-02T00:00:00Z","updated_at":"2026-11-02T00:00:00Z","finished_at":null{extra}}}"#
+    )
+}
+
+/// M3 R4: `mr merge` posts the reviewed head, the method and the source
+/// deletion, then (`--wait`) polls `GET …/merge` until the attempt is final.
+#[test]
+fn mr_merge_posts_the_sha_and_waits_until_applied() {
+    let srv = Mock::start(|r| {
+        if r.method == "POST" {
+            Resp::json(202, &attempt("queued", ""))
+        } else {
+            let applied = attempt("applied", "")
+                .replace(
+                    r#""new_sha":null"#,
+                    r#""new_sha":"4444444444444444444444444444444444444444""#,
+                )
+                .replace(r#""source_outcome":null"#, r#""source_outcome":"deleted""#);
+            Resp::json(200, &format!(r#"{{"iid":3,"merge":{applied}}}"#))
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--method",
+            "squash",
+            "--delete-source-branch",
+            "--wait",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("applied"), "{}", o.stdout);
+    assert!(o
+        .stdout
+        .contains("merged as: 4444444444444444444444444444444444444444"));
+    assert!(o.stdout.contains("source branch: deleted"));
+    let seen = srv.seen();
+    assert_eq!(seen[0].method, "POST");
+    assert_eq!(seen[0].target, "/api/v1/projects/7/merge-requests/3/merge");
+    let body: Value = serde_json::from_str(&seen[0].body).expect("json");
+    assert_eq!(
+        body,
+        json!({"sha": SHA, "method": "squash", "delete_source_branch": true})
+    );
+    assert_eq!(seen[1].method, "GET");
+    assert_eq!(seen[1].target, "/api/v1/projects/7/merge-requests/3/merge");
+    // Without --wait: the queued attempt, one request.
+    let srv = Mock::start(|_| Resp::json(202, &attempt("queued", "")));
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let out: Value = serde_json::from_str(o.stdout.trim()).expect("json");
+    assert_eq!(out["state"], "queued");
+    assert_eq!(srv.seen().len(), 1);
+}
+
+/// A merge the job refused ends `superseded`: `--wait` exits with the
+/// attempt's own code and the merge's request id (409 → exit 5).
+#[test]
+fn mr_merge_wait_exits_with_the_refusal_code() {
+    let srv = Mock::start(|r| {
+        if r.method == "POST" {
+            Resp::json(202, &attempt("queued", ""))
+        } else {
+            let refused = attempt("superseded", "")
+                .replace(r#""reason":null"#, r#""reason":"target_moved""#)
+                .replace(r#""error_code":null"#, r#""error_code":"FG-REVIEW-0008""#);
+            Resp::json(200, &format!(r#"{{"iid":3,"merge":{refused}}}"#))
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--wait",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 5, "{}", o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-REVIEW-0008");
+    assert_eq!(o.err_json()["request_id"], "req-merge-41");
+    // A request refused at once keeps the server's code (here 0011, 409).
+    let srv = Mock::start(|_| {
+        Resp::json(
+            409,
+            r#"{"error_code":"FG-REVIEW-0011","user_message":"このマージリクエストはマージを実行中です。","request_id":"req-9"}"#,
+        )
+    });
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 5, "{}", o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-REVIEW-0011");
+}
+
+/// FG-CLI-0008: the attempt is not final when `--wait-timeout` passes —
+/// retryable (exit 6); nothing is cancelled. `mr merge-status` shows it.
+#[test]
+fn merge_wait_that_times_out_is_retryable() {
+    let srv = Mock::start(|_| {
+        Resp::json(
+            200,
+            &format!(r#"{{"iid":3,"merge":{}}}"#, attempt("executing", "")),
+        )
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge-status",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--wait",
+            "--wait-timeout",
+            "0",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 6, "{}", o.stderr);
+    assert_eq!(o.err_json()["error_code"], "FG-CLI-0008");
+    assert_eq!(o.err_json()["retryable"], true);
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "merge-status", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("executing"), "{}", o.stdout);
+    // A wrong argument never reaches the server.
+    let before = srv.seen().len();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "merge",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--sha",
+            SHA,
+            "--method",
+            "rebase",
+        ],
+    );
+    assert_eq!(o.code, 2, "{}", o.stderr);
+    assert_eq!(srv.seen().len(), before);
+}

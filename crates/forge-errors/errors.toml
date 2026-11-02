@@ -1362,6 +1362,19 @@ diagnosis = "The detail line carries `stream` (stdout or stderr) and the OS erro
 fix = "Fix the redirection or the reader of the pipe and run the read-only command again; exit code 1."
 test = "closed_stdout_is_output_failed"
 
+[[error]]
+code = "FG-CLI-0008"
+name = "CliWaitTimedOut"
+http_status = 504
+severity = "info"
+user_message_ja = "待ち時間内に処理が終わりませんでした。処理はサーバーで続いています。しばらくしてから状態を確認してください。"
+user_message_en = "The operation did not finish within the wait time. It continues on the server; check its status later."
+user_message_id = "Operasi tidak selesai dalam waktu tunggu. Operasi tetap berjalan di server; periksa statusnya nanti."
+cause = "`gstn … --wait` (M3 R4: `gstn mr merge --wait`, `gstn mr merge-status --wait`) polled the server until `--wait-timeout` passed and the operation was still not final (a merge still `queued`, `prepared` or `executing`). Nothing was cancelled: the server's job goes on. Retryable (exit code 6)."
+diagnosis = "The detail line carries `reason=merge_not_final` and the last `state`. Read the attempt with `gstn mr merge-status --project ID --iid N --json`; an attempt that stays `executing` is runbook merge-execution."
+fix = "Run `gstn mr merge-status --project ID --iid N --wait` again (or with a longer `--wait-timeout`)."
+test = "merge_wait_that_times_out_is_retryable"
+
 # ── M3 R1a: merge requests (area REVIEW, ADR-0024; numbers in registration order, plan 11 §11.4) ──
 [[error]]
 code = "FG-REVIEW-0001"

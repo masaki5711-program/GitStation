@@ -899,6 +899,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "mr versions",
             "mr diff",
             "mr mergeability",
+            "mr merge",
+            "mr merge-status",
             "mr discussions",
             "mr comment",
             "mr resolve",

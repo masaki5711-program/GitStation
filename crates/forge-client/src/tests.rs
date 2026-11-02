@@ -49,7 +49,8 @@ fn registry_and_clap_describe_the_same_commands() {
                     "write_repository",
                     "read_api",
                     "api",
-                    "admin"
+                    "admin",
+                    "merge_execute"
                 ]
                 .contains(s),
                 "{}: unknown scope {s}",

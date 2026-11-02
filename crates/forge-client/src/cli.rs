@@ -643,6 +643,47 @@ pub enum MrCommand {
         #[arg(long, value_enum, requires = "version")]
         side: Option<DiffSide>,
     },
+    /// Merge a merge request (M3 R4): queue the merge of the head you
+    /// reviewed (--sha); --wait waits until it is applied or refused.
+    Merge {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The head commit you reviewed (`mr view` shows it); another head
+        /// is refused (FG-REVIEW-0008).
+        #[arg(long, value_parser = parse_text, value_name = "SHA")]
+        sha: String,
+        /// The method (default: the project's, merge_commit).
+        #[arg(long, value_enum)]
+        method: Option<MergeMethodArg>,
+        /// Delete the source branch after the merge (a protected branch is kept).
+        #[arg(long)]
+        delete_source_branch: bool,
+        /// The commit message (default: from the title and description).
+        #[arg(long, value_parser = parse_description)]
+        message: Option<String>,
+        /// Wait until the merge is applied, superseded or failed.
+        #[arg(long)]
+        wait: bool,
+        /// How long --wait waits, in seconds (default 300, at most 3600).
+        #[arg(long, value_parser = parse_wait_secs, value_name = "SECS", requires = "wait")]
+        wait_timeout: Option<u64>,
+    },
+    /// The latest merge attempt of a merge request (--wait: until it is final).
+    #[command(name = "merge-status")]
+    MergeStatus {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// Wait until the latest attempt is applied, superseded or failed.
+        #[arg(long)]
+        wait: bool,
+        /// How long --wait waits, in seconds (default 300, at most 3600).
+        #[arg(long, value_parser = parse_wait_secs, value_name = "SECS", requires = "wait")]
+        wait_timeout: Option<u64>,
+    },
     /// Resolve a discussion (or open it again with --unresolve).
     Resolve {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
@@ -655,6 +696,33 @@ pub enum MrCommand {
         #[arg(long)]
         unresolve: bool,
     },
+}
+
+/// How a merge request is merged (ADR-0024 §4.1).
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[value(rename_all = "snake_case")]
+pub enum MergeMethodArg {
+    MergeCommit,
+    Squash,
+    FastForward,
+}
+
+impl MergeMethodArg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MergeCommit => "merge_commit",
+            Self::Squash => "squash",
+            Self::FastForward => "fast_forward",
+        }
+    }
+}
+
+/// `--wait-timeout`: 0..=3600 seconds.
+pub fn parse_wait_secs(raw: &str) -> Result<u64, String> {
+    match raw.parse::<u64>() {
+        Ok(n) if n <= 3600 => Ok(n),
+        _ => Err("seconds, 0 to 3600".to_string()),
+    }
 }
 
 /// The side of a diff an inline discussion sits on.
