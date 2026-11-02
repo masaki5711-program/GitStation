@@ -30,6 +30,11 @@ const LOCK_WAIT: Duration = Duration::from_secs(2);
 /// The most one pass works (the rest keep their place for the next pass;
 /// `forge serve` bounds the pass with its own timeout too).
 pub const PASS_BUDGET: Duration = Duration::from_secs(45);
+/// The most one attempt may take inside a pass (the lock wait, two git
+/// reads and the record): past it the attempt is logged with its merge id
+/// (FG-SYS-0005 `reconcile_attempt_timeout`) and goes to the back of the
+/// next scan (review round 2).
+pub const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// What one run did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,7 +68,14 @@ impl Merger {
                 report.skipped += 1;
                 continue;
             }
-            match self.reconcile_one(listed).await {
+            // Review round 2: one slow attempt never uses up the pass.
+            let one = tokio::time::timeout(ATTEMPT_TIMEOUT, self.reconcile_one(listed)).await;
+            let one = one.unwrap_or_else(|_| {
+                Err(ForgeError::new(ErrorCode::ServeFailed)
+                    .with_context("reason", "reconcile_attempt_timeout")
+                    .with_context("timeout_ms", ATTEMPT_TIMEOUT.as_millis()))
+            });
+            match one {
                 Ok(Settled::Applied) => report.applied += 1,
                 Ok(Settled::Superseded) => report.superseded += 1,
                 Ok(Settled::Failed) => report.failed += 1,
@@ -85,12 +97,7 @@ impl Merger {
                 }
             }
         }
-        tracing::debug!(
-            target: "forge_review",
-            event = "forge.review.merge_reconcile_pass",
-            request_id = %request_id,
-            looked = report.looked,
-        );
+
         if report.looked > 0 {
             tracing::info!(
                 target: "forge_review",
@@ -130,7 +137,7 @@ impl Merger {
             Err(e) if merges::is_lock_busy(&e) => return Ok(Settled::Busy),
             Err(e) => return Err(e),
         };
-        let settled = self.reconcile_locked(listed.id, &subject).await;
+        let settled = self.reconcile_locked(&lock, listed.id, &subject).await;
         lock.release().await;
         if matches!(settled, Ok(Settled::Applied)) {
             // The job stopped before the source deletion (ADR-0024 §4.2
@@ -157,6 +164,7 @@ impl Merger {
 
     async fn reconcile_locked(
         &self,
+        lock: &merges::MergeLock,
         id: i64,
         subject: &super::execute::Subject,
     ) -> Result<Settled, ForgeError> {
@@ -180,7 +188,7 @@ impl Merger {
                     Settled::Skipped
                 })
             }
-            MergeState::Executing => self.ask_git(&attempt, subject).await,
+            MergeState::Executing => self.ask_git(lock, &attempt, subject).await,
             MergeState::Applied | MergeState::Superseded | MergeState::Failed => {
                 Ok(Settled::Skipped)
             }
@@ -190,6 +198,7 @@ impl Merger {
     /// Settle an `executing` attempt by asking git (module docs).
     async fn ask_git(
         &self,
+        lock: &merges::MergeLock,
         attempt: &StoredMerge,
         subject: &super::execute::Subject,
     ) -> Result<Settled, ForgeError> {
@@ -204,7 +213,7 @@ impl Merger {
                 &self.storage,
                 subject.repo,
                 &attempt.target_branch,
-                self.timeouts.read,
+                self.bounded(self.timeouts.read, lock)?,
             )
             .await?;
         let landed = match &tip {
@@ -212,7 +221,13 @@ impl Merger {
             Some(t) if t == old => false,
             Some(t) => {
                 self.git
-                    .is_ancestor(&self.storage, subject.repo, new, t, self.timeouts.read)
+                    .is_ancestor(
+                        &self.storage,
+                        subject.repo,
+                        new,
+                        t,
+                        self.bounded(self.timeouts.read, lock)?,
+                    )
                     .await?
             }
             None => false,
@@ -220,7 +235,7 @@ impl Merger {
         if landed {
             // The ref moved under a run that stopped: drop the browse caches.
             self.invalidate(subject.repo);
-            self.record(attempt, subject, &[]).await?;
+            self.record(lock, attempt, subject, &[]).await?;
             return Ok(Settled::Applied);
         }
         if tip.as_ref() == Some(old) {

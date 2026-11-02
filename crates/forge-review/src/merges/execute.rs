@@ -210,7 +210,7 @@ impl Merger {
     /// no git call under the lock outlives it); `FG-DB-0002
     /// reason=merge_lock_lost detail=hold_exceeded` (retryable) when nothing
     /// is left — git is not started.
-    fn bounded(&self, want: Duration, lock: &MergeLock) -> Result<Duration, ForgeError> {
+    pub(super) fn bounded(&self, want: Duration, lock: &MergeLock) -> Result<Duration, ForgeError> {
         let left = lock.left();
         if left.is_zero() {
             return Err(ForgeError::new(ErrorCode::DbQueryFailed)
@@ -464,7 +464,7 @@ impl Merger {
             }
             MergeMethod::MergeCommit | MergeMethod::Squash => {
                 let limits = MergeTreeLimits {
-                    timeout: MergeTreeLimits::default().timeout.min(lock.left()),
+                    timeout: self.bounded(MergeTreeLimits::default().timeout, lock)?,
                     ..MergeTreeLimits::default()
                 };
                 match self
@@ -706,7 +706,7 @@ impl Merger {
         if tip.as_ref() == Some(new) {
             // Moved by the stopped run: the cache may still hold the old tip.
             self.invalidate(subject.repo);
-            return self.record(attempt, subject, &[]).await;
+            return self.record(lock, attempt, subject, &[]).await;
         }
         if tip.as_ref() != Some(old) {
             // Moved elsewhere: only the reconciliation (after the window)
@@ -795,15 +795,16 @@ impl Merger {
         // Every outcome may have changed the ref: drop the browse caches.
         self.invalidate(subject.repo);
         if let Err(cause) = moved {
-            return self.classify(attempt, subject, scopes, cause).await;
+            return self.classify(lock, attempt, subject, scopes, cause).await;
         }
-        self.record(attempt, subject, scopes).await
+        self.record(lock, attempt, subject, scopes).await
     }
 
     /// A failed compare-and-swap, told apart by reading the ref again
     /// (ADR-0024 §4.2 step 7).
     async fn classify(
         &self,
+        lock: &MergeLock,
         attempt: &StoredMerge,
         subject: &Subject,
         scopes: &[String],
@@ -818,7 +819,7 @@ impl Merger {
                 &self.storage,
                 subject.repo,
                 &attempt.target_branch,
-                self.timeouts.read,
+                self.bounded(self.timeouts.read, lock)?,
             )
             .await
         {
@@ -832,7 +833,7 @@ impl Merger {
         };
         if tip.as_ref() == Some(new) {
             // An earlier attempt of this run (or git despite the error) moved it.
-            return self.record(attempt, subject, scopes).await;
+            return self.record(lock, attempt, subject, scopes).await;
         }
         if tip.as_ref() != Some(old) {
             let refusal = head_changed(
@@ -859,9 +860,11 @@ impl Merger {
             .with_source(cause))
     }
 
-    /// Step 8 and 9: the applied line first, then tx2.
+    /// Step 8 and 9: the applied line first, then tx2 (under the merge
+    /// lock: the job's or the reconciliation's).
     pub(super) async fn record(
         &self,
+        lock: &MergeLock,
         attempt: &StoredMerge,
         subject: &Subject,
         scopes: &[String],
@@ -883,7 +886,7 @@ impl Merger {
             new_sha = new.as_str(),
             head_sha = attempt.head_sha.as_str(),
         );
-        let push = self.push_record(attempt, subject, old, new).await;
+        let push = self.push_record(lock, attempt, subject, old, new).await;
         let scopes = (!scopes.is_empty()).then_some(scopes);
         match finish_merge(&self.db, &requester_ctx(attempt, scopes), attempt, &push).await {
             Ok(MergeFinished::Recorded(_)) => Ok(MergeReport {
@@ -917,9 +920,13 @@ impl Merger {
     }
 
     /// The target's update as a push record (the new commits listed like a
-    /// push's; a failed listing records none and says so).
+    /// push's; a failed listing records none and says so). The ref has moved
+    /// already, so the record is never refused for the lock's hold: the
+    /// listing gets what is left of it, and none at all (`partial`, warn)
+    /// when nothing is left (review round 2).
     async fn push_record(
         &self,
+        lock: &MergeLock,
         attempt: &StoredMerge,
         subject: &Subject,
         old: &ObjectId,
@@ -930,17 +937,23 @@ impl Merger {
             old: old.as_str().to_owned(),
             new: new.as_str().to_owned(),
         };
-        let listed = self
-            .git
-            .new_commits(
-                &self.storage,
-                subject.repo,
-                std::slice::from_ref(&query),
-                &format!("merge:{}", attempt.id),
-                self.timeouts.read,
-            )
-            .await
-            .map(|mut all| all.pop());
+        let listing = self.timeouts.read.min(lock.left());
+        let listed = if listing.is_zero() {
+            Err(ForgeError::new(ErrorCode::DbQueryFailed)
+                .with_context("reason", "merge_lock_lost")
+                .with_context("detail", "hold_exceeded"))
+        } else {
+            self.git
+                .new_commits(
+                    &self.storage,
+                    subject.repo,
+                    std::slice::from_ref(&query),
+                    &format!("merge:{}", attempt.id),
+                    listing,
+                )
+                .await
+                .map(|mut all| all.pop())
+        };
         let (commits, total, partial) = match listed {
             Ok(Some(Ok(list))) => {
                 let commits: Vec<ObjectId> = list

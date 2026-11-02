@@ -32,8 +32,10 @@ const MERGE_MARGIN: std::time::Duration = std::time::Duration::from_secs(180);
 /// `review.merges` (M3 R4 review round 1, FG-REVIEW-0009, runbook
 /// merge-execution): no live merge attempt past the reconciliation's bound
 /// (a count means `forge serve`'s reconciliation is not running or fails
-/// every pass), and no `failed` attempt of the last 7 days waiting for a
-/// person.
+/// every pass), and no `failed` attempt of the last 24 hours waiting for a
+/// person. The bounds are serve's own: `MergeTimeouts::default()` is the
+/// only source (R4 has no configuration key for them; a key added later
+/// must feed both serve and this check).
 pub(super) async fn merges_check(db: &Db) -> Check {
     let t = forge_review::MergeTimeouts::default();
     match forge_db::review::merges::health(db, t.idle, t.executing_after(), MERGE_MARGIN).await {

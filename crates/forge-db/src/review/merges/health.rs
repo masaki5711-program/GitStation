@@ -15,7 +15,8 @@ use crate::{read_query_error, Db};
 pub struct MergesHealth {
     /// `queued` / `prepared` / `executing` past their bound + the margin.
     pub overdue: i64,
-    /// `failed` attempts of the last 7 days (each needs a person).
+    /// `failed` attempts of the last 24 hours (each needs a person; an
+    /// older one no longer keeps doctor red — review round 2).
     pub failed_recent: i64,
     /// Seconds since the oldest overdue attempt became due (0: none).
     pub oldest_overdue_secs: i64,
@@ -68,7 +69,7 @@ pub async fn health(
                WHERE state IN ('queued', 'prepared', 'executing')) \
              SELECT (SELECT count(*) FROM due WHERE at + make_interval(secs => $3) < now()), \
                (SELECT count(*) FROM forge.merge_request_merges WHERE state = 'failed' \
-                 AND finished_at > now() - interval '7 days'), \
+                 AND finished_at > now() - interval '24 hours'), \
                (SELECT EXTRACT(EPOCH FROM now() - min(at))::float8 FROM due \
                  WHERE at + make_interval(secs => $3) < now())",
         )

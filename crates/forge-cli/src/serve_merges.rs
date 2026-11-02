@@ -15,7 +15,7 @@
 //!   with the streak's count.
 //! - **reconcile**: [`forge_review::Merger::reconcile`] every
 //!   [`RECONCILE_PERIOD`], each pass bounded by [`PASS_TIMEOUT`] and stopped
-//!   at once by a shutdown. Each pass logs a heartbeat (debug,
+//!   at once by a shutdown. Each pass logs a heartbeat (info, once a minute,
 //!   `forge.serve.merge_reconcile_pass` with the pass's counts); `forge
 //!   doctor`'s `review.merges` reports attempts the reconciliation has left
 //!   past their bound (it is not running, or fails every pass).
@@ -424,7 +424,9 @@ async fn reconcile_loop(merger: Arc<Merger>, mut stop: watch::Receiver<bool>) {
             done = pass => match done {
                 Ok(Ok(report)) => {
                     streak.reset();
-                    tracing::debug!(
+                    // The liveness heartbeat (info, once a minute; review
+                    // round 2). doctor `review.merges` is the other signal.
+                    tracing::info!(
                         request_id = %rid,
                         looked = report.looked,
                         applied = report.applied,
