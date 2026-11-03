@@ -369,7 +369,11 @@ async fn end_or_carry(
                 .await?;
             let keep: Vec<i64> = approved
                 .iter()
-                .filter(|a| plan.approved_heads.contains(&a.approved_head))
+                .filter(|a| {
+                    a.approved_head
+                        .as_ref()
+                        .is_some_and(|h| plan.approved_heads.contains(h))
+                })
                 .map(|a| a.approval.get())
                 .collect();
             return super::approvals::carry_some_on(tx, current, head, &keep).await;

@@ -159,8 +159,15 @@ impl ApprovalRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovedHead {
     pub approval: ApprovalId,
-    pub approved_head: ObjectId,
+    /// `None`: the chain is longer than [`MAX_CARRY_HOPS`] (or leaves the
+    /// merge request) — never carried (fail closed: the approval ends).
+    pub approved_head: Option<ObjectId>,
 }
+
+/// The most `carried_from` hops followed back to the approval a person
+/// gave (one per carried push; the recursion's bound). A longer chain is
+/// never carried again.
+pub const MAX_CARRY_HOPS: i32 = 1_000;
 
 /// The [`ApprovedHead`] of every live approval of `mr`, oldest first.
 /// More than [`MAX_APPROVALS`] is `FG-SYS-0001 reason=approvals_over_cap`.
@@ -168,13 +175,39 @@ pub(crate) async fn approved_heads_on(
     conn: &mut PgConnection,
     mr: MergeRequestId,
 ) -> Result<Vec<ApprovedHead>, ForgeError> {
-    // carried_from always names an older row of the same merge request
-    // (the approvals guard keeps it), so the chain ends.
-    let rows: Vec<(i64, String)> = sqlx::query_as(
-        "WITH RECURSIVE chain (live_id, carried_from, head_sha) AS (              SELECT id, carried_from, head_sha FROM forge.merge_request_approvals              WHERE merge_request_id = $1 AND revoked_at IS NULL            UNION ALL              SELECT c.live_id, a.carried_from, a.head_sha              FROM chain c JOIN forge.merge_request_approvals a ON a.id = c.carried_from          )          SELECT live_id, head_sha FROM chain WHERE carried_from IS NULL          ORDER BY live_id LIMIT $2",
+    approved_heads_capped_on(conn, mr, MAX_CARRY_HOPS).await
+}
+
+/// [`approved_heads_on`] following at most `max_hops` hops.
+pub(crate) async fn approved_heads_capped_on(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+    max_hops: i32,
+) -> Result<Vec<ApprovedHead>, ForgeError> {
+    // What holds a chain together: carried_from is a foreign key to an
+    // approval, fixed at insert (the approvals guard refuses any change to
+    // it), and forge-db sets it only in `carry_on`, to the id of a live
+    // approval of the same merge request it just ended (no caller supplies
+    // it). The database does not enforce "older" or "same merge request",
+    // so the walk stays on this merge request's rows and stops after
+    // `max_hops` hops: a chain that does not reach an approval without
+    // carried_from by then has no approved head (never carried).
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+        "WITH RECURSIVE chain (live_id, carried_from, head_sha, hops) AS ( \
+             SELECT id, carried_from, head_sha, 0 FROM forge.merge_request_approvals \
+             WHERE merge_request_id = $1 AND revoked_at IS NULL \
+           UNION ALL \
+             SELECT c.live_id, a.carried_from, a.head_sha, c.hops + 1 \
+             FROM chain c JOIN forge.merge_request_approvals a \
+               ON a.id = c.carried_from AND a.merge_request_id = $1 \
+             WHERE c.hops < $3 \
+         ) \
+         SELECT live_id, min(head_sha) FILTER (WHERE carried_from IS NULL) \
+         FROM chain GROUP BY live_id ORDER BY live_id LIMIT $2",
     )
     .bind(mr.get())
     .bind(MAX_APPROVALS + 1)
+    .bind(max_hops)
     .fetch_all(conn)
     .await
     .map_err(|e| query_error("review.approved_heads", e))?;
@@ -187,7 +220,9 @@ pub(crate) async fn approved_heads_on(
         .map(|(id, head)| {
             Ok(ApprovedHead {
                 approval: ApprovalId::new(id),
-                approved_head: ObjectId::parse(&head)
+                approved_head: head
+                    .map(|h| ObjectId::parse(&h))
+                    .transpose()
                     .map_err(|_| stored_invalid("stored_approval_sha_invalid", id))?,
             })
         })

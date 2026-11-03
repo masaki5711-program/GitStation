@@ -63,8 +63,19 @@ pub(crate) async fn carry_plan(
     }
     let mut approved: Vec<ObjectId> = Vec::new();
     for a in forge_db::review::approved_heads(db, stored.id).await? {
-        if !approved.contains(&a.approved_head) {
-            approved.push(a.approved_head);
+        match a.approved_head {
+            Some(head) => {
+                if !approved.contains(&head) {
+                    approved.push(head);
+                }
+            }
+            // Longer than MAX_CARRY_HOPS: never carried (it ends).
+            None => log_decision(
+                request_id,
+                stored,
+                (&previous, None, tip),
+                Err("carry_chain_too_long"),
+            ),
         }
     }
     if approved.is_empty() {

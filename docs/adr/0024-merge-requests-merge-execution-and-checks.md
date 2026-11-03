@@ -1532,3 +1532,8 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   失敗にせず早送りを「不明」（`ff_possible: None`、`ff_not_possible` を出さない）にし、warn `forge.review.status_ff_unknown`
   （`error_code`、`request_id`）を 1 行出す。マージのジョブはロックの下でもう一度決める。テスト
   `a_git_failure_of_the_fast_forward_check_leaves_it_unknown`（ログの 1 行と `error_code` も確かめる）。
+- **承認した head をたどる深さの上限（再レビュー MEDIUM）**: `approved_heads` の再帰は `carried_from` を **最大 1 000 段**
+  （`MAX_CARRY_HOPS`、写した push 1 回で 1 段）までたどり、同じ MR の行だけを通る。それまでに承認の行（`carried_from` なし）に
+  届かない承認は承認した head が無い（`None`）として **写さず消す**（ログ `forge.review.approvals_carry_decided` の
+  `reason=carry_chain_too_long`）。データベースが保証するのは `carried_from` が承認への外部キーで、挿入後は変わらない（ガード）ことだけ。
+  「古い行」「同じ MR」はアプリ（`carry_on` だけが直前に終えた同じ MR の行の id を入れる）が守る。テスト `the_approved_head_walk_is_bounded`。

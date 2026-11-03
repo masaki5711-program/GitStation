@@ -524,7 +524,7 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
     assert_eq!(heads[0].approval, live[0].id);
     assert_eq!(
         heads[0].approved_head,
-        oid('c'),
+        Some(oid('c')),
         "followed back to the approval"
     );
     // R6 review round 2: the carried approval's approved head is still
@@ -573,5 +573,73 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
     .await
     .expect("v6");
     assert!(w.live().await.is_empty(), "a protected target ends them");
+    w.t.drop_now().await;
+}
+
+impl World {
+    /// The project keeps approvals on push (`reset_approvals_on_push = false`).
+    async fn keep_approvals(&self) {
+        let keep = forge_core::MergeSettingsValues {
+            reset_approvals_on_push: false,
+            ..forge_core::MergeSettingsValues::default()
+        };
+        let (changed, _, ()) = put_merge_settings_mr_decided(
+            &self.t.db,
+            &as_user(self.alice, "req-keep"),
+            self.web.project_id,
+            self.alice,
+            &keep,
+            |_| Ok(()),
+        )
+        .await
+        .expect("settings");
+        assert_eq!(changed, SettingsOutcome::Changed);
+    }
+
+    /// Record `to` as the head, carrying the approvals given on `approved`
+    /// (the plan made for the recorded head `from`).
+    async fn carry(&self, request: &str, (from, to): (char, char), approved: &[char]) {
+        record_mr_version_carrying(
+            &self.t.db,
+            &system(request),
+            self.mr.id,
+            &oid(to),
+            None,
+            Some(&CarryPlan {
+                from: oid(from),
+                approved_heads: approved.iter().map(|c| oid(*c)).collect(),
+            }),
+        )
+        .await
+        .expect("version");
+    }
+}
+
+/// R6 re-review (MEDIUM): the `carried_from` walk is bounded — a chain
+/// longer than the cap has no approved head (`None`: never carried); one
+/// within it is followed back through every ended, carried row.
+#[tokio::test]
+async fn the_approved_head_walk_is_bounded() {
+    let w = world().await;
+    w.keep_approvals().await;
+    assert!(matches!(
+        w.approve(w.bob, "req-approve").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    // Three carried pushes: a -> b -> c -> d.
+    w.carry("req-v2", ('a', 'b'), &['a']).await;
+    w.carry("req-v3", ('b', 'c'), &['a']).await;
+    w.carry("req-v4", ('c', 'd'), &['a']).await;
+    let mut su = w.t.superuser().await;
+    let within = super::approvals::approved_heads_capped_on(&mut su, w.mr.id, 3)
+        .await
+        .expect("within the cap");
+    assert_eq!(within.len(), 1);
+    assert_eq!(within[0].approved_head, Some(oid('a')), "three hops back");
+    let over = super::approvals::approved_heads_capped_on(&mut su, w.mr.id, 2)
+        .await
+        .expect("over the cap");
+    assert_eq!(over.len(), 1, "the approval is still listed");
+    assert_eq!(over[0].approved_head, None, "past the cap: never carried");
     w.t.drop_now().await;
 }
