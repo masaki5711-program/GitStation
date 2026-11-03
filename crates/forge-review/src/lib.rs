@@ -159,7 +159,7 @@ pub struct Review {
     /// and merging are `FG-SYS-0001 reason=review_git_unconfigured`).
     review_git: Option<approvals::ReviewGit>,
     /// M3 C1: where the merge status reads the head's check runs
-    /// (`forge serve` / `forge worker` inject the `Db`; the database the
+    /// (only `forge serve` injects the `Db`; the database the
     /// commands use unless set). The request and the job read them in the
     /// gate's transaction instead.
     checks: Arc<dyn forge_core::CheckResultsSource>,
@@ -280,8 +280,9 @@ impl Review {
         }
     }
 
-    /// Where the merge status reads check runs (M3 C1; `forge serve` /
-    /// `forge worker` pass the `Db`, tests a failing source).
+    /// Where the merge status reads check runs (M3 C1; only `forge serve`
+    /// passes the `Db` — `forge worker` builds no `Review` —; tests pass a
+    /// spy or a failing source).
     #[must_use]
     pub fn with_check_results(mut self, checks: Arc<dyn forge_core::CheckResultsSource>) -> Self {
         self.checks = checks;

@@ -230,7 +230,7 @@ pub async fn runs_for(
     snapshot(project, head, rows)
 }
 
-/// The merge status's source (`forge serve` / `forge worker` inject the
+/// The merge status's source (only `forge serve` injects the
 /// `Db`): exactly [`runs_for`].
 impl forge_core::CheckResultsSource for Db {
     fn runs_on<'a>(
@@ -551,7 +551,9 @@ pub async fn report_check_run_decided<P>(
                              summary = $4, details_url = $5, reported_by = $6, \
                              credential_id = $7, request_id = $8, revision = revision + 1, \
                              updated_at = now(), \
-                             completed_at = CASE WHEN $2 = 'completed' THEN now() END \
+                             completed_at = CASE WHEN $2 = 'completed' THEN \
+                             CASE WHEN status = 'completed' AND conclusion IS NOT DISTINCT FROM $3 \
+                             THEN completed_at ELSE now() END END \
                              WHERE id = $1 RETURNING revision",
                         )
                         .bind(id)
@@ -586,11 +588,19 @@ pub async fn report_check_run_decided<P>(
             let mut levels = Vec::with_capacity(new.annotations.len());
             let mut messages = Vec::with_capacity(new.annotations.len());
             let mut titles = Vec::with_capacity(new.annotations.len());
+            // forge-checks keeps 50 annotations at most and lines within
+            // i32 (FG-REVIEW-0020); a value beyond is a broken precondition,
+            // never written saturated (review fix 8).
+            let out_of_range = |field: &'static str| {
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "annotation_out_of_range")
+                    .with_context("field", field)
+            };
             for (i, a) in new.annotations.iter().enumerate() {
-                positions.push(i16::try_from(i).unwrap_or(i16::MAX));
+                positions.push(i16::try_from(i).map_err(|_| out_of_range("position"))?);
                 paths.push(a.path.clone()); // clone: the arrays own their values
-                starts.push(i32::try_from(a.start_line).unwrap_or(i32::MAX));
-                ends.push(i32::try_from(a.end_line).unwrap_or(i32::MAX));
+                starts.push(i32::try_from(a.start_line).map_err(|_| out_of_range("start_line"))?);
+                ends.push(i32::try_from(a.end_line).map_err(|_| out_of_range("end_line"))?);
                 levels.push(a.level.as_str());
                 messages.push(a.message.clone()); // clone: as above
                 titles.push(a.title.clone()); // clone: as above

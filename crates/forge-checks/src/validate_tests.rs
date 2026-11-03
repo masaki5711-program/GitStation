@@ -157,6 +157,10 @@ fn annotation_paths_are_relative_without_dot_dot() {
         "src/..",
         "src\\a.rs",
         "src/a\n.rs",
+        // Review fix 8: drive-letter forms are no relative paths.
+        "C:/Windows/x.rs",
+        "c:x.rs",
+        "Z:",
     ] {
         let mut r = input("queued", None);
         r.annotations = vec![note(bad)];

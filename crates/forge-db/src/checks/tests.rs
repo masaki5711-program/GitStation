@@ -1028,3 +1028,77 @@ async fn more_runs_than_the_cap_is_check_run_data_invalid() {
     }
     w.t.drop_now().await;
 }
+
+/// Review fix 8: `completed_at` is the time of the completion that set the
+/// conclusion — a re-report with the same conclusion keeps it; a new
+/// conclusion moves it.
+#[tokio::test]
+async fn completed_at_keeps_the_first_completion_of_a_conclusion() {
+    let w = world().await;
+    let head = sha('a');
+    let first = w
+        .report(&head, &success("ci/gates"), "req-1")
+        .await
+        .expect("first")
+        .run
+        .completed_at;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let again = w
+        .report(&head, &success("ci/gates"), "req-2")
+        .await
+        .expect("again")
+        .run
+        .completed_at;
+    assert_eq!(
+        again, first,
+        "the same conclusion keeps its completion time"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let failed = w
+        .report(&head, &failure("ci/gates"), "req-3")
+        .await
+        .expect("failed")
+        .run
+        .completed_at;
+    assert_ne!(failed, first, "a new conclusion is a new completion");
+    let queued = w
+        .report(
+            &head,
+            &report("ci/gates", CheckStatus::Queued, None),
+            "req-4",
+        )
+        .await
+        .expect("queued")
+        .run
+        .completed_at;
+    assert_eq!(queued, None);
+    w.t.drop_now().await;
+}
+
+/// Review fix 8: a drive-letter path (`C:/…`, `c:x`) is no relative path:
+/// refused by the CHECK too.
+#[tokio::test]
+async fn a_drive_letter_annotation_path_is_refused_by_the_check() {
+    let w = world().await;
+    let run = w
+        .report(&sha('a'), &success("ci/gates"), "req-1")
+        .await
+        .expect("run")
+        .run
+        .id;
+    let mut su = w.t.superuser().await;
+    let p = w.project().get();
+    for path in ["'C:/Windows/x.rs'", "'c:x.rs'", "'Z:'"] {
+        let sql = format!(
+            "INSERT INTO forge.check_annotations (check_run_id, project_id, position, path, \
+             start_line, end_line, level, message) VALUES ({run}, {p}, 0, {path}, 1, 1, \
+             'notice', 'm')"
+        );
+        assert_eq!(
+            constraint_of(sqlx::query(&sql).execute(&mut su).await),
+            Some("check_annotations_path".to_owned()),
+            "{path}"
+        );
+    }
+    w.t.drop_now().await;
+}

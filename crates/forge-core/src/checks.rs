@@ -7,7 +7,8 @@
 //! depends on forge-checks (which records the runs): both are feature
 //! crates and talk only through forge-core (CLAUDE.md §3-9). forge-db
 //! implements it on `Db` with the same SQL the merge gate runs inside its
-//! transaction; `forge serve` / `forge worker` inject it.
+//! transaction; `forge serve` injects it (`forge worker` builds no
+//! `Review`: the merge job runs inside `forge serve`).
 
 use std::collections::BTreeMap;
 
@@ -156,7 +157,7 @@ impl CheckRunsOnHead {
 }
 
 /// Reads the check runs of a commit (forge-db implements it on `Db`; the
-/// merge status reads through it, `forge serve` / `forge worker` inject
+/// merge status reads through it, `forge serve` injects
 /// it). One bounded statement; a stored row this build cannot read is
 /// `FG-DB-0022` CheckRunDataInvalid and a failed or timed-out read its own
 /// `FG-DB-*` error — never an empty snapshot (a failure is not "no run").
