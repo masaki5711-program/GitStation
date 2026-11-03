@@ -150,3 +150,36 @@
   gap: var(--gs-space-3);
   margin-top: var(--gs-space-2);
 }
+
+.explain {
+  margin: 0 0 var(--gs-space-3);
+  color: var(--gs-color-text-muted);
+}
+
+/* The comment button before a diff line: a "+" drawn by CSS (its name is
+ * the aria-label, which names the path and line). 24px: WCAG 2.5.8. */
+.lineButton {
+  composes: interactive from '../../components/controls.module.css';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-surface);
+  color: var(--gs-color-link);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lineButton::before {
+  content: '+';
+  font-weight: bold;
+}
+
+.lineButton[aria-expanded='true'] {
+  background: var(--gs-color-active-surface);
+}

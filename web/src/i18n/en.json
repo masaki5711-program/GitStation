@@ -516,8 +516,6 @@
       "tabsLabel": "Merge request views",
       "overview": "Overview",
       "changes": "Changes",
-      "changesLater": "The changes of each version will be shown here. For now, compare the two branches.",
-      "compareLink": "Compare the branches",
       "description": "Description",
       "noDescription": "No description."
     },
@@ -544,6 +542,16 @@
       "submit": "Comment",
       "required": "Write a comment first.",
       "sending": "Sending…"
+    },
+    "diff": {
+      "version": "Version {{version}} (the latest)",
+      "noVersion": "No version is recorded yet. The changes appear here once the push has been read.",
+      "purged": "The changes of this version were removed (for example, to delete a secret). They can no longer be shown.",
+      "column": "Comment",
+      "lineNew": "line {{line}} of {{path}}",
+      "lineOld": "removed line {{line}} of {{path}}",
+      "commentOn": "Comment on {{where}}",
+      "yourComment": "Your comment: {{where}}"
     }
   }
 }

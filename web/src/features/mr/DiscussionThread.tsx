@@ -25,6 +25,7 @@ export function DiscussionThread({
   project,
   refName,
   discussion,
+  headingLevel = 3,
 }: {
   projectId: number;
   iid: number;
@@ -32,6 +33,8 @@ export function DiscussionThread({
   /** The ref relative links in the notes resolve against (the target branch). */
   refName: string;
   discussion: Discussion;
+  /** 3 on the Overview (under "Threads"); 4 inside a diff (under the file's h3). */
+  headingLevel?: 3 | 4;
 }) {
   const { t, i18n } = useTranslation();
   const headingId = useId();
@@ -41,6 +44,7 @@ export function DiscussionThread({
   const unresolve = useUnresolve(projectId, iid);
   const toggle = discussion.resolved ? unresolve : resolve;
   const position = discussion.position;
+  const Heading = headingLevel === 3 ? 'h3' : 'h4';
 
   return (
     <article
@@ -51,9 +55,9 @@ export function DiscussionThread({
       data-testid={`thread-${discussion.id}`}
     >
       <header className={styles.threadHead}>
-        <h3 id={headingId} className={styles.threadTitle}>
+        <Heading id={headingId} className={styles.threadTitle}>
           {t('mr.thread.title', { author: discussion.author.display_name })}
-        </h3>
+        </Heading>
         {position !== null && (
           <code className={styles.position}>
             {position.path}:{position.line}
@@ -81,7 +85,7 @@ export function DiscussionThread({
                 project={project}
                 refName={refName}
                 dir=""
-                headingOffset={3}
+                headingOffset={headingLevel}
               />
             </div>
           </li>

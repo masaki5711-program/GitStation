@@ -87,10 +87,8 @@ describe('merge request header and status line', () => {
     expect(within(after).getByRole('link', { name: 'Changes' }).getAttribute('aria-current')).toBe(
       'page',
     );
-    // Until the diff tab exists, the branches can be compared.
-    expect(screen.getByRole('link', { name: 'Compare the branches' }).getAttribute('href')).toBe(
-      `${MR_SCREENS}/compare/main...dev`,
-    );
+    // The latest version's diff is there (tests/mr-changes.test.tsx has the rest).
+    expect(await screen.findByText('Version 1 (the latest)')).toBeTruthy();
   });
 
   it('"next" moves the focus to the first unresolved thread', async () => {

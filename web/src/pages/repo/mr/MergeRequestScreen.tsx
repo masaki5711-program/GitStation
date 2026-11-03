@@ -14,8 +14,9 @@ import { formatDate, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
+import { MrChanges } from '../../../features/mr/MrChanges';
 import { StatusLine } from '../../../features/mr/StatusLine';
-import { compareUrl, pullUrl } from '../../../features/repoUrls';
+import { pullUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
 import repo from '../Repo.module.css';
@@ -98,12 +99,12 @@ export function MergeRequestScreen({
           <h2 id="mr-changes-title" className={repo.sectionTitle}>
             {t('mr.view.changes')}
           </h2>
-          <p>{t('mr.view.changesLater')}</p>
-          <p>
-            <Link to={compareUrl(project, mr.data.target_branch, mr.data.source_branch)}>
-              {t('mr.view.compareLink')}
-            </Link>
-          </p>
+          <MrChanges
+            projectId={projectId}
+            project={project}
+            iid={iid}
+            targetBranch={mr.data.target_branch}
+          />
         </section>
       )}
     </>

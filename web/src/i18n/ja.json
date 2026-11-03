@@ -516,8 +516,6 @@
       "tabsLabel": "変更依頼の画面",
       "overview": "概要",
       "changes": "変更",
-      "changesLater": "版ごとの変更は、ここに表示する予定です。今は比較の画面で 2 つのブランチの違いを見てください。",
-      "compareLink": "ブランチを比較する",
       "description": "説明",
       "noDescription": "説明はありません。"
     },
@@ -544,6 +542,16 @@
       "submit": "コメントする",
       "required": "コメントを入力してください。",
       "sending": "送っています…"
+    },
+    "diff": {
+      "version": "版 {{version}}（最新）",
+      "noVersion": "まだ版が記録されていません。push を読み取ると、ここに変更が表示されます。",
+      "purged": "この版の変更は削除されました（秘密情報を消すためなど）。もう表示できません。",
+      "column": "コメント",
+      "lineNew": "{{path}} の {{line}} 行目",
+      "lineOld": "{{path}} の削除した {{line}} 行目",
+      "commentOn": "{{where}}にコメントする",
+      "yourComment": "コメント: {{where}}"
     }
   }
 }

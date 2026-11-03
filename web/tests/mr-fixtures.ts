@@ -2,7 +2,7 @@
 // `mrRoutes()` is the route table the MR page tests share; it builds on the
 // repository routes (session, resolve, project, refs).
 import type { MergeStatus } from '../src/api/types';
-import { repoRoutes } from './repo-fixtures';
+import { DIFF, repoRoutes } from './repo-fixtures';
 import { type Handler } from './mock';
 import { json } from './render';
 
@@ -86,12 +86,40 @@ export const discussions = (list: unknown[], truncated = false) => ({
   truncated,
 });
 
+export function version(n: number, over: Record<string, unknown> = {}) {
+  return {
+    version: n,
+    head_sha: String(n).repeat(40).slice(0, 40),
+    base_sha: 'a'.repeat(40),
+    merge_base_sha: 'a'.repeat(40),
+    pushed_by: null,
+    refs_purged: false,
+    created_at: '2026-10-20T01:00:00Z',
+    ...over,
+  };
+}
+
+export const versions = (list: unknown[]) => ({ iid: 3, versions: list });
+
+export function versionDiff(n: number, diff: unknown) {
+  return {
+    version: version(n),
+    from: 'a'.repeat(40),
+    to: String(n).repeat(40).slice(0, 40),
+    commits: [],
+    commits_truncated: false,
+    diff,
+  };
+}
+
 export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return repoRoutes({
     [`GET ${MR_API}`]: () => json(200, { merge_requests: [mr(3)], next_before: null }),
     [`GET ${MR_API}/3`]: () => json(200, mr(3)),
     [`GET ${MR_API}/3/status`]: () => json(200, status([])),
     [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([])),
+    [`GET ${MR_API}/3/versions`]: () => json(200, versions([version(1)])),
+    [`GET ${MR_API}/3/versions/1/diff`]: () => json(200, versionDiff(1, DIFF)),
     ...over,
   });
 }

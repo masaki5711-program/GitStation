@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SESSION_KEY } from '../session/session';
 import { ApiFailure, call } from './client';
 import { useApi } from './context';
-import type { CreateMergeRequestBody, MergeStatus } from './types';
+import type { CreateMergeRequestBody, MergeStatus, Position } from './types';
 
 export type MrState = 'open' | 'closed' | 'merged' | 'all';
 export interface MrListFilter {
@@ -183,11 +183,15 @@ export function useAddComment(project: number, iid: number) {
   const refreshSession = useRefreshSessionOn403();
   const after = useAfterDiscussionChange(project, iid);
   return useMutation({
-    mutationFn: (input: { body: string }) =>
+    /** A general thread; with `position`, a thread on that line of a version. */
+    mutationFn: (input: { body: string; position?: Position }) =>
       call(() =>
         api.POST('/api/v1/projects/{id}/merge-requests/{iid}/discussions', {
           params: { path: { id: project, iid: String(iid) } },
-          body: { body: input.body },
+          body:
+            input.position === undefined
+              ? { body: input.body }
+              : { body: input.body, position: input.position },
         }),
       ),
     onSuccess: after,

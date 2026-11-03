@@ -67,6 +67,36 @@ const SCREENS: [string, string, Record<string, Handler>][] = [
 ];
 
 describe('axe: merge request screens', () => {
+  it('changes: a thread under its line and an open line comment box', async () => {
+    const server = mockServer(
+      mrRoutes({
+        [`GET ${MR_API}/3/discussions`]: () =>
+          json(
+            200,
+            discussions([
+              discussion(9, {
+                kind: 'inline',
+                position: { path: 'src/lib.rs', line: 3, side: 'new', version: 1 },
+              }),
+            ]),
+          ),
+      }),
+    );
+    const { container } = await renderApp({
+      fetch: server.fetch,
+      path: `${MR_SCREENS}/pull/3/changes`,
+      lang: 'en',
+    });
+    await settle();
+    await screen.findByTestId('thread-9');
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on line 2 of src/lib.rs' }));
+    await screen.findByLabelText('Your comment: line 2 of src/lib.rs');
+    await waitFor(() => {
+      expect(screen.queryByText(/Loading/)).toBeNull();
+    });
+    expect(await violations(container)).toEqual([]);
+  });
+
   it('a reply box open and an empty comment refused', async () => {
     const server = mockServer(
       mrRoutes({ [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([discussion(2)])) }),

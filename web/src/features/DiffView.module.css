@@ -99,3 +99,28 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Merge request annotations (absent for commits and comparisons). */
+.action {
+  width: 2.75rem;
+  padding: 0 var(--gs-space-1);
+  vertical-align: top;
+  background: var(--gs-color-code-surface);
+}
+
+.belowCell {
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border-top: 1px solid var(--gs-color-border);
+  border-bottom: 1px solid var(--gs-color-border);
+  background: var(--gs-color-background);
+  font-family: var(--gs-font-body);
+  font-size: var(--gs-font-size-md);
+  white-space: normal;
+}
+
+/* Stays in view while a long line scrolls the table sideways. */
+.belowBody {
+  position: sticky;
+  left: var(--gs-space-3);
+  max-width: min(48rem, calc(100vw - 4rem));
+}
