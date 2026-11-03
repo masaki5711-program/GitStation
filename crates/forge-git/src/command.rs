@@ -515,7 +515,7 @@ impl GitCommand {
         })?;
         // Dropped with this future (a cancelled job), the tree is killed
         // (`Drop for ProcessTree`); released once git exited by itself.
-        let mut tree = if self.supervise_tree {
+        let tree = if self.supervise_tree {
             match ProcessTree::attach(&child) {
                 Ok(tree) => Some(tree),
                 Err(e) => {
@@ -555,27 +555,53 @@ impl GitCommand {
             }
             Ok(())
         };
-        let child_ref = &mut child;
-        let io = async move {
+        // The child and the tree are shared by the readers (the cap kills)
+        // and, for a supervised run, the leader watcher; every lock is a
+        // short synchronous call, never held across an await.
+        let child_cell = std::sync::Mutex::new(child);
+        let tree_cell = std::sync::Mutex::new(tree);
+        let supervised = self.supervise_tree;
+        let io = async {
             let out = async {
                 let r = read_capped(stdout, max_out).await;
                 if matches!(r, Ok((_, true))) {
                     // Over the cap: stop git now. Otherwise it blocks writing to
                     // the undrained pipe, stderr never closes and the run would
-                    // wait for the full timeout while holding a slot.
-                    let _ = child_ref.start_kill(); // ignore: reaped below
+                    // wait for the full timeout while holding a slot. A
+                    // supervised run loses its helpers with it, at once.
+                    kill_tree(&mut lock_cell(&tree_cell));
+                    let _ = lock_cell(&child_cell).start_kill(); // ignore: reaped below
                 }
                 r
             };
             tokio::join!(write, out, read_capped(stderr, MAX_STDERR_BYTES))
         };
-
-        let Ok((write_res, out_res, err_res)) = tokio::time::timeout_at(deadline, io).await else {
-            // The group is killed while the leader is still unreaped (its id
-            // cannot have been reused), then the leader is reaped.
-            kill_tree(&mut tree);
+        let watched = async {
+            tokio::select! {
+                done = io => done,
+                () = watch_leader(&child_cell, &tree_cell), if supervised => {
+                    // `watch_leader` never ends; `select!` needs a value.
+                    std::future::pending().await
+                }
+            }
+        };
+        let ran = tokio::time::timeout_at(deadline, watched).await;
+        let mut child = child_cell
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut tree = tree_cell
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Ok((write_res, out_res, err_res)) = ran else {
+            // The group is stopped (SIGTERM, then SIGKILL after the grace)
+            // while the leader is still unreaped (its id cannot have been
+            // reused), then the leader is reaped.
+            let stop = stop_tree(&mut tree).await;
             let reaped = reap(&mut child).await;
-            return Err(with_reap(self.timed_out(), reaped));
+            return Err(with_reap(
+                self.timed_out().with_context("stop", stop),
+                reaped,
+            ));
         };
         let (stderr_bytes, _) = err_res.unwrap_or_default();
         let stderr_head = stderr_head(&stderr_bytes);
@@ -620,6 +646,23 @@ impl GitCommand {
             ));
         }
 
+        // A supervised leader's exit is first observed without reaping it
+        // (Unix): after a failure its group is killed while the id is still
+        // taken, so helpers it left behind never outlive it.
+        if let Some(t) = tree.as_mut() {
+            match t.wait_leader(deadline).await {
+                Some(Ok(true)) | Some(Err(_)) => {}
+                Some(Ok(false)) => t.kill(),
+                None => {
+                    let stop = stop_tree(&mut tree).await;
+                    let reaped = reap(&mut child).await;
+                    return Err(with_reap(
+                        self.timed_out().with_context("stop", stop),
+                        reaped,
+                    ));
+                }
+            }
+        }
         let status = match tokio::time::timeout_at(deadline, child.wait()).await {
             Ok(Ok(status)) => status,
             Ok(Err(e)) => {
@@ -629,14 +672,23 @@ impl GitCommand {
                     .with_source(e))
             }
             Err(_) => {
-                kill_tree(&mut tree);
+                let stop = stop_tree(&mut tree).await;
                 let reaped = reap(&mut child).await;
-                return Err(with_reap(self.timed_out(), reaped));
+                return Err(with_reap(
+                    self.timed_out().with_context("stop", stop),
+                    reaped,
+                ));
             }
         };
-        // git exited by itself and has waited for its helpers.
         if let Some(t) = tree.as_mut() {
-            t.release();
+            if status.success() {
+                // git exited by itself and has waited for its helpers.
+                t.release();
+            } else {
+                // Windows: closing the job ends any helper left behind
+                // (Unix: killed above while the leader was a zombie).
+                t.kill();
+            }
         }
         let exit_code = status
             .code()
@@ -677,6 +729,74 @@ fn kill_tree(tree: &mut Option<ProcessTree>) {
     if let Some(t) = tree.as_mut() {
         t.kill();
     }
+}
+
+/// How long the pipes may stay open after a supervised leader exited
+/// before its tree is killed (a helper that inherited stdout / stderr would
+/// otherwise hold the capture until the step's deadline).
+pub(crate) const LINGER: Duration = Duration::from_secs(2);
+
+/// Lock a cell shared inside one capture (short synchronous use only); a
+/// poisoned lock still hands out its value (a panic elsewhere must not
+/// leave git running).
+fn lock_cell<T>(cell: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    cell.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A supervised run's leader watcher (never returns): once the leader has
+/// exited — observed without reaping it on Unix (`waitid(WNOWAIT)`), with
+/// `try_wait` on Windows (the Job Object does not need the pid) — the
+/// pipes get [`LINGER`] to close; a helper still holding them is then
+/// killed with the tree, so the capture ends instead of waiting for the
+/// deadline. A normal git closes its pipes at exit and the reads finish
+/// first.
+async fn watch_leader(
+    child: &std::sync::Mutex<tokio::process::Child>,
+    tree: &std::sync::Mutex<Option<ProcessTree>>,
+) {
+    loop {
+        #[cfg(unix)]
+        let exited = {
+            let _ = child;
+            matches!(
+                lock_cell(tree).as_ref().map(ProcessTree::peek_leader),
+                Some(Ok(Some(_)))
+            )
+        };
+        #[cfg(windows)]
+        let exited = matches!(lock_cell(child).try_wait(), Ok(Some(_)));
+        if exited {
+            tokio::time::sleep(LINGER).await;
+            kill_tree(&mut lock_cell(tree));
+            std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// How long a supervised run gets after `SIGTERM` before `SIGKILL`.
+pub(crate) const TERM_GRACE: Duration = Duration::from_secs(5);
+
+/// Stop a supervised run's tree at a timeout: `SIGTERM` to the group (git
+/// removes its lock files on it), up to [`TERM_GRACE`] for the leader to
+/// exit (watched without reaping it), then `SIGKILL` to the group either
+/// way (helpers that ignored the signal). Windows and plain runs: killed at
+/// once. Returns the `stop` context value: `term` (the leader exited within
+/// the grace), `kill` (it did not, or no graceful stop exists) or `none`.
+async fn stop_tree(tree: &mut Option<ProcessTree>) -> &'static str {
+    let Some(t) = tree.as_mut() else {
+        return "none";
+    };
+    let mut how = "kill";
+    if t.terminate() {
+        let until = tokio::time::Instant::now() + TERM_GRACE;
+        if matches!(t.wait_leader(until).await, Some(Ok(_))) {
+            how = "term";
+        }
+    }
+    t.kill();
+    how
 }
 
 #[cfg(test)]

@@ -202,7 +202,15 @@ async fn maintenance_argv_on_git_2_38() {
     let pack = f.git.pack_refs_command(&f.path, T).expect("pack-refs");
     assert_eq!(
         argv(&pack),
-        ["-c", hooks.as_str(), "pack-refs", "--all", "--prune"]
+        [
+            "-c",
+            "core.packedRefsTimeout=10000",
+            "-c",
+            hooks.as_str(),
+            "pack-refs",
+            "--all",
+            "--prune"
+        ]
     );
     let graph = f.git.commit_graph_command(&f.path, T).expect("graph");
     assert_eq!(
@@ -690,4 +698,229 @@ fn count_objects_needs_every_key() {
         parse_count_objects(&text.replace("in-pack: 10", "in-pack: x")),
         None
     );
+}
+
+/// A fake git that starts a helper writing to `marker` and then exits
+/// with `code` (a failing leader that leaves a helper). Synthetic.
+#[cfg(unix)]
+fn leaving_fake(dir: &Path, marker: &Path, code: i32) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("fake-leave.sh");
+    let body = format!(
+        "#!/bin/sh\n(while true; do echo x >> '{m}'; sleep 0.1; done) &\nsleep 1\nexit {code}\n",
+        m = marker.display()
+    );
+    std::fs::write(&path, body).expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+#[cfg(windows)]
+fn leaving_fake(dir: &Path, marker: &Path, code: i32) -> PathBuf {
+    let path = dir.join("fake-leave.cmd");
+    let body = format!(
+        "@echo off\r\nstart \"\" /b powershell -NoProfile -NonInteractive -Command \
+         \"while ($true) {{ Add-Content -LiteralPath '{m}' -Value x; Start-Sleep -Milliseconds 100 }}\"\r\n\
+         ping -n 4 127.0.0.1 >nul\r\nexit /b {code}\r\n",
+        m = marker.display()
+    );
+    std::fs::write(&path, body).expect("script");
+    path
+}
+
+async fn assert_helper_stopped(marker: &Path) {
+    assert!(marker_len(marker) > 0, "the helper ran");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let before = marker_len(marker);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(marker_len(marker), before, "the helper died with the tree");
+}
+
+/// A maintenance step whose future is dropped (the job aborted at
+/// shutdown, a cancelled run) kills git's whole tree, not only the leader.
+#[tokio::test]
+async fn a_dropped_maintenance_step_kills_its_tree() {
+    let f = fixture().await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let marker = tmp.path().join("helper-alive");
+    let fake = f.with_bin(tree_fake(tmp.path(), &marker));
+    let run = fake.gc_objects(&f.root, f.id, GRACE, Duration::from_secs(120));
+    let cut = tokio::time::timeout(Duration::from_secs(8), run).await;
+    assert!(cut.is_err(), "still running when dropped");
+    assert_helper_stopped(&marker).await;
+}
+
+/// A leader that fails on its own (non-zero exit) does not leave its
+/// helpers running: the group is killed before the leader is reaped.
+#[tokio::test]
+async fn helpers_die_when_a_maintenance_step_fails() {
+    let f = fixture().await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let marker = tmp.path().join("helper-alive");
+    let fake = f.with_bin(leaving_fake(tmp.path(), &marker, 3));
+    let err = fake
+        .gc_objects(&f.root, f.id, GRACE, T)
+        .await
+        .expect_err("failed");
+    assert_eq!(err.code(), ErrorCode::RepositoryMaintenanceFailed, "{err}");
+    assert_helper_stopped(&marker).await;
+}
+
+/// Unix: a step past its timeout gets SIGTERM first (git removes its lock
+/// files on it) and SIGKILL only after the grace.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_timed_out_step_gets_sigterm_before_sigkill() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture().await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let marker = tmp.path().join("got-term");
+    let path = tmp.path().join("fake-term.sh");
+    let script = format!(
+        "#!/bin/sh\ntrap \"echo term > {m}; exit 143\" TERM\nsleep 300 &\nwait\n",
+        m = marker.display()
+    );
+    std::fs::write(&path, script).expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let fake = f.with_bin(path);
+    let err = fake
+        .gc_objects(&f.root, f.id, GRACE, Duration::from_secs(2))
+        .await
+        .expect_err("timed out");
+    assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
+    assert!(err.to_string().contains("stop=term"), "{err}");
+    assert!(marker.exists(), "the leader got SIGTERM");
+}
+
+/// Set `path`'s modification time (files and directories alike).
+fn set_mtime(path: &Path, when: SystemTime) {
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_WRITE_ATTRIBUTES; FILE_FLAG_BACKUP_SEMANTICS opens a directory.
+        std::fs::OpenOptions::new()
+            .access_mode(0x100)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .expect("open for times")
+    };
+    #[cfg(unix)]
+    let file = std::fs::File::open(path).expect("open for times");
+    file.set_modified(when).expect("set mtime");
+}
+
+/// After a killed or failed pack-refs (still under the merge lock), the
+/// lock is removed only when it is ours (made at or after the step's
+/// start); an older one is left and named. The doctor's probe measures it.
+#[tokio::test]
+async fn a_killed_pack_refs_lock_of_our_own_is_removed_and_a_foreign_one_kept() {
+    let f = fixture().await;
+    let lock = f.path.join("packed-refs.lock");
+    let started = SystemTime::now() - Duration::from_secs(5);
+    let cleanup = |git: &Git| {
+        let (git, root, id) = (git.clone(), f.root.clone(), f.id); // clone: owned by the future
+        async move { git.clear_own_packed_refs_lock(&root, id, started).await }
+    };
+    assert_eq!(cleanup(&f.git).await.expect("cleanup"), LockCleanup::Absent);
+    assert_eq!(
+        packed_refs_lock_age(&f.root, f.id, SystemTime::now()).expect("age"),
+        None
+    );
+    std::fs::write(&lock, b"").expect("our lock");
+    assert_eq!(
+        cleanup(&f.git).await.expect("cleanup"),
+        LockCleanup::Removed
+    );
+    assert!(!lock.exists(), "ours is removed");
+    std::fs::write(&lock, b"").expect("foreign lock");
+    set_mtime(&lock, SystemTime::now() - Duration::from_secs(3600));
+    let kept = cleanup(&f.git).await.expect("cleanup");
+    assert!(
+        matches!(kept, LockCleanup::Foreign { age_secs } if age_secs >= 3590),
+        "{kept:?}"
+    );
+    assert!(lock.exists(), "someone else's is left");
+    let age = packed_refs_lock_age(&f.root, f.id, SystemTime::now())
+        .expect("age")
+        .expect("present");
+    assert!(age >= Duration::from_secs(3590), "{age:?}");
+}
+
+/// A crashed push's quarantine with files in it does not defer the run
+/// once stale, and gc's prune removes it (directory and files) once it is
+/// older than the grace; a stale one inside the grace stays.
+#[tokio::test]
+async fn a_stale_quarantine_with_files_is_pruned_after_the_grace() {
+    let f = fixture().await;
+    let objects = f.path.join("objects");
+    let make = |name: &str, age: Duration| {
+        let q = objects.join(format!("{QUARANTINE_PREFIX}{name}"));
+        std::fs::create_dir_all(q.join("pack")).expect("dirs");
+        std::fs::create_dir_all(q.join("ab")).expect("dirs");
+        std::fs::write(q.join("ab").join("cdef"), b"synthetic").expect("file");
+        std::fs::write(q.join("pack").join("tmp_pack_x"), b"synthetic").expect("file");
+        let then = SystemTime::now() - age;
+        for p in [
+            q.join("ab").join("cdef"),
+            q.join("pack").join("tmp_pack_x"),
+            q.join("ab"),
+            q.join("pack"),
+            q.clone(), // clone: the directory itself last
+        ] {
+            set_mtime(&p, then);
+        }
+        q
+    };
+    let old = make("old", Duration::from_secs(72 * 3600));
+    let young = make("young", Duration::from_secs(7 * 3600));
+    assert_eq!(
+        f.git
+            .maintenance_blocker(&f.root, f.id)
+            .await
+            .expect("check"),
+        None,
+        "stale quarantines do not defer"
+    );
+    assert_eq!(f.gc().await.expect("gc"), GcRun::Ran);
+    assert!(!old.exists(), "past the grace: pruned with its files");
+    assert!(young.exists(), "inside the grace: kept");
+}
+
+/// A `gc.pid` left by a gc that is gone (a dead pid) does not block gc.
+#[tokio::test]
+async fn a_stale_gc_pid_does_not_block_gc() {
+    let f = fixture().await;
+    let host = Command::new("hostname").output().expect("hostname");
+    let host = String::from_utf8_lossy(&host.stdout).trim().to_owned();
+    // A pid no process can have: odd (Windows pids are multiples of 4)
+    // and above Linux's largest `pid_max` (4 194 304).
+    let dead_pid = 9_999_999u32;
+    std::fs::write(f.path.join("gc.pid"), format!("{dead_pid} {host}")).expect("gc.pid");
+    assert_eq!(f.gc().await.expect("gc"), GcRun::Ran);
+}
+
+/// fsck that cannot look at the repository at all (exit 128, "not a git
+/// repository" / dubious ownership) is a maintenance failure, not a
+/// finding of corruption; any other non-zero exit stays a finding.
+#[tokio::test]
+async fn fsck_on_an_unusable_repository_is_maintenance_failed_not_corrupt() {
+    let f = fixture().await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let fake = f.with_bin(exit_fake(
+        tmp.path(),
+        128,
+        "fatal: not a git repository: synthetic",
+    ));
+    let err = fake
+        .fsck(&f.root, f.id, FsckMode::Connectivity, T)
+        .await
+        .expect_err("failed");
+    assert_eq!(err.code(), ErrorCode::RepositoryMaintenanceFailed, "{err}");
+    assert!(err.to_string().contains("reason=fsck_unusable"), "{err}");
+    let fake = f.with_bin(exit_fake(tmp.path(), 1, "error: synthetic broken link"));
+    let err = fake
+        .fsck(&f.root, f.id, FsckMode::Connectivity, T)
+        .await
+        .expect_err("corrupt");
+    assert_eq!(err.code(), ErrorCode::RepositoryCorrupt, "{err}");
 }

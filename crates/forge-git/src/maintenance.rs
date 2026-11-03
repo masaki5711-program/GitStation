@@ -12,8 +12,11 @@
 //!    push quarantine (`objects/tmp_objdir-incoming-*`, receive-pack's
 //!    objects not yet migrated) younger than [`QUARANTINE_STALE`] defers
 //!    the run ([`Blocked::IncomingPush`]); gc never starts during a push.
-//!    Older ones are a crashed push's leftovers, removed by gc's own prune
-//!    once past the grace.
+//!    The job checks it again right before gc (fsck may have taken long).
+//!    Older ones are a crashed push's leftovers: they do not defer, and
+//!    gc's own prune removes them — directory and files — once they are
+//!    older than the prune grace (verified on git 2.53,
+//!    `a_stale_quarantine_with_files_is_pruned_after_the_grace`).
 //! 2. [`Git::gc_objects`] — `git -c gc.packRefs=false -c
 //!    gc.writeCommitGraph=false -c repack.writeBitmaps=true -c
 //!    pack.writeBitmapHashCache=true -c core.hooksPath=<empty> gc --cruft
@@ -322,7 +325,12 @@ impl Git {
         repo: &Path,
         timeout: Duration,
     ) -> Result<GitCommand, ForgeError> {
-        let cmd = self.command("pack-refs");
+        // Its own wait for `packed-refs.lock` (a push deleting a packed ref
+        // holds it for a moment) is the writers' 10 s too, not git's 1 s.
+        let cmd = self.command("pack-refs").config_override(
+            "core.packedRefsTimeout",
+            crate::refs::PACKED_REFS_TIMEOUT_MS,
+        );
         Ok(self
             .with_empty_hooks(cmd)?
             .arg("--all")
@@ -429,7 +437,29 @@ impl Git {
         if run.exit_code == Some(0) && !run.truncated {
             return Ok(());
         }
-        let head: Vec<&str> = stdout.lines().take(FINDINGS_HEAD_LINES).collect();
+        // git could not look at the repository at all (not one, owned by
+        // someone else): an operational failure, never a finding about the
+        // objects.
+        if run.exit_code == Some(128) && fsck_unusable(&run.stderr) {
+            return Err(ForgeError::new(ErrorCode::RepositoryMaintenanceFailed)
+                .with_context("reason", "fsck_unusable")
+                .with_context("subcommand", "fsck")
+                .with_context("exit_code", 128)
+                .with_context("stderr", &run.stderr)
+                .with_context("step", Step::Fsck.as_str())
+                .with_context("repo_id", id.get()));
+        }
+        // The head of stdout is redacted like stderr (object ids and ref
+        // names stay; URL credentials or secret-looking values would not).
+        let head = crate::redact::stderr_head(
+            stdout
+                .lines()
+                .take(FINDINGS_HEAD_LINES)
+                .collect::<Vec<_>>()
+                .join("\n")
+                .as_bytes(),
+        );
+        let first = crate::redact::stderr_head(lines.first().copied().unwrap_or("").as_bytes());
         Err(ForgeError::new(ErrorCode::RepositoryCorrupt)
             .with_context("mode", mode.as_str())
             .with_context(
@@ -438,8 +468,8 @@ impl Git {
                     .map_or_else(|| "truncated".to_owned(), |c| c.to_string()),
             )
             .with_context("findings", lines.len())
-            .with_context("first_finding", lines.first().copied().unwrap_or(""))
-            .with_context("stdout", head.join(" | "))
+            .with_context("first_finding", first)
+            .with_context("stdout", head)
             .with_context("stderr", &run.stderr)
             .with_context("step", Step::Fsck.as_str())
             .with_context("repo_id", id.get()))
@@ -475,6 +505,111 @@ impl Git {
         counts.refs = u64::try_from(refs.stdout.iter().filter(|b| **b == b'\n').count())
             .map_err(|_| unexpected(Step::Counts, id, "for-each-ref"))?;
         Ok(counts)
+    }
+}
+
+/// git's words for "this is not a repository I may read" (LC_ALL=C).
+fn fsck_unusable(stderr: &str) -> bool {
+    [
+        "not a git repository",
+        "dubious ownership",
+        "safe.directory",
+    ]
+    .iter()
+    .any(|m| stderr.contains(m))
+}
+
+/// What [`Git::clear_own_packed_refs_lock`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockCleanup {
+    /// No `packed-refs.lock`.
+    Absent,
+    /// Ours (created at or after the step started): removed.
+    Removed,
+    /// Older than the step: someone else's, left in place.
+    Foreign { age_secs: u64 },
+}
+
+impl LockCleanup {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Removed => "removed",
+            Self::Foreign { .. } => "foreign",
+        }
+    }
+}
+
+/// The age of `<repo>/packed-refs.lock`, `None` when there is none
+/// (doctor `repositories.stale_locks`). Blocking (`std::fs`).
+pub fn packed_refs_lock_age(
+    storage: &StorageRoot,
+    id: RepoId,
+    now: SystemTime,
+) -> Result<Option<Duration>, ForgeError> {
+    let repo = storage.existing(id)?;
+    match std::fs::metadata(repo.join("packed-refs.lock")).and_then(|m| m.modified()) {
+        Ok(t) => Ok(Some(now.duration_since(t).unwrap_or(Duration::ZERO))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(ForgeError::new(ErrorCode::StorageIoFailed)
+            .with_context("operation", "packed_refs_lock_stat")
+            .with_context("repo_id", id.get())
+            .with_source(e)),
+    }
+}
+
+impl Git {
+    /// After a pack-refs that failed or was killed, still under the merge
+    /// lock: remove `packed-refs.lock` only when it is ours — its time is at
+    /// or after `step_started` (the step created it; every other writer of
+    /// this repository is kept out by the merge lock or holds it for a
+    /// moment only). An older lock is someone else's and is left
+    /// ([`LockCleanup::Foreign`]: the caller alerts, FG-GIT-0020). A killed
+    /// pack-refs that kept its lock would make every push deleting a packed
+    /// ref and every `update-ref` that needs it fail until cleaned.
+    pub async fn clear_own_packed_refs_lock(
+        &self,
+        storage: &StorageRoot,
+        id: RepoId,
+        step_started: SystemTime,
+    ) -> Result<LockCleanup, ForgeError> {
+        let repo = storage.existing(id)?;
+        let lock = repo.join("packed-refs.lock");
+        let io_failed = move |e: io::Error| {
+            ForgeError::new(ErrorCode::StorageIoFailed)
+                .with_context("operation", "packed_refs_lock_cleanup")
+                .with_context("repo_id", id.get())
+                .with_source(e)
+        };
+        let done = tokio::task::spawn_blocking(move || {
+            let modified = match std::fs::metadata(&lock).and_then(|m| m.modified()) {
+                Ok(t) => t,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LockCleanup::Absent),
+                Err(e) => return Err(e),
+            };
+            if modified >= step_started {
+                match std::fs::remove_file(&lock) {
+                    Ok(()) => Ok(LockCleanup::Removed),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LockCleanup::Absent),
+                    Err(e) => Err(e),
+                }
+            } else {
+                let age = SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or(Duration::ZERO);
+                Ok(LockCleanup::Foreign {
+                    age_secs: age.as_secs(),
+                })
+            }
+        })
+        .await
+        .map_err(|join| {
+            ForgeError::new(ErrorCode::Internal)
+                .with_context("operation", "packed_refs_lock_cleanup")
+                .with_context("reason", "blocking_task_failed")
+                .with_source(join)
+        })?;
+        done.map_err(io_failed)
     }
 }
 

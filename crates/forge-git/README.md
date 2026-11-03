@@ -163,7 +163,17 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   (`count-objects -v` + `for-each-ref --format=.`: loose / packed objects, packs, `size_pack_kib`,
   every ref incl. hidden ones). git failing in a step → FG-GIT-0018 (`step`); timeouts stay
   FG-GIT-0002 and a missing slot FG-GIT-0004 (`step`). Pinned by `maintenance_argv_on_git_2_38`
-  (verified on git 2.53). Ref writers (`update_refs`, receive-pack) set
+  (verified on git 2.53). O3 review: a supervised timeout first sends `SIGTERM` to the group
+  (git removes its lock files), waits `TERM_GRACE` (5 s) for the leader (watched with
+  `waitid(WNOWAIT)`), then `SIGKILL` (`stop=term|kill` in the FG-GIT-0002 context; Windows has
+  no graceful stop: `kill`); a leader that exits non-zero gets its group killed before it is
+  reaped; a helper that keeps the pipes open after the leader exited is killed after `LINGER`
+  (2 s); the output cap kills the group at once. `Git::clear_own_packed_refs_lock(storage, id,
+  step_started) -> LockCleanup::{Absent, Removed, Foreign}` removes a `packed-refs.lock` only
+  when it is not older than the step (the caller holds the merge lock); `packed_refs_lock_age`
+  is doctor's probe. fsck exit 128 with "not a git repository" / dubious ownership is FG-GIT-0018
+  `reason=fsck_unusable`; the fsck stdout head is redacted. pack-refs also runs with
+  `core.packedRefsTimeout=10000`. Ref writers (`update_refs`, receive-pack) set
   `core.packedRefsTimeout=10000` (`refs::PACKED_REFS_TIMEOUT_MS`) so a write that needs
   `packed-refs.lock` waits out pack-refs (`version_ref_write_during_pack_refs_is_retried`).
 - **pkt-line** (`pkt_line`): `decode(buf, PktMode) -> Option<(Packet, used)>`, `decode_all`,
@@ -312,6 +322,11 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   (short commands without long-lived helpers) unless built with the
   crate-internal `supervise_tree()` (the maintenance steps, M3 O3); streams
   always kill the whole tree.
+- Windows: no graceful stop for a supervised run (closing the Job Object is
+  `TerminateProcess`, so a timed-out git leaves its lock files — the
+  maintenance removes its own `packed-refs.lock`); a helper started before
+  the Job Object assignment would escape (no suspended spawn without
+  `unsafe`; not hit in practice, see `process_tree.rs`).
 - **protocol v2 serves unreferenced objects** (any commit / blob whose id is
   known), and `uploadpack.allowAnySHA1InWant=false` does not stop it; v0
   serves unreferenced blobs. Pinned by
