@@ -533,7 +533,9 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
       <p role="status" className={styles.muted}>
         {done}
       </p>
-      {canManage && (
+      {/* Only with the list read: the name check needs every existing name,
+          and a PUT under one of them would replace that rule. */}
+      {canManage && rules.isSuccess && (
         <button
           type="button"
           className={controls.button}
