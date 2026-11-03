@@ -109,7 +109,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 
 `{namespace}` は `ci` か `kanflow` だけ（それ以外は `FG-REVIEW-0020 reason=namespace_not_grantable`）。人のアカウントには割り当てられない
 （サービスアカウントでない id は `FG-REPO-0005`、DB のガード `check_namespace_grants_service_account` も拒む）。存在しないプロジェクトは
-`FG-REPO-0005`。答えは `{ "grants": [{ "project_id", "namespace" }], "changed": 真偽 }`（`changed: false` は既にそうだった）。監査は
+`FG-REPO-0005`、削除待ちのプロジェクトへの割り当ては `FG-REPO-0006`（取り消しはできる）。答えは `{ "grants": [{ "project_id", "namespace" }], "changed": 真偽 }`（`changed: false` は既にそうだった）。監査は
 `check_namespace.granted` / `.revoked`（**プロジェクトに**。`details` は `user_id`・`project_id`・`namespace`）。プロジェクトの完全削除で
 その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 

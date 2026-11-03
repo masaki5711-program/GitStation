@@ -1102,3 +1102,48 @@ async fn a_drive_letter_annotation_path_is_refused_by_the_check() {
     }
     w.t.drop_now().await;
 }
+
+/// Re-review (LOW): no new grant on a project pending deletion (the
+/// pending-deletion code, FG-REPO-0006); a revoke still works there (it
+/// only removes a reporter).
+#[tokio::test]
+async fn no_grant_on_a_project_pending_deletion() {
+    let w = world().await;
+    let p = w.project();
+    let change = |on: bool, req: &'static str| {
+        let db = w.t.db.clone(); // clone: the future owns its handle
+        let (admin, ci) = (w.alice, w.ci);
+        async move {
+            change_check_namespace_grant_decided(
+                &db,
+                &as_user(admin, req),
+                (ci, p, CheckNamespace::Ci, on),
+                admin,
+                |_| Ok(()),
+            )
+            .await
+            .map(|(o, ())| o)
+        }
+    };
+    assert_eq!(
+        change(true, "req-g1").await.expect("grant"),
+        GrantOutcome::Changed
+    );
+    let _deleted = projects::delete_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-delete"),
+        p,
+        w.alice,
+        std::time::Duration::from_secs(3 * 86_400),
+        |_| Ok(()),
+    )
+    .await
+    .expect("delete");
+    let err = change(true, "req-g2").await.expect_err("pending deletion");
+    assert_eq!(err.code(), ErrorCode::PendingDeletion, "{err}");
+    assert_eq!(
+        change(false, "req-g3").await.expect("revoke"),
+        GrantOutcome::Changed
+    );
+    w.t.drop_now().await;
+}

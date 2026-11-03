@@ -761,19 +761,22 @@ async fn lock_target(
 }
 
 /// `FG-REPO-0005 resource=project` unless `project` exists, the row locked
-/// `FOR SHARE` (a purge waits for the grant).
-async fn lock_project_shared(tx: &mut ChangeTx, project: ProjectId) -> Result<(), ForgeError> {
-    let row: Option<i64> = tx
+/// `FOR SHARE` (a purge waits for the grant). `true` when the project is
+/// pending deletion (`deleted_at` set).
+async fn lock_project_shared(tx: &mut ChangeTx, project: ProjectId) -> Result<bool, ForgeError> {
+    let row: Option<bool> = tx
         .step(|c| async move {
-            sqlx::query_scalar("SELECT id FROM forge.projects WHERE id = $1 FOR SHARE")
-                .bind(project.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("checks.grant_project", e))
+            sqlx::query_scalar(
+                "SELECT deleted_at IS NOT NULL FROM forge.projects WHERE id = $1 FOR SHARE",
+            )
+            .bind(project.get())
+            .fetch_optional(c)
+            .await
+            .map_err(|e| query_error("checks.grant_project", e))
         })
         .await?;
     match row {
-        Some(_) => Ok(()),
+        Some(deleted) => Ok(deleted),
         None => Err(ForgeError::new(ErrorCode::NotFound)
             .with_context("resource", "project")
             .with_context("reason", "absent")),
@@ -805,10 +808,18 @@ pub async fn change_check_namespace_grant_decided<P>(
     };
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        lock_project_shared(&mut tx, project).await?;
+        let pending_deletion = lock_project_shared(&mut tx, project).await?;
         let target = lock_target(&mut tx, user).await?;
         let account = tx.step(|c| lock_account(c, admin)).await?;
         let decided = decide(&GrantFacts { account, target })?;
+        // Re-review (LOW): no new reporter for a project pending deletion
+        // (a revoke still removes one).
+        if grant && pending_deletion {
+            return Err(ForgeError::new(ErrorCode::PendingDeletion)
+                .with_context("reason", "project_pending_deletion")
+                .with_context("project_id", project.get())
+                .with_context("action", "CheckNamespaceGrantManage"));
+        }
         let changed: u64 = if grant {
             tx.step(|c| async move {
                 sqlx::query(
