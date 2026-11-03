@@ -176,7 +176,7 @@ pub(super) fn decide(
         &stored.target_branch,
         &attempt.head_sha,
         gate.unresolved_discussions,
-        &super::conditions::NoCheckRuns,
+        &gate.check_runs,
     );
     let facts = MergeFacts {
         state: stored.state,

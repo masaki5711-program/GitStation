@@ -915,6 +915,54 @@ pub fn authorize(
             Ok(())
         }
 
+        // --- check runs (M3 C1, ADR-0024 §10) ---
+        // Visibility, pending deletion and the `api` scope were decided
+        // above. Reporting is a service account's: an agent's token is
+        // refused first (a person's agent must not turn its own merge
+        // request green), then the namespace decides.
+        (
+            Action::CheckWrite,
+            Resource::CheckRun {
+                project,
+                namespace,
+                granted,
+            },
+        ) => {
+            if principal.is_agent() {
+                return Err(refused("agent_token"));
+            }
+            match namespace {
+                // forge's own worker writes these without HTTP (X2):
+                // administrators are refused too.
+                forge_core::CheckNamespace::Forge => Err(refused("forge_namespace_internal")),
+                // A person's external tool (ADR-0024 §10): not in C1.
+                forge_core::CheckNamespace::Ext => Err(refused("ext_namespace_unavailable")),
+                forge_core::CheckNamespace::Ci | forge_core::CheckNamespace::Kanflow => {
+                    if kind != AccountKind::ServiceAccount {
+                        return Err(refused("not_service_account"));
+                    }
+                    if !granted {
+                        return Err(refused("namespace_not_granted")
+                            .with_context("namespace", namespace.as_str()));
+                    }
+                    // The membership role (a service account never holds
+                    // administrator rights).
+                    if project.role.is_some_and(|r| r >= Role::Developer) {
+                        Ok(())
+                    } else {
+                        Err(deny(ErrorCode::Forbidden)
+                            .with_context("required_role", Role::Developer.as_str())
+                            .with_context("actual_role", project.role.map_or("none", Role::as_str)))
+                    }
+                }
+            }
+        }
+        (Action::CheckRead, Resource::Project(p)) => need(Role::Reporter, read_role(p)),
+        (Action::CheckNamespaceGrantManage, Resource::ServiceAccount(account)) => {
+            people_only()?;
+            admin_only()?;
+            service_account(account)
+        }
         // --- integrations (M3 I1a, plan 11 §5 I1) ---
         // Creating and changing one: a person's, an administrator's web
         // session (a token was refused above as session-only).
@@ -1007,6 +1055,9 @@ pub fn authorize(
             | Action::ServiceAccountTokenIssue
             | Action::ServiceAccountTokenList
             | Action::ServiceAccountTokenRevoke
+            | Action::CheckWrite
+            | Action::CheckRead
+            | Action::CheckNamespaceGrantManage
             | Action::IntegrationManage
             | Action::IntegrationRead
             | Action::IntegrationBindingManage
@@ -1033,7 +1084,8 @@ pub fn authorize(
             | Resource::CodeownersEnforcement { .. }
             | Resource::MergeSettingsChange { .. }
             | Resource::ServiceAccount(_)
-            | Resource::ServiceAccountTokenRequest { .. },
+            | Resource::ServiceAccountTokenRequest { .. }
+            | Resource::CheckRun { .. },
         ) => wrong_resource(),
     }
 }
@@ -1075,7 +1127,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::MergeRequest { project, .. }
         | Resource::Discussion { project, .. }
         | Resource::CodeownersEnforcement { project, .. }
-        | Resource::MergeSettingsChange { project, .. } => live(project),
+        | Resource::MergeSettingsChange { project, .. }
+        | Resource::CheckRun { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -1155,7 +1208,8 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::CodeownersEnforcement { .. }
         | Resource::MergeSettingsChange { .. }
         | Resource::ServiceAccount(_)
-        | Resource::ServiceAccountTokenRequest { .. } => None,
+        | Resource::ServiceAccountTokenRequest { .. }
+        | Resource::CheckRun { .. } => None,
     }
 }
 

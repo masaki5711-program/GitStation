@@ -26,6 +26,8 @@ forge-oidc.workspace = true
 # M3 R1a: the merge request commands (web → review → auth / git / db,
 # ADR-0024 §11).
 forge-review.workspace = true
+# M3 C1: the Checks API (web → checks → auth / git / db, ADR-0024 §11).
+forge-checks.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).

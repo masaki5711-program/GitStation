@@ -18,8 +18,7 @@ use forge_errors::{ErrorCode, ForgeError};
 
 use crate::approvals::{evaluate, ApprovalReport, STATE_BUDGET};
 use crate::merges::{
-    conditions, evaluate_merge, stored_mergeable, BlockReason, MergeFacts, NoCheckRuns,
-    RequiredCheck,
+    conditions, evaluate_merge, stored_mergeable, BlockReason, MergeFacts, RequiredCheck,
 };
 use crate::{account, change_context, loaded, require, shape_mismatch, Review, ReviewRequest};
 
@@ -280,12 +279,25 @@ impl Review {
         let live = review::merges::latest_merge(&self.db, current.id)
             .await?
             .is_some_and(|m| m.state.is_live());
+        // M3 C1: the head's runs, only when the merge rule requires a check;
+        // a failed read fails the status (a store failure is never
+        // "no run reported").
+        let runs = if facts
+            .protection
+            .merge_rule(&current.target_branch)
+            .required_checks
+            .is_empty()
+        {
+            forge_core::CheckRunsOnHead::default()
+        } else {
+            self.checks.runs_on(project, &head).await?
+        };
         let conditions = conditions(
             &facts.protection,
             &current.target_branch,
             &head,
             unresolved,
-            &NoCheckRuns,
+            &runs,
         );
         let inputs = git.inputs(&current, &head, facts);
         let report = evaluate(&inputs);

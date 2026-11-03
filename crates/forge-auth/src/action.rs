@@ -143,6 +143,23 @@ actions! {
     /// suspension also needs a role at or above every protection rule of
     /// the project (`above_own_role`); `api`.
     CodeownersEnforcementToggle,
+    // --- REST API: check runs (M3 C1, ADR-0024 §10, §12) ---
+    /// `POST /api/v1/projects/{id}/commits/{sha}/checks`
+    /// (`Resource::CheckRun`): report a check run (create or update by
+    /// name). `ci/` and `kanflow/` only by a service account holding a grant
+    /// of the namespace and a Developer (or above) membership; people —
+    /// administrators included —, bots and agents' tokens are refused;
+    /// `forge/` is never written over HTTP; `ext/` is refused in C1. `api`.
+    CheckWrite,
+    /// `GET /api/v1/projects/{id}/commits/{sha}/checks`: as `RepoBrowse`
+    /// (`read_api`).
+    CheckRead,
+    /// `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{ns}`
+    /// (`Resource::ServiceAccount`): grant or revoke a check namespace
+    /// (`ci`, `kanflow`) to a service account. Administrators, people only
+    /// (who may report a merge condition is a person's decision); `api` +
+    /// `admin` on a token.
+    CheckNamespaceGrantManage,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -354,6 +371,7 @@ impl Action {
                 | Action::ServiceAccountCreate
                 | Action::ServiceAccountUpdate
                 | Action::ServiceAccountTokenIssue
+                | Action::CheckNamespaceGrantManage
                 | Action::IntegrationManage
                 | Action::IntegrationRead
                 | Action::IntegrationBindingManage
@@ -409,6 +427,7 @@ impl Action {
             | Action::ServiceAccountList
             | Action::ServiceAccountRead
             | Action::ServiceAccountTokenList
+            | Action::CheckRead
             | Action::IntegrationRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
@@ -440,6 +459,8 @@ impl Action {
             | Action::CodeownersEnforcementToggle
             | Action::ServiceAccountUpdate
             | Action::ServiceAccountTokenRevoke
+            | Action::CheckWrite
+            | Action::CheckNamespaceGrantManage
             | Action::IntegrationBindingManage
             | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.

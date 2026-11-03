@@ -210,7 +210,12 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::WorkItemProjectNotBound
         | ErrorCode::WorkItemLinkLimitReached
         | ErrorCode::ApprovalRuleChanged
-        | ErrorCode::MergeRuleChanged => false,
+        | ErrorCode::MergeRuleChanged
+        // M3 C1: a stored run this build cannot read stays unreadable;
+        // a report's own codes never reach the job.
+        | ErrorCode::CheckRunDataInvalid
+        | ErrorCode::CheckPayloadInvalid
+        | ErrorCode::CheckRunLimitReached => false,
     }
 }
 

@@ -68,14 +68,33 @@ pub(crate) struct Locked {
 /// `FG-SYS-0001 project_without_namespace` (as `members::lock_project`), an
 /// unknown stored visibility `FG-DB-0021 unknown_visibility`.
 pub(crate) async fn lock(tx: &mut ChangeTx, project: ProjectId) -> Result<Locked, ForgeError> {
+    lock_with(tx, project, "FOR UPDATE OF p").await
+}
+
+/// [`lock`] with `FOR SHARE` (M3 C1 review fix 3: a check report reads the
+/// project's access facts and must block a purge, a deletion or a
+/// visibility change of the project until it commits, but not other
+/// reports — only the row lock's strength differs).
+pub(crate) async fn lock_shared(
+    tx: &mut ChangeTx,
+    project: ProjectId,
+) -> Result<Locked, ForgeError> {
+    lock_with(tx, project, "FOR SHARE OF p").await
+}
+
+async fn lock_with(
+    tx: &mut ChangeTx,
+    project: ProjectId,
+    strength: &'static str,
+) -> Result<Locked, ForgeError> {
     let row: Option<(String, bool, String, String, bool)> = tx
         .step(|c| async move {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.visibility, p.deleted_at IS NOT NULL, p.display_name, p.description, \
                  n.id IS NOT NULL FROM forge.projects p \
                  LEFT JOIN forge.namespaces n ON n.kind = 'project' AND n.owner_id = p.id \
-                 WHERE p.id = $1 FOR UPDATE OF p",
-            )
+                 WHERE p.id = $1 {strength}"
+            ))
             .bind(project.get())
             .fetch_optional(c)
             .await

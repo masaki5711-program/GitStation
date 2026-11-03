@@ -480,7 +480,7 @@
       "resolved": "Thread harus diselesaikan",
       "noPush": "Push langsung dilarang",
       "noPushLabel": "Larang push langsung (hanya merge)",
-      "unreportable": "Belum ada pemeriksaan yang dapat melaporkan hasil, jadi setiap merge ke branch ini terblokir. Hapus pemeriksaan wajib atau syaratnya untuk membukanya.",
+      "unreportable": "Beberapa pemeriksaan wajib tidak dapat dilaporkan oleh siapa pun, jadi setiap merge ke branch ini terblokir. Minta administrator mengizinkan akun layanan melaporkannya, atau hapus pemeriksaan itu.",
       "frozen": "Push langsung juga dilarang, jadi branch ini sama sekali tidak dapat berubah.",
       "change": "Ubah",
       "changeOf": "Ubah syarat {{pattern}}",

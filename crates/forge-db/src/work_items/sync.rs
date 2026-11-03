@@ -444,7 +444,11 @@ impl Subscriber for WorkItemSync {
                 | EventType::GroupMoved
                 | EventType::UserRenamed
                 | EventType::CodeownersEnforcementChanged
-                | EventType::CodeownersEnforcementRestored => Ok(()),
+                | EventType::CodeownersEnforcementRestored
+                // M3 C1: a check run names a commit, not a merge request;
+                // which merge requests' work items it concerns is the
+                // feed's to resolve (I1c), not recorded here.
+                | EventType::CheckCompleted => Ok(()),
             }
         })
     }

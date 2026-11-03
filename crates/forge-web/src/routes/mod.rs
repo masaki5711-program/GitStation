@@ -6,6 +6,7 @@
 pub mod assets;
 pub mod auth;
 pub mod browse;
+pub mod checks;
 pub mod content;
 pub mod directory;
 pub mod git;

@@ -58,6 +58,10 @@ guarded_functions = [
     "user_identities_human_guard",
     # M3 I1a: an integration acts as one service account, for its life.
     "integrations_service_account_guard",
+    # M3 C1: a check run's identity never changes; grants go to service
+    # accounts only.
+    "check_runs_guard",
+    "check_namespace_grants_kind_guard",
     # M3 I1b: a work item link's identity never changes; it ends once; the
     # purge alone deletes it.
     "merge_request_work_items_guard",
@@ -433,6 +437,41 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 I1a ──
+
+# ── M3 C1: the Checks API (ADR-0024 §10) ──
+# One row per (project, commit, name); a report updates it. check_run.reported /
+# check.completed are audited on the project.
+[tables.check_runs]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# At most 50 per run, replaced with the run.
+[tables.check_annotations]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# Which service account reports which namespace (ci / kanflow) on which
+# project (20261115100100); check_namespace.granted / .revoked are audited
+# on the project.
+[tables.check_namespace_grants]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 C1 ──
 
 # ── M3 I1b: work items and their links (plan 02 §2, §5.7, §5.8, ADR-0016
 # Amendment I1b). Derived: the ordered subscriber work-item-sync writes them

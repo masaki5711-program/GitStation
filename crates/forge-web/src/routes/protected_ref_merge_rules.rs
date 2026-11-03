@@ -159,14 +159,28 @@ pub async fn put(state: AppState, request: Dispatched<RefProtectionCtx, PutMerge
             )
             .await?;
         let mut body = written_body(&state, w.proof.id().0, rule_of(&w.proof)?).await?;
-        // R6 review: before the Checks API (C1) no check can be reported,
-        // so a required check blocks every merge (runbook merge-blocked).
-        if body
+        // M3 C1 (narrowing R6's warning): a required check that no active
+        // service account may report blocks every merge into the branch
+        // (runbook checks-reporting); name each one.
+        let required: Vec<forge_core::CheckName> = body
             .merge_rule
             .as_ref()
-            .is_some_and(|m| !m.required_checks.is_empty())
-        {
+            .map(|m| {
+                m.required_checks
+                    .iter()
+                    .filter_map(|n| forge_core::CheckName::parse(n).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let unreportable = bounded(
+            &state,
+            "check_reporters_load",
+            crate::routes::checks::checks(&state)?.unreportable(w.proof.id().0, &required),
+        )
+        .await?;
+        if !unreportable.is_empty() {
             body.warnings.push(REQUIRED_CHECKS_UNREPORTABLE.to_owned());
+            body.unreportable_checks = unreportable.iter().map(|n| n.as_str().to_owned()).collect();
         }
         Ok((outcome, json(body)?))
     }

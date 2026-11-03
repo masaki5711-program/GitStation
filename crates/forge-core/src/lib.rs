@@ -4,6 +4,7 @@
 pub mod approval;
 pub mod audit_details;
 pub mod authenticator;
+pub mod checks;
 pub mod config;
 pub mod cursor;
 pub mod dedup_key;
@@ -43,6 +44,10 @@ pub use audit_details::{
     AuditDetails, ChangedField, IdentityLinkVia, ServiceAccountField, SessionRevokeReason,
 };
 pub use authenticator::{Authenticator, SessionAuthenticator, SessionIdentity, TokenIdentity};
+pub use checks::{
+    CheckConclusion, CheckResultsSource, CheckRun, CheckRunsOnHead, CheckStatus,
+    MAX_CHECK_ANNOTATIONS, MAX_CHECK_RUNS_PER_COMMIT,
+};
 pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
@@ -92,6 +97,8 @@ pub use work_item::{
 
 #[cfg(test)]
 mod audit_details_tests;
+#[cfg(test)]
+mod checks_tests;
 #[cfg(test)]
 mod cursor_tests;
 #[cfg(test)]

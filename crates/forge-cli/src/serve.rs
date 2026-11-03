@@ -125,8 +125,18 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 .with_review_git(forge_review::approvals::ReviewGit::new(
                     smart_http.git.clone(),     // clone: Arc handles
                     smart_http.storage.clone(), // clone: the root path
-                )),
+                ))
+                // M3 C1 (ADR-0024 §11): the merge status reads the head's
+                // check runs from the database (the request and the merge
+                // job read them in the gate's transaction).
+                .with_check_results(Arc::new(db.clone())), // clone: the pool handle is shared
             )
+            // M3 C1: the Checks API; a report's commit must be reachable
+            // through the same browse API (reach checks, limits, caches).
+            .with_checks(forge_checks::Checks::new(
+                db.clone(),                          // clone: the pool handle is shared
+                Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
+            ))
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(

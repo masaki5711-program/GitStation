@@ -82,16 +82,22 @@ pub struct ProtectedRefBody {
     #[schema(required = true)]
     pub merge_rule: Option<MergeRuleBody>,
     /// Things to know about the answer (M3 R6 review). Today only
-    /// `required_checks_unreportable`: the merge rule requires checks but no
-    /// check can be reported before the Checks API (C1), so every merge
-    /// into the branch is blocked (`required_check_missing`); with the
-    /// direct-push ban the branch cannot change at all. Remove the check
-    /// names or the merge rule to unblock (runbook merge-blocked). Empty
-    /// otherwise.
+    /// `required_checks_unreportable` (M3 C1: narrowed): the merge rule
+    /// requires a check no active service account may report (its
+    /// namespace is granted to none, or it is `forge/`, whose own checks
+    /// arrive later), so every merge into the branch is blocked
+    /// (`required_check_missing`); with the direct-push ban the branch
+    /// cannot change at all. The names are in `unreportable_checks`. Grant
+    /// the namespace to a service account, or remove the check names
+    /// (runbooks checks-reporting, merge-blocked). Empty otherwise.
     pub warnings: Vec<String>,
+    /// M3 C1: the required checks behind `required_checks_unreportable`
+    /// (empty without the warning). Only in a merge-rule write's answer.
+    pub unreportable_checks: Vec<String>,
 }
 
-/// The warning of a merge rule requiring checks before the Checks API.
+/// The warning of a merge rule requiring a check no active service account
+/// may report (M3 C1; `unreportable_checks` names them).
 pub const REQUIRED_CHECKS_UNREPORTABLE: &str = "required_checks_unreportable";
 
 // Built only by `merge_rule_body`; its doc comment is the schema description.
@@ -154,6 +160,7 @@ fn rule_body(rule: &StoredRule) -> Result<ProtectedRefBody, ForgeError> {
         updated_at: rule.updated_at.clone(),
         merge_rule,
         warnings: Vec::new(),
+        unreportable_checks: Vec::new(),
     })
 }
 

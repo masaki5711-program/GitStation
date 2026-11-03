@@ -259,7 +259,12 @@ async fn world() -> World {
                 git.clone(),
                 storage.clone(),
             )),
-    );
+    )
+    // M3 C1: the Checks API (the merge rule's warning reads its reporters).
+    .with_checks(forge_checks::Checks::new(
+        t.db.clone(),
+        Arc::new(browser.clone()),
+    ));
     let router = forge_web::app(state, AppConfig::default()).expect("router");
     let merger =
         Merger::new(t.db.clone(), git.clone(), storage.clone()).with_browser(browser.clone());
@@ -944,8 +949,9 @@ async fn the_merge_rule_routes_and_the_status_contract() {
     let (status, body) = put(olga.clone(), wanted).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["merge_rule"]["required_checks"], json!(["ci/gates"]));
-    // R6 review: no check can be reported before the Checks API.
+    // M3 C1: no service account may report ci/ yet (no grant).
     assert_eq!(body["warnings"], json!(["required_checks_unreportable"]));
+    assert_eq!(body["unreportable_checks"], json!(["ci/gates"]));
     let (_, list) = send(
         w.router.clone(),
         "GET",
@@ -1869,5 +1875,406 @@ async fn a_group_without_its_namespace_row_never_blocks_the_merge_decision() {
     assert_eq!(warned[0]["error_code"], "FG-SYS-0001", "{}", warned[0]);
     assert!(warned[0]["request_id"].is_string(), "{}", warned[0]);
     assert_eq!(warned[0]["missing_groups"], 1, "{}", warned[0]);
+    w.t.drop_now().await;
+}
+
+// ── M3 C1: the Checks API (ADR-0024 §10, docs/api/checks.md) ──
+
+impl World {
+    /// A web session of a new administrator.
+    async fn admin(&self) -> Caller {
+        let mut ada = NewUser::human("ada", "ada", "ada@example.test");
+        ada.is_admin = true;
+        let id = users::create(&self.t.db, &ctx("req-ada"), &ada)
+            .await
+            .expect("ada")
+            .user_id;
+        let session = forge_db::sessions::issue(
+            &self.t.db,
+            &ctx("req-session-ada"),
+            &forge_db::sessions::NewSession {
+                user: id,
+                idle: Duration::from_secs(3600),
+                absolute: Duration::from_secs(8 * 3600),
+                oidc: None,
+            },
+        )
+        .await
+        .expect("session")
+        .session_id;
+        Caller {
+            principal: Principal::authenticated(
+                id,
+                true,
+                true,
+                Credential::Session,
+                forge_auth::AccountKind::Human,
+            ),
+            session: Some(session),
+        }
+    }
+
+    /// A CI service account (a Developer member) with an `api` token.
+    async fn reporter(&self, owner: UserId) -> (UserId, Caller) {
+        let sa = forge_db::service_accounts::create(
+            &self.t.db,
+            &ctx("req-sa"),
+            &forge_db::service_accounts::NewServiceAccount {
+                username: "ci-runner".to_owned(),
+                display_name: "CI".to_owned(),
+                owner,
+                purpose: "synthetic CI reporter".to_owned(),
+            },
+            owner,
+        )
+        .await
+        .expect("service account")
+        .user_id;
+        projects::add_member(
+            &self.t.db,
+            &ctx("req-sa-member"),
+            forge_core::ProjectId::new(self.project),
+            sa,
+            Role::Developer,
+        )
+        .await
+        .expect("member");
+        let caller = Caller {
+            principal: Principal::authenticated(
+                sa,
+                false,
+                true,
+                Credential::Token(vec![Scope::Api]),
+                forge_auth::AccountKind::ServiceAccount,
+            ),
+            session: None,
+        };
+        (sa, caller)
+    }
+
+    fn checks_uri(&self, sha: &str) -> String {
+        format!("/api/v1/projects/{}/commits/{sha}/checks", self.project)
+    }
+}
+
+/// The plan's route E2E: an administrator grants `ci` to a service account
+/// (the merge rule's warning narrows), the service account reports
+/// `ci/gates` on the merge request's head, the status contract (`gstn mr
+/// status --json` prints it unchanged) shows the run and the merge request
+/// is mergeable; the refusals of people, agents, `forge/`, `ext/`, a bad
+/// body, an unknown commit and an outsider.
+#[tokio::test]
+async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let ada = w.admin().await;
+    let (sa, ci) = w.reporter(olga.principal.user().expect("olga")).await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "developer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let rule = created["id"].as_i64().expect("rule id");
+    let rule_uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &rule_uri,
+        olga.clone(),
+        Some(json!({"required_checks": ["ci/gates", "forge/risk"], "expected_updated_at": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["warnings"], json!(["required_checks_unreportable"]));
+    assert_eq!(
+        body["unreportable_checks"],
+        json!(["ci/gates", "forge/risk"])
+    );
+    // The grant: administrators only, for one project; then it narrows the
+    // warning to the name without a reporter. A grant on another project
+    // (review fix 1) changes nothing here.
+    let elsewhere = projects::create(
+        &w.t.db,
+        &ctx("req-elsewhere"),
+        &NewProject::new(
+            "elsewhere",
+            w.t.json_rows("SELECT id FROM forge.namespaces WHERE kind = 'user' AND owner_id = (SELECT id FROM forge.users WHERE username = 'olga')")
+                .await
+                .first()
+                .and_then(|r| r["id"].as_i64())
+                .map(forge_core::NamespaceId::new)
+                .expect("olga's namespace"),
+            "Elsewhere",
+            olga.principal.user().expect("olga"),
+        ),
+    )
+    .await
+    .expect("elsewhere")
+    .project_id
+    .get();
+    let elsewhere_uri = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{elsewhere}/ci",
+        sa.get()
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &elsewhere_uri, ada.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let grant_uri = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/ci",
+        sa.get(),
+        w.project
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &grant_uri, olga.clone(), None).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &grant_uri, ada.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let both = json!([
+        {"project_id": w.project, "namespace": "ci"},
+        {"project_id": elsewhere, "namespace": "ci"}
+    ]);
+    assert_eq!(body, json!({"grants": both, "changed": true}));
+    let (_, again) = send(w.router.clone(), "PUT", &grant_uri, ada.clone(), None).await;
+    assert_eq!(again["changed"], false);
+    let forge_grant = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/forge",
+        sa.get(),
+        w.project
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &forge_grant, ada.clone(), None).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0020"),
+        "{body}"
+    );
+    let grants_uri = format!("/api/v1/admin/service-accounts/{}/check-grants", sa.get());
+    let (status, body) = send(w.router.clone(), "GET", &grants_uri, ada.clone(), None).await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"grants": both})));
+    let (_, listed) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        None,
+    )
+    .await;
+    let current = listed["rules"][0]["merge_rule"]["updated_at"].clone();
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &rule_uri,
+        olga.clone(),
+        Some(json!({"required_checks": ["ci/gates"], "expected_updated_at": current})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["warnings"], json!([]));
+    assert_eq!(body["unreportable_checks"], json!([]));
+    // Before any report: required_check_missing.
+    let (_, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s["reasons"][0]["reason"], "required_check_missing", "{s}");
+    // The refusals.
+    let report = json!({"name": "ci/gates", "status": "completed", "conclusion": "success",
+                        "summary": "all green", "details_url": "https://ci.example.test/1"});
+    let uri = w.checks_uri(&w.head);
+    for (who, why) in [
+        (token(w.dev_id, &[Scope::Api], false), "a person"),
+        (token(w.dev_id, &[Scope::Api], true), "an agent"),
+    ] {
+        let (status, body) = send(w.router.clone(), "POST", &uri, who, Some(report.clone())).await;
+        assert_eq!(
+            (status, code(&body)),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+            "{why}: {body}"
+        );
+    }
+    for name in ["forge/risk", "ext/lint"] {
+        let mut r = report.clone();
+        r["name"] = json!(name);
+        let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(r)).await;
+        assert_eq!(
+            (status, code(&body)),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+            "{name}: {body}"
+        );
+    }
+    let mut bad = report.clone();
+    bad["conclusion"] = Value::Null;
+    let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(bad)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0020"),
+        "{body}"
+    );
+    let mut bad = report.clone();
+    bad["name"] = json!("gates");
+    let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(bad)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0020"),
+        "{body}"
+    );
+    // A commit no branch or tag reaches is not found (nothing is written);
+    // a malformed id is an absent resource.
+    let unknown = w.checks_uri(&"9".repeat(40));
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &unknown,
+        ci.clone(),
+        Some(report.clone()),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0023"),
+        "{body}"
+    );
+    let (status, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.checks_uri("ABC"),
+        ci.clone(),
+        Some(report.clone()),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    // An outsider cannot see the project: the same 404 as a missing one.
+    let (status, body) = send(w.router.clone(), "GET", &uri, w.outsider.clone(), None).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    // The report: created, then updated by name.
+    let (status, run) = send(
+        w.router.clone(),
+        "POST",
+        &uri,
+        ci.clone(),
+        Some(report.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{run}");
+    assert_eq!(run["name"], "ci/gates");
+    assert_eq!(run["conclusion"], "success");
+    assert_eq!(run["reported_by"]["username"], "ci-runner");
+    assert_eq!(run["revision"], 1);
+    let (status, again) = send(
+        w.router.clone(),
+        "POST",
+        &uri,
+        ci.clone(),
+        Some(report.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["id"], run["id"]);
+    assert_eq!(again["revision"], 2);
+    let (status, list) = send(w.router.clone(), "GET", &uri, w.dev.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["schema_version"], 1);
+    assert_eq!(list["head_sha"], w.head);
+    assert_eq!(list["check_runs"].as_array().map(Vec::len), Some(1));
+    // check.completed once: the second report kept the conclusion.
+    let events =
+        w.t.json_rows("SELECT event_type FROM forge.events WHERE event_type = 'check.completed'")
+            .await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    // The status contract shows the run; nothing blocks.
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(
+        s["checks"],
+        json!([{"name": "ci/gates", "status": "completed", "conclusion": "success"}])
+    );
+    assert_eq!(s["mergeable"], true, "{s}");
+    assert_eq!(s["reasons"], json!([]));
+    w.t.drop_now().await;
+}
+
+/// Review fix 7: the body cap of a report is the JSON routes' 64 KiB
+/// (`MAX_JSON_BODY_BYTES`). A report of exactly 64 KiB with 50 annotations
+/// is accepted (the field limits — 64 KiB summary, 50 × 4 KiB messages —
+/// are upper bounds; the body cap binds first, docs/api/checks.md); one
+/// byte more is 413 FG-WEB-0009 and nothing is written. The stored
+/// `check.completed` carries its dedup key.
+#[tokio::test]
+async fn the_largest_report_fits_the_body_cap_and_one_byte_more_is_413() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let ada = w.admin().await;
+    let (sa, ci) = w.reporter(olga.principal.user().expect("olga")).await;
+    let grant = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/ci",
+        sa.get(),
+        w.project
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &grant, ada.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let annotations: Vec<Value> = (0..50)
+        .map(|i| {
+            json!({"path": format!("src/file{i}.rs"), "start_line": 1, "end_line": 2,
+                   "level": "warning", "message": "m".repeat(500), "title": "lint"})
+        })
+        .collect();
+    let report = |summary_len: usize| {
+        json!({"name": "ci/gates", "status": "completed", "conclusion": "success",
+               "summary": "s".repeat(summary_len),
+               "details_url": "https://ci.example.test/runs/1",
+               "annotations": annotations.clone()})
+    };
+    let cap = forge_web::body::MAX_JSON_BODY_BYTES;
+    let base = report(0).to_string().len();
+    let exact = report(cap - base);
+    assert_eq!(exact.to_string().len(), cap);
+    let uri = w.checks_uri(&w.head);
+    let over = report(cap - base + 1);
+    let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(over)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::PAYLOAD_TOO_LARGE, "FG-WEB-0009"),
+        "{body}"
+    );
+    assert!(w
+        .t
+        .json_rows("SELECT id FROM forge.check_runs")
+        .await
+        .is_empty());
+    let (status, run) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(exact)).await;
+    assert_eq!(status, StatusCode::CREATED, "{run}");
+    assert_eq!(run["annotations"].as_array().map(Vec::len), Some(50));
+    let id = run["id"].as_i64().expect("id");
+    let events =
+        w.t.json_rows("SELECT dedup_key FROM forge.events WHERE event_type = 'check.completed'")
+            .await;
+    assert_eq!(
+        events,
+        [json!({"dedup_key": format!("check_completed:{id}:1")})]
+    );
     w.t.drop_now().await;
 }

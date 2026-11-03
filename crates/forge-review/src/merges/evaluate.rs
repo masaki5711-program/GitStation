@@ -84,71 +84,9 @@ pub enum BlockReason {
     },
 }
 
-/// A check run's status (ADR-0024 §10; C1 reports it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CheckStatus {
-    Queued,
-    InProgress,
-    Completed,
-}
-
-impl CheckStatus {
-    pub const ALL: [CheckStatus; 3] = [Self::Queued, Self::InProgress, Self::Completed];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
-        }
-    }
-}
-
-/// A completed check run's conclusion (ADR-0024 §10).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CheckConclusion {
-    Success,
-    Neutral,
-    Failure,
-    Error,
-    ActionRequired,
-}
-
-impl CheckConclusion {
-    pub const ALL: [CheckConclusion; 5] = [
-        Self::Success,
-        Self::Neutral,
-        Self::Failure,
-        Self::Error,
-        Self::ActionRequired,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Neutral => "neutral",
-            Self::Failure => "failure",
-            Self::Error => "error",
-            Self::ActionRequired => "action_required",
-        }
-    }
-}
-
-/// The run of a check on the head (the latest one per name, C1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CheckRun {
-    pub status: CheckStatus,
-    /// `Some` only when `completed`.
-    pub conclusion: Option<CheckConclusion>,
-}
-
-impl CheckRun {
-    /// Whether it satisfies a required check: `completed` and `success`
-    /// only (ADR-0024 §10: `neutral` does not).
-    pub fn succeeded(&self) -> bool {
-        self.status == CheckStatus::Completed && self.conclusion == Some(CheckConclusion::Success)
-    }
-}
+// M3 C1: the check run types moved to forge-core (forge-checks records
+// them, forge-review decides with them; neither depends on the other).
+pub use forge_core::checks::{CheckConclusion, CheckRun, CheckStatus};
 
 /// A required check and its run on the head (`None`: no run reported).
 #[derive(Debug, Clone, PartialEq, Eq)]

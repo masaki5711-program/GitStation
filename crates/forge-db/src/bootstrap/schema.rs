@@ -55,6 +55,9 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.user_identities_human_guard()",
     // ── M3 I1a: an integration's service account (20261114100000) ──
     "forge.integrations_service_account_guard()",
+    // ── M3 C1: check runs and namespace grants (20261115100000) ──
+    "forge.check_runs_guard()",
+    "forge.check_namespace_grants_kind_guard()",
     // ── M3 I1b: a work item link ends once; the purge deletes it (20261116100000) ──
     "forge.merge_request_work_items_guard()",
     // ── M3 I1b review: a person's link is audited, a detected one the
@@ -177,6 +180,20 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER integrations_service_account_guard BEFORE INSERT OR UPDATE OF \
          service_account_id ON forge.integrations FOR EACH ROW EXECUTE FUNCTION \
          forge.integrations_service_account_guard()",
+    ),
+    // ── M3 C1: a check run's identity; grants to service accounts only (20261115100000) ──
+    (
+        "check_runs",
+        "check_runs_identity",
+        "CREATE TRIGGER check_runs_identity BEFORE UPDATE ON forge.check_runs \
+         FOR EACH ROW EXECUTE FUNCTION forge.check_runs_guard()",
+    ),
+    (
+        "check_namespace_grants",
+        "check_namespace_grants_kind_guard",
+        "CREATE TRIGGER check_namespace_grants_kind_guard BEFORE INSERT OR UPDATE OF user_id \
+         ON forge.check_namespace_grants FOR EACH ROW EXECUTE FUNCTION \
+         forge.check_namespace_grants_kind_guard()",
     ),
     // ── M3 I1b: a work item link ends once; the purge deletes it (20261116100000) ──
     (
@@ -669,6 +686,11 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]
             .concat(),
         ),
+        // ── M3 C1: check runs, annotations (removed by the purge) and the
+        // namespace grants (a revoke deletes) (20261115100000) ──
+        ("forge.check_runs", operational()),
+        ("forge.check_annotations", operational()),
+        ("forge.check_namespace_grants", operational()),
         // ── M3 I1b: work items (never updated or deleted), their links
         // (UPDATE of the unlink columns only, DELETE for the purge) and the
         // events' work items (20261116100000) ──
@@ -875,6 +897,10 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 I1a: integrations (migration 20261114100000) ──
     "integrations",
     "integration_bindings",
+    // ── M3 C1: the Checks API (migration 20261115100000) ──
+    "check_runs",
+    "check_annotations",
+    "check_namespace_grants",
 ];
 
 /// Every table the first migration creates.

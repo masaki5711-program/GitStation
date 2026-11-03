@@ -103,6 +103,91 @@
         ],
         "type": "object"
       },
+      "AnnotationBody": {
+        "additionalProperties": false,
+        "description": "One annotation as stored.",
+        "properties": {
+          "end_line": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "level": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "start_line": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "start_line",
+          "end_line",
+          "level",
+          "message",
+          "title"
+        ],
+        "type": "object"
+      },
+      "AnnotationRequest": {
+        "additionalProperties": false,
+        "description": "One annotation of a report.",
+        "properties": {
+          "end_line": {
+            "description": "At least `start_line` (default: `start_line`).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "level": {
+            "description": "`notice`, `warning` or `failure`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "1 character to 4 KiB, plain text.",
+            "type": "string"
+          },
+          "path": {
+            "description": "A path inside the repository: relative, no `..` segment, 1..=4096\nbytes.",
+            "type": "string"
+          },
+          "start_line": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": {
+            "description": "At most 255 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "start_line",
+          "level",
+          "message"
+        ],
+        "type": "object"
+      },
       "ApprovalAnswerBody": {
         "additionalProperties": false,
         "description": "What an approve or unapprove did.",
@@ -708,6 +793,147 @@
         },
         "required": [
           "push_min_role"
+        ],
+        "type": "object"
+      },
+      "CheckGrantChange": {
+        "additionalProperties": false,
+        "description": "A grant change's answer: the grants now, and whether the change wrote\nanything (`false`: the grant already was, or was not, there).",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "CheckGrants": {
+        "additionalProperties": false,
+        "description": "The grants of a service account, by project then namespace.",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "type": "object"
+      },
+      "CheckRunBody": {
+        "additionalProperties": false,
+        "description": "One check run (docs/api/checks.md).",
+        "properties": {
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationBody"
+            },
+            "type": "array"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339 with microseconds.",
+            "type": "string"
+          },
+          "details_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reported_by": {
+            "$ref": "#/components/schemas/ReporterBody"
+          },
+          "revision": {
+            "description": "Counts the run's reports (1 at creation).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "head_sha",
+          "status",
+          "conclusion",
+          "summary",
+          "details_url",
+          "annotations",
+          "reported_by",
+          "revision",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "type": "object"
+      },
+      "CheckRunList": {
+        "additionalProperties": false,
+        "description": "`GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1).",
+        "properties": {
+          "check_runs": {
+            "description": "By name; at most 100.",
+            "items": {
+              "$ref": "#/components/schemas/CheckRunBody"
+            },
+            "type": "array"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "head_sha",
+          "check_runs"
         ],
         "type": "object"
       },
@@ -1502,6 +1728,26 @@
           "error_code",
           "user_message",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "GrantBody": {
+        "additionalProperties": false,
+        "description": "One grant: a namespace a service account reports on one project.",
+        "properties": {
+          "namespace": {
+            "description": "`ci` or `kanflow`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "namespace"
         ],
         "type": "object"
       },
@@ -2805,11 +3051,18 @@
             "description": "The minimum role that may push (create / fast-forward) a matching\nref; force-push and deletion are refused for everyone.",
             "type": "string"
           },
+          "unreportable_checks": {
+            "description": "M3 C1: the required checks behind `required_checks_unreportable`\n(empty without the warning). Only in a merge-rule write's answer.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "updated_at": {
             "type": "string"
           },
           "warnings": {
-            "description": "Things to know about the answer (M3 R6 review). Today only\n`required_checks_unreportable`: the merge rule requires checks but no\ncheck can be reported before the Checks API (C1), so every merge\ninto the branch is blocked (`required_check_missing`); with the\ndirect-push ban the branch cannot change at all. Remove the check\nnames or the merge rule to unblock (runbook merge-blocked). Empty\notherwise.",
+            "description": "Things to know about the answer (M3 R6 review). Today only\n`required_checks_unreportable` (M3 C1: narrowed): the merge rule\nrequires a check no active service account may report (its\nnamespace is granted to none, or it is `forge/`, whose own checks\narrive later), so every merge into the branch is blocked\n(`required_check_missing`); with the direct-push ban the branch\ncannot change at all. The names are in `unreportable_checks`. Grant\nthe namespace to a service account, or remove the check names\n(runbooks checks-reporting, merge-blocked). Empty otherwise.",
             "items": {
               "type": "string"
             },
@@ -2823,7 +3076,8 @@
           "created_at",
           "updated_at",
           "merge_rule",
-          "warnings"
+          "warnings",
+          "unreportable_checks"
         ],
         "type": "object"
       },
@@ -3132,6 +3386,75 @@
           }
         },
         "required": [
+          "username"
+        ],
+        "type": "object"
+      },
+      "ReportCheckRun": {
+        "additionalProperties": false,
+        "description": "`POST …/commits/{sha}/checks`.",
+        "properties": {
+          "annotations": {
+            "description": "At most 50; a report replaces the run's annotations.",
+            "items": {
+              "$ref": "#/components/schemas/AnnotationRequest"
+            },
+            "type": "array"
+          },
+          "conclusion": {
+            "description": "Exactly when `completed`: `success`, `neutral`, `failure`, `error`\nor `action_required`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details_url": {
+            "description": "An http(s) link for people (at most 2 KiB; never fetched by the\nserver).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "`<namespace>/<name>`: `ci/…` or `kanflow/…` (a granted service\naccount); `forge/…` and `ext/…` are refused over HTTP in C1.",
+            "type": "string"
+          },
+          "status": {
+            "description": "`queued`, `in_progress` or `completed`.",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Plain text / Markdown as written, at most 64 KiB (default empty).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ReporterBody": {
+        "additionalProperties": false,
+        "description": "Who reported a run last.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
           "username"
         ],
         "type": "object"
@@ -5215,6 +5538,163 @@
         "x-forge-max-body-bytes": 4096
       }
     },
+    "/api/v1/admin/service-accounts/{id}/check-grants": {
+      "get": {
+        "operationId": "get_api_v1_admin_service_accounts_id_check_grants",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckGrants"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The check namespace grants of a service account, by project (administrators)",
+        "x-forge-action": "ServiceAccountRead"
+      }
+    },
+    "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_service_accounts_id_check_grants_project_id_namespace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckGrantChange"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Stop a service account reporting a check namespace on one project (administrators, people only)",
+        "x-forge-action": "CheckNamespaceGrantManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_admin_service_accounts_id_check_grants_project_id_namespace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckGrantChange"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Let a service account report a check namespace on one project (ci, kanflow; administrators, people only)",
+        "x-forge-action": "CheckNamespaceGrantManage"
+      }
+    },
     "/api/v1/admin/service-accounts/{id}/tokens": {
       "get": {
         "operationId": "get_api_v1_admin_service_accounts_id_tokens",
@@ -6506,6 +6986,113 @@
         "summary": "Create or replace an approval rule (people only; Maintainer)",
         "x-forge-action": "ApprovalRuleManage",
         "x-forge-max-body-bytes": 16384
+      }
+    },
+    "/api/v1/projects/{id}/commits/{sha}/checks": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_commits_sha_checks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sha",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "List a commit's check runs by name (as the repository browse API; a commit no branch or tag reaches is not found)",
+        "x-forge-action": "CheckRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_projects_id_commits_sha_checks",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sha",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportCheckRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Report a check run on a commit; the same name again updates it (ci/, kanflow/: a service account holding the namespace, Developer member; forge/ and ext/ are refused)",
+        "x-forge-action": "CheckWrite",
+        "x-forge-max-body-bytes": 65536
       }
     },
     "/api/v1/projects/{id}/integration-bindings": {

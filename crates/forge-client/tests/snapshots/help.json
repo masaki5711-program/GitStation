@@ -2208,7 +2208,7 @@
       "scopes": [
         "api"
       ],
-      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten."
+      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten."
     },
     {
       "args": [
@@ -5887,6 +5887,392 @@
         "api"
       ],
       "summary": "Unbind a project from an integration (people only; Maintainer); the Reporter membership the binding granted is removed. Needs --yes."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account check-grants 42 --json"
+      ],
+      "name": "admin service-account check-grants",
+      "output": {
+        "properties": {
+          "grants": {
+            "items": {
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/service-accounts/{id}/check-grants"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "The check namespaces a service account may report, per project (M3 C1; administrators)."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project the grant is for.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "ci or kanflow.",
+          "kind": "positional",
+          "name": "namespace",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account grant-checks 42 --project 7 ci"
+      ],
+      "name": "admin service-account grant-checks",
+      "output": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "grants": {
+            "items": {
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Let a service account report checks of a namespace (ci or kanflow) on one project (administrators, people only). A grant is for that project only, and the account must also be a Developer member there; forge/ and ext/ are never granted."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project the grant is for.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "ci or kanflow.",
+          "kind": "positional",
+          "name": "namespace",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account revoke-checks 42 --project 7 ci"
+      ],
+      "name": "admin service-account revoke-checks",
+      "output": {
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "grants": {
+            "items": {
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants",
+          "changed"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Stop a service account reporting checks of a namespace on one project (administrators, people only); its reported runs stay."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The full commit id (40 or 64 hex digits).",
+          "kind": "option",
+          "name": "--sha",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "<namespace>/<name>, e.g. ci/gates (keep it stable per kind of check).",
+          "kind": "option",
+          "name": "--name",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "queued, in_progress or completed.",
+          "kind": "option",
+          "name": "--status",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "With completed: success, neutral, failure, error or action_required.",
+          "kind": "option",
+          "name": "--conclusion",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The summary (plain text / Markdown).",
+          "kind": "option",
+          "name": "--summary",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The summary from a UTF-8 file (at most 64 KiB).",
+          "kind": "option",
+          "name": "--summary-file",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "An http(s) link for people (the server never fetches it).",
+          "kind": "option",
+          "name": "--details-url",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A JSON array of {path, start_line, end_line?, level, message, title?} (at most 50).",
+          "kind": "option",
+          "name": "--annotations-file",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn checks report --project 7 --sha 0123456789abcdef0123456789abcdef01234567 --name ci/gates --status completed --conclusion success --details-url https://ci.example.test/runs/1"
+      ],
+      "name": "checks report",
+      "output": {
+        "properties": {
+          "annotations": {
+            "items": {
+              "required": [
+                "path",
+                "start_line",
+                "end_line",
+                "level",
+                "message",
+                "title"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conclusion": {
+            "enum": [
+              "success",
+              "neutral",
+              "failure",
+              "error",
+              "action_required",
+              null
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "details_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reported_by": {
+            "required": [
+              "id",
+              "username"
+            ],
+            "type": "object"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "in_progress",
+              "completed"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "head_sha",
+          "status",
+          "conclusion",
+          "summary",
+          "details_url",
+          "annotations",
+          "reported_by",
+          "revision",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "POST /api/v1/projects/{id}/commits/{sha}/checks"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Report a check run on a commit (M3 C1, docs/api/checks.md): a service account holding the name's namespace (ci/, kanflow/) and a Developer member; the same name on the same commit updates its run (there is no separate update). A conclusion exactly with --status completed. The commit must be reachable from a branch or tag (otherwise not found, FG-REPO-0023). A required check of a protected branch is met only by completed/success on the merge request's head."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The full commit id (40 or 64 hex digits).",
+          "kind": "option",
+          "name": "--sha",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn checks list --project 7 --sha 0123456789abcdef0123456789abcdef01234567 --json"
+      ],
+      "name": "checks list",
+      "output": {
+        "properties": {
+          "check_runs": {
+            "items": {
+              "required": [
+                "id",
+                "name",
+                "status",
+                "conclusion",
+                "reported_by"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "head_sha": {
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version",
+          "head_sha",
+          "check_runs"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/commits/{sha}/checks"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Every check run of a commit, by name, with its annotations (as the repository browse API; schema_version 1)."
     },
     {
       "args": [

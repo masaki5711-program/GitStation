@@ -5,9 +5,11 @@
 //! Shared by the merge request, the job's gates and the status read, so
 //! every decision reads the conditions alike.
 //!
-//! The check runs arrive with C1 (`check_runs`, `CheckResultsSource`):
-//! until then no run exists, so every required check is
-//! `required_check_missing` — never success (ADR-0024 §10).
+//! The check runs (M3 C1) are one snapshot of the head's runs
+//! ([`forge_core::CheckRunsOnHead`]): the request and the job read it in the
+//! gate's transaction (`MergeGate::check_runs`), the status through
+//! `forge_core::CheckResultsSource` — the same SQL. A required name without
+//! a run is `required_check_missing`, never success (ADR-0024 §10).
 
 use forge_core::{MergeMethod, ObjectId, ProtectionRules, RefName};
 use forge_db::review::StoredMergeSettings;
@@ -16,20 +18,16 @@ use forge_errors::ForgeError;
 use super::evaluate::{CheckRun, RequiredCheck};
 use super::MergeSettings;
 
-/// The runs of checks on a commit (C1 implements it; until then
-/// [`NoCheckRuns`]).
+/// The runs of checks on a commit.
 pub trait CheckRuns {
     /// The latest run of `name` on `head` (`None`: none reported).
     fn run(&self, head: &ObjectId, name: &forge_core::CheckName) -> Option<CheckRun>;
 }
 
-/// No check run has been reported anywhere (before C1).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoCheckRuns;
-
-impl CheckRuns for NoCheckRuns {
-    fn run(&self, _head: &ObjectId, _name: &forge_core::CheckName) -> Option<CheckRun> {
-        None
+/// M3 C1: the stored runs of one head (a run on another head never counts).
+impl CheckRuns for forge_core::CheckRunsOnHead {
+    fn run(&self, head: &ObjectId, name: &forge_core::CheckName) -> Option<CheckRun> {
+        forge_core::CheckRunsOnHead::run(self, head, name)
     }
 }
 

@@ -480,7 +480,7 @@
       "resolved": "Threads must be resolved",
       "noPush": "Direct pushes are forbidden",
       "noPushLabel": "Forbid direct pushes (merges only)",
-      "unreportable": "No check can report a result yet, so every merge into this branch is blocked. Remove the required checks or the conditions to unblock it.",
+      "unreportable": "No reporter can send some of the required checks, so every merge into this branch is blocked. Ask an administrator to let a service account report them, or remove those checks.",
       "frozen": "Direct pushes are forbidden too, so this branch cannot change at all.",
       "change": "Change",
       "changeOf": "Change the conditions of {{pattern}}",

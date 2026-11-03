@@ -2325,3 +2325,220 @@ async fn a_git_failure_of_the_carry_reads_is_logged_once() {
     assert!(live.is_empty(), "both approvals end: {live:?}");
     w.t.drop_now().await;
 }
+
+// ── M3 C1: the check runs behind the required checks (ADR-0024 §10) ──
+
+impl World {
+    /// Report `name` on `head` as forge-checks writes it (one row per
+    /// name; a second report updates it).
+    async fn run(&self, head: &str, name: &str, status: &str, conclusion: Option<&str>) {
+        let conclusion = conclusion.map_or_else(|| "NULL".to_owned(), |c| format!("'{c}'"));
+        let completed = if status == "completed" {
+            "now()"
+        } else {
+            "NULL"
+        };
+        self.t
+            .commit_audited(
+                ("project", self.project.get()),
+                &[format!(
+                    "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
+                     conclusion, completed_at, reported_by, request_id) VALUES ({p}, '{head}', \
+                     '{name}', '{status}', {conclusion}, {completed}, {u}, 'req-check') \
+                     ON CONFLICT (project_id, head_sha, name) DO UPDATE SET \
+                     status = EXCLUDED.status, conclusion = EXCLUDED.conclusion, \
+                     completed_at = EXCLUDED.completed_at, \
+                     revision = forge.check_runs.revision + 1",
+                    p = self.project.get(),
+                    u = self.owner.get()
+                )],
+            )
+            .await;
+    }
+
+    fn reason_names(status: &forge_review::MergeStatus) -> Vec<&'static str> {
+        status.reasons.iter().map(|r| r.as_str()).collect()
+    }
+}
+
+/// The plan's C1 row: a `completed` / `success` run of the required name on
+/// the merge request's head clears `required_check_missing`, and the merge
+/// goes through.
+#[tokio::test]
+async fn a_success_on_the_head_clears_required_check_missing() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    assert_eq!(
+        World::reason_names(&w.status().await),
+        ["required_check_missing"]
+    );
+    w.run(&w.head, "ci/gates", "completed", Some("success"))
+        .await;
+    let status = w.status().await;
+    assert!(status.mergeable, "{:?}", status.reasons);
+    let run = status.checks[0].run.expect("reported");
+    assert!(run.succeeded());
+    let attempt = w.ask().await.expect("queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    w.t.drop_now().await;
+}
+
+/// A run reported on an earlier head never counts for the new one.
+#[tokio::test]
+async fn a_success_on_an_old_head_does_not_count() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    let old = w.head.clone();
+    w.run(&old, "ci/gates", "completed", Some("success")).await;
+    assert!(w.status().await.mergeable);
+    w.push_next(&[("g.txt", "g\n")], "req-push-2").await;
+    assert_ne!(w.head, old);
+    let status = w.status().await;
+    assert_eq!(World::reason_names(&status), ["required_check_missing"]);
+    assert!(status.checks[0].run.is_none());
+    let blocked = w.ask().await.expect_err("blocked");
+    assert_eq!(reasons(&blocked), "required_check_missing");
+    w.t.drop_now().await;
+}
+
+/// `neutral` and a run still going are no success (ADR-0024 §10).
+#[tokio::test]
+async fn neutral_and_in_progress_block() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    for (status, conclusion) in [
+        ("completed", Some("neutral")),
+        ("in_progress", None),
+        ("queued", None),
+        ("completed", Some("failure")),
+    ] {
+        w.run(&w.head, "ci/gates", status, conclusion).await;
+        let s = w.status().await;
+        assert_eq!(
+            World::reason_names(&s),
+            ["required_check_not_successful"],
+            "{status} {conclusion:?}"
+        );
+        let blocked = w.ask().await.expect_err("blocked");
+        assert_eq!(reasons(&blocked), "required_check_not_successful");
+    }
+    w.t.drop_now().await;
+}
+
+/// A spy source: every call is counted and answered "no run reported".
+#[derive(Default)]
+struct SpySource {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl forge_core::CheckResultsSource for SpySource {
+    fn runs_on<'a>(
+        &'a self,
+        _project: ProjectId,
+        _head: &'a forge_core::ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::CheckRunsOnHead> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(forge_core::CheckRunsOnHead::default()) })
+    }
+}
+
+/// Review fix 2 (HIGH): the merge request and the merge job read the runs
+/// inside the gate's transaction (`MergeGate::check_runs`, under the merge
+/// request's locks), never through the status's `CheckResultsSource`. The
+/// spy answers "no run" for every call: a request that read through it
+/// would be refused (`required_check_missing`) although the stored run
+/// succeeded; the spy must not be called by the request or the job, only
+/// by the status. The job then decides on the runs as stored at its own
+/// gate: a run that failed after the request supersedes the attempt.
+#[tokio::test]
+async fn the_request_and_the_job_read_the_runs_inside_the_gate_transaction() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let spy = Arc::new(SpySource::default());
+    w.review = w.review.clone().with_check_results(spy.clone());
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    w.run(&w.head, "ci/gates", "completed", Some("success"))
+        .await;
+    let attempt = w
+        .ask()
+        .await
+        .expect("queued: the request read the stored success in its gate");
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    w.run(&w.head, "ci/gates", "completed", Some("failure"))
+        .await;
+    let report = w.merger.execute(attempt.id).await.expect("job");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
+    assert_eq!(w.tip("main"), w.base);
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // The status reads through the source (the spy says "no run").
+    let status = w.status().await;
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(World::reason_names(&status), ["required_check_missing"]);
+    w.t.drop_now().await;
+}
+
+/// A check results source that always fails (the store is down).
+struct FailingSource;
+
+impl forge_core::CheckResultsSource for FailingSource {
+    fn runs_on<'a>(
+        &'a self,
+        _project: ProjectId,
+        _head: &'a forge_core::ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::CheckRunsOnHead> {
+        Box::pin(async {
+            Err(ForgeError::new(ErrorCode::DbQueryFailed).with_context("query", "checks.runs_read"))
+        })
+    }
+}
+
+/// A failed read of the runs fails the status — it is never shown as
+/// "no run reported" (`required_check_missing`).
+#[tokio::test]
+async fn a_store_failure_in_status_is_an_error_not_missing() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.review = w.review.clone().with_check_results(Arc::new(FailingSource));
+    // Without a required check the runs are not read at all.
+    assert!(w.status().await.mergeable);
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    let principal = session(w.owner);
+    let proof = w
+        .mr_proof(&principal, Action::MergeRequestRead)
+        .await
+        .expect("proof");
+    let err = w
+        .review
+        .merge_status(
+            &RequestId::parse("req-status").expect("id"),
+            &proof,
+            ready(w.repo),
+            None,
+        )
+        .await
+        .expect_err("the store failed");
+    assert_eq!(err.code(), ErrorCode::DbQueryFailed);
+    w.t.drop_now().await;
+}
