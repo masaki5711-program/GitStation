@@ -742,7 +742,7 @@ FG-INT-0017; binding makes the service account a Reporter when it
 is no member and unbinding removes that membership while it is still Reporter,
 with the `member.added` / `.removed` audit row and event in the same change),
 `get` / `list` / `bindings` / `project_bindings` (read pool). The purge deletes
-a project's binding; the member removals clear `granted_membership`
+a project's binding; the member removals and role changes clear `granted_membership`
 (`integrations::clear_grant`). Schema backstops: `integrations_service_account_guard`
 (`integrations_service_account_kind`, `integrations_service_account_fixed`),
 `integrations_kind_known`, `integrations_event_types_count`,

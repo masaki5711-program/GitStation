@@ -961,3 +961,8 @@ Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding
 7. **受け入れた残り**: 結びつけの経路の答えで、Maintainer は連携の id の有無を知れる（判定の後、無い連携は
    `FG-REPO-0005 resource=integration`）。連携の id は秘密ではなく、Maintainer は kanflow の設定で id を知る立場なので、受け入れる。
    `forge-db/src/integrations` は `admin` / `bind` / `read` に分けた（動きは同じ）。
+8. **再レビュー（2026-11-03）**: forge_app の結びつけの UPDATE は `granted_membership` の列だけにした（追記のマイグレーション
+   `20261114100200` が表の UPDATE を取り消し、列の UPDATE を許す。結びつけの他の列は作った後に変わらない）。人が付けたメンバーの
+   **ロールを変えた** ときも（削除と同じく）同じ変更で `granted_membership` を false にする（どのロールへの変更でも、そのメンバーは人のもの）。
+   サービスアカウントが無効の連携は有効に戻せない（`create` と同じ規則、`FG-WEB-0006 field=enabled rule=service_account_disabled`。
+   無効にすること・`event_types` を変えることはできる）。
