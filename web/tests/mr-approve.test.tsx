@@ -107,7 +107,9 @@ describe('the conditions panel', () => {
       within(region).getByText('saburo: does not count (they pushed commits of this merge request)'),
     ).toBeTruthy();
     expect(within(region).getByText('shiro: does not count (it does not count now)')).toBeTruthy();
-    expect(within(region).getByText('ci/gates: not reported yet')).toBeTruthy();
+    // The shared state badge (review: never the raw `completed / success`).
+    const check = within(region).getByText('ci/gates').closest('li') as HTMLElement;
+    expect(within(check).getByText('Not reported yet').getAttribute('data-badge')).toBe('draft');
     expect(within(region).getByText(/CODEOWNERS approval is suspended until/)).toBeTruthy();
   });
 });

@@ -17,6 +17,7 @@ import {
   useDiscussions,
   useVersionDiff,
   useVersions,
+  latestVersion,
 } from '../../api/mergeRequests';
 import type { Discussion, DiffFile, Position, Version } from '../../api/types';
 import repo from '../../pages/repo/Repo.module.css';
@@ -63,10 +64,7 @@ export function MrChanges({
       />
     );
   }
-  const latest = list.data.versions.reduce<Version | null>(
-    (best, v) => (best === null || v.version > best.version ? v : best),
-    null,
-  );
+  const latest: Version | null = latestVersion(list.data.versions);
   if (latest === null) return <p className={styles.explain}>{t('mr.diff.noVersion')}</p>;
   if (latest.refs_purged) return <p className={styles.explain}>{t('mr.diff.purged')}</p>;
   return (

@@ -166,7 +166,8 @@ export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Han
     [`GET ${MR_API}/3`]: () => json(200, mr(3)),
     [`GET ${MR_API}/3/status`]: () => json(200, status([])),
     [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([])),
-    [`GET ${MR_API}/3/versions`]: () => json(200, versions([version(1)])),
+    // The version on screen is the head the status is about (U2 review HIGH 1).
+    [`GET ${MR_API}/3/versions`]: () => json(200, versions([version(1, { head_sha: 'b'.repeat(40) })])),
     [`GET ${MR_API}/3/versions/1/diff`]: () => json(200, versionDiff(1, DIFF)),
     // U2: the latest merge attempt (read while a merge runs).
     [`GET ${MR_API}/3/merge`]: () => json(200, { iid: 3, merge: null }),

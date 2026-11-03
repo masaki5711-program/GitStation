@@ -466,7 +466,7 @@
       "deleted": "Aturan {{name}} dihapus.",
       "save": "Simpan aturan",
       "saved": "Aturan {{name}} disimpan.",
-      "unnamed": "Sebagian pemberi persetujuan aturan ini tidak dapat ditampilkan dengan nama. Menyimpan di sini akan menghapus mereka, jadi ubah aturan ini dengan gstn approval-rule.",
+      "unnamed": "Sebagian pemberi persetujuan aturan ini tidak dapat ditampilkan dengan nama: mereka bukan anggota langsung proyek ini atau grup yang dapat Anda lihat. Menyimpan di sini akan menghapus mereka, jadi tidak ditawarkan. Ubah aturan dengan gstn approval-rule, atau hapus dan buat lagi dengan pemberi persetujuan yang Anda inginkan.",
       "tableLabel": "Daftar aturan persetujuan"
     },
     "conditions": {
@@ -682,8 +682,7 @@
       "notCounted": "{{name}}: tidak dihitung ({{why}})",
       "codeownersSuspended": "Persetujuan CODEOWNERS ditangguhkan sampai {{until}}.",
       "checks": "Pemeriksaan wajib",
-      "checkNone": "{{name}}: belum dilaporkan",
-      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+      "unread": "Syarat tidak dapat dibaca. Pesan di atas berisi ID permintaan."
     },
     "uncounted": {
       "stale": "diberikan untuk versi yang lebih lama",
@@ -705,7 +704,8 @@
       "approvedUncounted": "Persetujuan Anda dicatat tetapi tidak dihitung ({{why}}).",
       "withdrawn": "Persetujuan Anda ditarik.",
       "unchanged": "Tidak ada yang berubah.",
-      "reload": "Muat ulang merge request"
+      "reload": "Muat ulang merge request",
+      "newVersion": "Versi baru di-push. Muat ulang merge request untuk melihatnya sebelum menyetujui atau merge."
     },
     "merge": {
       "open": "Merge…",
@@ -742,7 +742,14 @@
         "methodNotAllowed": "Cara merge itu tidak lagi diizinkan. Pilih cara lain dan merge lagi.",
         "sourceMoved": "Commit baru di-push sementara itu. Periksa, lalu merge lagi.",
         "other": "Merge dihentikan. Periksa merge request dan merge lagi."
-      }
+      },
+      "progressLabel": "Kemajuan merge"
+    },
+    "check": {
+      "none": "Belum dilaporkan",
+      "running": "Berjalan",
+      "success": "Berhasil",
+      "failed": "Tidak berhasil ({{conclusion}})"
     }
   }
 }

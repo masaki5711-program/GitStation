@@ -392,7 +392,7 @@ export function mergePollDelay(
 
 /** The latest merge attempt, read while it runs. `since`: when the screen
  * started watching (Date.now()); `null`: not watching (nothing is read). */
-export function useMergeAttempt(project: number, iid: number, since: number | null) {
+export function useMergeAttempt(project: number, iid: number, since: number | null, minMergeId = 0) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useQuery<LatestMerge>({
@@ -402,12 +402,10 @@ export function useMergeAttempt(project: number, iid: number, since: number | nu
     staleTime: MERGE_POLL_FIRST_MS,
     refetchInterval: (query) => {
       if (since === null) return false;
-      const delay = mergePollDelay(
-        query.state.dataUpdateCount,
-        Date.now() - since,
-        query.state.data?.merge,
-      );
-      return delay;
+      // An attempt older than the one started here is not finished news.
+      const cached = query.state.data?.merge ?? null;
+      const current = cached !== null && cached.merge_id >= minMergeId ? cached : null;
+      return mergePollDelay(query.state.dataUpdateCount, Date.now() - since, current);
     },
     queryFn: async ({ signal }) => {
       const latest = await call(() =>
@@ -424,4 +422,9 @@ export function useMergeAttempt(project: number, iid: number, since: number | nu
       return latest;
     },
   });
+}
+
+/** The newest version of a list (what the Changes tab renders), or null. */
+export function latestVersion<V extends { version: number }>(list: readonly V[]): V | null {
+  return list.reduce<V | null>((best, v) => (best === null || v.version > best.version ? v : best), null);
 }

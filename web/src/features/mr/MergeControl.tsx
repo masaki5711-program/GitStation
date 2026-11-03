@@ -5,8 +5,12 @@
 // line per reason) or failed, each with the request id of the merge request.
 // After 2 minutes the screen stops asking and says the merge goes on in the
 // server. The attempt's error_code is never shown (CLAUDE.md contract 3).
+//
+// The merge names the head of the version on screen (`sha`, from the
+// versions the Changes tab renders), captured when the dialog opens: a push
+// after that is refused by the server (409) instead of merged unseen.
 import type { TFunction } from 'i18next';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -22,51 +26,45 @@ import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { Modal } from '../../ui/Modal';
+import { focusWhenNoDialog } from '../../ui/focus';
 import { mergeMethodHelp, mergeMethodLabel } from '../labels';
 import { ActionError } from './ActionError';
 import styles from './Mr.module.css';
-
-/** Focus an element once no modal dialog is open (focus moved while the
- * dialog is still modal is lost: the page behind is inert). */
-function focusWhenNoDialog(target: RefObject<HTMLElement | null>) {
-  let tries = 0;
-  const attempt = () => {
-    tries += 1;
-    if (document.querySelector('dialog[open]') !== null && tries < 50) {
-      window.setTimeout(attempt, 20);
-      return;
-    }
-    target.current?.focus();
-  };
-  window.setTimeout(attempt, 0);
-}
 
 export function MergeButton({
   projectId,
   iid,
   status,
+  viewedHead,
   sourceBranch,
   onStarted,
 }: {
   projectId: number;
   iid: number;
   status: MergeStatus;
+  /** The head of the version on screen (null: none read yet). */
+  viewedHead: string | null;
   sourceBranch: string;
-  /** The merge was queued (202): follow it. */
-  onStarted: () => void;
+  /** The merge was queued (202): follow it, from this attempt on. */
+  onStarted: (mergeId: number) => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  /** The head captured when the dialog opened; null while it is closed. */
+  const [openSha, setOpenSha] = useState<string | null>(null);
+  const open = openSha !== null;
   const button = useRef<HTMLButtonElement>(null);
-  const head = status.head_sha;
-  // Shown only when the server said a merge would be allowed and nothing
-  // blocks it now; the server decides again (and the job under its lock).
-  const shown = status.viewer.can_merge && status.mergeable && head !== null;
-  const settings = useMergeSettings(projectId, shown);
+  const sending = useRef(false);
+  // Shown only when the server said a merge would be allowed, nothing blocks
+  // it now and the version on screen is the head the status is about; the
+  // server decides again (and the job under its lock).
+  const shown =
+    status.viewer.can_merge && status.mergeable && viewedHead !== null && viewedHead === status.head_sha;
+  const settings = useMergeSettings(projectId, shown || open);
   const start = useStartMerge(projectId, iid);
   const [method, setMethod] = useState<string | null>(null);
   const [deleteSource, setDeleteSource] = useState<boolean | null>(null);
-  if (!shown) return null;
+  // An open dialog stays (its request names the head captured at opening).
+  if (!shown && !open) return null;
 
   const allowed = settings.data?.allowed_methods.filter(isMergeMethod) ?? [];
   const chosen =
@@ -76,17 +74,22 @@ export function MergeButton({
   const deleting = deleteSource ?? settings.data?.delete_source_default ?? false;
 
   const close = () => {
-    setOpen(false);
+    setOpenSha(null);
     focusWhenNoDialog(button);
   };
   const confirm = () => {
-    if (start.isPending || chosen === null) return;
+    // A second click before the first answer must not ask twice.
+    if (sending.current || start.isPending || chosen === null || openSha === null) return;
+    sending.current = true;
     start.mutate(
-      { sha: head, method: chosen, deleteSourceBranch: deleting },
+      { sha: openSha, method: chosen, deleteSourceBranch: deleting },
       {
-        onSuccess: () => {
-          setOpen(false);
-          onStarted();
+        onSuccess: (attempt) => {
+          setOpenSha(null);
+          onStarted(attempt.merge_id);
+        },
+        onSettled: () => {
+          sending.current = false;
         },
       },
     );
@@ -99,10 +102,11 @@ export function MergeButton({
         type="button"
         className={controls.primary}
         onClick={() => {
+          if (viewedHead === null) return;
           start.reset();
           setMethod(null);
           setDeleteSource(null);
-          setOpen(true);
+          setOpenSha(viewedHead);
         }}
       >
         {t('mr.merge.open')}
@@ -242,16 +246,19 @@ export function MergeProgress({
   projectId,
   iid,
   since,
+  minMergeId,
   focusOnStart,
 }: {
   projectId: number;
   iid: number;
   since: number | null;
+  /** The attempt this screen started: an older one in the cache is not it. */
+  minMergeId: number;
   /** Take the focus when the dialog that started the merge has closed. */
   focusOnStart: boolean;
 }) {
   const { t } = useTranslation();
-  const latest = useMergeAttempt(projectId, iid, since);
+  const latest = useMergeAttempt(projectId, iid, since, minMergeId);
   const region = useRef<HTMLDivElement>(null);
   const [gaveUp, setGaveUp] = useState(false);
 
@@ -273,14 +280,17 @@ export function MergeProgress({
     if (since !== null && focusOnStart) focusWhenNoDialog(region);
   }, [since, focusOnStart]);
 
-  const a = since === null ? null : (latest.data?.merge ?? null);
+  const cached = latest.data?.merge ?? null;
+  const a = since === null || cached === null || cached.merge_id < minMergeId ? null : cached;
   const shown = a === null ? null : attemptLines(t, a, gaveUp && !isFinished(a));
   return (
     // One region that stays mounted: each new state is a change, so it is read out.
     <div
       ref={region}
       tabIndex={-1}
+      role="status"
       aria-live="polite"
+      aria-label={t('mr.merge.progressLabel')}
       className={styles.progress}
       data-testid="mr-merge-progress"
     >

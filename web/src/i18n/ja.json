@@ -466,7 +466,7 @@
       "deleted": "ルール {{name}} を削除しました。",
       "save": "ルールを保存",
       "saved": "ルール {{name}} を保存しました。",
-      "unnamed": "このルールの承認者の一部を名前で表示できません。ここで保存するとその人たちが外れるため、gstn approval-rule で変更してください。",
+      "unnamed": "このルールの承認者の一部を名前で表示できません（このプロジェクトの直接のメンバーでないか、あなたが見られないグループです）。ここで保存するとその人たちが外れるため、保存はできません。gstn approval-rule で変更するか、ルールを削除して、求める承認者で作り直してください。",
       "tableLabel": "承認のルールの一覧"
     },
     "conditions": {
@@ -682,8 +682,7 @@
       "notCounted": "{{name}}: 数えません（{{why}}）",
       "codeownersSuspended": "CODEOWNERS の承認は {{until}} まで止めています。",
       "checks": "必須のチェック",
-      "checkNone": "{{name}}: まだ報告がありません",
-      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+      "unread": "条件を読めませんでした。問い合わせ番号は上のメッセージにあります。"
     },
     "uncounted": {
       "stale": "前の版への承認です",
@@ -705,7 +704,8 @@
       "approvedUncounted": "承認を記録しましたが、数えません（{{why}}）。",
       "withdrawn": "承認を取り消しました。",
       "unchanged": "変わりはありません。",
-      "reload": "MR を読み直す"
+      "reload": "MR を読み直す",
+      "newVersion": "新しい版が push されました。承認やマージの前に、MR を読み直して確かめてください。"
     },
     "merge": {
       "open": "マージ…",
@@ -742,7 +742,14 @@
         "methodNotAllowed": "その方式は今は許されていません。別の方式を選んで、もう一度マージしてください。",
         "sourceMoved": "その間に新しいコミットが push されました。確かめてから、もう一度マージしてください。",
         "other": "マージは止まりました。MR を確かめて、もう一度マージしてください。"
-      }
+      },
+      "progressLabel": "マージの進み具合"
+    },
+    "check": {
+      "none": "まだ報告がありません",
+      "running": "実行中",
+      "success": "成功",
+      "failed": "成功していません（{{conclusion}}）"
     }
   }
 }

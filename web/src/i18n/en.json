@@ -466,7 +466,7 @@
       "deleted": "The rule {{name}} was deleted.",
       "save": "Save the rule",
       "saved": "The rule {{name}} was saved.",
-      "unnamed": "Some approvers of this rule cannot be shown by name. Saving here would remove them, so change this rule with gstn approval-rule instead.",
+      "unnamed": "Some approvers of this rule cannot be shown by name: they are not direct members of this project or groups you can see. Saving here would remove them, so it is not offered. Change the rule with gstn approval-rule, or delete it and create it again with the approvers you want.",
       "tableLabel": "List of approval rules"
     },
     "conditions": {
@@ -682,8 +682,7 @@
       "notCounted": "{{name}}: does not count ({{why}})",
       "codeownersSuspended": "CODEOWNERS approval is suspended until {{until}}.",
       "checks": "Required checks",
-      "checkNone": "{{name}}: not reported yet",
-      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+      "unread": "The conditions could not be read. The message above has the request ID."
     },
     "uncounted": {
       "stale": "it was given for an older version",
@@ -705,7 +704,8 @@
       "approvedUncounted": "Your approval was recorded but does not count ({{why}}).",
       "withdrawn": "Your approval was withdrawn.",
       "unchanged": "Nothing changed.",
-      "reload": "Reload the merge request"
+      "reload": "Reload the merge request",
+      "newVersion": "A new version was pushed. Reload the merge request to see it before approving or merging."
     },
     "merge": {
       "open": "Merge…",
@@ -742,7 +742,14 @@
         "methodNotAllowed": "That merge method is no longer allowed. Choose another one and merge again.",
         "sourceMoved": "New commits were pushed meanwhile. Look at them, then merge again.",
         "other": "The merge was stopped. Look at the merge request and merge again."
-      }
+      },
+      "progressLabel": "Merge progress"
+    },
+    "check": {
+      "none": "Not reported yet",
+      "running": "Running",
+      "success": "Succeeded",
+      "failed": "Did not succeed ({{conclusion}})"
     }
   }
 }

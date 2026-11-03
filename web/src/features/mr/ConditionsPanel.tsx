@@ -2,18 +2,33 @@
 // line first, the detail for whoever opens it): every reason of the status
 // contract in the server's order, the approval counts with why an approval
 // does not count, the required checks, and the actions the viewer flags allow
-// (approve / withdraw / merge) and the progress of a merge. A button is shown only when the server said
-// the request would be allowed (`viewer`), never guessed from a role; the
-// server decides again when it is pressed.
+// (approve / withdraw / merge) and the progress of a merge. A button is
+// shown only when the server said the request would be allowed (`viewer`),
+// never guessed from a role; the server decides again when it is pressed.
+//
+// Approve and merge name the head of the version on screen (the newest of
+// the versions the Changes tab renders), never a status head read later: when
+// the status is about another head (a push came in), the actions give way to
+// "a new version was pushed — reload" (review HIGH, 2026-11-03).
 import type { TFunction } from 'i18next';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useApprove, useMergeStatus, useUnapprove } from '../../api/mergeRequests';
+import {
+  latestVersion,
+  useApprove,
+  useMergeStatus,
+  useReloadMergeRequest,
+  useUnapprove,
+  useVersions,
+} from '../../api/mergeRequests';
 import type { ApprovalAnswer, MergeStatus } from '../../api/types';
+import { Loading } from '../../components/Loading';
+import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
-import { formatDateTime } from '../labels';
+import { checkBadge, formatDateTime } from '../labels';
 import { ActionError } from './ActionError';
+import { StateBadge } from './StateBadge';
 import { reasonLine, uncountedKey } from './blockedReason';
 import { MergeButton, MergeProgress } from './MergeControl';
 import styles from './Mr.module.css';
@@ -29,9 +44,13 @@ export function ConditionsPanel({
 }) {
   const { t } = useTranslation();
   const status = useMergeStatus(projectId, iid);
+  const versions = useVersions(projectId, iid);
+  /** The head of the version on screen; null until the versions are read. */
+  const viewedHead = versions.isSuccess ? (latestVersion(versions.data.versions)?.head_sha ?? null) : null;
   /** When the screen began following a merge attempt (null: not following). */
   const [since, setSince] = useState<number | null>(null);
   const [startedHere, setStartedHere] = useState(false);
+  const [minMergeId, setMinMergeId] = useState(0);
   const running = status.data?.reasons[0]?.reason === 'merge_in_progress';
   // A merge already running when the page opens (or started elsewhere) is followed too.
   useEffect(() => {
@@ -42,7 +61,18 @@ export function ConditionsPanel({
       <h2 id="mr-conditions-title" tabIndex={-1} className={styles.conditionsTitle}>
         {t('mr.conditions.title')}
       </h2>
-      {/* The status line above already shows a failed or pending read. */}
+      {(status.isPending || versions.isPending) && <Loading />}
+      {/* The status line above has the failure itself (user_message +
+          request_id); one alert per failure, so here only the pointer. */}
+      {status.isError && <p className={styles.nextHint}>{t('mr.conditions.unread')}</p>}
+      {versions.isError && (
+        <QueryError
+          error={versions.error}
+          onRetry={() => {
+            void versions.refetch();
+          }}
+        />
+      )}
       {status.isSuccess && (
         <>
           <Reasons status={status.data} />
@@ -52,15 +82,23 @@ export function ConditionsPanel({
             projectId={projectId}
             iid={iid}
             status={status.data}
+            viewedHead={versions.isSuccess ? viewedHead : null}
             sourceBranch={sourceBranch}
-            onMergeStarted={() => {
+            onMergeStarted={(mergeId) => {
               setStartedHere(true);
+              setMinMergeId(mergeId);
               setSince(Date.now());
             }}
           />
         </>
       )}
-      <MergeProgress projectId={projectId} iid={iid} since={since} focusOnStart={startedHere} />
+      <MergeProgress
+        projectId={projectId}
+        iid={iid}
+        since={since}
+        minMergeId={minMergeId}
+        focusOnStart={startedHere}
+      />
     </section>
   );
 }
@@ -115,7 +153,7 @@ function Approvals({ status }: { status: MergeStatus }) {
         </ul>
       )}
       {suspended && (
-        <p className={styles.nextHint}>
+        <p className={styles.warning}>
           {t('mr.conditions.codeownersSuspended', {
             until: formatDateTime(status.codeowners.suspended_until ?? '', i18n.language),
           })}
@@ -132,17 +170,14 @@ function Checks({ status }: { status: MergeStatus }) {
     <>
       <h3 className={styles.conditionsSub}>{t('mr.conditions.checks')}</h3>
       <ul className={styles.plainList}>
-        {status.checks.map((c) => (
-          <li key={c.name}>
-            {c.status === null
-              ? t('mr.conditions.checkNone', { name: c.name })
-              : t('mr.conditions.checkRun', {
-                  name: c.name,
-                  status: c.status,
-                  conclusion: c.conclusion ?? '-',
-                })}
-          </li>
-        ))}
+        {status.checks.map((c) => {
+          const badge = checkBadge(t, c.status, c.conclusion);
+          return (
+            <li key={c.name} className={styles.checkItem}>
+              <code>{c.name}</code> <StateBadge tone={badge.tone}>{badge.label}</StateBadge>
+            </li>
+          );
+        })}
       </ul>
     </>
   );
@@ -159,21 +194,28 @@ function Actions({
   projectId,
   iid,
   status,
+  viewedHead,
   sourceBranch,
   onMergeStarted,
 }: {
   projectId: number;
   iid: number;
   status: MergeStatus;
+  /** The head of the version on screen (null: not read yet). */
+  viewedHead: string | null;
   sourceBranch: string;
-  onMergeStarted: () => void;
+  onMergeStarted: (mergeId: number) => void;
 }) {
   const { t } = useTranslation();
   const approve = useApprove(projectId, iid);
   const unapprove = useUnapprove(projectId, iid);
+  const reload = useReloadMergeRequest(projectId, iid);
   const [result, setResult] = useState('');
   const v = status.viewer;
-  const head = status.head_sha;
+  // The status is about another head than the version on screen: a push
+  // came in after it was read. Nothing may be approved or merged unseen.
+  const pushed = viewedHead !== null && status.head_sha !== null && viewedHead !== status.head_sha;
+  const head = pushed ? null : viewedHead;
   // `can_unapprove` pairs with `approved_by_me` (docs/api/merge-status.md).
   const mayApprove = v.can_approve && !v.approved_by_me && head !== null;
   const mayWithdraw = v.can_unapprove && v.approved_by_me;
@@ -195,6 +237,20 @@ function Actions({
 
   return (
     <>
+      {pushed && (
+        <div className={styles.actions}>
+          <p className={styles.warningLine}>{t('mr.actions.newVersion')}</p>
+          <button
+            type="button"
+            className={controls.primary}
+            onClick={() => {
+              void reload();
+            }}
+          >
+            {t('mr.actions.reload')}
+          </button>
+        </div>
+      )}
       {(mayApprove || mayWithdraw || mayMerge) && (
         <div className={styles.actions} role="group" aria-label={t('mr.actions.label')}>
           {(mayApprove || mayWithdraw) && (
@@ -213,6 +269,7 @@ function Actions({
             projectId={projectId}
             iid={iid}
             status={status}
+            viewedHead={head}
             sourceBranch={sourceBranch}
             onStarted={onMergeStarted}
           />
