@@ -155,6 +155,82 @@ pub struct WorkItem {
     pub reference: WorkItemRef,
 }
 
+/// Who linked or unlinked by hand (I1b review): a person, or a non-person
+/// credential with the same role. Only a person's unlink keeps detection
+/// from linking the work item again. Stored in `linked_by_kind` /
+/// `unlinked_by_kind` (CHECK `merge_request_work_items_*_by_kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinkActorKind {
+    /// A person with a web session or a personal token.
+    Human,
+    /// A person's agent token (`is_agent`).
+    Agent,
+    ServiceAccount,
+    Bot,
+}
+
+impl LinkActorKind {
+    pub const ALL: [LinkActorKind; 4] = [Self::Human, Self::Agent, Self::ServiceAccount, Self::Bot];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+            Self::ServiceAccount => "service_account",
+            Self::Bot => "bot",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == raw)
+    }
+
+    /// A person acting for themselves (not an agent, a service account or
+    /// a bot).
+    pub fn is_person(self) -> bool {
+        self == Self::Human
+    }
+}
+
+/// How a link ended (`unlink_source`, I1b review).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnlinkSource {
+    /// The title or branch no longer names it (detected links only).
+    Auto,
+    /// Unlinked by hand (`unlinked_by_kind` says by whom).
+    Manual,
+    /// A detected link a person linked by hand: the detected interval ends
+    /// and the person's begins.
+    Converted,
+    /// The project was unbound from that work item's kanflow project.
+    Unbound,
+}
+
+impl UnlinkSource {
+    pub const ALL: [UnlinkSource; 4] = [Self::Auto, Self::Manual, Self::Converted, Self::Unbound];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Manual => "manual",
+            Self::Converted => "converted",
+            Self::Unbound => "unbound",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.as_str() == raw)
+    }
+}
+
+/// Which link an unlink names: by reference in the project's current
+/// binding, or by work item id (also a link to an earlier binding's item).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    Ref(WorkItemRef),
+    WorkItem(i64),
+}
+
 /// A link of a merge request to a work item made or ended
 /// (`work_item.linked` / `work_item.unlinked`, integration class). The
 /// subscriber's are derived events (actor `system`); a person's carry an
@@ -169,19 +245,21 @@ pub enum WorkItemChange {
         link: i64,
         work_item: WorkItem,
         source: LinkSource,
-        /// The person who linked it (`None` for a detected link).
-        by: Option<UserId>,
+        /// Who linked it by hand (`None` for a detected link).
+        by: Option<(UserId, LinkActorKind)>,
+        /// The detected link this person's link replaces (`converted`).
+        replaces: Option<i64>,
     },
-    /// `work_item.unlinked`: link row `link` ended by `source` (the title
-    /// no longer names it, or a person unlinked it). The row stays.
+    /// `work_item.unlinked`: link row `link` ended by `source`. The row
+    /// stays.
     Unlinked {
         project: ProjectId,
         merge_request: MergeRequestId,
         iid: i64,
         link: i64,
         work_item: WorkItem,
-        source: LinkSource,
-        by: Option<UserId>,
+        source: UnlinkSource,
+        by: Option<(UserId, LinkActorKind)>,
     },
 }
 
@@ -234,28 +312,31 @@ impl WorkItemChange {
     }
 
     /// `{"merge_request_id","iid","link_id","work_item_id","work_item":
-    /// {"provider","project_id","ref"},"integration_id","source","by"}`
-    /// (02 §5.7's `work_items` entry shape; ids and the reference only).
+    /// {"provider","project_id","ref"},"integration_id","source","by",
+    /// "by_kind"}` (02 §5.7's `work_items` entry shape; ids and the
+    /// reference only), plus `"replaces_link_id"` on `linked`.
     pub fn to_value(&self) -> serde_json::Value {
-        let (Self::Linked {
-            merge_request,
-            iid,
-            link,
-            work_item,
-            source,
-            by,
-            ..
-        }
-        | Self::Unlinked {
-            merge_request,
-            iid,
-            link,
-            work_item,
-            source,
-            by,
-            ..
-        }) = self;
-        serde_json::json!({
+        let (merge_request, iid, link, work_item, source, by) = match self {
+            Self::Linked {
+                merge_request,
+                iid,
+                link,
+                work_item,
+                source,
+                by,
+                ..
+            } => (merge_request, iid, link, work_item, source.as_str(), by),
+            Self::Unlinked {
+                merge_request,
+                iid,
+                link,
+                work_item,
+                source,
+                by,
+                ..
+            } => (merge_request, iid, link, work_item, source.as_str(), by),
+        };
+        let mut value = serde_json::json!({
             "merge_request_id": merge_request.get(),
             "iid": iid,
             "link_id": link,
@@ -266,8 +347,13 @@ impl WorkItemChange {
                 "ref": work_item.reference.as_str(),
             },
             "integration_id": work_item.integration.get(),
-            "source": source.as_str(),
-            "by": by.map(UserId::get),
-        })
+            "source": source,
+            "by": by.map(|(u, _)| u.get()),
+            "by_kind": by.map(|(_, k)| k.as_str()),
+        });
+        if let (Self::Linked { replaces, .. }, Some(map)) = (self, value.as_object_mut()) {
+            map.insert("replaces_link_id".to_owned(), serde_json::json!(replaces));
+        }
+        value
     }
 }

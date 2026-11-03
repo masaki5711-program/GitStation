@@ -89,7 +89,7 @@ pub use versions::{
 };
 
 pub use work_item_links::{
-    link_work_item_mr_decided, unlink_work_item_mr_decided, LinkAnswer, LinkOutcome,
+    link_work_item_mr_decided, unlink_work_item_mr_decided, LinkActor, LinkAnswer, LinkOutcome,
 };
 
 pub use commands::{

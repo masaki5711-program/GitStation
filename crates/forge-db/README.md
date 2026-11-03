@@ -772,4 +772,13 @@ pool). Schema backstops: `work_items_ref_format`, `work_items_identity`,
 `merge_request_work_items_unlink_source`,
 `merge_request_work_items_unlink_source_fields`,
 `merge_request_work_items_one_active`, `event_work_items_seq_positive`, the
-guard `merge_request_work_items_guard`. Tests `src/work_items/tests.rs`.
+guard `merge_request_work_items_guard`. I1b review (20261116100100,
+20261116100200): the deferred trigger `merge_request_work_items_audited`
+(constraints `merge_request_work_items_audited` / `_derived`, FG-DB-0013)
+needs a person's link and its end to carry their `work_item.*` audit row
+(`converted` / `unbound` ends: `work_item.linked` / `integration.unbound`) and a
+detected one the subscriber's progress; DELETE only while the repository is
+`purging`; the composite FK `merge_request_work_items_merge_request_project`;
+`linked_by_kind` / `unlinked_by_kind` (only a `human`'s manual unlink stops
+detection); unbinding ends the binding's open links (`unbound`). Tests
+`src/work_items/tests.rs`.

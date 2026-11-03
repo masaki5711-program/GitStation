@@ -722,7 +722,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--iid", "option", true, "The merge request's number in the project."),
-            arg("--ref", "option", true, "The work item, PBI-<n>."),
+            arg("--ref", "option", true, "The work item, PBI-<n> or its work_item_id (a link to an earlier binding's work item)."),
         ],
         examples: &["gstn mr unlink-work-item --project 7 --iid 3 --ref PBI-43"],
         scopes: &["api"],

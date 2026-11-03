@@ -38,7 +38,8 @@ use std::collections::HashSet;
 
 use forge_core::ids::{MergeRequestId, ProjectId};
 use forge_core::{
-    find_refs, DedupKey, DedupPart, EventType, LinkSource, WorkItemChange, WorkItemRef,
+    find_refs, DedupKey, DedupPart, EventType, LinkSource, UnlinkSource, WorkItemChange,
+    WorkItemRef,
 };
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -224,11 +225,13 @@ impl WorkItemSync {
             wanted.push(work_item(tx.conn(), bound, reference).await?);
         }
         let open = open_links(tx.conn(), id).await?;
-        // The work items a person unlinked last from this merge request.
+        // The work items a person (`human`, I1b review: not an agent, a
+        // service account or a bot) unlinked last from this merge request.
         let unlinked_by_people: Vec<i64> = sqlx::query_scalar(
             "SELECT work_item_id FROM (SELECT DISTINCT ON (work_item_id) work_item_id, \
-             unlink_source FROM forge.merge_request_work_items WHERE merge_request_id = $1 \
-             ORDER BY work_item_id, id DESC) AS last WHERE unlink_source = 'manual'",
+             unlink_source, unlinked_by_kind FROM forge.merge_request_work_items \
+             WHERE merge_request_id = $1 ORDER BY work_item_id, id DESC) AS last \
+             WHERE unlink_source = 'manual' AND unlinked_by_kind = 'human'",
         )
         .bind(id.get())
         .fetch_all(tx.conn())
@@ -252,7 +255,7 @@ impl WorkItemSync {
                         iid,
                         link: link.link,
                         work_item: link.work_item.clone(), // clone: the event owns it
-                        source: LinkSource::Auto,
+                        source: UnlinkSource::Auto,
                         by: None,
                     };
                     tx.emit(link_event(&change)?).await?;
@@ -283,6 +286,7 @@ impl WorkItemSync {
                 work_item: item,
                 source: LinkSource::Auto,
                 by: None,
+                replaces: None,
             };
             tx.emit(link_event(&change)?).await?;
         }

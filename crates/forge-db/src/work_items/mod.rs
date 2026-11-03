@@ -18,7 +18,7 @@
 //! write the link row with a `work_item.*` audit row and event.
 
 use forge_core::ids::{IntegrationId, MergeRequestId, ProjectId, UserId};
-use forge_core::{IntegrationKind, LinkSource, WorkItem, WorkItemRef};
+use forge_core::{IntegrationKind, LinkActorKind, LinkSource, UnlinkSource, WorkItem, WorkItemRef};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
@@ -204,12 +204,14 @@ pub struct StoredLink {
     pub id: i64,
     pub work_item: WorkItem,
     pub source: LinkSource,
-    pub linked_by: Option<UserId>,
+    /// Who linked it by hand and their kind (`None` for a detected link).
+    pub linked_by: Option<(UserId, LinkActorKind)>,
     pub linked_at: String,
     /// `None` while the link is open.
     pub unlinked_at: Option<String>,
-    pub unlink_source: Option<LinkSource>,
-    pub unlinked_by: Option<UserId>,
+    pub unlink_source: Option<UnlinkSource>,
+    /// Who ended it and their kind (`None` while open or for detection).
+    pub unlinked_by: Option<(UserId, LinkActorKind)>,
 }
 
 /// The most link rows [`links`] returns (newest first beyond it are cut;
@@ -228,15 +230,13 @@ type StoredRow = (
     i64,
     String,
     Option<i64>,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
     Option<i64>,
-    i64,
-    i64,
-    String,
-    String,
-    String,
+    Option<String>,
+    (i64, i64, String, String, String),
 );
 
 /// The links of `merge_request` on the read pool (at most
@@ -247,11 +247,11 @@ pub async fn links(db: &Db, merge_request: MergeRequestId) -> Result<Links, Forg
         .within(QUERY, async {
             let mut conn = db.acquire().await?;
             sqlx::query_as(
-                "SELECT l.id, l.source, l.linked_by, \
+                "SELECT l.id, l.source, l.linked_by, l.linked_by_kind, \
                  to_char(l.linked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                  to_char(l.unlinked_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
-                 l.unlink_source, l.unlinked_by, w.id, w.integration_id, i.kind, \
-                 w.external_project_id, w.ref \
+                 l.unlink_source, l.unlinked_by, l.unlinked_by_kind, \
+                 ROW(w.id, w.integration_id, i.kind, w.external_project_id, w.ref) \
                  FROM forge.merge_request_work_items AS l \
                  JOIN forge.work_items AS w ON w.id = l.work_item_id \
                  JOIN forge.integrations AS i ON i.id = w.integration_id \
@@ -278,19 +278,26 @@ fn stored_link(row: StoredRow) -> Result<StoredLink, ForgeError> {
         id,
         source,
         linked_by,
+        linked_by_kind,
         linked_at,
         unlinked_at,
         unlink_source,
         unlinked_by,
-        item,
-        integration,
-        kind,
-        external_project_id,
-        reference,
+        unlinked_by_kind,
+        (item, integration, kind, external_project_id, reference),
     ) = row;
     let unlink_source = unlink_source
-        .map(|s| LinkSource::parse(&s).ok_or_else(|| stored_invalid("unlink_source", id)))
+        .map(|s| UnlinkSource::parse(&s).ok_or_else(|| stored_invalid("unlink_source", id)))
         .transpose()?;
+    let actor = |user: Option<i64>, kind: Option<String>, field: &'static str| match (user, kind) {
+        (None, None) => Ok(None),
+        (Some(user), Some(kind)) => LinkActorKind::parse(&kind)
+            .map(|k| Some((UserId::new(user), k)))
+            .ok_or_else(|| stored_invalid(field, id)),
+        _ => Err(stored_invalid(field, id)),
+    };
+    let linked_by = actor(linked_by, linked_by_kind, "linked_by_kind")?;
+    let unlinked_by = actor(unlinked_by, unlinked_by_kind, "unlinked_by_kind")?;
     Ok(StoredLink {
         id,
         work_item: WorkItem {
@@ -301,11 +308,11 @@ fn stored_link(row: StoredRow) -> Result<StoredLink, ForgeError> {
             reference: WorkItemRef::parse(&reference).ok_or_else(|| stored_invalid("ref", item))?,
         },
         source: LinkSource::parse(&source).ok_or_else(|| stored_invalid("source", id))?,
-        linked_by: linked_by.map(UserId::new),
+        linked_by,
         linked_at,
         unlinked_at,
         unlink_source,
-        unlinked_by: unlinked_by.map(UserId::new),
+        unlinked_by,
     })
 }
 

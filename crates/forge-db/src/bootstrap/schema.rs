@@ -690,13 +690,20 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                         "work_item_id",
                         "source",
                         "linked_by",
+                        // 20261116100200: who linked by hand.
+                        "linked_by_kind",
                         "linked_seq",
                     ],
                 ),
                 columns(
                     "forge_app",
                     "UPDATE",
-                    &["unlinked_at", "unlink_source", "unlinked_by"],
+                    &[
+                        "unlinked_at",
+                        "unlink_source",
+                        "unlinked_by",
+                        "unlinked_by_kind",
+                    ],
                 ),
             ]
             .concat(),

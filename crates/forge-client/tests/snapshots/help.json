@@ -3563,7 +3563,7 @@
           "required": true
         },
         {
-          "description": "The work item, PBI-<n>.",
+          "description": "The work item, PBI-<n> or its work_item_id (a link to an earlier binding's work item).",
           "kind": "option",
           "name": "--ref",
           "repeatable": false,

@@ -5,8 +5,8 @@
 
 use forge_core::ids::{IntegrationId, ProjectId, UserId};
 use forge_core::{
-    EventType, IntegrationKind, ObjectId, PushRecord, PushRecorder, PushUpdateKind, PushedRef,
-    Pusher, RefName, RequestId, UserKind, WorkItemRef,
+    EventType, IntegrationKind, LinkActorKind, LinkTarget, ObjectId, PushRecord, PushRecorder,
+    PushUpdateKind, PushedRef, Pusher, RefName, RequestId, UserKind, WorkItemRef,
 };
 use forge_errors::ErrorCode;
 use sqlx::Connection as _;
@@ -166,7 +166,7 @@ async fn link(w: &World, mr: &StoredMergeRequest, raw: &str, request: &str) -> L
         &ctx(Actor::User(w.alice), request),
         (w.web.project_id, mr.iid),
         &reference(raw),
-        w.alice,
+        (w.alice, LinkActorKind::Human),
         |_| Ok(()),
     )
     .await
@@ -345,7 +345,7 @@ async fn unlink_keeps_history() {
     assert!(listed.links[0].unlinked_at.is_some());
     assert_eq!(
         listed.links[0].unlink_source,
-        Some(forge_core::LinkSource::Auto)
+        Some(forge_core::UnlinkSource::Auto)
     );
     // forge_app may not delete a link of a live project.
     let err = sqlx::query("DELETE FROM forge.merge_request_work_items")
@@ -604,17 +604,13 @@ async fn a_persons_link_and_unlink_are_audited_and_win_over_detection() {
     let w = world().await;
     let mr = open(&w, "Fix (PBI-43)", "fix").await;
     drain(&w.t).await;
-    // A person links PBI-9; again is unchanged; PBI-43 is linked already.
+    // A person links PBI-9; again is unchanged.
     assert_eq!(
         link(&w, &mr, "PBI-9", "req-link-9").await,
         LinkOutcome::Changed
     );
     assert_eq!(
         link(&w, &mr, "PBI-9", "req-link-9b").await,
-        LinkOutcome::Unchanged
-    );
-    assert_eq!(
-        link(&w, &mr, "PBI-43", "req-link-43").await,
         LinkOutcome::Unchanged
     );
     let audit: Vec<(String, String, Option<i64>)> = sqlx::query_as(
@@ -637,8 +633,8 @@ async fn a_persons_link_and_unlink_are_audited_and_win_over_detection() {
         &w.t.db,
         &ctx(Actor::User(w.alice), "req-unlink-43"),
         (w.web.project_id, mr.iid),
-        &reference("PBI-43"),
-        w.alice,
+        &LinkTarget::Ref(reference("PBI-43")),
+        (w.alice, LinkActorKind::Human),
         |_| Ok(()),
     )
     .await
@@ -686,8 +682,8 @@ async fn a_persons_link_and_unlink_are_audited_and_win_over_detection() {
         &w.t.db,
         &ctx(Actor::User(w.alice), "req-unlink-none"),
         (w.web.project_id, mr.iid),
-        &reference("PBI-1"),
-        w.alice,
+        &LinkTarget::Ref(reference("PBI-1")),
+        (w.alice, LinkActorKind::Human),
         |_| Ok(()),
     )
     .await
@@ -728,7 +724,7 @@ async fn manual_link_on_an_unbound_project_is_int_0018() {
         &ctx(Actor::User(w.alice), "req-link-api"),
         (api.project_id, mr.iid),
         &reference("PBI-3"),
-        w.alice,
+        (w.alice, LinkActorKind::Human),
         |_| Ok(()),
     )
     .await
@@ -759,7 +755,7 @@ async fn manual_links_past_the_limit_are_int_0019() {
         &ctx(Actor::User(w.alice), "req-link-over"),
         (w.web.project_id, mr.iid),
         &reference("PBI-999"),
-        w.alice,
+        (w.alice, LinkActorKind::Human),
         |_| Ok(()),
     )
     .await
@@ -808,9 +804,11 @@ async fn work_item_checks_refuse_raw_rows_by_constraint_name() {
         (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_seq) VALUES ({m}, {p}, {item}, 'detected', 1)"), "merge_request_work_items_source"),
         (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source) VALUES ({m}, {p}, {item}, 'manual')"), "merge_request_work_items_source_fields"),
         (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_seq) VALUES ({m}, {p}, {item}, 'auto', 0)"), "merge_request_work_items_linked_seq"),
-        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, unlinked_at, unlink_source) VALUES ({m}, {p}, {item}, 'manual', {a}, now(), 'manual')"), "merge_request_work_items_unlink_source_fields"),
-        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, unlinked_at, unlink_source) VALUES ({m}, {p}, {item}, 'manual', {a}, now(), 'bot')"), "merge_request_work_items_unlink_source"),
-        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by) VALUES ({m}, {p}, {item}, 'manual', {a})"), "merge_request_work_items_one_active"),
+        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, linked_by_kind, unlinked_at, unlink_source) VALUES ({m}, {p}, {item}, 'manual', {a}, 'human', now(), 'manual')"), "merge_request_work_items_unlink_source_fields"),
+        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, linked_by_kind, unlinked_at, unlink_source) VALUES ({m}, {p}, {item}, 'manual', {a}, 'human', now(), 'bot')"), "merge_request_work_items_unlink_source"),
+        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, linked_by_kind) VALUES ({m}, {p}, {item}, 'manual', {a}, 'human')"), "merge_request_work_items_one_active"),
+        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, linked_by_kind) VALUES ({m}, {p}, {item}, 'manual', {a}, 'robot')"), "merge_request_work_items_linked_by_kind"),
+        (format!("INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, work_item_id, source, linked_by, linked_by_kind, unlinked_at, unlink_source, unlinked_by, unlinked_by_kind) VALUES ({m}, {p}, {item}, 'manual', {a}, 'human', now(), 'manual', {a}, 'robot')"), "merge_request_work_items_unlinked_by_kind"),
         ("INSERT INTO forge.event_work_items (seq, work_item_id) VALUES (0, 1)".to_owned(), "event_work_items_seq_positive"),
     ] {
         assert_eq!(violated(&w.t, &sql).await, constraint, "{sql}");
@@ -962,7 +960,7 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             &w.t,
             &format!(
                 "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
-             work_item_id, source, linked_by) VALUES ({m}, {p}, {other}, 'manual', {a})"
+             work_item_id, source, linked_by, linked_by_kind) VALUES ({m}, {p}, {other}, 'manual', {a}, 'human')"
             )
         )
         .await,
@@ -974,7 +972,7 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             &w.t,
             &format!(
                 "UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
-             unlink_source = 'manual', unlinked_by = {a} WHERE id = {manual}"
+             unlink_source = 'manual', unlinked_by = {a}, unlinked_by_kind = 'human' \n             WHERE id = {manual}"
             )
         )
         .await,
@@ -1002,6 +1000,11 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
     )
     .await;
     assert!(ended.contains("a person's link"), "{ended}");
+    let converted = violated(&w.t, &format!(
+        "UPDATE forge.merge_request_work_items SET unlinked_at = now(),          unlink_source = 'converted', unlinked_by = {a}, unlinked_by_kind = 'human'          WHERE id = {manual}"
+    ))
+    .await;
+    assert!(converted.contains("a person's link"), "{converted}");
     // The link's project is its merge request's.
     let api = projects::create(
         &w.t.db,
@@ -1015,7 +1018,7 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             &w.t,
             &format!(
                 "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
-             work_item_id, source, linked_by) VALUES ({m}, {}, {other}, 'manual', {a})",
+             work_item_id, source, linked_by, linked_by_kind) VALUES ({m}, {}, {other}, 'manual', {a}, 'human')",
                 api.project_id.get()
             )
         )
@@ -1156,5 +1159,220 @@ async fn events_record_only_the_current_bindings_work_items() {
     let current = [("kf-2".to_owned(), "PBI-1".to_owned())];
     assert_eq!(items_of_last(&w.t, "merge_request.updated").await, current);
     assert_eq!(items_of_last(&w.t, "repository.pushed").await, current);
+    w.t.drop_now().await;
+}
+
+async fn unlink_as(
+    w: &World,
+    mr: &StoredMergeRequest,
+    target: LinkTarget,
+    kind: LinkActorKind,
+    request: &str,
+) -> review::LinkAnswer {
+    unlink_work_item_mr_decided(
+        &w.t.db,
+        &ctx(Actor::User(w.alice), request),
+        (w.web.project_id, mr.iid),
+        &target,
+        (w.alice, kind),
+        |_| Ok(()),
+    )
+    .await
+    .map(|(answer, ())| answer)
+    .expect("unlink")
+}
+
+/// (ref, source, unlink_source, linked_by_kind, unlinked_by_kind) per row.
+async fn kinds_of(
+    t: &FreshDb,
+    mr: &StoredMergeRequest,
+) -> Vec<(
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+)> {
+    sqlx::query_as(
+        "SELECT w.ref, l.source, l.unlink_source, l.linked_by_kind, l.unlinked_by_kind \
+         FROM forge.merge_request_work_items AS l JOIN forge.work_items AS w \
+         ON w.id = l.work_item_id WHERE l.merge_request_id = $1 ORDER BY l.id",
+    )
+    .bind(mr.id.get())
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("kinds")
+}
+
+fn s(v: &str) -> Option<String> {
+    Some(v.to_owned())
+}
+
+/// I1b review (security MEDIUM): an agent's, a service account's or a
+/// bot's unlink is recorded with its kind and does not stop detection;
+/// only a person's does.
+#[tokio::test]
+async fn a_non_persons_unlink_does_not_silence_detection() {
+    let w = world().await;
+    let mr = open(&w, "Fix (PBI-43)", "fix").await;
+    drain(&w.t).await;
+    let answer = unlink_as(
+        &w,
+        &mr,
+        LinkTarget::Ref(reference("PBI-43")),
+        LinkActorKind::Agent,
+        "req-agent-unlink",
+    )
+    .await;
+    assert_eq!(answer.source, forge_core::LinkSource::Auto);
+    let events = link_events(&w.t).await;
+    let (_, _, payload) = events.last().expect("the unlink event");
+    assert_eq!(payload["by_kind"], "agent", "{payload}");
+    retitle(&w, &mr, "Fix (PBI-43) again", "req-edit-agent").await;
+    drain(&w.t).await;
+    assert_eq!(
+        kinds_of(&w.t, &mr).await,
+        [
+            (
+                "PBI-43".to_owned(),
+                "auto".to_owned(),
+                s("manual"),
+                None,
+                s("agent")
+            ),
+            ("PBI-43".to_owned(), "auto".to_owned(), None, None, None),
+        ],
+        "detection linked it again"
+    );
+    w.t.drop_now().await;
+}
+
+/// I1b review (rust MEDIUM): a person's link of a detected work item makes
+/// it the person's (the detected interval ends as `converted`), so a later
+/// title edit does not end it.
+#[tokio::test]
+async fn linking_an_auto_linked_item_makes_it_a_persons_link() {
+    let w = world().await;
+    let mr = open(&w, "Fix (PBI-43)", "fix").await;
+    drain(&w.t).await;
+    assert_eq!(
+        link(&w, &mr, "PBI-43", "req-keep-43").await,
+        LinkOutcome::Changed
+    );
+    let events = link_events(&w.t).await;
+    let (kind, _, payload) = events.last().expect("the link event");
+    assert_eq!(kind, "work_item.linked");
+    assert_eq!(payload["source"], "manual");
+    assert!(payload["replaces_link_id"].is_i64(), "{payload}");
+    retitle(&w, &mr, "Fix", "req-edit-drop").await;
+    drain(&w.t).await;
+    assert_eq!(
+        kinds_of(&w.t, &mr).await,
+        [
+            (
+                "PBI-43".to_owned(),
+                "auto".to_owned(),
+                s("converted"),
+                None,
+                s("human")
+            ),
+            (
+                "PBI-43".to_owned(),
+                "manual".to_owned(),
+                None,
+                s("human"),
+                None
+            ),
+        ]
+    );
+    // Linked again: unchanged (it is the person's).
+    assert_eq!(
+        link(&w, &mr, "PBI-43", "req-keep-43b").await,
+        LinkOutcome::Unchanged
+    );
+    w.t.drop_now().await;
+}
+
+/// I1b review (security MEDIUM): unbinding ends the project's open links to
+/// that binding's work items (`unbound`, by the person, counted on the
+/// audit row), so they no longer count or stay unreachable; and a link is
+/// reachable by its work item id.
+#[tokio::test]
+async fn unbinding_ends_the_projects_links_to_the_old_binding() {
+    let w = world().await;
+    let mr = open(&w, "Fix (PBI-1)", "fix").await;
+    drain(&w.t).await;
+    assert_eq!(
+        link(&w, &mr, "PBI-2", "req-link-2").await,
+        LinkOutcome::Changed
+    );
+    integrations::unbind_decided(
+        &w.t.db,
+        &system("req-unbind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        |_| Ok(()),
+    )
+    .await
+    .expect("unbind");
+    assert_eq!(
+        kinds_of(&w.t, &mr).await,
+        [
+            (
+                "PBI-1".to_owned(),
+                "auto".to_owned(),
+                s("unbound"),
+                None,
+                s("human")
+            ),
+            (
+                "PBI-2".to_owned(),
+                "manual".to_owned(),
+                s("unbound"),
+                s("human"),
+                s("human")
+            ),
+        ]
+    );
+    let ended: serde_json::Value = sqlx::query_scalar(
+        "SELECT details FROM forge.audit_log WHERE action = 'integration.unbound'",
+    )
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("audit");
+    assert_eq!(ended["work_item_links_ended"], 2, "{ended}");
+    // Bound again: the same references link to the new binding's items.
+    let (_bound, _, ()) = integrations::bind_decided(
+        &w.t.db,
+        &system("req-rebind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        "kf-2",
+        |_| Ok(()),
+    )
+    .await
+    .expect("rebind");
+    assert_eq!(
+        link(&w, &mr, "PBI-2", "req-link-2b").await,
+        LinkOutcome::Changed
+    );
+    // Unlinked by its work item id.
+    let id: i64 = sqlx::query_scalar(
+        "SELECT id FROM forge.work_items WHERE external_project_id = 'kf-2' AND ref = 'PBI-2'",
+    )
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("item");
+    let answer = unlink_as(
+        &w,
+        &mr,
+        LinkTarget::WorkItem(id),
+        LinkActorKind::Human,
+        "req-unlink-id",
+    )
+    .await;
+    assert_eq!(answer.work_item.id, id);
     w.t.drop_now().await;
 }

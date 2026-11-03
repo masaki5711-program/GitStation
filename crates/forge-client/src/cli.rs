@@ -894,8 +894,8 @@ pub enum MrCommand {
         project: i64,
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
-        /// The work item, `PBI-<n>`.
-        #[arg(long = "ref", value_parser = crate::mr_work_items::parse_work_item_ref, value_name = "REF")]
+        /// The work item, `PBI-<n>` or its work item id.
+        #[arg(long = "ref", value_parser = crate::mr_work_items::parse_unlink_target, value_name = "REF")]
         reference: String,
     },
     /// Whether a merge request may merge now, and every reason it may not

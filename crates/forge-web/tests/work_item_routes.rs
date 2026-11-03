@@ -286,6 +286,7 @@ async fn a_developer_links_lists_and_unlinks_a_work_item() {
     assert_eq!(links.len(), 1);
     assert_eq!(links[0]["linked_by"], w.dave.get());
     assert_eq!(links[0]["unlinked_at"], Value::Null);
+    assert_eq!(links[0]["linked_by_kind"], "human");
 
     let unlinked = call(&w.t.db, "DELETE", &one, session(w.dave), None).await;
     assert_eq!(unlinked.status, StatusCode::NO_CONTENT, "{}", unlinked.json);
@@ -295,10 +296,20 @@ async fn a_developer_links_lists_and_unlinks_a_work_item() {
     assert_eq!(links.len(), 1);
     assert_eq!(links[0]["unlink_source"], "manual");
     assert_eq!(links[0]["unlinked_by"], w.dave.get());
+    assert_eq!(links[0]["unlinked_by_kind"], "human");
     assert!(links[0]["unlinked_at"].is_string());
     // Nothing is linked now.
     let gone = call(&w.t.db, "DELETE", &one, session(w.dave), None).await;
     assert_eq!(denied(&gone), (StatusCode::NOT_FOUND, "FG-REPO-0005"));
+    // A link is reachable by its work item id too (an earlier binding's).
+    let relinked = call(&w.t.db, "PUT", &one, session(w.dave), None).await;
+    assert_eq!(relinked.json["outcome"], "linked", "{}", relinked.json);
+    let by_id = format!("{}/{}", links_uri(&w.web), relinked.json["work_item_id"]);
+    let unlinked = call(&w.t.db, "DELETE", &by_id, session(w.dave), None).await;
+    assert_eq!(unlinked.status, StatusCode::NO_CONTENT, "{}", unlinked.json);
+    // An id links nothing: links name a reference.
+    let refused = call(&w.t.db, "PUT", &by_id, session(w.dave), None).await;
+    assert_eq!(denied(&refused), (StatusCode::BAD_REQUEST, "FG-WEB-0006"));
     w.t.drop_now().await;
 }
 

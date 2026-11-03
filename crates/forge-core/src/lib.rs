@@ -85,7 +85,10 @@ pub use web_path::{
     log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
     RouteWord, TailSegments,
 };
-pub use work_item::{find_refs, LinkSource, WorkItem, WorkItemChange, WorkItemRef};
+pub use work_item::{
+    find_refs, LinkActorKind, LinkSource, LinkTarget, UnlinkSource, WorkItem, WorkItemChange,
+    WorkItemRef,
+};
 
 #[cfg(test)]
 mod audit_details_tests;

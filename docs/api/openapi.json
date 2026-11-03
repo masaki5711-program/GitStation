@@ -4588,7 +4588,7 @@
             "type": "integer"
           },
           "outcome": {
-            "description": "`linked` or `unchanged` (already linked, by detection or a person).",
+            "description": "`linked` (also when a detected link became the person's) or\n`unchanged` (already linked by hand).",
             "type": "string"
           },
           "source": {
@@ -4628,10 +4628,17 @@
             "type": "string"
           },
           "linked_by": {
-            "description": "The person who linked it (`null` for a detected link).",
+            "description": "Who linked it by hand (`null` for a detected link).",
             "format": "int64",
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "linked_by_kind": {
+            "description": "`human`, `agent`, `service_account` or `bot` (`null` with\n`linked_by`).",
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -4640,7 +4647,7 @@
             "type": "string"
           },
           "unlink_source": {
-            "description": "`auto` (the title no longer names it) or `manual`; `null` while open.",
+            "description": "`auto` (the title no longer names it), `manual`, `converted` (a\nperson linked the detected work item: their link follows) or\n`unbound` (the project was unbound); `null` while open.",
             "type": [
               "string",
               "null"
@@ -4660,6 +4667,13 @@
               "null"
             ]
           },
+          "unlinked_by_kind": {
+            "description": "`human`, `agent`, `service_account` or `bot`; only a `human`'s\n`manual` unlink keeps detection from linking it again.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "work_item": {
             "$ref": "#/components/schemas/WorkItemBody"
           },
@@ -4675,10 +4689,12 @@
           "work_item",
           "source",
           "linked_by",
+          "linked_by_kind",
           "linked_at",
           "unlinked_at",
           "unlink_source",
-          "unlinked_by"
+          "unlinked_by",
+          "unlinked_by_kind"
         ],
         "type": "object"
       },

@@ -32,6 +32,21 @@ pub fn parse_work_item_ref(raw: &str) -> std::result::Result<String, String> {
     }
 }
 
+/// What `mr unlink-work-item --ref` names: `PBI-<n>`, or a work item id
+/// (`work_item_id` of `mr work-items`: a link to an earlier binding's work
+/// item). Only digits or the reference reach the path.
+pub fn parse_unlink_target(raw: &str) -> std::result::Result<String, String> {
+    let id = !raw.is_empty()
+        && raw.len() <= 19
+        && raw.bytes().all(|b| b.is_ascii_digit())
+        && !raw.starts_with('0');
+    if id {
+        return Ok(raw.to_owned());
+    }
+    parse_work_item_ref(raw)
+        .map_err(|_| "a work item reference is PBI-<n>, or a work item id".to_owned())
+}
+
 /// `gstn mr work-items`.
 pub fn list(cli: &Cli, (project, iid): (i64, i64), env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     let c = client(cli, env, io)?;
@@ -46,7 +61,10 @@ pub fn list(cli: &Cli, (project, iid): (i64, i64), env: EnvFn<'_>, io: &mut Io<'
         human.push_str(&format!(
             "\n  {} {} {} {}",
             text(&l["work_item"], "ref"),
-            text(l, "source"),
+            match l["linked_by_kind"].as_str() {
+                Some(kind) => format!("{} ({kind})", text(l, "source")),
+                None => text(l, "source"),
+            },
             state,
             text(l, "linked_at"),
         ));

@@ -3103,7 +3103,10 @@ export interface components {
             iid: number;
             /** Format: int64 */
             link_id: number;
-            /** @description `linked` or `unchanged` (already linked, by detection or a person). */
+            /**
+             * @description `linked` (also when a detected link became the person's) or
+             *     `unchanged` (already linked by hand).
+             */
             outcome: string;
             /** @description `auto` or `manual`: how the (found) link was made. */
             source: string;
@@ -3119,17 +3122,31 @@ export interface components {
             linked_at: string;
             /**
              * Format: int64
-             * @description The person who linked it (`null` for a detected link).
+             * @description Who linked it by hand (`null` for a detected link).
              */
             linked_by: number | null;
+            /**
+             * @description `human`, `agent`, `service_account` or `bot` (`null` with
+             *     `linked_by`).
+             */
+            linked_by_kind: string | null;
             /** @description `auto` (detected in the title or the source branch) or `manual`. */
             source: string;
-            /** @description `auto` (the title no longer names it) or `manual`; `null` while open. */
+            /**
+             * @description `auto` (the title no longer names it), `manual`, `converted` (a
+             *     person linked the detected work item: their link follows) or
+             *     `unbound` (the project was unbound); `null` while open.
+             */
             unlink_source: string | null;
             /** @description `null` while the link is open. */
             unlinked_at: string | null;
             /** Format: int64 */
             unlinked_by: number | null;
+            /**
+             * @description `human`, `agent`, `service_account` or `bot`; only a `human`'s
+             *     `manual` unlink keeps detection from linking it again.
+             */
+            unlinked_by_kind: string | null;
             work_item: components["schemas"]["WorkItemBody"];
             /** Format: int64 */
             work_item_id: number;

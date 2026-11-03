@@ -18,7 +18,9 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use forge_auth::{MergeRequestCtx, MergeRequestEdit};
-use forge_core::{parse_positive_id, ProjectId, UserId, WorkItem, WorkItemRef};
+use forge_core::{
+    parse_positive_id, LinkActorKind, LinkTarget, ProjectId, UserId, WorkItem, WorkItemRef,
+};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_review::work_items::{LinkAnswer, LinkOutcome};
 use serde::Serialize;
@@ -71,19 +73,29 @@ pub struct WorkItemLinkBody {
     pub work_item: WorkItemBody,
     /// `auto` (detected in the title or the source branch) or `manual`.
     pub source: String,
-    /// The person who linked it (`null` for a detected link).
+    /// Who linked it by hand (`null` for a detected link).
     #[schema(required = true)]
     pub linked_by: Option<i64>,
+    /// `human`, `agent`, `service_account` or `bot` (`null` with
+    /// `linked_by`).
+    #[schema(required = true)]
+    pub linked_by_kind: Option<String>,
     /// UTC, RFC 3339.
     pub linked_at: String,
     /// `null` while the link is open.
     #[schema(required = true)]
     pub unlinked_at: Option<String>,
-    /// `auto` (the title no longer names it) or `manual`; `null` while open.
+    /// `auto` (the title no longer names it), `manual`, `converted` (a
+    /// person linked the detected work item: their link follows) or
+    /// `unbound` (the project was unbound); `null` while open.
     #[schema(required = true)]
     pub unlink_source: Option<String>,
     #[schema(required = true)]
     pub unlinked_by: Option<i64>,
+    /// `human`, `agent`, `service_account` or `bot`; only a `human`'s
+    /// `manual` unlink keeps detection from linking it again.
+    #[schema(required = true)]
+    pub unlinked_by_kind: Option<String>,
 }
 
 /// `GET …/work-items`.
@@ -104,7 +116,8 @@ pub struct WorkItemLinksBody {
 pub struct WorkItemLinkAnswerBody {
     #[schema(minimum = 1)]
     pub iid: i64,
-    /// `linked` or `unchanged` (already linked, by detection or a person).
+    /// `linked` (also when a detected link became the person's) or
+    /// `unchanged` (already linked by hand).
     pub outcome: String,
     #[schema(minimum = 1)]
     pub link_id: i64,
@@ -130,9 +143,10 @@ fn answer_body(iid: i64, outcome: &LinkOutcome, a: &LinkAnswer) -> WorkItemLinkA
     }
 }
 
-/// The ids and the reference of
-/// `/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` (raw path).
-fn link_ids(raw_path: &str) -> Result<(ProjectId, i64, WorkItemRef), ForgeError> {
+/// The ids and the target of
+/// `/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}` (raw path):
+/// `PBI-<n>`, or (an unlink only) a work item id.
+fn link_ids(raw_path: &str) -> Result<(ProjectId, i64, LinkTarget), ForgeError> {
     let (id, rest) = raw_path
         .strip_prefix(PREFIX)
         .and_then(|rest| rest.split_once("/merge-requests/"))
@@ -144,8 +158,13 @@ fn link_ids(raw_path: &str) -> Result<(ProjectId, i64, WorkItemRef), ForgeError>
     let iid = parse_positive_id(iid)
         .filter(|_| !iid.contains('/'))
         .ok_or_else(|| param_invalid("iid", "not_positive_decimal"))?;
-    let reference = WorkItemRef::parse(reference).ok_or_else(|| param_invalid("ref", "format"))?;
-    Ok((ProjectId::new(id), iid, reference))
+    let target = match WorkItemRef::parse(reference) {
+        Some(r) => LinkTarget::Ref(r),
+        None => LinkTarget::WorkItem(
+            parse_positive_id(reference).ok_or_else(|| param_invalid("ref", "format"))?,
+        ),
+    };
+    Ok((ProjectId::new(id), iid, target))
 }
 
 /// `GET …/work-items`: the merge request.
@@ -183,6 +202,10 @@ impl Loader<AppState> for LinkOf {
             lookup_ids(state, (project, iid), viewer, MergeRequestEdit::default()).await
         })
     }
+}
+
+fn kind_name(k: LinkActorKind) -> String {
+    k.as_str().to_owned()
 }
 
 fn proof_iid(proof: &forge_auth::Authorized<MergeRequestCtx>) -> Result<i64, ForgeError> {
@@ -225,11 +248,13 @@ pub async fn links(state: AppState, request: Dispatched<MergeRequestCtx>) -> Res
                     work_item_id: l.work_item.id,
                     work_item: item_body(&l.work_item),
                     source: l.source.as_str().to_owned(),
-                    linked_by: l.linked_by.map(UserId::get),
+                    linked_by: l.linked_by.map(|(u, _)| u.get()),
+                    linked_by_kind: l.linked_by.map(|(_, k)| kind_name(k)),
                     linked_at: l.linked_at.clone(), // clone: the body owns its values
                     unlinked_at: l.unlinked_at.clone(),
                     unlink_source: l.unlink_source.map(|s| s.as_str().to_owned()),
-                    unlinked_by: l.unlinked_by.map(UserId::get),
+                    unlinked_by: l.unlinked_by.map(|(u, _)| u.get()),
+                    unlinked_by_kind: l.unlinked_by.map(|(_, k)| kind_name(k)),
                 })
                 .collect(),
         })
@@ -244,7 +269,11 @@ pub async fn link(state: AppState, request: Dispatched<MergeRequestCtx>) -> Resp
     let w = request.into_write();
     let built = async {
         let iid = proof_iid(&w.proof)?;
-        let (_, _, reference) = link_ids(&path)?;
+        // A link names a reference (a work item id is for unlinking an
+        // earlier binding's link).
+        let LinkTarget::Ref(reference) = link_ids(&path)?.2 else {
+            return Err(param_invalid("ref", "format"));
+        };
         let (outcome, answer) = review(&state)?
             .link_work_item(&review_request(&w), &w.proof, &reference)
             .await?;
@@ -259,9 +288,9 @@ pub async fn unlink(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
     let path = request.raw_path().to_owned();
     let w = request.into_write();
     let done = async {
-        let (_, _, reference) = link_ids(&path)?;
+        let (_, _, target) = link_ids(&path)?;
         review(&state)?
-            .unlink_work_item(&review_request(&w), &w.proof, &reference)
+            .unlink_work_item(&review_request(&w), &w.proof, &target)
             .await
     }
     .await;
@@ -279,7 +308,14 @@ mod unit {
     fn the_link_path_names_a_canonical_reference() {
         let (p, iid, r) =
             link_ids("/api/v1/projects/3/merge-requests/7/work-items/PBI-43").expect("ids");
-        assert_eq!((p.get(), iid, r.as_str()), (3, 7, "PBI-43"));
+        assert_eq!((p.get(), iid), (3, 7));
+        assert_eq!(
+            r,
+            LinkTarget::Ref(WorkItemRef::parse("PBI-43").expect("ref"))
+        );
+        let (_, _, id) =
+            link_ids("/api/v1/projects/3/merge-requests/7/work-items/12").expect("ids");
+        assert_eq!(id, LinkTarget::WorkItem(12));
         for bad in [
             "/api/v1/projects/3/merge-requests/7/work-items/pbi-43",
             "/api/v1/projects/3/merge-requests/7/work-items/PBI-43/x",

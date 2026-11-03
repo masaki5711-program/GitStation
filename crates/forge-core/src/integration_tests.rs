@@ -98,9 +98,11 @@ fn integration_audit_details_name_their_action_and_publish_no_event() {
         external_project_id: "P1".to_owned(),
         service_account: UserId::new(4),
         membership_removed: false,
+        work_item_links_ended: 3,
     });
     assert_eq!(unbound.action(), "integration.unbound");
     assert_eq!(unbound.to_value()["membership_removed"], false);
+    assert_eq!(unbound.to_value()["work_item_links_ended"], 3);
     let created = AuditDetails::Integration(IntegrationChange::Created {
         integration: IntegrationId::new(3),
         kind: IntegrationKind::Kanflow,

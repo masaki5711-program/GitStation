@@ -1,4 +1,6 @@
-use crate::work_item::{find_refs, LinkSource, WorkItem, WorkItemChange, WorkItemRef};
+use crate::work_item::{
+    find_refs, LinkActorKind, LinkSource, UnlinkSource, WorkItem, WorkItemChange, WorkItemRef,
+};
 use crate::{EventType, IntegrationId, IntegrationKind, MergeRequestId, ProjectId, UserId};
 
 /// The shared vectors kanflow tests its K1 matcher against (plan 02 §2).
@@ -81,6 +83,13 @@ fn link_sources_round_trip() {
         assert_eq!(LinkSource::parse(s.as_str()), Some(s));
     }
     assert_eq!(LinkSource::parse("Auto"), None);
+    for s in UnlinkSource::ALL {
+        assert_eq!(UnlinkSource::parse(s.as_str()), Some(s));
+    }
+    for k in LinkActorKind::ALL {
+        assert_eq!(LinkActorKind::parse(k.as_str()), Some(k));
+        assert_eq!(k.is_person(), k == LinkActorKind::Human);
+    }
 }
 
 fn item() -> WorkItem {
@@ -102,7 +111,8 @@ fn work_item_events_carry_the_reference_and_are_integration_class() {
         link: 11,
         work_item: item(),
         source: LinkSource::Manual,
-        by: Some(UserId::new(4)),
+        by: Some((UserId::new(4), LinkActorKind::Agent)),
+        replaces: Some(8),
     };
     assert_eq!(linked.event_type(), EventType::WorkItemLinked);
     assert_eq!(linked.action(), "work_item.linked");
@@ -112,7 +122,8 @@ fn work_item_events_carry_the_reference_and_are_integration_class() {
         serde_json::json!({
             "merge_request_id": 9, "iid": 2, "link_id": 11, "work_item_id": 7,
             "work_item": {"provider": "kanflow", "project_id": "kf-12", "ref": "PBI-43"},
-            "integration_id": 3, "source": "manual", "by": 4,
+            "integration_id": 3, "source": "manual", "by": 4, "by_kind": "agent",
+            "replaces_link_id": 8,
         })
     );
     let unlinked = WorkItemChange::Unlinked {
@@ -121,7 +132,7 @@ fn work_item_events_carry_the_reference_and_are_integration_class() {
         iid: 2,
         link: 11,
         work_item: item(),
-        source: LinkSource::Auto,
+        source: UnlinkSource::Unbound,
         by: None,
     };
     assert_eq!(unlinked.event_type(), EventType::WorkItemUnlinked);

@@ -1428,6 +1428,26 @@ fn mr_work_item_commands_call_their_routes() {
             "/api/v1/projects/7/merge-requests/3/work-items/PBI-43"
         )
     );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "unlink-work-item",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--ref",
+            "9",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        r.target.as_str(),
+        "/api/v1/projects/7/merge-requests/3/work-items/9"
+    );
     let before = srv.seen().len();
     for bad in ["pbi-43", "PBI-043", "PBI-43/../x", "ICE-1"] {
         let o = gstn(
