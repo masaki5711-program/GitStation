@@ -889,3 +889,58 @@ async fn a_report_shares_the_project_row_lock() {
     tx.rollback().await.expect("rollback");
     w.t.drop_now().await;
 }
+
+/// Review fix 4: an annotation's project is its run's project (composite
+/// foreign key `check_annotations_run_project`), so the purge's
+/// `project_id` delete and the audit resource can never disagree with the
+/// run.
+#[tokio::test]
+async fn an_annotation_belongs_to_its_runs_project() {
+    let w = world().await;
+    let run = w
+        .report(&sha('a'), &success("ci/gates"), "req-1")
+        .await
+        .expect("run")
+        .run
+        .id;
+    let home =
+        w.t.json_rows(&format!(
+            "SELECT id FROM forge.namespaces WHERE kind = 'user' AND owner_id = {}",
+            w.alice.get()
+        ))
+        .await
+        .first()
+        .and_then(|r| r["id"].as_i64())
+        .map(forge_core::NamespaceId::new)
+        .expect("alice's namespace");
+    let other = projects::create(
+        &w.t.db,
+        &system("req-project-other"),
+        &NewProject::new("other", home, "Other", w.alice),
+    )
+    .await
+    .expect("other")
+    .project_id;
+    let mut su = w.t.superuser().await;
+    let mut tx = sqlx::Connection::begin(&mut su).await.expect("begin");
+    let insert = |project: i64| {
+        format!(
+            "INSERT INTO forge.check_annotations (check_run_id, project_id, position, path, \
+             start_line, end_line, level, message) VALUES ({run}, {project}, 0, 'a.rs', 1, 1, \
+             'notice', 'm')"
+        )
+    };
+    let wrong = sqlx::query(&insert(other.get())).execute(&mut *tx).await;
+    assert_eq!(
+        constraint_of(wrong),
+        Some("check_annotations_run_project".to_owned())
+    );
+    tx.rollback().await.expect("rollback");
+    let mut tx = sqlx::Connection::begin(&mut su).await.expect("begin");
+    sqlx::query(&insert(w.project().get()))
+        .execute(&mut *tx)
+        .await
+        .expect("the run's own project passes");
+    tx.rollback().await.expect("rollback");
+    w.t.drop_now().await;
+}
