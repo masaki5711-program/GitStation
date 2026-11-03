@@ -51,6 +51,14 @@ pub struct PutMergeRule {
     /// (FG-WEB-0006 `rule=unavailable_until_i1`).
     #[serde(default)]
     pub require_work_item_link: bool,
+    /// The merge rule's `updated_at` the caller read, echoed verbatim (an
+    /// opaque string), or `null` when the branch has none (create only).
+    /// Required (U2 follow-up): another merge rule under the lock — changed,
+    /// removed, or created by someone else — is FG-REVIEW-0019 and nothing
+    /// is written.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schema(required = true)]
+    pub expected_updated_at: Option<String>,
 }
 
 /// The ids of `/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule`.
@@ -143,7 +151,12 @@ pub async fn put(state: AppState, request: Dispatched<RefProtectionCtx, PutMerge
             require_work_item_link: w.input.require_work_item_link,
         };
         let (outcome, _) = hosting(&state)?
-            .put_merge_rule(&write_request(&w), &w.proof, &ask)
+            .put_merge_rule(
+                &write_request(&w),
+                &w.proof,
+                &ask,
+                w.input.expected_updated_at.as_deref(),
+            )
             .await?;
         let mut body = written_body(&state, w.proof.id().0, rule_of(&w.proof)?).await?;
         // R6 review: before the Checks API (C1) no check can be reported,

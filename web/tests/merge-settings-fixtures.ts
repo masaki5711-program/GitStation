@@ -21,6 +21,9 @@ export function protectedRef(id: number, pattern: string, over: Record<string, u
   };
 }
 
+export const RULE_STAMP = '2026-11-03T02:00:00.000001Z';
+
+/** An approval rule as the API answers it: approvers by id and by name. */
 export const RULE = {
   approval_rule_id: 1,
   name: 'leads',
@@ -28,6 +31,9 @@ export const RULE = {
   required_approvals: 2,
   user_ids: [6],
   group_ids: [3],
+  users: [{ id: 6, username: 'jiro', display_name: 'Jiro Suzuki' }],
+  groups: [{ id: 3, full_path: 'acme', display_name: 'Acme Plant' }],
+  updated_at: RULE_STAMP,
 };
 
 export function settingsRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
@@ -38,13 +44,7 @@ export function settingsRoutes(over: Record<string, Handler> = {}): Record<strin
     [`GET ${API}/protected-refs`]: () => json(200, { rules: [] }),
     [`GET ${API}/merge-settings`]: () => json(200, mergeSettings({ viewer: MANAGER })),
     [`GET ${API}/approval-rules`]: () => json(200, { rules: [] }),
-    [`GET ${API}/members`]: () =>
-      json(200, {
-        members: [
-          { user_id: 6, username: 'jiro', display_name: 'Jiro Suzuki', role: 'developer', active: true, created_at: '2026-10-02T00:00:00Z' },
-        ],
-        next_after: null,
-      }),
+    // The rules name their approvers: no member list is read for them.
     'GET /api/v1/groups': () =>
       page([
         { id: 3, namespace_id: 30, path: 'acme', name: 'acme', display_name: 'Acme Plant', description: '', created_at: '2026-09-01T00:00:00Z', role: 'owner' },

@@ -1696,3 +1696,29 @@ diagnosis = "The log event carries `reason` (`integration_disabled` or `service_
 fix = "If the stop was intended, nothing to do. Otherwise, after checking why it was stopped (runbook integrations, service-accounts), an administrator enables the integration again in the browser session (`PATCH /api/v1/admin/integrations/{id}` with `enabled: true`) or enables its service account; then bind again."
 runbook = "integrations"
 test = "binding_a_disabled_integration_is_refused"
+# ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
+[[error]]
+code = "FG-REVIEW-0018"
+name = "ApprovalRuleChanged"
+http_status = 409
+severity = "info"
+user_message_ja = "この承認の規則は、表示した後に変更されたか、同じ名前の規則が追加されました。最新の規則を読み直してから、もう一度保存してください。"
+user_message_en = "This approval rule changed after you opened it, or a rule with the same name was added. Reload the latest rules, then save again."
+user_message_id = "Aturan persetujuan ini berubah setelah Anda membukanya, atau aturan dengan nama yang sama telah ditambahkan. Muat ulang aturan terbaru, lalu simpan lagi."
+cause = "`PUT /api/v1/projects/{id}/approval-rules/{name}` carried an `expected_updated_at` that does not match the rule as locked in the write transaction (after the project row lock and the re-authorization): `reason=stale_rule` — the rule's `updated_at` differs (someone saved it in between); `reason=rule_exists` — `null` (create only) but a rule with that name exists (two people adding the same name); `reason=rule_gone` — a stamp, but the rule was removed in between. The write is refused instead of silently replacing, re-creating or overwriting the other change. Nothing was written. Not an alert: two people editing at once."
+diagnosis = "The log event carries `reason` (`stale_rule`, `rule_exists` or `rule_gone`), `expected` and `actual` (the two `updated_at` values, `none` for no rule), `project_id` and `approval_rule` (the name), with `action=ApprovalRuleManage`. The change in between is the newest audit row: SELECT action, actor_user_id, occurred_at, details FROM forge.audit_log WHERE resource_type = 'project' AND resource_id = <project_id> AND action LIKE 'approval_rule.%' ORDER BY id DESC LIMIT 5."
+fix = "Read the rules again (`gstn approval-rule list --project <id>`, or reload the screen), check the other change, and save again with the rule's new `updated_at` (`gstn approval-rule set` reads it by itself; `null` only for a name no rule has)."
+test = "stale_approval_rule_put_is_409"
+
+[[error]]
+code = "FG-REVIEW-0019"
+name = "MergeRuleChanged"
+http_status = 409
+severity = "info"
+user_message_ja = "このブランチのマージの条件は、表示した後に変更されました。最新の条件を読み直してから、もう一度保存してください。"
+user_message_en = "The merge conditions of this branch changed after you opened them. Reload the latest conditions, then save again."
+user_message_id = "Syarat merge untuk branch ini berubah setelah Anda membukanya. Muat ulang syarat terbaru, lalu simpan lagi."
+cause = "`PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule` carried an `expected_updated_at` that does not match the merge rule as locked in the write transaction (after the project and protection rule row locks and the re-authorization): `reason=stale_rule` — its `updated_at` differs (someone saved it in between); `reason=rule_exists` — `null` (create only) but the protection rule has a merge rule; `reason=rule_gone` — a stamp, but the merge rule was removed in between. The write is refused instead of silently replacing, re-creating or overwriting the other change (a second save could otherwise erase required approvals or checks). Nothing was written. Not an alert: two people editing at once."
+diagnosis = "The log event carries `reason` (`stale_rule`, `rule_exists` or `rule_gone`), `expected` and `actual` (the two `updated_at` values, `none` for no merge rule), `project_id` and `protected_ref_id`, with `action=ProtectedRefManage`. The change in between is the newest audit row: SELECT action, actor_user_id, occurred_at, details FROM forge.audit_log WHERE resource_type = 'project' AND resource_id = <project_id> AND action LIKE 'protected_ref.merge_rule_%' ORDER BY id DESC LIMIT 5."
+fix = "Read the rules again (`gstn protected-ref list --project <id>` or `GET …/protected-refs`, or reload the screen), check the other change, and save again with the merge rule's new `updated_at` (`gstn merge-rule set` reads it by itself; `null` only when the branch has no merge rule)."
+test = "stale_merge_rule_put_is_409"

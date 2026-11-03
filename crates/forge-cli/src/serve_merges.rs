@@ -206,7 +206,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::MergeSettingsChanged
         | ErrorCode::IntegrationLimitReached
         | ErrorCode::BindingConflict
-        | ErrorCode::IntegrationDisabled => false,
+        | ErrorCode::IntegrationDisabled
+        | ErrorCode::ApprovalRuleChanged
+        | ErrorCode::MergeRuleChanged => false,
     }
 }
 

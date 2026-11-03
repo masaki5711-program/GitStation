@@ -211,13 +211,22 @@ pub fn approval_rule(
             user,
             group,
         } => {
+            let c = client(cli, env, io)?;
+            // U2 follow-up: the rule this replaces, as read now (`null`: no
+            // rule has the name, create only); changed in between is
+            // FG-REVIEW-0018 (run it again), never overwritten.
+            let current = call(&c, Method::Get, &rules(*project), &[], None)?;
+            let expected = current["rules"]
+                .as_array()
+                .and_then(|a| a.iter().find(|r| r["name"].as_str() == Some(name.as_str())))
+                .map_or(Value::Null, |r| r["updated_at"].clone()); // clone: the request owns it
             let req = json!({
                 "target_pattern": target_pattern,
                 "required_approvals": required,
                 "users": user,
                 "groups": group,
+                "expected_updated_at": expected,
             });
-            let c = client(cli, env, io)?;
             let body = call(
                 &c,
                 Method::Put,

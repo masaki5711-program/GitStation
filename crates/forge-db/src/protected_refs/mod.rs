@@ -630,6 +630,10 @@ pub struct StoredRule {
     pub push_min_role: Role,
     /// M3 R6: its merge rule (`None`: none).
     pub merge: Option<forge_core::MergeRule>,
+    /// U2 follow-up: the merge rule's `updated_at`, UTC, RFC 3339 to the
+    /// microsecond (`None` without one): the token a merge-rule write's
+    /// `expected_updated_at` compares (FG-REVIEW-0019).
+    pub merge_updated_at: Option<String>,
     /// UTC, RFC 3339.
     pub created_at: String,
     pub updated_at: String,
@@ -652,19 +656,21 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
         Option<Vec<String>>,
         Option<bool>,
         Option<bool>,
+        Option<String>,
     );
     let rows: Vec<Row> = db
         .within(QUERY, async {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 "SELECT p.id, p.pattern, p.push_min_role, \
                  to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                  to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                  m.required_approvals, m.required_checks, m.require_resolved_discussions, \
-                 m.direct_push_forbidden \
+                 m.direct_push_forbidden, {} \
                  FROM forge.protected_refs p \
                  LEFT JOIN forge.protected_ref_merge_rules m ON m.protected_ref_id = p.id \
                  WHERE p.project_id = $1 ORDER BY p.id LIMIT $2",
-            )
+                merge_rules::UPDATED_AT_US
+            ))
             .bind(project.get())
             .bind(row_limit())
             .fetch_all(db.pool().executor())
@@ -679,7 +685,18 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
     }
     rows.into_iter()
         .map(
-            |(id, pattern, role, created_at, updated_at, approvals, checks, talks, no_push)| {
+            |(
+                id,
+                pattern,
+                role,
+                created_at,
+                updated_at,
+                approvals,
+                checks,
+                talks,
+                no_push,
+                merge_updated_at,
+            )| {
                 let rule = parse_row((id, pattern, role))?;
                 let merge = merge_rules::parse_merge(id, approvals, checks, talks, no_push)?;
                 Ok(StoredRule {
@@ -687,6 +704,7 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
                     pattern: rule.pattern,
                     push_min_role: rule.push_min_role,
                     merge,
+                    merge_updated_at,
                     created_at,
                     updated_at,
                 })

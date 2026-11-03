@@ -4,6 +4,9 @@
 // expected_updated_at check: another value is 409, as FG-REVIEW-0017), the
 // CODEOWNERS suspension, approval rules and the merge conditions of protected
 // branches (required checks answer the required_checks_unreportable warning).
+// The rule writes check expected_updated_at too (null: create only; another
+// value is 409, as FG-REVIEW-0018 / FG-REVIEW-0019), and an approval rule
+// names its approvers (users / groups) as the API does.
 // Stateful, so a created token appears in the list; every unsafe request must
 // carry the CSRF header. The shapes are those of tests/settings.test.tsx and
 // tests/merge-settings-fixtures.ts (keep them in step).
@@ -172,19 +175,28 @@ export function settingsBackend(csrf) {
     if (key === 'GET /api/v1/projects/7/approval-rules') return json({ rules: approvalRules });
     const approvalRule = path.match(/^\/api\/v1\/projects\/7\/approval-rules\/([a-z0-9_.-]+)$/);
     if (approvalRule && method === 'PUT') {
-      const user_ids = (input.users ?? []).map((u) => found.find((f) => f.username === u)?.id ?? 0);
-      const group_ids = (input.groups ?? []).map((g) => groupIds[g] ?? 0);
-      if (user_ids.includes(0) || group_ids.includes(0)) {
-        return { status: 422, error: ['An approver does not exist.', 'req-rule-422', 'FG-WEB-0006'] };
+      if (!('expected_updated_at' in input)) {
+        return { status: 400, error: ['expected_updated_at is required.', 'req-rule-400', 'FG-WEB-0006'] };
       }
       const existing = approvalRules.find((r) => r.name === approvalRule[1]);
+      if (input.expected_updated_at !== (existing?.updated_at ?? null)) {
+        return { status: 409, error: ['This approval rule changed after you opened it.', 'req-rule-409', 'FG-REVIEW-0018'] };
+      }
+      const users = (input.users ?? []).map((u) => found.find((f) => f.username === u));
+      const group_ids = (input.groups ?? []).map((g) => groupIds[g] ?? 0);
+      if (users.includes(undefined) || group_ids.includes(0)) {
+        return { status: 422, error: ['An approver does not exist.', 'req-rule-422', 'FG-WEB-0006'] };
+      }
       const next = {
         approval_rule_id: existing?.approval_rule_id ?? nextApprovalRule++,
         name: approvalRule[1],
         target_pattern: input.target_pattern ?? null,
         required_approvals: input.required_approvals,
-        user_ids,
+        user_ids: users.map((u) => u.id),
         group_ids,
+        users,
+        groups: (input.groups ?? []).map((g) => ({ id: groupIds[g], full_path: g, display_name: 'Acme Plant' })),
+        updated_at: stamp(),
       };
       if (existing) Object.assign(existing, next);
       else approvalRules.push(next);
@@ -208,11 +220,18 @@ export function settingsBackend(csrf) {
         if ('require_work_item_link' in input) {
           return { status: 400, error: ['Not available yet.', 'req-mrule-i1', 'FG-WEB-0006'] };
         }
+        if (!('expected_updated_at' in input)) {
+          return { status: 400, error: ['expected_updated_at is required.', 'req-mrule-400', 'FG-WEB-0006'] };
+        }
+        if (input.expected_updated_at !== (r.merge_rule?.updated_at ?? null)) {
+          return { status: 409, error: ['The merge conditions changed after you opened them.', 'req-mrule-409', 'FG-REVIEW-0019'] };
+        }
         r.merge_rule = {
           required_approvals: input.required_approvals ?? 0,
           required_checks: input.required_checks ?? [],
           require_resolved_discussions: input.require_resolved_discussions === true,
           direct_push_forbidden: input.direct_push_forbidden === true,
+          updated_at: stamp(),
         };
         r.warnings = r.merge_rule.required_checks.length > 0 ? ['required_checks_unreportable'] : [];
         return json(r);

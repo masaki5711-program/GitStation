@@ -109,9 +109,13 @@ pub struct MergeRuleBody {
     pub require_resolved_discussions: bool,
     /// Pushes may not create or move the branch (merges may).
     pub direct_push_forbidden: bool,
+    /// UTC, RFC 3339 to the microsecond (U2 follow-up): an opaque token —
+    /// send it back verbatim as the merge-rule write's
+    /// `expected_updated_at`.
+    pub updated_at: String,
 }
 
-pub(crate) fn merge_rule_body(rule: &forge_core::MergeRule) -> MergeRuleBody {
+pub(crate) fn merge_rule_body(rule: &forge_core::MergeRule, updated_at: &str) -> MergeRuleBody {
     MergeRuleBody {
         required_approvals: rule.required_approvals,
         required_checks: rule
@@ -121,6 +125,7 @@ pub(crate) fn merge_rule_body(rule: &forge_core::MergeRule) -> MergeRuleBody {
             .collect(),
         require_resolved_discussions: rule.require_resolved_discussions,
         direct_push_forbidden: rule.direct_push_forbidden,
+        updated_at: updated_at.to_owned(),
     }
 }
 
@@ -131,16 +136,25 @@ pub struct ProtectedRefRules {
     pub rules: Vec<ProtectedRefBody>,
 }
 
-fn rule_body(rule: &StoredRule) -> ProtectedRefBody {
-    ProtectedRefBody {
+fn rule_body(rule: &StoredRule) -> Result<ProtectedRefBody, ForgeError> {
+    let merge_rule = match (&rule.merge, &rule.merge_updated_at) {
+        (Some(m), Some(at)) => Some(merge_rule_body(m, at)),
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(ForgeError::new(ErrorCode::Internal)
+                .with_context("reason", "merge_rule_without_updated_at")
+                .with_context("protected_ref_id", rule.id.get()))
+        }
+    };
+    Ok(ProtectedRefBody {
         id: rule.id.get(),
         pattern: rule.pattern.as_str().to_owned(),
         push_min_role: rule.push_min_role.as_str().to_owned(),
         created_at: rule.created_at.clone(), // clone: the rule is borrowed
         updated_at: rule.updated_at.clone(),
-        merge_rule: rule.merge.as_ref().map(merge_rule_body),
+        merge_rule,
         warnings: Vec::new(),
-    }
+    })
 }
 
 /// The ids of `/api/v1/projects/{id}/protected-refs/{rule_id}` (raw path).
@@ -345,7 +359,7 @@ pub(crate) async fn written_body(
             .with_context("reason", "written_protected_ref_missing")
             .with_context("protected_ref_id", rule.get())
     })?;
-    Ok(rule_body(rule))
+    rule_body(rule)
 }
 
 /// `GET /api/v1/projects/{id}/protected-refs` → `200` every rule.
@@ -360,7 +374,7 @@ pub async fn list(state: AppState, request: Dispatched<ProjectCtx>) -> Response 
         )
         .await?;
         json(ProtectedRefRules {
-            rules: rules.iter().map(rule_body).collect(),
+            rules: rules.iter().map(rule_body).collect::<Result<_, _>>()?,
         })
     }
     .await;

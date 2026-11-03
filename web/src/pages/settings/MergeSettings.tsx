@@ -5,9 +5,12 @@
 // can_suspend_codeowners); without them everything is read-only, so a
 // Developer still sees why a merge is stopped. The server decides again.
 //
-// `updated_at` is sent back as `expected_updated_at` exactly as it was read
-// (an opaque string); a 409 means someone saved in between: the screen offers
-// to read the settings again instead of overwriting theirs.
+// `updated_at` (of the settings, of an approval rule, of a merge rule) is sent
+// back as `expected_updated_at` exactly as it was read (an opaque string; null
+// for a rule that does not exist yet: create only); a 409 means someone saved
+// in between: the screen offers to read them again instead of overwriting
+// theirs. Approval rules name their approvers themselves, so every rule can be
+// changed here whatever the number of members.
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
@@ -18,10 +21,10 @@ import {
   MERGE_METHODS,
   isMergeMethod,
   useApprovalRules,
-  useApproverNames,
   useCodeownersEnforcement,
   useDeleteApprovalRule,
   useDeleteMergeRule,
+  useGroupChoices,
   useMergeSettings,
   useProtectedRefs,
   usePutApprovalRule,
@@ -399,38 +402,31 @@ function parseCount(raw: string, min: number, max: number): number | null {
   return n >= min && n <= max ? n : null;
 }
 
-interface Names {
-  user: (id: number) => string | null;
-  group: (id: number) => string | null;
-}
-
 type GroupName = { id: number; path: string; display_name: string };
 
-interface NameState extends Names {
+interface GroupChoices {
   groups: GroupName[];
-  /** Both lists were read (a rule dialog may only start from them then). */
+  /** The list was read (a rule dialog's form starts then). */
   ready: boolean;
-  pending: boolean;
   error: unknown;
   retry: () => void;
 }
 
-function useNames(projectId: number, enabled: boolean): NameState {
-  const { members, groups } = useApproverNames(projectId, enabled);
-  const users = new Map((members.data ?? []).map((m) => [m.user_id, m.username]));
-  const paths = new Map((groups.data ?? []).map((g) => [g.id, g.path]));
+function useChoices(enabled: boolean): GroupChoices {
+  const groups = useGroupChoices(enabled);
   return {
-    user: (id) => users.get(id) ?? null,
-    group: (id) => paths.get(id) ?? null,
     groups: groups.data ?? [],
-    ready: members.isSuccess && groups.isSuccess,
-    pending: members.isPending || groups.isPending,
-    error: members.error ?? groups.error,
+    ready: groups.isSuccess,
+    error: groups.error,
     retry: () => {
-      if (members.isError) void members.refetch();
-      if (groups.isError) void groups.refetch();
+      void groups.refetch();
     },
   };
+}
+
+/** Who may approve for a rule, by the names the rule answers with. */
+function approverNames(r: ApprovalRule): { users: string[]; groups: string[] } {
+  return { users: r.users.map((u) => u.username), groups: r.groups.map((g) => g.full_path) };
 }
 
 export function ApprovalRulesSection({ projectId, canManage }: { projectId: number; canManage: boolean }) {
@@ -445,17 +441,14 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setEditing(target);
   };
-  const needNames = editing !== null || list.some((r) => r.user_ids.length > 0 || r.group_ids.length > 0);
-  const names = useNames(projectId, needNames);
+  const choices = useChoices(editing !== null);
   const confirm = useConfirm<string>();
   const remove = useDeleteApprovalRule(projectId);
   const [done, setDone] = useState('');
 
   const who = (r: ApprovalRule) => {
-    const people = [
-      ...r.user_ids.map((id) => names.user(id) ?? t('settings.rules.unknownUser', { id })),
-      ...r.group_ids.map((id) => names.group(id) ?? t('settings.rules.unknownGroup', { id })),
-    ];
+    const { users, groups } = approverNames(r);
+    const people = [...users, ...groups];
     return people.length === 0 ? t('settings.rules.anyone') : people.join(', ');
   };
 
@@ -526,15 +519,11 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
             </table>
           </div>
         ))}
-      {list.length > 0 && needNames && names.pending && <Loading />}
-      {needNames && names.error !== null && editing === null && (
-        <QueryError error={names.error} onRetry={names.retry} />
-      )}
       <p role="status" className={styles.muted}>
         {done}
       </p>
-      {/* Only with the list read: the name check needs every existing name,
-          and a PUT under one of them would replace that rule. */}
+      {/* Only with the list read: the name check needs every existing name
+          (the server refuses an existing name too: a new rule only creates). */}
       {canManage && rules.isSuccess && (
         <button
           type="button"
@@ -549,13 +538,18 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
       {editing !== null && (
         <RuleDialog
           projectId={projectId}
-          rule={editing === 'new' ? null : editing}
+          // The rule as last read (a reload after a 409 gives the dialog the
+          // new updated_at; the typed values stay).
+          rule={editing === 'new' ? null : (list.find((r) => r.approval_rule_id === editing.approval_rule_id) ?? editing)}
           taken={list.map((r) => r.name)}
-          names={names}
+          choices={choices}
           onClose={(savedName) => {
             setEditing(null);
             if (savedName !== null) setDone(t('settings.rules.saved', { name: savedName }));
             focusWhenNoDialog(opener);
+          }}
+          onReload={async () => {
+            await rules.refetch();
           }}
         />
       )}
@@ -587,23 +581,25 @@ function RuleDialog({
   projectId,
   rule,
   taken,
-  names,
+  choices,
   onClose,
+  onReload,
 }: {
   projectId: number;
   rule: ApprovalRule | null;
-  /** The names of the rules that exist (a PUT under one would replace it). */
+  /** The names of the rules that exist (the server refuses a new rule under one). */
   taken: string[];
-  names: NameState;
+  choices: GroupChoices;
   /** The saved rule's name, or null when nothing was saved. */
   onClose: (saved: string | null) => void;
+  /** After a 409: read the rules again (the dialog stays open). */
+  onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const save = usePutApprovalRule(projectId);
   const title = rule === null ? t('settings.rules.add') : t('settings.rules.changeTitle', { name: rule.name });
-  // One dialog; its form is mounted only after both name lists were read,
-  // so the approvers are seeded from them once and a Save can never send a
-  // list that was empty only because the names had not arrived (review HIGH).
+  // One dialog; its form is mounted once the group choices were read. The
+  // approvers are seeded from the rule's own names, never from a list.
   return (
     <Modal
       open
@@ -613,11 +609,11 @@ function RuleDialog({
       title={title}
       busy={save.isPending}
     >
-      {names.ready ? (
-        <RuleForm rule={rule} taken={taken} names={names} save={save} onClose={onClose} />
+      {choices.ready ? (
+        <RuleForm rule={rule} taken={taken} choices={choices} save={save} onClose={onClose} onReload={onReload} />
       ) : (
         <>
-          {names.error !== null ? <QueryError error={names.error} onRetry={names.retry} /> : <Loading />}
+          {choices.error !== null ? <QueryError error={choices.error} onRetry={choices.retry} /> : <Loading />}
           <div className={styles.row}>
             <button
               type="button"
@@ -639,15 +635,17 @@ function RuleDialog({
 function RuleForm({
   rule,
   taken,
-  names,
+  choices,
   save,
   onClose,
+  onReload,
 }: {
   rule: ApprovalRule | null;
   taken: string[];
-  names: NameState;
+  choices: GroupChoices;
   save: ReturnType<typeof usePutApprovalRule>;
   onClose: (saved: string | null) => void;
+  onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const form = useRef<HTMLFormElement>(null);
@@ -659,14 +657,14 @@ function RuleForm({
   const [name, setName] = useState(rule?.name ?? '');
   const [target, setTarget] = useState(rule?.target_pattern ?? '');
   const [count, setCount] = useState(String(rule?.required_approvals ?? 1));
-  const known = {
-    users: (rule?.user_ids ?? []).map((id) => names.user(id)),
-    groups: (rule?.group_ids ?? []).map((id) => names.group(id)),
-  };
-  // Saving replaces the approvers: an id that has no name here would be dropped.
-  const unnamed = known.users.includes(null) || known.groups.includes(null);
-  const [users, setUsers] = useState<string[]>(known.users.filter((u): u is string => u !== null));
-  const [groups, setGroups] = useState<string[]>(known.groups.filter((g): g is string => g !== null));
+  // Saving replaces the approvers: they start as the rule names them. An
+  // approver the answer could not name (its ids are longer than its names)
+  // would be dropped by a save, so none is offered then.
+  const known = rule === null ? { users: [], groups: [] } : approverNames(rule);
+  const unnamed =
+    rule !== null && (rule.users.length !== rule.user_ids.length || rule.groups.length !== rule.group_ids.length);
+  const [users, setUsers] = useState<string[]>(known.users);
+  const [groups, setGroups] = useState<string[]>(known.groups);
   const [attempt, setAttempt] = useState(0);
 
   // Names are lower case only (the server's rule), so they compare as they are.
@@ -697,6 +695,8 @@ function RuleForm({
           target_pattern: target.trim() === '' ? null : target.trim(),
           users,
           groups,
+          // Verbatim; null: a new rule (refused when the name exists by then).
+          expected_updated_at: rule?.updated_at ?? null,
         },
       },
       {
@@ -744,7 +744,7 @@ function RuleForm({
           }}
         />
         <GroupPicker
-          groups={names.groups}
+          groups={choices.groups}
           chosen={groups}
           onAdd={(g) => {
             if (!groups.includes(g)) setGroups([...groups, g]);
@@ -756,10 +756,19 @@ function RuleForm({
         <p className={styles.hint}>{t('settings.rules.anyoneHelp')}</p>
         {unnamed && (
           <p role="note" className={styles.warning}>
-            {t('settings.rules.unnamed')}
+            {t('settings.rules.namesMissing')}
           </p>
         )}
-        {save.isError && <Denied error={save.error} />}
+        {save.isError && (
+          <SaveError
+            error={save.error}
+            onReload={async () => {
+              await onReload();
+              save.reset();
+              form.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+            }}
+          />
+        )}
         <div className={styles.row}>
           <button
             type="button"
@@ -954,6 +963,27 @@ function GroupPicker({
   );
 }
 
+/** A refused save; on a 409 (someone saved in between) the reload line. */
+function SaveError({ error, onReload }: { error: unknown; onReload: () => Promise<void> }) {
+  const { t } = useTranslation();
+  return (
+    <div>
+      <Denied error={error} />
+      {isStale(error) && (
+        <button
+          type="button"
+          className={controls.button}
+          onClick={() => {
+            void onReload();
+          }}
+        >
+          {t('settings.merging.reload')}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- merge conditions
 
 const CHECK_NAME = /^(ci|kanflow|forge)\/[^\s/]+(\/[^\s/]+)*$/;
@@ -1052,11 +1082,16 @@ export function MergeConditionsSection({ projectId, canManage }: { projectId: nu
       {editing !== null && (
         <ConditionsDialog
           projectId={projectId}
-          rule={editing}
+          // The branch as last read (a reload after a 409 gives the dialog the
+          // new updated_at; the typed values stay).
+          rule={branches.find((r) => r.id === editing.id) ?? editing}
           onClose={(saved) => {
             setEditing(null);
             if (saved) setDone(t('settings.conditions.saved', { pattern: editing.pattern }));
             focusWhenNoDialog(opener);
+          }}
+          onReload={async () => {
+            await refs.refetch();
           }}
         />
       )}
@@ -1107,13 +1142,17 @@ function ConditionsDialog({
   projectId,
   rule,
   onClose,
+  onReload,
 }: {
   projectId: number;
   rule: ProtectedRef;
   onClose: (saved: boolean) => void;
+  /** After a 409: read the branches again (the dialog stays open). */
+  onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const save = usePutMergeRule(projectId);
+  const form = useRef<HTMLFormElement>(null);
   const m = rule.merge_rule;
   const [count, setCount] = useState(String(m?.required_approvals ?? 0));
   const [checks, setChecks] = useState((m?.required_checks ?? []).join('\n'));
@@ -1134,12 +1173,14 @@ function ConditionsDialog({
     save.mutate(
       {
         ruleId: rule.id,
-        // Exactly these four: the work-item link is not offered before I1.
+        // These four (the work-item link is not offered before I1) and the
+        // merge rule as read, verbatim (null: none yet, create only).
         body: {
           required_approvals: required,
           required_checks: names,
           require_resolved_discussions: resolved,
           direct_push_forbidden: noPush,
+          expected_updated_at: m?.updated_at ?? null,
         },
       },
       {
@@ -1159,7 +1200,7 @@ function ConditionsDialog({
       title={t('settings.conditions.dialogTitle', { pattern: rule.pattern })}
       busy={save.isPending}
     >
-      <form onSubmit={submit} noValidate>
+      <form ref={form} onSubmit={submit} noValidate>
         <TextField
           label={t('settings.rules.required')}
           value={count}
@@ -1183,7 +1224,16 @@ function ConditionsDialog({
           {blocking && <p>{t('settings.conditions.unreportable')}</p>}
           {blocking && noPush && <p>{t('settings.conditions.frozen')}</p>}
         </div>
-        {save.isError && <Denied error={save.error} />}
+        {save.isError && (
+          <SaveError
+            error={save.error}
+            onReload={async () => {
+              await onReload();
+              save.reset();
+              form.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+            }}
+          />
+        )}
         <div className={styles.row}>
           <button
             type="button"

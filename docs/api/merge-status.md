@@ -143,3 +143,24 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   `updated_at`（既定のまま一度も保存されていなければ `null`）を送る。ロックの下の値と違えば `409 FG-REVIEW-0017`（何も書かない）。
   CODEOWNERS の切り替えや期限切れの自動復帰も `updated_at` を進めるので、その後の保存は読み直しが要る。欄が無い要求は
   `FG-WEB-0006`（古いクライアントが他人の変更を黙って上書きしないため）。`gstn merge-settings set` は読んだ値を自分で送る。
+
+## 承認の規則と保護したブランチのマージの規則の同時編集と承認者の名前（U2 の続き）
+
+この契約の外（`schema_version` を持たない）。マージの設定と同じ考え方を、規則の書き込みにも広げた。
+
+- `GET /api/v1/projects/{id}/approval-rules` の各規則と `PUT …/approval-rules/{name}` の答えに `updated_at`（マイクロ秒までの
+  不透明な文字列）を足した。`PUT …/approval-rules/{name}` は **`expected_updated_at` が必須**: 読んだ規則の `updated_at` を
+  そのまま送る。**`null` は「この名前の規則はまだ無い」（作るだけ）** の意味で、同じ名前の規則が既にあれば置き換えずに
+  `409 FG-REVIEW-0018`（`reason=rule_exists`）。値が違えば `stale_rule`、読んだ後に消されていれば `rule_gone`（黙って作り直さない）。
+  どれも何も書かない。欄が無い要求は `FG-WEB-0006`。
+- `GET /api/v1/projects/{id}/protected-refs` の `merge_rule` と `PUT …/protected-refs/{rule_id}/merge-rule` の答えの
+  `merge_rule` に `updated_at` を足した。`PUT …/merge-rule` も **`expected_updated_at` が必須**（`null` はマージの規則がまだ
+  無いとき）。違えば `409 FG-REVIEW-0019`（`reason` は上と同じ 3 つ）。
+- 承認の規則の答えは承認者を名前つきで返す: `users: [{ "id", "username", "display_name" }]`、
+  `groups: [{ "id", "full_path", "display_name" }]`（`user_ids` / `group_ids` と同じ順。`user_ids` / `group_ids` も残す）。
+  見える範囲は規則そのものと同じ（`ProjectRead`）。新しい経路は無い。名前を引けない承認者（読み取りの失敗も）は `users` /
+  `groups` から外れ、id は `user_ids` / `group_ids` に残る（warn `forge.web.approver_names_incomplete`）。数が合わない規則は、
+  そのまま保存し直すと外れた承認者が消えるので、画面は保存を出さない。書き込みは利用者を `username`、グループを `full_path` で
+  名指しするので、画面は答えの名前のまま保存し直せる。
+- `gstn approval-rule set` と `gstn merge-rule set` は先に読み、読んだ `updated_at`（無ければ `null`）を自分で送る。409 なら
+  もう一度実行する。

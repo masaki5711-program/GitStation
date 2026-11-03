@@ -353,12 +353,19 @@ async fn approval_rules_are_put_replaced_and_removed() {
         let project = w.web.project_id;
         let alice = w.alice;
         async move {
+            // U2 follow-up: each put names the rule as it reads it now.
+            let read = approval_rules(&db, project).await?;
+            let expected = read
+                .iter()
+                .find(|r| r.name == new.name)
+                .map(|r| r.updated_at.clone());
             put_approval_rule_mr_decided(
                 &db,
                 &as_user(alice, request),
                 project,
                 alice,
                 &new,
+                expected.as_deref(),
                 |_| Ok(()),
             )
             .await

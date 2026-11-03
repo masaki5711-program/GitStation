@@ -198,6 +198,12 @@
             },
             "type": "array"
           },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/ApproverGroupBody"
+            },
+            "type": "array"
+          },
           "name": {
             "type": "string"
           },
@@ -211,10 +217,21 @@
               "null"
             ]
           },
+          "updated_at": {
+            "description": "UTC, RFC 3339 to the microsecond: an opaque token — send it back\nverbatim as `expected_updated_at`.",
+            "type": "string"
+          },
           "user_ids": {
             "items": {
               "format": "int64",
               "type": "integer"
+            },
+            "type": "array"
+          },
+          "users": {
+            "description": "The same approvers with their names (U2 follow-up), in the order of\n`user_ids` / `group_ids`.",
+            "items": {
+              "$ref": "#/components/schemas/ApproverUserBody"
             },
             "type": "array"
           }
@@ -225,7 +242,10 @@
           "target_pattern",
           "required_approvals",
           "user_ids",
-          "group_ids"
+          "group_ids",
+          "users",
+          "groups",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -369,6 +389,54 @@
         },
         "required": [
           "sha"
+        ],
+        "type": "object"
+      },
+      "ApproverGroupBody": {
+        "additionalProperties": false,
+        "description": "An approver group of a rule, named.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "full_path": {
+            "description": "What a rule write names the group by.",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "full_path",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "ApproverUserBody": {
+        "additionalProperties": false,
+        "description": "An approver user of a rule, named.",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "description": "What a rule write names the user by.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
         ],
         "type": "object"
       },
@@ -2271,13 +2339,18 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "updated_at": {
+            "description": "UTC, RFC 3339 to the microsecond (U2 follow-up): an opaque token —\nsend it back verbatim as the merge-rule write's\n`expected_updated_at`.",
+            "type": "string"
           }
         },
         "required": [
           "required_approvals",
           "required_checks",
           "require_resolved_discussions",
-          "direct_push_forbidden"
+          "direct_push_forbidden",
+          "updated_at"
         ],
         "type": "object"
       },
@@ -2792,6 +2865,13 @@
         "additionalProperties": false,
         "description": "`PUT …/approval-rules/{name}`.",
         "properties": {
+          "expected_updated_at": {
+            "description": "The rule's `updated_at` the caller read, echoed verbatim (an opaque\nstring), or `null` to create a rule no rule has the name of.\nRequired (U2 follow-up): another rule under the lock — changed,\nremoved, or created by someone else — is FG-REVIEW-0018 and nothing\nis written.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "groups": {
             "description": "Group full paths whose direct members may approve for the rule\n(no users and no groups: any eligible person).",
             "items": {
@@ -2820,7 +2900,8 @@
           }
         },
         "required": [
-          "required_approvals"
+          "required_approvals",
+          "expected_updated_at"
         ],
         "type": "object"
       },
@@ -2855,6 +2936,13 @@
             "description": "Pushes may not create or move the branch; merges still may.",
             "type": "boolean"
           },
+          "expected_updated_at": {
+            "description": "The merge rule's `updated_at` the caller read, echoed verbatim (an\nopaque string), or `null` when the branch has none (create only).\nRequired (U2 follow-up): another merge rule under the lock — changed,\nremoved, or created by someone else — is FG-REVIEW-0019 and nothing\nis written.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "require_resolved_discussions": {
             "description": "Every discussion of the merge request must be resolved.",
             "type": "boolean"
@@ -2877,6 +2965,9 @@
             "type": "array"
           }
         },
+        "required": [
+          "expected_updated_at"
+        ],
         "type": "object"
       },
       "PutMergeSettings": {

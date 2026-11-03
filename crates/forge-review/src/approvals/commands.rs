@@ -290,6 +290,26 @@ impl Review {
         review::approval_rules(&self.db, *proof.id()).await
     }
 
+    /// The names of the approvers of `rules`, for a rule answer only (U2
+    /// follow-up; never read by a merge decision). `proof` is the answer's
+    /// own: `ProjectRead` (the list) or `ApprovalRuleManage` (a put).
+    pub async fn approver_names(
+        &self,
+        proof: &Authorized<ProjectCtx>,
+        rules: &[StoredApprovalRule],
+    ) -> Result<review::ApproverNames, ForgeError> {
+        let action = proof.action();
+        if action != Action::ApprovalRuleManage {
+            require(action, Action::ProjectRead)?;
+        }
+        let users: Vec<UserId> = rules.iter().flat_map(|r| r.users.iter().copied()).collect();
+        let groups: Vec<forge_core::GroupId> = rules
+            .iter()
+            .flat_map(|r| r.groups.iter().copied())
+            .collect();
+        review::approver_names(&self.db, &users, &groups).await
+    }
+
     /// Check a rule's fields and resolve its approvers (`FG-WEB-0006`).
     async fn rule(&self, ask: &RuleAsk) -> Result<NewApprovalRule, ForgeError> {
         if !name_ok(&ask.name) {
@@ -337,28 +357,39 @@ impl Review {
     }
 
     /// `PUT …/approval-rules/{name}` (`ApprovalRuleManage`): create or
-    /// replace a rule; never touches approvals (ADR-0024 §8.6).
+    /// replace a rule; never touches approvals (ADR-0024 §8.6). U2
+    /// follow-up: `expected_updated_at` is the rule's `updated_at` the
+    /// caller read (`None`: create only); another rule under the lock, after
+    /// the re-authorization, is `FG-REVIEW-0018`.
     pub async fn put_approval_rule(
         &self,
         request: &ReviewRequest,
         proof: &Authorized<ProjectCtx>,
         ask: &RuleAsk,
+        expected_updated_at: Option<&str>,
     ) -> Result<(RuleOutcome, StoredApprovalRule), ForgeError> {
         require(proof.action(), Action::ApprovalRuleManage)?;
         let project = *proof.id();
         let user = caller_of(proof)?;
         let new = self.rule(ask).await?;
         let ctx = change_context(request, proof.principal(), user);
-        let (outcome, rule, ()) =
-            review::put_approval_rule_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
+        let (outcome, rule, ()) = review::put_approval_rule_mr_decided(
+            &self.db,
+            &ctx,
+            project,
+            user,
+            &new,
+            expected_updated_at,
+            |facts| {
                 proof
                     .reconfirm(
                         account(facts.account),
                         ProjectCtx::new(loaded(&facts.project)),
                     )
                     .map(drop)
-            })
-            .await?;
+            },
+        )
+        .await?;
         Ok((outcome, rule))
     }
 

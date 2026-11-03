@@ -1379,11 +1379,22 @@ export interface components {
             /** Format: int64 */
             approval_rule_id: number;
             group_ids: number[];
+            groups: components["schemas"]["ApproverGroupBody"][];
             name: string;
             /** Format: int32 */
             required_approvals: number;
             target_pattern: string | null;
+            /**
+             * @description UTC, RFC 3339 to the microsecond: an opaque token — send it back
+             *     verbatim as `expected_updated_at`.
+             */
+            updated_at: string;
             user_ids: number[];
+            /**
+             * @description The same approvers with their names (U2 follow-up), in the order of
+             *     `user_ids` / `group_ids`.
+             */
+            users: components["schemas"]["ApproverUserBody"][];
         };
         /** @description `GET …/approval-rules`. */
         ApprovalRulesBody: {
@@ -1438,6 +1449,22 @@ export interface components {
              *     refused (FG-REVIEW-0008 stale_view).
              */
             sha: string;
+        };
+        /** @description An approver group of a rule, named. */
+        ApproverGroupBody: {
+            display_name: string;
+            /** @description What a rule write names the group by. */
+            full_path: string;
+            /** Format: int64 */
+            id: number;
+        };
+        /** @description An approver user of a rule, named. */
+        ApproverUserBody: {
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            /** @description What a rule write names the user by. */
+            username: string;
         };
         /** @description `PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`. */
         BindProject: {
@@ -2149,6 +2176,12 @@ export interface components {
              *     (`ci/`, `kanflow/`, `forge/` only); "no check reported" blocks.
              */
             required_checks: string[];
+            /**
+             * @description UTC, RFC 3339 to the microsecond (U2 follow-up): an opaque token —
+             *     send it back verbatim as the merge-rule write's
+             *     `expected_updated_at`.
+             */
+            updated_at: string;
         };
         /** @description A project's merge settings. */
         MergeSettingsBody: {
@@ -2382,6 +2415,14 @@ export interface components {
         /** @description `PUT …/approval-rules/{name}`. */
         PutApprovalRule: {
             /**
+             * @description The rule's `updated_at` the caller read, echoed verbatim (an opaque
+             *     string), or `null` to create a rule no rule has the name of.
+             *     Required (U2 follow-up): another rule under the lock — changed,
+             *     removed, or created by someone else — is FG-REVIEW-0018 and nothing
+             *     is written.
+             */
+            expected_updated_at: string | null;
+            /**
              * @description Group full paths whose direct members may approve for the rule
              *     (no users and no groups: any eligible person).
              */
@@ -2417,6 +2458,14 @@ export interface components {
         PutMergeRule: {
             /** @description Pushes may not create or move the branch; merges still may. */
             direct_push_forbidden?: boolean;
+            /**
+             * @description The merge rule's `updated_at` the caller read, echoed verbatim (an
+             *     opaque string), or `null` when the branch has none (create only).
+             *     Required (U2 follow-up): another merge rule under the lock — changed,
+             *     removed, or created by someone else — is FG-REVIEW-0019 and nothing
+             *     is written.
+             */
+            expected_updated_at: string | null;
             /** @description Every discussion of the merge request must be resolved. */
             require_resolved_discussions?: boolean;
             /**

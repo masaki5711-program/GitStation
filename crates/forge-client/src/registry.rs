@@ -388,16 +388,16 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "approval-rule list",
-        summary: "List a project's approval rules (name, required approvals, target pattern, approvers).",
+        summary: "List a project's approval rules (name, required approvals, target pattern, approvers with their names, updated_at).",
         args: &[arg("--project", "option", true, "The project id.")],
         examples: &["gstn approval-rule list --project 7 --json"],
         scopes: &["read_api"],
         routes: &["GET /api/v1/projects/{id}/approval-rules"],
-        output: r#"{"type":"object","required":["rules"],"properties":{"rules":{"type":"array","items":{"type":"object","required":["approval_rule_id","name","target_pattern","required_approvals","user_ids","group_ids"]}}}}"#,
+        output: r#"{"type":"object","required":["rules"],"properties":{"rules":{"type":"array","items":{"type":"object","required":["approval_rule_id","name","target_pattern","required_approvals","user_ids","group_ids","users","groups","updated_at"]}}}}"#,
     },
     CommandSpec {
         name: "approval-rule set",
-        summary: "Create or replace an approval rule (people only; Maintainer): how many counted approvals a merge request into a matching target needs, and from whom (no --user and no --group: any eligible Developer). Existing approvals are kept; the merge decision changes at once.",
+        summary: "Create or replace an approval rule (people only; Maintainer): how many counted approvals a merge request into a matching target needs, and from whom (no --user and no --group: any eligible Developer). Existing approvals are kept; the merge decision changes at once. It reads the rules first and sends the rule's updated_at (null for a new name): a rule changed, removed or added under the name in between is refused (FG-REVIEW-0018; run it again), never overwritten.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--name", "option", true, "The rule's name (a-z 0-9 _ . -)."),
@@ -408,8 +408,8 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
         examples: &["gstn approval-rule set --project 7 --name backend --required 2 --target-pattern refs/heads/main --group acme/backend"],
         scopes: &["api"],
-        routes: &["PUT /api/v1/projects/{id}/approval-rules/{name}"],
-        output: r#"{"type":"object","required":["approval_rule_id","name","target_pattern","required_approvals","user_ids","group_ids"]}"#,
+        routes: &["GET /api/v1/projects/{id}/approval-rules", "PUT /api/v1/projects/{id}/approval-rules/{name}"],
+        output: r#"{"type":"object","required":["approval_rule_id","name","target_pattern","required_approvals","user_ids","group_ids","users","groups","updated_at"]}"#,
     },
     CommandSpec {
         name: "approval-rule remove",
@@ -472,7 +472,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "merge-rule set",
-        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value.",
+        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--rule-id", "option", true, "The protection rule's id (from protected-ref list)."),
@@ -485,7 +485,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         examples: &["gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true"],
         scopes: &["api"],
         routes: &["GET /api/v1/projects/{id}/protected-refs", "PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule"],
-        output: r#"{"type":"object","required":["id","pattern","push_min_role","merge_rule","warnings"],"properties":{"merge_rule":{"type":"object","required":["required_approvals","required_checks","require_resolved_discussions","direct_push_forbidden"]}}}"#,
+        output: r#"{"type":"object","required":["id","pattern","push_min_role","merge_rule","warnings"],"properties":{"merge_rule":{"type":"object","required":["required_approvals","required_checks","require_resolved_discussions","direct_push_forbidden","updated_at"]}}}"#,
     },
     CommandSpec {
         name: "merge-rule remove",

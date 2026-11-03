@@ -40,7 +40,9 @@ use forge_db::review::{self, MergeRequestFacts, MergeRequestPatch, NewMergeReque
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
-pub use forge_db::review::{ApproveOutcome, RuleOutcome, StoredApproval, StoredApprovalRule};
+pub use forge_db::review::{
+    ApproveOutcome, ApproverNames, RuleOutcome, StoredApproval, StoredApprovalRule,
+};
 pub use forge_db::review::{EditOutcome, StateOutcome, StoredMergeRequest, UserName, MAX_PAGE};
 
 mod after_version;

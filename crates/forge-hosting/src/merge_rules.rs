@@ -91,12 +91,16 @@ fn rule_of(
 
 impl Hosting {
     /// `PUT …/protected-refs/{rule_id}/merge-rule` (`ProtectedRefManage`):
-    /// create or replace the rule's merge rule.
+    /// create or replace the rule's merge rule. U2 follow-up:
+    /// `expected_updated_at` is the merge rule's `updated_at` the caller read
+    /// (`None`: none yet, create only); another one under the lock, after
+    /// the re-authorization, is `FG-REVIEW-0019`.
     pub async fn put_merge_rule(
         &self,
         request: &WriteRequest,
         proof: &Authorized<RefProtectionCtx>,
         ask: &MergeRuleAsk,
+        expected_updated_at: Option<&str>,
     ) -> Result<(MergeRuleOutcome, MergeRule), ForgeError> {
         require(proof.action(), Action::ProtectedRefManage)?;
         let rule = rule_of(proof, "merge_rule_put")?;
@@ -111,6 +115,7 @@ impl Hosting {
             rule,
             user,
             &merge,
+            expected_updated_at,
             |facts| {
                 let level = protection_level(facts.rule);
                 let fresh = RefProtectionCtx::new(

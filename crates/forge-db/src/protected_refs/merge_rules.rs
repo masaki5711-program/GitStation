@@ -8,6 +8,13 @@
 //! audit row on the project (`protected_ref.merge_rule_put` /
 //! `.merge_rule_removed`, audit only). A rule's deletion deletes its merge
 //! rule in the same change ([`delete_with_rule`]).
+//!
+//! U2 follow-up: a put names the merge rule it read
+//! (`expected_updated_at`; `None`: none yet, create only) and another one
+//! as locked is `FG-REVIEW-0019` — a second save never erases the other's
+//! approvals or checks silently. `updated_at` is stamped with
+//! `clock_timestamp()` under the project and rule row locks and read to
+//! the microsecond.
 
 use forge_core::ids::{ProjectId, ProtectedRefId};
 use forge_core::merge_conditions::{MAX_REQUIRED_APPROVALS, MAX_REQUIRED_CHECKS};
@@ -105,25 +112,61 @@ fn audit(project: ProjectId, change: MergeRuleChange) -> ChangeRecord {
     }
 }
 
-/// The merge rule of `rule` as locked (`None`: none).
+/// `updated_at` of a merge rule to the microsecond (the token of
+/// `expected_updated_at`).
+pub(super) const UPDATED_AT_US: &str =
+    "to_char(m.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')";
+
+/// The merge rule of `rule` as locked with its `updated_at` (`None`:
+/// none).
 async fn merge_rule_on(
     conn: &mut PgConnection,
     rule: ProtectedRefId,
-) -> Result<Option<MergeRule>, ForgeError> {
-    type Row = (i32, Vec<String>, bool, bool);
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT required_approvals, required_checks, require_resolved_discussions, \
-         direct_push_forbidden FROM forge.protected_ref_merge_rules \
-         WHERE protected_ref_id = $1 FOR UPDATE",
-    )
+) -> Result<Option<(MergeRule, String)>, ForgeError> {
+    type Row = (i32, Vec<String>, bool, bool, String);
+    let row: Option<Row> = sqlx::query_as(&format!(
+        "SELECT m.required_approvals, m.required_checks, m.require_resolved_discussions, \
+         m.direct_push_forbidden, {UPDATED_AT_US} FROM forge.protected_ref_merge_rules m \
+         WHERE m.protected_ref_id = $1 FOR UPDATE"
+    ))
     .bind(rule.get())
     .fetch_optional(conn)
     .await
     .map_err(|e| query_error("protected_refs.merge_rule_lock", e))?;
     match row {
         None => Ok(None),
-        Some((a, c, d, p)) => parse_merge(rule.get(), Some(a), Some(c), Some(d), Some(p)),
+        Some((a, c, d, p, updated_at)) => {
+            let merge = parse_merge(rule.get(), Some(a), Some(c), Some(d), Some(p))?
+                .ok_or_else(|| stored_invalid("stored_merge_rule_invalid", rule.get()))?;
+            Ok(Some((merge, updated_at)))
+        }
     }
+}
+
+/// The merge rule as locked is the one the caller read (U2 follow-up): the
+/// same `updated_at`, or none for `None` (create only). `FG-REVIEW-0019`
+/// otherwise — `rule_exists`, `rule_gone` or `stale_rule`.
+fn unchanged_since(
+    project: ProjectId,
+    rule: ProtectedRefId,
+    expected: Option<&str>,
+    actual: Option<&str>,
+) -> Result<(), ForgeError> {
+    if actual == expected {
+        return Ok(());
+    }
+    let reason = match (expected, actual) {
+        (None, Some(_)) => "rule_exists",
+        (Some(_), None) => "rule_gone",
+        _ => "stale_rule",
+    };
+    Err(ForgeError::new(ErrorCode::MergeRuleChanged)
+        .with_context("action", "ProtectedRefManage")
+        .with_context("reason", reason)
+        .with_context("project_id", project.get())
+        .with_context("protected_ref_id", rule.get())
+        .with_context("expected", expected.unwrap_or("none").to_owned())
+        .with_context("actual", actual.unwrap_or("none").to_owned()))
 }
 
 /// The shape checks forge-hosting made, held again here (the table's
@@ -154,7 +197,10 @@ fn check(merge: &MergeRule) -> Result<(), ForgeError> {
 /// level as both `from` and `to`). After it: `FG-REPO-0005
 /// resource=protected_ref` for an absent rule, `FG-DB-0020` for a rule this
 /// build cannot read, `FG-REPO-0013 merge_rule_on_tag` for a tag pattern
-/// (merge requests target branches only), the shape checks.
+/// (merge requests target branches only), the shape checks, then
+/// `expected_updated_at` against the merge rule as locked
+/// (`FG-REVIEW-0019`, module docs) before anything is compared or written.
+#[allow(clippy::too_many_arguments)] // the ids of the path, the caller, the ask, what was read and the decision
 pub async fn put_merge_rule_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
@@ -162,6 +208,7 @@ pub async fn put_merge_rule_decided<P>(
     rule: ProtectedRefId,
     viewer: forge_core::UserId,
     merge: &MergeRule,
+    expected_updated_at: Option<&str>,
     decide: impl FnOnce(&ProtectionFacts) -> Result<P, ForgeError>,
 ) -> Result<(MergeRuleOutcome, P), ForgeError> {
     const ACTION: &str = "protected_ref.merge_rule_put";
@@ -184,7 +231,14 @@ pub async fn put_merge_rule_decided<P>(
             return Err(rule_invalid("merge_rule_on_tag"));
         }
         check(merge)?;
-        let current = tx.step(|c| merge_rule_on(c, rule)).await?;
+        let locked = tx.step(|c| merge_rule_on(c, rule)).await?;
+        unchanged_since(
+            project,
+            rule,
+            expected_updated_at,
+            locked.as_ref().map(|(_, at)| at.as_str()),
+        )?;
+        let current = locked.map(|(m, _)| m);
         if current.as_ref() == Some(merge) {
             return Ok(Settle::Discard((MergeRuleOutcome::Unchanged, decided)));
         }
@@ -199,12 +253,14 @@ pub async fn put_merge_rule_decided<P>(
             sqlx::query(
                 "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
                  required_approvals, required_checks, require_resolved_discussions, \
-                 direct_push_forbidden) VALUES ($1, $2, $3, $4, $5, $6) \
+                 direct_push_forbidden, created_at, updated_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp(), clock_timestamp()) \
                  ON CONFLICT (protected_ref_id) DO UPDATE SET \
                  required_approvals = EXCLUDED.required_approvals, \
                  required_checks = EXCLUDED.required_checks, \
                  require_resolved_discussions = EXCLUDED.require_resolved_discussions, \
-                 direct_push_forbidden = EXCLUDED.direct_push_forbidden, updated_at = now()",
+                 direct_push_forbidden = EXCLUDED.direct_push_forbidden, \
+                 updated_at = clock_timestamp()",
             )
             .bind(rule.get())
             .bind(project.get())

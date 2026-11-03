@@ -979,10 +979,12 @@ fn mr_approve_unapprove_and_approvals_call_their_routes() {
 }
 
 /// M3 R5: `approval-rule set` PUTs the rule by name, `list` and `remove`
-/// call their routes; a name that could leave the path is refused.
+/// call their routes; a name that could leave the path is refused. U2
+/// follow-up: `set` reads the rules first and sends the rule's
+/// `updated_at` as `expected_updated_at` (`null` for a new name).
 #[test]
 fn approval_rule_commands_call_their_routes() {
-    let rule = r#"{"approval_rule_id":1,"name":"backend","target_pattern":"refs/heads/main","required_approvals":2,"user_ids":[12],"group_ids":[]}"#;
+    let rule = r#"{"approval_rule_id":1,"name":"backend","target_pattern":"refs/heads/main","required_approvals":2,"user_ids":[12],"group_ids":[],"users":[{"id":12,"username":"rita","display_name":"Rita"}],"groups":[],"updated_at":"2026-11-03T00:00:00.123456Z"}"#;
     let srv = Mock::start(move |r| {
         if r.method == "DELETE" {
             Resp::json(204, "")
@@ -1012,14 +1014,45 @@ fn approval_rule_commands_call_their_routes() {
         ],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
-    let r = srv.seen().pop().expect("a request");
+    let seen = srv.seen();
+    assert_eq!(
+        (seen[0].method.as_str(), seen[0].target.as_str()),
+        ("GET", "/api/v1/projects/7/approval-rules")
+    );
+    let r = seen.last().expect("a request");
     assert_eq!(
         (r.method.as_str(), r.target.as_str()),
         ("PUT", "/api/v1/projects/7/approval-rules/backend")
     );
     assert_eq!(
         serde_json::from_str::<Value>(&r.body).expect("json"),
-        json!({"target_pattern": "refs/heads/main", "required_approvals": 2, "users": ["rita"], "groups": []})
+        json!({"target_pattern": "refs/heads/main", "required_approvals": 2, "users": ["rita"],
+               "groups": [], "expected_updated_at": "2026-11-03T00:00:00.123456Z"})
+    );
+    // A name no rule has: create only.
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "approval-rule",
+            "set",
+            "--project",
+            "7",
+            "--name",
+            "frontend",
+            "--required",
+            "1",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("PUT", "/api/v1/projects/7/approval-rules/frontend")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json")["expected_updated_at"],
+        Value::Null
     );
     let o = gstn(&sb, &srv, &["approval-rule", "list", "--project", "7"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -1217,10 +1250,11 @@ fn codeowners_enforcement_suspends_for_a_bounded_time() {
     assert_eq!(srv.seen().len(), before);
 }
 
-/// `merge-rule set` PUTs the whole merge rule; `remove` needs `--yes`.
+/// `merge-rule set` PUTs the whole merge rule with the `updated_at` it
+/// read (U2 follow-up); `remove` needs `--yes`.
 #[test]
 fn merge_rule_commands_call_their_routes() {
-    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":1,"required_checks":["ci/gates"],"require_resolved_discussions":true,"direct_push_forbidden":true},"warnings":["required_checks_unreportable"]}"#;
+    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":1,"required_checks":["ci/gates"],"require_resolved_discussions":true,"direct_push_forbidden":true,"updated_at":"2026-11-03T00:00:01.654321Z"},"warnings":["required_checks_unreportable"]}"#;
     let srv = Mock::start(move |r| {
         if r.method == "DELETE" {
             Resp::json(204, "")
@@ -1267,7 +1301,8 @@ fn merge_rule_commands_call_their_routes() {
     assert_eq!(
         serde_json::from_str::<Value>(&r.body).expect("json"),
         json!({"required_approvals": 2, "required_checks": ["ci/gates"],
-               "require_resolved_discussions": true, "direct_push_forbidden": false})
+               "require_resolved_discussions": true, "direct_push_forbidden": false,
+               "expected_updated_at": "2026-11-03T00:00:01.654321Z"})
     );
     let o = gstn(
         &sb,

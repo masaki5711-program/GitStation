@@ -109,6 +109,12 @@ impl World {
         merge: &MergeRule,
         request: &str,
     ) -> Result<MergeRuleOutcome, forge_errors::ForgeError> {
+        // U2 follow-up: each put names the merge rule as it reads it now.
+        let expected = protected_refs::list(&self.t.db, self.web.project_id)
+            .await?
+            .into_iter()
+            .find(|r| r.id == rule)
+            .and_then(|r| r.merge_updated_at);
         protected_refs::put_merge_rule_decided(
             &self.t.db,
             &as_user(self.alice, request),
@@ -116,6 +122,7 @@ impl World {
             rule,
             self.alice,
             merge,
+            expected.as_deref(),
             |_| Ok(()),
         )
         .await
