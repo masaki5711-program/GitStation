@@ -444,8 +444,6 @@
       "who": "Siapa yang boleh menyetujui",
       "anyone": "Siapa pun yang boleh menyetujui",
       "anyoneHelp": "Tanpa pengguna dan grup, siapa pun yang boleh menyetujui akan dihitung.",
-      "unknownUser": "pengguna #{{id}}",
-      "unknownGroup": "grup #{{id}}",
       "users": "Pengguna",
       "groups": "Grup",
       "group": "Grup",
@@ -467,7 +465,6 @@
       "deleted": "Aturan {{name}} dihapus.",
       "save": "Simpan aturan",
       "saved": "Aturan {{name}} disimpan.",
-      "unnamed": "Sebagian pemberi persetujuan aturan ini tidak dapat ditampilkan dengan nama: mereka bukan anggota langsung proyek ini atau grup yang dapat Anda lihat. Menyimpan di sini akan menghapus mereka, jadi tidak ditawarkan. Ubah aturan dengan gstn approval-rule, atau hapus dan buat lagi dengan pemberi persetujuan yang Anda inginkan.",
       "tableLabel": "Daftar aturan persetujuan",
       "nameTaken": "Aturan dengan nama ini sudah ada. Ubah aturan itu di daftar, atau pilih nama lain."
     },

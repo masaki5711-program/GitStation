@@ -10,7 +10,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { apiError, mockServer, SESSION, type Handler } from './mock';
-import { RULE, protectedRef, settingsRoutes } from './merge-settings-fixtures';
+import { RULE, RULE_STAMP, protectedRef, settingsRoutes } from './merge-settings-fixtures';
 import { mergeSettings } from './mr-fixtures';
 import { json, renderApp } from './render';
 
@@ -223,10 +223,24 @@ describe('CODEOWNERS enforcement', () => {
 });
 
 describe('approval rules', () => {
-  it('lists rules with approvers by name; an id that cannot be named is shown as a number', async () => {
-    await open({
+  it('lists rules with approvers by the names the rule answers with (no member list is read)', async () => {
+    const { server } = await open({
       [`GET ${API}/approval-rules`]: () =>
-        json(200, { rules: [RULE, { ...RULE, approval_rule_id: 2, name: 'any', target_pattern: null, user_ids: [99], group_ids: [] }] }),
+        json(200, {
+          rules: [
+            RULE,
+            {
+              ...RULE,
+              approval_rule_id: 2,
+              name: 'any',
+              target_pattern: null,
+              user_ids: [999],
+              group_ids: [],
+              users: [{ id: 999, username: 'hana', display_name: 'Hana Ito' }],
+              groups: [],
+            },
+          ],
+        }),
     });
     const rules = await section('Approval rules');
     const row = (await within(rules).findByText('leads')).closest('tr') as HTMLElement;
@@ -235,7 +249,8 @@ describe('approval rules', () => {
     expect(within(row).getByText(/acme/)).toBeTruthy();
     const other = within(rules).getByText('any').closest('tr') as HTMLElement;
     expect(within(other).getByText('Every target branch')).toBeTruthy();
-    expect(within(other).getByText(/user #99/)).toBeTruthy();
+    expect(within(other).getByText(/hana/)).toBeTruthy();
+    expect(server.calls.filter((c) => c.path.endsWith('/members'))).toHaveLength(0);
   });
 
   it('adds a rule with a user and a group from the pickers', async () => {
@@ -262,11 +277,13 @@ describe('approval rules', () => {
       expect(server.to('PUT', `${API}/approval-rules/release-leads`)).toHaveLength(1);
     });
     const call = server.to('PUT', `${API}/approval-rules/release-leads`)[0];
+    // A new rule: create only (a rule made meanwhile under the name is a 409).
     expect(call?.body).toEqual({
       required_approvals: 2,
       target_pattern: 'refs/heads/release/*',
       users: ['jiro'],
       groups: ['acme'],
+      expected_updated_at: null,
     });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
     await waitFor(() => {
@@ -289,15 +306,57 @@ describe('approval rules', () => {
     expect(server.calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
   });
 
-  it('a rule whose approvers cannot all be named cannot be changed here (it would drop them)', async () => {
-    await open({
-      [`GET ${API}/approval-rules`]: () => json(200, { rules: [{ ...RULE, user_ids: [6, 99] }] }),
+  it('a rule naming an approver beyond any member list is changed and keeps them; updated_at goes back verbatim', async () => {
+    const wide = {
+      ...RULE,
+      user_ids: [6, 999],
+      users: [...RULE.users, { id: 999, username: 'hana', display_name: 'Hana Ito' }],
+    };
+    const { server } = await open({
+      [`GET ${API}/approval-rules`]: () => json(200, { rules: [wide] }),
+      [`PUT ${API}/approval-rules/leads`]: () => json(200, wide),
     });
     const rules = await section('Approval rules');
     fireEvent.click(await within(rules).findByRole('button', { name: 'Change leads' }));
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByText(/Some approvers of this rule cannot be shown by name/)).toBeTruthy();
-    expect(within(dialog).queryByRole('button', { name: 'Save the rule' })).toBeNull();
+    expect(await within(dialog).findByRole('button', { name: 'Remove hana' })).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the rule' }));
+    await waitFor(() => {
+      expect(server.to('PUT', `${API}/approval-rules/leads`)).toHaveLength(1);
+    });
+    expect(server.to('PUT', `${API}/approval-rules/leads`)[0]?.body).toEqual({
+      required_approvals: 3,
+      target_pattern: 'refs/heads/main',
+      users: ['jiro', 'hana'],
+      groups: ['acme'],
+      expected_updated_at: RULE_STAMP,
+    });
+  });
+
+  it('a 409 on a rule save (changed or added meanwhile) shows the reason and a reload that reads the rules again', async () => {
+    const { server } = await open({
+      [`PUT ${API}/approval-rules/leads`]: () =>
+        apiError(409, 'This approval rule changed after you opened it. Reload, then save again.', 'req-rule-409', 'FG-REVIEW-0018'),
+    });
+    const rules = await section('Approval rules');
+    fireEvent.click(await within(rules).findByRole('button', { name: 'Add an approval rule' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(await within(dialog).findByLabelText('Name'), { target: { value: 'leads' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the rule' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(within(alert).getByText('This approval rule changed after you opened it. Reload, then save again.')).toBeTruthy();
+    expect(within(alert).getByTestId('request-id').textContent).toBe('req-rule-409');
+    expect(alert.textContent).not.toContain('FG-');
+    expect(server.to('PUT', `${API}/approval-rules/leads`)[0]?.body).toMatchObject({ expected_updated_at: null });
+    const reads = server.to('GET', `${API}/approval-rules`).length;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reload the settings' }));
+    await waitFor(() => {
+      expect(server.to('GET', `${API}/approval-rules`).length).toBeGreaterThan(reads);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
   });
 
   it('deletes a rule after asking', async () => {
@@ -318,7 +377,13 @@ describe('approval rules', () => {
 
 describe('merge conditions of protected branches', () => {
   const BLOCKED = protectedRef(1, 'refs/heads/main', {
-    merge_rule: { required_approvals: 1, required_checks: ['ci/gates'], require_resolved_discussions: false, direct_push_forbidden: true },
+    merge_rule: {
+      required_approvals: 1,
+      required_checks: ['ci/gates'],
+      require_resolved_discussions: false,
+      direct_push_forbidden: true,
+      updated_at: STAMP,
+    },
     warnings: ['required_checks_unreportable'],
   });
 
@@ -337,7 +402,7 @@ describe('merge conditions of protected branches', () => {
     expect(document.body.textContent).not.toMatch(/work item/i);
   });
 
-  it('changes the conditions: PUT with exactly the four fields, CSRF, and warns while typing checks', async () => {
+  it('changes the conditions: PUT with the four fields and expected_updated_at null (none yet), CSRF, and warns while typing checks', async () => {
     const { server } = await open({
       [`GET ${API}/protected-refs`]: () => json(200, { rules: [protectedRef(1, 'refs/heads/main')] }),
       [`PUT ${API}/protected-refs/1/merge-rule`]: () => json(200, BLOCKED),
@@ -362,8 +427,33 @@ describe('merge conditions of protected branches', () => {
       required_checks: ['ci/gates'],
       require_resolved_discussions: true,
       direct_push_forbidden: true,
+      expected_updated_at: null,
     });
     expect(call?.headers.get('X-GitStation-CSRF')).toBe(CSRF);
+  });
+
+  it('a 409 on the conditions (changed meanwhile) sends the stamp read verbatim and offers a reload', async () => {
+    const { server } = await open({
+      [`GET ${API}/protected-refs`]: () => json(200, { rules: [BLOCKED] }),
+      [`PUT ${API}/protected-refs/1/merge-rule`]: () =>
+        apiError(409, 'The merge conditions of this branch changed. Reload, then save again.', 'req-mr-409', 'FG-REVIEW-0019'),
+    });
+    const conditions = await section('Merge conditions of protected branches');
+    fireEvent.click(await within(conditions).findByRole('button', { name: 'Change the conditions of refs/heads/main' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '2' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
+    const alert = await within(dialog).findByRole('alert');
+    expect(within(alert).getByTestId('request-id').textContent).toBe('req-mr-409');
+    expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)[0]?.body).toMatchObject({ expected_updated_at: STAMP });
+    const reads = server.to('GET', `${API}/protected-refs`).length;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reload the settings' }));
+    await waitFor(() => {
+      expect(server.to('GET', `${API}/protected-refs`).length).toBeGreaterThan(reads);
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
   });
 
   it('a check outside ci/, kanflow/ and forge/ is refused before sending', async () => {
