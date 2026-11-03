@@ -392,9 +392,15 @@ impl Hosting {
                     namespace,
                     group: LoadedGroup { id: group, role },
                 },
-                projects::ParentAccess::User { namespace, owner } => {
-                    LoadedParent::User(LoadedUserNamespace { namespace, owner })
-                }
+                projects::ParentAccess::User {
+                    namespace,
+                    owner,
+                    owner_kind,
+                } => LoadedParent::User(LoadedUserNamespace {
+                    namespace,
+                    owner,
+                    owner_kind,
+                }),
             };
             proof
                 .reconfirm(account(facts.account), ParentCtx::new(parent))

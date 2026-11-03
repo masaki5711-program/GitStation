@@ -545,14 +545,17 @@ const PARENT_SQL: &str = concat!(
        agg AS (SELECT array_agg(step ORDER BY step) AS steps, \
          array_agg(truncated ORDER BY step) AS truncs, \
          array_agg(role ORDER BY step) AS roles FROM steps) \
-     SELECT n.kind, n.owner_id, a.steps, a.truncs, a.roles \
-     FROM agg a LEFT JOIN forge.namespaces n ON n.id = $1"
+     SELECT n.kind, n.owner_id, u.kind AS owner_kind, a.steps, a.truncs, a.roles \
+     FROM agg a LEFT JOIN forge.namespaces n ON n.id = $1 \
+     LEFT JOIN forge.users u ON n.kind = 'user' AND u.id = n.owner_id"
 );
 
 #[derive(Debug, sqlx::FromRow)]
 struct ParentRow {
     kind: Option<String>,
     owner_id: Option<i64>,
+    /// The owner's `users.kind` for a personal namespace (S0 review).
+    owner_kind: Option<String>,
     #[sqlx(flatten)]
     chain: ChainRoles,
 }
@@ -566,10 +569,11 @@ pub enum ParentRecord {
         group: GroupId,
         role: Option<forge_core::Role>,
     },
-    /// A personal namespace and its owner.
+    /// A personal namespace, its owner and the owner's `users.kind`.
     User {
         namespace: NamespaceId,
         owner: UserId,
+        owner_kind: forge_core::UserKind,
     },
     /// A project namespace: never a parent (the route answers it as absent).
     Project,
@@ -608,10 +612,16 @@ pub async fn load_parent(
                 role: roles.native,
             }))
         }
-        Some(NamespaceKind::User) => Ok(Some(ParentRecord::User {
-            namespace,
-            owner: UserId::new(owner),
-        })),
+        Some(NamespaceKind::User) => {
+            let raw = row.owner_kind.ok_or_else(|| {
+                invalid("namespace_owner_missing").with_context("namespace_id", id)
+            })?;
+            Ok(Some(ParentRecord::User {
+                namespace,
+                owner: UserId::new(owner),
+                owner_kind: crate::users::parse_kind(owner, &raw)?,
+            }))
+        }
         Some(NamespaceKind::Project) => Ok(Some(ParentRecord::Project)),
         None => Err(invalid("unknown_namespace_kind")
             .with_context("namespace_id", id)

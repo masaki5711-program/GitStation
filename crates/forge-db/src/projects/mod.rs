@@ -232,7 +232,9 @@ struct Placement {
 #[derive(Debug, Clone, Copy)]
 enum ParentOwner {
     Group(GroupId),
-    User(UserId),
+    /// The owner and its `users.kind` (S0 review: only a person's personal
+    /// namespace holds projects; `authorize()` decides on the kind).
+    User(UserId, forge_core::UserKind),
 }
 
 /// The parent must be a user or group namespace (`FG-REPO-0014
@@ -337,10 +339,11 @@ pub enum ParentAccess {
         group: GroupId,
         role: Option<Role>,
     },
-    /// A personal namespace and its owner.
+    /// A personal namespace, its owner and the owner's `users.kind`.
     User {
         namespace: NamespaceId,
         owner: UserId,
+        owner_kind: forge_core::UserKind,
     },
 }
 
@@ -372,16 +375,29 @@ async fn lock_parent_owner(
     conn: &mut PgConnection,
     parent: NamespaceId,
 ) -> Result<ParentOwner, ForgeError> {
-    let row: Option<(String, i64)> =
-        sqlx::query_as("SELECT kind, owner_id FROM forge.namespaces WHERE id = $1 FOR SHARE")
-            .bind(parent.get())
-            .fetch_optional(conn)
-            .await
-            .map_err(|e| query_error("projects.create.parent_owner_kind", e))?;
+    let row: Option<(String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT n.kind, n.owner_id, u.kind FROM forge.namespaces n \
+         LEFT JOIN forge.users u ON n.kind = 'user' AND u.id = n.owner_id \
+         WHERE n.id = $1 FOR SHARE OF n",
+    )
+    .bind(parent.get())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| query_error("projects.create.parent_owner_kind", e))?;
     match row {
         None => Err(not_found("namespace")),
-        Some((kind, owner)) if kind == "group" => Ok(ParentOwner::Group(GroupId::new(owner))),
-        Some((kind, owner)) if kind == "user" => Ok(ParentOwner::User(UserId::new(owner))),
+        Some((kind, owner, _)) if kind == "group" => Ok(ParentOwner::Group(GroupId::new(owner))),
+        Some((kind, owner, user_kind)) if kind == "user" => {
+            let raw = user_kind.ok_or_else(|| {
+                ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "namespace_owner_missing")
+                    .with_context("user_id", owner)
+            })?;
+            Ok(ParentOwner::User(
+                UserId::new(owner),
+                crate::users::parse_kind(owner, &raw)?,
+            ))
+        }
         Some(_) => Err(request_invalid("parent_not_owner_namespace")),
     }
 }
@@ -414,7 +430,11 @@ where
                         role: roles.native,
                     }
                 }
-                ParentOwner::User(owner) => ParentAccess::User { namespace, owner },
+                ParentOwner::User(owner, owner_kind) => ParentAccess::User {
+                    namespace,
+                    owner,
+                    owner_kind,
+                },
             };
             let account = tx.step(|c| lock_account(c, creator)).await?;
             Some(decide(&ProjectCreateFacts { account, parent })?)

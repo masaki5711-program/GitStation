@@ -208,7 +208,10 @@ fn service_account_cannot_create_project_in_own_namespace() {
     let err = authorize(
         &creator,
         Action::ProjectCreate,
-        &Resource::Namespace { owner: SA },
+        &Resource::Namespace {
+            owner: SA,
+            owner_kind: AccountKind::ServiceAccount,
+        },
     )
     .expect_err("own namespace");
     assert_eq!(err.code(), ErrorCode::Forbidden);
@@ -221,4 +224,35 @@ fn service_account_cannot_create_project_in_own_namespace() {
         }
     )
     .is_ok());
+}
+
+/// S0 review: the rule is the namespace owner's kind, not the caller's —
+/// an administrator is refused too, for creating and for moving into it.
+#[test]
+fn nobody_creates_or_moves_a_project_into_a_service_accounts_namespace() {
+    let theirs = Resource::Namespace {
+        owner: SA,
+        owner_kind: AccountKind::ServiceAccount,
+    };
+    let err = authorize(&admin_session(), Action::ProjectCreate, &theirs).expect_err("admin");
+    assert_eq!(reason(&err), "non_person_namespace");
+    let into = Resource::Transfer {
+        source: ProjectView {
+            visibility: Visibility::Private,
+            role: Some(Role::Owner),
+            pending_deletion: false,
+        },
+        target: crate::TransferTarget::PersonalNamespace {
+            owner: SA,
+            owner_kind: AccountKind::ServiceAccount,
+        },
+    };
+    let err = authorize(&admin_session(), Action::ProjectTransfer, &into).expect_err("admin");
+    assert_eq!(reason(&err), "non_person_namespace");
+    // A person's namespace is unchanged: an administrator may.
+    let person = Resource::Namespace {
+        owner: UserId::new(9),
+        owner_kind: AccountKind::Human,
+    };
+    assert!(authorize(&admin_session(), Action::ProjectCreate, &person).is_ok());
 }

@@ -223,9 +223,10 @@ fn people_only_rows_are_allowed_for_the_human_twin() {
 /// allowed too (the kind decides nothing there; commenting stays open) —
 /// except where M3 S0 made the kind decide on purpose, each with its own
 /// log reason: a service account sees member projects only
-/// (`service_account_not_member`, FG-REPO-0005) and neither kind creates in
-/// its own personal namespace (`non_person_namespace`); a service account
-/// that is a Guest of an internal project reads by its Guest role.
+/// (`service_account_not_member`, FG-REPO-0005), and a service account
+/// that is a Guest of an internal project reads by its Guest role. (A
+/// non-person's personal namespace is refused by its owner's kind, a
+/// fixture fact: rows in `matrix_rows_service_accounts.rs`.)
 #[test]
 fn only_people_only_actions_refuse_by_account_kind() {
     use crate::matrix::{Expect, ROWS};
@@ -255,10 +256,6 @@ fn only_people_only_actions_refuse_by_account_kind() {
                                     .iter()
                                     .any(|(k, v)| *k == "actual_role" && v == "guest")
                         }
-                        (
-                            AccountKind::ServiceAccount | AccountKind::Bot,
-                            "non_person_namespace",
-                        ) => e.code() == ErrorCode::Forbidden && r.action == Action::ProjectCreate,
                         _ => false,
                     };
                     if !designed {

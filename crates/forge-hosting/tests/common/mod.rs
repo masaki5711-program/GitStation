@@ -165,9 +165,15 @@ pub async fn parent_proof(
             namespace,
             group: LoadedGroup { id: group, role },
         },
-        forge_hosting::Parent::User { namespace, owner } => {
-            LoadedParent::User(LoadedUserNamespace { namespace, owner })
-        }
+        forge_hosting::Parent::User {
+            namespace,
+            owner,
+            owner_kind,
+        } => LoadedParent::User(LoadedUserNamespace {
+            namespace,
+            owner,
+            owner_kind,
+        }),
         forge_hosting::Parent::Project => panic!("a project is not a parent"),
     };
     let ctx = ParentCtx::new(parent);

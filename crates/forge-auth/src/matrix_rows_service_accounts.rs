@@ -124,6 +124,13 @@ pub(crate) const SERVICE_ACCOUNT_ROWS: &[Row] = &[
     row(A::ProjectCreate, W::BotOwnerTokenApi, F::OwnNamespace, deny(E::Forbidden)),
     row(A::ProjectCreate, W::OwnerTokenApi, F::OwnNamespace, Allow),
     row(A::ProjectCreate, W::ServiceAccountMaintainerTokenApi, F::Group, Allow),
+    // S0 review: not by anyone else either — an administrator neither
+    // creates nor moves a project into a service account's namespace (its
+    // owner would become the project's implicit Owner).
+    row(A::ProjectCreate, W::Admin, F::ServiceAccountNamespace, deny(E::Forbidden)),
+    row(A::ProjectCreate, W::AdminTokenAdmin, F::ServiceAccountNamespace, deny(E::Forbidden)),
+    row(A::ProjectTransfer, W::Admin, F::TransferToServiceAccountNamespace, deny(E::Forbidden)),
+    row(A::ProjectTransfer, W::Owner, F::TransferToServiceAccountNamespace, deny(E::Forbidden)),
     // A service account sees member projects only: an internal project it
     // is no member of is not found (a person reads it as a Reporter).
     row(A::ProjectRead, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),

@@ -19,8 +19,8 @@
 use forge_core::{GroupId, NamespaceId, ProjectId, ProtectedRefId, TombstoneId, UserId};
 
 use crate::model::{
-    MembershipChange, MembershipScope, ProjectView, Resource, Role, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, Visibility,
+    AccountKind, MembershipChange, MembershipScope, ProjectView, Resource, Role, Scope,
+    ServiceAccountView, TombstoneRelease, TransferTarget, Visibility,
 };
 use crate::prove::{sealed, LoadedProject, ResourceCtx};
 
@@ -69,6 +69,8 @@ impl ResourceCtx for GroupCtx {
 pub struct LoadedUserNamespace {
     pub namespace: NamespaceId,
     pub owner: UserId,
+    /// The owner's `users.kind`, read with the namespace (never defaulted).
+    pub owner_kind: AccountKind,
 }
 
 /// A personal namespace (`ProjectCreate` in it).
@@ -94,6 +96,7 @@ impl ResourceCtx for UserNamespaceCtx {
     fn resource(&self) -> Resource {
         Resource::Namespace {
             owner: self.namespace.owner,
+            owner_kind: self.namespace.owner_kind,
         }
     }
     fn id(&self) -> NamespaceId {
@@ -137,7 +140,10 @@ impl ResourceCtx for ParentCtx {
     fn resource(&self) -> Resource {
         match self.parent {
             LoadedParent::Group { group, .. } => Resource::Group { role: group.role },
-            LoadedParent::User(ns) => Resource::Namespace { owner: ns.owner },
+            LoadedParent::User(ns) => Resource::Namespace {
+                owner: ns.owner,
+                owner_kind: ns.owner_kind,
+            },
         }
     }
     fn id(&self) -> NamespaceId {
@@ -362,7 +368,10 @@ impl LoadedTransferTarget {
                 role: group.role,
                 visible: true,
             },
-            LoadedTransferTarget::User(ns) => TransferTarget::PersonalNamespace { owner: ns.owner },
+            LoadedTransferTarget::User(ns) => TransferTarget::PersonalNamespace {
+                owner: ns.owner,
+                owner_kind: ns.owner_kind,
+            },
             LoadedTransferTarget::TopLevel => TransferTarget::TopLevel,
             LoadedTransferTarget::NotVisible => TransferTarget::Group {
                 role: None,

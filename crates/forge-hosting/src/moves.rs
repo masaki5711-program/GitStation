@@ -74,9 +74,15 @@ fn target_of(
             namespace,
             group: LoadedGroup { id: group, role },
         },
-        TargetAccess::PersonalNamespace { namespace, owner } => {
-            LoadedTransferTarget::User(LoadedUserNamespace { namespace, owner })
-        }
+        TargetAccess::PersonalNamespace {
+            namespace,
+            owner,
+            owner_kind,
+        } => LoadedTransferTarget::User(LoadedUserNamespace {
+            namespace,
+            owner,
+            owner_kind,
+        }),
         // Never a parent: the loader answered it as not visible, so no
         // proof names it (and the id check of `reconfirm` refuses it).
         TargetAccess::Project { .. } => LoadedTransferTarget::NotVisible,

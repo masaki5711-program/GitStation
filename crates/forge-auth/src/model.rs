@@ -287,9 +287,12 @@ pub enum Resource {
     Group {
         role: Option<Role>,
     },
-    /// A user's personal namespace.
+    /// A user's personal namespace. `owner_kind` is the owner's
+    /// `users.kind`, loaded with the namespace (S0 review: only a person's
+    /// namespace holds projects, whoever the caller is).
     Namespace {
         owner: UserId,
+        owner_kind: AccountKind,
     },
     Project(ProjectView),
     /// One ref update in a push. The kind is derived from `name` inside
@@ -563,8 +566,11 @@ pub enum TransferTarget {
     /// when the caller cannot see the target — and for a target that does
     /// not exist, so both get the same `FG-REPO-0005`.
     Group { role: Option<Role>, visible: bool },
-    /// A user's personal namespace.
-    PersonalNamespace { owner: UserId },
+    /// A user's personal namespace, with its owner's `users.kind`.
+    PersonalNamespace {
+        owner: UserId,
+        owner_kind: AccountKind,
+    },
     /// No parent: the top level. Never for a project; a group only by an
     /// administrator.
     TopLevel,

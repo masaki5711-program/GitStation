@@ -156,6 +156,11 @@ pub(crate) enum Fixture {
     Group,
     OwnNamespace,
     ForeignNamespace,
+    /// Another user's personal namespace whose owner is a service account
+    /// (S0 review: nobody creates or moves a project into it).
+    ServiceAccountNamespace,
+    /// Moving a private project into a service account's namespace.
+    TransferToServiceAccountNamespace,
     /// Moving a private project the caller has the actor's role on to a
     /// visible group where the caller has `target`.
     Transfer {
@@ -633,8 +638,25 @@ impl Fixture {
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),
             Fixture::Group => Resource::Group { role },
-            Fixture::OwnNamespace => Resource::Namespace { owner: ME },
-            Fixture::ForeignNamespace => Resource::Namespace { owner: OTHER },
+            Fixture::OwnNamespace => Resource::Namespace {
+                owner: ME,
+                owner_kind: actor.kind(),
+            },
+            Fixture::ForeignNamespace => Resource::Namespace {
+                owner: OTHER,
+                owner_kind: AccountKind::Human,
+            },
+            Fixture::ServiceAccountNamespace => Resource::Namespace {
+                owner: OTHER,
+                owner_kind: AccountKind::ServiceAccount,
+            },
+            Fixture::TransferToServiceAccountNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: OTHER,
+                    owner_kind: AccountKind::ServiceAccount,
+                },
+            ),
             Fixture::Transfer { target } => transfer(
                 private,
                 TransferTarget::Group {
@@ -643,12 +665,20 @@ impl Fixture {
                 },
             ),
             Fixture::TransferHiddenTarget => transfer(private, hidden),
-            Fixture::TransferToOwnNamespace => {
-                transfer(private, TransferTarget::PersonalNamespace { owner: ME })
-            }
-            Fixture::TransferToForeignNamespace => {
-                transfer(private, TransferTarget::PersonalNamespace { owner: OTHER })
-            }
+            Fixture::TransferToOwnNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: ME,
+                    owner_kind: actor.kind(),
+                },
+            ),
+            Fixture::TransferToForeignNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: OTHER,
+                    owner_kind: AccountKind::Human,
+                },
+            ),
             Fixture::TransferToTopLevel => transfer(private, TransferTarget::TopLevel),
             Fixture::TransferDeletedSource => transfer(
                 deleted,
@@ -664,7 +694,10 @@ impl Fixture {
             Fixture::GroupTransferHiddenTarget => group_transfer(hidden),
             Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
             Fixture::GroupTransferToNamespace => {
-                group_transfer(TransferTarget::PersonalNamespace { owner: ME })
+                group_transfer(TransferTarget::PersonalNamespace {
+                    owner: ME,
+                    owner_kind: actor.kind(),
+                })
             }
             Fixture::TransferRename => {
                 transfer(private, TransferTarget::CurrentParent { top_level: false })

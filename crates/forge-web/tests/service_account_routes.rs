@@ -583,6 +583,42 @@ async fn service_account_cannot_create_project_in_own_namespace() {
         "{}",
         refused.json
     );
-    let _ = w.root;
+    // S0 review: an administrator neither creates a project in it nor
+    // moves one into it (its owner would be the project's implicit Owner).
+    let refused = call(
+        db,
+        "POST",
+        "/api/v1/projects",
+        session(w.root, true),
+        Some(json!({"namespace_id": namespace, "path": "theirs", "display_name": "Theirs"})),
+    )
+    .await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{}",
+        refused.json
+    );
+    let alices = projects::create(
+        db,
+        &ctx("req-alices"),
+        &NewProject::new("tool", w.alice.namespace_id, "Tool", w.alice.user_id),
+    )
+    .await
+    .expect("alice's project");
+    let refused = call(
+        db,
+        "POST",
+        &format!("/api/v1/projects/{}/transfer", alices.project_id.get()),
+        session(w.root, true),
+        Some(json!({"namespace_id": namespace})),
+    )
+    .await;
+    assert_eq!(
+        (refused.status, refused.code()),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{}",
+        refused.json
+    );
     w.t.drop_now().await;
 }

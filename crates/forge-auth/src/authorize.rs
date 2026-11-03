@@ -310,10 +310,12 @@ pub fn authorize(
         }
 
         (Action::ProjectCreate, Resource::Group { role }) => need(Role::Maintainer, *role),
-        (Action::ProjectCreate, Resource::Namespace { owner }) => {
-            // M3 S0: the personal namespace of a service account or a bot
-            // holds no projects (they work in their members' projects).
-            if *owner == user && kind != AccountKind::Human {
+        (Action::ProjectCreate, Resource::Namespace { owner, owner_kind }) => {
+            // M3 S0 (and its review): the personal namespace of a service
+            // account or a bot holds no projects, whoever creates them —
+            // administrators included (its owner would be the project's
+            // implicit Owner).
+            if *owner_kind != AccountKind::Human {
                 return Err(refused("non_person_namespace"));
             }
             if admin || *owner == user {
@@ -370,7 +372,11 @@ pub fn authorize(
             need(Role::Owner, source.role)?;
             match *target {
                 TransferTarget::Group { role, .. } => need(Role::Maintainer, role),
-                TransferTarget::PersonalNamespace { owner } => {
+                TransferTarget::PersonalNamespace { owner, owner_kind } => {
+                    // Not into a non-person's namespace (S0 review).
+                    if owner_kind != AccountKind::Human {
+                        return Err(refused("non_person_namespace"));
+                    }
                     if admin || owner == user {
                         Ok(())
                     } else {
