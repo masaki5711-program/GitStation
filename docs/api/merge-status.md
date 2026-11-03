@@ -30,7 +30,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `mergeable` | 真偽 | 止める理由が無い |
 | `reasons[]` | 配列 | `{ "reason": 名前, "detail": 文字列 / null }`。下の表 |
 | `approvals` | オブジェクト / null | 承認の側（版が無いと null）: `rules[]`（`name`、`applies`、`required`、`counted`。保護ブランチの最低の承認数は `name = "@protected_branch"`）、`approvals[]`（`approver_id`、`username`、`counted`、`uncounted_reason`）、`codeowners[]`（`pattern`、`owners`、`satisfied`。CODEOWNERS の強制が一時停止中は空） |
-| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion" }`。**`status: null` は報告が無い**（成功ではない） |
+| `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない） |
 | `discussions` | オブジェクト / null | マージの条件がスレッドの解決を求めるとき `{ "unresolved": 件数 }`、求めないとき null |
 | `codeowners` | オブジェクト | `{ "enforced": 真偽, "suspended_until": 文字列 / null }`（一時停止中だけ期限。期限を過ぎれば `enforced: true`） |
 | `viewer` | オブジェクト | 呼び出した人が **今** できること（U2 で追加。下の表） |
@@ -126,7 +126,19 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
 }
 ```
 
-理由ごとの対処は runbook `merge-blocked`（承認・マージの条件）と `codeowners`。
+理由ごとの対処は runbook `merge-blocked`（承認・マージの条件）と `codeowners`、チェックの報告は `checks-reporting`。
+
+## 必須のチェックの結果（M3 C1）
+
+この契約の欄は変えずに、`checks[]` と `required_check_*` の中身が Checks API（`docs/api/checks.md`）の報告から来るようになった。
+
+- `checks[]` の各要素は、マージの条件が求める名前ごとに、**MR の今の head** に報告された実行（`status`、`conclusion`）。報告が無ければ
+  `status: null`（`required_check_missing`）。`completed` / `success` 以外（`neutral`・`queued`・`in_progress`・`failure` など）は
+  `required_check_not_successful`。
+- 状態の取得は保存された実行をその場で読む。**読めなかったとき（DB の失敗・時間切れ・読めない行の `FG-DB-0022`）は状態の取得そのものが
+  失敗する**（`required_check_missing` として見せない）。マージの条件が必須のチェックを求めないときは実行を読まない。
+- マージの要求とマージのジョブは、MR のロックの下のトランザクションで同じ SQL で実行を読み直す（ジョブは要求の時点ではなく、ジョブの
+  ゲートの時点の結果で決める。その間に `failure` になれば `superseded`）。
 
 ## マージの設定（`GET` / `PUT /api/v1/projects/{id}/merge-settings`）の `viewer` と同時編集
 

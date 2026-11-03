@@ -28,7 +28,7 @@ target に一致する保護のルールのマージの条件は **いちばん�
 | reason（detail） | 意味 | 対処 |
 |---|---|---|
 | `approvals_missing`（`rule=@protected_branch required=<n> counted=<m>`） | 保護ブランチの最低の承認数。数えられる承認（下の表の理由が無い承認）なら誰のものでも数える（承認のルールとは別に効く） | 承認を集める。数えられない理由は下の表 |
-| `required_check_missing`（`name=<check>`） | 必須のチェックの実行が今の head に **報告されていない**。報告が無いことは成功ではない（ADR-0024 §10）。C1（Checks API）が入るまでは報告の経路が無いので、必須のチェックを設定した保護ブランチには **マージできない**（設定の答えに `warnings: ["required_checks_unreportable"]`、gstn は警告の 1 行） | 下の「必須のチェックで動かなくなったブランチ」 |
+| `required_check_missing`（`name=<check>`） | 必須のチェックの実行が今の head に **報告されていない**。報告が無いことは成功ではない（ADR-0024 §10）。報告は Checks API（M3 C1、`gstn checks report`）で、その名前空間を割り当てられたサービスアカウントが MR の **今の head** に送る（古い head への報告は数えない）。報告できる有効なサービスアカウントが無い名前は、設定の答えの `unreportable_checks` に出る（`warnings: ["required_checks_unreportable"]`、gstn は警告の 1 行）。`forge/` の名前は forge 自身のチェック（X2）まで報告されない | `gstn checks list --project <id> --sha <head>` で報告を確かめる（runbook checks-reporting）。報告の経路が無いなら下の「必須のチェックで動かなくなったブランチ」 |
 | `required_check_not_successful`（`name=… status=… conclusion=…`） | 実行はあるが `completed` かつ `success` でない（`neutral` も満たさない、実行中も満たさない） | チェックを直して再実行する |
 | `unresolved_discussions`（`count=<n>`） | マージの条件がスレッドの解決を求め、未解決のスレッドが n 件ある | スレッドを解決する（MR の作成者は他人のスレッドを解決できない。ADR-0024 §12） |
 
@@ -40,9 +40,11 @@ target に一致する保護のルールのマージの条件は **いちばん�
 - キューにあったマージが FG-REVIEW-0010 で `superseded` → 要求の後にプロジェクトの設定（`gstn merge-settings show`）がその方式を
   許さなくなった。許された方式でもう一度要求する。
 
-### 必須のチェックで動かなくなったブランチ（C1 の前）
+### 必須のチェックで動かなくなったブランチ（報告できる主体が無い）
 
-必須のチェックと直接の push の禁止の両方があると、マージも push もできずブランチが動かない。`[MUTATING — needs approval]`
+必須のチェックを報告するサービスアカウントが無い（`unreportable_checks` に出る名前、`forge doctor` の `checks.reporters` が WARN）か、
+報告が届かないとき、必須のチェックと直接の push の禁止の両方があると、マージも push もできずブランチが動かない。まず runbook
+`checks-reporting` の A（名前空間の割り当て）で報告の経路を直す。すぐにマージを進める必要があるときだけ:`[MUTATING — needs approval]`
 そのブランチの保護のルールの水準以上の Maintainer が、次のどちらかを行う（どちらも監査の行 `protected_ref.merge_rule_put` /
 `.merge_rule_removed` が残る）:
 
@@ -50,7 +52,7 @@ target に一致する保護のルールのマージの条件は **いちばん�
 2. マージの条件ごと消す: `gstn merge-rule remove --project <id> --rule-id <n> --yes`。
 
 ルールの番号は `gstn protected-ref list --project <id> --json` の `merge_rule` が付いた行。戻し方: 同じコマンドでチェックの名前を
-付け直す（C1 で提供者が報告できるようになってから）。
+付け直す（報告の経路が直ってから。runbook checks-reporting）。
 
 ### 承認の引き継ぎ（`reset_approvals_on_push = false`、ADR-0024 §8.2）
 
