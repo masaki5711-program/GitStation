@@ -250,3 +250,65 @@
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* U2: the merge settings. */
+.subTitle {
+  margin: var(--gs-space-4) 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-md);
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: var(--gs-space-1) var(--gs-space-4);
+  margin: 0 0 var(--gs-space-4);
+}
+
+.facts dt {
+  font-weight: bold;
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Something a person must know before relying on the setting (role="note"). */
+.warning {
+  margin: var(--gs-space-2) 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-brand-orange);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.warning p {
+  margin: 0;
+}
+
+.branchList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.branch {
+  margin: 0 0 var(--gs-space-4);
+  padding: 0 0 var(--gs-space-3);
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.plainList {
+  margin: 0 0 var(--gs-space-2);
+  padding-left: var(--gs-space-6);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 40rem) {
+  .facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

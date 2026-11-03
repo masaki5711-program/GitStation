@@ -92,6 +92,7 @@ describe('MR11 leftovers', () => {
     const rule = {
       id: 1, pattern: 'refs/heads/main', push_min_role: 'maintainer',
       created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      merge_rule: null, warnings: [],
     };
     const server = mockServer({
       ...projectRoutes(),

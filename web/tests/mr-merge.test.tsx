@@ -9,50 +9,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MERGE_POLL_GIVE_UP_MS, mergePollDelay } from '../src/api/mergeRequests';
 import { apiError, mockServer, SESSION } from './mock';
-import { MR_API, MR_SCREENS, mr, mrRoutes, status } from './mr-fixtures';
+import { MR_API, MR_SCREENS, attempt, mergeSettings, mr, mrRoutes, status } from './mr-fixtures';
 import { json, renderApp } from './render';
 
 const VIEW = `${MR_SCREENS}/pull/3`;
 const HEAD = 'b'.repeat(40);
 const SETTINGS_API = '/api/v1/projects/7/merge-settings';
-
-export function mergeSettings(over: Record<string, unknown> = {}) {
-  return {
-    project_id: 7,
-    allowed_methods: ['merge_commit', 'squash'],
-    default_method: 'merge_commit',
-    delete_source_default: false,
-    reset_approvals_on_push: true,
-    committer_approvals_excluded: true,
-    codeowners: { enforced: true, suspended_at: null, suspended_until: null },
-    stored: true,
-    updated_at: '2026-11-03T01:02:03.123456Z',
-    viewer: { can_manage: false, can_loosen: false, can_suspend_codeowners: false },
-    ...over,
-  };
-}
-
-export function attempt(state: string, over: Record<string, unknown> = {}) {
-  return {
-    merge_id: 41,
-    iid: 3,
-    state,
-    method: 'squash',
-    head_sha: HEAD,
-    target_branch: 'main',
-    delete_source_branch: true,
-    expected_old: null,
-    new_sha: null,
-    reason: null,
-    error_code: null,
-    source_outcome: null,
-    request_id: 'req-merge-1',
-    created_at: '2026-11-03T01:00:00Z',
-    updated_at: '2026-11-03T01:00:00Z',
-    finished_at: null,
-    ...over,
-  };
-}
 
 const mergeable = (can_merge: boolean, ok = true) => ({
   ...status(ok ? [] : [{ reason: 'conflict', detail: null }]),

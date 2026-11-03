@@ -1,4 +1,5 @@
 // `/{project}/-/settings`: name and description, visibility, protected refs,
+// merging, approval rules and merge conditions (U2, MergeSettings.tsx),
 // move / rename and delete. Every control is there for everyone who can see
 // the page; what the person may not do is refused by the server with its
 // reason (user_message + request_id), shown at the control.
@@ -20,6 +21,8 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSession } from '../../session/session';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading, useRefreshSessionOn403 } from './common';
 import { GeneralForm, MoveForm } from './Forms';
+import { ApprovalRulesSection, MergeConditionsSection, MergingSection, useMergeViewer } from './MergeSettings';
+import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
 
 export function ProjectSettings({ projectId }: { projectId: number }) {
@@ -32,6 +35,8 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       call(() => api.GET('/api/v1/projects/{id}', { signal, params: { path: { id: projectId } } })),
   });
   useDocumentTitle(t('settings.title'));
+  // Edit controls of the merge sections come from these flags only (U2).
+  const viewer = useMergeViewer(projectId);
   if (project.isPending) return <Loading />;
   if (project.isError) {
     return (
@@ -70,6 +75,9 @@ export function ProjectSettings({ projectId }: { projectId: number }) {
       <Section id="refs-title" title={t('settings.refs.title')}>
         <ProtectedRefs projectId={projectId} />
       </Section>
+      <MergingSection projectId={projectId} />
+      <ApprovalRulesSection projectId={projectId} canManage={viewer.can_manage} />
+      <MergeConditionsSection projectId={projectId} canManage={viewer.can_manage} />
       <Section id="move-title" title={t('settings.move.title')}>
         <MoveForm kind="project" id={projectId} path={p.path} />
       </Section>
@@ -131,19 +139,6 @@ function VisibilityForm({ project, onSaved }: { project: Project; onSaved: (p: P
 }
 
 const PUSH_ROLES = ['developer', 'maintainer', 'owner'] as const;
-
-/** `refs/heads/…` or `refs/tags/…`, at most 255 bytes, at most one `*`, only
- * in the last part (ADR-0008). The server has the last word. */
-export function patternProblem(pattern: string): 'empty' | 'prefix' | 'length' | 'star' | null {
-  if (pattern.trim() === '') return 'empty';
-  if (!pattern.startsWith('refs/heads/') && !pattern.startsWith('refs/tags/')) return 'prefix';
-  if (new TextEncoder().encode(pattern).length > 255) return 'length';
-  const stars = pattern.split('*').length - 1;
-  if (stars > 1 || (stars === 1 && pattern.slice(pattern.lastIndexOf('/') + 1).indexOf('*') < 0)) {
-    return 'star';
-  }
-  return null;
-}
 
 function ProtectedRefs({ projectId }: { projectId: number }) {
   const { t, i18n } = useTranslation();
