@@ -1665,3 +1665,45 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   スナップショット）。`merge-rule set` の警告は報告できない名前を出す。
 - **残したこと**: `ext/` の書き込みの経路（人の外部の道具。`sha_stakeholders` の規則とともに）、`forge/` の内部の書き込み（X2）、
   target が進んだときの「古い」チェック（M4、計画 04 M-2）、決定的な危険の層（`forge/risk`、M-6）、画面での表示（U-series）。
+
+### C1 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（security PASS、rust PASS、database WARN、test-adequacy WARN（HIGH 1））への対応。上の C1 の節と違えたところは **改訂** と書いた。
+
+- **割り当てはプロジェクトごと（security MEDIUM、改訂。承認された計画への戻し）**: `check_namespace_grants` は
+  **サービスアカウント × プロジェクト × 名前空間**（追記のマイグレーション 20261115100100: `project_id`、主キー
+  `(user_id, project_id, namespace)`、監査はプロジェクトに、完全削除で消える）。全プロジェクトに効く割り当てだと、どのプロジェクトの
+  Maintainer でも `ci` を持つ別のチームのサービスアカウントを Developer に足して `ci/gates` を報告させ、自分では外せない必須の
+  チェック（`above_own_role`）を満たせてしまう。ローダーと書き込みは **報告先のプロジェクトと名前の名前空間** の割り当てだけを読む
+  （別のプロジェクトの割り当ても `kanflow` だけの割り当ても `namespace_not_granted`）。管理は
+  `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}`（管理者・人だけは変わらない）、
+  `GET …/check-grants`。`unreportable_checks` と doctor `checks.reporters` もルールのプロジェクトで判定する。
+- **報告のロックの強さ（database MEDIUM、改訂）**: 報告はプロジェクトの行を `FOR SHARE` で取る（`FOR UPDATE` だと CI の報告が
+  プロジェクトのすべての書き込みとマージに直列になり、コミットごとの advisory lock が意味を失っていた）。完全削除・削除・公開範囲の
+  変更（`FOR UPDATE`）は報告の終わりを待つ。順序: プロジェクト `SHARE` → ロール・アカウント `SHARE` → 割り当て `SHARE` →
+  コミットの advisory lock（名前の行と 100 名の上限はこの下で決める）→ 実行の行 `FOR UPDATE`。マージのゲートはプロジェクトの行を
+  `FOR UPDATE` で先に取るので、進行中の報告はゲートが実行を読む前に終わり、ゲートの間に始まった報告はゲートの終わりを待つ
+  （ゲートは確定した実行だけを読み、両者は同じ行を先に取るのでデッドロックしない）。テスト `a_report_shares_the_project_row_lock`。
+- **注釈のプロジェクト（database MEDIUM）**: 20261115100200 で `check_runs (id, project_id)` を一意にし、`check_annotations
+  (check_run_id, project_id)` からの外部キー `check_annotations_run_project` を足した（監査と完全削除の `project_id` が実行と食い違わない）。
+- **保持の方針（database MEDIUM）**: 実行と注釈はプロジェクトがある間は残し、完全削除で消す。量は 1 コミット 100 名・注釈 50 個で
+  抑えるが、コミットの数だけ増える。**この MR にはジョブを入れない**。O3（保守）の範囲に「`updated_at` が 180 日より古く、開いている
+  MR の今の head でないコミットの実行と注釈を消す（監査の記録は残る）」を足した（計画 11 §5 O3 の注記）。それまでは runbook
+  `checks-reporting` の「保持」で量を見る。
+- **ゲートの読み取りと `update-ref` の間の窓（security MEDIUM、受け入れ）**: マージのジョブは必須のチェックをゲート（tx1a / tx1b、
+  MR のロックの下）で読み、その後の `update-ref` の CAS までの間に報告が `failure` に変わっても、そのマージは止まらない。R4 の承認・
+  R6 の規則と同じく **受け入れる**: 判定はロックの下のある時点の確定した事実に対して行い、CAS は判定した head と target の先端に
+  結んでいる（別の head の結果で通ることは無い）。窓はマージのロックの保持時間（秒の単位）に限られ、窓の後の報告はマージした
+  コミットの記録として残り、監査で追える。報告をマージのロックに参加させると、CI の報告がマージを待たせ、マージが報告を待たせる。
+- **ゲートの読み取りのテスト（HIGH）**: `the_merge_job_reads_the_runs_under_the_gate_lock` は読み取りの経路に関係なく通っていた。
+  `the_request_and_the_job_read_the_runs_inside_the_gate_transaction` に置き換えた（「報告なし」と答えて呼び出しを数える
+  `CheckResultsSource` を入れても、マージの要求は保存された成功で通り、ジョブは要求の後の失敗で `superseded` になり、どちらもそれを
+  呼ばない。状態の取得だけが 1 回呼ぶ）。
+- **LOW**: `completed_at` は同じ結論の報告では最初の完了の時刻のまま（結論が変わると新しい時刻）。注釈のパスはドライブ文字の形
+  （`C:/…`、`c:x`）も拒む（forge-checks と、20261115100300 で置き換えた CHECK `check_annotations_path`）。要約は **プレーンテキスト**
+  （サーバーも画面も HTML として描画しない）。`details_url` に秘密（トークン・署名つき URL の鍵）を入れない（人が開く公開のリンクで、
+  答えと一覧にそのまま出る）。注釈の位置・行の変換は飽和させず、範囲外は FG-SYS-0001（`annotation_out_of_range`。forge-checks の
+  検証が前提）。`Db` を `CheckResultsSource` として注入するのは `forge serve` だけ（`forge worker` は `Review` を作らない）。
+- **テスト**: 上限の同時実行（99 + 8 → 1 件だけ成功、7 件 FG-REVIEW-0021）、実際の `Browser` の到達可能性（届かない・時間切れは
+  `ref_not_found` で何も書かない）、本文の上限（ちょうど 64 KiB は 201、1 バイト多いと 413 FG-WEB-0009 で行なし）、FG-DB-0022
+  `too_many_stored_runs`、保存されたイベントの重複の鍵。

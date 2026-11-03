@@ -14,7 +14,8 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
   新しい head に数えない（push の後はもう一度報告する）。target が進んだときにチェックを「古い」とする扱いは M4（計画 04 M-2）。
 - `check.completed` のイベント（Webhook・イベントの履歴）は **結論が変わった報告のときだけ** 出る（同じ結論の報告を繰り返しても増えない）。
   重複の鍵は `check_completed:<check_run_id>:<revision>`。
-- `details_url` は人のためのリンクで、**サーバーは開かない**（http / https だけ。資格情報を含む URL は拒む）。
+- `details_url` は人のためのリンクで、**サーバーは開かない**（http / https だけ。資格情報を含む URL は拒む）。答えと一覧に
+  そのまま出るので、**秘密（トークン、署名つき URL の鍵）を入れない**。
 
 ## 誰が書けるか（`CheckWrite`、トークンは `api`）
 
@@ -54,15 +55,16 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | `name` | `<名前空間>/<名前>`。名前空間は `ci` / `forge` / `kanflow` / `ext`、名前は英小文字・数字・`.`・`_`・`-`・`/` の 1〜100 バイトで、英小文字か数字で始まり、`/` で終わらず `//` を含まない（`name_invalid`。名前空間は判定の入力なので、この検査だけは権限の判定の前） |
 | `status` | `queued` / `in_progress` / `completed`（`status_invalid`） |
 | `conclusion` | `completed` のときだけ、かつ必ず: `success` / `neutral` / `failure` / `error` / `action_required`（`conclusion_invalid`、`completed_without_conclusion`、`conclusion_without_completed`） |
-| `summary` | 省略は空。64 KiB まで、NUL を含まない（`summary_too_long`、`summary_invalid`） |
+| `summary` | 省略は空。**プレーンテキスト**（サーバーも画面も HTML / Markdown として描画しない）。64 KiB まで、NUL を含まない（`summary_too_long`、`summary_invalid`）。本文全体の上限（64 KiB）が先に効く |
 | `details_url` | 省略可。http / https、ホストあり、ユーザー名・パスワードなし、空白・制御文字なし、正規化した形で 2 KiB まで（`details_url_invalid`）。保存は正規化した形（例: スキームとホストは小文字） |
 | `annotations[]` | 50 個まで（`too_many_annotations`）。報告ごとに **まるごと置き換える** |
-| `annotations[].path` | リポジトリの中の相対パス: 1〜4096 バイト、`/` で始まらない、`..` の区切りを含まない、`\` と制御文字を含まない（`annotation_path_invalid`） |
+| `annotations[].path` | リポジトリの中の相対パス: 1〜4096 バイト、`/` で始まらない、ドライブ文字（`C:`）で始まらない、`..` の区切りを含まない、`\` と制御文字を含まない（`annotation_path_invalid`） |
 | `annotations[].start_line` / `end_line` | 1 以上、`end_line` は省略すると `start_line`、`start_line` 以上（`annotation_lines_invalid`） |
 | `annotations[].level` | `notice` / `warning` / `failure`（`annotation_level_invalid`） |
 | `annotations[].message` | 1 文字〜4 KiB（`annotation_message_invalid`） |
 | `annotations[].title` | 省略可、255 バイトまで（`annotation_title_invalid`） |
 
+- 各欄の上限は上限であって、すべてを同時に使える大きさではない（本文全体が 64 KiB まで。例: 注釈 50 個と要約を合わせて 64 KiB）。
 - 1 つのコミットに持てる名前は **100 個まで**。101 個目の新しい名前は `FG-REVIEW-0021`（409、`reason=too_many_runs`）。既にある名前の報告は
   いつでも更新できる。名前は報告の種類ごとに固定する（`ci/gates-<実行番号>` のように変えない）。
 - 答え: 新しい行は `201`、既にある行の更新は `200`。本文は下の「check run」1 つ。
@@ -93,7 +95,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 | `annotations[]` | 配列 | `{ "path", "start_line", "end_line", "level", "message", "title" }`（`title` は null 可） |
 | `reported_by` | オブジェクト | 最後に報告した主体 `{ "id", "username" }` |
 | `revision` | 整数 | 報告の回数（作成で 1） |
-| `created_at` / `updated_at` / `completed_at` | 文字列 / null | UTC、RFC 3339、マイクロ秒まで。`completed_at` は `completed` の報告の時刻 |
+| `created_at` / `updated_at` / `completed_at` | 文字列 / null | UTC、RFC 3339、マイクロ秒まで。`completed_at` はその結論になった最初の `completed` の報告の時刻（同じ結論の報告を繰り返しても変わらない） |
 
 ## 名前空間の割り当て（管理者、人だけ。`CheckNamespaceGrantManage`）
 
@@ -114,3 +116,8 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
 `unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は X2 まで常にここに入る）。
 対処は runbook `checks-reporting`。
+
+## 保持
+
+実行と注釈はプロジェクトがある間は残り、プロジェクトの完全削除で消える。古い実行を消すジョブは O3（保守）で入る予定（`updated_at` が
+180 日より古く、開いている MR の今の head でないコミットのもの。監査の記録は残る）。

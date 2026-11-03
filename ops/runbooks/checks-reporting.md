@@ -85,6 +85,18 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
    （ロールバック: 報告し直す）。手で UPDATE しない、監査の行を手で書かない、トリガーを止めない。
 2. 外された制約を、マイグレーション `20261115100000` の定義どおりに戻す `[MUTATING — needs approval]`。
 
+### E. 保持（量が気になるとき）
+
+実行と注釈はプロジェクトがある間は残る（完全削除で消える）。古い実行を消すジョブは O3（保守）で入るまで無い。量は読み取りで見る:
+
+```sql
+SELECT project_id, count(*) AS runs, min(updated_at) FROM forge.check_runs GROUP BY project_id ORDER BY runs DESC LIMIT 20;
+SELECT count(*) FROM forge.check_annotations;
+```
+
+手で消さない（監査される表で、消すには承認された手順と監査の行が要る）。O3 の方針: `updated_at` が 180 日より古く、開いている MR の
+今の head でないコミットのものを消す。
+
 ## Verify
 
 - `gstn checks list --project <id> --sha <head_sha>` に報告が出る。
