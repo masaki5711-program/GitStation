@@ -2244,3 +2244,60 @@ impl Captured {
             .collect()
     }
 }
+
+/// R6 re-review (LOW): a git failure reading the change from one approved
+/// head stops the reads — the heads not decided yet end too — and is
+/// logged once (`unread_heads`), never once per approved head.
+#[tokio::test]
+async fn a_git_failure_of_the_carry_reads_is_logged_once() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    let first = w.head.clone();
+    w.approve(w.rita)
+        .await
+        .expect("rita approves the first head");
+    w.push_next(
+        &[("README.md", "base\n"), ("f.txt", "f\n"), ("g.txt", "g\n")],
+        "req-push-2",
+    )
+    .await;
+    w.approve(w.mara)
+        .await
+        .expect("mara approves the second head");
+    // The first head's tree is gone: `diff-tree` from it fails, while the
+    // commits (and every history walk) stay readable.
+    let tree = plumb(&w.path, &["rev-parse", &format!("{first}^{{tree}}")], None);
+    std::fs::remove_file(w.path.join("objects").join(&tree[..2]).join(&tree[2..]))
+        .expect("a loose tree object");
+    let logs = Captured::default();
+    let guard = logs.install();
+    w.push_next(
+        &[
+            ("README.md", "base\n"),
+            ("f.txt", "f\n"),
+            ("g.txt", "g\n"),
+            ("h.txt", "h\n"),
+        ],
+        "req-push-3",
+    )
+    .await;
+    drop(guard);
+    let unread = logs.named("forge.review.approvals_carry_unread");
+    assert_eq!(unread.len(), 1, "logged once: {unread:?}");
+    assert_eq!(unread[0]["level"], "WARN");
+    assert!(unread[0]["fields"]["error_code"].is_string());
+    assert_eq!(unread[0]["fields"]["unread_heads"], 2);
+    let live =
+        w.t.json_rows("SELECT id FROM forge.merge_request_approvals WHERE revoked_at IS NULL")
+            .await;
+    assert!(live.is_empty(), "both approvals end: {live:?}");
+    w.t.drop_now().await;
+}

@@ -1537,3 +1537,7 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   届かない承認は承認した head が無い（`None`）として **写さず消す**（ログ `forge.review.approvals_carry_decided` の
   `reason=carry_chain_too_long`）。データベースが保証するのは `carried_from` が承認への外部キーで、挿入後は変わらない（ガード）ことだけ。
   「古い行」「同じ MR」はアプリ（`carry_on` だけが直前に終えた同じ MR の行の id を入れる）が守る。テスト `the_approved_head_walk_is_bounded`。
+- **引き継ぎの読み取りの失敗は 1 回だけ記録（再レビュー LOW）**: 承認した head からの差分の読み取りで最初に git が失敗するか時間が
+  尽きたら、残りの head は読まずに（その承認は消える）、warn `forge.review.approvals_carry_unread` を 1 行だけ `error_code` と
+  `unread_heads` 付きで出す（リポジトリ全体の障害で push ごとに最大 50 行の warn を出さない。時間切れも同じ行で記録する）。テスト
+  `a_git_failure_of_the_carry_reads_is_logged_once`。

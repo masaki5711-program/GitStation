@@ -60,7 +60,8 @@ target に一致する保護のルールのマージの条件は **いちばん�
 `carried_from` をたどった最初の承認の head。ログの `approved_head`）からの変更が設定のファイル（`.forge/**` など）か
 target の CODEOWNERS の行が覆うパスに触れる、変更を読み切れない（ログ `forge.review.approvals_carry_decided` の `reason` =
 `target_protected` / `config_path` / `owned_path` / `changes_unknown` / `codeowners_unknown`、R6 のレビューで足した `special_path`（`.gitmodules`・`.gitattributes`・`.lfsconfig`）/ `submodule` / `symlink` / `mode_change`（実行ビットを含む）/ `binary_file` / `too_many_files`（51 以上）/ `too_many_lines`（追加と削除の合計 1 001 以上）、読めなかった入力は
-`forge.review.approvals_carry_unread` の warn）。写した承認も数えるかは評価の時点で決まる。
+`forge.review.approvals_carry_unread` の warn。最初の git の失敗・時間切れで残りの承認した head は読まずに消し、warn は
+1 回だけ `unread_heads`（読めなかった head の数）付きで出る）。写した承認も数えるかは評価の時点で決まる。
 
 ## 承認が数えられない理由（`gstn mr approvals --json` の `approvals[].uncounted_reason`）
 

@@ -7,8 +7,9 @@
 //! per push. The git reads run only when the project keeps approvals on
 //! push and the target is unprotected; every read is bounded by the refs
 //! lock's deadline. A git failure or an exhausted deadline is "no carry"
-//! (the approvals end, the default), logged once; only the database is an
-//! error. forge-db decides again under the merge request's lock
+//! (the approvals end, the default): the first one stops the reads of the
+//! remaining approved heads (they end too) and is logged once with their
+//! count (`unread_heads`); only the database is an error. forge-db decides again under the merge request's lock
 //! (`record_mr_version_carrying`).
 
 use forge_core::{ObjectId, RepoId, RequestId};
@@ -83,12 +84,27 @@ pub(crate) async fn carry_plan(
     }
     let codeowners = target_codeowners(refs, deadline, repo, stored, request_id).await;
     let mut allowed = Vec::with_capacity(approved.len());
+    // R6 review round 2: the first git failure or exhausted deadline stops
+    // the reads — every head not decided yet ends — and is logged once.
+    let mut stopped: Option<ForgeError> = None;
+    let mut unread: usize = 0;
     for head in approved {
+        if stopped.is_some() {
+            unread += 1;
+            continue;
+        }
         let changes = if &head == tip {
             // Back to the head the approval was given on: nothing new.
             CarryChanges::Known(Vec::new())
         } else {
-            changed(refs, deadline, repo, &head, tip, request_id).await
+            match changed(refs, deadline, repo, &head, tip).await {
+                Ok(changes) => changes,
+                Err(e) => {
+                    stopped = Some(e);
+                    unread += 1;
+                    continue;
+                }
+            }
         };
         let inputs = CarryInputs {
             reset_approvals_on_push: false,
@@ -103,6 +119,19 @@ pub(crate) async fn carry_plan(
         if decided.is_ok() {
             allowed.push(head);
         }
+    }
+    if let Some(e) = stopped {
+        tracing::warn!(
+            target: "forge_review",
+            event = "forge.review.approvals_carry_unread",
+            error_code = e.code().id(),
+            request_id = %request_id,
+            merge_request_id = stored.id.get(),
+            input = "changed_entries",
+            unread_heads = unread,
+            error = %e,
+            "the change from the approved heads could not be read; their approvals end (no carry)"
+        );
     }
     Ok((!allowed.is_empty()).then_some(CarryPlan {
         from: previous,
@@ -132,32 +161,28 @@ fn log_decision(
 }
 
 /// The entries changed from `from` to `to` with their modes and line
-/// counts, at most one past [`CARRY_MAX_FILES`] (unknown on any failure:
-/// never carried).
+/// counts, at most one past [`CARRY_MAX_FILES`] (a listing that cannot be
+/// used is unknown: never carried). A git failure or an exhausted deadline
+/// is the error: the caller stops reading and logs it once.
 async fn changed(
     refs: &VersionRefs,
     deadline: Deadline,
     repo: RepoId,
     from: &ObjectId,
     to: &ObjectId,
-    request_id: &RequestId,
-) -> CarryChanges {
-    let Ok(timeout) = git_budget(deadline, "carry_changed_entries") else {
-        return CarryChanges::Unknown("timeout");
-    };
+) -> Result<CarryChanges, ForgeError> {
+    let timeout = git_budget(deadline, "carry_changed_entries")?;
     let (git, storage) = refs.git();
-    match git
-        .changed_entries(storage, repo, from, to, CARRY_MAX_FILES + 1, timeout)
-        .await
-    {
-        Ok(ChangeListing::Complete(entries)) => CarryChanges::Known(entries),
-        Ok(ChangeListing::TooMany) => CarryChanges::Unknown("too_many_files"),
-        Ok(ChangeListing::NonUtf8) => CarryChanges::Unknown("non_utf8_path"),
-        Err(e) => {
-            warn_unread(request_id, "changed_entries", &e);
-            CarryChanges::Unknown("git_failed")
-        }
-    }
+    Ok(
+        match git
+            .changed_entries(storage, repo, from, to, CARRY_MAX_FILES + 1, timeout)
+            .await?
+        {
+            ChangeListing::Complete(entries) => CarryChanges::Known(entries),
+            ChangeListing::TooMany => CarryChanges::Unknown("too_many_files"),
+            ChangeListing::NonUtf8 => CarryChanges::Unknown("non_utf8_path"),
+        },
+    )
 }
 
 /// The target tip's CODEOWNERS (unknown on any failure).
