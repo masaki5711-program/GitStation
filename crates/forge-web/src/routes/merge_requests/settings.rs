@@ -33,7 +33,7 @@ use forge_review::{CodeownersEnforcement, ReviewRequest, StoredMergeSettings};
 use serde::{Deserialize, Serialize};
 
 use super::loaders::{found, project_of};
-use super::{respond, review};
+use super::{respond, review, viewer_read};
 use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, WriteParts};
@@ -63,10 +63,11 @@ pub struct PutMergeSettings {
     pub reset_approvals_on_push: bool,
     /// Committers' approvals do not count (the default `true`).
     pub committer_approvals_excluded: bool,
-    /// The `updated_at` the caller read (`null`: the defaults, never
-    /// stored). Required (U2): another value under the lock is
-    /// FG-REVIEW-0017 — the settings changed in between and nothing is
-    /// overwritten silently.
+    /// The `updated_at` the caller read, echoed verbatim — an opaque string
+    /// (never round-tripped through a date type: it is to the microsecond)
+    /// — or `null` for the defaults, never stored. Required (U2): another
+    /// value under the lock is FG-REVIEW-0017 — the settings changed in
+    /// between and nothing is overwritten silently.
     #[serde(deserialize_with = "Option::deserialize")]
     #[schema(required = true)]
     pub expected_updated_at: Option<String>,
@@ -128,11 +129,12 @@ pub struct MergeSettingsBody {
     pub codeowners: CodeownersEnforcementBody,
     /// `false`: the project never changed them (the defaults).
     pub stored: bool,
-    /// UTC, RFC 3339 to the microsecond (`null` for the defaults): send it
-    /// back as `expected_updated_at`.
+    /// UTC, RFC 3339 to the microsecond (`null` for the defaults): an
+    /// opaque token — send it back verbatim as `expected_updated_at`.
     #[schema(required = true)]
     pub updated_at: Option<String>,
-    /// What the caller could do now (U2).
+    /// What the caller could do now (U2): a hint; on a write's answer it
+    /// is decided on the facts read before the lock.
     pub viewer: MergeSettingsViewerBody,
 }
 
@@ -330,6 +332,7 @@ pub async fn get_settings(state: AppState, request: Dispatched<ProjectCtx>) -> R
         let settings = bounded(&state, "merge_settings", review.merge_settings(&w.proof)).await?;
         // The protection the write routes' loaders read, as they read it
         // (only for a caller who could manage the project): U2 viewer flags.
+        // A failed read closes the flags only (review round).
         let highest = read_if_manager(w.proof.ctx().view().role, || {
             bounded(
                 &state,
@@ -337,12 +340,15 @@ pub async fn get_settings(state: AppState, request: Dispatched<ProjectCtx>) -> R
                 review.highest_protection(project),
             )
         })
-        .await?
-        .flatten();
-        let viewer = w
-            .proof
-            .ctx()
-            .merge_settings_viewer(w.proof.principal(), highest);
+        .await;
+        let viewer = viewer_read(&w.ctx, "merge_settings_protection", highest).map_or(
+            MergeSettingsViewer::CLOSED,
+            |highest| {
+                w.proof
+                    .ctx()
+                    .merge_settings_viewer(w.proof.principal(), highest.flatten())
+            },
+        );
         json(settings_body(project, &settings, viewer))
     }
     .await;

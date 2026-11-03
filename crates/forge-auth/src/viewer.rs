@@ -33,6 +33,17 @@ pub struct MergeRequestViewer {
     pub can_mark_ready: bool,
 }
 
+impl MergeRequestViewer {
+    /// Every flag `false`: what a screen shows when the facts behind the
+    /// flags could not be read (U2 review: a hint fails closed).
+    pub const CLOSED: Self = Self {
+        can_approve: false,
+        can_unapprove: false,
+        can_merge: false,
+        can_mark_ready: false,
+    };
+}
+
 /// The merge settings actions of the caller (`GET …/merge-settings`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeSettingsViewer {
@@ -44,6 +55,15 @@ pub struct MergeSettingsViewer {
     pub can_loosen: bool,
     /// `PUT …/codeowners-enforcement` suspending CODEOWNERS.
     pub can_suspend_codeowners: bool,
+}
+
+impl MergeSettingsViewer {
+    /// Every flag `false` (as [`MergeRequestViewer::CLOSED`]).
+    pub const CLOSED: Self = Self {
+        can_manage: false,
+        can_loosen: false,
+        can_suspend_codeowners: false,
+    };
 }
 
 /// One trial decision. A denial is the answer, not a failure: nothing is

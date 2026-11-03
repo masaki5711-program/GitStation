@@ -219,6 +219,23 @@ async fn world() -> World {
     );
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &head], None);
+    // U2 review: a branch for a second merge request (never refreshed).
+    let second = commit_on(
+        &path,
+        Some(&base),
+        &[
+            (
+                "README", "base
+",
+            ),
+            (
+                "second.txt",
+                "s
+",
+            ),
+        ],
+    );
+    plumb(&path, &["update-ref", "refs/heads/second", &second], None);
     // One browse cache for the routes and the merge job, as in `forge serve`.
     let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
     let smart = SmartHttp::new(git.clone(), storage.clone(), GitHttpLimits::default());
@@ -1300,5 +1317,189 @@ async fn stale_merge_settings_put_is_409() {
         .remove("expected_updated_at");
     let (status, body) = put(olga.clone(), old_client).await;
     assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    w.t.drop_now().await;
+}
+
+// ── review round: the viewer flags are a hint — a failed read closes them ──
+
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Captured>> = const { std::cell::RefCell::new(None) };
+}
+
+struct ThreadSink;
+
+impl std::io::Write for ThreadSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        SINK.with(|s| {
+            if let Some(c) = s.borrow().as_ref() {
+                c.0.lock().expect("log buffer").extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        SINK.with(|s| s.borrow_mut().take());
+    }
+}
+
+impl Captured {
+    /// Capture this thread's events (`#[tokio::test]` runs on the current
+    /// thread, so the request's events land here).
+    fn install(&self) -> CaptureGuard {
+        static GLOBAL: std::sync::Once = std::sync::Once::new();
+        GLOBAL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .flatten_event(true)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(|| ThreadSink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("the only global subscriber");
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(self.clone()));
+        CaptureGuard
+    }
+
+    fn events(&self) -> Vec<Value> {
+        let text = String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("utf-8");
+        text.lines()
+            .map(|l| serde_json::from_str(l).expect("json log line"))
+            .collect()
+    }
+
+    fn named(&self, event: &str) -> Vec<Value> {
+        self.events()
+            .into_iter()
+            .filter(|e| e["event"] == event)
+            .collect()
+    }
+}
+
+/// The protection read behind the flags fails (its table is gone for a
+/// moment): the status and the settings still answer 200 with everything
+/// else, every flag is `false`, and one warn per answer carries the
+/// error code, the request id and what was read.
+#[tokio::test]
+async fn a_failing_viewer_read_closes_the_flags_and_keeps_the_answer() {
+    let w = world().await;
+    let olga = w.owner().await;
+    // A second merge request (branch `second`, made with the world) whose
+    // version the worker has not recorded: its status reads the protection
+    // apart from the approval facts.
+    let (status, opened) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/merge-requests"),
+        w.dev.clone(),
+        Some(json!({"title": "Second", "source_branch": "second", "target_branch": "main"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let iid = opened["iid"].as_i64().expect("iid");
+    w.t.exec_superuser("ALTER TABLE forge.protected_refs RENAME TO protected_refs_gone")
+        .await;
+    let logs = Captured::default();
+    let guard = logs.install();
+    let (code_status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri(&format!("/merge-requests/{iid}/status")),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(code_status, StatusCode::OK, "{s}");
+    assert_eq!(s["schema_version"], 1);
+    assert_eq!(s["mergeable"], false);
+    assert!(
+        s["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|r| r["reason"] == "mergeability_unknown"),
+        "{s}"
+    );
+    assert_eq!(s["viewer"], mr_viewer(false, false, false, false), "{s}");
+    let (code_status, settings) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/merge-settings"),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(code_status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["default_method"], "merge_commit");
+    assert_eq!(settings["viewer"], settings_viewer(false, false, false));
+    drop(guard);
+    let warns = logs.named("forge.web.viewer_flags_closed");
+    assert_eq!(warns.len(), 2, "one per answer: {warns:?}");
+    for (warn, read) in warns
+        .iter()
+        .zip(["merge_target_protection", "merge_settings_protection"])
+    {
+        assert_eq!(warn["level"], "WARN", "{warn}");
+        assert!(
+            warn["error_code"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("FG-")),
+            "{warn}"
+        );
+        assert!(warn["request_id"].is_string(), "{warn}");
+        assert_eq!(warn["read"], read, "{warn}");
+    }
+    w.t.exec_superuser("ALTER TABLE forge.protected_refs_gone RENAME TO protected_refs")
+        .await;
+    w.t.drop_now().await;
+}
+
+/// A settings write without `expected_updated_at` is FG-WEB-0006 and the
+/// log says why (`reason=missing_field`, the field).
+#[tokio::test]
+async fn a_settings_write_without_expected_updated_at_is_missing_field() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let logs = Captured::default();
+    let guard = logs.install();
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.project_uri("/merge-settings"),
+        olga,
+        Some(json!({
+            "allowed_methods": ["merge_commit"],
+            "default_method": "merge_commit",
+            "delete_source_default": false,
+            "reset_approvals_on_push": true,
+            "committer_approvals_excluded": true
+        })),
+    )
+    .await;
+    drop(guard);
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+        "{body}"
+    );
+    let logged = logs
+        .events()
+        .into_iter()
+        .find(|e| e["error_code"] == "FG-WEB-0006")
+        .unwrap_or_else(|| panic!("the refusal is logged: {:?}", logs.events()));
+    let line = logged.to_string();
+    assert!(line.contains("missing_field"), "{line}");
+    assert!(line.contains("expected_updated_at"), "{line}");
     w.t.drop_now().await;
 }

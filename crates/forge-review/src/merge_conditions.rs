@@ -59,6 +59,10 @@ pub struct MergeStatus {
     pub discussions: Option<u32>,
     /// The project's settings as read.
     pub settings: StoredMergeSettings,
+    /// The protection in effect on the target branch, from the rules read
+    /// with the approval facts (U2 review: the viewer flags share that
+    /// read); `None` when they were not read (no version yet).
+    pub target_protection: Option<Option<forge_auth::RefProtection>>,
 }
 
 /// The settings as locked are the ones the caller read (U2): the same
@@ -256,6 +260,7 @@ impl Review {
                 checks: Vec::new(),
                 discussions: None,
                 settings,
+                target_protection: None,
             });
         };
         let source_tip = self
@@ -268,6 +273,8 @@ impl Review {
             .git_facts(request_id, repo, user, &current, &head, STATE_BUDGET)
             .await?;
         let facts = review::approval_facts(&self.db, project, current.id).await?;
+        let target_protection =
+            forge_auth::RefProtection::of(&facts.protection, &current.target_branch);
         let unresolved = review::unresolved_discussions(&self.db, current.id).await?;
         let stored: Option<StoredMergeability> = review::mergeability(&self.db, current.id).await?;
         let live = review::merges::latest_merge(&self.db, current.id)
@@ -344,6 +351,7 @@ impl Review {
             checks: conditions.checks,
             discussions: conditions.discussions,
             settings,
+            target_protection: Some(target_protection),
         })
     }
 

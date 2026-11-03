@@ -19,7 +19,7 @@ use forge_review::{BlockReason, MergeStatus};
 use serde::Serialize;
 
 use super::approvals::StoredMr;
-use super::{repository, respond, review};
+use super::{repository, respond, review, viewer_read};
 use crate::app::AppState;
 use crate::registry::Dispatched;
 use crate::routes::write::{bounded, json};
@@ -194,12 +194,14 @@ pub struct StatusCodeownersBody {
 pub struct StatusViewerBody {
     /// `POST …/approve` would be allowed (never for the author).
     pub can_approve: bool,
-    /// `POST …/unapprove` would be allowed.
+    /// `POST …/unapprove` would be allowed (pair it with `approved_by_me`:
+    /// there may be nothing to withdraw).
     pub can_unapprove: bool,
     /// `POST …/merge` would be allowed (the target's minimum push role;
     /// whether the merge request may merge now is `mergeable`).
     pub can_merge: bool,
-    /// `PATCH …/{iid}` with `draft: false` would be allowed.
+    /// `PATCH …/{iid}` with `draft: false` would be allowed (meaningful
+    /// only for a draft).
     pub can_mark_ready: bool,
     /// The caller has a live approval of the merge request.
     pub approved_by_me: bool,
@@ -345,16 +347,26 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
         let answer = review
             .merge_status(&w.ctx.request_id, &w.proof, repo?, None)
             .await?;
-        // The protection the merge route's loader reads (U2 viewer flags).
-        let target = &w.proof.ctx().merge_request().target_branch;
-        let protection = bounded(
-            &state,
-            "merge_target_protection",
-            review.target_protection(project, target),
-        )
-        .await?;
+        // The protection the merge route's loader reads (U2 viewer flags):
+        // the rules the status read with the approval facts, else (no
+        // version yet) read here; a failed read closes the flags only.
+        let protection = match answer.target_protection {
+            Some(read) => Some(read),
+            None => {
+                let target = &w.proof.ctx().merge_request().target_branch;
+                let read = bounded(
+                    &state,
+                    "merge_target_protection",
+                    review.target_protection(project, target),
+                )
+                .await;
+                viewer_read(&w.ctx, "merge_target_protection", read)
+            }
+        };
         let principal = w.proof.principal();
-        let viewer = w.proof.ctx().viewer(principal, protection);
+        let viewer = protection.map_or(MergeRequestViewer::CLOSED, |p| {
+            w.proof.ctx().viewer(principal, p)
+        });
         json(status_body(iid, &answer, viewer, principal.user()))
     }
     .await;

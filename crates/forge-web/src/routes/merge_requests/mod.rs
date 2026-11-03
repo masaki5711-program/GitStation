@@ -285,6 +285,31 @@ fn review(state: &AppState) -> Result<&Review, ForgeError> {
     })
 }
 
+/// A read behind the viewer flags (U2 review): the flags are a hint, so a
+/// failed read closes them (`None`: every flag `false`) instead of failing
+/// the answer — logged once here, at warn, with the code and the request.
+fn viewer_read<T>(
+    ctx: &crate::Ctx,
+    read: &'static str,
+    result: Result<T, ForgeError>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_web",
+                event = "forge.web.viewer_flags_closed",
+                error_code = e.code().id(),
+                request_id = %ctx.request_id,
+                read,
+                error = %e,
+                "a read behind the viewer flags failed; every flag is false (the answer is unchanged)"
+            );
+            None
+        }
+    }
+}
+
 // ── handlers ──
 
 fn respond(ctx: &crate::Ctx, status: StatusCode, body: Result<Value, ForgeError>) -> Response {

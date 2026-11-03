@@ -1868,11 +1868,14 @@ export interface components {
             /** @description `false`: the project never changed them (the defaults). */
             stored: boolean;
             /**
-             * @description UTC, RFC 3339 to the microsecond (`null` for the defaults): send it
-             *     back as `expected_updated_at`.
+             * @description UTC, RFC 3339 to the microsecond (`null` for the defaults): an
+             *     opaque token — send it back verbatim as `expected_updated_at`.
              */
             updated_at: string | null;
-            /** @description What the caller could do now (U2). */
+            /**
+             * @description What the caller could do now (U2): a hint; on a write's answer it
+             *     is decided on the facts read before the lock.
+             */
             viewer: components["schemas"]["MergeSettingsViewerBody"];
         };
         /**
@@ -2142,10 +2145,11 @@ export interface components {
             /** @description Delete the source branch after a merge unless the request says. */
             delete_source_default: boolean;
             /**
-             * @description The `updated_at` the caller read (`null`: the defaults, never
-             *     stored). Required (U2): another value under the lock is
-             *     FG-REVIEW-0017 — the settings changed in between and nothing is
-             *     overwritten silently.
+             * @description The `updated_at` the caller read, echoed verbatim — an opaque string
+             *     (never round-tripped through a date type: it is to the microsecond)
+             *     — or `null` for the defaults, never stored. Required (U2): another
+             *     value under the lock is FG-REVIEW-0017 — the settings changed in
+             *     between and nothing is overwritten silently.
              */
             expected_updated_at: string | null;
             /**
@@ -2400,14 +2404,20 @@ export interface components {
             approved_by_me: boolean;
             /** @description `POST …/approve` would be allowed (never for the author). */
             can_approve: boolean;
-            /** @description `PATCH …/{iid}` with `draft: false` would be allowed. */
+            /**
+             * @description `PATCH …/{iid}` with `draft: false` would be allowed (meaningful
+             *     only for a draft).
+             */
             can_mark_ready: boolean;
             /**
              * @description `POST …/merge` would be allowed (the target's minimum push role;
              *     whether the merge request may merge now is `mergeable`).
              */
             can_merge: boolean;
-            /** @description `POST …/unapprove` would be allowed. */
+            /**
+             * @description `POST …/unapprove` would be allowed (pair it with `approved_by_me`:
+             *     there may be nothing to withdraw).
+             */
             can_unapprove: boolean;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
