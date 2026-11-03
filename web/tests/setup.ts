@@ -25,6 +25,17 @@ if (dom) {
   }
 }
 
+// MarkdownView renders the parser through React.lazy (a separate chunk in the
+// build). vitest isolates each test file, so without this the first test of a
+// file that shows Markdown (a README, an MR description, a thread) pays the
+// cold import of react-markdown + remark-gfm + micromark *inside* its 1 s
+// `waitFor` / `findBy` budget: ~0.6 s on an idle machine, 0.6-3.5 s while the
+// whole suite runs in parallel — the Loading fallback was still on screen at
+// the timeout. Evaluating the chunk here, before any test starts, makes the
+// lazy import resolve from the module cache; the Suspense boundary is still
+// exercised, it just no longer depends on machine load.
+await import('../src/features/Markdown');
+
 afterEach(() => {
   cleanup();
 });
