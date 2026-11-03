@@ -771,6 +771,24 @@ export interface paths {
         patch: operations["patch_api_v1_projects_id_protected_refs_rule_id"];
         trace?: never;
     };
+    "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set a protected branch rule's merge conditions: minimum approvals, required checks, resolved discussions, the direct-push ban (people only; Maintainer; never above the caller's role) */
+        put: operations["put_api_v1_projects_id_protected_refs_rule_id_merge_rule"];
+        post?: never;
+        /** Remove a protected branch rule's merge conditions (people only; Maintainer; never above the caller's role) */
+        delete: operations["delete_api_v1_projects_id_protected_refs_rule_id_merge_rule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/repository/blame": {
         parameters: {
             query?: never;
@@ -2046,6 +2064,29 @@ export interface components {
              *     comes back by itself at the expiry).
              */
             for_minutes?: number | null;
+        };
+        /** @description `PUT …/merge-rule` (absent fields: off / 0). */
+        PutMergeRule: {
+            /** @description Pushes may not create or move the branch; merges still may. */
+            direct_push_forbidden?: boolean;
+            /** @description Every discussion of the merge request must be resolved. */
+            require_resolved_discussions?: boolean;
+            /**
+             * @description Not available until work items exist (M3 I1): `true` is refused
+             *     (FG-WEB-0006 `rule=unavailable_until_i1`).
+             */
+            require_work_item_link?: boolean;
+            /**
+             * Format: int32
+             * @description The minimum counted approvals of a merge into the branch, 0..=20.
+             */
+            required_approvals?: number;
+            /**
+             * @description Checks that must have succeeded on the merge request's head, at
+             *     most 20, each `ci/…`, `kanflow/…` or `forge/…` (`ext/…` is refused,
+             *     FG-REVIEW-0016).
+             */
+            required_checks?: string[];
         };
         /** @description `PUT …/merge-settings` (every field: the settings are replaced). */
         PutMergeSettings: {
@@ -4529,6 +4570,72 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProtectedRefBody"];
                 };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_protected_refs_rule_id_merge_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                rule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutMergeRule"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedRefBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_protected_refs_rule_id_merge_rule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                rule_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

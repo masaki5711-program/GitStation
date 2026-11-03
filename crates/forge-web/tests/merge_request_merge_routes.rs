@@ -874,3 +874,116 @@ async fn the_codeowners_route_suspends_for_a_bounded_time_only() {
     assert_eq!(body["codeowners"]["enforced"], true);
     w.t.drop_now().await;
 }
+
+/// ADR-0024 §7, §10, §11, §12: a merge rule refuses `ext/` checks
+/// (FG-REVIEW-0016) and the work item link (FG-WEB-0006); set, it is
+/// listed with its rule and the status (the stable contract) shows every
+/// reason; the merge is refused with them; removed, nothing blocks.
+#[tokio::test]
+async fn the_merge_rule_routes_and_the_status_contract() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "developer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert!(created["merge_rule"].is_null());
+    let rule = created["id"].as_i64().expect("rule id");
+    let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let (status, body) = put(olga.clone(), json!({"required_checks": ["ext/sonar"]})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0016"),
+        "{body}"
+    );
+    let (status, body) = put(olga.clone(), json!({"require_work_item_link": true})).await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    let (status, body) = put(w.dev.clone(), json!({"required_approvals": 1})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let wanted = json!({
+        "required_approvals": 1,
+        "required_checks": ["ci/gates"],
+        "require_resolved_discussions": true
+    });
+    let (status, body) = put(olga.clone(), wanted).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["merge_rule"]["required_checks"], json!(["ci/gates"]));
+    let (_, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/protected-refs"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(list["rules"][0]["merge_rule"]["required_approvals"], 1);
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["schema_version"], 1);
+    assert_eq!(s["mergeable"], false);
+    let reasons: Vec<&str> = s["reasons"]
+        .as_array()
+        .expect("reasons")
+        .iter()
+        .filter_map(|r| r["reason"].as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        ["approvals_missing", "required_check_missing"],
+        "{s}"
+    );
+    assert_eq!(s["checks"][0]["name"], "ci/gates");
+    assert!(s["checks"][0]["status"].is_null(), "no run reported");
+    assert_eq!(s["discussions"]["unresolved"], 0);
+    assert_eq!(s["method"], "merge_commit");
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0007"),
+        "{body}"
+    );
+    let (status, _) = send(w.router.clone(), "DELETE", &uri, olga.clone(), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s["mergeable"], true, "{s}");
+    assert_eq!(s["reasons"], json!([]));
+    // An outsider gets the not-found answer, as for the merge request.
+    let (status, body) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.outsider.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}

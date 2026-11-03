@@ -1397,6 +1397,39 @@ fn force_push_to_protected_is_fg_git_0007_even_for_an_admin() {
     assert_eq!(s.refs().get("refs/heads/main"), Some(&tip));
 }
 
+/// M3 R6 (ADR-0024 §4.3, §12): a merge rule that forbids direct pushes
+/// refuses a fast-forward of `main` for its Owner and for an administrator
+/// (FG-GIT-0017, nothing changes); another branch still pushes.
+#[test]
+fn a_direct_push_to_a_branch_with_the_ban_is_fg_git_0017() {
+    let s = server(Options::default());
+    let t = s.t.as_ref().expect("db");
+    let pid = s.web.project_id.get();
+    s.rt.block_on(t.commit_audited(
+        ("project", pid),
+        &[format!(
+            "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id,              direct_push_forbidden) SELECT id, project_id, true FROM forge.protected_refs              WHERE project_id = {pid} AND pattern = 'refs/heads/main'"
+        )],
+    ));
+    let work = s.work();
+    s.commit(
+        &work,
+        "ban.txt",
+        b"synthetic ban
+",
+    );
+    let before = s.refs();
+    for token in [&s.alice_write, &s.dave_admin] {
+        let out = s.push(token, &work, &["HEAD:main"]);
+        refused(&out, ErrorCode::ProtectedRefDirectPushForbidden);
+        assert_eq!(s.refs(), before);
+    }
+    ok(
+        &s.push(&s.alice_write, &work, &["HEAD:refs/heads/side"]),
+        "an unprotected branch",
+    );
+}
+
 #[test]
 fn deleting_a_protected_branch_is_fg_git_0009() {
     let s = server(Options::default());

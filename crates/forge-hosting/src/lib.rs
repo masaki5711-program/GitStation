@@ -26,10 +26,13 @@ use std::time::Duration;
 
 // M2 MR6: tokens, sessions, the user search and administration.
 pub mod accounts;
+// M3 R6: a protection rule's merge rule.
+mod merge_rules;
 mod moves;
 mod operator;
 
 pub use forge_db::namespaces::MoveOutcome;
+pub use merge_rules::MergeRuleAsk;
 pub use moves::{MoveRequest, Released, MOVE_ATTEMPTS};
 
 use forge_auth::{
@@ -57,7 +60,7 @@ pub use forge_db::members::{MemberRow, MAX_PAGE as MAX_MEMBER_PAGE};
 pub use forge_db::projects::{CreatedProject, Deletion, VisibilityOutcome};
 /// A protection rule's state as a route loader reads it.
 pub use forge_db::protected_refs::RuleState as ProtectionRuleState;
-pub use forge_db::protected_refs::{RuleChange, StoredRule};
+pub use forge_db::protected_refs::{MergeRuleOutcome, RuleChange, StoredRule};
 
 /// The parent of a new project as a viewer sees it (the `POST
 /// /api/v1/projects` loader).

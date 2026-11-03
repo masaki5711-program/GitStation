@@ -536,6 +536,22 @@
     "word": "fixed"
   },
   {
+    "action": "ProtectedRefManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "RepoBrowse",
     "method": "GET",
     "path": "/api/v1/projects/{id}/repository/blame",

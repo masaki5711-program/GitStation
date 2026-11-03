@@ -2414,6 +2414,38 @@
         ],
         "type": "object"
       },
+      "PutMergeRule": {
+        "additionalProperties": false,
+        "description": "`PUT …/merge-rule` (absent fields: off / 0).",
+        "properties": {
+          "direct_push_forbidden": {
+            "description": "Pushes may not create or move the branch; merges still may.",
+            "type": "boolean"
+          },
+          "require_resolved_discussions": {
+            "description": "Every discussion of the merge request must be resolved.",
+            "type": "boolean"
+          },
+          "require_work_item_link": {
+            "description": "Not available until work items exist (M3 I1): `true` is refused\n(FG-WEB-0006 `rule=unavailable_until_i1`).",
+            "type": "boolean"
+          },
+          "required_approvals": {
+            "description": "The minimum counted approvals of a merge into the branch, 0..=20.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "required_checks": {
+            "description": "Checks that must have succeeded on the merge request's head, at\nmost 20, each `ci/…`, `kanflow/…` or `forge/…` (`ext/…` is refused,\nFG-REVIEW-0016).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "PutMergeSettings": {
         "additionalProperties": false,
         "description": "`PUT …/merge-settings` (every field: the settings are replaced).",
@@ -6700,6 +6732,110 @@
         "summary": "Change a rule's minimum push role (Maintainer; never above the caller's role)",
         "x-forge-action": "ProtectedRefManage",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_protected_refs_rule_id_merge_rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Remove a protected branch rule's merge conditions (people only; Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_protected_refs_rule_id_merge_rule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutMergeRule"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedRefBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Set a protected branch rule's merge conditions: minimum approvals, required checks, resolved discussions, the direct-push ban (people only; Maintainer; never above the caller's role)",
+        "x-forge-action": "ProtectedRefManage",
+        "x-forge-max-body-bytes": 8192
       }
     },
     "/api/v1/projects/{id}/repository/blame": {

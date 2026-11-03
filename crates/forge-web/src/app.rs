@@ -653,7 +653,7 @@ fn content_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
 /// the rule's level as loaded, and decided again inside its transaction
 /// (forge-hosting) on what it locks.
 fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
-    use routes::{members as m, protected_refs as pr};
+    use routes::{members as m, protected_ref_merge_rules as pmr, protected_refs as pr};
     registry
         .route_with(
             Verb::Get,
@@ -771,6 +771,26 @@ fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
             pr::delete,
         )
         .responds_no_content(Verb::Delete, pr::ONE)
+        // M3 R6 (ADR-0024 §12): a rule's merge conditions.
+        .route_with_body(
+            Verb::Put,
+            pmr::MERGE_RULE,
+            Action::ProtectedRefManage,
+            "Set a protected branch rule's merge conditions: minimum approvals, required checks, resolved discussions, the direct-push ban (people only; Maintainer; never above the caller's role)",
+            pmr::MAX_BODY,
+            pmr::MergeRuleOf,
+            pmr::put,
+        )
+        .responds::<pr::ProtectedRefBody>(Verb::Put, pmr::MERGE_RULE)
+        .route_with(
+            Verb::Delete,
+            pmr::MERGE_RULE,
+            Action::ProtectedRefManage,
+            "Remove a protected branch rule's merge conditions (people only; Maintainer; never above the caller's role)",
+            pmr::MergeRuleOf,
+            pmr::delete,
+        )
+        .responds_no_content(Verb::Delete, pmr::MERGE_RULE)
 }
 
 /// Merge requests (M3 R1a, ADR-0024): the list decided on the project,
