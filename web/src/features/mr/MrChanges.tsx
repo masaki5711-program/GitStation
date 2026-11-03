@@ -5,7 +5,11 @@
 // (its old number, the old path), an added or context line the new side (its
 // new number, the new path). A version whose refs were purged has no diff to
 // show: only the explanation.
-import { useState } from 'react';
+//
+// Each open comment box has its own mutation (keyed by its line), so one
+// line's sending state never shows on another; when a box closes (cancel or
+// sent) the focus goes back to that line's button.
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -15,6 +19,7 @@ import {
   useVersions,
 } from '../../api/mergeRequests';
 import type { Discussion, DiffFile, Position, Version } from '../../api/types';
+import repo from '../../pages/repo/Repo.module.css';
 import { Loading } from '../../components/Loading';
 import { QueryError } from '../../components/QueryError';
 import { DiffView, type DiffAnnotations, type LineRow } from '../DiffView';
@@ -90,9 +95,20 @@ function VersionChanges({
   const { t } = useTranslation();
   const diff = useVersionDiff(projectId, iid, version);
   const threads = useDiscussions(projectId, iid);
-  const comment = useAddComment(projectId, iid);
   /** The line whose comment box is open (its position key). */
   const [openAt, setOpenAt] = useState<string | null>(null);
+  /** The line whose button takes the focus once its box has closed. */
+  const [focusAt, setFocusAt] = useState<string | null>(null);
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  useEffect(() => {
+    if (focusAt === null || openAt === focusAt) return;
+    buttons.current.get(focusAt)?.focus();
+    setFocusAt(null);
+  }, [focusAt, openAt]);
+  const close = (k: string) => {
+    setOpenAt(null);
+    setFocusAt(k);
+  };
 
   if (diff.isPending) return <Loading />;
   if (diff.isError) {
@@ -126,13 +142,17 @@ function VersionChanges({
       const k = keyOf(p);
       return (
         <button
+          ref={(el) => {
+            if (el === null) buttons.current.delete(k);
+            else buttons.current.set(k, el);
+          }}
           type="button"
           className={styles.lineButton}
           aria-label={t('mr.diff.commentOn', { where: where(p) })}
           aria-expanded={openAt === k}
           onClick={() => {
-            comment.reset();
-            setOpenAt(openAt === k ? null : k);
+            if (openAt === k) close(k);
+            else setOpenAt(k);
           }}
         />
       );
@@ -157,25 +177,14 @@ function VersionChanges({
             />
           ))}
           {openAt === k && (
-            <CommentForm
+            <LineCommentBox
+              key={k}
+              projectId={projectId}
+              iid={iid}
+              position={p}
               label={t('mr.diff.yourComment', { where: where(p) })}
-              submitLabel={t('mr.comment.submit')}
-              pending={comment.isPending}
-              error={comment.isError ? comment.error : null}
-              autoFocus
-              onCancel={() => {
-                setOpenAt(null);
-              }}
-              onSend={(body, done) => {
-                comment.mutate(
-                  { body, position: p },
-                  {
-                    onSuccess: () => {
-                      done();
-                      setOpenAt(null);
-                    },
-                  },
-                );
+              onClose={() => {
+                close(k);
               }}
             />
           )}
@@ -187,6 +196,11 @@ function VersionChanges({
   return (
     <>
       <p className={styles.explain}>{t('mr.diff.version', { version })}</p>
+      {threads.data?.truncated === true && (
+        <p className={repo.warning} role="status" data-testid="mr-threads-truncated">
+          {t('mr.threads.truncated')}
+        </p>
+      )}
       {threads.isError && (
         <QueryError
           error={threads.error}
@@ -202,5 +216,45 @@ function VersionChanges({
         annotations={annotations}
       />
     </>
+  );
+}
+
+/** One line's comment box with its own mutation: its pending and error
+ * state belong to this line only. */
+function LineCommentBox({
+  projectId,
+  iid,
+  position,
+  label,
+  onClose,
+}: {
+  projectId: number;
+  iid: number;
+  position: Position;
+  label: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const comment = useAddComment(projectId, iid);
+  return (
+    <CommentForm
+      label={label}
+      submitLabel={t('mr.comment.submit')}
+      pending={comment.isPending}
+      error={comment.isError ? comment.error : null}
+      autoFocus
+      onCancel={onClose}
+      onSend={(body, done) => {
+        comment.mutate(
+          { body, position },
+          {
+            onSuccess: () => {
+              done();
+              onClose();
+            },
+          },
+        );
+      }}
+    />
   );
 }

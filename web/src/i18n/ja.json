@@ -266,9 +266,10 @@
     "change": "変更",
     "lineAdded": "追加",
     "lineRemoved": "削除",
-    "show": "差分を表示（{{count}} 行）",
     "files": "変更されたファイル: {{count}}",
-    "truncated": "変更が多いため、差分の一部しか表示していません。"
+    "truncated": "変更が多いため、差分の一部しか表示していません。",
+    "show_one": "差分を表示（{{count}} 行）",
+    "show_other": "差分を表示（{{count}} 行）"
   },
   "markdown": {
     "externalImage": "外部の画像（表示しません）",
@@ -472,10 +473,21 @@
       "next": {
         "firstUnresolved": "最初の未解決スレッドを開く",
         "changes": "変更を見る",
-        "push": "修正を push する",
-        "wait": "待つ"
+        "push": "修正を push する"
       },
-      "checking": "マージできるか確かめています…"
+      "checking": "マージできるか確かめています…",
+      "hint": {
+        "approvals": "レビューする人の承認を待っています。",
+        "owners": "そのファイルの担当者の承認を待っています。",
+        "checks": "チェックの結果を待っています。",
+        "merging": "マージが終わるのを待っています。",
+        "maintainer": "Maintainer の承認を待っています。",
+        "retry": "しばらくしてから開き直してください。続くときは管理者に知らせてください。",
+        "draft": "準備ができたら、作成した人が下書きを外します。",
+        "notOpen": "さらに変更を出すときは、新しい変更依頼を作ります。",
+        "codeowners": "CODEOWNERS のファイルが直るまでマージできません。",
+        "nothing": "取り込み先に同じ変更が既に入っています。"
+      }
     },
     "number": "!{{iid}}",
     "draft": "下書き",
@@ -492,9 +504,9 @@
       "new": "変更依頼を作る",
       "filterLabel": "表示する変更依頼",
       "empty": "ここに表示する変更依頼はありません。",
-      "emptyLead": "ブランチの変更を取り込んでほしいときは、変更依頼を作ります。",
       "older": "古い変更依頼を見る",
-      "newest": "最新に戻る"
+      "newest": "最新に戻る",
+      "emptyOpen": "開いている変更依頼はありません。"
     },
     "new": {
       "title": "新しい変更依頼",
@@ -522,7 +534,8 @@
     "threads": {
       "title": "スレッド",
       "empty": "まだコメントはありません。",
-      "truncated": "スレッドが多いため、一部だけを表示しています。"
+      "truncated": "スレッドが多いため、一部だけを表示しています。",
+      "resolvedCount": "解決済み {{n}} 件"
     },
     "thread": {
       "title": "{{author}} のスレッド",
@@ -534,7 +547,9 @@
       "replyLabel": "返信",
       "replySubmit": "返信を送る",
       "outdated": "この行は後の版で書き換えられました。",
-      "outdatedUnknown": "後の版でこの行が変わったかを確かめられませんでした。もう一度見てください。"
+      "outdatedUnknown": "後の版でこの行が変わったかを確かめられませんでした。もう一度見てください。",
+      "resolvedNotice": "スレッドを解決にしました。",
+      "reopenedNotice": "スレッドを未解決に戻しました。"
     },
     "comment": {
       "label": "コメントを書く",

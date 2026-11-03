@@ -521,7 +521,18 @@ async function main() {
     if (!focused.startsWith('thread-')) problems.push(`mr next: the focus is on "${focused}", not a thread`);
     await page.getByRole('button', { name: 'Resolve thread' }).click();
     await statusIs('Ready to merge', 'mr after resolve');
-    await page.getByText('Resolved', { exact: true }).waitFor();
+    // The resolved thread is folded behind its count, which takes the focus.
+    await page.getByText('Resolved threads: 1', { exact: true }).waitFor();
+    const afterResolve = await page.evaluate(() => document.activeElement?.textContent ?? '');
+    if (afterResolve !== 'Resolved threads: 1') problems.push(`mr resolve: the focus is on "${afterResolve}"`);
+    // Cancel on a line comment gives the focus back to that line's button.
+    await page.goto(`${base}/acme/forge-web/-/pull/2/changes`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Comment on line 2 of src/lib.rs' }).click();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    const back = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '');
+    if (back !== 'Comment on line 2 of src/lib.rs') problems.push(`mr cancel: the focus is on "${back}"`);
+    await page.goto(`${base}/acme/forge-web/-/pull/2`, { waitUntil: 'networkidle' });
+    await page.getByText('Resolved threads: 1', { exact: true }).waitFor();
     await check('44-mr-resolved');
     await page.setViewportSize({ width: 375, height: 800 });
     for (const [path, name] of [

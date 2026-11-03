@@ -330,7 +330,8 @@ describe('threads', () => {
     await waitFor(async () => {
       expect((await statusLine()).textContent).toBe('Ready to merge');
     });
-    expect(within(thread).getByText('Resolved')).toBeTruthy();
+    // It moved under the resolved summary (a new element there).
+    expect(within(screen.getByTestId('thread-2')).getByText('Resolved')).toBeTruthy();
     expect(
       server.to('POST', `${MR_API}/3/discussions/2/resolve`)[0]?.headers.get('X-GitStation-CSRF'),
     ).toBe(SESSION.csrf_token);
@@ -346,9 +347,15 @@ describe('threads', () => {
         return json(200, discussion(2));
       },
     });
-    const thread = await screen.findByTestId('thread-2');
+    // Resolved threads are folded behind their count.
+    fireEvent.click(await screen.findByText('Resolved threads: 1'));
+    const thread = screen.getByTestId('thread-2');
     fireEvent.click(within(thread).getByRole('button', { name: 'Reopen thread' }));
-    expect(await within(thread).findByRole('button', { name: 'Resolve thread' })).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId('thread-2')).getByRole('button', { name: 'Resolve thread' }),
+      ).toBeTruthy();
+    });
     expect(server.to('POST', `${MR_API}/3/discussions/2/unresolve`)).toHaveLength(1);
   });
 

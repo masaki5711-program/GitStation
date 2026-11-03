@@ -18,7 +18,8 @@ export interface BlockedReason {
 // keys literal here while the caller does the translating.
 const t = <K extends string>(key: K): K => key;
 
-/** The word for each `next` (shown beside the line); `none`: nothing to press. */
+/** The word for each `next` that has something to press (shown beside the
+ * line); `wait` / `none`: null, and the line's hint says what happens next. */
 export function nextKey(next: NextTarget): string | null {
   switch (next) {
     case 'first_unresolved':
@@ -27,8 +28,8 @@ export function nextKey(next: NextTarget): string | null {
       return t('mr.status.next.changes');
     case 'push':
       return t('mr.status.next.push');
+    // Nothing to press: the line's hint (statusHint) names what is waited for.
     case 'wait':
-      return t('mr.status.next.wait');
     case 'none':
       return null;
   }
@@ -139,5 +140,53 @@ export function blockedReason(status: MergeStatus): BlockedReason {
     }
     default:
       return generic();
+  }
+}
+
+/** For a line with nothing to press: what (or who) is waited for, or what
+ * to do instead. Null when the line says it all or something can be pressed. */
+export function statusHint(status: MergeStatus): string | null {
+  if (status.mergeable) return null;
+  switch (status.reasons[0]?.reason) {
+    case 'approvals_missing':
+      return t('mr.status.hint.approvals');
+    case 'codeowner_approval_missing':
+      return t('mr.status.hint.owners');
+    case 'required_check_missing':
+      return t('mr.status.hint.checks');
+    case 'merge_in_progress':
+      return t('mr.status.hint.merging');
+    case 'config_change_needs_maintainer_approval':
+      return t('mr.status.hint.maintainer');
+    case 'changed_paths_unknown':
+      return t('mr.status.hint.retry');
+    case 'draft':
+      return t('mr.status.hint.draft');
+    case 'not_open':
+      return t('mr.status.hint.notOpen');
+    case 'codeowners_invalid':
+      return t('mr.status.hint.codeowners');
+    case 'nothing_to_merge':
+      return t('mr.status.hint.nothing');
+    default:
+      return null;
+  }
+}
+
+export type StatusTone = 'ready' | 'blocked' | 'info';
+
+/** The colour of the line: `ready` (green), `blocked` (orange: someone has to
+ * act), `info` (neutral: it is moving, or it is not a merge question). */
+export function statusTone(status: MergeStatus): StatusTone {
+  if (status.mergeable) return 'ready';
+  switch (status.reasons[0]?.reason) {
+    case 'mergeability_unknown':
+    case 'merge_in_progress':
+    case 'draft':
+    case 'not_open':
+    case 'nothing_to_merge':
+      return 'info';
+    default:
+      return 'blocked';
   }
 }

@@ -8,7 +8,8 @@ import { useMergeRequests, type MrState } from '../../../api/mergeRequests';
 import type { MergeRequest } from '../../../api/types';
 import { Loading } from '../../../components/Loading';
 import controls from '../../../components/controls.module.css';
-import { formatDate, mrStateLabel } from '../../../features/labels';
+import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
+import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { newPullUrl, pullUrl, pullsUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
@@ -71,11 +72,16 @@ export function MergeRequestsScreen({ projectId, project }: { projectId: number;
       {page.isSuccess &&
         (page.data.merge_requests.length === 0 ? (
           <section data-testid="mr-empty" className={styles.empty}>
-            <p>{t('mr.list.empty')}</p>
-            <p>{t('mr.list.emptyLead')}</p>
-            <p>
-              <Link to={newPullUrl(project)}>{t('mr.list.new')}</Link>
-            </p>
+            {state === 'open' ? (
+              <>
+                <p>{t('mr.list.emptyOpen')}</p>
+                <Link to={newPullUrl(project)} className={controls.primary}>
+                  {t('mr.list.new')}
+                </Link>
+              </>
+            ) : (
+              <p>{t('mr.list.empty')}</p>
+            )}
           </section>
         ) : (
           <>
@@ -106,18 +112,20 @@ function MrList({ project, items }: { project: string; items: MergeRequest[] }) 
       {sorted.map((m) => (
         <li key={m.iid} className={styles.item}>
           <span className={styles.itemTitle}>
+            <StateBadge tone={mrTone(m.state)}>{mrStateLabel(t, m.state)}</StateBadge>
+            {m.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}
             <Link to={pullUrl(project, m.iid)} className={repo.subject}>
               {m.title}
             </Link>
-            {m.state !== 'open' && <span className={repo.badge}>{mrStateLabel(t, m.state)}</span>}
-            {m.draft && <span className={repo.badge}>{t('mr.draft')}</span>}
           </span>
           <span className={repo.hint}>
-            {t('mr.number', { iid: m.iid })} {'·'}{' '}
-            {t('mr.opened', {
-              author: m.author.display_name,
-              date: formatDate(m.created_at, i18n.language),
-            })}{' '}
+            <span className={styles.number}>{t('mr.number', { iid: m.iid })}</span> {'·'}{' '}
+            <span title={formatDateTime(m.created_at, i18n.language)}>
+              {t('mr.opened', {
+                author: m.author.display_name,
+                date: formatDate(m.created_at, i18n.language),
+              })}
+            </span>{' '}
             {'·'} {t('mr.branches', { source: m.source_branch, target: m.target_branch })}
           </span>
         </li>

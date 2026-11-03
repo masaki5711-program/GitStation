@@ -3,19 +3,22 @@
 // and threads) and Changes. The status line and the threads read on their
 // own: a failure of one shows in its place only, with its request_id.
 // Approve and merge are U2.
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import { useAddComment, useDiscussions, useMergeRequest } from '../../../api/mergeRequests';
-import type { MergeRequest } from '../../../api/types';
+import type { Discussion, MergeRequest } from '../../../api/types';
 import { Loading } from '../../../components/Loading';
 import { QueryError } from '../../../components/QueryError';
-import { formatDate, mrStateLabel } from '../../../features/labels';
+import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
 import { CommentForm } from '../../../features/mr/CommentForm';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
-import { StatusLine } from '../../../features/mr/StatusLine';
+import { Announcer } from '../../../features/mr/announce';
+import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
+import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
 import { pullUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
@@ -62,7 +65,7 @@ export function MergeRequestScreen({
         };
 
   return (
-    <>
+    <Announcer>
       <Header mr={mr.data} />
       <StatusLine
         projectId={projectId}
@@ -107,7 +110,7 @@ export function MergeRequestScreen({
           />
         </section>
       )}
-    </>
+    </Announcer>
   );
 }
 
@@ -116,12 +119,13 @@ function Header({ mr }: { mr: MergeRequest }) {
   return (
     <header>
       <h1 className={repo.title}>
-        {mr.title} <span className={repo.titleNote}>{t('mr.number', { iid: mr.iid })}</span>
+        {mr.title}{' '}
+        <span className={`${repo.titleNote} ${styles.number}`}>{t('mr.number', { iid: mr.iid })}</span>
       </h1>
       <p className={repo.meta}>
-        <span className={repo.badge}>{mrStateLabel(t, mr.state)}</span>
-        {mr.draft && <span className={repo.badge}>{t('mr.draft')}</span>}
-        <span>
+        <StateBadge tone={mrTone(mr.state)}>{mrStateLabel(t, mr.state)}</StateBadge>
+        {mr.draft && <StateBadge tone="draft">{t('mr.draft')}</StateBadge>}
+        <span title={formatDateTime(mr.created_at, i18n.language)}>
           {t('mr.opened', {
             author: mr.author.display_name,
             date: formatDate(mr.created_at, i18n.language),
@@ -130,6 +134,15 @@ function Header({ mr }: { mr: MergeRequest }) {
         <span>{t('mr.branches', { source: mr.source_branch, target: mr.target_branch })}</span>
       </p>
     </header>
+  );
+}
+
+function isFocusRequest(state: unknown): boolean {
+  return (
+    typeof state === 'object' &&
+    state !== null &&
+    'focus' in state &&
+    state.focus === FOCUS_FIRST_UNRESOLVED.focus
   );
 }
 
@@ -145,7 +158,60 @@ function Overview({
   threads: ReturnType<typeof useDiscussions>;
 }) {
   const { t } = useTranslation();
+  const location = useLocation();
   const comment = useAddComment(projectId, mr.iid);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const summary = useRef<HTMLElement>(null);
+  const arrived = useRef<string | null>(null);
+  /** After a resolve the thread moves under the summary; after a reopen, back. */
+  const [focusAfter, setFocusAfter] = useState<{ id: number; resolved: boolean } | null>(null);
+  const all = threads.data?.discussions ?? [];
+  const open = all.filter((d) => !d.resolved);
+  const done = all.filter((d) => d.resolved);
+
+  // Arriving from "next" on another tab: the first unresolved thread, or the
+  // threads' section when they could not be read.
+  useEffect(() => {
+    if (!isFocusRequest(location.state) || arrived.current === location.key) return;
+    if (threads.isPending) return;
+    arrived.current = location.key;
+    const first = threads.data?.discussions.find((d) => !d.resolved);
+    const target = first === undefined ? null : document.getElementById(threadElementId(first.id));
+    // After the layout's own move to the h1 on a new address (its effect
+    // runs after this one).
+    const timer = window.setTimeout(() => {
+      (target ?? heading.current)?.focus();
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [location, threads.isPending, threads.data]);
+
+  // Once the list shows the thread in its new place (the refetch may render
+  // after the mutation's callback).
+  useEffect(() => {
+    if (focusAfter === null) return;
+    const now = threads.data?.discussions.find((d) => d.id === focusAfter.id);
+    if (now === undefined || now.resolved !== focusAfter.resolved) return;
+    if (focusAfter.resolved) summary.current?.focus();
+    else document.getElementById(threadElementId(focusAfter.id))?.focus();
+    setFocusAfter(null);
+  }, [focusAfter, threads.data]);
+
+  const thread = (d: Discussion) => (
+    <DiscussionThread
+      key={d.id}
+      projectId={projectId}
+      iid={mr.iid}
+      project={project}
+      refName={mr.target_branch}
+      discussion={d}
+      onToggled={(id, resolved) => {
+        setFocusAfter({ id, resolved });
+      }}
+    />
+  );
+
   return (
     <>
       <section aria-labelledby="mr-description-title">
@@ -165,7 +231,7 @@ function Overview({
         )}
       </section>
       <section aria-labelledby="mr-threads-title">
-        <h2 id="mr-threads-title" className={repo.sectionTitle}>
+        <h2 id="mr-threads-title" ref={heading} tabIndex={-1} className={repo.sectionTitle}>
           {t('mr.threads.title')}
         </h2>
         {threads.isPending && <Loading />}
@@ -184,19 +250,16 @@ function Overview({
                 {t('mr.threads.truncated')}
               </p>
             )}
-            {threads.data.discussions.length === 0 ? (
-              <p className={repo.hint}>{t('mr.threads.empty')}</p>
-            ) : (
-              threads.data.discussions.map((d) => (
-                <DiscussionThread
-                  key={d.id}
-                  projectId={projectId}
-                  iid={mr.iid}
-                  project={project}
-                  refName={mr.target_branch}
-                  discussion={d}
-                />
-              ))
+            {all.length === 0 && <p className={repo.hint}>{t('mr.threads.empty')}</p>}
+            {/* Unresolved first: they are what is left to do. */}
+            {open.map(thread)}
+            {done.length > 0 && (
+              <details className={styles.resolvedGroup}>
+                <summary ref={summary} className={styles.resolvedSummary}>
+                  {t('mr.threads.resolvedCount', { n: done.length })}
+                </summary>
+                {done.map(thread)}
+              </details>
             )}
           </>
         )}
@@ -205,8 +268,8 @@ function Overview({
           submitLabel={t('mr.comment.submit')}
           pending={comment.isPending}
           error={comment.isError ? comment.error : null}
-          onSend={(body, done) => {
-            comment.mutate({ body }, { onSuccess: done });
+          onSend={(body, sent) => {
+            comment.mutate({ body }, { onSuccess: sent });
           }}
         />
       </section>

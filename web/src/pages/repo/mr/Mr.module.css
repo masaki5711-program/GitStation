@@ -72,3 +72,8 @@
   gap: var(--gs-space-3);
   margin-top: var(--gs-space-4);
 }
+
+/* !iid: digits of one width, so a list of numbers lines up. */
+.number {
+  font-variant-numeric: tabular-nums;
+}

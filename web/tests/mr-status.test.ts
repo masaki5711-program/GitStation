@@ -3,7 +3,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MergeStatus } from '../src/api/types';
-import { blockedReason, type NextTarget } from '../src/features/mr/blockedReason';
+import {
+  blockedReason,
+  nextKey,
+  statusHint,
+  statusTone,
+  type NextTarget,
+} from '../src/features/mr/blockedReason';
 
 function status(
   reasons: { reason: string; detail: string | null }[],
@@ -209,5 +215,55 @@ describe('blockedReason: next never points at approve or merge (U2)', () => {
     for (const n of names) {
       expect(allowed).toContain(plain(n).next);
     }
+  });
+});
+
+describe('statusHint / statusTone (U1 review: name what is waited for)', () => {
+  it.each([
+    ['approvals_missing', 'mr.status.hint.approvals'],
+    ['codeowner_approval_missing', 'mr.status.hint.owners'],
+    ['required_check_missing', 'mr.status.hint.checks'],
+    ['merge_in_progress', 'mr.status.hint.merging'],
+    ['config_change_needs_maintainer_approval', 'mr.status.hint.maintainer'],
+    ['changed_paths_unknown', 'mr.status.hint.retry'],
+    ['draft', 'mr.status.hint.draft'],
+    ['not_open', 'mr.status.hint.notOpen'],
+    ['codeowners_invalid', 'mr.status.hint.codeowners'],
+    ['nothing_to_merge', 'mr.status.hint.nothing'],
+    ['mergeability_unknown', null],
+    ['conflict', null],
+    ['unresolved_discussions', null],
+  ])('%s -> %s', (reason, hint) => {
+    expect(statusHint(status([{ reason, detail: null }]))).toBe(hint);
+  });
+
+  it('a mergeable status has no hint', () => {
+    expect(statusHint(status([], true))).toBeNull();
+  });
+
+  it('every wait and none reason has a hint (nothing to press is never silent)', () => {
+    const names = [
+      'not_open', 'draft', 'merge_in_progress', 'nothing_to_merge', 'codeowners_invalid',
+      'config_change_needs_maintainer_approval', 'changed_paths_unknown',
+    ];
+    for (const n of names) expect(statusHint(status([{ reason: n, detail: null }]))).not.toBeNull();
+    expect(statusHint(status([{ reason: 'approvals_missing', detail: 'rule=r required=1 counted=0' }]))).not.toBeNull();
+  });
+
+  it('there is no bare "wait" word any more', () => {
+    expect(nextKey('wait')).toBeNull();
+  });
+
+  it.each([
+    [[], true, 'ready'],
+    [[{ reason: 'mergeability_unknown', detail: null }], false, 'info'],
+    [[{ reason: 'merge_in_progress', detail: null }], false, 'info'],
+    [[{ reason: 'draft', detail: null }], false, 'info'],
+    [[{ reason: 'not_open', detail: null }], false, 'info'],
+    [[{ reason: 'nothing_to_merge', detail: null }], false, 'info'],
+    [[{ reason: 'conflict', detail: null }], false, 'blocked'],
+    [[{ reason: 'approvals_missing', detail: 'rule=r required=1 counted=0' }], false, 'blocked'],
+  ] as const)('tone of %j is %s', (reasons, mergeable, tone) => {
+    expect(statusTone(status([...reasons], mergeable))).toBe(tone);
   });
 });

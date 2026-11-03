@@ -37,6 +37,12 @@ export function CommentForm({
   const box = useRef<HTMLTextAreaElement>(null);
   const [body, setBody] = useState('');
   const [empty, setEmpty] = useState(false);
+  const [refused, setRefused] = useState(0);
+  // After the render that describes the box with the error: then the focus
+  // reads it.
+  useEffect(() => {
+    if (refused > 0) box.current?.focus();
+  }, [refused]);
   useEffect(() => {
     if (autoFocus === true) box.current?.focus();
   }, [autoFocus]);
@@ -48,7 +54,7 @@ export function CommentForm({
     const text = body.trim();
     if (text === '') {
       setEmpty(true);
-      box.current?.focus();
+      setRefused((n) => n + 1);
       return;
     }
     setEmpty(false);
@@ -81,7 +87,9 @@ export function CommentForm({
         {t('mr.comment.help')}
       </p>
       {empty && (
-        <p id={errorId} className={controls.fieldError} role="alert">
+        // No role=alert: the box takes the focus and reads this as its
+        // description, so the error is said once.
+        <p id={errorId} className={controls.fieldError}>
           {t('mr.comment.required')}
         </p>
       )}

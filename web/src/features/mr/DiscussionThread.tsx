@@ -3,8 +3,10 @@
 // demand. An inline thread names its `path:line` and says when a later
 // version changed that line (`outdated`) or when that could not be told
 // (`outdated_unknown`: look again). The element takes the focus when the
-// status line's "next" points here (`threadElementId`).
-import { useId, useState } from 'react';
+// status line's "next" points here (`threadElementId`), and after a reply is
+// sent; closing the reply box without sending puts it back on Reply. The
+// article is described by its state and `path:line`.
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useReply, useResolve, useUnresolve } from '../../api/mergeRequests';
@@ -13,7 +15,9 @@ import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { formatDateTime } from '../labels';
 import { MarkdownView } from '../MarkdownView';
+import { useAnnounce } from './announce';
 import { CommentForm } from './CommentForm';
+import { StateBadge } from './StateBadge';
 import styles from './Mr.module.css';
 
 /** The DOM id of a thread (the status line's "next" focuses it). */
@@ -26,6 +30,7 @@ export function DiscussionThread({
   refName,
   discussion,
   headingLevel = 3,
+  onToggled,
 }: {
   projectId: number;
   iid: number;
@@ -35,10 +40,24 @@ export function DiscussionThread({
   discussion: Discussion;
   /** 3 on the Overview (under "Threads"); 4 inside a diff (under the file's h3). */
   headingLevel?: 3 | 4;
+  /** After the server resolved (true) or reopened (false) it. */
+  onToggled?: (id: number, resolved: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
   const headingId = useId();
+  const stateId = useId();
+  const positionId = useId();
+  const announce = useAnnounce();
+  const article = useRef<HTMLElement>(null);
+  const replyButton = useRef<HTMLButtonElement>(null);
   const [replying, setReplying] = useState(false);
+  /** Where the focus goes once the reply box has closed. */
+  const [focusAfter, setFocusAfter] = useState<'reply' | 'thread' | null>(null);
+  useEffect(() => {
+    if (replying || focusAfter === null) return;
+    (focusAfter === 'reply' ? replyButton.current : article.current)?.focus();
+    setFocusAfter(null);
+  }, [replying, focusAfter]);
   const reply = useReply(projectId, iid);
   const resolve = useResolve(projectId, iid);
   const unresolve = useUnresolve(projectId, iid);
@@ -48,9 +67,11 @@ export function DiscussionThread({
 
   return (
     <article
+      ref={article}
       id={threadElementId(discussion.id)}
       tabIndex={-1}
       aria-labelledby={headingId}
+      aria-describedby={position === null ? stateId : `${stateId} ${positionId}`}
       className={discussion.resolved ? `${styles.thread} ${styles.resolved}` : styles.thread}
       data-testid={`thread-${discussion.id}`}
     >
@@ -59,13 +80,13 @@ export function DiscussionThread({
           {t('mr.thread.title', { author: discussion.author.display_name })}
         </Heading>
         {position !== null && (
-          <code className={styles.position}>
+          <code id={positionId} className={styles.position}>
             {position.path}:{position.line}
           </code>
         )}
-        <span className={discussion.resolved ? styles.badgeDone : styles.badgeOpen}>
+        <StateBadge id={stateId} tone={discussion.resolved ? 'resolved' : 'unresolved'}>
           {discussion.resolved ? t('mr.thread.resolved') : t('mr.thread.unresolved')}
-        </span>
+        </StateBadge>
       </header>
       {(discussion.outdated || discussion.outdated_unknown) && (
         <p className={styles.outdated}>
@@ -94,6 +115,7 @@ export function DiscussionThread({
       <div className={styles.threadActions}>
         {!replying && (
           <button
+            ref={replyButton}
             type="button"
             className={controls.button}
             onClick={() => {
@@ -109,7 +131,15 @@ export function DiscussionThread({
           aria-disabled={toggle.isPending ? 'true' : undefined}
           onClick={() => {
             if (toggle.isPending) return;
-            toggle.mutate(discussion.id);
+            const resolving = !discussion.resolved;
+            toggle.mutate(discussion.id, {
+              onSuccess: () => {
+                announce(
+                  resolving ? t('mr.thread.resolvedNotice') : t('mr.thread.reopenedNotice'),
+                );
+                onToggled?.(discussion.id, resolving);
+              },
+            });
           }}
         >
           {discussion.resolved ? t('mr.thread.unresolve') : t('mr.thread.resolve')}
@@ -125,6 +155,7 @@ export function DiscussionThread({
           autoFocus
           onCancel={() => {
             setReplying(false);
+            setFocusAfter('reply');
           }}
           onSend={(body, done) => {
             reply.mutate(
@@ -133,6 +164,7 @@ export function DiscussionThread({
                 onSuccess: () => {
                   done();
                   setReplying(false);
+                  setFocusAfter('thread');
                 },
               },
             );

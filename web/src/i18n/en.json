@@ -266,9 +266,10 @@
     "change": "Change",
     "lineAdded": "added",
     "lineRemoved": "removed",
-    "show": "Show the diff ({{count}} lines)",
     "files": "Changed files: {{count}}",
-    "truncated": "There are too many changes; only part of the diff is shown."
+    "truncated": "There are too many changes; only part of the diff is shown.",
+    "show_one": "Show the diff ({{count}} line)",
+    "show_other": "Show the diff ({{count}} lines)"
   },
   "markdown": {
     "externalImage": "External image (not shown)",
@@ -472,10 +473,21 @@
       "next": {
         "firstUnresolved": "Open the first unresolved thread",
         "changes": "See the changes",
-        "push": "Push a fix",
-        "wait": "Wait"
+        "push": "Push a fix"
       },
-      "checking": "Checking whether it can be merged…"
+      "checking": "Checking whether it can be merged…",
+      "hint": {
+        "approvals": "Waiting for reviewers to approve.",
+        "owners": "Waiting for an owner of those files to approve.",
+        "checks": "Waiting for the check result.",
+        "merging": "Waiting for the merge to finish.",
+        "maintainer": "Waiting for a maintainer to approve.",
+        "retry": "Open this page again in a while. If it stays, tell an administrator.",
+        "draft": "The author takes it out of draft when it is ready.",
+        "notOpen": "To propose more changes, create a new merge request.",
+        "codeowners": "It cannot be merged until the CODEOWNERS file is fixed.",
+        "nothing": "The target already has these changes."
+      }
     },
     "number": "!{{iid}}",
     "draft": "Draft",
@@ -492,9 +504,9 @@
       "new": "New merge request",
       "filterLabel": "Show merge requests",
       "empty": "There are no merge requests here.",
-      "emptyLead": "To ask for the changes of a branch to be merged, create a merge request.",
       "older": "Older merge requests",
-      "newest": "Back to the newest"
+      "newest": "Back to the newest",
+      "emptyOpen": "There are no open merge requests."
     },
     "new": {
       "title": "New merge request",
@@ -522,7 +534,8 @@
     "threads": {
       "title": "Threads",
       "empty": "No comments yet.",
-      "truncated": "There are too many threads; only part of them is shown."
+      "truncated": "There are too many threads; only part of them is shown.",
+      "resolvedCount": "Resolved threads: {{n}}"
     },
     "thread": {
       "title": "Thread by {{author}}",
@@ -534,7 +547,9 @@
       "replyLabel": "Your reply",
       "replySubmit": "Send reply",
       "outdated": "This line was changed by a later version.",
-      "outdatedUnknown": "Could not tell whether a later version changed this line. Look at it again."
+      "outdatedUnknown": "Could not tell whether a later version changed this line. Look at it again.",
+      "resolvedNotice": "Thread resolved.",
+      "reopenedNotice": "Thread reopened."
     },
     "comment": {
       "label": "Add a comment",

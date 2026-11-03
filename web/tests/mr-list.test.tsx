@@ -102,7 +102,7 @@ describe('merge request list', () => {
     const server = mockServer(mrRoutes({ [`GET ${MR_API}`]: list([]) }));
     await renderApp({ fetch: server.fetch, path: LIST, lang: 'en' });
     const empty = await screen.findByTestId('mr-empty');
-    expect(within(empty).getByText('There are no merge requests here.')).toBeTruthy();
+    expect(within(empty).getByText('There are no open merge requests.')).toBeTruthy();
     expect(
       within(empty).getByRole('link', { name: 'New merge request' }).getAttribute('href'),
     ).toBe(NEW);
