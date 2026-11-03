@@ -26,6 +26,7 @@
   { "action": "MergeRequestMerge", "allow": 10, "deny": 22, "public": false, "git_operation": false },
   { "action": "MergeRequestApprove", "allow": 8, "deny": 20, "public": false, "git_operation": false },
   { "action": "MergeRequestUnapprove", "allow": 7, "deny": 20, "public": false, "git_operation": false },
+  { "action": "WorkItemLink", "allow": 11, "deny": 12, "public": false, "git_operation": false },
   { "action": "ApprovalRuleManage", "allow": 4, "deny": 14, "public": false, "git_operation": false },
   { "action": "MergeSettingsManage", "allow": 9, "deny": 13, "public": false, "git_operation": false },
   { "action": "CodeownersEnforcementToggle", "allow": 7, "deny": 17, "public": false, "git_operation": false },

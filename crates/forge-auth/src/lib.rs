@@ -28,6 +28,7 @@ mod matrix_rows_integrations;
 mod matrix_rows_merge;
 mod matrix_rows_people;
 mod matrix_rows_service_accounts;
+mod matrix_rows_work_items;
 mod merge_request_ctx;
 mod model;
 mod prove;
