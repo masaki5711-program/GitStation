@@ -460,7 +460,8 @@
         "changes": "Lihat perubahan",
         "push": "Push perbaikan",
         "wait": "Tunggu"
-      }
+      },
+      "checking": "Memeriksa apakah bisa digabung…"
     },
     "number": "!{{iid}}",
     "draft": "Draf",
@@ -496,6 +497,39 @@
       "titleRequired": "Masukkan judul.",
       "titleTooLong": "Judul paling banyak 255 karakter.",
       "noBranches": "Repositori ini belum punya cabang. Push sebuah cabang dulu."
+    },
+    "view": {
+      "tabsLabel": "Layar merge request",
+      "overview": "Ringkasan",
+      "changes": "Perubahan",
+      "changesLater": "Perubahan tiap versi akan ditampilkan di sini. Untuk sekarang, bandingkan kedua cabang.",
+      "compareLink": "Bandingkan cabang",
+      "description": "Deskripsi",
+      "noDescription": "Tidak ada deskripsi."
+    },
+    "threads": {
+      "title": "Utas",
+      "empty": "Belum ada komentar.",
+      "truncated": "Utas terlalu banyak; hanya sebagian yang ditampilkan."
+    },
+    "thread": {
+      "title": "Utas oleh {{author}}",
+      "resolved": "Selesai",
+      "unresolved": "Belum selesai",
+      "resolve": "Tandai selesai",
+      "unresolve": "Buka lagi",
+      "reply": "Balas",
+      "replyLabel": "Balasan Anda",
+      "replySubmit": "Kirim balasan",
+      "outdated": "Baris ini diubah oleh versi berikutnya.",
+      "outdatedUnknown": "Tidak bisa dipastikan apakah versi berikutnya mengubah baris ini. Periksa lagi."
+    },
+    "comment": {
+      "label": "Tulis komentar",
+      "help": "Markdown bisa digunakan.",
+      "submit": "Komentar",
+      "required": "Tulis komentar dulu.",
+      "sending": "Mengirim…"
     }
   }
 }

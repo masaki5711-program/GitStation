@@ -474,7 +474,8 @@
         "changes": "See the changes",
         "push": "Push a fix",
         "wait": "Wait"
-      }
+      },
+      "checking": "Checking whether it can be merged…"
     },
     "number": "!{{iid}}",
     "draft": "Draft",
@@ -510,6 +511,39 @@
       "titleRequired": "Enter a title.",
       "titleTooLong": "The title can be at most 255 characters.",
       "noBranches": "This repository has no branches yet. Push a branch first."
+    },
+    "view": {
+      "tabsLabel": "Merge request views",
+      "overview": "Overview",
+      "changes": "Changes",
+      "changesLater": "The changes of each version will be shown here. For now, compare the two branches.",
+      "compareLink": "Compare the branches",
+      "description": "Description",
+      "noDescription": "No description."
+    },
+    "threads": {
+      "title": "Threads",
+      "empty": "No comments yet.",
+      "truncated": "There are too many threads; only part of them is shown."
+    },
+    "thread": {
+      "title": "Thread by {{author}}",
+      "resolved": "Resolved",
+      "unresolved": "Unresolved",
+      "resolve": "Resolve thread",
+      "unresolve": "Reopen thread",
+      "reply": "Reply",
+      "replyLabel": "Your reply",
+      "replySubmit": "Send reply",
+      "outdated": "This line was changed by a later version.",
+      "outdatedUnknown": "Could not tell whether a later version changed this line. Look at it again."
+    },
+    "comment": {
+      "label": "Add a comment",
+      "help": "Markdown can be used.",
+      "submit": "Comment",
+      "required": "Write a comment first.",
+      "sending": "Sending…"
     }
   }
 }

@@ -1,0 +1,152 @@
+/* The merge request pieces (status line, threads, comment box). Tokens only. */
+
+.statusArea {
+  margin: 0 0 var(--gs-space-4);
+}
+
+.statusRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-4);
+}
+
+.statusRow:has(> p:empty) {
+  display: none;
+}
+
+.statusText,
+.statusReady {
+  margin: 0;
+  padding: var(--gs-space-2) var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-left: 4px solid var(--gs-brand-orange);
+  border-radius: var(--gs-radius-sm);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+  font-weight: bold;
+}
+
+.statusReady {
+  border-left-color: var(--gs-brand-teal-strong);
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.nextHint {
+  color: var(--gs-color-text-muted);
+}
+
+.thread {
+  margin: 0 0 var(--gs-space-4);
+  padding: var(--gs-space-3);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.thread:focus-visible,
+.thread:focus {
+  outline: 3px solid var(--gs-color-focus);
+  outline-offset: 2px;
+}
+
+.resolved {
+  background: var(--gs-color-background);
+}
+
+.threadHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2) var(--gs-space-3);
+}
+
+.threadTitle {
+  margin: 0;
+  font-size: var(--gs-font-size-md);
+}
+
+.position {
+  overflow-wrap: anywhere;
+}
+
+.badgeOpen,
+.badgeDone {
+  display: inline-block;
+  padding: 0 var(--gs-space-2);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-sm);
+  font-size: var(--gs-font-size-sm);
+}
+
+.badgeOpen {
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.badgeDone {
+  background: var(--gs-color-success-surface);
+  color: var(--gs-color-success-text);
+}
+
+.outdated {
+  margin: var(--gs-space-2) 0 0;
+  padding: var(--gs-space-1) var(--gs-space-2);
+  border-left: 4px solid var(--gs-brand-orange);
+  background: var(--gs-color-warning-surface);
+  color: var(--gs-color-warning-text);
+}
+
+.notes {
+  margin: var(--gs-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note {
+  padding: var(--gs-space-2) 0;
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.note:first-child {
+  border-top: none;
+}
+
+.noteMeta {
+  margin: 0 0 var(--gs-space-1);
+  color: var(--gs-color-text-muted);
+  font-size: var(--gs-font-size-sm);
+}
+
+.noteAuthor {
+  color: var(--gs-color-text);
+  font-weight: bold;
+}
+
+.noteBody {
+  overflow-wrap: anywhere;
+}
+
+.threadActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2);
+  margin-top: var(--gs-space-2);
+}
+
+.commentForm {
+  margin-top: var(--gs-space-3);
+}
+
+.commentForm textarea {
+  width: 100%;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+  margin-top: var(--gs-space-2);
+}

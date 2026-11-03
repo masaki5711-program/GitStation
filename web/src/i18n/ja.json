@@ -474,7 +474,8 @@
         "changes": "変更を見る",
         "push": "修正を push する",
         "wait": "待つ"
-      }
+      },
+      "checking": "マージできるか確かめています…"
     },
     "number": "!{{iid}}",
     "draft": "下書き",
@@ -510,6 +511,39 @@
       "titleRequired": "タイトルを入力してください。",
       "titleTooLong": "タイトルは 255 文字までです。",
       "noBranches": "このリポジトリにはまだブランチがありません。先にブランチを push してください。"
+    },
+    "view": {
+      "tabsLabel": "変更依頼の画面",
+      "overview": "概要",
+      "changes": "変更",
+      "changesLater": "版ごとの変更は、ここに表示する予定です。今は比較の画面で 2 つのブランチの違いを見てください。",
+      "compareLink": "ブランチを比較する",
+      "description": "説明",
+      "noDescription": "説明はありません。"
+    },
+    "threads": {
+      "title": "スレッド",
+      "empty": "まだコメントはありません。",
+      "truncated": "スレッドが多いため、一部だけを表示しています。"
+    },
+    "thread": {
+      "title": "{{author}} のスレッド",
+      "resolved": "解決済み",
+      "unresolved": "未解決",
+      "resolve": "解決にする",
+      "unresolve": "未解決に戻す",
+      "reply": "返信する",
+      "replyLabel": "返信",
+      "replySubmit": "返信を送る",
+      "outdated": "この行は後の版で書き換えられました。",
+      "outdatedUnknown": "後の版でこの行が変わったかを確かめられませんでした。もう一度見てください。"
+    },
+    "comment": {
+      "label": "コメントを書く",
+      "help": "Markdown が使えます。",
+      "submit": "コメントする",
+      "required": "コメントを入力してください。",
+      "sending": "送っています…"
     }
   }
 }
