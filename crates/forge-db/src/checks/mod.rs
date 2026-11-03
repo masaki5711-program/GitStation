@@ -853,6 +853,31 @@ pub async fn reporters(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeEr
         .collect()
 }
 
+/// How many protected ref merge rules require a check of each namespace
+/// (doctor `checks.reporters`; a namespace no rule requires is absent).
+pub async fn required_namespaces(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
+    const QUERY: &str = "checks.required_namespaces";
+    let rows: Vec<(String, i64)> = db
+        .within(QUERY, async {
+            sqlx::query_as(
+                "SELECT split_part(c.name, '/', 1), count(DISTINCT r.protected_ref_id) \
+                 FROM forge.protected_ref_merge_rules r, unnest(r.required_checks) AS c(name) \
+                 GROUP BY 1 ORDER BY 1",
+            )
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.into_iter()
+        .map(|(raw, n)| {
+            namespace_of(&raw)
+                .map(|ns| (ns, n))
+                .ok_or_else(|| unknown_grant(&raw))
+        })
+        .collect()
+}
+
 /// The namespaces some active service account may report (the merge rule's
 /// `unreportable_checks`: a required name outside them has no granted
 /// reporter).

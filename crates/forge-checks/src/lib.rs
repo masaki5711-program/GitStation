@@ -30,14 +30,14 @@ use forge_core::{
 };
 use forge_db::access::Account;
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::checks::{self, GrantOutcome, ReportCredential, Reported, StoredCheckRun};
+use forge_db::checks::{self, ReportCredential};
 use forge_db::projects::ProjectAccessFacts;
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
 
 pub mod validate;
 
-pub use forge_db::checks::{CheckAnnotation, NewCheckRun};
+pub use forge_db::checks::{CheckAnnotation, GrantOutcome, NewCheckRun, Reported, StoredCheckRun};
 pub use validate::{parse_name, AnnotationInput, ReportInput};
 
 /// The commit a full id names, if a branch or tag of the repository

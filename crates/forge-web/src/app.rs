@@ -71,6 +71,10 @@ pub struct AppState {
     /// serve` always sets them; without them those routes answer
     /// `FG-SYS-0001 reason=review_unconfigured`).
     pub review: Option<Arc<forge_review::Review>>,
+    /// The check run commands and reads (M3 C1, ADR-0024 §10; `forge
+    /// serve` always sets them; without them those routes answer
+    /// `FG-SYS-0001 reason=checks_unconfigured`).
+    pub checks: Option<Arc<forge_checks::Checks>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -129,6 +133,7 @@ impl AppState {
             smart_http: None,
             hosting: None,
             review: None,
+            checks: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -171,6 +176,13 @@ impl AppState {
     #[must_use]
     pub fn with_review(mut self, review: forge_review::Review) -> Self {
         self.review = Some(Arc::new(review));
+        self
+    }
+
+    /// The check run commands (M3 C1).
+    #[must_use]
+    pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
+        self.checks = Some(Arc::new(checks));
         self
     }
 
@@ -414,11 +426,11 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    service_account_routes(account_routes(history_routes(browse_routes(git_routes(
-        shell_routes(merge_request_routes(member_routes(move_routes(
-            hosting_routes(fixed),
+    check_routes(service_account_routes(account_routes(history_routes(
+        browse_routes(git_routes(shell_routes(merge_request_routes(
+            member_routes(move_routes(hosting_routes(fixed))),
         )))),
-    )))))
+    ))))
 }
 
 /// Every route of the product. The `gen-authz` binary and the tests read the
@@ -604,6 +616,60 @@ fn service_account_routes(registry: Registry<AppState>) -> Registry<AppState> {
             sa::revoke,
         )
         .responds_no_content(Verb::Delete, sa::TOKEN)
+}
+
+/// The Checks API (M3 C1, ADR-0024 §10, docs/api/checks.md): a commit's
+/// check runs, and the administrators' grants of a check namespace to a
+/// service account.
+fn check_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::checks as c;
+    registry
+        .route_with_body(
+            Verb::Post,
+            c::CHECKS,
+            Action::CheckWrite,
+            "Report a check run on a commit; the same name again updates it (ci/, kanflow/: a service account holding the namespace, Developer member; forge/ and ext/ are refused)",
+            c::MAX_BODY,
+            c::ReportOf,
+            c::report,
+        )
+        .responds_created::<c::CheckRunBody>(Verb::Post, c::CHECKS)
+        .route_with(
+            Verb::Get,
+            c::CHECKS,
+            Action::CheckRead,
+            "List a commit's check runs by name (as the repository browse API; a commit no branch or tag reaches is not found)",
+            c::ChecksOf,
+            c::list,
+        )
+        .responds::<c::CheckRunList>(Verb::Get, c::CHECKS)
+        .route_with(
+            Verb::Get,
+            c::GRANTS,
+            Action::ServiceAccountRead,
+            "The check namespaces a service account reports (administrators)",
+            c::GrantsOf,
+            c::grants,
+        )
+        .responds::<c::CheckNamespaces>(Verb::Get, c::GRANTS)
+        .route_with(
+            Verb::Put,
+            c::GRANT,
+            Action::CheckNamespaceGrantManage,
+            "Let a service account report a check namespace (ci, kanflow; administrators, people only)",
+            c::GrantOf,
+            c::grant,
+        )
+        .responds::<c::CheckNamespaceGrant>(Verb::Put, c::GRANT)
+        .route_with(
+            Verb::Delete,
+            c::GRANT,
+            Action::CheckNamespaceGrantManage,
+            "Stop a service account reporting a check namespace (administrators, people only)",
+            c::GrantOf,
+            c::revoke,
+        )
+        .responds::<c::CheckNamespaceGrant>(Verb::Delete, c::GRANT)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

@@ -112,6 +112,30 @@
     "word": "fixed"
   },
   {
+    "action": "ServiceAccountRead",
+    "method": "GET",
+    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CheckNamespaceGrantManage",
+    "method": "PUT",
+    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CheckNamespaceGrantManage",
+    "method": "DELETE",
+    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ServiceAccountTokenList",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts/{id}/tokens",
@@ -323,6 +347,22 @@
     "action": "ApprovalRuleManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/approval-rules/{name}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CheckRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/commits/{sha}/checks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CheckWrite",
+    "method": "POST",
+    "path": "/api/v1/projects/{id}/commits/{sha}/checks",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

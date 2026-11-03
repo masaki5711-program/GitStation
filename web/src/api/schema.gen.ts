@@ -126,6 +126,41 @@ export interface paths {
         patch: operations["patch_api_v1_admin_service_accounts_id"];
         trace?: never;
     };
+    "/api/v1/admin/service-accounts/{id}/check-namespaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The check namespaces a service account reports (administrators) */
+        get: operations["get_api_v1_admin_service_accounts_id_check_namespaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Let a service account report a check namespace (ci, kanflow; administrators, people only) */
+        put: operations["put_api_v1_admin_service_accounts_id_check_namespaces_namespace"];
+        post?: never;
+        /** Stop a service account reporting a check namespace (administrators, people only) */
+        delete: operations["delete_api_v1_admin_service_accounts_id_check_namespaces_namespace"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/service-accounts/{id}/tokens": {
         parameters: {
             query?: never;
@@ -420,6 +455,24 @@ export interface paths {
         post?: never;
         /** Delete an approval rule (people only; Maintainer) */
         delete: operations["delete_api_v1_projects_id_approval_rules_name"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/commits/{sha}/checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a commit's check runs by name (as the repository browse API; a commit no branch or tag reaches is not found) */
+        get: operations["get_api_v1_projects_id_commits_sha_checks"];
+        put?: never;
+        /** Report a check run on a commit; the same name again updates it (ci/, kanflow/: a service account holding the namespace, Developer member; forge/ and ext/ are refused) */
+        post: operations["post_api_v1_projects_id_commits_sha_checks"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1256,6 +1309,38 @@ export interface components {
             items: components["schemas"]["AdminUser"][];
             next_cursor: string | null;
         };
+        /** @description One annotation as stored. */
+        AnnotationBody: {
+            /** Format: int32 */
+            end_line: number;
+            level: string;
+            message: string;
+            path: string;
+            /** Format: int32 */
+            start_line: number;
+            title: string | null;
+        };
+        /** @description One annotation of a report. */
+        AnnotationRequest: {
+            /**
+             * Format: int64
+             * @description At least `start_line` (default: `start_line`).
+             */
+            end_line?: number | null;
+            /** @description `notice`, `warning` or `failure`. */
+            level: string;
+            /** @description 1 character to 4 KiB, plain text. */
+            message: string;
+            /**
+             * @description A path inside the repository: relative, no `..` segment, 1..=4096
+             *     bytes.
+             */
+            path: string;
+            /** Format: int64 */
+            start_line: number;
+            /** @description At most 255 bytes. */
+            title?: string | null;
+        };
         /** @description What an approve or unapprove did. */
         ApprovalAnswerBody: {
             approval: null | components["schemas"]["ApprovalBody"];
@@ -1469,6 +1554,49 @@ export interface components {
          */
         ChangeProtectedRef: {
             push_min_role: components["schemas"]["RoleName"];
+        };
+        /**
+         * @description A grant change's answer: the namespaces now, and whether the change
+         *     wrote anything (`false`: the grant already was, or was not, there).
+         */
+        CheckNamespaceGrant: {
+            changed: boolean;
+            namespaces: string[];
+        };
+        /** @description The namespaces a service account reports. */
+        CheckNamespaces: {
+            /** @description `ci` / `kanflow`, sorted. */
+            namespaces: string[];
+        };
+        /** @description One check run (docs/api/checks.md). */
+        CheckRunBody: {
+            annotations: components["schemas"]["AnnotationBody"][];
+            completed_at: string | null;
+            conclusion: string | null;
+            /** @description UTC, RFC 3339 with microseconds. */
+            created_at: string;
+            details_url: string | null;
+            head_sha: string;
+            /** Format: int64 */
+            id: number;
+            name: string;
+            reported_by: components["schemas"]["ReporterBody"];
+            /**
+             * Format: int64
+             * @description Counts the run's reports (1 at creation).
+             */
+            revision: number;
+            status: string;
+            summary: string;
+            updated_at: string;
+        };
+        /** @description `GET …/commits/{sha}/checks` (docs/api/checks.md, schema_version 1). */
+        CheckRunList: {
+            /** @description By name; at most 100. */
+            check_runs: components["schemas"]["CheckRunBody"][];
+            head_sha: string;
+            /** Format: int32 */
+            schema_version: number;
         };
         /** @description One CODEOWNERS rule the changed paths need. */
         CodeownerStatusBody: {
@@ -2213,15 +2341,22 @@ export interface components {
              *     ref; force-push and deletion are refused for everyone.
              */
             push_min_role: string;
+            /**
+             * @description M3 C1: the required checks behind `required_checks_unreportable`
+             *     (empty without the warning). Only in a merge-rule write's answer.
+             */
+            unreportable_checks: string[];
             updated_at: string;
             /**
              * @description Things to know about the answer (M3 R6 review). Today only
-             *     `required_checks_unreportable`: the merge rule requires checks but no
-             *     check can be reported before the Checks API (C1), so every merge
-             *     into the branch is blocked (`required_check_missing`); with the
-             *     direct-push ban the branch cannot change at all. Remove the check
-             *     names or the merge rule to unblock (runbook merge-blocked). Empty
-             *     otherwise.
+             *     `required_checks_unreportable` (M3 C1: narrowed): the merge rule
+             *     requires a check no active service account may report (its
+             *     namespace is granted to none, or it is `forge/`, whose own checks
+             *     arrive later), so every merge into the branch is blocked
+             *     (`required_check_missing`); with the direct-push ban the branch
+             *     cannot change at all. The names are in `unreportable_checks`. Grant
+             *     the namespace to a service account, or remove the check names
+             *     (runbooks checks-reporting, merge-blocked). Empty otherwise.
              */
             warnings: string[];
         };
@@ -2379,6 +2514,36 @@ export interface components {
              *     (ADR-0015 rules; not a reserved word).
              */
             username: string;
+        };
+        /** @description `POST …/commits/{sha}/checks`. */
+        ReportCheckRun: {
+            /** @description At most 50; a report replaces the run's annotations. */
+            annotations?: components["schemas"]["AnnotationRequest"][];
+            /**
+             * @description Exactly when `completed`: `success`, `neutral`, `failure`, `error`
+             *     or `action_required`.
+             */
+            conclusion?: string | null;
+            /**
+             * @description An http(s) link for people (at most 2 KiB; never fetched by the
+             *     server).
+             */
+            details_url?: string | null;
+            /**
+             * @description `<namespace>/<name>`: `ci/…` or `kanflow/…` (a granted service
+             *     account); `forge/…` and `ext/…` are refused over HTTP in C1.
+             */
+            name: string;
+            /** @description `queued`, `in_progress` or `completed`. */
+            status: string;
+            /** @description Plain text / Markdown as written, at most 64 KiB (default empty). */
+            summary?: string | null;
+        };
+        /** @description Who reported a run last. */
+        ReporterBody: {
+            /** Format: int64 */
+            id: number;
+            username: string | null;
         };
         /**
          * @description Which namespace a path names. Exactly one of `project_id`, `group_id`,
@@ -3109,6 +3274,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdatedServiceAccount"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_service_accounts_id_check_namespaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckNamespaces"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_admin_service_accounts_id_check_namespaces_namespace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckNamespaceGrant"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_admin_service_accounts_id_check_namespaces_namespace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckNamespaceGrant"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -4009,6 +4269,74 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_commits_sha_checks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                sha: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckRunList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_projects_id_commits_sha_checks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                sha: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportCheckRun"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckRunBody"];
+                };
             };
             /** @description Error: registered code, localized message, request id */
             default: {

@@ -10,7 +10,7 @@
 //! storage (`repositories.provisioning`, `repositories.storage`), merge
 //! request mergeability (`review.mergeability`, M3 R2), service accounts
 //! (`service_accounts.tokens_expiring`, `service_accounts.ownerless`, M3
-//! S0), storage
+//! S0), check reporters (`checks.reporters`, M3 C1), storage
 //! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
 //! provider (`auth.oidc`, M2 MR4). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
@@ -32,6 +32,8 @@ use forge_git::{Git, GitConfig, StorageRoot};
 
 use crate::runtime::block_on;
 
+// M3 C1: required checks have a reporter.
+mod checks;
 mod oidc;
 mod render;
 // ── D4 MR3b ──
@@ -69,7 +71,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 19] = [
+const DB_CHECKS: [&str; 20] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -100,6 +102,8 @@ const DB_CHECKS: [&str; 19] = [
     // M3 S0: FG-AUTH-0019 (rotate before expiry), FG-AUTH-0010 (an owner).
     "service_accounts.tokens_expiring",
     "service_accounts.ownerless",
+    // M3 C1: every required check namespace has a reporter (warn).
+    "checks.reporters",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -232,6 +236,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let mergeability = review::mergeability_check(db).await;
     let merges = review::merges_check(db).await;
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
+    let reporters = checks::reporters_check(db).await;
     vec![
         bootstrap,
         connections,
@@ -252,6 +257,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         merges,
         sa_expiring,
         sa_ownerless,
+        reporters,
     ]
 }
 

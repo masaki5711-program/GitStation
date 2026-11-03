@@ -773,3 +773,51 @@ async fn a_run_keeps_its_identity_and_counts_its_writes() {
     }
     w.t.drop_now().await;
 }
+
+/// Doctor `checks.reporters`: the namespaces the merge rules require, and
+/// the active service accounts that may report each.
+#[tokio::test]
+async fn required_namespaces_and_reporters_are_counted() {
+    let w = world().await;
+    let p = w.project().get();
+    w.t.commit_audited(
+        ("project", p),
+        &[
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({p}, 'refs/heads/main', 'maintainer')"
+            ),
+            format!(
+                "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+                 required_checks) SELECT id, project_id, ARRAY['ci/gates', 'ci/lint', \
+                 'forge/risk']::text[] FROM forge.protected_refs WHERE project_id = {p}"
+            ),
+        ],
+    )
+    .await;
+    let required = required_namespaces(&w.t.db).await.expect("required");
+    assert_eq!(
+        required.into_iter().collect::<Vec<_>>(),
+        [(CheckNamespace::Ci, 1), (CheckNamespace::Forge, 1)]
+    );
+    assert!(reporters(&w.t.db).await.expect("none").is_empty());
+    let (granted, ()) = change_check_namespace_grant_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-grant"),
+        (w.ci, CheckNamespace::Ci, true),
+        w.alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect("grant");
+    assert_eq!(granted, GrantOutcome::Changed);
+    assert_eq!(
+        reporters(&w.t.db)
+            .await
+            .expect("one")
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [(CheckNamespace::Ci, 1)]
+    );
+    w.t.drop_now().await;
+}
