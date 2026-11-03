@@ -22,11 +22,13 @@ import { CompareScreen } from './CompareScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
+import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
+import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
 import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls'];
 
 export function RepoViews({
   projectId,
@@ -93,6 +95,16 @@ export function RepoViews({
     case 'compare':
       screen = <CompareScreen projectId={projectId} project={project} spec={spec} />;
       break;
+    case 'pulls':
+      screen =
+        tail.length === 0 ? (
+          <MergeRequestsScreen projectId={projectId} project={project} />
+        ) : tail.length === 1 && tail[0] === 'new' ? (
+          <NewMergeRequestScreen projectId={projectId} project={project} />
+        ) : (
+          <NotFound />
+        );
+      break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;
       break;
@@ -113,6 +125,7 @@ export function RepoViews({
     { words: ['branches'], to: `${base}/-/branches`, label: t('repo.branches') },
     { words: ['tags'], to: `${base}/-/tags`, label: t('repo.tags') },
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
+    { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     { words: ['settings'], to: `${base}/-/settings`, label: t('settings.title') },
   ];

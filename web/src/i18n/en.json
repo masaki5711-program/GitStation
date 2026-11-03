@@ -148,7 +148,8 @@
     "files": "Files",
     "commits": "Commits",
     "compare": "Compare",
-    "switchGo": "Go"
+    "switchGo": "Go",
+    "pulls": "MR"
   },
   "tree": {
     "title": "Files",
@@ -467,13 +468,48 @@
       "codeownerMissing": "An owner of {{pattern}} ({{owners}}) must approve",
       "checkMissing": "The required check \"{{name}}\" has not reported yet",
       "checkFailed": "The required check \"{{name}}\" did not succeed ({{status}} / {{conclusion}})",
-      "unresolved": "{{n}} threads are not resolved",
+      "unresolved": "Unresolved threads: {{n}}",
       "next": {
         "firstUnresolved": "Open the first unresolved thread",
         "changes": "See the changes",
         "push": "Push a fix",
         "wait": "Wait"
       }
+    },
+    "number": "!{{iid}}",
+    "draft": "Draft",
+    "opened": "Opened by {{author}} on {{date}}",
+    "branches": "{{source}} into {{target}}",
+    "state": {
+      "open": "Open",
+      "merged": "Merged",
+      "closed": "Closed",
+      "all": "All"
+    },
+    "list": {
+      "title": "Merge requests",
+      "new": "New merge request",
+      "filterLabel": "Show merge requests",
+      "empty": "There are no merge requests here.",
+      "emptyLead": "To ask for the changes of a branch to be merged, create a merge request.",
+      "older": "Older merge requests",
+      "newest": "Back to the newest"
+    },
+    "new": {
+      "title": "New merge request",
+      "source": "Branch with the changes",
+      "target": "Branch to merge into",
+      "choose": "Choose a branch",
+      "defaultBranch": "{{name}} (default)",
+      "titleLabel": "Title",
+      "description": "Description (optional, Markdown)",
+      "submit": "Create merge request",
+      "sourceRequired": "Choose the branch with the changes.",
+      "targetRequired": "Choose the branch to merge into.",
+      "sameBranch": "The two branches are the same. Choose a different branch with the changes.",
+      "titleRequired": "Enter a title.",
+      "titleTooLong": "The title can be at most 255 characters.",
+      "noBranches": "This repository has no branches yet. Push a branch first."
     }
   }
 }

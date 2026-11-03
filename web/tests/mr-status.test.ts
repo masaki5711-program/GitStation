@@ -21,8 +21,7 @@ function status(
     checks: [],
     discussions: null,
     codeowners: { enforced: true, suspended_until: null },
-    updated_at: null,
-  } as MergeStatus;
+  } satisfies MergeStatus;
 }
 
 const plain = (reason: string) => blockedReason(status([{ reason, detail: null }]));

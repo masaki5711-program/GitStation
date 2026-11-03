@@ -37,7 +37,13 @@ export function nextKey(next: NextTarget): string | null {
 const generic = (): BlockedReason => ({ key: t('mr.status.generic'), values: {}, next: 'changes' });
 
 /** `rule=a b required=1 counted=0` into pairs; a value runs to the next
- * ` key=` so a name with spaces survives. A string without pairs gives {}. */
+ * ` key=` so a name with spaces survives. A string without pairs gives {}.
+ *
+ * Known limit: a value that itself contains ` word=` (a space, then lower
+ * case letters or `_`, then `=`) is cut there and the rest read as another
+ * pair. The server's names (rules, checks, CODEOWNERS patterns) do not take
+ * that shape today; if one does, the line shows a wrong value or falls back
+ * to the generic text, never throws. */
 function parseDetail(detail: string | null): Record<string, string> {
   const out: Record<string, string> = {};
   if (detail === null) return out;

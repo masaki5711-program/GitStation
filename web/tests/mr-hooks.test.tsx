@@ -1,13 +1,16 @@
 // The merge request hooks over the real client and the route-table mock.
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createApiClient } from '../src/api/client';
 import { ApiProvider } from '../src/api/context';
 import {
   mrKeys,
+  parseIid,
+  shouldPollStatus,
+  STATUS_POLL_MS,
   useAddComment,
   useCreateMergeRequest,
   useDiscussions,
@@ -21,12 +24,13 @@ import {
   useVersions,
 } from '../src/api/mergeRequests';
 import { apiError, mockServer } from './mock';
+import { status } from './mr-fixtures';
 import { json } from './render';
 
 const BASE = '/api/v1/projects/7/merge-requests';
 const MR = { iid: 3, title: 't', state: 'open' };
 const DISCUSSIONS = { iid: 3, discussions: [], truncated: false };
-const STATUS = { schema_version: 1, iid: 3, mergeable: true, reasons: [] };
+const STATUS = status([]);
 const NEW_MR = { source_branch: 'f', target_branch: 'main', title: 't' };
 
 function setup(routes: Parameters<typeof mockServer>[0]) {
@@ -98,6 +102,101 @@ describe('merge request queries', () => {
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });
+  });
+});
+
+describe('status polling (phase 1 review)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    focusManager.setFocused(undefined);
+  });
+
+  it.each([
+    ['mergeability_unknown', true],
+    ['merge_in_progress', true],
+    ['approvals_missing', false],
+    ['conflict', false],
+  ])('reasons[0] = %s polls: %s', (reason, polls) => {
+    expect(shouldPollStatus(status([{ reason, detail: null }]))).toBe(polls);
+  });
+
+  it('a mergeable status or no data does not poll', () => {
+    expect(shouldPollStatus(STATUS)).toBe(false);
+    expect(shouldPollStatus(undefined)).toBe(false);
+    // Only the first reason decides (the one the line shows).
+    expect(
+      shouldPollStatus(
+        status([
+          { reason: 'draft', detail: null },
+          { reason: 'mergeability_unknown', detail: null },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads the status again while it waits, and stops when it is known', async () => {
+    // Only the timers the poll uses: React's scheduler runs on setImmediate.
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+    });
+    // jsdom's page is not "visible": polling stops in a hidden tab, so say focused.
+    focusManager.setFocused(true);
+    let answer = status([{ reason: 'mergeability_unknown', detail: null }]);
+    const { server, wrapper } = setup({ [`GET ${BASE}/3/status`]: () => json(200, answer) });
+    const { result } = renderHook(() => useMergeStatus(7, 3), { wrapper });
+    // Read `data` here: the hook re-renders only for the fields read so far.
+    await waitFor(() => {
+      expect(result.current.data?.mergeable).toBe(false);
+    });
+    const first = server.to('GET', `${BASE}/3/status`).length;
+    answer = status([]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 2);
+    });
+    expect(server.to('GET', `${BASE}/3/status`).length).toBeGreaterThan(first);
+    await waitFor(() => {
+      expect(result.current.data?.mergeable).toBe(true);
+    });
+    const after = server.to('GET', `${BASE}/3/status`).length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3);
+    });
+    expect(server.to('GET', `${BASE}/3/status`)).toHaveLength(after);
+  });
+});
+
+describe('iid guard (phase 1 review)', () => {
+  it.each([
+    ['3', 3],
+    ['120', 120],
+    ['0', null],
+    ['-1', null],
+    ['03', null],
+    ['3a', null],
+    ['1.5', null],
+    ['', null],
+    ['99999999999999999999', null],
+  ])('parseIid(%j) is %j', (raw, want) => {
+    expect(parseIid(raw)).toBe(want);
+  });
+
+  it('the hooks do not call the API for an invalid iid', async () => {
+    const { server, wrapper } = setup({});
+    const { result } = renderHook(
+      () => ({
+        mr: useMergeRequest(7, Number.NaN),
+        st: useMergeStatus(7, 0),
+        d: useDiscussions(7, -1),
+        v: useVersions(7, 1.5),
+        diff: useVersionDiff(7, 3, Number.NaN),
+      }),
+      { wrapper },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(result.current.mr.fetchStatus).toBe('idle');
+    expect(result.current.diff.fetchStatus).toBe('idle');
+    expect(server.calls).toEqual([]);
   });
 });
 

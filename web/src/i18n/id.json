@@ -148,7 +148,8 @@
     "files": "Berkas",
     "commits": "Commit",
     "compare": "Bandingkan",
-    "switchGo": "Pergi"
+    "switchGo": "Pergi",
+    "pulls": "MR"
   },
   "tree": {
     "title": "Berkas",
@@ -453,13 +454,48 @@
       "generic": "Belum bisa digabung. Periksa perubahannya",
       "mergeabilityUnknown": "Menunggu pemeriksaan. Push akan memperbaruinya",
       "conflict": "Bertabrakan dengan perubahan lain",
-      "unresolved": "{{n}} utas belum selesai",
+      "unresolved": "Utas belum selesai: {{n}}",
       "next": {
         "firstUnresolved": "Buka utas pertama yang belum selesai",
         "changes": "Lihat perubahan",
         "push": "Push perbaikan",
         "wait": "Tunggu"
       }
+    },
+    "number": "!{{iid}}",
+    "draft": "Draf",
+    "opened": "Dibuat oleh {{author}} pada {{date}}",
+    "branches": "{{source}} ke {{target}}",
+    "state": {
+      "open": "Terbuka",
+      "merged": "Digabung",
+      "closed": "Ditutup",
+      "all": "Semua"
+    },
+    "list": {
+      "title": "Merge request",
+      "new": "Merge request baru",
+      "filterLabel": "Tampilkan merge request",
+      "empty": "Tidak ada merge request di sini.",
+      "emptyLead": "Untuk meminta perubahan sebuah cabang digabung, buat merge request.",
+      "older": "Merge request lebih lama",
+      "newest": "Kembali ke yang terbaru"
+    },
+    "new": {
+      "title": "Merge request baru",
+      "source": "Cabang dengan perubahan",
+      "target": "Cabang tujuan",
+      "choose": "Pilih cabang",
+      "defaultBranch": "{{name}} (bawaan)",
+      "titleLabel": "Judul",
+      "description": "Deskripsi (opsional, Markdown)",
+      "submit": "Buat merge request",
+      "sourceRequired": "Pilih cabang dengan perubahan.",
+      "targetRequired": "Pilih cabang tujuan.",
+      "sameBranch": "Kedua cabang sama. Pilih cabang lain yang berisi perubahan.",
+      "titleRequired": "Masukkan judul.",
+      "titleTooLong": "Judul paling banyak 255 karakter.",
+      "noBranches": "Repositori ini belum punya cabang. Push sebuah cabang dulu."
     }
   }
 }

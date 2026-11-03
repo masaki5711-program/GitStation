@@ -148,7 +148,8 @@
     "files": "ファイル",
     "commits": "コミット",
     "compare": "比較",
-    "switchGo": "切り替える"
+    "switchGo": "切り替える",
+    "pulls": "MR"
   },
   "tree": {
     "title": "ファイル",
@@ -474,6 +475,41 @@
         "push": "修正を push する",
         "wait": "待つ"
       }
+    },
+    "number": "!{{iid}}",
+    "draft": "下書き",
+    "opened": "{{author}} が {{date}} に作成",
+    "branches": "{{source}} から {{target}} へ",
+    "state": {
+      "open": "開いている",
+      "merged": "マージ済み",
+      "closed": "閉じた",
+      "all": "すべて"
+    },
+    "list": {
+      "title": "変更依頼（MR）",
+      "new": "変更依頼を作る",
+      "filterLabel": "表示する変更依頼",
+      "empty": "ここに表示する変更依頼はありません。",
+      "emptyLead": "ブランチの変更を取り込んでほしいときは、変更依頼を作ります。",
+      "older": "古い変更依頼を見る",
+      "newest": "最新に戻る"
+    },
+    "new": {
+      "title": "新しい変更依頼",
+      "source": "変更のあるブランチ",
+      "target": "取り込み先のブランチ",
+      "choose": "ブランチを選んでください",
+      "defaultBranch": "{{name}}（既定）",
+      "titleLabel": "タイトル",
+      "description": "説明（省略できます。Markdown が使えます）",
+      "submit": "変更依頼を作る",
+      "sourceRequired": "変更のあるブランチを選んでください。",
+      "targetRequired": "取り込み先のブランチを選んでください。",
+      "sameBranch": "2 つのブランチが同じです。変更のあるブランチに別のものを選んでください。",
+      "titleRequired": "タイトルを入力してください。",
+      "titleTooLong": "タイトルは 255 文字までです。",
+      "noBranches": "このリポジトリにはまだブランチがありません。先にブランチを push してください。"
     }
   }
 }

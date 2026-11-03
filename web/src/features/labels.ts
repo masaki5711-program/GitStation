@@ -22,6 +22,20 @@ export function roleLabel(t: TFunction, role: string | null): string | null {
   }
 }
 
+/** A merge request's state (`open` / `merged` / `closed`; the list filter adds `all`). */
+export function mrStateLabel(t: TFunction, state: string): string {
+  switch (state) {
+    case 'merged':
+      return t('mr.state.merged');
+    case 'closed':
+      return t('mr.state.closed');
+    case 'all':
+      return t('mr.state.all');
+    default:
+      return t('mr.state.open');
+  }
+}
+
 /** `1536` → `1.5 KiB` (binary units, as git and the servers count). */
 export function formatBytes(bytes: number, language: string): string {
   const units = ['B', 'KiB', 'MiB', 'GiB'];
