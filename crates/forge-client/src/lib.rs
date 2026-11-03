@@ -12,6 +12,7 @@
 pub mod admin;
 pub mod app;
 pub mod browse;
+pub mod checks;
 pub mod cli;
 pub mod config;
 pub mod coverage;

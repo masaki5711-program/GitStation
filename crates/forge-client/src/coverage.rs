@@ -83,6 +83,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/admin/service-accounts/{id}/tokens/{token_id}",
         Coverage::Command("admin service-account revoke-token"),
     ),
+    // M3 C1: the check namespaces of a service account.
+    (
+        "GET",
+        "/api/v1/admin/service-accounts/{id}/check-namespaces",
+        Coverage::Command("admin service-account check-namespaces"),
+    ),
+    (
+        "PUT",
+        "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+        Coverage::Command("admin service-account grant-checks"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+        Coverage::Command("admin service-account revoke-checks"),
+    ),
     ("GET", "/api/v1/admin/users", Coverage::Command("user list")),
     (
         "POST",
@@ -418,6 +434,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "DELETE",
         "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
         Coverage::Command("merge-rule remove"),
+    ),
+    // M3 C1 (ADR-0024 §10): the Checks API.
+    (
+        "POST",
+        "/api/v1/projects/{id}/commits/{sha}/checks",
+        Coverage::Command("checks report"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/commits/{sha}/checks",
+        Coverage::Command("checks list"),
     ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.

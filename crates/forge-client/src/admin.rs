@@ -31,6 +31,25 @@ const TOKEN_KEYS: [&str; 6] = [
     "issued_by_user_id",
 ];
 
+/// The `namespaces` of an answer as `ci/, kanflow/` (`none`).
+fn namespaces(body: &Value) -> String {
+    let names: Vec<String> = body
+        .get("namespaces")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(|n| format!("{}/", crate::error::sanitize(n)))
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
+}
+
 pub fn admin(cli: &Cli, cmd: &AdminCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
         AdminCommand::ServiceAccount { command } => service_account(cli, command, env, io),
@@ -123,6 +142,40 @@ fn service_account(
                 None,
             )?;
             let human = list_human(&body, "items", "-", "", &TOKEN_KEYS);
+            emit(io, cli, body, &human)
+        }
+        ServiceAccountCommand::CheckNamespaces { id } => {
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/admin/service-accounts/{id}/check-namespaces"),
+                &[],
+                None,
+            )?;
+            let human = format!("Service account {id} reports: {}", namespaces(&body));
+            emit(io, cli, body, &human)
+        }
+        ServiceAccountCommand::GrantChecks { id, namespace }
+        | ServiceAccountCommand::RevokeChecks { id, namespace } => {
+            let grant = matches!(cmd, ServiceAccountCommand::GrantChecks { .. });
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                if grant { Method::Put } else { Method::Delete },
+                &format!("/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}"),
+                &[],
+                None,
+            )?;
+            let verb = match (grant, body.get("changed") == Some(&Value::Bool(true))) {
+                (true, true) => "granted",
+                (false, true) => "revoked",
+                (_, false) => "unchanged",
+            };
+            let human = format!(
+                "Service account {id}: {namespace}/ {verb}; reports: {}",
+                namespaces(&body)
+            );
             emit(io, cli, body, &human)
         }
         ServiceAccountCommand::RevokeToken { id, token_id, yes } => {

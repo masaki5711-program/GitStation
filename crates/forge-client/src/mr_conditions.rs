@@ -264,9 +264,19 @@ pub fn merge_rule_cmd(
                 }
             );
             if warned {
-                human.push_str(
-                    "\nwarning: no check can be reported before the Checks API (C1): every merge into this branch is blocked (required_check_missing). Remove the checks with --clear-checks or remove the merge rule (runbook merge-blocked).",
-                );
+                let names = body["unreportable_checks"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(sanitize)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                human.push_str(&format!(
+                    "\nwarning: no service account may report [{names}]: every merge into this branch is blocked (required_check_missing). Grant the namespace to a reporter (gstn admin service-account grant-checks) or remove the checks with --clear-checks (runbook checks-reporting).",
+                ));
             }
             emit(io, cli, body, &human)
         }

@@ -57,6 +57,8 @@ const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","mes
 
 const SA_SCHEMA: &str = r#"{"type":"object","required":["id","username","display_name","state","owner","purpose","created_by","created_at","active_tokens","last_token_expiry"],"properties":{"id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"state":{"enum":["active","disabled"]},"owner":{"type":["object","null"],"required":["id","username","active"]},"purpose":{"type":["string","null"]},"created_by":{"type":["integer","null"]},"created_at":{"type":"string"},"active_tokens":{"type":"integer"},"last_token_expiry":{"type":["string","null"]}}}"#;
 
+const CHECK_RUN_SCHEMA: &str = r#"{"type":"object","required":["id","name","head_sha","status","conclusion","summary","details_url","annotations","reported_by","revision","created_at","updated_at","completed_at"],"properties":{"id":{"type":"integer"},"name":{"type":"string"},"head_sha":{"type":"string"},"status":{"enum":["queued","in_progress","completed"]},"conclusion":{"enum":["success","neutral","failure","error","action_required",null]},"summary":{"type":"string"},"details_url":{"type":["string","null"]},"annotations":{"type":"array","items":{"type":"object","required":["path","start_line","end_line","level","message","title"]}},"reported_by":{"type":"object","required":["id","username"]},"revision":{"type":"integer"},"created_at":{"type":"string"},"updated_at":{"type":"string"},"completed_at":{"type":["string","null"]}}}"#;
+
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
 
 pub const GLOBAL_ARGS: &[ArgSpec] = &[
@@ -470,7 +472,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "merge-rule set",
-        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten.",
+        summary: "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). A required check no active service account may report blocks every merge (the answer warns `required_checks_unreportable` and names them in `unreportable_checks`; grant the namespace with admin service-account grant-checks). Reads the merge rule first: options left out keep their value, and it sends the merge rule's updated_at (null when there is none): a merge rule changed, removed or added in between is refused (FG-REVIEW-0019; run it again), never overwritten.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--rule-id", "option", true, "The protection rule's id (from protected-ref list)."),
@@ -1043,6 +1045,70 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api", "admin"],
         routes: &["DELETE /api/v1/admin/service-accounts/{id}/tokens/{token_id}"],
         output: r#"{"type":"object","required":["service_account_id","id","revoked"],"properties":{"service_account_id":{"type":"integer"},"id":{"type":"integer"},"revoked":{"const":true}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account check-namespaces",
+        summary: "The check namespaces a service account may report (M3 C1; administrators).",
+        args: &[arg("id", "positional", true, "The service account's user id.")],
+        examples: &["gstn admin service-account check-namespaces 42 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/service-accounts/{id}/check-namespaces"],
+        output: r#"{"type":"object","required":["namespaces"],"properties":{"namespaces":{"type":"array","items":{"enum":["ci","kanflow"]}}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account grant-checks",
+        summary: "Let a service account report checks of a namespace (ci or kanflow; administrators, people only). It reports only on projects it is a Developer member of; forge/ and ext/ are never granted.",
+        args: &[
+            arg("id", "positional", true, "The service account's user id."),
+            arg("namespace", "positional", true, "ci or kanflow."),
+        ],
+        examples: &["gstn admin service-account grant-checks 42 ci"],
+        scopes: &["api", "admin"],
+        routes: &["PUT /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}"],
+        output: r#"{"type":"object","required":["namespaces","changed"],"properties":{"namespaces":{"type":"array","items":{"enum":["ci","kanflow"]}},"changed":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account revoke-checks",
+        summary: "Stop a service account reporting checks of a namespace (administrators, people only); its reported runs stay.",
+        args: &[
+            arg("id", "positional", true, "The service account's user id."),
+            arg("namespace", "positional", true, "ci or kanflow."),
+        ],
+        examples: &["gstn admin service-account revoke-checks 42 ci"],
+        scopes: &["api", "admin"],
+        routes: &["DELETE /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}"],
+        output: r#"{"type":"object","required":["namespaces","changed"],"properties":{"namespaces":{"type":"array","items":{"enum":["ci","kanflow"]}},"changed":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "checks report",
+        summary: "Report a check run on a commit (M3 C1, docs/api/checks.md): a service account holding the name's namespace (ci/, kanflow/) and a Developer member; the same name on the same commit updates its run (there is no separate update). A conclusion exactly with --status completed. The commit must be reachable from a branch or tag (otherwise not found, FG-REPO-0023). A required check of a protected branch is met only by completed/success on the merge request's head.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--sha", "option", true, "The full commit id (40 or 64 hex digits)."),
+            arg("--name", "option", true, "<namespace>/<name>, e.g. ci/gates (keep it stable per kind of check)."),
+            arg("--status", "option", true, "queued, in_progress or completed."),
+            arg("--conclusion", "option", false, "With completed: success, neutral, failure, error or action_required."),
+            arg("--summary", "option", false, "The summary (plain text / Markdown)."),
+            arg("--summary-file", "option", false, "The summary from a UTF-8 file (at most 64 KiB)."),
+            arg("--details-url", "option", false, "An http(s) link for people (the server never fetches it)."),
+            arg("--annotations-file", "option", false, "A JSON array of {path, start_line, end_line?, level, message, title?} (at most 50)."),
+        ],
+        examples: &["gstn checks report --project 7 --sha 0123456789abcdef0123456789abcdef01234567 --name ci/gates --status completed --conclusion success --details-url https://ci.example.test/runs/1"],
+        scopes: &["api"],
+        routes: &["POST /api/v1/projects/{id}/commits/{sha}/checks"],
+        output: CHECK_RUN_SCHEMA,
+    },
+    CommandSpec {
+        name: "checks list",
+        summary: "Every check run of a commit, by name, with its annotations (as the repository browse API; schema_version 1).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--sha", "option", true, "The full commit id (40 or 64 hex digits)."),
+        ],
+        examples: &["gstn checks list --project 7 --sha 0123456789abcdef0123456789abcdef01234567 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/commits/{sha}/checks"],
+        output: r#"{"type":"object","required":["schema_version","head_sha","check_runs"],"properties":{"schema_version":{"const":1},"head_sha":{"type":"string"},"check_runs":{"type":"array","items":{"type":"object","required":["id","name","status","conclusion","reported_by"]}}}}"#,
     },
     CommandSpec {
         name: "api",
