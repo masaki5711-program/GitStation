@@ -1073,3 +1073,155 @@ async fn bind_returns_the_binding_it_wrote() {
     assert_eq!(same, binding);
     w.t.drop_now().await;
 }
+
+// ── I1a re-review ───────────────────────────────────────────────────────
+
+/// Database re-review MEDIUM: forge_app may change a binding's
+/// `granted_membership` and nothing else (column-level UPDATE,
+/// 20261114100200). Each statement runs as forge_app in a transaction that
+/// is rolled back (the deferred audit trigger is not reached).
+#[tokio::test]
+async fn forge_app_updates_only_granted_membership_of_a_binding() {
+    let w = world().await;
+    bound(&w, w.web, w.integration, "P1").await;
+    let id = w.web.get();
+    for (column, value) in [
+        ("external_project_id", "'P2'"),
+        ("integration_id", "integration_id"),
+        ("project_id", "project_id"),
+        ("created_by", "NULL"),
+        ("created_at", "now()"),
+    ] {
+        let mut tx = w.t.db.write_pool().begin().await.expect("begin");
+        let result = sqlx::raw_sql(&format!(
+            "UPDATE forge.integration_bindings SET {column} = {value} WHERE project_id = {id}"
+        ))
+        .execute(&mut *tx)
+        .await;
+        tx.rollback().await.expect("rollback");
+        let e = result.expect_err(column);
+        assert_eq!(
+            e.as_database_error().and_then(|d| d.code()).as_deref(),
+            Some("42501"),
+            "{column}: {e}"
+        );
+    }
+    let mut tx = w.t.db.write_pool().begin().await.expect("begin");
+    let result = sqlx::raw_sql(&format!(
+        "UPDATE forge.integration_bindings SET granted_membership = false WHERE project_id = {id}"
+    ))
+    .execute(&mut *tx)
+    .await;
+    tx.rollback().await.expect("rollback");
+    result.expect("granted_membership is forge_app's to change");
+    w.t.drop_now().await;
+}
+
+/// Security re-review LOW: a person changing the granted membership's role
+/// (any change) makes it theirs: the grant is cleared in the same change,
+/// so an unbind keeps the membership (both change paths).
+#[tokio::test]
+async fn a_role_change_of_the_granted_membership_clears_the_grant() {
+    let w = world().await;
+    bound(&w, w.web, w.integration, "P1").await;
+    let changed = projects::change_member(
+        &w.t.db,
+        &ctx("req-promote"),
+        w.web,
+        w.sa,
+        Role::Reporter,
+        Role::Developer,
+    )
+    .await
+    .expect("promote");
+    assert!(matches!(
+        changed,
+        crate::groups::MemberChange::Changed { .. }
+    ));
+    assert!(!granted(&w.t, w.web).await);
+    // Back to Reporter by hand: still the person's, the unbind keeps it.
+    let back = projects::change_member(
+        &w.t.db,
+        &ctx("req-demote"),
+        w.web,
+        w.sa,
+        Role::Developer,
+        Role::Reporter,
+    )
+    .await
+    .expect("demote");
+    assert!(matches!(back, crate::groups::MemberChange::Changed { .. }));
+    let unbound = unbind_as(&w, w.web, w.integration).await.expect("unbind");
+    assert!(!unbound.membership_removed);
+    assert_eq!(
+        role_of(&w.t, w.web, w.sa).await.as_deref(),
+        Some("reporter")
+    );
+    // The decided change path too.
+    let api = project(&w.t, &w.alice, "api").await;
+    bound(&w, api, w.integration, "P1").await;
+    let (decided, ()) = projects::change_member_decided(
+        &w.t.db,
+        &ctx("req-promote-decided"),
+        api,
+        w.alice.user_id,
+        w.sa,
+        Role::Guest,
+        |_| Ok(()),
+    )
+    .await
+    .expect("change decided");
+    assert!(matches!(
+        decided,
+        crate::groups::MemberChange::Changed { .. }
+    ));
+    assert!(!granted(&w.t, api).await);
+    w.t.drop_now().await;
+}
+
+/// Security re-review LOW: an integration whose service account is
+/// disabled is not enabled again (the rule of `create`); disabling it, or
+/// changing its event types, still works.
+#[tokio::test]
+async fn enabling_an_integration_of_a_disabled_account_is_refused() {
+    let w = world().await;
+    set_enabled(&w.t, w.integration, false).await;
+    disable_user(&w.t, w.sa).await;
+    let refused = update(
+        &w.t.db,
+        &ctx("req-enable"),
+        w.integration,
+        &Changes {
+            enabled: Some(true),
+            event_types: None,
+        },
+    )
+    .await
+    .expect_err("disabled account");
+    assert_eq!(refused.code(), ErrorCode::RequestInvalid);
+    assert_eq!(
+        ctx_of(&refused, "rule").as_deref(),
+        Some("service_account_disabled")
+    );
+    let got = get(&w.t.db, w.integration)
+        .await
+        .expect("get")
+        .expect("present");
+    assert!(!got.enabled);
+    let types = update(
+        &w.t.db,
+        &ctx("req-types"),
+        w.integration,
+        &Changes {
+            enabled: Some(false),
+            event_types: Some(vec!["merge_request.*".to_owned()]),
+        },
+    )
+    .await
+    .expect("event types of a disabled integration");
+    assert_eq!(
+        types,
+        UpdateOutcome::Updated(vec![IntegrationField::EventTypes])
+    );
+    w.t.drop_now().await;
+}

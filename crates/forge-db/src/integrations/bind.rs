@@ -94,12 +94,15 @@ async fn binding_of(
 }
 
 /// Clear `granted_membership` of `project`'s binding when `user` is the
-/// bound integration's service account (I1a review): the membership the
-/// binding granted was removed, so a membership given again later is a
-/// person's and an unbind must keep it. Called by the project member
-/// removals inside their change (their `member.removed` row on the project
-/// covers the binding's audit trigger). No binding, another user or an
-/// already cleared grant: nothing written.
+/// bound integration's service account (I1a review): a person removed the
+/// membership the binding granted, or changed its role (re-review), so the
+/// membership as it stands (or as given again later) is the person's and
+/// an unbind must keep it. Called by the project member removals and role
+/// changes inside their change (their `member.removed` /
+/// `member.role_changed` row on the project covers the binding's audit
+/// trigger). No binding, another user or an already cleared grant:
+/// nothing written. forge_app may update this one column only
+/// (20261114100200).
 pub(crate) async fn clear_grant(
     conn: &mut PgConnection,
     project: ProjectId,

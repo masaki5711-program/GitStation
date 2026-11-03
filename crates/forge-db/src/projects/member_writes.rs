@@ -159,6 +159,9 @@ async fn run<T, P>(
                     .map_err(|e| query_error("projects.change_member", e))
                 })
                 .await?;
+                // M3 I1a re-review: as in `members::change_member`.
+                tx.step(|c| crate::integrations::clear_grant(c, project, member))
+                    .await?;
                 (
                     AuditDetails::ProjectMemberRoleChanged {
                         user: member,

@@ -621,8 +621,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         // ── M3 I1a: integrations (no DELETE) and their bindings (deleted
-        // by unbinding and the purge; UPDATE since 20261114100100: a
-        // removed grant clears granted_membership) (20261114100000) ──
+        // by unbinding and the purge; UPDATE of granted_membership only,
+        // 20261114100100 / 20261114100200: a removal or role change of the
+        // granted membership clears it) (20261114100000) ──
         (
             "forge.integrations",
             plain(&[
@@ -634,13 +635,17 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "forge.integration_bindings",
-            plain(&[
-                "forge_app:SELECT",
-                "forge_app:INSERT",
-                "forge_app:UPDATE",
-                "forge_app:DELETE",
-                "forge_ro:SELECT",
-            ]),
+            [
+                plain(&[
+                    "forge_app:SELECT",
+                    "forge_app:INSERT",
+                    "forge_app:DELETE",
+                    "forge_ro:SELECT",
+                ]),
+                // Column-level since 20261114100200 (re-review).
+                columns("forge_app", "UPDATE", &["granted_membership"]),
+            ]
+            .concat(),
         ),
     ]
 }

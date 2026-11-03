@@ -316,6 +316,10 @@ pub async fn change_member(
         .map_err(|e| query_error("projects.change_member", e))
     })
     .await?;
+    // M3 I1a re-review: a person changed the granted membership's role, so
+    // it is theirs now; an unbind must not remove it.
+    tx.step(|c| crate::integrations::clear_grant(c, project, user))
+        .await?;
     let details = AuditDetails::ProjectMemberRoleChanged { user, from, to };
     commit(tx, project, &details).await?;
     Ok(MemberChange::Changed { from })

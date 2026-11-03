@@ -117,7 +117,9 @@ fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
 /// value equals the stored one.
 ///
 /// Errors (nothing written): `FG-REPO-0005 resource=integration`,
-/// `FG-WEB-0006 field=event_types`.
+/// `FG-WEB-0006 field=event_types`, `field=enabled
+/// rule=service_account_disabled` (enabling while its service account is
+/// disabled).
 pub async fn update(
     db: &Db,
     ctx: &ChangeContext,
@@ -131,10 +133,12 @@ pub async fn update(
         .transpose()?;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let row: Option<(bool, Vec<String>)> = tx
+        // The integration row FOR UPDATE, then its service account's row
+        // FOR SHARE (the order of a bind; a concurrent disable waits).
+        let row: Option<(bool, Vec<String>, bool)> = tx
             .step(|c| async move {
                 sqlx::query_as(
-                    "SELECT enabled, event_types FROM forge.integrations WHERE id = $1 FOR UPDATE",
+                    "SELECT i.enabled, i.event_types, u.state = 'active'                      FROM forge.integrations i JOIN forge.users u ON u.id = i.service_account_id                      WHERE i.id = $1 FOR UPDATE OF i FOR SHARE OF u",
                 )
                 .bind(id.get())
                 .fetch_optional(c)
@@ -142,7 +146,7 @@ pub async fn update(
                 .map_err(|e| query_error("integrations.update.lock", e))
             })
             .await?;
-        let Some((enabled, stored_types)) = row else {
+        let Some((enabled, stored_types, account_active)) = row else {
             return Err(not_found("integration", "absent"));
         };
         let mut stored_sorted = stored_types;
@@ -151,6 +155,11 @@ pub async fn update(
         let mut fields = Vec::new();
         let to_enabled = changes.enabled.unwrap_or(enabled);
         if to_enabled != enabled {
+            // Re-review: the rule of `create` — nothing is switched on for
+            // a disabled service account (disabling stays possible).
+            if to_enabled && !account_active {
+                return Err(field_invalid("enabled", "service_account_disabled"));
+            }
             fields.push(IntegrationField::Enabled);
         }
         let to_types = match new_types {
