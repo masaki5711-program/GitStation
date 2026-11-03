@@ -47,6 +47,42 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         Coverage::BrowserOnly("ending one of your web sessions; tokens are refused (ADR-0021 §17)"),
     ),
     ("GET", "/api/v1/users", Coverage::Command("user search")),
+    // M3 S0: service accounts.
+    (
+        "GET",
+        "/api/v1/admin/service-accounts",
+        Coverage::Command("admin service-account list"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/service-accounts",
+        Coverage::BrowserOnly("an administrator's web session only: a token never creates a service account (FG-AUTH-0002 session_required)"),
+    ),
+    (
+        "GET",
+        "/api/v1/admin/service-accounts/{id}",
+        Coverage::Command("admin service-account view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/admin/service-accounts/{id}",
+        Coverage::Command("admin service-account update"),
+    ),
+    (
+        "GET",
+        "/api/v1/admin/service-accounts/{id}/tokens",
+        Coverage::Command("admin service-account tokens"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/service-accounts/{id}/tokens",
+        Coverage::BrowserOnly("an administrator's web session only: a token never issues a token (FG-AUTH-0002 session_required)"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/admin/service-accounts/{id}/tokens/{token_id}",
+        Coverage::Command("admin service-account revoke-token"),
+    ),
     ("GET", "/api/v1/admin/users", Coverage::Command("user list")),
     (
         "POST",

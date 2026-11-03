@@ -167,3 +167,122 @@ fn the_new_commands_are_described_with_their_scopes() {
     assert_eq!(scopes("user disable"), json!(["api", "admin"]));
     assert_eq!(scopes("user end-sessions"), json!(["api", "admin"]));
 }
+
+// ── M3 S0: gstn admin service-account … ────────────────────────────────
+
+const SERVICE_ACCOUNT: &str = r#"{"id":42,"username":"kanflow-sync","display_name":"Kanflow","state":"active","owner":{"id":7,"username":"alice","active":true},"purpose":"Kanflow sync","created_by":1,"created_at":"2026-01-01T00:00:00Z","active_tokens":1,"last_token_expiry":"2026-04-01T00:00:00Z"}"#;
+
+#[test]
+fn admin_service_account_commands_call_the_administration_routes() {
+    let srv = Mock::start(|r| match (r.method.as_str(), r.target.as_str()) {
+        ("DELETE", _) => Resp::json(204, ""),
+        ("PATCH", _) => ok(&format!(
+            r#"{{"outcome":"updated","fields":["owner"],"service_account":{SERVICE_ACCOUNT}}}"#
+        )),
+        ("GET", "/api/v1/admin/service-accounts") => ok(&format!(
+            r#"{{"items":[{SERVICE_ACCOUNT}],"truncated":false}}"#
+        )),
+        ("GET", "/api/v1/admin/service-accounts/42/tokens") => ok(
+            r#"{"items":[{"id":31,"public_id":"00000000000000a1","name":"feed","scopes":["read_api"],"created_at":"2026-01-01T00:00:00Z","expires_at":"2026-04-01T00:00:00Z","revoked_at":null,"last_used_at":null,"issued_by_user_id":1}]}"#,
+        ),
+        _ => ok(SERVICE_ACCOUNT),
+    });
+    let sb = Sandbox::new();
+    let o = gstn(&sb, &srv, &["admin", "service-account", "list", "--json"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        last(&srv),
+        ("GET".into(), "/api/v1/admin/service-accounts".into())
+    );
+    assert_eq!(o.json()["items"][0]["username"], "kanflow-sync");
+    let o = gstn(&sb, &srv, &["admin", "service-account", "view", "42"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        last(&srv),
+        ("GET".into(), "/api/v1/admin/service-accounts/42".into())
+    );
+    assert!(o.stdout.contains("owner: alice (7)"), "{}", o.stdout);
+
+    // Update sends only what was given, in the body.
+    assert_eq!(
+        gstn(&sb, &srv, &["admin", "service-account", "update", "42"]).code,
+        2
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &["admin", "service-account", "update", "42", "--owner", "7"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let seen = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (seen.method.as_str(), seen.target.as_str()),
+        ("PATCH", "/api/v1/admin/service-accounts/42")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&seen.body).expect("json"),
+        json!({"owner_id": 7})
+    );
+    assert!(
+        o.stdout.contains("Service account 42: updated"),
+        "{}",
+        o.stdout
+    );
+
+    let o = gstn(
+        &sb,
+        &srv,
+        &["admin", "service-account", "tokens", "42", "--json"],
+    );
+    assert_eq!(
+        last(&srv),
+        (
+            "GET".into(),
+            "/api/v1/admin/service-accounts/42/tokens".into()
+        )
+    );
+    assert_eq!(o.json()["items"][0]["issued_by_user_id"], 1);
+
+    // Revoking is destructive: --yes first, before any request.
+    let before = srv.seen().len();
+    assert_eq!(
+        gstn(
+            &sb,
+            &srv,
+            &["admin", "service-account", "revoke-token", "42", "31"]
+        )
+        .code,
+        2
+    );
+    assert_eq!(srv.seen().len(), before);
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "admin",
+            "service-account",
+            "revoke-token",
+            "42",
+            "31",
+            "--yes",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        last(&srv),
+        (
+            "DELETE".into(),
+            "/api/v1/admin/service-accounts/42/tokens/31".into()
+        )
+    );
+    assert_eq!(
+        o.json(),
+        json!({"service_account_id": 42, "id": 31, "revoked": true})
+    );
+    assert_eq!(
+        gstn(&sb, &srv, &["admin", "service-account", "view", "../1"]).code,
+        2,
+        "an id is a positive whole number"
+    );
+}

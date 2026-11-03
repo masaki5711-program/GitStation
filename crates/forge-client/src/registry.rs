@@ -55,6 +55,8 @@ const MR_SCHEMA: &str = r#"{"type":"object","required":["project_id","iid","titl
 
 const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","message","diff"],"properties":{"commit":{"type":"object","required":["oid","parents","author_name","author_email","authored_at","committer_name","committer_email","committed_at","subject"]},"message":{"type":"string"},"diff":{"type":"object","required":["files","truncated"],"properties":{"files":{"type":"array","items":{"type":"object","required":["status","old_path","new_path","old_mode","new_mode","old_oid","new_oid","similarity","binary","patch","omitted"],"properties":{"status":{"enum":["added","modified","deleted","renamed","copied","type_changed"]},"patch":{"type":["string","null"]},"omitted":{"enum":["too_large","total_cap","not_utf8",null]}}}},"truncated":{"type":"boolean"}}}}}"#;
 
+const SA_SCHEMA: &str = r#"{"type":"object","required":["id","username","display_name","state","owner","purpose","created_by","created_at","active_tokens","last_token_expiry"],"properties":{"id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"state":{"enum":["active","disabled"]},"owner":{"type":["object","null"],"required":["id","username","active"]},"purpose":{"type":["string","null"]},"created_by":{"type":["integer","null"]},"created_at":{"type":"string"},"active_tokens":{"type":"integer"},"last_token_expiry":{"type":["string","null"]}}}"#;
+
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
 
 pub const GLOBAL_ARGS: &[ArgSpec] = &[
@@ -986,6 +988,61 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api"],
         routes: &["DELETE /api/v1/user/tokens/{id}"],
         output: r#"{"type":"object","required":["id","revoked"],"properties":{"id":{"type":"integer"},"revoked":{"const":true}}}"#,
+    },
+    // ── M3 S0: service accounts (create and issue: the browser only) ──
+    CommandSpec {
+        name: "admin service-account list",
+        summary: "List every service account with its owner, state and token summary (administrators; at most 500, truncated says when more exist).",
+        args: &[],
+        examples: &["gstn admin service-account list --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/service-accounts"],
+        output: r#"{"type":"object","required":["items","truncated"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","username","display_name","state","owner","purpose","created_by","created_at","active_tokens","last_token_expiry"]}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account view",
+        summary: "Show one service account: owner, purpose, active tokens and the latest expiry (administrators; a person's id is not found).",
+        args: &[arg("id", "positional", true, "The service account's user id.")],
+        examples: &["gstn admin service-account view 42 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/service-accounts/{id}"],
+        output: SA_SCHEMA,
+    },
+    CommandSpec {
+        name: "admin service-account update",
+        summary: "Change a service account's display name, purpose or owner (administrators, people only; offboarding hands it on with --owner).",
+        args: &[
+            arg("id", "positional", true, "The service account's user id."),
+            arg("--display-name", "option", false, "The new display name (1..=255 characters)."),
+            arg("--purpose", "option", false, "Why it exists (1..=500 characters, one line)."),
+            arg("--owner", "option", false, "The new owner's user id (an active person)."),
+        ],
+        examples: &["gstn admin service-account update 42 --owner 7", "gstn admin service-account update 42 --purpose \"Kanflow sync\" --json"],
+        scopes: &["api", "admin"],
+        routes: &["PATCH /api/v1/admin/service-accounts/{id}"],
+        output: r#"{"type":"object","required":["outcome","fields","service_account"],"properties":{"outcome":{"enum":["updated","unchanged"]},"fields":{"type":"array","items":{"enum":["display_name","purpose","owner"]}},"service_account":{"type":"object"}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account tokens",
+        summary: "List a service account's tokens with who issued them (administrators; never a secret; revoked and expired ones too).",
+        args: &[arg("id", "positional", true, "The service account's user id.")],
+        examples: &["gstn admin service-account tokens 42 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/service-accounts/{id}/tokens"],
+        output: r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","public_id","name","scopes","created_at","expires_at","revoked_at","last_used_at","issued_by_user_id"]}}}}"#,
+    },
+    CommandSpec {
+        name: "admin service-account revoke-token",
+        summary: "Revoke one of a service account's tokens at once, e.g. after a leak (administrators; an admin-scoped token works). Needs --yes.",
+        args: &[
+            arg("id", "positional", true, "The service account's user id."),
+            arg("token_id", "positional", true, "The token id (admin service-account tokens)."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn admin service-account revoke-token 42 31 --yes"],
+        scopes: &["api", "admin"],
+        routes: &["DELETE /api/v1/admin/service-accounts/{id}/tokens/{token_id}"],
+        output: r#"{"type":"object","required":["service_account_id","id","revoked"],"properties":{"service_account_id":{"type":"integer"},"id":{"type":"integer"},"revoked":{"const":true}}}"#,
     },
     CommandSpec {
         name: "api",

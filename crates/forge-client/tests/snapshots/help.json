@@ -5080,6 +5080,319 @@
       "summary": "Revoke one of your tokens (it may be the one gstn uses). Needs --yes."
     },
     {
+      "args": [],
+      "examples": [
+        "gstn admin service-account list --json"
+      ],
+      "name": "admin service-account list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "username",
+                "display_name",
+                "state",
+                "owner",
+                "purpose",
+                "created_by",
+                "created_at",
+                "active_tokens",
+                "last_token_expiry"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/service-accounts"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List every service account with its owner, state and token summary (administrators; at most 500, truncated says when more exist)."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account view 42 --json"
+      ],
+      "name": "admin service-account view",
+      "output": {
+        "properties": {
+          "active_tokens": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "last_token_expiry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "required": [
+              "id",
+              "username",
+              "active"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "state",
+          "owner",
+          "purpose",
+          "created_by",
+          "created_at",
+          "active_tokens",
+          "last_token_expiry"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/service-accounts/{id}"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "Show one service account: owner, purpose, active tokens and the latest expiry (administrators; a person's id is not found)."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The new display name (1..=255 characters).",
+          "kind": "option",
+          "name": "--display-name",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Why it exists (1..=500 characters, one line).",
+          "kind": "option",
+          "name": "--purpose",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The new owner's user id (an active person).",
+          "kind": "option",
+          "name": "--owner",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn admin service-account update 42 --owner 7",
+        "gstn admin service-account update 42 --purpose \"Kanflow sync\" --json"
+      ],
+      "name": "admin service-account update",
+      "output": {
+        "properties": {
+          "fields": {
+            "items": {
+              "enum": [
+                "display_name",
+                "purpose",
+                "owner"
+              ]
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "enum": [
+              "updated",
+              "unchanged"
+            ]
+          },
+          "service_account": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "outcome",
+          "fields",
+          "service_account"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PATCH /api/v1/admin/service-accounts/{id}"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Change a service account's display name, purpose or owner (administrators, people only; offboarding hands it on with --owner)."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account tokens 42 --json"
+      ],
+      "name": "admin service-account tokens",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "public_id",
+                "name",
+                "scopes",
+                "created_at",
+                "expires_at",
+                "revoked_at",
+                "last_used_at",
+                "issued_by_user_id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/service-accounts/{id}/tokens"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List a service account's tokens with who issued them (administrators; never a secret; revoked and expired ones too)."
+    },
+    {
+      "args": [
+        {
+          "description": "The service account's user id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The token id (admin service-account tokens).",
+          "kind": "positional",
+          "name": "token_id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin service-account revoke-token 42 31 --yes"
+      ],
+      "name": "admin service-account revoke-token",
+      "output": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "revoked": {
+            "const": true
+          },
+          "service_account_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "service_account_id",
+          "id",
+          "revoked"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/admin/service-accounts/{id}/tokens/{token_id}"
+      ],
+      "scopes": [
+        "api",
+        "admin"
+      ],
+      "summary": "Revoke one of a service account's tokens at once, e.g. after a leak (administrators; an admin-scoped token works). Needs --yes."
+    },
+    {
       "args": [
         {
           "description": "GET | POST | PUT | PATCH | DELETE",

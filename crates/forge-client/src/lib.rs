@@ -9,6 +9,7 @@
 //! crate may depend on it. `Cargo.toml` of the server crates is checked by
 //! `client_depends_only_on_forge_errors` below.
 
+pub mod admin;
 pub mod app;
 pub mod browse;
 pub mod cli;
