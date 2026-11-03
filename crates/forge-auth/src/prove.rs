@@ -281,6 +281,10 @@ impl ProjectCtx {
             pending_deletion: self.project.pending_deletion,
         }
     }
+    /// The project as loaded (the viewer flags, `viewer.rs`).
+    pub(crate) fn loaded(&self) -> LoadedProject {
+        self.project
+    }
 }
 
 impl sealed::Sealed for ProjectCtx {}

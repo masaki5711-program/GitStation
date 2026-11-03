@@ -22,11 +22,20 @@ function status(
     target_branch: 'main',
     method: 'merge_commit',
     mergeable,
-    reasons,
+    // A newer server may add reason names under schema_version 1 (docs/api/merge-status.md);
+    // tests feed unknown names on purpose, so the wire type is widened here only.
+    reasons: reasons as MergeStatus['reasons'],
     approvals: null,
     checks: [],
     discussions: null,
     codeowners: { enforced: true, suspended_until: null },
+    viewer: {
+      can_approve: false,
+      can_unapprove: false,
+      can_merge: false,
+      can_mark_ready: false,
+      approved_by_me: false,
+    },
   } satisfies MergeStatus;
 }
 

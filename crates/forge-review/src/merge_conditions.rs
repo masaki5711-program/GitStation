@@ -59,6 +59,29 @@ pub struct MergeStatus {
     pub discussions: Option<u32>,
     /// The project's settings as read.
     pub settings: StoredMergeSettings,
+    /// The protection in effect on the target branch, from the rules read
+    /// with the approval facts (U2 review: the viewer flags share that
+    /// read); `None` when they were not read (no version yet).
+    pub target_protection: Option<Option<forge_auth::RefProtection>>,
+}
+
+/// The settings as locked are the ones the caller read (U2): the same
+/// `updated_at`, or both the defaults. `FG-REVIEW-0017` otherwise.
+fn unchanged_since(
+    project: forge_core::ProjectId,
+    expected: Option<&str>,
+    current: &StoredMergeSettings,
+) -> Result<(), ForgeError> {
+    let actual = current.updated_at.as_deref();
+    if actual == expected {
+        return Ok(());
+    }
+    Err(ForgeError::new(ErrorCode::MergeSettingsChanged)
+        .with_context("action", Action::MergeSettingsManage.name())
+        .with_context("reason", "stale_settings")
+        .with_context("project_id", project.get())
+        .with_context("expected", expected.unwrap_or("none"))
+        .with_context("actual", actual.unwrap_or("none")))
 }
 
 impl Review {
@@ -96,12 +119,17 @@ impl Review {
     /// the default among them (`FG-WEB-0006`); the CODEOWNERS switch is
     /// not touched (it has its own action). R6 review: decided again on the
     /// settings as locked — a change that loosens the approvals needs a role
-    /// at or above every protection of the project.
+    /// at or above every protection of the project. U2: `expected_updated_at`
+    /// is the `updated_at` the caller read (`None`: the defaults, never
+    /// stored); another one under the lock is `FG-REVIEW-0017
+    /// reason=stale_settings` — someone changed the settings in between and
+    /// nothing is overwritten silently.
     pub async fn put_merge_settings(
         &self,
         request: &ReviewRequest,
         proof: &Authorized<MergeSettingsCtx>,
         values: &MergeSettingsValues,
+        expected_updated_at: Option<&str>,
     ) -> Result<(SettingsOutcome, StoredMergeSettings), ForgeError> {
         require(proof.action(), Action::MergeSettingsManage)?;
         if values.allowed_methods.is_empty() {
@@ -120,7 +148,8 @@ impl Review {
                     facts.highest_protection,
                     review::settings::loosens(&facts.current.values, values),
                 );
-                proof.reconfirm(account(facts.account), fresh).map(drop)
+                proof.reconfirm(account(facts.account), fresh).map(drop)?;
+                unchanged_since(project, expected_updated_at, &facts.current)
             })
             .await?;
         Ok((outcome, stored))
@@ -231,6 +260,7 @@ impl Review {
                 checks: Vec::new(),
                 discussions: None,
                 settings,
+                target_protection: None,
             });
         };
         let source_tip = self
@@ -243,6 +273,8 @@ impl Review {
             .git_facts(request_id, repo, user, &current, &head, STATE_BUDGET)
             .await?;
         let facts = review::approval_facts(&self.db, project, current.id).await?;
+        let target_protection =
+            forge_auth::RefProtection::of(&facts.protection, &current.target_branch);
         let unresolved = review::unresolved_discussions(&self.db, current.id).await?;
         let stored: Option<StoredMergeability> = review::mergeability(&self.db, current.id).await?;
         let live = review::merges::latest_merge(&self.db, current.id)
@@ -319,6 +351,7 @@ impl Review {
             checks: conditions.checks,
             discussions: conditions.discussions,
             settings,
+            target_protection: Some(target_protection),
         })
     }
 

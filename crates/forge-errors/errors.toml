@@ -1624,3 +1624,17 @@ diagnosis = "The log event carries `reason=namespace_not_allowed`, `namespace` a
 fix = "Require the check under the namespace of the service account that reports it (for example `ci/gates`), or leave it optional."
 runbook = "merge-blocked"
 test = "an_ext_check_cannot_be_required"
+
+# ── U2: the merge settings screen (optimistic concurrency) ───────────────
+[[error]]
+code = "FG-REVIEW-0017"
+name = "MergeSettingsChanged"
+http_status = 409
+severity = "info"
+user_message_ja = "マージの設定は、表示した後に変更されました。最新の設定を読み直してから、もう一度保存してください。"
+user_message_en = "The merge settings changed after you opened them. Reload the latest settings, then save again."
+user_message_id = "Pengaturan merge berubah setelah Anda membukanya. Muat ulang pengaturan terbaru, lalu simpan lagi."
+cause = "`PUT /api/v1/projects/{id}/merge-settings` carried an `expected_updated_at` (the `updated_at` the caller read; `null` for the defaults, never stored) other than the settings' `updated_at` as locked in the write transaction (U2): someone changed the settings or the CODEOWNERS switch in between (the expiry worker's restore of a suspension counts too). The write is refused instead of silently replacing the other change. Nothing was written. Not an alert: two people editing at once."
+diagnosis = "The log event carries `reason=stale_settings`, `expected` and `actual` (the two `updated_at` values, `none` for the defaults) and `project_id`, with `action=MergeSettingsManage`. The change in between is the newest audit row: SELECT action, actor_user_id, occurred_at FROM forge.audit_log WHERE resource_type = 'project' AND resource_id = <project_id> AND action LIKE 'merge_settings.%' ORDER BY id DESC LIMIT 5."
+fix = "Read the settings again (`gstn merge-settings show --project <id>`, or reload the screen), check the other change, and save again with the new `updated_at` (`gstn merge-settings set` reads it by itself)."
+test = "stale_merge_settings_put_is_409"

@@ -201,7 +201,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::SelfApprovalRefused
         | ErrorCode::CodeownersInvalid
         | ErrorCode::ApprovalLimitReached
-        | ErrorCode::RequiredCheckNamespaceNotAllowed => false,
+        | ErrorCode::RequiredCheckNamespaceNotAllowed
+        | ErrorCode::MergeSettingsChanged => false,
     }
 }
 
