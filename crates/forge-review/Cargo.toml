@@ -29,6 +29,8 @@ serde_json.workspace = true
 # tests/real_browser.rs: a real bare repository under a temporary storage root.
 tempfile.workspace = true
 uuid.workspace = true
+# M3 R6: the combination table of evaluate_merge() (plan 11 R6).
+proptest.workspace = true
 
 [lints]
 workspace = true

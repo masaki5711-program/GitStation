@@ -25,8 +25,8 @@ use forge_git::browse::{BrowseLimits, Browser};
 use forge_git::{Git, GitConfig, StorageRoot};
 use forge_review::approvals::ReviewGit;
 use forge_review::{
-    check, refresh, CredentialRef, MergeAsk, MergeSettings, MergeTimeouts, Mergeability, Merger,
-    NewFields, Review, StoredMerge, StoredMergeRequest, VersionRefs,
+    check, refresh, CredentialRef, MergeAsk, MergeTimeouts, Mergeability, Merger, NewFields,
+    Review, StoredMerge, StoredMergeRequest, VersionRefs,
 };
 
 fn plumb(repo: &Path, args: &[&str], input: Option<&[u8]>) -> String {
@@ -79,6 +79,32 @@ fn commit(repo: &Path, files: &[(&str, &str)], parent: Option<&str>) -> String {
 
 fn oid(raw: &str) -> ObjectId {
     ObjectId::parse(raw).expect("oid")
+}
+
+impl World {
+    /// M3 R6: the project allows fast-forward only (its stored settings:
+    /// the request and the job read them).
+    async fn allow_fast_forward_only(&self) {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::User(self.owner),
+            forge_core::RequestId::parse("req-ff-settings").expect("id"),
+        );
+        let (outcome, _, ()) = forge_db::review::put_merge_settings_mr_decided(
+            &self.t.db,
+            &ctx,
+            self.project,
+            self.owner,
+            &forge_core::MergeSettingsValues {
+                allowed_methods: vec![MergeMethod::FastForward],
+                default_method: MergeMethod::FastForward,
+                ..forge_core::MergeSettingsValues::default()
+            },
+            |_| Ok(()),
+        )
+        .await
+        .expect("settings");
+        assert_eq!(outcome, forge_db::review::SettingsOutcome::Changed);
+    }
 }
 
 struct World {
@@ -453,9 +479,7 @@ async fn squash_and_fast_forward_build_their_own_results() {
     // Fast-forward, allowed by the project's settings.
     let mut w = world().await;
     w.checked().await;
-    let settings = MergeSettings::allowing(&[MergeMethod::FastForward]).expect("settings");
-    w.review = w.review.clone().with_merge_settings(settings.clone());
-    w.merger = w.merger.clone().with_settings(settings);
+    w.allow_fast_forward_only().await;
     let attempt = w
         .ask(Some(MergeMethod::FastForward), false)
         .await
@@ -1239,9 +1263,7 @@ async fn the_reconciliation_skips_only_a_busy_lock_and_settles_later() {
 async fn a_fast_forward_of_a_target_already_at_the_head_has_nothing_to_merge() {
     let mut w = world().await;
     w.checked().await;
-    let settings = MergeSettings::allowing(&[MergeMethod::FastForward]).expect("settings");
-    w.review = w.review.clone().with_merge_settings(settings.clone());
-    w.merger = w.merger.clone().with_settings(settings);
+    w.allow_fast_forward_only().await;
     let attempt = w
         .ask(Some(MergeMethod::FastForward), false)
         .await

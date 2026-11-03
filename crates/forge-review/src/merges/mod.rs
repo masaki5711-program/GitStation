@@ -44,14 +44,17 @@ use forge_git::browse::Browser;
 use forge_git::{Git, StorageRoot};
 
 mod attribution;
+pub mod conditions;
 pub mod evaluate;
 mod execute;
 mod reconcile;
 mod request;
 mod source;
 
+pub use conditions::{conditions, method_allowed, CheckRuns, Conditions, NoCheckRuns};
 pub use evaluate::{
-    blocked, evaluate_merge, stored_mergeable, BlockReason, MergeClearance, MergeFacts, Mergeable,
+    blocked, evaluate_merge, stored_mergeable, BlockReason, CheckConclusion, CheckRun, CheckStatus,
+    MergeClearance, MergeFacts, Mergeable, RequiredCheck,
 };
 pub use execute::{MergeReport, RECONCILE_BATCH};
 pub use forge_db::review::merges::{CredentialRef, StoredMerge};
@@ -59,12 +62,11 @@ pub use reconcile::ReconcileReport;
 pub use request::MergeAsk;
 pub(crate) use request::{head_changed as request_head_changed, is_ref_not_found};
 
-/// The methods a project allows and its defaults (ADR-0024 §4.1). M3 R4
-/// has no per-project setting yet: every project uses
-/// [`MergeSettings::default`] (merge commit and squash; default merge
-/// commit; the source branch kept unless asked). The setting and its
-/// `MergeSettingsManage` route join with the first writer (R6, with the
-/// other merge conditions).
+/// The methods a project allows and its defaults (ADR-0024 §4.1): since M3
+/// R6 the project's stored settings ([`MergeSettings::from_values`] of
+/// `forge_db::review::merge_settings`; without a row
+/// [`MergeSettings::default`]: merge commit and squash, default merge
+/// commit, the source branch kept unless asked).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeSettings {
     allowed: Vec<MergeMethod>,
@@ -92,6 +94,17 @@ impl MergeSettings {
             default_method,
             delete_source_default: false,
         })
+    }
+
+    /// The settings a project stored (M3 R6). An empty method list (the
+    /// table refuses it) allows nothing and defaults to a merge commit,
+    /// which is then refused (`FG-REVIEW-0010`), never a silent allow.
+    pub fn from_values(values: &forge_core::MergeSettingsValues) -> Self {
+        Self {
+            allowed: values.allowed_methods.clone(), // clone: the settings own their list
+            default_method: values.default_method,
+            delete_source_default: values.delete_source_default,
+        }
     }
 
     pub fn default_method(&self) -> MergeMethod {
@@ -188,7 +201,6 @@ pub struct Merger {
     git: Git,
     storage: StorageRoot,
     browser: Option<Browser>,
-    settings: MergeSettings,
     timeouts: MergeTimeouts,
     before_update_ref: Option<BeforeUpdateRef>,
 }
@@ -196,7 +208,6 @@ pub struct Merger {
 impl std::fmt::Debug for Merger {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Merger")
-            .field("settings", &self.settings)
             .field("timeouts", &self.timeouts)
             .finish_non_exhaustive()
     }
@@ -209,7 +220,6 @@ impl Merger {
             git,
             storage,
             browser: None,
-            settings: MergeSettings::default(),
             timeouts: MergeTimeouts::default(),
             before_update_ref: None,
         }
@@ -219,13 +229,6 @@ impl Merger {
     #[must_use]
     pub fn with_browser(mut self, browser: Browser) -> Self {
         self.browser = Some(browser);
-        self
-    }
-
-    /// Other merge settings (tests; the project setting arrives in R6).
-    #[must_use]
-    pub fn with_settings(mut self, settings: MergeSettings) -> Self {
-        self.settings = settings;
         self
     }
 

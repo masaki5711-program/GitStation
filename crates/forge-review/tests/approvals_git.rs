@@ -1531,3 +1531,334 @@ async fn a_merge_commit_is_attributed_to_the_range_pushers_or_to_no_one() {
     assert!(w.pushers_of(&w.tip("main")).await.is_empty());
     w.t.drop_now().await;
 }
+
+// ── M3 R6: merge conditions (ADR-0024 §7, §8.2, §8.6, §9, §10, §12) ──
+
+impl World {
+    /// Protect `main` at `role` with a merge rule (written as the
+    /// protected-ref routes write it: the rule and its merge rule).
+    async fn protect(
+        &self,
+        role: &str,
+        approvals: i32,
+        checks: &[&str],
+        talks: bool,
+        no_push: bool,
+    ) {
+        let checks: Vec<String> = checks.iter().map(|c| format!("'{c}'")).collect();
+        self.t
+            .commit_audited(
+                ("project", self.project.get()),
+                &[
+                    format!(
+                        "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                         VALUES ({}, 'refs/heads/main', '{role}')",
+                        self.project.get()
+                    ),
+                    format!(
+                        "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, \
+                         project_id, required_approvals, required_checks, \
+                         require_resolved_discussions, direct_push_forbidden) \
+                         SELECT id, project_id, {approvals}, ARRAY[{}]::text[], {talks}, {no_push} \
+                         FROM forge.protected_refs WHERE project_id = {}",
+                        checks.join(","),
+                        self.project.get()
+                    ),
+                ],
+            )
+            .await;
+    }
+
+    /// The project's merge settings (as `PUT …/merge-settings` writes them).
+    async fn settings(&self, values: forge_core::MergeSettingsValues) {
+        let principal = session(self.owner);
+        let project = loaded(&self.t, &principal, self.project).await;
+        let proof = prove(
+            &principal,
+            Action::MergeSettingsManage,
+            ProjectCtx::new(project),
+        )
+        .expect("proof");
+        let (outcome, _) = self
+            .review
+            .put_merge_settings(&request("req-settings"), &proof, &values)
+            .await
+            .expect("settings");
+        assert_eq!(outcome, forge_db::review::SettingsOutcome::Changed);
+    }
+
+    async fn status(&self) -> forge_review::MergeStatus {
+        let principal = session(self.owner);
+        let proof = self
+            .mr_proof(&principal, Action::MergeRequestRead)
+            .await
+            .expect("proof");
+        self.review
+            .merge_status(
+                &RequestId::parse("req-status").expect("id"),
+                &proof,
+                ready(self.repo),
+                None,
+            )
+            .await
+            .expect("status")
+    }
+
+    /// dave pushes `files` on top of the head (recorded like a push).
+    async fn push_next(&mut self, files: &[(&str, &str)], request_id: &str) {
+        let next = commit(&self.path, files, Some(&self.head));
+        plumb(
+            &self.path,
+            &["update-ref", "refs/heads/feature", &next],
+            None,
+        );
+        self.record_push(
+            self.dave,
+            "feature",
+            Some(&self.head.clone()),
+            &next,
+            request_id,
+        )
+        .await;
+        self.head = next;
+        self.checked().await;
+    }
+
+    async fn toggle(
+        &self,
+        change: forge_auth::CodeownersToggle,
+    ) -> forge_db::review::StoredMergeSettings {
+        let principal = session(self.owner);
+        let project = loaded(&self.t, &principal, self.project).await;
+        let proof = prove(
+            &principal,
+            Action::CodeownersEnforcementToggle,
+            forge_auth::CodeownersToggleCtx::new(project, None, change),
+        )
+        .expect("proof");
+        self.review
+            .toggle_codeowners(&request("req-toggle"), &proof)
+            .await
+            .expect("toggle")
+            .1
+    }
+}
+
+/// ADR-0024 §8.6, §10, §7: the protected branch's minimum, a required check
+/// nobody reported (never success) and every other reason come back at
+/// once, ranked; the status says the same.
+#[tokio::test]
+async fn a_merge_rule_blocks_with_every_reason_and_the_status_says_so() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 2, &["ci/gates"], true, false).await;
+    w.approve(w.rita).await.expect("approve");
+    let blocked = w.ask().await.expect_err("blocked");
+    assert_eq!(
+        reasons(&blocked),
+        "approvals_missing,required_check_missing"
+    );
+    assert!(
+        detail(&blocked).contains("rule=@protected_branch required=2 counted=1"),
+        "{}",
+        detail(&blocked)
+    );
+    let status = w.status().await;
+    assert!(!status.mergeable);
+    let names: Vec<&str> = status.reasons.iter().map(|r| r.as_str()).collect();
+    assert_eq!(names, ["approvals_missing", "required_check_missing"]);
+    assert_eq!(status.discussions, Some(0));
+    assert_eq!(status.checks.len(), 1);
+    assert!(status.checks[0].run.is_none(), "no check reported");
+    w.approve(w.mara).await.expect("approve");
+    let status = w.status().await;
+    let names: Vec<&str> = status.reasons.iter().map(|r| r.as_str()).collect();
+    assert_eq!(names, ["required_check_missing"], "still no check reported");
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §4.2 steps 3 and 5: a merge rule added after the request is
+/// decided again by the job (superseded, no ref moves).
+#[tokio::test]
+async fn the_merge_job_decides_a_merge_rule_added_after_the_request() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let attempt = w.ask().await.expect("queued");
+    w.protect("developer", 0, &["ci/gates"], false, false).await;
+    let report = w.merger.execute(attempt.id).await.expect("job");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
+    assert_eq!(w.tip("main"), w.base);
+    w.t.drop_now().await;
+}
+
+/// The settings are decided again by the job too: a method the project
+/// stopped allowing after the request supersedes the attempt
+/// (FG-REVIEW-0010).
+#[tokio::test]
+async fn the_merge_job_decides_the_allowed_method_again() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    let attempt = w.ask().await.expect("queued (merge commit, the default)");
+    w.settings(forge_core::MergeSettingsValues {
+        allowed_methods: vec![forge_core::MergeMethod::Squash],
+        default_method: forge_core::MergeMethod::Squash,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    let report = w.merger.execute(attempt.id).await.expect("job");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::MergeMethodNotAllowed));
+    assert_eq!(w.tip("main"), w.base);
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §4.3: the direct-push ban never stops a merge into the branch.
+#[tokio::test]
+async fn a_branch_without_direct_pushes_still_merges() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 0, &[], false, true).await;
+    let attempt = w.ask().await.expect("queued");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    assert_ne!(w.tip("main"), w.base);
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §8.2: a project that keeps approvals on push carries them to
+/// a new head that changes no configuration and no CODEOWNERS path; one
+/// `merge_request.approved` with `carried_from`, and the merge lands.
+#[tokio::test]
+async fn a_push_carries_the_approvals_when_the_project_keeps_them() {
+    let mut w = world(
+        &[("README.md", "base\n"), ("CODEOWNERS", "docs/ @mara\n")],
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "docs/ @mara\n"),
+            ("f.txt", "f\n"),
+        ],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    w.rule(1, &[]).await;
+    w.approve(w.rita).await.expect("approve");
+    w.push_next(
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "docs/ @mara\n"),
+            ("f.txt", "f2\n"),
+        ],
+        "req-push-2",
+    )
+    .await;
+    let carried: i64 = count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.events WHERE event_type = 'merge_request.approved' \
+         AND payload ->> 'carried_from' IS NOT NULL",
+    )
+    .await;
+    assert_eq!(carried, 1);
+    let attempt = w.ask().await.expect("the carried approval counts");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §8.2 (c): a new head that touches a path a CODEOWNERS rule of
+/// the target covers never carries — the approvals end (`new_commits`).
+#[tokio::test]
+async fn a_push_touching_an_owned_path_never_carries() {
+    let mut w = world(
+        &[("README.md", "base\n"), ("CODEOWNERS", "g.md @mara\n")],
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "g.md @mara\n"),
+            ("f.txt", "f\n"),
+        ],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    w.approve(w.rita).await.expect("approve");
+    w.push_next(
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "g.md @mara\n"),
+            ("f.txt", "f\n"),
+            ("g.md", "g\n"),
+        ],
+        "req-push-2",
+    )
+    .await;
+    let revoked: i64 = count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.events WHERE event_type = 'merge_request.unapproved' \
+         AND payload ->> 'reason' = 'new_commits'",
+    )
+    .await;
+    assert_eq!(revoked, 1);
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §9 (runbook codeowners): a broken CODEOWNERS blocks every
+/// merge; an Owner suspends the enforcement (time-boxed), the merge
+/// passes, and enforcing again restores it.
+#[tokio::test]
+async fn a_suspended_codeowners_enforcement_lets_the_fix_merge() {
+    let w = world(
+        &[("README.md", "base\n"), ("CODEOWNERS", "* @ghost\n")],
+        &[
+            ("README.md", "base\n"),
+            ("CODEOWNERS", "* @ghost\n"),
+            ("f.txt", "f\n"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        reasons(&w.ask().await.expect_err("blocked")),
+        "codeowners_invalid"
+    );
+    let suspended = w
+        .toggle(forge_auth::CodeownersToggle::Suspend { minutes: Some(30) })
+        .await;
+    assert!(!suspended.codeowners.enforced());
+    assert!(
+        !w.status()
+            .await
+            .approvals
+            .expect("report")
+            .codeowners_enforced
+    );
+    let attempt = w.ask().await.expect("passes while suspended");
+    assert_eq!(
+        w.merger.execute(attempt.id).await.expect("merge").outcome,
+        "applied"
+    );
+    let back = w.toggle(forge_auth::CodeownersToggle::Enforce).await;
+    assert!(back.codeowners.enforced());
+    w.t.drop_now().await;
+}

@@ -7,17 +7,23 @@
 //! (`inactive`), a person (`not_human`), Developer or above on the project
 //! (`role_insufficient`), not the author (`author`), and not a committer of
 //! the range (`committer`; `committers_unknown` when that cannot be shown —
-//! fail closed). The setting "committers' approvals do not count" is on for
-//! every project until R6 adds the project settings.
+//! fail closed) while the project's setting "committers' approvals do not
+//! count" is on (the default; M3 R6 makes it a project setting).
 //!
 //! Requirements, each blocking on its own:
 //! - every approval rule whose `target_pattern` is absent or matches the
 //!   target needs `required_approvals` counted approvals from its approvers
 //!   (any person when it names none) — `approvals_missing`;
+//! - M3 R6: the target's protection needs at least its merge rule's
+//!   minimum counted approvals from anyone eligible — `approvals_missing`
+//!   with the rule [`PROTECTED_BRANCH_RULE`] (ADR-0024 §8.6: a minimum);
 //! - every changed path's last-matching CODEOWNERS rule needs one counted
 //!   approval by one of its owners (a user, or a direct member of a group)
 //!   — `codeowner_approval_missing` (once per rule);
 //! - an unusable CODEOWNERS file — `codeowners_invalid`;
+//! - (both CODEOWNERS requirements only while enforcement is on: M3 R6's
+//!   time-boxed suspension, ADR-0024 §9, drops them — never the
+//!   configuration rule);
 //! - a changed configuration path ([`is_config_path`]) needs one counted
 //!   approval of a Maintainer or higher — `config_change_needs_maintainer_approval`;
 //! - changed paths that could not be read in full — `changed_paths_unknown`
@@ -58,6 +64,10 @@ pub enum ChangedPathsFact {
     Unknown(&'static str),
 }
 
+/// The name of the approval requirement of a protected branch's minimum
+/// (M3 R6): `@` never starts an approval rule's name, so it cannot collide.
+pub const PROTECTED_BRANCH_RULE: &str = "@protected_branch";
+
 /// What an owner resolved to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerRef {
@@ -92,6 +102,13 @@ pub struct ApprovalInputs {
     pub committers: Committers,
     pub changed: ChangedPathsFact,
     pub codeowners: CodeownersFact,
+    /// M3 R6: the project's "committers' approvals do not count" (default
+    /// on).
+    pub committer_approvals_excluded: bool,
+    /// M3 R6: CODEOWNERS enforced now (off only during a live suspension).
+    pub codeowners_enforced: bool,
+    /// M3 R6: the target's protection's minimum counted approvals (0: none).
+    pub minimum: u32,
 }
 
 impl ApprovalInputs {
@@ -106,6 +123,9 @@ impl ApprovalInputs {
             committers: Committers::Known(BTreeMap::new()),
             changed: ChangedPathsFact::Known(Vec::new()),
             codeowners: CodeownersFact::Absent,
+            committer_approvals_excluded: true,
+            codeowners_enforced: true,
+            minimum: 0,
         }
     }
 }
@@ -151,6 +171,8 @@ pub struct ApprovalReport {
     pub codeowners: Vec<CodeownerStatus>,
     /// `Some(satisfied)` when a configuration path changed.
     pub config_change: Option<bool>,
+    /// M3 R6: whether CODEOWNERS was enforced in this evaluation.
+    pub codeowners_enforced: bool,
     pub blocks: Vec<BlockReason>,
 }
 
@@ -178,6 +200,9 @@ fn classify(inputs: &ApprovalInputs, a: &ApproverFacts) -> (Option<UncountedReas
         Some(UncountedReason::RoleInsufficient)
     } else if a.approval.approver == inputs.author {
         Some(UncountedReason::Author)
+    } else if !inputs.committer_approvals_excluded {
+        // M3 R6: the project counts committers' approvals.
+        None
     } else {
         match &inputs.committers {
             Committers::Unknown(_) => Some(UncountedReason::CommittersUnknown),
@@ -245,10 +270,28 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
             counted,
         });
     }
-    // CODEOWNERS.
+    // M3 R6: the protected branch's minimum (anyone eligible counts).
+    if inputs.minimum > 0 {
+        let counted = u32::try_from(valid.len()).unwrap_or(u32::MAX);
+        if counted < inputs.minimum {
+            blocks.push(BlockReason::ApprovalsMissing {
+                rule: PROTECTED_BRANCH_RULE.to_owned(),
+                required: inputs.minimum,
+                counted,
+            });
+        }
+        rules.push(RuleStatus {
+            name: PROTECTED_BRANCH_RULE.to_owned(),
+            applies: true,
+            required: inputs.minimum,
+            counted,
+        });
+    }
+    // CODEOWNERS (M3 R6: not while its enforcement is suspended).
     let mut codeowners = Vec::new();
     let mut invalid = None;
     if let (
+        true,
         CodeownersFact::Valid {
             file,
             owners,
@@ -256,8 +299,11 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
             ..
         },
         ChangedPathsFact::Known(_),
-    ) = (&inputs.codeowners, &inputs.changed)
-    {
+    ) = (
+        inputs.codeowners_enforced,
+        &inputs.codeowners,
+        &inputs.changed,
+    ) {
         let by_line = matched.iter().filter_map(|(line, count)| {
             file.rules
                 .iter()
@@ -282,7 +328,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
             });
         }
     }
-    if let CodeownersFact::Invalid(e) = &inputs.codeowners {
+    if let (true, CodeownersFact::Invalid(e)) = (inputs.codeowners_enforced, &inputs.codeowners) {
         invalid = Some(BlockReason::CodeownersInvalid {
             line: e.line,
             reason: e.reason,
@@ -315,6 +361,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
         .map(|(a, reason, push)| {
             let reason = reason.or_else(|| {
                 let needed = !any_requirement
+                    || inputs.minimum > 0
                     || inputs
                         .facts
                         .rules
@@ -322,6 +369,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
                         .zip(&rules)
                         .any(|(rule, status)| status.applies && in_rule(rule, a))
                     || match &inputs.codeowners {
+                        CodeownersFact::Valid { .. } if !inputs.codeowners_enforced => false,
                         CodeownersFact::Valid { file, owners, .. } => codeowners.iter().any(|c| {
                             file.rules
                                 .iter()
@@ -348,6 +396,7 @@ pub fn evaluate(inputs: &ApprovalInputs) -> ApprovalReport {
         rules,
         codeowners,
         config_change,
+        codeowners_enforced: inputs.codeowners_enforced,
         blocks,
     }
 }

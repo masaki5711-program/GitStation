@@ -123,6 +123,11 @@ impl VersionRefs {
 
     /// The tip of `branch` in `repo` (`None`: the branch does not exist),
     /// the git call bounded by `deadline` too.
+    /// The git and the storage the refs live in (M3 R6: the carry's reads).
+    pub(crate) fn git(&self) -> (&Git, &StorageRoot) {
+        (&self.git, &self.storage)
+    }
+
     pub async fn branch_tip(
         &self,
         repo: RepoId,
@@ -262,7 +267,7 @@ pub type Deadline = tokio::time::Instant;
 
 /// What is left before `deadline`, at most [`GIT_TIMEOUT`];
 /// `FG-GIT-0002 operation=version_refs` when nothing is.
-fn git_budget(deadline: Deadline, step: &'static str) -> Result<Duration, ForgeError> {
+pub(crate) fn git_budget(deadline: Deadline, step: &'static str) -> Result<Duration, ForgeError> {
     let left = deadline.saturating_duration_since(tokio::time::Instant::now());
     if left.is_zero() {
         return Err(ForgeError::new(ErrorCode::GitTimeout)

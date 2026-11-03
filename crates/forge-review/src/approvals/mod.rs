@@ -32,6 +32,7 @@ use forge_db::review::StoredMergeRequest;
 use forge_errors::ForgeError;
 use forge_git::{Git, StorageRoot};
 
+pub mod carry;
 pub mod codeowners;
 mod commands;
 pub mod committers;
@@ -42,7 +43,7 @@ pub use codeowners::{Codeowners, CodeownersError, Owner};
 pub use commands::{ApprovalAnswer, ApprovalState, RuleAsk};
 pub use evaluate::{
     evaluate, is_config_path, ApprovalInputs, ApprovalReport, ApprovalStatus, ChangedPathsFact,
-    CodeownerStatus, CodeownersFact, Committers, OwnerRef, RuleStatus,
+    CodeownerStatus, CodeownersFact, Committers, OwnerRef, RuleStatus, PROTECTED_BRANCH_RULE,
 };
 
 /// The most changed paths evaluated (decided in R5; ADR-0024 未決): more is
@@ -142,13 +143,21 @@ pub struct GitFacts {
 }
 
 impl GitFacts {
-    /// With the database half: the inputs of [`evaluate`].
+    /// With the database half: the inputs of [`evaluate`] (M3 R6: the
+    /// project's settings and the target's merge rule minimum come with
+    /// the approval facts, read in the same transaction).
     pub fn inputs(
         self,
         mr: &StoredMergeRequest,
         head: &ObjectId,
         facts: forge_db::review::ApprovalFacts,
     ) -> ApprovalInputs {
+        let committer_approvals_excluded = facts.settings.values.committer_approvals_excluded;
+        let codeowners_enforced = facts.settings.codeowners.enforced();
+        let minimum = facts
+            .protection
+            .merge_rule(&mr.target_branch)
+            .required_approvals;
         ApprovalInputs {
             author: mr.author,
             head: head.clone(), // clone: the inputs own their values
@@ -157,6 +166,9 @@ impl GitFacts {
             committers: self.committers,
             changed: self.changed,
             codeowners: self.codeowners,
+            committer_approvals_excluded,
+            codeowners_enforced,
+            minimum,
         }
     }
 }
