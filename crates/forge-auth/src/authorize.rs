@@ -983,6 +983,20 @@ pub fn authorize(
             need(Role::Maintainer, p.role)
         }
 
+        // --- the integrations' event feed (M3 I1c, ADR-0016 §7) ---
+        // The route: the integration's own service account only.
+        (
+            Action::IntegrationEventRead | Action::IntegrationEventCursorRead,
+            Resource::IntegrationFeed(feed),
+        ) => integration_feed(principal, feed).map_err(|e| e.with_context("action", action.name())),
+        // One bound project's events of one class (`prove_visible`):
+        // visibility and pending deletion were decided above.
+        (
+            Action::IntegrationEventRead | Action::IntegrationEventCursorRead,
+            Resource::ProjectEvents { project, class },
+        ) => project_events(principal, project, *class)
+            .map_err(|e| e.with_context("action", action.name())),
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -1061,6 +1075,8 @@ pub fn authorize(
             | Action::IntegrationManage
             | Action::IntegrationRead
             | Action::IntegrationBindingManage
+            | Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -1085,7 +1101,9 @@ pub fn authorize(
             | Resource::MergeSettingsChange { .. }
             | Resource::ServiceAccount(_)
             | Resource::ServiceAccountTokenRequest { .. }
-            | Resource::CheckRun { .. },
+            | Resource::CheckRun { .. }
+            | Resource::IntegrationFeed(_)
+            | Resource::ProjectEvents { .. },
         ) => wrong_resource(),
     }
 }
@@ -1128,7 +1146,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Discussion { project, .. }
         | Resource::CodeownersEnforcement { project, .. }
         | Resource::MergeSettingsChange { project, .. }
-        | Resource::CheckRun { project, .. } => live(project),
+        | Resource::CheckRun { project, .. }
+        | Resource::ProjectEvents { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -1158,7 +1177,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::UserRename { .. }
         | Resource::Tombstone(_)
         | Resource::ServiceAccount(_)
-        | Resource::ServiceAccountTokenRequest { .. } => None,
+        | Resource::ServiceAccountTokenRequest { .. }
+        | Resource::IntegrationFeed(_) => None,
     }
 }
 
@@ -1209,7 +1229,9 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::MergeSettingsChange { .. }
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
-        | Resource::CheckRun { .. } => None,
+        | Resource::CheckRun { .. }
+        | Resource::IntegrationFeed(_)
+        | Resource::ProjectEvents { .. } => None,
     }
 }
 
@@ -1263,5 +1285,77 @@ fn service_account(account: &ServiceAccountView) -> Result<(), ForgeError> {
         AccountKind::Human | AccountKind::Bot => {
             Err(ForgeError::new(ErrorCode::NotFound).with_context("reason", "not_service_account"))
         }
+    }
+}
+
+/// The feed route (M3 I1c): the caller must be the integration's own
+/// service account — a person (administrators included) or a bot is the
+/// same 404 as another integration (no oracle for which ids exist), an
+/// agent's token, an act-as request and a disabled integration are 403.
+/// No administrator right passes anything here.
+fn integration_feed(
+    principal: &Principal,
+    feed: &crate::model::IntegrationFeedView,
+) -> Result<(), ForgeError> {
+    let not_found =
+        |reason| Err(ForgeError::new(ErrorCode::NotFound).with_context("reason", reason));
+    let refused =
+        |reason| Err(ForgeError::new(ErrorCode::Forbidden).with_context("reason", reason));
+    match principal.account_kind() {
+        AccountKind::ServiceAccount => {}
+        AccountKind::Human | AccountKind::Bot => return not_found("not_integration_account"),
+    }
+    if !feed.own {
+        return not_found("foreign_integration");
+    }
+    if principal.is_agent() {
+        return refused("agent_token");
+    }
+    if feed.act_as {
+        return refused("act_as_refused");
+    }
+    if !feed.enabled {
+        return refused("integration_disabled");
+    }
+    Ok(())
+}
+
+/// One bound project's events of one class for the feed's principal (M3
+/// I1c): the integration class by a Reporter (or higher) membership of the
+/// service account; the maintainer, deployment and admin classes never
+/// (they are not the feed's, whatever the role). No administrator right
+/// passes.
+fn project_events(
+    principal: &Principal,
+    project: &ProjectView,
+    class: forge_core::VisibilityClass,
+) -> Result<(), ForgeError> {
+    let refused =
+        |reason| Err(ForgeError::new(ErrorCode::Forbidden).with_context("reason", reason));
+    match principal.account_kind() {
+        AccountKind::ServiceAccount => {}
+        AccountKind::Human | AccountKind::Bot => return refused("not_service_account"),
+    }
+    if principal.is_agent() {
+        return refused("agent_token");
+    }
+    match class {
+        forge_core::VisibilityClass::Integration => {}
+        forge_core::VisibilityClass::Maintainer
+        | forge_core::VisibilityClass::Deployment
+        | forge_core::VisibilityClass::Admin => {
+            return Err(ForgeError::new(ErrorCode::Forbidden)
+                .with_context("reason", "class_not_in_feed")
+                .with_context("class", class.as_str()))
+        }
+    }
+    // The membership role: a service account sees member projects only,
+    // and holds no administrator right to lend.
+    if project.role.is_some_and(|r| r >= Role::Reporter) {
+        Ok(())
+    } else {
+        Err(ForgeError::new(ErrorCode::Forbidden)
+            .with_context("required_role", Role::Reporter.as_str())
+            .with_context("actual_role", project.role.map_or("none", Role::as_str)))
     }
 }

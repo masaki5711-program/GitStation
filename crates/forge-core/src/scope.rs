@@ -30,11 +30,16 @@ pub enum Scope {
     /// other scope satisfies it (`api` and `admin` included), so a token
     /// sees addresses only when it was issued for that.
     UserEmail,
+    /// See people's employee numbers where an API answer offers them (M3
+    /// I1c, plan 11 Q7: the event feed's `actor.employee_number`). Shaped
+    /// like [`Scope::UserEmail`]: an addition to `read_api` that satisfies
+    /// no other scope and that no other scope satisfies.
+    UserEmployeeNumber,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 8] = [
+    pub const ALL: [Scope; 9] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
@@ -43,6 +48,7 @@ impl Scope {
         Scope::MergeExecute,
         Scope::MergeApprove,
         Scope::UserEmail,
+        Scope::UserEmployeeNumber,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -60,6 +66,7 @@ impl Scope {
             Scope::MergeExecute => "merge_execute",
             Scope::MergeApprove => "merge_approve",
             Scope::UserEmail => "user_email",
+            Scope::UserEmployeeNumber => "user_employee_number",
         }
     }
 

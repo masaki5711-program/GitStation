@@ -172,6 +172,11 @@ pub const KEYS: &[Key] = &[
         "review.mergeability_fanout_max",
         "FORGE_REVIEW_MERGEABILITY_FANOUT_MAX",
     ),
+    // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
+    boolean(
+        "feed.require_sink_compare",
+        "FORGE_FEED_REQUIRE_SINK_COMPARE",
+    ),
     // M2 MR3: web sessions (ADR-0021 §5, §7, §12).
     text("web.base_url", "FORGE_WEB_BASE_URL"),
     text("web.session_key_file", "FORGE_WEB_SESSION_KEY_FILE"),

@@ -1,6 +1,6 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 8] = [
+const ALL: [(Scope, &str); 9] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
@@ -9,6 +9,7 @@ const ALL: [(Scope, &str); 8] = [
     (Scope::MergeExecute, "merge_execute"),
     (Scope::MergeApprove, "merge_approve"),
     (Scope::UserEmail, "user_email"),
+    (Scope::UserEmployeeNumber, "user_employee_number"),
 ];
 
 #[test]
@@ -102,4 +103,18 @@ fn user_email_scope_does_not_imply_read_api() {
     }
     assert!(Scope::UserEmail.satisfies(Scope::UserEmail));
     assert!(!Scope::UserEmail.satisfies(Scope::ReadApi));
+}
+
+/// M3 I1c (plan 11 Q7): `user_employee_number` is shaped like
+/// `user_email` — it satisfies nothing else and nothing else satisfies it.
+#[test]
+fn user_employee_number_scope_is_an_addition_only() {
+    for other in Scope::ALL {
+        if other == Scope::UserEmployeeNumber {
+            continue;
+        }
+        assert!(!Scope::UserEmployeeNumber.satisfies(other), "{other:?}");
+        assert!(!other.satisfies(Scope::UserEmployeeNumber), "{other:?}");
+    }
+    assert!(Scope::UserEmployeeNumber.satisfies(Scope::UserEmployeeNumber));
 }

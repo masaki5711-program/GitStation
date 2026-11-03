@@ -18,6 +18,8 @@ mod api;
 mod audit;
 mod auth;
 mod database;
+// M3 I1c: `feed.*`.
+mod feed;
 mod git_http;
 mod hosting;
 mod keys;
@@ -32,6 +34,7 @@ pub(crate) use audit::decode_hex;
 pub use audit::{AuditConfig, SealKey, SealKeys};
 pub use auth::{AuthConfig, OidcConfig, OidcSigningAlg};
 pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
+pub use feed::{FeedConfig, REQUIRE_SINK_COMPARE_KEY};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
@@ -54,6 +57,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_HOSTING_",
     // M3 R2: `review.*`.
     "FORGE_REVIEW_",
+    // M3 I1c: `feed.*`.
+    "FORGE_FEED_",
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
@@ -144,6 +149,8 @@ pub struct Config {
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
     pub review: ReviewConfig,
+    /// `feed.*` (the integrations' event feed, M3 I1c).
+    pub feed: FeedConfig,
     /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
     pub web: WebConfig,
     /// `auth.oidc.*` (the browser sign-in, M2 MR4).
@@ -387,6 +394,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         git_http: git_http(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,
+        feed: FeedConfig::load(get)?,
         web: WebConfig::load(
             get,
             text("web.base_url")?,

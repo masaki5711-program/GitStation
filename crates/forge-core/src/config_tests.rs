@@ -1351,3 +1351,25 @@ fn review_mergeability_fanout_has_a_default_env_and_a_range() {
     let err = load(None, &env(&[("FORGE_REVIEW_FANOUT", "7")])).expect_err("typo");
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+/// `feed.require_sink_compare` (M3 I1c, plan 11 Q1): `false` by default
+/// and when set so; `true` cannot take effect before the seal sink exists,
+/// so it is refused (`reason=unsupported`), as is any other value.
+#[test]
+fn feed_require_sink_compare_is_false_until_the_seal_sink_exists() {
+    use super::FeedConfig;
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.feed, FeedConfig::default());
+    assert!(!cfg.feed.require_sink_compare);
+    let cfg = load(None, &env(&[("FORGE_FEED_REQUIRE_SINK_COMPARE", "false")])).expect("false");
+    assert!(!cfg.feed.require_sink_compare);
+    for (value, reason) in [("true", "unsupported"), ("yes", "invalid")] {
+        let err = load(None, &env(&[("FORGE_FEED_REQUIRE_SINK_COMPARE", value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{value}");
+        let text = err.to_string();
+        assert!(
+            text.contains("feed.require_sink_compare") && text.contains(reason),
+            "{value}: {text}"
+        );
+    }
+}

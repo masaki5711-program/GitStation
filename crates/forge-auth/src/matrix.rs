@@ -127,6 +127,12 @@ pub(crate) enum Actor {
     /// A service account that is a Reporter member, with an `api` token
     /// (M3 C1: below the reporters' Developer role).
     ServiceAccountReporterTokenApi,
+    /// A service account that is a Developer member, with a `read_api`
+    /// token issued with `is_agent` (M3 I1c: the feed refuses agents).
+    ServiceAccountAgentTokenReadApi,
+    /// A disabled service account that is a Developer member, with a
+    /// `read_api` token (M3 I1c).
+    ServiceAccountDisabledTokenReadApi,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -329,6 +335,19 @@ pub(crate) enum Fixture {
         granted: bool,
         project: crate::matrix_review::MrProject,
     },
+    /// An integration's feed (M3 I1c): the caller is its service account
+    /// (`own`), it is enabled, the request carried `Forge-Act-As`.
+    IntegrationFeed {
+        own: bool,
+        enabled: bool,
+        act_as: bool,
+    },
+    /// One bound project's events of `class` (M3 I1c) on a project of
+    /// `project`'s kind.
+    ProjectEvents {
+        class: forge_core::VisibilityClass,
+        project: crate::matrix_review::MrProject,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,6 +469,16 @@ impl Actor {
             Actor::ServiceAccountReporterTokenApi => {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::Api])
             }
+            Actor::ServiceAccountAgentTokenReadApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi]).as_agent(true)
+            }
+            Actor::ServiceAccountDisabledTokenReadApi => Principal::authenticated(
+                ME,
+                false,
+                false,
+                Credential::Token(vec![Scope::ReadApi]),
+                AccountKind::ServiceAccount,
+            ),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -484,7 +513,9 @@ impl Actor {
             | Actor::ServiceAccountTokenMergeApprove
             | Actor::BotTokenMergeApprove
             | Actor::DevTokenUserEmail
-            | Actor::ServiceAccountTokenReadApi => Some(Role::Developer),
+            | Actor::ServiceAccountTokenReadApi
+            | Actor::ServiceAccountAgentTokenReadApi
+            | Actor::ServiceAccountDisabledTokenReadApi => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -580,7 +611,9 @@ impl Actor {
             | Actor::ServiceAccountGuestTokenRead
             | Actor::BotNonMemberTokenReadApi
             | Actor::ServiceAccountTokenReadApi
-            | Actor::ServiceAccountReporterTokenApi => None,
+            | Actor::ServiceAccountReporterTokenApi
+            | Actor::ServiceAccountAgentTokenReadApi
+            | Actor::ServiceAccountDisabledTokenReadApi => None,
         }
     }
 
@@ -903,6 +936,23 @@ impl Fixture {
                 namespace,
                 granted,
             },
+            Fixture::IntegrationFeed {
+                own,
+                enabled,
+                act_as,
+            } => Resource::IntegrationFeed(crate::model::IntegrationFeedView {
+                own,
+                enabled,
+                act_as,
+            }),
+            Fixture::ProjectEvents { class, project } => Resource::ProjectEvents {
+                project: match project {
+                    crate::matrix_review::MrProject::Private => private,
+                    crate::matrix_review::MrProject::Internal => internal,
+                    crate::matrix_review::MrProject::Deleted => deleted,
+                },
+                class,
+            },
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::Discussion(d) => d.resource(role),
             Fixture::ServiceAccountTarget { human, active } => {
@@ -965,6 +1015,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_checks::CHECK_ROWS,
         crate::matrix_rows_integrations::INTEGRATION_ROWS,
         crate::matrix_rows_work_items::WORK_ITEM_ROWS,
+        crate::matrix_rows_feed::FEED_ROWS,
     ]
     .concat()
 });

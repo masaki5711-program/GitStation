@@ -10,6 +10,9 @@ pub mod cursor;
 pub mod dedup_key;
 pub mod discussion;
 pub mod event_type;
+// ── M3 I1c: the event feed's visible set and cursor position ──
+pub mod feed;
+// ── end M3 I1c ──
 pub mod ids;
 pub mod integration;
 pub mod list_page;
@@ -52,6 +55,7 @@ pub use cursor::CursorKeys;
 pub use dedup_key::{DedupKey, DedupPart};
 pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
+pub use feed::{FeedBinding, FeedMaterial, FeedPosition, VisibleProject, VisibleSet};
 pub use ids::{
     ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,
     NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
@@ -105,6 +109,8 @@ mod cursor_tests;
 mod dedup_key_tests;
 #[cfg(test)]
 mod event_type_tests;
+#[cfg(test)]
+mod feed_tests;
 #[cfg(test)]
 mod integration_tests;
 #[cfg(test)]
