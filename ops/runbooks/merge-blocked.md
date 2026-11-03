@@ -59,7 +59,7 @@ target に一致する保護のルールのマージの条件は **いちばん�
 **写さない**（従来どおり `new_commits` で消す）のは: target が保護ブランチ、**その承認が与えられた head**（写された承認は
 `carried_from` をたどった最初の承認の head。ログの `approved_head`）からの変更が設定のファイル（`.forge/**` など）か
 target の CODEOWNERS の行が覆うパスに触れる、変更を読み切れない（ログ `forge.review.approvals_carry_decided` の `reason` =
-`target_protected` / `config_path` / `owned_path` / `changes_unknown` / `codeowners_unknown`、R6 のレビューで足した `special_path`（`.gitmodules`・`.gitattributes`）/ `submodule` / `symlink` / `mode_change`（実行ビットを含む）/ `binary_file` / `too_many_files`（51 以上）/ `too_many_lines`（追加と削除の合計 1 001 以上）、読めなかった入力は
+`target_protected` / `config_path` / `owned_path` / `changes_unknown` / `codeowners_unknown`、R6 のレビューで足した `special_path`（`.gitmodules`・`.gitattributes`・`.lfsconfig`）/ `submodule` / `symlink` / `mode_change`（実行ビットを含む）/ `binary_file` / `too_many_files`（51 以上）/ `too_many_lines`（追加と削除の合計 1 001 以上）、読めなかった入力は
 `forge.review.approvals_carry_unread` の warn）。写した承認も数えるかは評価の時点で決まる。
 
 ## 承認が数えられない理由（`gstn mr approvals --json` の `approvals[].uncounted_reason`）

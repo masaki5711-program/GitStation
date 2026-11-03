@@ -7,7 +7,7 @@
 //!
 //! R6 review (HIGH): a carry vouches for code nobody looked at, so it is
 //! limited to small, plain edits — never a build / execution surface
-//! (`.gitmodules`, `.gitattributes`, a file-mode change or a new
+//! (`.gitmodules`, `.gitattributes`, `.lfsconfig`, a file-mode change or a new
 //! executable, a symlink, a submodule), never more than
 //! [`CARRY_MAX_FILES`] files or [`CARRY_MAX_LINES`] changed lines, never a
 //! binary file. The remaining risk is accepted (ADR-0024 R6): a
@@ -70,7 +70,10 @@ fn file_name(path: &str) -> String {
 /// A build or execution surface (R6 review): never carried.
 fn surface(e: &ChangedEntry) -> Option<CarryRefusal> {
     let name = file_name(&e.path);
-    if name == ".gitmodules" || name == ".gitattributes" {
+    if matches!(
+        name.as_str(),
+        ".gitmodules" | ".gitattributes" | ".lfsconfig"
+    ) {
         return Some("special_path");
     }
     let modes = [e.old_mode, e.new_mode];
@@ -213,6 +216,9 @@ mod tests {
             ".gitattributes",
             "vendor/.gitattributes",
             "x/.GitModules",
+            // R6 review round 2: Git LFS's configuration (endpoints).
+            ".lfsconfig",
+            "sub/dir/.LfsConfig",
         ] {
             assert_eq!(
                 may_carry_approvals(&keep(vec![edit(path, 1)])),

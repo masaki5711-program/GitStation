@@ -1527,3 +1527,4 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   20261112100300 で CHECK を置き換え、つないだ文字列を空白で分けた数が配列の要素の数と等しいことも求める（副問い合わせを使わない
   式）。テスト `the_table_refuses_check_names_check_name_refuses` は拒否が CHECK によることを制約の名前で確かめ、正しい名前が CHECK を
   通ることも確かめる。
+- **LOW**: `.lfsconfig`（Git LFS の接続先の設定）も `special_path` として写さない（どの階層でも、大文字小文字を区別しない）。
