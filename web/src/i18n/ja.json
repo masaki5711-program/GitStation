@@ -473,7 +473,8 @@
       "next": {
         "firstUnresolved": "最初の未解決スレッドを開く",
         "changes": "変更を見る",
-        "push": "修正を push する"
+        "push": "修正を push する",
+        "markReady": "準備完了にする"
       },
       "checking": "マージできるか確かめています…",
       "hint": {
@@ -567,6 +568,43 @@
       "lineOld": "{{path}} の削除した {{line}} 行目",
       "commentOn": "{{where}}にコメントする",
       "yourComment": "コメント: {{where}}"
+    },
+    "conditions": {
+      "title": "マージの条件",
+      "met": "すべての条件を満たしています。",
+      "approvals": "承認",
+      "ruleProtected": "保護ブランチ: {{required}} 件のうち {{counted}} 件",
+      "rule": "{{name}}: {{required}} 件のうち {{counted}} 件",
+      "given_one": "承認 {{count}} 件",
+      "given_other": "承認 {{count}} 件",
+      "counts": "{{name}}: 数えます",
+      "notCounted": "{{name}}: 数えません（{{why}}）",
+      "codeownersSuspended": "CODEOWNERS の承認は {{until}} まで止めています。",
+      "checks": "必須のチェック",
+      "checkNone": "{{name}}: まだ報告がありません",
+      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+    },
+    "uncounted": {
+      "stale": "前の版への承認です",
+      "inactive": "アカウントが無効です",
+      "notHuman": "人による承認ではありません",
+      "roleInsufficient": "承認した人の役割が今は Developer 未満です",
+      "author": "作成者は自分の MR を承認できません",
+      "committer": "この MR のコミットを push した人です",
+      "committersUnknown": "コミットを push した人を確かめられません",
+      "notInRule": "この人を求めるルールがありません",
+      "carried": "前の版から引き継いだ承認です",
+      "other": "今は数えません"
+    },
+    "actions": {
+      "label": "この MR の操作",
+      "approve": "承認する",
+      "withdraw": "承認を取り消す",
+      "approved": "この版を承認しました。",
+      "approvedUncounted": "承認を記録しましたが、数えません（{{why}}）。",
+      "withdrawn": "承認を取り消しました。",
+      "unchanged": "変わりはありません。",
+      "reload": "MR を読み直す"
     }
   }
 }

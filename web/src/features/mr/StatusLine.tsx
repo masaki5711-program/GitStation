@@ -6,10 +6,11 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
-import { useMergeStatus } from '../../api/mergeRequests';
+import { useMarkReady, useMergeStatus } from '../../api/mergeRequests';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { pullUrl } from '../repoUrls';
+import { ActionError } from './ActionError';
 import { blockedReason, nextKey, statusHint, statusTone, type StatusTone } from './blockedReason';
 import styles from './Mr.module.css';
 
@@ -33,6 +34,7 @@ export function StatusLine({
 }) {
   const { t } = useTranslation();
   const status = useMergeStatus(projectId, iid);
+  const markReady = useMarkReady(projectId, iid);
 
   // One live region that stays mounted: its text changes, so each change is
   // announced (a region that appears with its text is often not).
@@ -62,6 +64,20 @@ export function StatusLine({
             {label}
           </button>
         );
+    } else if (label !== null && reason.next === 'mark_ready') {
+      // Shown only for a draft the viewer flags allow (blockedReason).
+      next = (
+        <button
+          type="button"
+          className={controls.primary}
+          aria-disabled={markReady.isPending ? 'true' : undefined}
+          onClick={() => {
+            if (!markReady.isPending) markReady.mutate();
+          }}
+        >
+          {label}
+        </button>
+      );
     } else if (label !== null) {
       next = <span className={styles.nextHint}>{label}</span>;
     }
@@ -82,6 +98,16 @@ export function StatusLine({
         {next}
         {hint !== null && <span className={styles.nextHint}>{hint}</span>}
       </div>
+      {markReady.isError && (
+        <ActionError
+          projectId={projectId}
+          iid={iid}
+          error={markReady.error}
+          onReload={() => {
+            markReady.reset();
+          }}
+        />
+      )}
       {status.isError && (
         <QueryError
           error={status.error}

@@ -459,7 +459,8 @@
       "next": {
         "firstUnresolved": "Buka utas pertama yang belum selesai",
         "changes": "Lihat perubahan",
-        "push": "Push perbaikan"
+        "push": "Push perbaikan",
+        "markReady": "Tandai siap"
       },
       "checking": "Memeriksa apakah bisa digabung…",
       "notOpen": "Merge request ini sudah tidak terbuka",
@@ -567,6 +568,43 @@
       "lineOld": "baris {{line}} yang dihapus di {{path}}",
       "commentOn": "Komentari {{where}}",
       "yourComment": "Komentar Anda: {{where}}"
+    },
+    "conditions": {
+      "title": "Syarat merge",
+      "met": "Semua syarat terpenuhi.",
+      "approvals": "Persetujuan",
+      "ruleProtected": "Branch terlindungi: {{counted}} dari {{required}} persetujuan",
+      "rule": "{{name}}: {{counted}} dari {{required}} persetujuan",
+      "given_one": "{{count}} persetujuan diberikan",
+      "given_other": "{{count}} persetujuan diberikan",
+      "counts": "{{name}}: dihitung",
+      "notCounted": "{{name}}: tidak dihitung ({{why}})",
+      "codeownersSuspended": "Persetujuan CODEOWNERS ditangguhkan sampai {{until}}.",
+      "checks": "Pemeriksaan wajib",
+      "checkNone": "{{name}}: belum dilaporkan",
+      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+    },
+    "uncounted": {
+      "stale": "diberikan untuk versi yang lebih lama",
+      "inactive": "akunnya dinonaktifkan",
+      "notHuman": "tidak diberikan oleh orang",
+      "roleInsufficient": "peran pemberi persetujuan sekarang di bawah Developer",
+      "author": "penulis tidak dapat menyetujui merge request miliknya",
+      "committer": "mereka mem-push commit merge request ini",
+      "committersUnknown": "siapa yang mem-push commit tidak dapat dipastikan",
+      "notInRule": "tidak ada aturan yang meminta pemberi persetujuan ini",
+      "carried": "dibawa dari versi sebelumnya",
+      "other": "saat ini tidak dihitung"
+    },
+    "actions": {
+      "label": "Tindakan pada merge request ini",
+      "approve": "Setujui",
+      "withdraw": "Tarik persetujuan saya",
+      "approved": "Anda menyetujui versi ini.",
+      "approvedUncounted": "Persetujuan Anda dicatat tetapi tidak dihitung ({{why}}).",
+      "withdrawn": "Persetujuan Anda ditarik.",
+      "unchanged": "Tidak ada yang berubah.",
+      "reload": "Muat ulang merge request"
     }
   }
 }

@@ -2,7 +2,8 @@
 // status (why it is stopped, what next), and the tabs Overview (description
 // and threads) and Changes. The status line and the threads read on their
 // own: a failure of one shows in its place only, with its request_id.
-// Approve and merge are U2.
+// The Overview starts with the merge conditions panel (U2: every reason,
+// approve / withdraw, merge).
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
@@ -14,6 +15,7 @@ import { QueryError } from '../../../components/QueryError';
 import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
 import { CommentForm } from '../../../features/mr/CommentForm';
+import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
 import { Announcer } from '../../../features/mr/announce';
@@ -233,6 +235,7 @@ function Overview({
 
   return (
     <>
+      <ConditionsPanel projectId={projectId} iid={mr.iid} />
       <section aria-labelledby="mr-description-title">
         <h2 id="mr-description-title" className={repo.sectionTitle}>
           {t('mr.view.description')}

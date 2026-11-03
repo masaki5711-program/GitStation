@@ -238,3 +238,58 @@
   opacity: 0.7;
   cursor: progress;
 }
+
+/* U2: the merge conditions panel and its actions. */
+.conditions {
+  margin: 0 0 var(--gs-space-6);
+  padding: var(--gs-space-3) var(--gs-space-4);
+  border: 1px solid var(--gs-color-border);
+  border-radius: var(--gs-radius-md);
+  background: var(--gs-color-surface);
+}
+
+.conditionsTitle {
+  margin: 0 0 var(--gs-space-2);
+  font-size: var(--gs-font-size-lg);
+}
+
+.conditionsTitle:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}
+
+.conditionsSub {
+  margin: var(--gs-space-3) 0 var(--gs-space-1);
+  font-size: var(--gs-font-size-md);
+}
+
+.conditionsMet {
+  margin: 0;
+  color: var(--gs-color-success-text);
+  font-weight: bold;
+}
+
+.reasonList,
+.plainList {
+  margin: 0;
+  padding-left: var(--gs-space-6);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  align-items: center;
+  margin: var(--gs-space-4) 0 var(--gs-space-2);
+}
+
+.progress {
+  margin: var(--gs-space-2) 0;
+  overflow-wrap: anywhere;
+}
+
+.progress:focus-visible {
+  outline: var(--gs-focus-ring);
+  outline-offset: 2px;
+}

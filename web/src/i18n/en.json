@@ -473,7 +473,8 @@
       "next": {
         "firstUnresolved": "Open the first unresolved thread",
         "changes": "See the changes",
-        "push": "Push a fix"
+        "push": "Push a fix",
+        "markReady": "Mark as ready"
       },
       "checking": "Checking whether it can be merged…",
       "hint": {
@@ -567,6 +568,43 @@
       "lineOld": "removed line {{line}} of {{path}}",
       "commentOn": "Comment on {{where}}",
       "yourComment": "Your comment: {{where}}"
+    },
+    "conditions": {
+      "title": "Merge conditions",
+      "met": "Every condition is met.",
+      "approvals": "Approvals",
+      "ruleProtected": "Protected branch: {{counted}} of {{required}} approvals",
+      "rule": "{{name}}: {{counted}} of {{required}} approvals",
+      "given_one": "{{count}} approval given",
+      "given_other": "{{count}} approvals given",
+      "counts": "{{name}}: counts",
+      "notCounted": "{{name}}: does not count ({{why}})",
+      "codeownersSuspended": "CODEOWNERS approval is suspended until {{until}}.",
+      "checks": "Required checks",
+      "checkNone": "{{name}}: not reported yet",
+      "checkRun": "{{name}}: {{status}} / {{conclusion}}"
+    },
+    "uncounted": {
+      "stale": "it was given for an older version",
+      "inactive": "the account is disabled",
+      "notHuman": "it was not given by a person",
+      "roleInsufficient": "the approver's role is below Developer now",
+      "author": "the author cannot approve their own merge request",
+      "committer": "they pushed commits of this merge request",
+      "committersUnknown": "who pushed the commits cannot be confirmed",
+      "notInRule": "no rule asks for this approver",
+      "carried": "it was carried over from an earlier version",
+      "other": "it does not count now"
+    },
+    "actions": {
+      "label": "Actions on this merge request",
+      "approve": "Approve",
+      "withdraw": "Withdraw my approval",
+      "approved": "You approved this version.",
+      "approvedUncounted": "Your approval was recorded but does not count ({{why}}).",
+      "withdrawn": "Your approval was withdrawn.",
+      "unchanged": "Nothing changed.",
+      "reload": "Reload the merge request"
     }
   }
 }

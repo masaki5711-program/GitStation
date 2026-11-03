@@ -51,10 +51,10 @@ describe('merge request header and status line', () => {
     await waitFor(() => {
       expect(line.textContent).toBe('It conflicts with other changes');
     });
-    // Only the first reason is the line.
-    expect(screen.queryByText(/Not enough approvals/)).toBeNull();
+    // Only the first reason is the line (U2: the conditions panel lists the rest).
+    expect(line.textContent).not.toContain('Not enough approvals');
     expect(screen.getByText('Push a fix')).toBeTruthy();
-    // U1 has no approve or merge buttons (U2).
+    // No viewer flag: no approve or merge button (U2 shows them from the flags only).
     expect(screen.queryByRole('button', { name: /approve|merge/i })).toBeNull();
     const nav = screen.getByRole('navigation', { name: 'Repository screens' });
     expect(within(nav).getByRole('link', { name: 'MR' }).getAttribute('aria-current')).toBe('page');
