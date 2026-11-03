@@ -645,3 +645,38 @@ async fn doctor_reports_a_service_account_whose_owner_left() {
     assert_eq!(h.ownerless, 0);
     t.drop_now().await;
 }
+
+/// S0 review: a user's kind never changes (`users_kind_immutable`), so the
+/// kind checks of a profile and an identity stay true after their rows were
+/// written; an UPDATE of another column passes.
+#[tokio::test]
+async fn a_users_kind_never_changes() {
+    let t = FreshDb::migrated().await;
+    let mut su = t.superuser().await;
+    for (from, to) in [
+        (902, "human"),
+        (901, "service_account"),
+        (903, "service_account"),
+    ] {
+        assert_eq!(
+            refusal(
+                &mut su,
+                PEOPLE,
+                &format!("UPDATE forge.users SET kind = '{to}' WHERE id = {from}")
+            )
+            .await,
+            Some(("23514".into(), "users_kind_immutable".into())),
+            "{from} -> {to}"
+        );
+    }
+    assert_eq!(
+        refusal(
+            &mut su,
+            PEOPLE,
+            "UPDATE forge.users SET display_name = 'Renamed', kind = kind WHERE id = 902"
+        )
+        .await,
+        None
+    );
+    t.drop_now().await;
+}

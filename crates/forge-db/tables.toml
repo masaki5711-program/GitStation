@@ -50,6 +50,8 @@ guarded_functions = [
     "push_unlisted_refs_guard",
     # M3 R5 round 4: the commits a push introduced are never changed.
     "push_commits_guard",
+    # M3 S0 review: a user's kind never changes.
+    "users_kind_immutable",
 ]
 
 [tables.events]

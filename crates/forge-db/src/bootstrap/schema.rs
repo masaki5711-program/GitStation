@@ -49,6 +49,10 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.push_unlisted_refs_guard()",
     // ── M3 R5 round 4: pushed commits never change (20261111100300) ──
     "forge.push_commits_guard()",
+    // ── M3 S0 (20261113100000; guarded since 20261113100100) ──
+    "forge.users_kind_immutable()",
+    "forge.service_account_profiles_kinds()",
+    "forge.user_identities_human_only()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -137,6 +141,27 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER push_commits_immutable BEFORE UPDATE ON \
          forge.push_commits FOR EACH ROW EXECUTE FUNCTION \
          forge.push_commits_guard()",
+    ),
+    // ── M3 S0: a user's kind never changes; the kinds of a profile and an
+    // identity (20261113100000, guarded since 20261113100100) ──
+    (
+        "users",
+        "users_kind_immutable",
+        "CREATE TRIGGER users_kind_immutable BEFORE UPDATE OF kind ON forge.users \
+         FOR EACH ROW EXECUTE FUNCTION forge.users_kind_immutable()",
+    ),
+    (
+        "service_account_profiles",
+        "service_account_profiles_kinds",
+        "CREATE TRIGGER service_account_profiles_kinds BEFORE INSERT OR UPDATE OF user_id, \
+         owner_user_id ON forge.service_account_profiles FOR EACH ROW EXECUTE FUNCTION \
+         forge.service_account_profiles_kinds()",
+    ),
+    (
+        "user_identities",
+        "user_identities_human_only",
+        "CREATE TRIGGER user_identities_human_only BEFORE INSERT OR UPDATE OF user_id ON \
+         forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_only()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
