@@ -76,8 +76,8 @@ CREATE TABLE forge.protected_ref_merge_rules (
         CHECK (cardinality(required_checks) <= 20
             AND array_position(required_checks, NULL) IS NULL
             AND (cardinality(required_checks) = 0
-                OR (E'\n' || array_to_string(required_checks, E'\n'))
-                    ~ '^(\n(ci|forge|kanflow)/[a-z0-9][a-z0-9._/-]{0,99})+$')),
+                OR (' ' || array_to_string(required_checks, ' '))
+                    ~ '^( (ci|forge|kanflow)/[a-z0-9][a-z0-9._/-]{0,99})+$')),
     require_resolved_discussions  boolean NOT NULL DEFAULT false,
     direct_push_forbidden         boolean NOT NULL DEFAULT false,
     created_at                    timestamptz NOT NULL DEFAULT now(),
