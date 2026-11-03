@@ -742,7 +742,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             ]),
         ),
         // ── M3 I1c: the feed's reads (derived, written by the feed) and the
-        // retention policy (read only; 20261117100000) ──
+        // retention policy (read only; 20261118100000) ──
         (
             "forge.integration_feed_reads",
             plain(&[
@@ -923,7 +923,7 @@ const LATER_TABLES: &[&str] = &[
     "check_runs",
     "check_annotations",
     "check_namespace_grants",
-    // ── M3 I1c: the event feed (migration 20261117100000) ──
+    // ── M3 I1c: the event feed (migration 20261118100000) ──
     "integration_feed_reads",
     "retention_policy",
 ];

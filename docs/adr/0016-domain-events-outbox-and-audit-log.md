@@ -1118,7 +1118,7 @@ API の契約は `docs/api/integration-feed.md`（schema_version 1、欄は足�
    §7 の「同じゲート」はこのテスト。エージェントモデルのゲートは必要なら別に足す）。`VisibleSet` は §7 の `Projects` / `Instance` の
    列挙ではなく、連携の分類だけの構造体にした（管理者の履歴は後の MR）。
 4. **結びつけの世代**（§7 と「第 3 回の案」の扱いを変えた点。I1b Amendment の「I1c への依存」を満たす）: `integration_bindings.generation`
-   （`GENERATED ALWAYS AS IDENTITY`、追記のマイグレーション `20261117100000`。forge_app は選べず、更新もできない）を `VisibleSet` の
+   （`GENERATED ALWAYS AS IDENTITY`、追記のマイグレーション `20261118100000`。forge_app は選べず、更新もできない）を `VisibleSet` の
    ハッシュに入れた。§7 は「ハッシュなら判定の結果そのものを比べるので世代は要らない」としたが、**同じプロジェクトを解除して結び直すと
    判定の結果は同じ**になり、I1b が解除で `work_item.unlinked` なしに終わらせたリンクを kanflow が知らないまま続けてしまう。世代を足した
    ハッシュなら、解除と結び直し（同じ kanflow のプロジェクトでも）の後は必ず 410 `visible_set_changed`（テスト

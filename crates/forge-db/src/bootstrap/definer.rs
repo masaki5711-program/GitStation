@@ -46,7 +46,7 @@ const DEFINERS: &[Definer] = &[
         signature: "forge.events_retention(integer,text)",
         arguments: "max_rows integer, request_id text, OUT deleted bigint, \
              OUT from_seq bigint, OUT to_seq bigint",
-        version: 20261117100000,
+        version: 20261118100000,
         owner: "forge_purge",
         grants: &["forge_app:EXECUTE"],
     },
@@ -54,7 +54,7 @@ const DEFINERS: &[Definer] = &[
         name: "feed_new_epoch",
         signature: "forge.feed_new_epoch(text,text)",
         arguments: "reason text, request_id text, OUT old_epoch uuid, OUT new_epoch uuid",
-        version: 20261117100000,
+        version: 20261118100000,
         owner: "forge_seq",
         grants: &["forge_maint:EXECUTE"],
     },

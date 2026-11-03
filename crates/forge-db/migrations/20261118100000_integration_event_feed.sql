@@ -204,4 +204,4 @@ ON CONFLICT DO NOTHING;
 
 INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id, details)
 VALUES ('system', 'db.migrate', 'succeeded', 'migration', 'db.migrate',
-    '{"version": 20261117100000, "guarded_changes": ["forge.integration_bindings.audited_change_present", "forge.events_retention", "forge.feed_new_epoch"]}');
+    '{"version": 20261118100000, "guarded_changes": ["forge.integration_bindings.audited_change_present", "forge.events_retention", "forge.feed_new_epoch"]}');

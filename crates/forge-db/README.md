@@ -783,7 +783,7 @@ detected one the subscriber's progress; DELETE only while the repository is
 detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
 
-**The integration feed (M3 I1c, migration `20261117100000`, ADR-0016 Amendment
+**The integration feed (M3 I1c, migration `20261118100000`, ADR-0016 Amendment
 I1c)**: `feed::open` starts a `REPEATABLE READ READ ONLY` snapshot on the read
 pool (`FeedSnapshot`): `state` (epoch, `high_seq`, `retained_from`, the
 `work-item-sync` position, `retention_policy.events_days`; the read's bound is
