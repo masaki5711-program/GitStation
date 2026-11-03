@@ -1,4 +1,4 @@
-# Runbook: integrations（FG-INT-0012 / FG-INT-0016 / FG-INT-0017）
+# Runbook: integrations（FG-INT-0012 / FG-INT-0016 / FG-INT-0017 / FG-INT-0018 / FG-INT-0019）
 
 連携（kanflow）の登録・有効と無効の切り替え・プロジェクトの結びつけと解除の手順（M3 I1a、計画 11 §5 I1、02 §2、ADR-0016 Amendment I1a）。
 
@@ -13,6 +13,22 @@
   - 削除待ちのプロジェクトには結べない（`FG-REPO-0006`）。完全削除（purge）で結びつけも消える。
   - **無効の連携、またはサービスアカウントが無効の連携には結べない**（`FG-INT-0017`）。解除はできる。
   - 結びつけが付けたメンバーを人が外すと、付けた印（`granted_membership`）が消える。その後に人が付け直したメンバーは、解除しても残る。
+- 作業項目（M3 I1b、ADR-0016 Amendment I1b）: 結ばれたプロジェクトでは、MR のタイトルとソースブランチの名前、push されたブランチの名前から
+  kanflow の `PBI-<n>` の参照を見つけて（02 §2 の規則。`PBI-430` は `PBI-43` ではない。共有のテストのベクタ `docs/api/pbi-ref-vectors.json`）、
+  購読者 `work-item-sync`（`ordered`）が MR とのリンク（`forge.merge_request_work_items`、`source = auto`）とイベントの作業項目
+  （`forge.event_work_items`）を書く。作業項目は (連携, 外部プロジェクト, `PBI-<n>`) で 1 つ（`forge.work_items`）。
+  - タイトルから参照が消えたリンクは終わる（`unlinked_at`、`unlink_source = auto`）。**行は消えない**（履歴）。ブランチの削除・マージ・クローズでもリンクは残る。
+  - 人は MR の画面・API から手でリンク・解除できる（Developer 以上、`WorkItemLink`）。**人（`human`）が** 解除した作業項目は、タイトルにあっても
+    自動ではもう付かない（人がもう一度リンクすれば付く）。エージェント・サービスアカウント・ボットの解除（`unlinked_by_kind`）は検出を止めない。
+    人のリンクは自動では外れない。自動で付いた作業項目を人がリンクすると人のリンクになる（自動の行は `unlink_source = converted` で終わる）。
+  - 結びつけを解除すると、そのプロジェクトの開いたリンクのうち、その結びつけの作業項目のものは `unlink_source = unbound` で終わる
+    （監査 `integration.unbound` の `work_item_links_ended` が数。`work_item.unlinked` のイベントは出ない）。
+  - データベースが裏付ける: 人のリンク・解除には同じトランザクションの `work_item.*` の監査の行、自動のリンクには `work-item-sync` の前進が要る
+    （トリガー `merge_request_work_items_audited`。違反は `FG-DB-0013` の `reason=work_item_link_unaudited` / `derived_work_item_link`、
+    制約名 `merge_request_work_items_audited` / `_derived`。監査の行はその作業項目を名指す必要がある）。
+  - 結ばれていないプロジェクトでは何も見つけない（手でのリンクは `FG-INT-0018`）。結ぶ前からある MR は、次のイベント（編集・push・コメント）でリンクされる。
+  - 自動のリンクは MR あたり 20 まで（超えた分はログ `forge.work_items.detected_capped`）、手のリンクは 50 まで（`FG-INT-0019`）、
+    1 つのイベントの作業項目は 100 まで（`forge.work_items.event_items_capped`）。
 
 ## Trigger
 
@@ -23,11 +39,16 @@
 - 結びつけが `FG-INT-0017`（409、IntegrationDisabled）で断られた: 連携が無効（`reason=integration_disabled`）、またはその
   サービスアカウントが無効（`reason=service_account_disabled`）。
 - 連携をすぐ止めたい（トークンの漏えい、kanflow 側の暴走）。
+- 手でのリンクが `FG-INT-0018`（409、WorkItemProjectNotBound）で断られた: そのプロジェクトは連携に結ばれていない。
+- 手でのリンクが `FG-INT-0019`（409、WorkItemLinkLimitReached）で断られた: その MR の手のリンクが 50 に達した。
+- 「MR が kanflow の PBI に出ない」「リンクが付かない・外れない」という問い合わせ。
 
 ## Impact
 
 - `FG-INT-0016` / `FG-INT-0012`: その結びつけが作られないだけ。ほかの結びつけ・連携は動く。何も書かれていない。
 - 連携の無効化: その連携のイベントの履歴（I1c）が止まる。結びつけとメンバーはそのまま。
+- `FG-INT-0018` / `FG-INT-0019`: そのリンクが作られないだけ。何も書かれていない。
+- `work-item-sync` が止まると（Runbook subscriber-lag、`FG-DB-0008 reason=stuck`）、リンクとイベントの作業項目の更新が遅れる（失われはしない）。
 
 ## 本番での実行の承認
 
@@ -80,6 +101,33 @@
 
    結びつけがメンバーを付けた・外したときは、同じトランザクションに `member.added` / `member.removed` の行とイベントがある。
 
+7. MR の作業項目のリンク（そのプロジェクトの Reporter 以上）。`source`（`auto` / `manual`）、`unlinked_at`（`null` = 付いている）、`unlink_source`。
+
+   ```sh
+   gstn mr work-items --project <project_id> --iid <iid> --json
+   ```
+
+   `linked_by_kind` / `unlinked_by_kind` は `human` / `agent` / `service_account` / `bot`。`unlink_source` は `auto`（タイトルから消えた）、
+   `manual`（手）、`converted`（人のリンクに切り替わった）、`unbound`（結びつけの解除）。
+
+   リンクが付かないとき: プロジェクトが結ばれているか（2）、参照が規則どおりか（`PBI-43`、`pbi-43`、`PBI #43`、`PBI_43`。`PBI--43` や前に英数字が付くと拾わない。
+   ベクタ `docs/api/pbi-ref-vectors.json`）、人が一度解除していないか（`unlink_source = manual` の行があれば自動では付かない）、
+   `work-item-sync` が止まっていないか（`forge doctor` の `subscribers.lag`）。
+
+   ```sql
+   SELECT l.id, w.ref, l.source, l.linked_by, l.linked_seq, l.linked_at, l.unlinked_at, l.unlink_source, l.unlinked_by
+     FROM forge.merge_request_work_items AS l JOIN forge.work_items AS w ON w.id = l.work_item_id
+    WHERE l.merge_request_id = (SELECT id FROM forge.merge_requests WHERE project_id = <project_id> AND iid = <iid>)
+    ORDER BY l.id;
+   SELECT e.seq, e.event_type, w.ref FROM forge.event_work_items AS x
+     JOIN forge.events AS e ON e.seq = x.seq JOIN forge.work_items AS w ON w.id = x.work_item_id
+    WHERE e.project_id = <project_id> ORDER BY e.seq DESC LIMIT 20;
+   ```
+
+8. `FG-INT-0018` のログ: `reason=project_not_bound`、`project_id`。`FG-INT-0019` のログ: `reason=manual_link_limit`、`limit=50`、`project_id`、
+   `merge_request_id`。人のリンクと解除の監査は `work_item.linked` / `work_item.unlinked`（プロジェクトの行、`actor_kind = user`）。
+   自動のリンクは派生イベント（`actor_kind = system`、`caused_by_seq` が元の MR のイベント）で、監査の行は無い。
+
 ## Mitigate
 
 ### A. 連携を登録する `[MUTATING — needs approval]`
@@ -124,12 +172,26 @@ gstn integration-binding remove --project <project_id> --integration <integratio
   gstn user disable <service_account_id>
   ```
 
+### D. 作業項目を手でリンクする・解除する `[MUTATING — needs approval]`
+
+```sh
+gstn mr link-work-item --project <project_id> --iid <iid> --ref PBI-43
+gstn mr unlink-work-item --project <project_id> --iid <iid> --ref PBI-43
+```
+
+- `FG-INT-0018`: 先に B でプロジェクトを結ぶ。
+- `FG-INT-0019`: 要らない手のリンクを解除する。上限はコードの定数（forge-db `work_items::MAX_MANUAL_LINKS`）。
+- 自動のリンクを人が解除すると、そのタイトルのままでも自動では付き直さない（意図した解除を上書きしないため）。戻すときは手でリンクする。
+- 前の結びつけの作業項目へのリンクが残っているとき（通常は解除で終わる）は、作業項目の id で解除する:
+  `gstn mr unlink-work-item --project <project_id> --iid <iid> --ref <work_item_id>`（id は `gstn mr work-items` の `work_item_id`）。
+
 ## Verify
 
 - `gstn admin integration view <id> --json` の `enabled`・`event_types`・`bindings` が期待どおり。
 - `gstn integration-binding list --project <id> --json` の `items` が期待どおり（解除後は空）。
 - 結んだプロジェクトのメンバーにサービスアカウントが Reporter でいる（`gstn member list --project <id>`）。解除後は（結びつけが付けた
   Reporter なら）いない。
+- 作業項目: `gstn mr work-items --project <id> --iid <iid>` に期待どおりのリンクがある（解除した行は `unlinked_at` 付きで残る）。
 
 ## 後片付け
 

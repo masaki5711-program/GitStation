@@ -218,12 +218,16 @@ fn tasks(
 /// first in production: enqueues the version job on `repository.pushed`;
 /// registered at the head on the first start, ADR-0016 §1; M3 R2: it also
 /// enqueues the mergeability checks of a target push, at most
-/// `review.mergeability_fanout_max`). The others (`notify`,
-/// `webhook-dispatch`, `work-item-sync`, …) join with their features.
+/// `review.mergeability_fanout_max`) and `work-item-sync` (M3 I1b,
+/// `ordered`: the work item links and the events' work items; it stops and
+/// alerts on an event it cannot process). The others (`notify`,
+/// `webhook-dispatch`, …) join with their features.
 fn registry(review: &ReviewConfig) -> Result<Registry, ForgeError> {
-    Registry::new().with(Arc::new(forge_db::review::MergeRequestRefresh::new(
-        review.mergeability_fanout_max,
-    )))
+    Registry::new()
+        .with(Arc::new(forge_db::review::MergeRequestRefresh::new(
+            review.mergeability_fanout_max,
+        )))?
+        .with(Arc::new(forge_db::work_items::WorkItemSync))
 }
 // ── end C5 ──
 

@@ -39,7 +39,7 @@ use std::path::Path;
 
 use forge_core::config::DatabaseConfig;
 use forge_core::ids::{ProjectId, RepoId};
-use forge_core::{PushApplied, PushRecord, PushRecorded, PushReplay, Pusher, RequestId};
+use forge_core::{PushApplied, PushRecord, PushRecorded, PushReplay, RequestId};
 use forge_db::jobs::Enqueued;
 use forge_db::repositories::{self, Reprovisioned};
 use forge_db::Db;
@@ -157,10 +157,13 @@ fn log_error(reason: &'static str) -> ForgeError {
     ForgeError::new(ErrorCode::PushRecordFailed).with_context("reason", reason)
 }
 
+/// One logged push: its request id, the logged pusher, project and record.
+pub(crate) type LoggedPush = (RequestId, PushReplay, ProjectId, PushRecord);
+
 /// The pushes of the `forge.git.push_applied` lines of `text`, checked, in
 /// file order. A push line that cannot be replayed stops everything (with
 /// its 1-based `line`); no push line at all is `push_log_empty`.
-pub(crate) fn pushes_in(text: &str) -> Result<Vec<(Pusher, ProjectId, PushRecord)>, ForgeError> {
+pub(crate) fn pushes_in(text: &str) -> Result<Vec<LoggedPush>, ForgeError> {
     let mut pushes = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let parsed = PushApplied::from_log_line(line)
@@ -207,30 +210,26 @@ pub(crate) async fn record_push_with(
     text: &str,
 ) -> Result<String, ForgeError> {
     let pushes = pushes_in(text)?;
-    let replay_of = |pusher: &Pusher| PushReplay {
-        pusher: pusher.user,
-        credential_id: pusher.credential_id,
-    };
     // All or nothing up to the first write: every line must name an
     // existing repository of its logged project and an existing pusher.
-    for (n, (pusher, logged_project, push)) in pushes.iter().enumerate() {
-        repositories::check_replay(db, *logged_project, replay_of(pusher), push)
+    for (n, (push_request, replay, logged_project, push)) in pushes.iter().enumerate() {
+        repositories::check_replay(db, *logged_project, *replay, push)
             .await
             .map_err(|e| {
                 e.with_context("push", n + 1)
-                    .with_context("push_request_id", &pusher.request_id)
+                    .with_context("push_request_id", push_request)
             })?;
     }
     // The operator acts (system + the CLI's label); the logged pusher goes
     // into the record as `replayed_from`.
     let operator = context(request_id);
     let mut out = String::new();
-    for (pusher, logged_project, push) in &pushes {
+    for (push_request, replay, logged_project, push) in &pushes {
         let mut ctx = operator.clone(); // clone: one operator context per replayed push
-        ctx.request_id = pusher.request_id.clone(); // clone: the logged id keys the record
-        let done = repositories::replay_push(db, &ctx, *logged_project, replay_of(pusher), push)
+        ctx.request_id = push_request.clone(); // clone: the logged id keys the record
+        let done = repositories::replay_push(db, &ctx, *logged_project, *replay, push)
             .await
-            .map_err(|e| e.with_context("push_request_id", &pusher.request_id))?;
+            .map_err(|e| e.with_context("push_request_id", push_request))?;
         let outcome = match done {
             PushRecorded::Recorded => "recorded",
             PushRecorded::Deduped => "already_recorded",
@@ -239,7 +238,7 @@ pub(crate) async fn record_push_with(
             target: "forge_cli",
             event = "forge.admin.repo.push_recorded",
             request_id = %request_id,
-            push_request_id = %pusher.request_id,
+            push_request_id = %push_request,
             repo_id = push.repository_id.get(),
             project_id = logged_project.get(),
             refs = push.updates.len(),
@@ -249,13 +248,13 @@ pub(crate) async fn record_push_with(
         let line = match done {
             PushRecorded::Recorded => format!(
                 "push {} (repository {}, {} refs): recorded\n",
-                pusher.request_id,
+                push_request,
                 push.repository_id.get(),
                 push.updates.len()
             ),
             PushRecorded::Deduped => format!(
                 "push {} (repository {}, {} refs): already recorded (nothing changed)\n",
-                pusher.request_id,
+                push_request,
                 push.repository_id.get(),
                 push.updates.len()
             ),

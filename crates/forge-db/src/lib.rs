@@ -88,6 +88,9 @@ pub mod service_accounts;
 // ── M3 I1a: integrations and project bindings (plan 11 §5 I1) ──
 pub mod integrations;
 // ── end M3 I1a ──
+// ── M3 I1b: work items, their links and the work-item-sync subscriber ──
+pub mod work_items;
+// ── end M3 I1b ──
 // ── M2 MR3: web sessions (ADR-0021 §5) ──
 pub mod sessions;
 // ── end M2 MR3 ──

@@ -126,9 +126,10 @@ mod record_push {
     }
 
     fn push_line(repo: RepoId, project: ProjectId, user: UserId, request: &str) -> String {
-        let pusher = Pusher {
+        let pusher = forge_core::Pusher {
             request_id: RequestId::parse(request).expect("request id"),
             user,
+            kind: forge_core::UserKind::Human,
             credential_id: None,
             source_ip: None,
             user_agent: None,

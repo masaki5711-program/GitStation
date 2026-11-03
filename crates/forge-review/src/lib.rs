@@ -58,6 +58,7 @@ mod purge;
 mod version_refs;
 pub mod versions;
 mod versions_carry;
+pub mod work_items;
 
 pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{

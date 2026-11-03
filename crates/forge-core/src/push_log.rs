@@ -15,7 +15,7 @@
 use forge_errors::{ErrorCode, ForgeError};
 use serde::{Deserialize, Serialize};
 
-use crate::push::{ObjectId, PushRecord, PushUpdateKind, PushedRef, Pusher};
+use crate::push::{ObjectId, PushRecord, PushReplay, PushUpdateKind, PushedRef, Pusher};
 use crate::{ProjectId, RefName, RepoId, RequestId, UserId};
 
 /// The `event` field of the line.
@@ -168,10 +168,11 @@ impl PushApplied {
         Ok(Some(applied))
     }
 
-    /// The pusher, project and record of this line, checked
-    /// ([`PushRecord::check`]). IP and user agent are not logged, so a
-    /// replayed record has none.
-    pub fn to_parts(&self) -> Result<(Pusher, ProjectId, PushRecord), ForgeError> {
+    /// The push request's id, the pusher (as the replay records it:
+    /// `replayed_from`), the project and the record of this line, checked
+    /// ([`PushRecord::check`]). IP, user agent and account kind are not
+    /// logged: the replay's actor is the operator, never the pusher.
+    pub fn to_parts(&self) -> Result<(RequestId, PushReplay, ProjectId, PushRecord), ForgeError> {
         let request_id =
             RequestId::parse(&self.request_id).ok_or_else(|| unreadable("request_id"))?;
         let user = UserId::new(positive(self.user_id, "user_id")?);
@@ -206,12 +207,10 @@ impl PushApplied {
         };
         record.check()?;
         Ok((
-            Pusher {
-                request_id,
-                user,
+            request_id,
+            PushReplay {
+                pusher: user,
                 credential_id,
-                source_ip: None,
-                user_agent: None,
             },
             project,
             record,

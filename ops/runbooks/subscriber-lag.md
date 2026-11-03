@@ -45,7 +45,11 @@
    （`query=subscribers.release`。ハンドラーが SQL のエラーを握りつぶした）、COMMIT で派生イベントの検査に拒まれた（`FG-DB-0013 reason=derived_*`）。
    `source_event_id` も付く。イベントに数えない失敗（`subscriber_not_registered`、`ordering_mismatch`、`event_missing`、`cursor_moved`、DB の障害）は
    `source_seq` なしで出て、`failures` は増えない。
-6. `behind` のとき: `forge worker` が動いているか（`systemctl status forge-worker`）、`outbox.sequencer_lag` も失敗していないか（番号付けが止まっていれば購読者も止まる → Runbook `outbox-sequencer-lag.md`）。
+6. **`work-item-sync`**（M3 I1b、`ordered`。作業項目のリンクとイベントの作業項目、Runbook integrations）が止まったとき: ハンドラーの
+   `FG-SYS-0001 reason=invalid_event_payload`（`field`、`event_type`、`seq`。イベントの書き手の不具合）か DB のエラーが多い。止まっている間は
+   新しいリンクと `forge.event_work_items` が書かれず、kanflow のイベントの履歴（I1c）の作業項目が遅れる（失われはしない。再開すると順に書く）。
+   MR やブランチの操作は動き続ける。飛ばすと、そのイベントのリンクの変化と作業項目が永久に記録されないので、手順 4 は最後の手段。
+7. `behind` のとき: `forge worker` が動いているか（`systemctl status forge-worker`）、`outbox.sequencer_lag` も失敗していないか（番号付けが止まっていれば購読者も止まる → Runbook `outbox-sequencer-lag.md`）。
    worker のログに `FG-DB-0001`（DB に届かない）や LISTEN の失敗（`query=subscribers.listen*`）があれば、購読者は 5 秒ごとの確認と再接続で続く。
 
 ### 受け入れているリスク（ADR-0016 C5 の Amendment）

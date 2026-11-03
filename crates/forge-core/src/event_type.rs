@@ -1,7 +1,7 @@
 //! Domain event types (ADR-0016 §5): the one list of the `forge.events`
 //! `event_type` values forge writes. A variant joins in the commit that adds
 //! its writer (step D3 MR1b: the token events, and `repository.created`
-//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`); subscribers match it without `_`.
+//! for D4; D4 MR2: `project.created`; D4 MR4: `member.*` of projects; D4 MR5: `protected_ref.*`; M1 phase 9 MR2: `repository.pushed`; M1 phase 8b MR7a: `project.visibility_changed`; D5 MR3: `project.deleted`, `project.restored`; D5 MR4: `project.purged`; D5 MR5: `project.moved`, `group.moved`, `user.renamed`; M3 R1a: `merge_request.opened`, `.updated`, `.draft_changed`, `.closed`, `.reopened`; M3 R1b: `merge_request.pushed`; M3 R2: `merge_request.conflict_detected`, `.conflict_resolved`; M3 R6: `merge_settings.codeowners_enforcement_changed`, `.codeowners_enforcement_restored`; M3 C1: `check.completed`; M3 I1b: `work_item.linked`, `.unlinked`); subscribers match it without `_`.
 
 /// Who may read an event type (ADR-0016 §5 table); the feed and webhooks
 /// decide with it through `authorize()`.
@@ -165,11 +165,23 @@ pub enum EventType {
     /// conclusion as it was publishes nothing). Deduplicated by
     /// `check_completed:<check_run_id>:<revision>`.
     CheckCompleted,
+    // ── M3 I1b: work item links (plan 02 §5.8; integration class) ──
+    /// `work_item.linked` (M3 I1b, ADR-0016 Amendment I1b): a merge request
+    /// was linked to a work item — detected in its title or source branch
+    /// by the `work-item-sync` subscriber (a derived event, actor `system`)
+    /// or linked by a person (audited on the project). Deduplicated by
+    /// `work_item_linked:<link_id>` (a link row is made once).
+    WorkItemLinked,
+    /// `work_item.unlinked` (M3 I1b): the link ended — the title no longer
+    /// names the work item, or a person unlinked it. The link row stays
+    /// (history). Deduplicated by `work_item_unlinked:<link_id>`.
+    WorkItemUnlinked,
+    // ── end M3 I1b ──
 }
 
 impl EventType {
     /// Every event type, in declaration order.
-    pub const ALL: [EventType; 34] = [
+    pub const ALL: [EventType; 36] = [
         EventType::ProjectCreated,
         EventType::RepositoryCreated,
         EventType::TokenCreated,
@@ -204,6 +216,8 @@ impl EventType {
         EventType::CodeownersEnforcementChanged,
         EventType::CodeownersEnforcementRestored,
         EventType::CheckCompleted,
+        EventType::WorkItemLinked,
+        EventType::WorkItemUnlinked,
     ];
 
     /// The stored name (passes the `forge.events.event_type` CHECK; tested).
@@ -247,6 +261,8 @@ impl EventType {
                 "merge_settings.codeowners_enforcement_restored"
             }
             EventType::CheckCompleted => "check.completed",
+            EventType::WorkItemLinked => "work_item.linked",
+            EventType::WorkItemUnlinked => "work_item.unlinked",
         }
     }
 
@@ -277,7 +293,9 @@ impl EventType {
             | EventType::MergeRequestSourceBranchDeleted
             | EventType::MergeRequestApproved
             | EventType::MergeRequestUnapproved
-            | EventType::CheckCompleted => VisibilityClass::Integration,
+            | EventType::CheckCompleted
+            | EventType::WorkItemLinked
+            | EventType::WorkItemUnlinked => VisibilityClass::Integration,
             EventType::TokenCreated
             | EventType::TokenRevoked
             | EventType::ProjectPurged
