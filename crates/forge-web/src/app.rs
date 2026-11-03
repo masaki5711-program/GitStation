@@ -1160,6 +1160,35 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::unapprove,
         )
         .responds::<mr::ApprovalAnswerBody>(Verb::Post, mr::UNAPPROVE)
+        // M3 I1b (plan 02 §2, §5.7): a merge request's work item links,
+        // detected and a person's.
+        .route_with(
+            Verb::Get,
+            mr::WORK_ITEM_LINKS,
+            Action::MergeRequestRead,
+            "A merge request's work item links, open and ended, oldest first (as the repository browse API)",
+            mr::LinksOf,
+            mr::work_item_links,
+        )
+        .responds::<mr::WorkItemLinksBody>(Verb::Get, mr::WORK_ITEM_LINKS)
+        .route_with(
+            Verb::Put,
+            mr::WORK_ITEM_LINK,
+            Action::WorkItemLink,
+            "Link a work item (PBI-<n> of the project's kanflow binding) to a merge request by hand (Developer)",
+            mr::LinkOf,
+            mr::link_work_item,
+        )
+        .responds::<mr::WorkItemLinkAnswerBody>(Verb::Put, mr::WORK_ITEM_LINK)
+        .route_with(
+            Verb::Delete,
+            mr::WORK_ITEM_LINK,
+            Action::WorkItemLink,
+            "Unlink a work item from a merge request; the link stays in its history and is not detected again (Developer)",
+            mr::LinkOf,
+            mr::unlink_work_item,
+        )
+        .responds_no_content(Verb::Delete, mr::WORK_ITEM_LINK)
         .route_with(
             Verb::Get,
             mr::APPROVALS,

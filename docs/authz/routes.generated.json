@@ -600,6 +600,30 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WorkItemLink",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "WorkItemLink",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProjectRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-settings",

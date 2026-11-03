@@ -4548,6 +4548,167 @@
           "internal"
         ],
         "type": "string"
+      },
+      "WorkItemBody": {
+        "additionalProperties": false,
+        "description": "A work item as kanflow names it (02 §5.7's `work_items` entry).",
+        "properties": {
+          "project_id": {
+            "description": "The external (kanflow) project of the binding.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "`kanflow`.",
+            "type": "string"
+          },
+          "ref": {
+            "description": "`PBI-<n>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "project_id",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "WorkItemLinkAnswerBody": {
+        "additionalProperties": false,
+        "description": "`PUT …/work-items/{ref}`: what the link did.",
+        "properties": {
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "link_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "outcome": {
+            "description": "`linked` or `unchanged` (already linked, by detection or a person).",
+            "type": "string"
+          },
+          "source": {
+            "description": "`auto` or `manual`: how the (found) link was made.",
+            "type": "string"
+          },
+          "work_item": {
+            "$ref": "#/components/schemas/WorkItemBody"
+          },
+          "work_item_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "link_id",
+          "work_item_id",
+          "work_item",
+          "source"
+        ],
+        "type": "object"
+      },
+      "WorkItemLinkBody": {
+        "additionalProperties": false,
+        "description": "One link, open or ended.",
+        "properties": {
+          "link_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "linked_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "linked_by": {
+            "description": "The person who linked it (`null` for a detected link).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "`auto` (detected in the title or the source branch) or `manual`.",
+            "type": "string"
+          },
+          "unlink_source": {
+            "description": "`auto` (the title no longer names it) or `manual`; `null` while open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unlinked_at": {
+            "description": "`null` while the link is open.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unlinked_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "work_item": {
+            "$ref": "#/components/schemas/WorkItemBody"
+          },
+          "work_item_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "link_id",
+          "work_item_id",
+          "work_item",
+          "source",
+          "linked_by",
+          "linked_at",
+          "unlinked_at",
+          "unlink_source",
+          "unlinked_by"
+        ],
+        "type": "object"
+      },
+      "WorkItemLinksBody": {
+        "additionalProperties": false,
+        "description": "`GET …/work-items`.",
+        "properties": {
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "links": {
+            "description": "Oldest first, at most 500.",
+            "items": {
+              "$ref": "#/components/schemas/WorkItemLinkBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More than 500 link rows exist.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "iid",
+          "links",
+          "truncated"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -7913,6 +8074,160 @@
         },
         "summary": "One version's diff, merge base to head (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/work-items": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_work_items",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemLinksBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A merge request's work item links, open and ended, oldest first (as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_merge_requests_iid_work_items_ref",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Unlink a work item from a merge request; the link stays in its history and is not detected again (Developer)",
+        "x-forge-action": "WorkItemLink"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_merge_requests_iid_work_items_ref",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemLinkAnswerBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Link a work item (PBI-<n> of the project's kanflow binding) to a merge request by hand (Developer)",
+        "x-forge-action": "WorkItemLink"
       }
     },
     "/api/v1/projects/{id}/merge-settings": {
