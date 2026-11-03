@@ -566,3 +566,65 @@ async fn binding_refused_for_pending_deletion_project_over_http() {
     assert_eq!(member_role(&w.t, w.web, w.sa).await, None);
     w.t.drop_now().await;
 }
+
+/// I1a review (security HIGH / MEDIUM): a disabled integration, or one
+/// whose service account is disabled, binds no project (each bind would
+/// grant the account a Reporter membership).
+#[tokio::test]
+async fn binding_a_disabled_integration_or_account_is_refused_over_http() {
+    let w = world().await;
+    let db = &w.t.db;
+    let owner = session(w.alice.user_id, false);
+    let one = format!("/api/v1/admin/integrations/{}", w.integration);
+    let body = json!({"external_project_id": "P1"});
+    let off = call(
+        db,
+        "PATCH",
+        &one,
+        session(w.root, true),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.json);
+    let refused = call(
+        db,
+        "PUT",
+        &binding_uri(w.web, w.integration),
+        owner.clone(),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.json);
+    assert_eq!(refused.code(), "FG-INT-0017");
+    assert_eq!(member_role(&w.t, w.web, w.sa).await, None);
+    let on = call(
+        db,
+        "PATCH",
+        &one,
+        session(w.root, true),
+        Some(json!({"enabled": true})),
+    )
+    .await;
+    assert_eq!(on.status, StatusCode::OK, "{}", on.json);
+    let disabled = call(
+        db,
+        "POST",
+        &format!("/api/v1/admin/users/{}/disable", w.sa.get()),
+        session(w.root, true),
+        None,
+    )
+    .await;
+    assert!(disabled.status.is_success(), "{}", disabled.json);
+    let refused = call(
+        db,
+        "PUT",
+        &binding_uri(w.web, w.integration),
+        owner,
+        Some(body),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.json);
+    assert_eq!(refused.code(), "FG-INT-0017");
+    assert_eq!(member_role(&w.t, w.web, w.sa).await, None);
+    w.t.drop_now().await;
+}
