@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 422 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`merge-blocked`](../../ops/runbooks/merge-blocked.md) |
 | 発生させるテスト | `an_ext_check_cannot_be_required` |
 
 ## 利用者向けメッセージ

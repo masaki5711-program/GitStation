@@ -55,6 +55,8 @@ M3 R5（ADR-0024 §9）の CODEOWNERS。マージの条件は **target のブラ
       `gstn codeowners-enforcement suspend --project <id> --for <分>`
       （= `PUT /api/v1/projects/<id>/merge-settings/codeowners-enforcement` 本文 `{"enforced": false, "for_minutes": <分>}`）。
       期限なし・0・1441 以上は FG-AUTH-0003（`expiry_missing` / `expiry_out_of_range`）。
+      **一時停止は延ばせない**: 止まっている間にもう一度止めても何も変わらない（答えは今の期限のまま）。足りなければ、期限が過ぎるか
+      戻してから、改めて承認を得て止め直す（期限の過ぎた一時停止を止め直すと、期限の記録が同じ変更に先に残る）。
    3. 一時停止の間は、CODEOWNERS の所有者の承認（`codeowner_approval_missing`）と読めないファイル（`codeowners_invalid`）だけが止める
       理由から外れる。**設定のファイルの変更は Maintainer の承認が要るまま**（`config_change_needs_maintainer_approval`。CODEOWNERS を直す
       MR はこれに当たる）。承認のルール・保護ブランチのマージの条件もそのまま効く。
@@ -68,10 +70,21 @@ M3 R5（ADR-0024 §9）の CODEOWNERS。マージの条件は **target のブラ
    R6 より前の「target に push できる人の直接の push」は、禁止の無いブランチでだけ使える（承認された手順。force push はしない）。
 3. 直した後、止まっていた MR はもう一度マージを要求すれば評価し直される（CODEOWNERS はキャッシュしない）。
 
+## 期限が来たとき（知らせ）
+
+- worker のタスク `codeowners_restore`（60 秒ごと）が、期限を過ぎた一時停止を 1 回記録する: 監査の行とイベント
+  `merge_settings.codeowners_enforcement_restored`（actor `system`、`expired_at`、dedup は `codeowners_enforcement_restored:<project_id>:<期限の epoch>`）、
+  ログ `forge.worker.codeowners_enforcement_restored`（info、`restored` の件数、`request_id`）。
+- 記録に失敗した行は `forge.worker.codeowners_restore_failed`（warn、`error_code`、`project_id`）を 1 回出し、次の回の後ろへ回る
+  （ほかのプロジェクトの記録は続く）。
+- **記録のためだけ**: worker が止まっていても、判定は期限を過ぎた時点で強制に戻っている（`GET /api/v1/projects/<id>/merge-settings` の
+  `codeowners.enforced` は期限の後 `true`）。記録が来ない・遅れるのは worker の障害（runbook worker）。
+
 ## Verify
 
 - `gstn mr approvals --project <id> --iid <n>` の `blocked_by` から `codeowners_invalid` が消え、`codeowners` に必要な所有者の行が出る。
 - 新しい `forge.review.codeowners_invalid` がその target で出ない。
+- 一時停止を使ったなら `gstn merge-settings show --project <id>` が `CODEOWNERS enforced` を示す（戻した、または期限が過ぎた）。
 - 一時停止を使ったなら `gstn merge-settings show --project <id>` が `CODEOWNERS enforced` を示す（戻した、または期限が過ぎた）。
 
 ## Escalate

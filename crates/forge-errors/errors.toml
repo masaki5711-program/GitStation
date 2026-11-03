@@ -834,7 +834,8 @@ user_message_en = "This branch cannot be pushed to directly. Open a merge reques
 user_message_id = "Branch ini tidak dapat di-push secara langsung. Buat merge request lalu lakukan merge."
 cause = "The branch is protected and a matching rule's merge rule forbids direct pushes (`protected_ref_merge_rules.direct_push_forbidden`, M3 R6, ADR-0024 §4.3, §12): a push may neither create nor move it — for every caller, administrators included (like force pushes and deletions of a protected ref). Merging a merge request is not affected (`MergeRequestMerge` does not read the ban). The whole push was refused in-band before git ran (no ref changed)."
 diagnosis = "The log event carries `action=RepoPush`, `reason=direct_push_forbidden` and `protection` (the protection's minimum push role); on a Smart HTTP push also `refs`, `denied_refs`, `denied_codes`. Which rule bans it (read-only): GET /api/v1/projects/<id>/protected-refs (the rules with their `merge_rule`)."
-fix = "Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban by setting the merge rule again without `--no-direct-push` (`gstn merge-rule set --project <id> --rule-id <n> …`) or removes it (`gstn merge-rule remove`). When a broken CODEOWNERS also blocks the fix's merge request, suspend CODEOWNERS enforcement instead (runbook codeowners)."
+fix = "Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban (`gstn merge-rule set --project <id> --rule-id <n> --direct-push-forbidden false`) or removes it (`gstn merge-rule remove`). When a broken CODEOWNERS also blocks the fix's merge request, suspend CODEOWNERS enforcement instead (runbook codeowners)."
+runbook = "merge-blocked"
 test = "a_direct_push_to_a_branch_with_the_ban_is_refused"
 
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
@@ -1621,4 +1622,5 @@ user_message_id = "Pemeriksaan ini tidak dapat diwajibkan. Hanya pemeriksaan di 
 cause = "A protected ref's merge rule named a required check in a namespace a person can write (`ext/`; ADR-0024 §10, M3 R6): a check a person can report must never satisfy a merge condition, so only the namespaces of service accounts and of forge itself (`ci/`, `kanflow/`, `forge/`) can be required. Nothing was written."
 diagnosis = "The log event carries `reason=namespace_not_allowed`, `namespace` and `check` (the refused name), with `action=ProtectedRefManage`."
 fix = "Require the check under the namespace of the service account that reports it (for example `ci/gates`), or leave it optional."
+runbook = "merge-blocked"
 test = "an_ext_check_cannot_be_required"

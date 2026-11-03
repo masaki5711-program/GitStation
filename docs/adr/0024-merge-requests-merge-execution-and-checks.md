@@ -1461,3 +1461,50 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   （C-1 の表、登録簿、help のスナップショット）。
 - **残したこと**: 必須のチェックの報告（C1）、作業項目のリンクの条件（I1）、画面（U2）。保存されたマージ可否の判定は版の記録と
   target の push で確かめ直されるが、マージの条件の変更そのものは確かめ直しを積まない（判定はいつも評価の時点。表示も要求も読み直す）。
+
+### R6 の独立レビュー（1 回目）で決めたこと（2026-11-03）
+
+評価役（authz・git / security・rust / db）の HIGH 1 件と MEDIUM / LOW への対応。上の R6 の節と違えたところは **改訂** と書いた。
+マイグレーションの `E'\n'` は利用者の承認を得てコーディネーターが直した（`dc34b6e`）。
+
+- **承認の引き継ぎを小さな普通の変更に限る（HIGH、改訂）**: 引き継ぎは見ていないコードに承認を付けることなので、§8.2 の opt-in の
+  設計は保ったまま、`may_carry_approvals` に次を足した。前の head から新しい head への変更（forge-git `changed_entries`:
+  `diff-tree --no-renames -r -z --raw --numstat` 1 回）が、`.gitmodules` か `.gitattributes`（どの階層でも）に触れる（`special_path`）、
+  サブモジュール（gitlink 160000）の項目（`submodule`）、シンボリックリンク（120000）の追加・変更・置き換え（`symlink`）、残るファイルの
+  モードの変更と実行可能な新しいファイル（`mode_change`）、バイナリ（`binary_file`）、**51 ファイル以上**（`too_many_files`）、
+  **追加と削除の合計 1 001 行以上**（`too_many_lines`）、読み切れない（`changes_unknown`）のどれでも写さない（`CARRY_MAX_FILES = 50`、
+  `CARRY_MAX_LINES = 1000`）。各場合を単体テストで、件数の上限を実際の git のテスト（`a_large_push_never_carries_the_approvals`）で固定した。
+  **残る危険は受け入れる**: Maintainer 以上が選ぶ opt-in（下の「設定を緩める変更」で保護の水準以上のロールが要る）で、保護ブランチでない
+  target だけ。上限の中の小さな普通の変更なら、見ていないコードにも承認が残る。
+- **一時停止は延ばせない（MEDIUM）**: 一時停止中にもう一度止める要求は `Unchanged`（何も書かず、答えは今の期限）。期限の過ぎた一時停止を
+  別の切り替え（止める・戻す）で置き換えるときは、同じ変更に **期限の記録**（`merge_settings.codeowners_enforcement_restored` の監査の行と
+  dedup つきのイベント）を先に入れる（worker が後で記録するものが残らないので、記録が失われない）。テスト
+  `a_suspension_cannot_be_extended`・`a_new_suspension_after_an_expired_one_records_the_restore_first`。
+- **期限の記録の失敗が他を止めない（MEDIUM）**: `restore_expired_codeowners` は 1 件の失敗で止まらず、失敗をプロジェクトと誤りの組で返す。
+  worker が 1 件ずつ `forge.worker.codeowners_restore_failed`（warn、`error_code`）で出す。失敗した行は列
+  `codeowners_restore_seen_at`（追記のマイグレーション 20261112100100。監査しない帳簿の列、`tables.toml` の `unaudited_columns`）を
+  付けて次の走査の後ろへ回す（`codeowners_restore_seen_at NULLS FIRST`）。テスト `a_failing_restore_does_not_stop_the_batch`。
+- **設定を緩める変更（MEDIUM、改訂）**: `MergeSettingsManage` を `Resource::MergeSettingsChange { project, highest_protection, loosens }`
+  （`MergeSettingsCtx`）で判定する。`committer_approvals_excluded` か `reset_approvals_on_push` を on から off にする変更（承認の規則を
+  緩める）は、CODEOWNERS の一時停止と同じく **プロジェクトの保護ブランチの最大の水準以上のロール** が要る（`above_own_role`、管理者は越える）。
+  締める変更は Maintainer で足りる。ローダーは管理できる人にだけ今の設定と保護を読み、トランザクションの中でロックした設定に対して
+  もう一度判定する（古い証明でも緩める変更は通らない。テスト `loosening_the_approvals_needs_a_role_at_or_above_every_protection`、
+  権限の表の行）。方式の並びは設定ではない（集合として比べ、並べ替えだけは `Unchanged`）。
+- **マージの状態の早送り（MEDIUM、改訂）**: 方式が `fast_forward` のとき、状態の表示も target の先端が head の祖先かを確かめて
+  `ff_not_possible` を出す（ジョブはロックの下でもう一度決める）。`nothing_to_merge` はジョブだけが出す。
+- **C1 までの必須のチェック（MEDIUM）**: 必須のチェックを設定したマージの条件の答え（`PUT …/merge-rule`）に `warnings:
+  ["required_checks_unreportable"]` を付け、`gstn merge-rule set` は警告の 1 行を出す（報告が無いのでどのマージも止まり、直接の push の
+  禁止と合わせるとブランチが動かなくなる）。逃げ道は runbook `merge-blocked`（チェックの名前を外す `--clear-checks`、またはマージの条件を消す）。
+  拒否ではなく警告にしたのは、C1 の前に条件を用意しておけるようにするため。
+- **LOW**: FG-GIT-0017 と FG-REVIEW-0016 に runbook `merge-blocked`。表の CHECK を `CheckName::parse` に合わせた（20261112100100:
+  末尾の `/`・`//`・空白・101 バイト以上を拒む。テスト `the_table_refuses_check_names_check_name_refuses`）。理由の並びを文字列の表で固定し、
+  この ADR の §7 の並びと一致することをテストで確かめる（`the_reason_order_is_fixed`・`the_reason_order_agrees_with_the_adr`）。
+  一致する保護のルールが複数あるときの合わせ方を実際の git で確かめた（`several_matching_rules_combine_to_the_strictest`）。
+  CODEOWNERS の切り替えのローダーは Maintainer 未満には保護を読まない。期限の誤り（なし・0・1441 以上）は判定の deny（403
+  FG-AUTH-0003 `expiry_missing` / `expiry_out_of_range`）のままにした（権限の表の行にあるため。400 にしない）。`gstn merge-rule set` は
+  今のマージの条件を読んでから指定した値だけを変える（`--clear-checks`、`--resolved-discussions <BOOL>`、`--direct-push-forbidden <BOOL>`）。
+  権限の表に CODEOWNERS の切り替えの NonMember（internal ではない）と、直接の push の禁止の `write_repository` トークン（人・エージェント）の
+  行を足した（サービスアカウント・ボットの `write_repository` の actor は表に無いので足していない。`RepoPush` は人だけの Action ではない）。
+- **既知の窓**: ジョブの最後の判定（tx1b）の後・`update-ref` の前に変わった設定とマージの条件は、そのマージに反映されない（権限の窓と同じ、
+  §4.2・R4 の節）。**直接の push の禁止は forge-web の push の経路（receive-pack の前の判定）でだけ効く**。サーバーのフック
+  （pre-receive）で守るのは X8。

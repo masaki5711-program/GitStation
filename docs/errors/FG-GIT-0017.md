@@ -5,7 +5,7 @@
 |---|---|
 | HTTP ステータス | 403 |
 | 重大度 | info |
-| Runbook | なし |
+| Runbook | [`merge-blocked`](../../ops/runbooks/merge-blocked.md) |
 | 発生させるテスト | `a_direct_push_to_a_branch_with_the_ban_is_refused` |
 
 ## 利用者向けメッセージ
@@ -24,4 +24,4 @@ The log event carries `action=RepoPush`, `reason=direct_push_forbidden` and `pro
 
 ## 対処 (fix)
 
-Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban by setting the merge rule again without `--no-direct-push` (`gstn merge-rule set --project <id> --rule-id <n> …`) or removes it (`gstn merge-rule remove`). When a broken CODEOWNERS also blocks the fix's merge request, suspend CODEOWNERS enforcement instead (runbook codeowners).
+Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban (`gstn merge-rule set --project <id> --rule-id <n> --direct-push-forbidden false`) or removes it (`gstn merge-rule remove`). When a broken CODEOWNERS also blocks the fix's merge request, suspend CODEOWNERS enforcement instead (runbook codeowners).

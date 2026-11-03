@@ -13,8 +13,8 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 - 読み取りだけ（何も書かない、確認を積まない）。マージはロックの下でもう一度判定するので、`mergeable: true` でもマージの要求が
   断られることはある（その間に head・target・条件が変わったとき）。逆に `merge_request.approved` イベントの `counted` はマージの可否の
   判断に使わない（ADR-0024 §6）。この契約を使う。
-- 評価する方式はプロジェクトの既定の方式（`method`）。`fast_forward` の可否はジョブがロックの下で決めるので、ここでは
-  `ff_not_possible` を出さない。
+- 評価する方式はプロジェクトの既定の方式（`method`）。`fast_forward` なら target の先端が head の祖先かも確かめて
+  `ff_not_possible` を出す（ジョブはロックの下でもう一度決める）。`nothing_to_merge` はジョブだけが出す。
 
 ## 欄
 
@@ -42,7 +42,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `source_branch_missing` | null | ソースブランチが無い |
 | `mergeability_unknown` | null | 今の (head, target の先端) の組でマージできるかが決まっていない（確認の待ち・失敗、版が無い） |
 | `conflict` | null | 衝突する |
-| `ff_not_possible` | null | 早送りできない（ジョブだけが出す） |
+| `ff_not_possible` | null | 早送りできない（方式が `fast_forward` のとき） |
 | `nothing_to_merge` | null | target が既に head（早送り。ジョブだけが出す） |
 | `approvals_missing` | `rule=<名前> required=<n> counted=<m>` | 承認のルール、または `@protected_branch`（保護ブランチの最低の数）の承認が足りない |
 | `codeowner_approval_missing` | `pattern=<p> owners=<@a,@b>` | 変更されたパスの CODEOWNERS の所有者の承認が無い |
