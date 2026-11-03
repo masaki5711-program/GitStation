@@ -18,8 +18,13 @@
   購読者 `work-item-sync`（`ordered`）が MR とのリンク（`forge.merge_request_work_items`、`source = auto`）とイベントの作業項目
   （`forge.event_work_items`）を書く。作業項目は (連携, 外部プロジェクト, `PBI-<n>`) で 1 つ（`forge.work_items`）。
   - タイトルから参照が消えたリンクは終わる（`unlinked_at`、`unlink_source = auto`）。**行は消えない**（履歴）。ブランチの削除・マージ・クローズでもリンクは残る。
-  - 人は MR の画面・API から手でリンク・解除できる（Developer 以上、`WorkItemLink`）。人が解除した作業項目は、タイトルにあっても自動ではもう付かない
-    （人がもう一度リンクすれば付く）。人のリンクは自動では外れない。
+  - 人は MR の画面・API から手でリンク・解除できる（Developer 以上、`WorkItemLink`）。**人（`human`）が** 解除した作業項目は、タイトルにあっても
+    自動ではもう付かない（人がもう一度リンクすれば付く）。エージェント・サービスアカウント・ボットの解除（`unlinked_by_kind`）は検出を止めない。
+    人のリンクは自動では外れない。自動で付いた作業項目を人がリンクすると人のリンクになる（自動の行は `unlink_source = converted` で終わる）。
+  - 結びつけを解除すると、そのプロジェクトの開いたリンクのうち、その結びつけの作業項目のものは `unlink_source = unbound` で終わる
+    （監査 `integration.unbound` の `work_item_links_ended` が数。`work_item.unlinked` のイベントは出ない）。
+  - データベースが裏付ける: 人のリンク・解除には同じトランザクションの `work_item.*` の監査の行、自動のリンクには `work-item-sync` の前進が要る
+    （トリガー `merge_request_work_items_audited`。違反は `FG-DB-0013`、制約名 `merge_request_work_items_audited` / `_derived`）。
   - 結ばれていないプロジェクトでは何も見つけない（手でのリンクは `FG-INT-0018`）。結ぶ前からある MR は、次のイベント（編集・push・コメント）でリンクされる。
   - 自動のリンクは MR あたり 20 まで（超えた分はログ `forge.work_items.detected_capped`）、手のリンクは 50 まで（`FG-INT-0019`）、
     1 つのイベントの作業項目は 100 まで（`forge.work_items.event_items_capped`）。
@@ -101,6 +106,9 @@
    gstn mr work-items --project <project_id> --iid <iid> --json
    ```
 
+   `linked_by_kind` / `unlinked_by_kind` は `human` / `agent` / `service_account` / `bot`。`unlink_source` は `auto`（タイトルから消えた）、
+   `manual`（手）、`converted`（人のリンクに切り替わった）、`unbound`（結びつけの解除）。
+
    リンクが付かないとき: プロジェクトが結ばれているか（2）、参照が規則どおりか（`PBI-43`、`pbi-43`、`PBI #43`、`PBI_43`。`PBI--43` や前に英数字が付くと拾わない。
    ベクタ `docs/api/pbi-ref-vectors.json`）、人が一度解除していないか（`unlink_source = manual` の行があれば自動では付かない）、
    `work-item-sync` が止まっていないか（`forge doctor` の `subscribers.lag`）。
@@ -173,6 +181,8 @@ gstn mr unlink-work-item --project <project_id> --iid <iid> --ref PBI-43
 - `FG-INT-0018`: 先に B でプロジェクトを結ぶ。
 - `FG-INT-0019`: 要らない手のリンクを解除する。上限はコードの定数（forge-db `work_items::MAX_MANUAL_LINKS`）。
 - 自動のリンクを人が解除すると、そのタイトルのままでも自動では付き直さない（意図した解除を上書きしないため）。戻すときは手でリンクする。
+- 前の結びつけの作業項目へのリンクが残っているとき（通常は解除で終わる）は、作業項目の id で解除する:
+  `gstn mr unlink-work-item --project <project_id> --iid <iid> --ref <work_item_id>`（id は `gstn mr work-items` の `work_item_id`）。
 
 ## Verify
 

@@ -1038,3 +1038,46 @@ Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding
 7. **受け入れた残り**: (1) 結ぶ前からある MR は、次のイベント（編集・push・コメントなど）までリンクされない（さかのぼりの取り込みは I1d の開発状況か、
    後の手順）。(2) `event_work_items` の保持による削除は C7 と一緒（今は削除の権限を与えない）。(3) 自動のリンクは今の行を読むので、
    古いイベントの処理が後のタイトルでリンクすることがある（同じ MR のイベントの順は守られ、最後には今のタイトルに一致する）。
+
+### I1b の独立レビュー（2026-11-03）で変えた点
+
+最初のマイグレーション `20261116100000` は変えず、追記のマイグレーション `20261116100100`（裏付け）と `20261116100200`（操作者の種類と終わり方）で直した。
+
+1. **人のリンクは監査の行で裏付ける**（database HIGH）: 表は `derived` のままだが、遅延の制約トリガー
+   `merge_request_work_items_audited`（ENABLE ALWAYS、保護の対象）が、同じトランザクションに次があることを COMMIT で確かめる。
+   人のリンク（`source = manual` の INSERT）は `work_item.linked`、人の解除（`unlink_source = manual`）は `work_item.unlinked`、
+   自動から人のリンクへの切り替え（`converted`）は `work_item.linked`、結びつけの解除（`unbound`）は `integration.unbound` の
+   成功した監査の行（`resource_type = 'project'`、`resource_id = project_id`。制約名 `merge_request_work_items_audited`）。
+   自動のリンクとその終わり（`auto`）は、同じトランザクションで購読者 `work-item-sync` が進んだこと（`event_subscribers.last_txid`、
+   C5 の派生の規則と同じ。制約名 `merge_request_work_items_derived`）。どちらも XF002 → `FG-DB-0013`。
+   ガードは、人のリンクを人の解除か結びつけの解除でしか終わらせない（`converted` も自動のリンクだけ）。
+2. **DELETE は完全削除の間だけ**（database MEDIUM）: 削除待ち（`deleted_at`）ではなく、リポジトリが `purging` のとき
+   （完全削除の印、`20261102100200`）だけ。リンクの `(merge_request_id, project_id)` は MR の組への外部キー
+   `merge_request_work_items_merge_request_project`（MR 側の一意 `merge_requests_id_project` は R3 からある）。forge_app の INSERT は
+   列ごと（`linked_at` は DB が決める）。
+3. **知らない種類で止まる**（security / rust MEDIUM）: `work-item-sync` は知らないイベントの種類を `Ok` で飛ばしていた。
+   `FG-SYS-0001 reason=unknown_event_type`（`event_type`、`seq`）で失敗し、5 回で `FG-DB-0008 reason=stuck`（新しい書き手の
+   イベントのリンクを黙って失わない）。`merge-request-refresh` は `independent`（失敗すると隔離になる）なので warn
+   `forge.subscribers.unknown_event_type` を出して進む。
+4. **今の結びつけの作業項目だけを記録する**（security MEDIUM）: `event_work_items` には、処理の時点のプロジェクトの結びつけの作業項目だけを書く
+   （結びつけがなければ何も書かない）。手の上限 50 も今の結びつけのリンクだけを数える。
+5. **結びつけの解除はリンクを終わらせる**（security MEDIUM）: `integrations::unbind_decided` が同じ変更で、そのプロジェクトの開いたリンクのうち
+   その結びつけの作業項目のものを `unlink_source = unbound`（解除した人）で終わらせ、数を `integration.unbound` の監査の
+   `work_item_links_ended` に残す。**`work_item.unlinked` のイベントは出さない**（レビューの依頼から外した点）: 結びつけを解いた
+   プロジェクトのイベントはどの連携の履歴にも見えず（I1c の `VisibleSet`）、1 つの変更のイベントは最大 100 件なので、リンクの多い
+   プロジェクトの解除が失敗する。付け替えは「解除してから結ぶ」（`FG-INT-0016`）なので、この 1 か所で足りる。解除は作業項目の id でも
+   できる（`DELETE …/work-items/{work_item_id}`、`gstn mr unlink-work-item --ref <id>`）。
+6. **人でない操作者は検出を止めない**（security MEDIUM）: `linked_by_kind` / `unlinked_by_kind`（`human`、`agent` = 人の
+   エージェントのトークン、`service_account`、`bot`）を記録し、API の答えと `work_item.*` の payload（`by_kind`）に出す。
+   検出を止めるのは `human` の `manual` の解除だけ。リンクと解除の権限（権限の表の行）は変えない。
+7. **自動のリンクを人がリンクすると人のリンクになる**（rust MEDIUM）: 以前は `unchanged` で、後のタイトルの編集が人の頼んだリンクを
+   終わらせていた。自動の区間を `converted` で終わらせ、人の区間を始める（`outcome = linked`、イベントの `replaces_link_id`）。
+8. **錠の順**（LOW）: リンクを書くものはすべて プロジェクトの行 → MR の行 の順。人のコマンドと解除はプロジェクトを `FOR UPDATE`、
+   購読者は `FOR SHARE` で取ってから MR を `FOR NO KEY UPDATE`（購読者の処理の間に結びつけが変わらない）。`find_refs` の重複は集合で除く。
+9. **受け入れた残り**（LOW）:
+   - `forge.work_items` の行は消さない（リンクと履歴が指す）。行は (連携, kanflow のプロジェクト, 番号) ごとに 1 つで、見つけた参照の数
+     （kanflow の PBI の数が上限の目安。プロジェクトあたり数千）しか増えない。
+   - `forge.event_work_items` は連携の分類のイベントごとに 0〜100 行（ふつうは 0〜2 行、1 行 約 40 バイト + 索引）。1 日 1 万イベントで
+     年に数百万行・数百 MB 程度。イベントの保持（C7、既定 90 日）でイベントと一緒に消すまで増え続けるので、C7 はこの表の削除を含める。
+   - `GET …/work-items` の答えは、MR を読める人（Reporter 以上）に結びつけの kanflow のプロジェクトの id（`project_id`）を見せる。
+     同じ値は `GET /api/v1/projects/{id}/integration-bindings`（`ProjectRead`）でも読め、秘密ではないので受け入れる。
