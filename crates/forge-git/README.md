@@ -114,6 +114,10 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   head, cap, timeout) -> Option<Vec<ObjectId>>` (`rev-list -n <cap+1>`), `Git::codeowners_file(…,
   commit, max_bytes, timeout) -> CodeownersFile` (`.forge/CODEOWNERS`, else `CODEOWNERS`;
   `ls-tree -z` + `cat-file blob`; `TooLarge` / `NotAFile`). Tests `review_inputs_tests.rs`.
+  M3 R6 review (`review_changes`): `Git::changed_entries(…, base, head, max_entries, timeout) ->
+  ChangeListing` (`diff-tree --no-renames -r -z --raw --numstat`: each entry's old / new mode and
+  added / deleted lines, `None` for binary; the approval carry's input). Tests
+  `review_changes_tests.rs`.
 - **Introduced commits** (`push_introduced`, M3 R5 round 4/5, ADR-0024 §8.3):
   `Git::ref_snapshot(storage, id, principal, timeout) -> RefSnapshot` reads every ref tip before
   receive-pack starts (`for-each-ref`, hidden refs included, tags peeled, symbolic refs skipped,

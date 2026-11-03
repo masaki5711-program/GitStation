@@ -12,10 +12,13 @@ use forge_core::{ObjectId, RepoId, RequestId};
 use forge_db::review::StoredMergeRequest;
 use forge_db::Db;
 use forge_errors::ForgeError;
-use forge_git::review_inputs::{ChangedPaths, CodeownersFile};
+use forge_git::review_changes::ChangeListing;
+use forge_git::review_inputs::CodeownersFile;
 
-use crate::approvals::carry::{may_carry_approvals, CarryCodeowners, CarryInputs};
-use crate::approvals::{codeowners, ChangedPathsFact, MAX_CHANGED_PATHS};
+use crate::approvals::carry::{
+    may_carry_approvals, CarryChanges, CarryCodeowners, CarryInputs, CARRY_MAX_FILES,
+};
+use crate::approvals::codeowners;
 use crate::version_refs::{git_budget, Deadline, VersionRefs};
 
 /// The head to carry from (`Some(recorded head)`) when the change from it
@@ -47,11 +50,8 @@ pub(crate) async fn carry_from(
     }
     let rules = forge_db::protected_refs::rules_for(db, stored.project_id).await?;
     let target_protected = !rules.levels(&stored.target_branch).is_empty();
-    let (changed, codeowners) = if target_protected {
-        (
-            ChangedPathsFact::Unknown("skipped"),
-            CarryCodeowners::Unknown,
-        )
+    let (changes, codeowners) = if target_protected {
+        (CarryChanges::Unknown("skipped"), CarryCodeowners::Unknown)
     } else {
         (
             changed(refs, deadline, repo, &previous, tip, request_id).await,
@@ -61,7 +61,7 @@ pub(crate) async fn carry_from(
     let inputs = CarryInputs {
         reset_approvals_on_push: false,
         target_protected,
-        changed,
+        changes,
         codeowners,
     };
     let decided = tokio::task::spawn_blocking(move || may_carry_approvals(&inputs))
@@ -82,7 +82,9 @@ pub(crate) async fn carry_from(
     Ok(decided.ok().map(|()| previous))
 }
 
-/// The paths changed from `from` to `to` (unknown on any failure).
+/// The entries changed from `from` to `to` with their modes and line
+/// counts, at most one past [`CARRY_MAX_FILES`] (unknown on any failure:
+/// never carried).
 async fn changed(
     refs: &VersionRefs,
     deadline: Deadline,
@@ -90,21 +92,21 @@ async fn changed(
     from: &ObjectId,
     to: &ObjectId,
     request_id: &RequestId,
-) -> ChangedPathsFact {
-    let Ok(timeout) = git_budget(deadline, "carry_changed_paths") else {
-        return ChangedPathsFact::Unknown("timeout");
+) -> CarryChanges {
+    let Ok(timeout) = git_budget(deadline, "carry_changed_entries") else {
+        return CarryChanges::Unknown("timeout");
     };
     let (git, storage) = refs.git();
     match git
-        .changed_paths(storage, repo, from, to, MAX_CHANGED_PATHS, timeout)
+        .changed_entries(storage, repo, from, to, CARRY_MAX_FILES + 1, timeout)
         .await
     {
-        Ok(ChangedPaths::Complete(paths)) => ChangedPathsFact::Known(paths),
-        Ok(ChangedPaths::TooMany) => ChangedPathsFact::Unknown("too_many_paths"),
-        Ok(ChangedPaths::NonUtf8) => ChangedPathsFact::Unknown("non_utf8_path"),
+        Ok(ChangeListing::Complete(entries)) => CarryChanges::Known(entries),
+        Ok(ChangeListing::TooMany) => CarryChanges::Unknown("too_many_files"),
+        Ok(ChangeListing::NonUtf8) => CarryChanges::Unknown("non_utf8_path"),
         Err(e) => {
-            warn_unread(request_id, "changed_paths", &e);
-            ChangedPathsFact::Unknown("git_failed")
+            warn_unread(request_id, "changed_entries", &e);
+            CarryChanges::Unknown("git_failed")
         }
     }
 }
