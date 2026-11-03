@@ -174,26 +174,51 @@ export function useDeleteMergeRule(project: number) {
   });
 }
 
+/** At most this many pages of 100 are read for names (2 000 members or
+ * groups); a rule naming someone beyond that cannot be changed here. */
+export const NAME_PAGES = 20;
+
 /** Names for the ids an approval rule answers with: the project's direct
- * members (first 100) and the groups the caller can see (first 100). */
+ * members and the groups the caller can see, every page (up to NAME_PAGES).
+ * There is no lookup by id, so an approver who is neither (an inherited
+ * member, a group the caller cannot see) has no name here. */
 export function useApproverNames(project: number, enabled: boolean) {
   const api = useApi();
   const members = useQuery({
     queryKey: ['members', 'project', project, 'names'],
     enabled,
-    queryFn: ({ signal }) =>
-      call(() =>
-        api.GET('/api/v1/projects/{id}/members', {
-          signal,
-          params: { path: { id: project }, query: { limit: 100 } },
-        }),
-      ),
+    queryFn: async ({ signal }) => {
+      const all = [];
+      let after: number | undefined;
+      for (let page = 0; page < NAME_PAGES; page += 1) {
+        const query: { limit: number; after?: number } = { limit: 100 };
+        if (after !== undefined) query.after = after;
+        const got = await call(() =>
+          api.GET('/api/v1/projects/{id}/members', { signal, params: { path: { id: project }, query } }),
+        );
+        all.push(...got.members);
+        if (got.next_after === null) break;
+        after = got.next_after;
+      }
+      return all;
+    },
   });
   const groups = useQuery({
     queryKey: ['groups', 'names'],
     enabled,
-    queryFn: ({ signal }) =>
-      call(() => api.GET('/api/v1/groups', { signal, params: { query: { limit: 100 } } })),
+    queryFn: async ({ signal }) => {
+      const all = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < NAME_PAGES; page += 1) {
+        const query: { limit: number; cursor?: string } = { limit: 100 };
+        if (cursor !== undefined) query.cursor = cursor;
+        const got = await call(() => api.GET('/api/v1/groups', { signal, params: { query } }));
+        all.push(...got.items);
+        if (got.next_cursor === null) break;
+        cursor = got.next_cursor;
+      }
+      return all;
+    },
   });
   return { members, groups };
 }

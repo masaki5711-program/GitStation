@@ -246,7 +246,8 @@ describe('approval rules', () => {
     const rules = await section('Approval rules');
     fireEvent.click(await within(rules).findByRole('button', { name: 'Add an approval rule' }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'release-leads' } });
+    // The form appears once the approver names were read.
+    fireEvent.change(await within(dialog).findByLabelText('Name'), { target: { value: 'release-leads' } });
     fireEvent.change(within(dialog).getByLabelText('Target branches (optional)'), { target: { value: 'refs/heads/release/*' } });
     fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '2' } });
     fireEvent.change(within(dialog).getByLabelText('Find a user'), { target: { value: 'jir' } });
@@ -278,7 +279,7 @@ describe('approval rules', () => {
     const rules = await section('Approval rules');
     fireEvent.click(await within(rules).findByRole('button', { name: 'Add an approval rule' }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Leads Team' } });
+    fireEvent.change(await within(dialog).findByLabelText('Name'), { target: { value: 'Leads Team' } });
     fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '21' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save the rule' }));
     expect(
@@ -295,7 +296,7 @@ describe('approval rules', () => {
     const rules = await section('Approval rules');
     fireEvent.click(await within(rules).findByRole('button', { name: 'Change leads' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/Some approvers of this rule cannot be shown by name/)).toBeTruthy();
+    expect(await within(dialog).findByText(/Some approvers of this rule cannot be shown by name/)).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: 'Save the rule' })).toBeNull();
   });
 

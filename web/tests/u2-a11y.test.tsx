@@ -163,7 +163,7 @@ describe('axe: U2 screens', () => {
     await settle();
     fireEvent.click(await screen.findByRole('button', { name: 'Add an approval rule' }));
     let dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Find a user'), { target: { value: 'jir' } });
+    fireEvent.change(await within(dialog).findByLabelText('Find a user'), { target: { value: 'jir' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Search' }));
     await within(dialog).findByRole('button', { name: 'Add Jiro Suzuki' });
     expect(await violations(container)).toEqual([]);

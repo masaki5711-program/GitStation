@@ -8,7 +8,7 @@
 // `updated_at` is sent back as `expected_updated_at` exactly as it was read
 // (an opaque string); a 409 means someone saved in between: the screen offers
 // to read the settings again instead of overwriting theirs.
-import { useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 
@@ -37,6 +37,7 @@ import controls from '../../components/controls.module.css';
 import { isStale } from '../../features/mr/ActionError';
 import { formatDateTime, mergeMethodLabel } from '../../features/labels';
 import { Modal } from '../../ui/Modal';
+import { focusWhenNoDialog } from '../../ui/focus';
 import { ConfirmDialog, Denied, Section, useConfirm, useFocusHeading } from './common';
 import { patternProblem } from './patterns';
 import styles from './Settings.module.css';
@@ -57,10 +58,10 @@ function listOf(items: string[], language: string): string {
 export function MergingSection({ projectId }: { projectId: number }) {
   const { t } = useTranslation();
   const settings = useMergeSettings(projectId);
-  /** A new form after "read again", even when nothing changed meanwhile. */
+  /** A new form after "read again" (the drafts start from what was read). */
   const [generation, setGeneration] = useState(0);
-  // Kept here: a save gives a new updated_at, and the form starts again from it.
   const [saved, setSaved] = useState(false);
+  const focusHeading = useFocusHeading();
   return (
     <Section id="merging-title" title={t('settings.merging.title')}>
       {settings.isPending && <Loading />}
@@ -76,13 +77,15 @@ export function MergingSection({ projectId }: { projectId: number }) {
         <>
           {settings.data.viewer.can_manage ? (
             <MergingForm
-              key={`${settings.data.updated_at ?? 'defaults'}-${String(generation)}`}
+              key={generation}
               projectId={projectId}
               settings={settings.data}
               onSaved={setSaved}
               onReload={async () => {
                 await settings.refetch();
                 setGeneration((g) => g + 1);
+                // The reload button goes away with the old form.
+                focusHeading('merging-title');
               }}
             />
           ) : (
@@ -151,6 +154,21 @@ function Check({
   );
 }
 
+function sameMethods(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((m) => b.includes(m));
+}
+
+/** The fields this form edits are the same in both. */
+function sameFields(a: MergeSettings, b: MergeSettings): boolean {
+  return (
+    sameMethods(a.allowed_methods, b.allowed_methods) &&
+    a.default_method === b.default_method &&
+    a.delete_source_default === b.delete_source_default &&
+    a.reset_approvals_on_push === b.reset_approvals_on_push &&
+    a.committer_approvals_excluded === b.committer_approvals_excluded
+  );
+}
+
 function MergingForm({
   projectId,
   settings,
@@ -164,12 +182,41 @@ function MergingForm({
 }) {
   const { t } = useTranslation();
   const save = usePutMergeSettings(projectId);
+  /** The settings the drafts started from: its updated_at is what a save
+   * sends back, so a change made elsewhere meanwhile is a 409, never
+   * overwritten. */
+  const [basis, setBasis] = useState(settings);
   const [allowed, setAllowed] = useState<MergeMethod[]>(settings.allowed_methods.filter(isMergeMethod));
   const [preferred, setPreferred] = useState(settings.default_method);
   const [deleteSource, setDeleteSource] = useState(settings.delete_source_default);
   const [reset, setReset] = useState(settings.reset_approvals_on_push);
   const [excluded, setExcluded] = useState(settings.committer_approvals_excluded);
   const [attempt, setAttempt] = useState(0);
+  const dirty =
+    !sameMethods(allowed, basis.allowed_methods) ||
+    preferred !== basis.default_method ||
+    deleteSource !== basis.delete_source_default ||
+    reset !== basis.reset_approvals_on_push ||
+    excluded !== basis.committer_approvals_excluded;
+
+  // New settings arrived (this form's own save, a CODEOWNERS change, a
+  // refetch). Without a change to these fields the new stamp is adopted; with
+  // one, untouched drafts start again from it, and edited drafts keep the old
+  // stamp, so their save is refused (409) instead of overwriting. The form is
+  // not remounted: the focus stays where it is.
+  useEffect(() => {
+    if (settings.updated_at === basis.updated_at) return;
+    if (sameFields(settings, basis)) {
+      setBasis(settings);
+    } else if (!dirty) {
+      setBasis(settings);
+      setAllowed(settings.allowed_methods.filter(isMergeMethod));
+      setPreferred(settings.default_method);
+      setDeleteSource(settings.delete_source_default);
+      setReset(settings.reset_approvals_on_push);
+      setExcluded(settings.committer_approvals_excluded);
+    }
+  }, [settings, basis, dirty]);
   // The default is always one of the allowed methods.
   const defaultMethod = allowed.find((m) => m === preferred) ?? allowed[0] ?? null;
   const problem = allowed.length === 0 ? t('settings.merging.noMethod') : null;
@@ -192,10 +239,11 @@ function MergingForm({
         reset_approvals_on_push: reset,
         committer_approvals_excluded: excluded,
         // Verbatim (null for the defaults that were never stored).
-        expected_updated_at: settings.updated_at,
+        expected_updated_at: basis.updated_at,
       },
       {
-        onSuccess: () => {
+        onSuccess: (next) => {
+          setBasis(next);
           onSaved(true);
         },
       },
@@ -284,7 +332,7 @@ function Codeowners({ projectId, settings }: { projectId: number; settings: Merg
   return (
     <>
       <h3 className={styles.subTitle}>{t('settings.codeowners.title')}</h3>
-      <p role="status">
+      <p role="status" className={suspended ? styles.warning : undefined}>
         {suspended
           ? t('settings.codeowners.suspended', { until: formatDateTime(c.suspended_until ?? '', i18n.language) })
           : t('settings.codeowners.enforced')}
@@ -347,14 +395,32 @@ interface Names {
   group: (id: number) => string | null;
 }
 
-function useNames(projectId: number, enabled: boolean): Names & { groups: { id: number; path: string; display_name: string }[] } {
+type GroupName = { id: number; path: string; display_name: string };
+
+interface NameState extends Names {
+  groups: GroupName[];
+  /** Both lists were read (a rule dialog may only start from them then). */
+  ready: boolean;
+  pending: boolean;
+  error: unknown;
+  retry: () => void;
+}
+
+function useNames(projectId: number, enabled: boolean): NameState {
   const { members, groups } = useApproverNames(projectId, enabled);
-  const users = new Map((members.data?.members ?? []).map((m) => [m.user_id, m.username]));
-  const paths = new Map((groups.data?.items ?? []).map((g) => [g.id, g.path]));
+  const users = new Map((members.data ?? []).map((m) => [m.user_id, m.username]));
+  const paths = new Map((groups.data ?? []).map((g) => [g.id, g.path]));
   return {
     user: (id) => users.get(id) ?? null,
     group: (id) => paths.get(id) ?? null,
-    groups: groups.data?.items ?? [],
+    groups: groups.data ?? [],
+    ready: members.isSuccess && groups.isSuccess,
+    pending: members.isPending || groups.isPending,
+    error: members.error ?? groups.error,
+    retry: () => {
+      if (members.isError) void members.refetch();
+      if (groups.isError) void groups.refetch();
+    },
   };
 }
 
@@ -364,6 +430,12 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
   const rules = useApprovalRules(projectId);
   const list = rules.data?.rules ?? [];
   const [editing, setEditing] = useState<ApprovalRule | 'new' | null>(null);
+  /** The button that opened the dialog gets the focus back when it closes. */
+  const opener = useRef<HTMLElement | null>(null);
+  const openDialog = (target: ApprovalRule | 'new') => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setEditing(target);
+  };
   const needNames = editing !== null || list.some((r) => r.user_ids.length > 0 || r.group_ids.length > 0);
   const names = useNames(projectId, needNames);
   const confirm = useConfirm<string>();
@@ -420,7 +492,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
                             className={controls.button}
                             aria-label={t('settings.rules.changeOf', { name: r.name })}
                             onClick={() => {
-                              setEditing(r);
+                              openDialog(r);
                             }}
                           >
                             {t('settings.rules.change')}
@@ -445,6 +517,10 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
             </table>
           </div>
         ))}
+      {list.length > 0 && needNames && names.pending && <Loading />}
+      {needNames && names.error !== null && editing === null && (
+        <QueryError error={names.error} onRetry={names.retry} />
+      )}
       <p role="status" className={styles.muted}>
         {done}
       </p>
@@ -453,7 +529,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
           type="button"
           className={controls.button}
           onClick={() => {
-            setEditing('new');
+            openDialog('new');
           }}
         >
           {t('settings.rules.add')}
@@ -467,6 +543,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
           onClose={(savedName) => {
             setEditing(null);
             if (savedName !== null) setDone(t('settings.rules.saved', { name: savedName }));
+            focusWhenNoDialog(opener);
           }}
         />
       )}
@@ -502,12 +579,66 @@ function RuleDialog({
 }: {
   projectId: number;
   rule: ApprovalRule | null;
-  names: Names & { groups: { id: number; path: string; display_name: string }[] };
+  names: NameState;
   /** The saved rule's name, or null when nothing was saved. */
   onClose: (saved: string | null) => void;
 }) {
   const { t } = useTranslation();
   const save = usePutApprovalRule(projectId);
+  const title = rule === null ? t('settings.rules.add') : t('settings.rules.changeTitle', { name: rule.name });
+  // One dialog; its form is mounted only after both name lists were read,
+  // so the approvers are seeded from them once and a Save can never send a
+  // list that was empty only because the names had not arrived (review HIGH).
+  return (
+    <Modal
+      open
+      onClose={() => {
+        onClose(null);
+      }}
+      title={title}
+      busy={save.isPending}
+    >
+      {names.ready ? (
+        <RuleForm rule={rule} names={names} save={save} onClose={onClose} />
+      ) : (
+        <>
+          {names.error !== null ? <QueryError error={names.error} onRetry={names.retry} /> : <Loading />}
+          <div className={styles.row}>
+            <button
+              type="button"
+              className={controls.button}
+              data-initial-focus=""
+              onClick={() => {
+                onClose(null);
+              }}
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function RuleForm({
+  rule,
+  names,
+  save,
+  onClose,
+}: {
+  rule: ApprovalRule | null;
+  names: NameState;
+  save: ReturnType<typeof usePutApprovalRule>;
+  onClose: (saved: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  const form = useRef<HTMLFormElement>(null);
+  // The form replaces the loading state inside the open dialog: its first
+  // field takes the focus (the dialog only does that when it opens).
+  useEffect(() => {
+    form.current?.querySelector<HTMLElement>('[data-initial-focus], input, select, textarea')?.focus();
+  }, []);
   const [name, setName] = useState(rule?.name ?? '');
   const [target, setTarget] = useState(rule?.target_pattern ?? '');
   const [count, setCount] = useState(String(rule?.required_approvals ?? 1));
@@ -552,15 +683,7 @@ function RuleDialog({
   };
 
   return (
-    <Modal
-      open
-      onClose={() => {
-        onClose(null);
-      }}
-      title={rule === null ? t('settings.rules.add') : t('settings.rules.changeTitle', { name: rule.name })}
-      busy={save.isPending}
-    >
-      <form onSubmit={submit} noValidate>
+      <form ref={form} onSubmit={submit} noValidate>
         {rule === null && (
           <TextField
             label={t('settings.rules.name')}
@@ -630,7 +753,6 @@ function RuleDialog({
           )}
         </div>
       </form>
-    </Modal>
   );
 }
 
@@ -669,9 +791,22 @@ function UserPicker({
 }) {
   const { t } = useTranslation();
   const api = useApi();
+  const box = useRef<HTMLFieldSetElement>(null);
   const [text, setText] = useState('');
   const [term, setTerm] = useState('');
   const [tried, setTried] = useState(false);
+  const searchField = () => box.current?.querySelector<HTMLInputElement>('input[type="text"]') ?? null;
+  const search = () => {
+    setTried(true);
+    if (termError === null) setTerm(trimmed);
+  };
+  // Enter in the search field searches; it never submits the rule form.
+  const onKeyDown = (e: KeyboardEvent<HTMLFieldSetElement>) => {
+    if (e.key === 'Enter' && e.target instanceof HTMLInputElement) {
+      e.preventDefault();
+      search();
+    }
+  };
   const trimmed = text.trim();
   const termError = trimmed.length < 2 || trimmed.length > 64 ? t('members.searchLength') : null;
   const results = useQuery({
@@ -681,9 +816,15 @@ function UserPicker({
       call(() => api.GET('/api/v1/users', { signal, params: { query: { search: term } } })),
   });
   return (
-    <fieldset className={controls.field}>
+    <fieldset ref={box} className={controls.field} onKeyDown={onKeyDown}>
       <legend className={controls.label}>{t('settings.rules.users')}</legend>
-      <Chosen items={chosen} onRemove={onRemove} />
+      <Chosen
+        items={chosen}
+        onRemove={(u) => {
+          onRemove(u);
+          searchField()?.focus();
+        }}
+      />
       <TextField
         label={t('members.search')}
         value={text}
@@ -691,25 +832,21 @@ function UserPicker({
         error={tried ? termError : null}
         help={t('members.searchHelp')}
       />
-      <button
-        type="button"
-        className={controls.button}
-        onClick={() => {
-          setTried(true);
-          if (termError === null) setTerm(trimmed);
-        }}
-      >
+      <button type="button" className={controls.button} onClick={search}>
         {t('members.searchButton')}
       </button>
       {results.isPending && term !== '' && <Loading />}
       {results.isError && <QueryError error={results.error} />}
+      {/* Stays mounted: each new count is read out. */}
+      <p role="status" className={styles.muted}>
+        {!results.isSuccess
+          ? ''
+          : results.data.items.length === 0
+            ? t('members.noMatch')
+            : t('members.found', { count: results.data.items.length })}
+      </p>
       {results.isSuccess && (
         <>
-          <p role="status" className={styles.muted}>
-            {results.data.items.length === 0
-              ? t('members.noMatch')
-              : t('members.found', { count: results.data.items.length })}
-          </p>
           {results.data.items.length > 0 && (
             <ul className={styles.results} aria-label={t('members.results')}>
               {results.data.items.map((u) => (
@@ -726,6 +863,7 @@ function UserPicker({
                       aria-label={t('members.addOne', { name: u.display_name })}
                       onClick={() => {
                         onAdd(u.username);
+                        searchField()?.focus();
                       }}
                     >
                       {t('members.addButton')}
@@ -747,17 +885,25 @@ function GroupPicker({
   onAdd,
   onRemove,
 }: {
-  groups: { id: number; path: string; display_name: string }[];
+  groups: GroupName[];
   chosen: string[];
   onAdd: (path: string) => void;
   onRemove: (path: string) => void;
 }) {
   const { t } = useTranslation();
   const [pick, setPick] = useState('');
+  const box = useRef<HTMLFieldSetElement>(null);
+  const select = () => box.current?.querySelector('select')?.focus();
   return (
-    <fieldset className={controls.field}>
+    <fieldset ref={box} className={controls.field}>
       <legend className={controls.label}>{t('settings.rules.groups')}</legend>
-      <Chosen items={chosen} onRemove={onRemove} />
+      <Chosen
+        items={chosen}
+        onRemove={(g) => {
+          onRemove(g);
+          select();
+        }}
+      />
       <SelectField label={t('settings.rules.group')} value={pick} onChange={setPick}>
         <option value="">{t('settings.rules.chooseGroup')}</option>
         {groups.map((g) => (
@@ -774,6 +920,7 @@ function GroupPicker({
           if (pick === '') return;
           onAdd(pick);
           setPick('');
+          select();
         }}
       >
         {t('settings.rules.addGroup')}
@@ -816,6 +963,7 @@ export function MergeConditionsSection({ projectId, canManage }: { projectId: nu
   const refs = useProtectedRefs(projectId);
   const branches = (refs.data?.rules ?? []).filter((r) => r.pattern.startsWith('refs/heads/'));
   const [editing, setEditing] = useState<ProtectedRef | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
   const confirm = useConfirm<ProtectedRef>();
   const remove = useDeleteMergeRule(projectId);
   const [done, setDone] = useState('');
@@ -848,6 +996,7 @@ export function MergeConditionsSection({ projectId, canManage }: { projectId: nu
                     className={controls.button}
                     aria-label={t('settings.conditions.changeOf', { pattern: r.pattern })}
                     onClick={() => {
+                      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
                       setEditing(r);
                     }}
                   >
@@ -882,6 +1031,7 @@ export function MergeConditionsSection({ projectId, canManage }: { projectId: nu
           onClose={(saved) => {
             setEditing(null);
             if (saved) setDone(t('settings.conditions.saved', { pattern: editing.pattern }));
+            focusWhenNoDialog(opener);
           }}
         />
       )}
