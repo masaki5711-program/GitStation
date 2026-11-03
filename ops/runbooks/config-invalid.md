@@ -55,6 +55,12 @@
        （86400 超）、`invalid`（整数でない）。未設定なら 300 秒。`FORGE_HOSTING_PURGE_INTERVAL_SECS` か設定ファイルの `[hosting] purge_interval_secs`
      - `config_key=review.mergeability_fanout_max`（M3 R2。target の 1 回の前進でマージできるかの確認を積む開いている MR の数の上限）: `below_min`（0）、
        `above_max`（501 以上。500 まで）、`invalid`（整数でない）。未設定なら 50。`FORGE_REVIEW_MERGEABILITY_FANOUT_MAX` か設定ファイルの `[review] mergeability_fanout_max`
+     - `config_key=maintenance.*`（M3 O3。リポジトリの保守、Runbook `repo-maintenance`。`FORGE_MAINTENANCE_…` か設定ファイルの `[maintenance]`）:
+       `interval_days`（1〜90、既定 7）、`window_start` / `window_end`（`HH:MM`、既定 02:00 / 05:00。同じ値は `empty_window`）、
+       `window_time_zone`（IANA の名前、既定 `Asia/Tokyo`。形が違えば `invalid`、DB が知らない名前は worker の起動で `unknown`）、
+       `prune_grace_hours`（24〜720、既定 48。worker の起動でマージの照合の窓と再試行の全体より短ければ `below_merge_window`、`needed_secs` つき）、
+       `step_timeout_secs`（60〜3000、既定 1800）、`fsck_interval_days`（1〜365、既定 30）、`batch_max`（1〜1000、既定 10）、`refs_warn`
+       （1〜10 000 000、既定 100 000）。範囲の外は `below_min` / `above_max`、整数でなければ `invalid`
 
    環境変数の値は `printenv | grep ^FORGE_` で見る。パスワードは値を表示しない（`database.password_file` は存在と権限だけを `ls -l` で確かめる）。設定の全体は `forge doctor` で検証できる（読み取りのみ。`config` の行に `config_key` と `reason` が出る。`--config` も同じように指定する）。
 3. 直近で設定ファイル・環境変数を変更したか確認する（誰が・いつ・何を）。

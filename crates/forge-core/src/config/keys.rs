@@ -172,6 +172,31 @@ pub const KEYS: &[Key] = &[
         "review.mergeability_fanout_max",
         "FORGE_REVIEW_MERGEABILITY_FANOUT_MAX",
     ),
+    // M3 O3: the repository maintenance (ADR-0024 "実装で決めたこと（O3）").
+    number(
+        "maintenance.interval_days",
+        "FORGE_MAINTENANCE_INTERVAL_DAYS",
+    ),
+    text("maintenance.window_start", "FORGE_MAINTENANCE_WINDOW_START"),
+    text("maintenance.window_end", "FORGE_MAINTENANCE_WINDOW_END"),
+    text(
+        "maintenance.window_time_zone",
+        "FORGE_MAINTENANCE_WINDOW_TIME_ZONE",
+    ),
+    number(
+        "maintenance.prune_grace_hours",
+        "FORGE_MAINTENANCE_PRUNE_GRACE_HOURS",
+    ),
+    number(
+        "maintenance.step_timeout_secs",
+        "FORGE_MAINTENANCE_STEP_TIMEOUT_SECS",
+    ),
+    number(
+        "maintenance.fsck_interval_days",
+        "FORGE_MAINTENANCE_FSCK_INTERVAL_DAYS",
+    ),
+    number("maintenance.batch_max", "FORGE_MAINTENANCE_BATCH_MAX"),
+    number("maintenance.refs_warn", "FORGE_MAINTENANCE_REFS_WARN"),
     // M2 MR3: web sessions (ADR-0021 §5, §7, §12).
     text("web.base_url", "FORGE_WEB_BASE_URL"),
     text("web.session_key_file", "FORGE_WEB_SESSION_KEY_FILE"),

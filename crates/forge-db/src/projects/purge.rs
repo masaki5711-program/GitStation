@@ -586,6 +586,14 @@ async fn finish_steps(
         "projects.purge.finish.merge_request_counters",
     )
     .await?;
+    // M3 O3: the maintenance ledger of the repository (operational state).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.repository_maintenance WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.repository_maintenance",
+    )
+    .await?;
     delete_one(
         tx,
         "DELETE FROM forge.repositories WHERE id = $1",

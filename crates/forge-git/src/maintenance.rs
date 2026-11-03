@@ -40,9 +40,10 @@
 //! `FG-GIT-0018` RepositoryMaintenanceFailed with `step`; a timeout stays
 //! `FG-GIT-0002` and no free slot `FG-GIT-0004`, both with `step`.
 //!
-//! Ordering is the caller's: steps 3–6 run only when gc ran; a repository
-//! whose fsck fails is never pruned again until it is clean (the job reads
-//! the last outcome first).
+//! Ordering is the caller's. The job (`forge worker`, `worker/maintenance.rs`)
+//! runs the blocker check, then fsck **before** gc (a finding stops the run,
+//! so a corrupt repository is never pruned; the next run's fsck is full),
+//! then gc, pack-refs, commit-graph and the counts.
 
 use std::io;
 use std::path::Path;

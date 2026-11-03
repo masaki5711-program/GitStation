@@ -669,6 +669,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.check_runs", operational()),
         ("forge.check_annotations", operational()),
         ("forge.check_namespace_grants", operational()),
+        // ── M3 O3: the maintenance ledger, DELETE for the purge (20261117100000) ──
+        ("forge.repository_maintenance", operational()),
     ]
 }
 
@@ -836,6 +838,8 @@ const LATER_TABLES: &[&str] = &[
     "check_runs",
     "check_annotations",
     "check_namespace_grants",
+    // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
+    "repository_maintenance",
 ];
 
 /// Every table the first migration creates.

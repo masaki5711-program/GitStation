@@ -467,6 +467,14 @@ unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 C1 ──
 
+# ── M3 O3: the repository maintenance ledger (ADR-0024 "実装で決めたこと（O3）"),
+# operational state the maintenance job writes every run ──
+[tables.repository_maintenance]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 O3 ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

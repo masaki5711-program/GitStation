@@ -329,7 +329,7 @@ fn the_production_registry_starts_the_subscribers_task() {
     let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
     assert_eq!(names, [REFRESH_SUBSCRIBER]);
-    let tasks = crate::worker::tasks(&registry, None);
+    let tasks = crate::worker::tasks(&registry, None, None);
     assert!(
         tasks.contains(&crate::worker::Task::Subscribers),
         "{tasks:?}"
