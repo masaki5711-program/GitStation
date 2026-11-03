@@ -55,6 +55,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.user_identities_human_guard()",
     // ── M3 I1a: an integration's service account (20261114100000) ──
     "forge.integrations_service_account_guard()",
+    // ── M3 I1b: a work item link ends once; the purge deletes it (20261116100000) ──
+    "forge.merge_request_work_items_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -172,6 +174,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER integrations_service_account_guard BEFORE INSERT OR UPDATE OF \
          service_account_id ON forge.integrations FOR EACH ROW EXECUTE FUNCTION \
          forge.integrations_service_account_guard()",
+    ),
+    // ── M3 I1b: a work item link ends once; the purge deletes it (20261116100000) ──
+    (
+        "merge_request_work_items",
+        "merge_request_work_items_end_once",
+        "CREATE TRIGGER merge_request_work_items_end_once BEFORE DELETE OR UPDATE ON \
+         forge.merge_request_work_items FOR EACH ROW EXECUTE FUNCTION \
+         forge.merge_request_work_items_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -646,6 +656,34 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 columns("forge_app", "UPDATE", &["granted_membership"]),
             ]
             .concat(),
+        ),
+        // ── M3 I1b: work items (never updated or deleted), their links
+        // (UPDATE of the unlink columns only, DELETE for the purge) and the
+        // events' work items (20261116100000) ──
+        (
+            "forge.work_items",
+            plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_ro:SELECT"]),
+        ),
+        (
+            "forge.merge_request_work_items",
+            [
+                plain(&[
+                    "forge_app:SELECT",
+                    "forge_app:INSERT",
+                    "forge_app:DELETE",
+                    "forge_ro:SELECT",
+                ]),
+                columns(
+                    "forge_app",
+                    "UPDATE",
+                    &["unlinked_at", "unlink_source", "unlinked_by"],
+                ),
+            ]
+            .concat(),
+        ),
+        (
+            "forge.event_work_items",
+            plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_ro:SELECT"]),
         ),
     ]
 }

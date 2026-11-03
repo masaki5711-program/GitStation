@@ -750,3 +750,26 @@ a project's binding; the member removals and role changes clear `granted_members
 `integrations_one_per_service_account`, `integration_bindings_one_per_project`,
 `integration_bindings_external_project_id_format`. Tests
 `src/integrations/tests.rs`.
+
+**Work items (M3 I1b, migration `20261116100000`, ADR-0016 Amendment I1b)**:
+`forge.work_items` (one per integration, external project and `PBI-<n>`),
+`forge.merge_request_work_items` (link intervals, `auto` / `manual`, ended
+once and never deleted but by the purge) and `forge.event_work_items` (the work
+items of each event), all `derived`. The ordered subscriber
+`work_items::WorkItemSync` (`work-item-sync`, registered by `forge worker`)
+links each merge request to the references in its current title and source
+branch (`forge_core::find_refs`, at most `MAX_AUTO_LINKS` = 20; derived
+`work_item.linked` / `.unlinked`), never ends a person's link nor relinks what a
+person unlinked, and records every merge request event, push and link event
+with its work items (at most 100); a failure stops it (FG-DB-0008 `stuck`).
+A person's link: `review::link_work_item_mr_decided` /
+`unlink_work_item_mr_decided` (forge-review only; FG-INT-0018 for an unbound
+project, FG-INT-0019 past 50 open manual links, FG-REPO-0005
+`resource=work_item_link` for nothing to unlink), `work_items::links` (read
+pool). Schema backstops: `work_items_ref_format`, `work_items_identity`,
+`work_items_external_project_id_format`, `merge_request_work_items_source`,
+`merge_request_work_items_source_fields`, `merge_request_work_items_linked_seq`,
+`merge_request_work_items_unlink_source`,
+`merge_request_work_items_unlink_source_fields`,
+`merge_request_work_items_one_active`, `event_work_items_seq_positive`, the
+guard `merge_request_work_items_guard`. Tests `src/work_items/tests.rs`.

@@ -32,6 +32,9 @@ fn review_commands() -> Vec<String> {
         // M3 R6: the merge settings and the CODEOWNERS switch.
         "put_merge_settings_mr",
         "toggle_codeowners_mr",
+        // M3 I1b: a person's work item links.
+        "link_work_item_mr",
+        "unlink_work_item_mr",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))
