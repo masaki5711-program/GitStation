@@ -2017,6 +2017,16 @@ export interface components {
              */
             push_min_role: string;
             updated_at: string;
+            /**
+             * @description Things to know about the answer (M3 R6 review). Today only
+             *     `required_checks_unreportable`: the merge rule requires checks but no
+             *     check can be reported before the Checks API (C1), so every merge
+             *     into the branch is blocked (`required_check_missing`); with the
+             *     direct-push ban the branch cannot change at all. Remove the check
+             *     names or the merge rule to unblock (runbook merge-blocked). Empty
+             *     otherwise.
+             */
+            warnings: string[];
         };
         /** @description Every rule of a project, in id order. */
         ProtectedRefRules: {

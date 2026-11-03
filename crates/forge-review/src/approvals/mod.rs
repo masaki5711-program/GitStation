@@ -132,6 +132,20 @@ impl ReviewGit {
     pub fn new(git: Git, storage: StorageRoot) -> Self {
         Self { git, storage }
     }
+
+    /// Whether `ancestor` is an ancestor of (or equal to) `descendant`
+    /// (the merge status of a fast-forward, R6 review).
+    pub(crate) async fn is_ancestor(
+        &self,
+        repo: RepoId,
+        ancestor: &ObjectId,
+        descendant: &ObjectId,
+        timeout: Duration,
+    ) -> Result<bool, ForgeError> {
+        self.git
+            .is_ancestor(&self.storage, repo, ancestor, descendant, timeout)
+            .await
+    }
 }
 
 /// The git half of the approval facts of one decision.

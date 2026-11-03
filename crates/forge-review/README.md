@@ -152,7 +152,9 @@ merge request in place (ADR-0024 §1).
   (`method_allowed`: FG-REVIEW-0010 again in the job). `Review::merge_status` (the stable
   `GET …/status` contract), `merge_settings` / `put_merge_settings`, `toggle_codeowners`
   (`Authorized<CodeownersToggleCtx>`), `highest_protection`. `approvals::carry::
-  may_carry_approvals` (pure) and the version job's carry reads (`versions_carry.rs`; logs
+  may_carry_approvals` (pure; R6 review: never `.gitmodules` / `.gitattributes`, a mode change or
+  new executable, a symlink, a submodule, a binary file, more than 50 files or 1 000 lines) and the
+  version job's carry reads (`versions_carry.rs`, forge-git `changed_entries`; logs
   `forge.review.approvals_carry_decided`, warn `forge.review.approvals_carry_unread`). Tests:
   the proptest combination table `merges/evaluate_tests.rs`, `approvals/evaluate_tests.rs`,
   `tests/approvals_git.rs` (real git: the rule's reasons and the status, the job deciding a new

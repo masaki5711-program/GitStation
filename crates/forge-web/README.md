@@ -213,8 +213,11 @@ admitted proof.
   `PUT …/merge-settings/codeowners-enforcement` (`CodeownersEnforcementToggle`; the loader reads
   the highest protection) in `routes/merge_requests/settings.rs`;
   `PUT|DELETE …/protected-refs/{rule_id}/merge-rule` (`routes/protected_ref_merge_rules.rs`,
-  `ProtectedRefManage` at the rule's own level; `ProtectedRefBody.merge_rule`). The push path
-  gets the direct-push ban from the snapshot (FG-GIT-0017). Tests in
+  `ProtectedRefManage` at the rule's own level; `ProtectedRefBody.merge_rule`, and `warnings:
+  ["required_checks_unreportable"]` on a put requiring checks before C1). The push path gets the
+  direct-push ban from the snapshot (FG-GIT-0017) — judged in this handler only, before
+  receive-pack, until X8's pre-receive hook. `PUT …/merge-settings` is proved on
+  `MergeSettingsCtx` (a loosening change needs the highest protection's role). Tests in
   `tests/merge_request_merge_routes.rs`.
   M3 R3 (`routes/merge_requests/discussions.rs`): `GET …/{iid}/discussions`
   (`MergeRequestRead`; `DiscussionsBody`, each thread with `outdated`), `POST

@@ -2133,36 +2133,43 @@
           "required": true
         },
         {
-          "description": "Minimum counted approvals (0..=20, default 0).",
+          "description": "Minimum counted approvals (0..=20).",
           "kind": "option",
           "name": "--approvals",
           "repeatable": false,
           "required": false
         },
         {
-          "description": "A required check name (repeatable).",
+          "description": "A required check name (repeatable; replaces the list).",
           "kind": "option",
           "name": "--check",
           "repeatable": false,
           "required": false
         },
         {
-          "description": "Every discussion must be resolved.",
+          "description": "Require no check.",
           "kind": "flag",
+          "name": "--clear-checks",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: every discussion must be resolved.",
+          "kind": "option",
           "name": "--resolved-discussions",
           "repeatable": false,
           "required": false
         },
         {
-          "description": "Forbid direct pushes to the branch (FG-GIT-0017).",
-          "kind": "flag",
-          "name": "--no-direct-push",
+          "description": "true / false: forbid direct pushes to the branch (FG-GIT-0017).",
+          "kind": "option",
+          "name": "--direct-push-forbidden",
           "repeatable": false,
           "required": false
         }
       ],
       "examples": [
-        "gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --check ci/gates --resolved-discussions --no-direct-push"
+        "gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true"
       ],
       "name": "merge-rule set",
       "output": {
@@ -2181,17 +2188,19 @@
           "id",
           "pattern",
           "push_min_role",
-          "merge_rule"
+          "merge_rule",
+          "warnings"
         ],
         "type": "object"
       },
       "routes": [
+        "GET /api/v1/projects/{id}/protected-refs",
         "PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule"
       ],
       "scopes": [
         "api"
       ],
-      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Replaces the merge rule: options left out are off."
+      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value."
     },
     {
       "args": [

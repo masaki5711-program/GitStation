@@ -7,7 +7,8 @@
 //! transaction.
 
 use forge_auth::{
-    Action, Authorized, CodeownersToggle, CodeownersToggleCtx, MergeRequestCtx, ProjectCtx,
+    Action, Authorized, CodeownersToggle, CodeownersToggleCtx, MergeRequestCtx, MergeSettingsCtx,
+    ProjectCtx,
 };
 use forge_core::{MergeMethod, MergeSettingsValues, ObjectId, ProjectRepository, UserId};
 use forge_db::review::{
@@ -61,6 +62,15 @@ pub struct MergeStatus {
 }
 
 impl Review {
+    /// The project's merge settings, for a route loader (the decision that
+    /// binds a write reads them again under the lock).
+    pub async fn stored_merge_settings(
+        &self,
+        project: forge_core::ProjectId,
+    ) -> Result<StoredMergeSettings, ForgeError> {
+        review::merge_settings(&self.db, project).await
+    }
+
     /// The highest minimum push role of `project`'s protection rules (the
     /// CODEOWNERS toggle's loader; `None` without rules).
     pub async fn highest_protection(
@@ -84,11 +94,13 @@ impl Review {
 
     /// `PUT …/merge-settings` (`MergeSettingsManage`): at least one method,
     /// the default among them (`FG-WEB-0006`); the CODEOWNERS switch is
-    /// not touched (it has its own action).
+    /// not touched (it has its own action). R6 review: decided again on the
+    /// settings as locked — a change that loosens the approvals needs a role
+    /// at or above every protection of the project.
     pub async fn put_merge_settings(
         &self,
         request: &ReviewRequest,
-        proof: &Authorized<ProjectCtx>,
+        proof: &Authorized<MergeSettingsCtx>,
         values: &MergeSettingsValues,
     ) -> Result<(SettingsOutcome, StoredMergeSettings), ForgeError> {
         require(proof.action(), Action::MergeSettingsManage)?;
@@ -103,12 +115,12 @@ impl Review {
         let ctx = change_context(request, proof.principal(), user);
         let (outcome, stored, ()) =
             review::put_merge_settings_mr_decided(&self.db, &ctx, project, user, values, |facts| {
-                proof
-                    .reconfirm(
-                        account(facts.account),
-                        ProjectCtx::new(loaded(&facts.project)),
-                    )
-                    .map(drop)
+                let fresh = MergeSettingsCtx::new(
+                    loaded(&facts.project),
+                    facts.highest_protection,
+                    review::settings::loosens(&facts.current.values, values),
+                );
+                proof.reconfirm(account(facts.account), fresh).map(drop)
             })
             .await?;
         Ok((outcome, stored))
@@ -246,6 +258,22 @@ impl Review {
         let inputs = git.inputs(&current, &head, facts);
         let report = evaluate(&inputs);
         let mergeable = stored_mergeable(stored.as_ref(), &head, target_tip.as_ref());
+        // R6 review: a fast-forward's ancestry is evaluated here too (the
+        // job decides it again under the lock).
+        let ff_possible = match (method, target_tip.as_ref()) {
+            (MergeMethod::FastForward, Some(tip)) => Some(
+                self.review_git()?
+                    .is_ancestor(
+                        crate::ready(project, repo)?,
+                        tip,
+                        &head,
+                        crate::approvals::READ_TIMEOUT,
+                    )
+                    .await?,
+            ),
+            (MergeMethod::FastForward, None)
+            | (MergeMethod::MergeCommit | MergeMethod::Squash, _) => None,
+        };
         let decision = evaluate_merge(&MergeFacts {
             state: current.state,
             draft: current.draft,
@@ -253,8 +281,7 @@ impl Review {
             source_present: source_tip.is_some(),
             mergeable: Some(mergeable),
             method,
-            // A fast-forward is decided by the job under the lock.
-            ff_possible: None,
+            ff_possible,
             approvals: inputs,
             checks: conditions.checks.clone(), // clone: the status shows them too
             discussions: conditions.discussions,

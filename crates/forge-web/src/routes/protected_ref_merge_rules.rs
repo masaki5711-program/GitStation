@@ -19,8 +19,10 @@ use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
 use crate::routes::projects::PREFIX;
-use crate::routes::protected_refs::{found, project_of, respond, written};
-use crate::routes::write::{absent, bounded, hosting, read_if_manager, write_request};
+use crate::routes::protected_refs::{
+    found, project_of, respond, written_body, REQUIRED_CHECKS_UNREPORTABLE,
+};
+use crate::routes::write::{absent, bounded, hosting, json, read_if_manager, write_request};
 
 /// `PUT` / `DELETE` one rule's merge rule.
 pub const MERGE_RULE: &str = "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule";
@@ -143,8 +145,17 @@ pub async fn put(state: AppState, request: Dispatched<RefProtectionCtx, PutMerge
         let (outcome, _) = hosting(&state)?
             .put_merge_rule(&write_request(&w), &w.proof, &ask)
             .await?;
-        let body = written(&state, w.proof.id().0, rule_of(&w.proof)?).await?;
-        Ok((outcome, body))
+        let mut body = written_body(&state, w.proof.id().0, rule_of(&w.proof)?).await?;
+        // R6 review: before the Checks API (C1) no check can be reported,
+        // so a required check blocks every merge (runbook merge-blocked).
+        if body
+            .merge_rule
+            .as_ref()
+            .is_some_and(|m| !m.required_checks.is_empty())
+        {
+            body.warnings.push(REQUIRED_CHECKS_UNREPORTABLE.to_owned());
+        }
+        Ok((outcome, json(body)?))
     }
     .await;
     match built {

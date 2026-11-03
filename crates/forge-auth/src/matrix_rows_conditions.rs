@@ -18,7 +18,7 @@ use forge_errors::ErrorCode as E;
 
 use crate::action::Action as A;
 use crate::matrix::{Actor as W, Expect, Expect::Allow, Fixture as F, Row};
-use crate::matrix_review::MrFixture as MF;
+use crate::matrix_review::{MrFixture as MF, MrProject as MP};
 use crate::model::{CodeownersToggle as T, RefUpdate as U, Role as R};
 
 const fn row(action: A, actor: W, fixture: F, expect: Expect) -> Row {
@@ -45,6 +45,17 @@ const fn suspend(highest: Option<R>, minutes: Option<u32>) -> F {
 }
 
 const HOUR: F = suspend(Some(R::Maintainer), Some(60));
+
+/// A merge settings change on a project of `project`'s kind.
+const fn settings(highest: Option<R>, loosens: bool, project: MP) -> F {
+    F::SettingsChange {
+        highest,
+        loosens,
+        project,
+    }
+}
+
+const TIGHTEN: F = settings(Some(R::Maintainer), false, MP::Private);
 const ENFORCE_OWNER_LEVEL: F = F::Codeowners {
     highest: Some(R::Owner),
     change: T::Enforce,
@@ -59,20 +70,28 @@ const NO_DIRECT_PUSH_MR: F = F::Mr(MF {
 #[rustfmt::skip]
 pub(crate) const CONDITION_ROWS: &[Row] = &[
     // --- merge settings: people only, Maintainer and above, `api` ---
-    row(A::MergeSettingsManage, W::Maintainer, F::PrivateProject, Allow),
-    row(A::MergeSettingsManage, W::Owner, F::PrivateProject, Allow),
-    row(A::MergeSettingsManage, W::Admin, F::PrivateProject, Allow),
-    row(A::MergeSettingsManage, W::MaintainerTokenApi, F::PrivateProject, Allow),
-    row(A::MergeSettingsManage, W::Developer, F::PrivateProject, deny(E::Forbidden)),
-    row(A::MergeSettingsManage, W::Reporter, F::PrivateProject, deny(E::Forbidden)),
-    row(A::MergeSettingsManage, W::AgentMaintainerTokenApi, F::PrivateProject, deny(E::Forbidden)),
-    row(A::MergeSettingsManage, W::OwnerTokenReadApi, F::PrivateProject, deny(E::InsufficientScope)),
-    row(A::MergeSettingsManage, W::DevTokenMergeExecute, F::PrivateProject, deny(E::InsufficientScope)),
-    row(A::MergeSettingsManage, W::NonMember, F::PrivateProject, deny(E::NotFound)),
-    row(A::MergeSettingsManage, W::NonMember, F::InternalProject, deny(E::Forbidden)),
-    row(A::MergeSettingsManage, W::Anonymous, F::PrivateProject, deny(E::Unauthenticated)),
-    row(A::MergeSettingsManage, W::Disabled, F::PrivateProject, deny(E::AccountDisabled)),
-    row(A::MergeSettingsManage, W::Maintainer, F::DeletedProject, deny(E::PendingDeletion)),
+    row(A::MergeSettingsManage, W::Maintainer, TIGHTEN, Allow),
+    row(A::MergeSettingsManage, W::Owner, TIGHTEN, Allow),
+    row(A::MergeSettingsManage, W::Admin, TIGHTEN, Allow),
+    row(A::MergeSettingsManage, W::MaintainerTokenApi, TIGHTEN, Allow),
+    row(A::MergeSettingsManage, W::Developer, TIGHTEN, deny(E::Forbidden)),
+    row(A::MergeSettingsManage, W::Reporter, TIGHTEN, deny(E::Forbidden)),
+    row(A::MergeSettingsManage, W::AgentMaintainerTokenApi, TIGHTEN, deny(E::Forbidden)),
+    row(A::MergeSettingsManage, W::OwnerTokenReadApi, TIGHTEN, deny(E::InsufficientScope)),
+    row(A::MergeSettingsManage, W::DevTokenMergeExecute, TIGHTEN, deny(E::InsufficientScope)),
+    row(A::MergeSettingsManage, W::NonMember, TIGHTEN, deny(E::NotFound)),
+    row(A::MergeSettingsManage, W::NonMember, settings(None, false, MP::Internal), deny(E::Forbidden)),
+    row(A::MergeSettingsManage, W::Anonymous, TIGHTEN, deny(E::Unauthenticated)),
+    row(A::MergeSettingsManage, W::Disabled, TIGHTEN, deny(E::AccountDisabled)),
+    row(A::MergeSettingsManage, W::Maintainer, settings(None, false, MP::Deleted), deny(E::PendingDeletion)),
+    // R6 review: loosening the approvals needs a role at or above every
+    // protection (like suspending CODEOWNERS); tightening does not.
+    row(A::MergeSettingsManage, W::Maintainer, settings(Some(R::Owner), true, MP::Private), deny(E::Forbidden)),
+    row(A::MergeSettingsManage, W::Maintainer, settings(Some(R::Owner), false, MP::Private), Allow),
+    row(A::MergeSettingsManage, W::Maintainer, settings(Some(R::Maintainer), true, MP::Private), Allow),
+    row(A::MergeSettingsManage, W::Maintainer, settings(None, true, MP::Private), Allow),
+    row(A::MergeSettingsManage, W::Owner, settings(Some(R::Owner), true, MP::Private), Allow),
+    row(A::MergeSettingsManage, W::Admin, settings(Some(R::Owner), true, MP::Private), Allow),
     // --- CODEOWNERS enforcement: allowed ---
     row(A::CodeownersEnforcementToggle, W::Maintainer, HOUR, Allow),
     row(A::CodeownersEnforcementToggle, W::Maintainer, suspend(None, Some(1)), Allow),
@@ -95,6 +114,12 @@ pub(crate) const CONDITION_ROWS: &[Row] = &[
     row(A::CodeownersEnforcementToggle, W::OwnerTokenReadApi, HOUR, deny(E::InsufficientScope)),
     row(A::CodeownersEnforcementToggle, W::DevTokenMergeApprove, HOUR, deny(E::InsufficientScope)),
     row(A::CodeownersEnforcementToggle, W::NonMember, HOUR, deny(E::NotFound)),
+    row(
+        A::CodeownersEnforcementToggle,
+        W::NonMember,
+        F::Codeowners { highest: None, change: T::Enforce, deleted: false },
+        deny(E::NotFound),
+    ),
     row(A::CodeownersEnforcementToggle, W::Anonymous, HOUR, deny(E::Unauthenticated)),
     row(A::CodeownersEnforcementToggle, W::Disabled, HOUR, deny(E::AccountDisabled)),
     row(
@@ -107,6 +132,8 @@ pub(crate) const CONDITION_ROWS: &[Row] = &[
     row(A::RepoPush, W::Maintainer, F::RefNoDirectPush { update: U::FastForward }, deny(E::ProtectedRefDirectPushForbidden)),
     row(A::RepoPush, W::Owner, F::RefNoDirectPush { update: U::Create }, deny(E::ProtectedRefDirectPushForbidden)),
     row(A::RepoPush, W::Admin, F::RefNoDirectPush { update: U::FastForward }, deny(E::ProtectedRefDirectPushForbidden)),
+    row(A::RepoPush, W::DevTokenWriteRepository, F::RefNoDirectPush { update: U::FastForward }, deny(E::ProtectedRefDirectPushForbidden)),
+    row(A::RepoPush, W::AgentTokenWriteRepository, F::RefNoDirectPush { update: U::Create }, deny(E::ProtectedRefDirectPushForbidden)),
     row(A::RepoPush, W::Owner, F::RefNoDirectPush { update: U::Force }, deny(E::ProtectedRefForcePush)),
     row(A::RepoPush, W::Owner, F::RefNoDirectPush { update: U::Delete }, deny(E::ProtectedRefDeletion)),
     // The same branch is merged into: the ban is not the merge's to read.

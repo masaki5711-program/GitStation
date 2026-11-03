@@ -185,16 +185,45 @@ pub fn merge_rule_cmd(
             rule_id,
             approvals,
             check,
+            clear_checks,
             resolved_discussions,
-            no_direct_push,
+            direct_push_forbidden,
         } => {
-            let req = json!({
-                "required_approvals": approvals,
-                "required_checks": check,
-                "require_resolved_discussions": resolved_discussions,
-                "direct_push_forbidden": no_direct_push,
-            });
             let c = client(cli, env, io)?;
+            // The PUT replaces the merge rule: read it first and keep what
+            // was not asked (R6 review).
+            let rules = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/projects/{project}/protected-refs"),
+                &[],
+                None,
+            )?;
+            let current = rules["rules"]
+                .as_array()
+                .and_then(|a| a.iter().find(|r| r["id"].as_i64() == Some(*rule_id)))
+                .map(|r| r["merge_rule"].clone()) // clone: merged below
+                .unwrap_or(Value::Null);
+            let keep = |key: &str, default: Value| match current.get(key) {
+                Some(v) if !v.is_null() => v.clone(), // clone: the request owns it
+                _ => default,
+            };
+            let checks = if *clear_checks {
+                json!([])
+            } else if check.is_empty() {
+                keep("required_checks", json!([]))
+            } else {
+                json!(check)
+            };
+            let req = json!({
+                "required_approvals": approvals
+                    .map_or_else(|| keep("required_approvals", json!(0)), |n| json!(n)),
+                "required_checks": checks,
+                "require_resolved_discussions": resolved_discussions
+                    .map_or_else(|| keep("require_resolved_discussions", json!(false)), Value::Bool),
+                "direct_push_forbidden": direct_push_forbidden
+                    .map_or_else(|| keep("direct_push_forbidden", json!(false)), Value::Bool),
+            });
             let body = call(
                 &c,
                 Method::Put,
@@ -203,7 +232,10 @@ pub fn merge_rule_cmd(
                 Some(&req),
             )?;
             let m = &body["merge_rule"];
-            let human = format!(
+            let warned = body["warnings"]
+                .as_array()
+                .is_some_and(|w| w.iter().any(|x| x == "required_checks_unreportable"));
+            let mut human = format!(
                 "Rule {} ({}): {} approval(s), checks [{}], resolved discussions {}, direct pushes {}",
                 text(&body, "id"),
                 text(&body, "pattern"),
@@ -224,6 +256,11 @@ pub fn merge_rule_cmd(
                     "allowed"
                 }
             );
+            if warned {
+                human.push_str(
+                    "\nwarning: no check can be reported before the Checks API (C1): every merge into this branch is blocked (required_check_missing). Remove the checks with --clear-checks or remove the merge rule (runbook merge-blocked).",
+                );
+            }
             emit(io, cli, body, &human)
         }
         MergeRuleCommand::Remove {

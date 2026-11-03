@@ -55,3 +55,43 @@ impl ResourceCtx for CodeownersToggleCtx {
         self.project.id
     }
 }
+
+/// A merge settings change of one project (`MergeSettingsManage`, M3 R6
+/// review): the project, its highest protection and whether the change
+/// loosens the approvals (decided against the settings as stored).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeSettingsCtx {
+    project: LoadedProject,
+    highest_protection: Option<Role>,
+    loosens: bool,
+}
+
+impl MergeSettingsCtx {
+    pub fn new(project: LoadedProject, highest_protection: Option<Role>, loosens: bool) -> Self {
+        Self {
+            project,
+            highest_protection,
+            loosens,
+        }
+    }
+}
+
+impl sealed::Sealed for MergeSettingsCtx {}
+
+impl ResourceCtx for MergeSettingsCtx {
+    type Id = ProjectId;
+    fn resource(&self) -> Resource {
+        Resource::MergeSettingsChange {
+            project: ProjectView {
+                visibility: self.project.visibility,
+                role: self.project.role,
+                pending_deletion: self.project.pending_deletion,
+            },
+            highest_protection: self.highest_protection,
+            loosens: self.loosens,
+        }
+    }
+    fn id(&self) -> ProjectId {
+        self.project.id
+    }
+}

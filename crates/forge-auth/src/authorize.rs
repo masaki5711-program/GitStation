@@ -719,11 +719,35 @@ pub fn authorize(
             }
             need(Role::Developer, project.role)
         }
-        // Approval rules (M3 R5, ADR-0024 §8.6) and merge settings (M3 R6,
-        // §4.1, §8.2, §8.3): people only, Maintainer.
-        (Action::ApprovalRuleManage | Action::MergeSettingsManage, Resource::Project(p)) => {
+        // Approval rules (M3 R5, ADR-0024 §8.6): people only, Maintainer.
+        (Action::ApprovalRuleManage, Resource::Project(p)) => {
             people_only()?;
             need(Role::Maintainer, p.role)
+        }
+        // Merge settings (M3 R6, §4.1, §8.2, §8.3): people only, Maintainer;
+        // a change that loosens the approvals (committers' approvals
+        // counted, approvals carried on push) also needs a role at or above
+        // every protection of the project, like suspending CODEOWNERS
+        // (R6 review). Tightening is any Maintainer's.
+        (
+            Action::MergeSettingsManage,
+            Resource::MergeSettingsChange {
+                project,
+                highest_protection,
+                loosens,
+            },
+        ) => {
+            people_only()?;
+            need(Role::Maintainer, project.role)?;
+            match highest_protection {
+                Some(level) if *loosens && !admin && project.role.is_none_or(|r| *level > r) => {
+                    Err(deny(ErrorCode::Forbidden)
+                        .with_context("reason", "above_own_role")
+                        .with_context("required_role", level.as_str())
+                        .with_context("actual_role", project.role.map_or("none", Role::as_str)))
+                }
+                Some(_) | None => Ok(()),
+            }
         }
         // CODEOWNERS enforcement (M3 R6, ADR-0024 §9): people only,
         // Maintainer. A suspension needs a role at or above every
@@ -884,7 +908,8 @@ pub fn authorize(
             | Resource::Resolved { .. }
             | Resource::MergeRequest { .. }
             | Resource::Discussion { .. }
-            | Resource::CodeownersEnforcement { .. },
+            | Resource::CodeownersEnforcement { .. }
+            | Resource::MergeSettingsChange { .. },
         ) => wrong_resource(),
     }
 }
@@ -925,7 +950,8 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::VisibilityChange { project, .. }
         | Resource::MergeRequest { project, .. }
         | Resource::Discussion { project, .. }
-        | Resource::CodeownersEnforcement { project, .. } => live(project),
+        | Resource::CodeownersEnforcement { project, .. }
+        | Resource::MergeSettingsChange { project, .. } => live(project),
         Resource::Membership {
             scope: MembershipScope::Project(p),
             ..
@@ -1000,7 +1026,8 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::Resolved { .. }
         | Resource::MergeRequest { .. }
         | Resource::Discussion { .. }
-        | Resource::CodeownersEnforcement { .. } => None,
+        | Resource::CodeownersEnforcement { .. }
+        | Resource::MergeSettingsChange { .. } => None,
     }
 }
 

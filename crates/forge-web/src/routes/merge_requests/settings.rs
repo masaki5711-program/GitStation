@@ -19,7 +19,7 @@
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::Response;
-use forge_auth::{CodeownersToggle, CodeownersToggleCtx, ProjectCtx};
+use forge_auth::{CodeownersToggle, CodeownersToggleCtx, MergeSettingsCtx, ProjectCtx};
 use forge_core::{parse_positive_id, MergeMethod, MergeSettingsValues, ProjectId, UserId};
 use forge_errors::ForgeError;
 use forge_review::{CodeownersEnforcement, ReviewRequest, StoredMergeSettings};
@@ -31,7 +31,7 @@ use crate::app::AppState;
 use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, WriteParts};
 use crate::routes::projects::PREFIX;
-use crate::routes::write::{absent, bounded, json};
+use crate::routes::write::{absent, bounded, json, read_if_manager};
 
 /// `GET` / `PUT` a project's merge settings.
 pub const SETTINGS: &str = "/api/v1/projects/{id}/merge-settings";
@@ -170,16 +170,58 @@ impl Loader<AppState> for SettingsProject {
     }
 }
 
-impl BodyLoader<AppState, PutMergeSettings> for SettingsProject {
-    type Ctx = ProjectCtx;
+/// `PUT …/merge-settings`: the project, its highest protection and
+/// whether the change loosens the approvals against the stored settings
+/// (R6 review; read only for a caller who could manage the project, the
+/// decision that binds the write reads them again under the lock).
+pub struct SettingsChangeOf;
+
+impl BodyLoader<AppState, PutMergeSettings> for SettingsChangeOf {
+    type Ctx = MergeSettingsCtx;
     fn load<'a>(
         &'a self,
         state: &'a AppState,
         parts: &'a Parts,
-        _body: &'a PutMergeSettings,
+        body: &'a PutMergeSettings,
         viewer: Option<UserId>,
-    ) -> LoadFuture<'a, ProjectCtx> {
-        Box::pin(project_lookup(state, parts, viewer))
+    ) -> LoadFuture<'a, MergeSettingsCtx> {
+        Box::pin(async move {
+            let id = project_id(parts.uri.path())?;
+            let Some((project, record)) = project_of(state, id, viewer).await? else {
+                return Ok(absent());
+            };
+            let review = review(state)?;
+            let facts = read_if_manager(project.role, || async {
+                let current =
+                    bounded(state, "merge_settings", review.stored_merge_settings(id)).await?;
+                let highest = bounded(
+                    state,
+                    "merge_settings_protection",
+                    review.highest_protection(id),
+                )
+                .await?;
+                Ok((current, highest))
+            })
+            .await?;
+            let (loosens, highest) = match facts {
+                Some((current, highest)) => {
+                    let new = MergeSettingsValues {
+                        reset_approvals_on_push: body.reset_approvals_on_push,
+                        committer_approvals_excluded: body.committer_approvals_excluded,
+                        ..current.values.clone() // clone: only the approval switches matter here
+                    };
+                    (
+                        forge_review::settings_loosen_approvals(&current.values, &new),
+                        highest,
+                    )
+                }
+                None => (false, None),
+            };
+            Ok(found(
+                MergeSettingsCtx::new(project, highest, loosens),
+                record,
+            ))
+        })
     }
 }
 
@@ -201,12 +243,18 @@ impl BodyLoader<AppState, PutCodeownersEnforcement> for CodeownersOf {
             let Some((project, record)) = project_of(state, id, viewer).await? else {
                 return Ok(absent());
             };
-            let highest = bounded(
-                state,
-                "codeowners_protection",
-                review(state)?.highest_protection(id),
-            )
-            .await?;
+            // R6 review: the protection is read only for a caller who could
+            // manage the project (others are refused on their role).
+            let review = review(state)?;
+            let highest = read_if_manager(project.role, || {
+                bounded(
+                    state,
+                    "codeowners_protection",
+                    review.highest_protection(id),
+                )
+            })
+            .await?
+            .flatten();
             let change = if body.enforced {
                 CodeownersToggle::Enforce
             } else {
@@ -250,7 +298,7 @@ pub async fn get_settings(state: AppState, request: Dispatched<ProjectCtx>) -> R
 /// `PUT …/merge-settings` → `200` the settings as stored.
 pub async fn put_settings(
     state: AppState,
-    request: Dispatched<ProjectCtx, PutMergeSettings>,
+    request: Dispatched<MergeSettingsCtx, PutMergeSettings>,
 ) -> Response {
     let w = request.into_write();
     let built = async {

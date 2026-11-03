@@ -85,7 +85,7 @@ pub use merges::{
 pub use settings::{
     get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,
     put_settings as put_merge_settings, CodeownersEnforcementBody, CodeownersOf, MergeSettingsBody,
-    PutCodeownersEnforcement, PutMergeSettings, SettingsProject,
+    PutCodeownersEnforcement, PutMergeSettings, SettingsChangeOf, SettingsProject,
     CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
     SETTINGS as MERGE_SETTINGS,
 };

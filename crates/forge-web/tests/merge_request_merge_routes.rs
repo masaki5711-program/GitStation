@@ -918,6 +918,8 @@ async fn the_merge_rule_routes_and_the_status_contract() {
     let (status, body) = put(olga.clone(), wanted).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["merge_rule"]["required_checks"], json!(["ci/gates"]));
+    // R6 review: no check can be reported before the Checks API.
+    assert_eq!(body["warnings"], json!(["required_checks_unreportable"]));
     let (_, list) = send(
         w.router.clone(),
         "GET",

@@ -57,6 +57,7 @@ mod version_refs;
 pub mod versions;
 mod versions_carry;
 
+pub use forge_db::review::settings::loosens as settings_loosen_approvals;
 pub use forge_db::review::{
     CodeownersEnforcement, PurgeOutcome, RefreshRequest, SettingsOutcome, StoredMergeSettings,
     StoredMergeability, StoredVersion,

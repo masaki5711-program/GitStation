@@ -137,6 +137,13 @@ pub(crate) enum Fixture {
         change: crate::model::CodeownersToggle,
         deleted: bool,
     },
+    /// A merge settings change (M3 R6 review) on a project of `project`'s
+    /// kind whose highest protection is `highest`.
+    SettingsChange {
+        highest: Option<Role>,
+        loosens: bool,
+        project: crate::matrix_review::MrProject,
+    },
     /// A branch fast-forward on an internal project.
     InternalRef,
     /// A branch fast-forward on a project pending deletion.
@@ -583,6 +590,19 @@ impl Fixture {
                 project: if gone { deleted } else { private },
                 highest_protection: highest,
                 change,
+            },
+            Fixture::SettingsChange {
+                highest,
+                loosens,
+                project,
+            } => Resource::MergeSettingsChange {
+                project: match project {
+                    crate::matrix_review::MrProject::Private => private,
+                    crate::matrix_review::MrProject::Internal => internal,
+                    crate::matrix_review::MrProject::Deleted => deleted,
+                },
+                highest_protection: highest,
+                loosens,
             },
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),

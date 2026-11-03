@@ -408,6 +408,16 @@ pub enum Resource {
         highest_protection: Option<Role>,
         change: CodeownersToggle,
     },
+    /// A change of a project's merge settings (`MergeSettingsManage`, M3
+    /// R6 review): `loosens` when it turns off a rule of the approvals
+    /// (`committer_approvals_excluded` or `reset_approvals_on_push` from
+    /// on to off, compared with the settings as stored);
+    /// `highest_protection` as for the CODEOWNERS switch.
+    MergeSettingsChange {
+        project: ProjectView,
+        highest_protection: Option<Role>,
+        loosens: bool,
+    },
     /// A path that resolved to a namespace (`PathResolve`), decided by
     /// whether the caller can see it — not by a read role (ADR-0015).
     Resolved {

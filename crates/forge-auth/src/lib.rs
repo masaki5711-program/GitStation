@@ -30,7 +30,7 @@ mod ref_updates;
 
 pub use action::Action;
 pub use authorize::authorize;
-pub use codeowners_ctx::CodeownersToggleCtx;
+pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,

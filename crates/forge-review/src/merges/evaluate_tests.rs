@@ -312,3 +312,110 @@ proptest! {
         }
     }
 }
+
+/// R6 review (LOW): the fixed order as literal names — the screen's first
+/// line and the `gstn mr status` contract depend on it.
+#[test]
+fn the_reason_order_is_fixed() {
+    let name = |n: &str| CheckName::parse(n).expect("name");
+    let every = [
+        BlockReason::ChangedPathsUnknown { reason: "timeout" },
+        BlockReason::ConfigChangeNeedsMaintainerApproval,
+        BlockReason::UnresolvedDiscussions { count: 1 },
+        BlockReason::RequiredCheckNotSuccessful {
+            name: name("ci/b"),
+            status: CheckStatus::Completed,
+            conclusion: Some(CheckConclusion::Failure),
+        },
+        BlockReason::RequiredCheckMissing { name: name("ci/a") },
+        BlockReason::CodeownersInvalid {
+            line: 1,
+            reason: "syntax",
+        },
+        BlockReason::CodeownerApprovalMissing {
+            pattern: "*".to_owned(),
+            owners: Vec::new(),
+        },
+        BlockReason::ApprovalsMissing {
+            rule: "r".to_owned(),
+            required: 1,
+            counted: 0,
+        },
+        BlockReason::NothingToMerge,
+        BlockReason::FfNotPossible,
+        BlockReason::Conflict,
+        BlockReason::MergeabilityUnknown,
+        BlockReason::SourceBranchMissing,
+        BlockReason::MergeInProgress,
+        BlockReason::Draft,
+        BlockReason::NotOpen,
+    ];
+    let mut sorted = every.to_vec();
+    sorted.sort_by_key(BlockReason::rank);
+    let names: Vec<&str> = sorted.iter().map(BlockReason::as_str).collect();
+    assert_eq!(
+        names,
+        [
+            "not_open",
+            "draft",
+            "merge_in_progress",
+            "source_branch_missing",
+            "mergeability_unknown",
+            "conflict",
+            "ff_not_possible",
+            "nothing_to_merge",
+            "approvals_missing",
+            "codeowner_approval_missing",
+            "codeowners_invalid",
+            "required_check_missing",
+            "required_check_not_successful",
+            "unresolved_discussions",
+            "config_change_needs_maintainer_approval",
+            "changed_paths_unknown",
+        ]
+    );
+    let ranks: Vec<u8> = sorted.iter().map(BlockReason::rank).collect();
+    assert_eq!(ranks, (0..16).collect::<Vec<u8>>(), "one rank each");
+}
+
+/// The order agrees with ADR-0024 §7's list (the names it lists appear in
+/// the same order; `nothing_to_merge` is R4's addition and
+/// `work_item_link_missing` waits for I1).
+#[test]
+fn the_reason_order_agrees_with_the_adr() {
+    let adr =
+        include_str!("../../../../docs/adr/0024-merge-requests-merge-execution-and-checks.md");
+    let start = adr.find("止める理由（`BlockReason`").expect("§7 list");
+    let section = &adr[start..];
+    let ranked = [
+        "not_open",
+        "draft",
+        "merge_in_progress",
+        "source_branch_missing",
+        "mergeability_unknown",
+        "conflict",
+        "ff_not_possible",
+        "approvals_missing",
+        "codeowner_approval_missing",
+        "codeowners_invalid",
+        "required_check_missing",
+        "required_check_not_successful",
+        "unresolved_discussions",
+        "config_change_needs_maintainer_approval",
+        "changed_paths_unknown",
+    ];
+    let positions: Vec<usize> = ranked
+        .iter()
+        .map(|n| {
+            section
+                .find(&format!("`{n}"))
+                .unwrap_or_else(|| panic!("{n} in ADR §7"))
+        })
+        .collect();
+    let mut sorted = positions.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        positions, sorted,
+        "ADR-0024 §7 lists the reasons in rank order"
+    );
+}

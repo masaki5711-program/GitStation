@@ -1576,7 +1576,7 @@ impl World {
         let proof = prove(
             &principal,
             Action::MergeSettingsManage,
-            ProjectCtx::new(project),
+            forge_auth::MergeSettingsCtx::new(project, None, true),
         )
         .expect("proof");
         let (outcome, _) = self
@@ -1860,5 +1860,196 @@ async fn a_suspended_codeowners_enforcement_lets_the_fix_merge() {
     );
     let back = w.toggle(forge_auth::CodeownersToggle::Enforce).await;
     assert!(back.codeowners.enforced());
+    w.t.drop_now().await;
+}
+
+/// R6 review (HIGH): a new head that changes more than 50 files never
+/// carries the approvals, even when the project keeps them.
+#[tokio::test]
+async fn a_large_push_never_carries_the_approvals() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    w.approve(w.rita).await.expect("approve");
+    let names: Vec<String> = (0..51).map(|i| format!("g{i}.txt")).collect();
+    let mut files: Vec<(&str, &str)> = vec![("README.md", "base\n"), ("f.txt", "f\n")];
+    files.extend(names.iter().map(|n| (n.as_str(), "g\n")));
+    w.push_next(&files, "req-push-big").await;
+    let carried: i64 = count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.events WHERE event_type = 'merge_request.approved' \
+         AND payload ->> 'carried_from' IS NOT NULL",
+    )
+    .await;
+    assert_eq!(carried, 0);
+    let revoked: i64 = count(
+        &w.t,
+        "SELECT count(*) AS n FROM forge.events WHERE event_type = 'merge_request.unapproved' \
+         AND payload ->> 'reason' = 'new_commits'",
+    )
+    .await;
+    assert_eq!(revoked, 1);
+    w.t.drop_now().await;
+}
+
+/// R6 review (MEDIUM): loosening the approvals is decided again on the
+/// settings as locked — a Maintainer below the project's Owner-level
+/// protection is refused (`above_own_role`) even with a proof decided on a
+/// stale "tightening"; tightening stays a Maintainer's.
+#[tokio::test]
+async fn loosening_the_approvals_needs_a_role_at_or_above_every_protection() {
+    let w = world(
+        &[(
+            "README.md",
+            "base
+",
+        )],
+        &[
+            (
+                "README.md",
+                "base
+",
+            ),
+            (
+                "f.txt", "f
+",
+            ),
+        ],
+    )
+    .await;
+    w.protect("owner", 0, &[], false, false).await;
+    let principal = session(w.mara);
+    let project = loaded(&w.t, &principal, w.project).await;
+    let stale = prove(
+        &principal,
+        Action::MergeSettingsManage,
+        forge_auth::MergeSettingsCtx::new(project, Some(Role::Owner), false),
+    )
+    .expect("a tightening proof");
+    let loose = forge_core::MergeSettingsValues {
+        committer_approvals_excluded: false,
+        ..forge_core::MergeSettingsValues::default()
+    };
+    let err = w
+        .review
+        .put_merge_settings(&request("req-loose"), &stale, &loose)
+        .await
+        .expect_err("loosening");
+    assert_eq!(err.code(), ErrorCode::Forbidden);
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "reason" && v == "above_own_role"));
+    let tight = forge_core::MergeSettingsValues {
+        allowed_methods: vec![forge_core::MergeMethod::Squash],
+        default_method: forge_core::MergeMethod::Squash,
+        ..forge_core::MergeSettingsValues::default()
+    };
+    let (outcome, _) = w
+        .review
+        .put_merge_settings(&request("req-tight"), &stale, &tight)
+        .await
+        .expect("tightening");
+    assert_eq!(outcome, forge_db::review::SettingsOutcome::Changed);
+    w.t.drop_now().await;
+}
+
+/// R6 review (MEDIUM): the status evaluates a fast-forward's ancestry —
+/// mergeable while the target is an ancestor of the head, `ff_not_possible`
+/// once the target moved elsewhere.
+#[tokio::test]
+async fn the_status_evaluates_a_fast_forward() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        allowed_methods: vec![forge_core::MergeMethod::FastForward],
+        default_method: forge_core::MergeMethod::FastForward,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    let status = w.status().await;
+    assert_eq!(status.method, forge_core::MergeMethod::FastForward);
+    assert!(status.mergeable, "{:?}", status.reasons);
+    let other = commit(
+        &w.path,
+        &[("README.md", "base\n"), ("o.txt", "o\n")],
+        Some(&w.base),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &other], None);
+    w.browser.invalidate(w.repo);
+    let names: Vec<&str> = w
+        .status()
+        .await
+        .reasons
+        .iter()
+        .map(|r| r.as_str())
+        .collect();
+    assert!(names.contains(&"ff_not_possible"), "{names:?}");
+    w.t.drop_now().await;
+}
+
+/// R6 review (LOW): several protection rules matching the target reach
+/// evaluate_merge combined to the strictest — the highest minimum, every
+/// required check, resolved discussions from either rule.
+#[tokio::test]
+async fn several_matching_rules_combine_to_the_strictest() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect("developer", 1, &["ci/gates"], false, false).await;
+    w.t.commit_audited(
+        ("project", w.project.get()),
+        &[
+            format!(
+                "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                 VALUES ({}, 'refs/heads/ma*', 'developer')",
+                w.project.get()
+            ),
+            format!(
+                "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+                 required_approvals, required_checks, require_resolved_discussions) \
+                 SELECT id, project_id, 2, ARRAY['kanflow/linked']::text[], true \
+                 FROM forge.protected_refs WHERE project_id = {} AND pattern = 'refs/heads/ma*'",
+                w.project.get()
+            ),
+        ],
+    )
+    .await;
+    let status = w.status().await;
+    let reasons: Vec<(String, Option<String>)> = status
+        .reasons
+        .iter()
+        .map(|r| (r.as_str().to_owned(), r.detail()))
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            (
+                "approvals_missing".to_owned(),
+                Some("rule=@protected_branch required=2 counted=0".to_owned())
+            ),
+            (
+                "required_check_missing".to_owned(),
+                Some("name=ci/gates".to_owned())
+            ),
+            (
+                "required_check_missing".to_owned(),
+                Some("name=kanflow/linked".to_owned())
+            ),
+        ]
+    );
+    assert_eq!(status.discussions, Some(0), "required by the second rule");
     w.t.drop_now().await;
 }

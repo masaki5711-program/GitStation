@@ -1063,7 +1063,7 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Action::MergeSettingsManage,
             "Replace a project's merge settings: methods, default, source deletion, approvals on push, committers' approvals (people only; Maintainer)",
             mr::SETTINGS_MAX_BODY,
-            mr::SettingsProject,
+            mr::SettingsChangeOf,
             mr::put_merge_settings,
         )
         .responds::<mr::MergeSettingsBody>(Verb::Put, mr::MERGE_SETTINGS)

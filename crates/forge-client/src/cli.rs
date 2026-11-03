@@ -553,8 +553,8 @@ pub enum CodeownersCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum MergeRuleCommand {
-    /// Set a protected branch rule's merge conditions (Maintainer; replaces
-    /// the merge rule: options left out are off).
+    /// Set a protected branch rule's merge conditions (Maintainer). Options
+    /// left out keep their current value (read first).
     Set {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
@@ -562,17 +562,22 @@ pub enum MergeRuleCommand {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         rule_id: i64,
         /// Minimum counted approvals (0..=20).
-        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=20))]
-        approvals: u32,
-        /// A required check (repeatable): ci/…, kanflow/… or forge/….
-        #[arg(long, value_parser = parse_text)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=20))]
+        approvals: Option<u32>,
+        /// A required check (repeatable; replaces the list): ci/…, kanflow/…
+        /// or forge/….
+        #[arg(long, value_parser = parse_text, conflicts_with = "clear_checks")]
         check: Vec<String>,
-        /// Every discussion must be resolved.
+        /// Require no check.
         #[arg(long)]
-        resolved_discussions: bool,
-        /// Forbid direct pushes (the branch changes through merges only).
-        #[arg(long)]
-        no_direct_push: bool,
+        clear_checks: bool,
+        /// true / false: every discussion must be resolved.
+        #[arg(long, value_name = "BOOL")]
+        resolved_discussions: Option<bool>,
+        /// true / false: forbid direct pushes (the branch changes through
+        /// merges only).
+        #[arg(long, value_name = "BOOL")]
+        direct_push_forbidden: Option<bool>,
     },
     /// Remove a protected branch rule's merge conditions.
     Remove {

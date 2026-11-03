@@ -2309,6 +2309,13 @@
           },
           "updated_at": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things to know about the answer (M3 R6 review). Today only\n`required_checks_unreportable`: the merge rule requires checks but no\ncheck can be reported before the Checks API (C1), so every merge\ninto the branch is blocked (`required_check_missing`); with the\ndirect-push ban the branch cannot change at all. Remove the check\nnames or the merge rule to unblock (runbook merge-blocked). Empty\notherwise.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -2317,7 +2324,8 @@
           "push_min_role",
           "created_at",
           "updated_at",
-          "merge_rule"
+          "merge_rule",
+          "warnings"
         ],
         "type": "object"
       },

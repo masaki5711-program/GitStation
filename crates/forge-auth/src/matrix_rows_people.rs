@@ -63,7 +63,11 @@ const GROUPS: [[Row; 2]; 18] = [
     both!(A::MergeRequestUnapprove, APPROVER.0, APPROVER.1, F::Mr(MF::other())),
     both!(A::ApprovalRuleManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
     // M3 R6.
-    both!(A::MergeSettingsManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
+    both!(A::MergeSettingsManage, MAINTAINER.0, MAINTAINER.1, F::SettingsChange {
+        highest: None,
+        loosens: false,
+        project: crate::matrix_review::MrProject::Private,
+    }),
     both!(A::CodeownersEnforcementToggle, MAINTAINER.0, MAINTAINER.1, F::Codeowners {
         highest: Some(R::Maintainer),
         change: crate::model::CodeownersToggle::Suspend { minutes: Some(60) },
