@@ -665,6 +665,13 @@ async fn the_table_refuses_check_names_check_name_refuses() {
         // space-joined match and then block every merge.
         "'ci/a ci/b'",
         "'ci/a', 'ci/b forge/c'",
+        // R6 re-review: an empty name, a leading or trailing space, a NULL
+        // element (alone or next to a valid name).
+        "''",
+        "' ci/a'",
+        "'ci/a '",
+        "NULL",
+        "'ci/a', NULL",
     ] {
         let err = sqlx::query(&insert(bad)).execute(&mut su).await;
         assert_eq!(
@@ -685,6 +692,13 @@ async fn the_table_refuses_check_names_check_name_refuses() {
         .execute(&mut *tx)
         .await
         .expect("well-formed names pass the CHECK");
+    tx.rollback().await.expect("rollback");
+    // No required check (the column's default) passes too.
+    let mut tx = sqlx::Connection::begin(&mut su).await.expect("begin");
+    sqlx::query(&insert(""))
+        .execute(&mut *tx)
+        .await
+        .expect("an empty array passes the CHECK");
     tx.rollback().await.expect("rollback");
     w.t.drop_now().await;
 }
