@@ -1194,3 +1194,8 @@ MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare
 - **作成者の名前**（同じ MR、ADR-0024 への追加）: マージリクエスト、ノート、ディスカッションの本文に `author: {username, display_name}`
   を足した（ディスカッションは始めた人 = `started_by`）。読むときに `forge.users` を引いて返す（行ごとの副問い合わせ。`RETURNING` でも
   使える）。`author_id` / `started_by` はそのまま残す（追加だけ。マイグレーションなし）。画面が利用者を 1 人ずつ引かなくてよい。
+- **利用者の消去と名前**（レビューで足した）: 名前が引けない行（`forge.users` に行がない）は、その読み込み全体を FG-SYS-0001
+  （`reason=stored_author_missing` / `stored_note_author_missing` / `stored_started_by_missing`）で失敗させる。黙って名前なしで返したり、
+  ノートを落としたりしない。今は外部キーで起きない。**将来、利用者の消去や匿名化を作るときは、`forge.users` の行と `username` /
+  `display_name`（`NOT NULL`）を残す（匿名化なら置き換えの値を入れる）こと**。行を消す設計にするなら、先に forge-db の `user_name()` と
+  この節を変える（消えた利用者を表す値を返す）。そうしないと、その人が書いたマージリクエストとスレッドが読めなくなる。
