@@ -61,6 +61,9 @@ guarded_functions = [
     # M3 I1b: a work item link's identity never changes; it ends once; the
     # purge alone deletes it.
     "merge_request_work_items_guard",
+    # M3 I1b review: a person's link carries its audit row, a detected one
+    # the subscriber's progress (deferred, 20261116100100).
+    "merge_request_work_items_audited",
 ]
 
 [tables.events]
@@ -443,7 +446,10 @@ kind = "derived"
 ro_columns = ["*"]
 
 # One interval of a merge request <-> work item link; ended once, never
-# deleted but by the project purge.
+# deleted but by the project purge (repository `purging`). Derived, but the
+# deferred trigger merge_request_work_items_audited (20261116100100) makes a
+# person's link and its end need their work_item.* audit row, and a detected
+# one the work-item-sync subscriber's progress, in the same transaction.
 [tables.merge_request_work_items]
 guarded = false
 kind = "derived"

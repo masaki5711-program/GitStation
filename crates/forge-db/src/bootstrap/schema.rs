@@ -57,6 +57,9 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.integrations_service_account_guard()",
     // ── M3 I1b: a work item link ends once; the purge deletes it (20261116100000) ──
     "forge.merge_request_work_items_guard()",
+    // ── M3 I1b review: a person's link is audited, a detected one the
+    // subscriber's (20261116100100) ──
+    "forge.merge_request_work_items_audited()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -182,6 +185,15 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER merge_request_work_items_end_once BEFORE DELETE OR UPDATE ON \
          forge.merge_request_work_items FOR EACH ROW EXECUTE FUNCTION \
          forge.merge_request_work_items_guard()",
+    ),
+    // ── M3 I1b review: deferred, a person's link needs its audit row
+    // (20261116100100) ──
+    (
+        "merge_request_work_items",
+        "merge_request_work_items_audited",
+        "CREATE CONSTRAINT TRIGGER merge_request_work_items_audited AFTER INSERT OR UPDATE OF \
+         unlinked_at ON forge.merge_request_work_items DEFERRABLE INITIALLY DEFERRED FOR EACH \
+         ROW EXECUTE FUNCTION forge.merge_request_work_items_audited()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -667,12 +679,20 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         (
             "forge.merge_request_work_items",
             [
-                plain(&[
-                    "forge_app:SELECT",
-                    "forge_app:INSERT",
-                    "forge_app:DELETE",
-                    "forge_ro:SELECT",
-                ]),
+                plain(&["forge_app:SELECT", "forge_app:DELETE", "forge_ro:SELECT"]),
+                // Column-level INSERT since 20261116100100 (not linked_at).
+                columns(
+                    "forge_app",
+                    "INSERT",
+                    &[
+                        "merge_request_id",
+                        "project_id",
+                        "work_item_id",
+                        "source",
+                        "linked_by",
+                        "linked_seq",
+                    ],
+                ),
                 columns(
                     "forge_app",
                     "UPDATE",

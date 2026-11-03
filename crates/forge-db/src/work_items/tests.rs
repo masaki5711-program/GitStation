@@ -822,17 +822,27 @@ async fn work_item_checks_refuse_raw_rows_by_constraint_name() {
     )
     .await;
     assert!(changed.contains("never changes"), "{changed}");
-    sqlx::query(
-        "UPDATE forge.merge_request_work_items SET unlinked_at = now(), unlink_source = 'auto'",
-    )
-    .execute(&mut w.t.superuser().await)
-    .await
-    .expect("end once");
-    let ended = violated(
-        &w.t,
-        "UPDATE forge.merge_request_work_items SET unlinked_at = now() - interval '1 day'",
-    )
-    .await;
+    // Ended once (in a transaction that is rolled back: the deferred
+    // trigger would refuse a detected end outside the subscriber), then
+    // final.
+    let ended = {
+        let mut su = w.t.superuser().await;
+        let mut tx = su.begin().await.expect("begin");
+        sqlx::query(
+            "UPDATE forge.merge_request_work_items SET unlinked_at = now(), unlink_source = 'auto'",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("end once");
+        let err = sqlx::query(
+            "UPDATE forge.merge_request_work_items SET unlinked_at = now() - interval '1 day'",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect_err("final");
+        tx.rollback().await.expect("rollback");
+        err.to_string()
+    };
     assert!(ended.contains("ended link"), "{ended}");
     // forge_app: no UPDATE of a work item or an event's work items.
     for sql in [
@@ -902,5 +912,143 @@ async fn a_purge_removes_the_merge_requests_work_item_links() {
         .await
         .expect("items");
     assert_eq!(items, 1);
+    w.t.drop_now().await;
+}
+
+/// The constraint a statement in forge_app's own transaction is refused by
+/// (at the statement or, for a deferred trigger, at COMMIT).
+async fn refused_as_app(t: &FreshDb, sql: &str) -> String {
+    let mut tx = t.db.write_pool().begin().await.expect("begin");
+    let err = match sqlx::query(sql).execute(&mut *tx).await {
+        Err(e) => e,
+        Ok(_) => tx.commit().await.expect_err("refused at commit"),
+    };
+    err.as_database_error()
+        .and_then(|d| d.constraint().map(str::to_owned))
+        .unwrap_or_else(|| err.to_string())
+}
+
+/// I1b review (database HIGH): a person's link and its end need their
+/// `work_item.*` audit row, a detected one the subscriber's progress, in
+/// the same transaction; a person's link ends only as a person's; the
+/// rows go only with the purge (the repository `purging`); the link's
+/// project is its merge request's; `linked_at` is the database's.
+#[tokio::test]
+async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
+    let w = world().await;
+    let mr = open(&w, "Fix", "fix").await;
+    drain(&w.t).await;
+    assert_eq!(
+        link(&w, &mr, "PBI-9", "req-link-9").await,
+        LinkOutcome::Changed
+    );
+    let (m, p, a) = (mr.id.get(), w.web.project_id.get(), w.alice.get());
+    let manual: i64 =
+        sqlx::query_scalar("SELECT id FROM forge.merge_request_work_items WHERE source = 'manual'")
+            .fetch_one(&mut w.t.superuser().await)
+            .await
+            .expect("manual row");
+    let other: i64 = sqlx::query_scalar(
+        "INSERT INTO forge.work_items (integration_id, external_project_id, ref) \
+         VALUES ($1, 'kf-1', 'PBI-10') RETURNING id",
+    )
+    .bind(w.integration.get())
+    .fetch_one(w.t.db.write_pool())
+    .await
+    .expect("work item");
+    // A person's link without its audit row.
+    assert_eq!(
+        refused_as_app(
+            &w.t,
+            &format!(
+                "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
+             work_item_id, source, linked_by) VALUES ({m}, {p}, {other}, 'manual', {a})"
+            )
+        )
+        .await,
+        "merge_request_work_items_audited"
+    );
+    // A person's link ended without its audit row.
+    assert_eq!(
+        refused_as_app(
+            &w.t,
+            &format!(
+                "UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
+             unlink_source = 'manual', unlinked_by = {a} WHERE id = {manual}"
+            )
+        )
+        .await,
+        "merge_request_work_items_audited"
+    );
+    // A detected link outside the subscriber's step.
+    assert_eq!(
+        refused_as_app(
+            &w.t,
+            &format!(
+                "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
+             work_item_id, source, linked_seq) VALUES ({m}, {p}, {other}, 'auto', 1)"
+            )
+        )
+        .await,
+        "merge_request_work_items_derived"
+    );
+    // A person's link never ends as detection's.
+    let ended = violated(
+        &w.t,
+        &format!(
+            "UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
+         unlink_source = 'auto' WHERE id = {manual}"
+        ),
+    )
+    .await;
+    assert!(ended.contains("a person's link"), "{ended}");
+    // The link's project is its merge request's.
+    let api = projects::create(
+        &w.t.db,
+        &system("req-project-api"),
+        &NewProject::new("api", w.namespace, "API", w.alice),
+    )
+    .await
+    .expect("api");
+    assert_eq!(
+        violated(
+            &w.t,
+            &format!(
+                "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
+             work_item_id, source, linked_by) VALUES ({m}, {}, {other}, 'manual', {a})",
+                api.project_id.get()
+            )
+        )
+        .await,
+        "merge_request_work_items_merge_request_project"
+    );
+    // linked_at is not forge_app's to write.
+    let err = sqlx::query(&format!(
+        "INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
+         work_item_id, source, linked_seq, linked_at) VALUES ({m}, {p}, {other}, 'auto', 1, now())"
+    ))
+    .execute(w.t.db.write_pool())
+    .await
+    .expect_err("column grant");
+    assert!(err.to_string().contains("permission denied"), "{err}");
+    // Pending deletion is not the purge: the rows stay until it runs.
+    projects::delete_decided(
+        &w.t.db,
+        &system("req-delete"),
+        w.web.project_id,
+        w.alice,
+        std::time::Duration::from_secs(3 * 86_400),
+        |_| Ok(()),
+    )
+    .await
+    .expect("delete");
+    let err = sqlx::query("DELETE FROM forge.merge_request_work_items")
+        .execute(w.t.db.write_pool())
+        .await
+        .expect_err("not purging");
+    assert!(
+        err.to_string().contains("deleted only by the purge"),
+        "{err}"
+    );
     w.t.drop_now().await;
 }

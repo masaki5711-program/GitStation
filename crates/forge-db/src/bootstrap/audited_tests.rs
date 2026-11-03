@@ -96,7 +96,8 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "service_account_profiles_kind_guard",
             "user_identities_human_guard",
             "integrations_service_account_guard",
-            "merge_request_work_items_guard"
+            "merge_request_work_items_guard",
+            "merge_request_work_items_audited"
         ]
     );
 }
