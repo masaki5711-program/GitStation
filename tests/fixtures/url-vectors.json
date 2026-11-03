@@ -287,6 +287,30 @@
       }
     },
     {
+      "name": "route word pulls",
+      "path": "/g/p/-/pulls",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "pulls",
+        "rest": []
+      }
+    },
+    {
+      "name": "route word pull",
+      "path": "/g/p/-/pull/3",
+      "form": "both",
+      "expect": {
+        "kind": "scoped",
+        "namespace": "g/p",
+        "word": "pull",
+        "rest": [
+          "3"
+        ]
+      }
+    },
+    {
       "name": "ref and file keep their case",
       "path": "/acme/x/-/blob/Main/ReadMe.MD",
       "form": "both",
@@ -1273,14 +1297,8 @@
       "reason": "unknown_route"
     },
     {
-      "name": "not yet routed: pulls (M3)",
-      "path": "/acme/x/-/pulls",
-      "form": "both",
-      "reason": "unknown_route"
-    },
-    {
-      "name": "not yet routed: pull (M3)",
-      "path": "/acme/x/-/pull/3",
+      "name": "no merge_requests alias of pull (ADR-0015 amendment B0)",
+      "path": "/acme/x/-/merge_requests/3",
       "form": "both",
       "reason": "unknown_route"
     },

@@ -276,7 +276,9 @@ pub const DECIDED_IN_ROUTE: &[(Action, &str)] = &[
 
 /// The words whose page is the SPA shell on a project (ADR-0015 "ルートの
 /// 系統"). `raw` and `archive` are `RepoRead` content routes
-/// (`routes::content`, M2 MR7).
+/// (`routes::content`, M2 MR7). `pulls` / `pull` are the merge request
+/// screens (MR B0; their data is the `MergeRequestList` / `MergeRequestRead`
+/// API).
 pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tree,
     RouteWord::Blob,
@@ -288,9 +290,12 @@ pub const PROJECT_SHELL_WORDS: &[RouteWord] = &[
     RouteWord::Tags,
     RouteWord::Settings,
     RouteWord::Members,
+    RouteWord::Pulls,
+    RouteWord::Pull,
 ];
 
-/// The words whose page is the SPA shell on a group.
+/// The words whose page is the SPA shell on a group (no merge request
+/// screens: those are a project's).
 pub const GROUP_SHELL_WORDS: &[RouteWord] = &[RouteWord::Settings, RouteWord::Members];
 
 /// Every route of the product but the content routes raw / archive (the
