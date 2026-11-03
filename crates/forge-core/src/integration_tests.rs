@@ -38,6 +38,9 @@ fn event_type_entries_admit_the_integration_class_only() {
         "repository.pushed",
         "repository.*",
         "project.*",
+        // M3 I1b: the work item links joined the integration class.
+        "work_item.*",
+        "work_item.linked",
     ] {
         assert!(event_type_entry_ok(ok), "{ok}");
     }
@@ -50,7 +53,7 @@ fn event_type_entries_admit_the_integration_class_only() {
         "token.*",
         "project.purged",
         "merge_request.nope",
-        "work_item.*",
+        "commit.*",
         ".*",
         "merge_*",
         "merge_request.**",
@@ -95,9 +98,11 @@ fn integration_audit_details_name_their_action_and_publish_no_event() {
         external_project_id: "P1".to_owned(),
         service_account: UserId::new(4),
         membership_removed: false,
+        work_item_links_ended: 3,
     });
     assert_eq!(unbound.action(), "integration.unbound");
     assert_eq!(unbound.to_value()["membership_removed"], false);
+    assert_eq!(unbound.to_value()["work_item_links_ended"], 3);
     let created = AuditDetails::Integration(IntegrationChange::Created {
         integration: IntegrationId::new(3),
         kind: IntegrationKind::Kanflow,

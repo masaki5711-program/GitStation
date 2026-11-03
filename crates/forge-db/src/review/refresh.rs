@@ -16,7 +16,8 @@
 //!
 //! Each job's dedup key is `mr_refresh:<merge_request_id>:push:<seq>`: a
 //! retried step never doubles a job, and each push gets its own. The pusher
-//! (`actor_user_id` of a `user` event) becomes the version's `pushed_by`.
+//! (`actor_user_id` of a `user` or `service_account` event) becomes the
+//! version's `pushed_by`.
 //!
 //! **Target pushes** (M3 R2, ADR-0024 §3): every listed `refs/heads/*` that
 //! was created, moved OR deleted is also a target: the open merge requests
@@ -250,7 +251,9 @@ impl MergeRequestRefresh {
         }
         // The job order does not matter; keep it stable for the logs.
         ids.sort_unstable();
-        let pushed_by = (event.actor_kind == "user")
+        // A person's, a bot's (`user`) or a service account's push (S0
+        // review, M3 I1b: those are audited as `service_account`).
+        let pushed_by = matches!(event.actor_kind.as_str(), "user" | "service_account")
             .then_some(event.actor_user_id)
             .flatten()
             .map(UserId::new);
@@ -284,7 +287,19 @@ impl Subscriber for MergeRequestRefresh {
     fn handle<'a>(&'a self, event: &'a SourceEvent, tx: &'a mut DerivedTx<'_>) -> HandleFuture<'a> {
         Box::pin(async move {
             let Some(kind) = EventType::parse(&event.event_type) else {
-                // A type this build does not know (a newer writer): not ours.
+                // A type this build does not know (a newer writer). This
+                // subscriber is independent (failing would quarantine the
+                // event, and it reacts to pushes only), so it goes on, but
+                // never silently (I1b review).
+                tracing::warn!(
+                    target: "forge_db",
+                    event = "forge.subscribers.unknown_event_type",
+                    subscriber = REFRESH_SUBSCRIBER,
+                    request_id = %event.request_id,
+                    source_seq = event.seq,
+                    event_type = %event.event_type,
+                    "an event type this build does not know was passed over"
+                );
                 return Ok(());
             };
             match kind {
@@ -321,7 +336,9 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestUnapproved
                 | EventType::CodeownersEnforcementChanged
                 | EventType::CodeownersEnforcementRestored
-                | EventType::CheckCompleted => Ok(()),
+                | EventType::CheckCompleted
+                | EventType::WorkItemLinked
+                | EventType::WorkItemUnlinked => Ok(()),
             }
         })
     }

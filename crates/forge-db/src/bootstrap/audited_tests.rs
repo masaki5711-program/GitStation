@@ -97,7 +97,9 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "user_identities_human_guard",
             "integrations_service_account_guard",
             "check_runs_guard",
-            "check_namespace_grants_kind_guard"
+            "check_namespace_grants_kind_guard",
+            "merge_request_work_items_guard",
+            "merge_request_work_items_audited"
         ]
     );
 }

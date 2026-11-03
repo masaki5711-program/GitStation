@@ -912,6 +912,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/work-items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A merge request's work item links, open and ended, oldest first (as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_work_items"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Link a work item (PBI-<n> of the project's kanflow binding) to a merge request by hand (Developer) */
+        put: operations["put_api_v1_projects_id_merge_requests_iid_work_items_ref"];
+        post?: never;
+        /** Unlink a work item from a merge request; the link stays in its history and is not detected again (Developer) */
+        delete: operations["delete_api_v1_projects_id_merge_requests_iid_work_items_ref"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-settings": {
         parameters: {
             query?: never;
@@ -3224,6 +3259,78 @@ export interface components {
          * @enum {string}
          */
         VisibilityName: "private" | "internal";
+        /** @description A work item as kanflow names it (02 §5.7's `work_items` entry). */
+        WorkItemBody: {
+            /** @description The external (kanflow) project of the binding. */
+            project_id: string;
+            /** @description `kanflow`. */
+            provider: string;
+            /** @description `PBI-<n>`. */
+            ref: string;
+        };
+        /** @description `PUT …/work-items/{ref}`: what the link did. */
+        WorkItemLinkAnswerBody: {
+            /** Format: int64 */
+            iid: number;
+            /** Format: int64 */
+            link_id: number;
+            /**
+             * @description `linked` (also when a detected link became the person's) or
+             *     `unchanged` (already linked by hand).
+             */
+            outcome: string;
+            /** @description `auto` or `manual`: how the (found) link was made. */
+            source: string;
+            work_item: components["schemas"]["WorkItemBody"];
+            /** Format: int64 */
+            work_item_id: number;
+        };
+        /** @description One link, open or ended. */
+        WorkItemLinkBody: {
+            /** Format: int64 */
+            link_id: number;
+            /** @description UTC, RFC 3339. */
+            linked_at: string;
+            /**
+             * Format: int64
+             * @description Who linked it by hand (`null` for a detected link).
+             */
+            linked_by: number | null;
+            /**
+             * @description `human`, `agent`, `service_account` or `bot` (`null` with
+             *     `linked_by`).
+             */
+            linked_by_kind: string | null;
+            /** @description `auto` (detected in the title or the source branch) or `manual`. */
+            source: string;
+            /**
+             * @description `auto` (the title no longer names it), `manual`, `converted` (a
+             *     person linked the detected work item: their link follows) or
+             *     `unbound` (the project was unbound); `null` while open.
+             */
+            unlink_source: string | null;
+            /** @description `null` while the link is open. */
+            unlinked_at: string | null;
+            /** Format: int64 */
+            unlinked_by: number | null;
+            /**
+             * @description `human`, `agent`, `service_account` or `bot`; only a `human`'s
+             *     `manual` unlink keeps detection from linking it again.
+             */
+            unlinked_by_kind: string | null;
+            work_item: components["schemas"]["WorkItemBody"];
+            /** Format: int64 */
+            work_item_id: number;
+        };
+        /** @description `GET …/work-items`. */
+        WorkItemLinksBody: {
+            /** Format: int64 */
+            iid: number;
+            /** @description Oldest first, at most 500. */
+            links: components["schemas"]["WorkItemLinkBody"][];
+            /** @description More than 500 link rows exist. */
+            truncated: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -5672,6 +5779,102 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VersionDiffBody"];
                 };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_requests_iid_work_items: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemLinksBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_merge_requests_iid_work_items_ref: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkItemLinkAnswerBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_merge_requests_iid_work_items_ref: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error: registered code, localized message, request id */
             default: {

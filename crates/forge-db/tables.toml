@@ -62,6 +62,12 @@ guarded_functions = [
     # accounts only.
     "check_runs_guard",
     "check_namespace_grants_kind_guard",
+    # M3 I1b: a work item link's identity never changes; it ends once; the
+    # purge alone deletes it.
+    "merge_request_work_items_guard",
+    # M3 I1b review: a person's link carries its audit row, a detected one
+    # the subscriber's progress (deferred, 20261116100100).
+    "merge_request_work_items_audited",
 ]
 
 [tables.events]
@@ -466,6 +472,34 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 C1 ──
+
+# ── M3 I1b: work items and their links (plan 02 §2, §5.7, §5.8, ADR-0016
+# Amendment I1b). Derived: the ordered subscriber work-item-sync writes them
+# (DerivedTx, no audit row); a person's manual link / unlink carries its own
+# work_item.* audit row and event (ChangeTx). ──
+# One kanflow work item (integration, external project, PBI-<n>); never
+# updated or deleted.
+[tables.work_items]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# One interval of a merge request <-> work item link; ended once, never
+# deleted but by the project purge (repository `purging`). Derived, but the
+# deferred trigger merge_request_work_items_audited (20261116100100) makes a
+# person's link and its end need their work_item.* audit row, and a detected
+# one the work-item-sync subscriber's progress, in the same transaction.
+[tables.merge_request_work_items]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# The work items each event concerns (the feed's filter, I1c).
+[tables.event_work_items]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 I1b ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

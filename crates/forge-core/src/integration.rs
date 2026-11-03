@@ -135,6 +135,9 @@ pub enum IntegrationChange {
         external_project_id: String,
         service_account: UserId,
         membership_removed: bool,
+        /// The project's open work item links to this binding's work items
+        /// the unbinding ended (`unlink_source = unbound`, M3 I1b review).
+        work_item_links_ended: i64,
     },
 }
 
@@ -152,7 +155,7 @@ impl IntegrationChange {
     /// Updated `{"integration_id","fields","enabled","event_types"}`,
     /// Bound `{"integration_id","project_id","external_project_id",
     /// "service_account_id","granted_membership"}`, Unbound the same with
-    /// `"membership_removed"`.
+    /// `"membership_removed"` and `"work_item_links_ended"`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
             Self::Created {
@@ -196,12 +199,14 @@ impl IntegrationChange {
                 external_project_id,
                 service_account,
                 membership_removed,
+                work_item_links_ended,
             } => serde_json::json!({
                 "integration_id": integration.get(),
                 "project_id": project.get(),
                 "external_project_id": external_project_id,
                 "service_account_id": service_account.get(),
                 "membership_removed": membership_removed,
+                "work_item_links_ended": work_item_links_ended,
             }),
         }
     }

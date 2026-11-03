@@ -13,7 +13,9 @@
 //! `merges.rs`) `POST|GET …/{iid}/merge` (`MergeRequestMerge` /
 //! `MergeRequestRead`: queue a merge, read the latest attempt), and (M3 R5,
 //! `approvals.rs`) `POST …/{iid}/approve`, `…/unapprove`, `GET …/approvals`
-//! and the project's `…/approval-rules[/{name}]`. Reading and listing are
+//! and the project's `…/approval-rules[/{name}]`, and (M3 I1b,
+//! `work_items.rs`) `GET …/{iid}/work-items` (`MergeRequestRead`) and
+//! `PUT|DELETE …/{iid}/work-items/{ref}` (`WorkItemLink`). Reading and listing are
 //! decided like the repository browse API (`MergeRequestRead`,
 //! `MergeRequestList`); opening is Developer and above (`MergeRequestCreate`);
 //! an update, a close and a reopen are the author's or a Developer's (another's
@@ -57,6 +59,7 @@ mod merges;
 mod settings;
 mod status;
 mod versions;
+mod work_items;
 
 pub use approvals::{
     approvals, approve, delete_rule as delete_approval_rule, put_rule as put_approval_rule,
@@ -99,6 +102,11 @@ pub use status::{
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,
     VersionsBody, COMPARE, COMPARE_QUERY, MERGEABILITY, VERSIONS, VERSION_DIFF,
+};
+pub use work_items::{
+    link as link_work_item, links as work_item_links, unlink as unlink_work_item, LinkOf, LinksOf,
+    WorkItemBody, WorkItemLinkAnswerBody, WorkItemLinkBody, WorkItemLinksBody,
+    LINK as WORK_ITEM_LINK, LINKS as WORK_ITEM_LINKS,
 };
 
 /// `GET` / `POST` a project's merge requests.

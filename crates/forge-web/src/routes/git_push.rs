@@ -185,6 +185,7 @@ async fn receive_pack_inner(
     let pusher = Pusher {
         request_id: ctx.request_id.clone(), // clone: the record keeps its own
         user,
+        kind: request.principal().account_kind(),
         credential_id: request.credential_id(),
         source_ip: None,
         user_agent: user_agent(&request),

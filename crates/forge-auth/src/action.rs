@@ -117,6 +117,14 @@ actions! {
     /// `POST …/merge-requests/{iid}/unapprove` (M3 R5): withdraw one's own
     /// approval; decided like `MergeRequestApprove`.
     MergeRequestUnapprove,
+    /// `PUT|DELETE …/merge-requests/{iid}/work-items/{ref}` (M3 I1b, plan
+    /// 11 §4.3, plan 02 §2): link a work item (kanflow `PBI-<n>` of the
+    /// project's binding) to a merge request by hand, or unlink one.
+    /// Developer and above (agents' tokens too: no merge condition, and
+    /// detection links the same from titles); `api`. Whether the project
+    /// is bound is the command's (`FG-INT-0018`), not a permission. Acting
+    /// for a person (kanflow) comes with S2.
+    WorkItemLink,
     /// `PUT …/approval-rules/{name}`, `DELETE …/approval-rules/{name}` (M3
     /// R5, ADR-0024 §8.6, §12): manage a project's approval rules. People
     /// only (a rule is a merge condition); Maintainer and above; `api`.
@@ -453,7 +461,8 @@ impl Action {
             | Action::ServiceAccountTokenRevoke
             | Action::CheckWrite
             | Action::CheckNamespaceGrantManage
-            | Action::IntegrationBindingManage => Some(Scope::Api),
+            | Action::IntegrationBindingManage
+            | Action::WorkItemLink => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.

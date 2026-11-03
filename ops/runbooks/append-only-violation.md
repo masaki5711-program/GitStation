@@ -3,7 +3,7 @@
 ## Trigger
 
 - `error_code=FG-DB-0009` AppendOnlyViolation（ログ、または `forge doctor` の `db.bootstrap`）
-- `error_code=FG-DB-0013` AuditMissing（ログ）: イベントが、同じトランザクションの監査の行なしにコミットされようとして、遅延制約トリガー（`events_audit_present`）が拒否した（SQLSTATE `XF002`）。`reason=audited_change` は状態の表（`tables.toml` の kind = audited）への INSERT / UPDATE / DELETE が、同じトランザクションに同じリソースの成功した監査の行を持たず、`audited_change_present` トリガーに拒否された（`table` に表の名前）
+- `error_code=FG-DB-0013` AuditMissing（ログ）: イベントが、同じトランザクションの監査の行なしにコミットされようとして、遅延制約トリガー（`events_audit_present`）が拒否した（SQLSTATE `XF002`）。`reason=audited_change` は状態の表（`tables.toml` の kind = audited）への INSERT / UPDATE / DELETE が、同じトランザクションに同じリソースの成功した監査の行を持たず、`audited_change_present` トリガーに拒否された（`table` に表の名前）。M3 I1b: `reason=work_item_link_unaudited`（制約 `merge_request_work_items_audited`）は、人の作業項目のリンク・解除が、同じトランザクションにその作業項目を名指す `work_item.*` の監査の行（結びつけの解除なら `integration.unbound`）を持たなかった。`reason=derived_work_item_link`（制約 `merge_request_work_items_derived`）は、自動のリンクが購読者 `work-item-sync` の処理の外で書かれた（購読者の中なら、そのイベントの失敗に数える）。どちらも書き込みの経路の不具合で、Runbook integrations を見る
 - `forge doctor` が `FAIL  db.bootstrap  FG-DB-0009 …` を出した
 
 ## Impact

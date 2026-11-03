@@ -27,7 +27,7 @@ use forge_errors::{ErrorCode, ForgeError};
 use sha2::{Digest, Sha256};
 
 use crate::namespace_resolver::LookupFuture;
-use crate::{ProjectId, RefName, RepoId, RequestId, UserId};
+use crate::{ProjectId, RefName, RepoId, RequestId, UserId, UserKind};
 
 /// The most ref updates one push may carry (MR4 refuses more commands
 /// before git runs).
@@ -354,6 +354,10 @@ pub struct Pusher {
     /// the logged one.
     pub request_id: RequestId,
     pub user: UserId,
+    /// The pusher's account kind (`users.kind`, from the authenticated
+    /// principal, never defaulted): a service account's push is audited as
+    /// `actor_kind = 'service_account'` (S0 review, carried into M3 I1b).
+    pub kind: UserKind,
     /// The token used (its id), `None` for a session.
     pub credential_id: Option<i64>,
     pub source_ip: Option<IpAddr>,

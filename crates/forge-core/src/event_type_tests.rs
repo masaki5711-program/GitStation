@@ -129,7 +129,9 @@ fn all_lists_every_event_type_once() {
             "merge_request.unapproved",
             "merge_settings.codeowners_enforcement_changed",
             "merge_settings.codeowners_enforcement_restored",
-            "check.completed"
+            "check.completed",
+            "work_item.linked",
+            "work_item.unlinked"
         ]
     );
 }

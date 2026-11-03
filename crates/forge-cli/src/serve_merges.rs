@@ -207,6 +207,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::IntegrationLimitReached
         | ErrorCode::BindingConflict
         | ErrorCode::IntegrationDisabled
+        | ErrorCode::WorkItemProjectNotBound
+        | ErrorCode::WorkItemLinkLimitReached
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;

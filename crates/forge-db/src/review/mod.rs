@@ -13,7 +13,9 @@
 //! [`add_note_mr_decided`], [`resolve_discussion_mr_decided`]); M3 R5: the
 //! approvals and approval rules (`approvals/`); M3 R6: the merge settings
 //! and the CODEOWNERS switch (`settings.rs`: [`put_merge_settings_mr_decided`],
-//! [`toggle_codeowners_mr_decided`], [`restore_expired_codeowners`]).
+//! [`toggle_codeowners_mr_decided`], [`restore_expired_codeowners`]); M3 I1b:
+//! a person's work item links (`work_item_links.rs`:
+//! [`link_work_item_mr_decided`], [`unlink_work_item_mr_decided`]).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -47,6 +49,7 @@ pub mod settings;
 mod version_bases;
 mod version_refs;
 pub mod versions;
+mod work_item_links;
 
 pub use approvals::{
     approval_facts, approval_rules, approve_mr_decided, approved_heads, approver_names, owners,
@@ -83,6 +86,10 @@ pub use versions::{
     list_versions, read_versions, record_mr_version, record_mr_version_carrying, refresh_job,
     refresh_payload, refresh_target, CarryPlan, RefreshRequest, RefreshTarget, RefreshTrigger,
     StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+};
+
+pub use work_item_links::{
+    link_work_item_mr_decided, unlink_work_item_mr_decided, LinkActor, LinkAnswer, LinkOutcome,
 };
 
 pub use commands::{

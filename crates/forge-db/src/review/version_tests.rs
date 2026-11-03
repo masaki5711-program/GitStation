@@ -404,6 +404,7 @@ async fn push(t: &FreshDb, user: UserId, request: &str, push: &PushRecord) {
     let who = Pusher {
         request_id: RequestId::parse(request).expect("request id"),
         user,
+        kind: forge_core::UserKind::Human,
         credential_id: None,
         source_ip: None,
         user_agent: None,
@@ -582,4 +583,72 @@ fn a_job_payload_round_trips_and_garbage_is_refused() {
     ] {
         assert!(refresh_payload(&bad).is_err(), "{bad}");
     }
+}
+
+/// S0 review, carried into M3 I1b: a service account's push is a
+/// `service_account` event; the version job still gets its pusher, so the
+/// version it records keeps `pushed_by` (it was dropped for anything but
+/// `actor_kind = 'user'`).
+#[tokio::test]
+async fn a_service_accounts_push_keeps_pushed_by_on_the_version() {
+    let t = FreshDb::migrated().await;
+    let (alice, web) = web(&t).await;
+    subscribers::register(&t.db, &MergeRequestRefresh::default(), Start::Head)
+        .await
+        .expect("register");
+    let bot = crate::service_accounts::create(
+        &t.db,
+        &system("req-sa-bot"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "release-bot".to_owned(),
+            display_name: "Release bot".to_owned(),
+            owner: alice,
+            purpose: "Pushes generated changes".to_owned(),
+        },
+        alice,
+    )
+    .await
+    .expect("service account")
+    .user_id;
+    let mr = open(&t, alice, web.project_id, "feature").await;
+    let who = Pusher {
+        request_id: RequestId::parse("req-push-bot").expect("request id"),
+        user: bot,
+        kind: forge_core::UserKind::ServiceAccount,
+        credential_id: None,
+        source_ip: None,
+        user_agent: None,
+    };
+    let recorder: &dyn PushRecorder = &t.db;
+    let done = recorder
+        .record_push(
+            &who,
+            &PushRecord {
+                repository_id: web.repository_id,
+                updates: vec![pushed("refs/heads/feature", PushUpdateKind::FastForward)],
+            },
+        )
+        .await
+        .expect("push");
+    assert_eq!(done, forge_core::PushRecorded::Recorded);
+    drain(&t).await;
+    let jobs = refresh_jobs(&t).await;
+    let (key, payload) = jobs.last().expect("the push's job");
+    assert!(
+        key.starts_with(&format!("mr_refresh:{}:push:", mr.id.get())),
+        "{key}"
+    );
+    assert_eq!(payload["pushed_by"], bot.get(), "{payload}");
+    // What the job then records for that version.
+    let pushed_by = payload["pushed_by"].as_i64().map(UserId::new);
+    record_mr_version(&t.db, &system("req-v-bot"), mr.id, &oid('b'), pushed_by)
+        .await
+        .expect("version");
+    let versions = list_versions(&t.db, mr.id).await.expect("versions");
+    assert_eq!(
+        versions.last().and_then(|v| v.pushed_by),
+        Some(bot),
+        "{versions:?}"
+    );
+    t.drop_now().await;
 }

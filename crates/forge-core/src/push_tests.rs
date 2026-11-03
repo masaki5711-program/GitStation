@@ -470,6 +470,7 @@ fn pusher() -> Pusher {
     Pusher {
         request_id: rid("req-push-log"),
         user: UserId::new(11),
+        kind: crate::UserKind::Human,
         credential_id: Some(5),
         source_ip: None,
         user_agent: None,
@@ -516,8 +517,15 @@ fn the_push_applied_line_round_trips_through_the_log() {
         .expect("readable")
         .expect("a push line");
     assert_eq!(parsed, applied);
-    let (who, project, back) = parsed.to_parts().expect("parts");
-    assert_eq!(who, pusher());
+    let (request, who, project, back) = parsed.to_parts().expect("parts");
+    assert_eq!(request, pusher().request_id);
+    assert_eq!(
+        who,
+        crate::PushReplay {
+            pusher: UserId::new(11),
+            credential_id: Some(5),
+        }
+    );
     assert_eq!(project, ProjectId::new(3));
     assert_eq!(back, push);
     // The same event under `fields` (the non-flattened layout) reads too.
@@ -639,7 +647,7 @@ fn a_partial_commit_count_is_stated_as_truncated() {
     let parsed = PushApplied::from_log_line(&line)
         .expect("readable")
         .expect("a push line");
-    assert_eq!(parsed.to_parts().expect("parts").2, push);
+    assert_eq!(parsed.to_parts().expect("parts").3, push);
     // Without the flag the field is not written (the MR2 layout).
     let mut plain = push.clone(); // clone: compared with the original below
     plain.updates[0].total_commits_partial = false;

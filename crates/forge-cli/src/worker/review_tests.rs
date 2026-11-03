@@ -274,6 +274,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
     let pusher = Pusher {
         request_id: RequestId::parse("req-push").expect("id"),
         user: alice,
+        kind: forge_core::UserKind::Human,
         credential_id: None,
         source_ip: None,
         user_agent: None,
@@ -323,12 +324,16 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
 }
 
 /// R1b turns subscribers on in production: the build's registry holds the
-/// refresh subscriber, so the worker starts its `subscribers` task.
+/// refresh subscriber (M3 I1b: and `work-item-sync`, ordered), so the
+/// worker starts its `subscribers` task.
 #[test]
 fn the_production_registry_starts_the_subscribers_task() {
     let registry = registry(&forge_core::config::ReviewConfig::default()).expect("registry");
     let names: Vec<&str> = registry.iter().map(|s| s.name()).collect();
-    assert_eq!(names, [REFRESH_SUBSCRIBER]);
+    assert_eq!(
+        names,
+        [REFRESH_SUBSCRIBER, forge_db::work_items::WORK_ITEM_SYNC]
+    );
     let tasks = crate::worker::tasks(&registry, None);
     assert!(
         tasks.contains(&crate::worker::Task::Subscribers),

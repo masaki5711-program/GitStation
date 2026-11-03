@@ -40,6 +40,20 @@ fn xf002_reasons_follow_the_constraint_and_an_unknown_one_is_not_no_audit_row() 
     );
 }
 
+/// I1b re-review: the work item link backstops keep their reason (a
+/// detected link written outside the subscriber is a derived refusal).
+#[test]
+fn xf002_of_the_work_item_link_trigger_has_its_own_reasons() {
+    assert_eq!(
+        audit_missing_reason(Some("merge_request_work_items_audited")),
+        "work_item_link_unaudited"
+    );
+    assert_eq!(
+        audit_missing_reason(Some("merge_request_work_items_derived")),
+        "derived_work_item_link"
+    );
+}
+
 #[test]
 fn transport_errors_are_unavailable_with_their_reason() {
     for (kind, reason) in [

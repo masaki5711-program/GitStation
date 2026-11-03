@@ -835,6 +835,20 @@ pub fn authorize(
             need(Role::Reporter, project.role)?;
             branches(source_branch, target_branch).map_err(refused)
         }
+        // Linking a work item by hand (M3 I1b): Developer and above (plan
+        // 11 §4.3), any state (a merged one keeps its links, 02 §5.7).
+        (
+            Action::WorkItemLink,
+            Resource::MergeRequest {
+                project,
+                source_branch,
+                target_branch,
+                ..
+            },
+        ) => {
+            need(Role::Developer, project.role)?;
+            branches(source_branch, target_branch).map_err(refused)
+        }
         // Resolving: people only; one's own thread (Reporter), another's
         // only a Developer who is not the merge request's author — the
         // author never clears another's thread, administrators included.
@@ -1026,6 +1040,7 @@ pub fn authorize(
             | Action::MergeRequestReopen
             | Action::MergeRequestVersionRefsPurge
             | Action::MergeRequestComment
+            | Action::WorkItemLink
             | Action::DiscussionResolve
             | Action::MergeRequestMerge
             | Action::MergeRequestApprove

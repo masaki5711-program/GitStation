@@ -258,6 +258,7 @@ impl World {
         let pusher = Pusher {
             request_id: RequestId::parse(&format!("req-push-{}", self.pushes)).expect("id"),
             user: self.alice,
+            kind: forge_core::UserKind::Human,
             credential_id: None,
             source_ip: None,
             user_agent: None,

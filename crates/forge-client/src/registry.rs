@@ -693,6 +693,44 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: r#"{"type":"object","required":["iid","head_sha","target_branch","approvals","rules","codeowners","config_change_approved","blocked_by","conflict"],"properties":{"blocked_by":{"type":"array","items":{"type":"object","required":["reason","detail"]}}}}"#,
     },
     CommandSpec {
+        name: "mr work-items",
+        summary: "A merge request's work item links (kanflow PBI-<n> of the project's binding), open and ended, oldest first: detected in the title or the source branch (source auto) or linked by a person (manual). An ended link stays (unlinked_at, unlink_source).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+        ],
+        examples: &["gstn mr work-items --project 7 --iid 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/merge-requests/{iid}/work-items"],
+        output: r#"{"type":"object","required":["iid","links","truncated"],"properties":{"links":{"type":"array","items":{"type":"object","required":["link_id","work_item_id","work_item","source","linked_by","linked_at","unlinked_at","unlink_source","unlinked_by"]}}}}"#,
+    },
+    CommandSpec {
+        name: "mr link-work-item",
+        summary: "Link a work item (--ref PBI-<n> of the project's kanflow binding) to a merge request by hand. Developer and above; FG-INT-0018 when the project is not bound. unchanged when it is linked already (by detection or a person).",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--ref", "option", true, "The work item, PBI-<n>."),
+        ],
+        examples: &["gstn mr link-work-item --project 7 --iid 3 --ref PBI-43"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}"],
+        output: r#"{"type":"object","required":["iid","outcome","link_id","work_item_id","work_item","source"],"properties":{"outcome":{"type":"string","enum":["linked","unchanged"]}}}"#,
+    },
+    CommandSpec {
+        name: "mr unlink-work-item",
+        summary: "Unlink a work item (--ref PBI-<n>) from a merge request. Developer and above. The link stays in the history and detection does not link it again (link it by hand to bring it back). Not linked now: FG-REPO-0005.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--iid", "option", true, "The merge request's number in the project."),
+            arg("--ref", "option", true, "The work item, PBI-<n> or its work_item_id (a link to an earlier binding's work item)."),
+        ],
+        examples: &["gstn mr unlink-work-item --project 7 --iid 3 --ref PBI-43"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}"],
+        output: r#"{"type":"object","required":["unlinked","project_id","iid","ref"]}"#,
+    },
+    CommandSpec {
         name: "mr status",
         summary: "Whether a merge request may merge now and every reason it may not, in ADR-0024's fixed order (the first is the one-line reason), with the approvals, the required checks, the discussions and CODEOWNERS enforcement. With --json: the stable merge status contract (schema_version 1, docs/api/merge-status.md) for agents.",
         args: &[

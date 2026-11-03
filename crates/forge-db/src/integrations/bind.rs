@@ -375,6 +375,33 @@ pub async fn unbind_decided<P>(
         } else {
             false
         };
+        // I1b review: the project's open links to this binding's work items
+        // end with it (`unbound`, by the person; the trigger
+        // merge_request_work_items_audited needs this change's
+        // integration.unbound audit row). No work_item.unlinked events: an
+        // unbound project's events reach no integration (the feed's
+        // visible set), and a change carries at most 100 events.
+        let ended_by = viewer;
+        let ext = external.clone(); // clone: the details keep it
+        let links_ended = tx
+            .step(|c| async move {
+                sqlx::query(
+                    "UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
+                     unlink_source = 'unbound', unlinked_by = $4, unlinked_by_kind = 'human' \
+                     WHERE project_id = $1 AND unlinked_at IS NULL AND work_item_id IN \
+                     (SELECT id FROM forge.work_items WHERE integration_id = $2 \
+                     AND external_project_id = $3)",
+                )
+                .bind(project.get())
+                .bind(integration.get())
+                .bind(&ext)
+                .bind(ended_by.get())
+                .execute(c)
+                .await
+                .map_err(|e| query_error("integrations.unbind.work_item_links", e))
+            })
+            .await?
+            .rows_affected();
         tx.step(|c| async move {
             sqlx::query(
                 "DELETE FROM forge.integration_bindings \
@@ -393,6 +420,7 @@ pub async fn unbind_decided<P>(
             external_project_id: external,
             service_account: account,
             membership_removed: removed,
+            work_item_links_ended: i64::try_from(links_ended).unwrap_or(i64::MAX),
         });
         let gone = AuditDetails::ProjectMemberRemoved {
             user: account,
