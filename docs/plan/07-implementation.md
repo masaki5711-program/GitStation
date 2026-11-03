@@ -38,7 +38,7 @@ M1 phase 8 MR4（修正待ち）→ MR5（`GET|HEAD /api/v1/projects/{id}`、res
 
 ## 4. M4 CI/CD とマージの安全（W8）
 
-- MR（`04` M-1 / M-2）、マージキュー（M-3）、自動マージの 4 方式 `merge.auto = off | reserve | conditional | full`（M-5、既定 `reserve`）、危険の検査（M-6、`stop` はどの方式でも人の承認）、main が壊れたときの原因の特定と revert の下書き（M-4）。
+- MR（`04` M-1 / M-2）、マージキュー（M-3）、自動マージの 4 方式 `merge.auto = off | reserve | conditional | full`（M-5、既定 `full`、2026-11-03）、危険の検査（M-6、`stop` はプログラムの破壊・DB の破壊・個人情報の流出の 3 分類で、どの方式でも人の判断）、main が壊れたときの原因の特定と revert の下書き（M-4）。
 - 自動マージは GitStation の「自動マージ」の主体が行う。AI のトークン（`is_agent`）にマージの権限を与えない。
 - MR の画面に AC の対応表（`PBI-<n>/AC-<m>` のテストの結果）を出し、Kanflow に送る（W5）。
 - 本番デプロイは人の承認が必須。成功したら `deployment.succeeded` を Kanflow に（リリースの更新）。
