@@ -109,6 +109,11 @@ pub(crate) enum Actor {
     MaintainerTokenReadApi,
     /// Administrator with a `merge_approve` + `admin` token (R5 review).
     AdminTokenMergeApproveAdmin,
+    /// A service account without a role, with a `read_api` token (M3 S0:
+    /// it sees member projects only); the twin of `NonMemberTokenReadApi`.
+    ServiceAccountNonMemberTokenReadApi,
+    /// Developer with a `user_email` token only (M3 S0: it reads no API).
+    DevTokenUserEmail,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -286,6 +291,19 @@ pub(crate) enum Fixture {
     Mr(crate::matrix_review::MrFixture),
     /// A discussion of a merge request (M3 R3): `matrix_review.rs`.
     Discussion(crate::matrix_review::DiscussionFixture),
+    /// The user a service account route acts on (M3 S0): a service account
+    /// (`human: false`) or a person, active or disabled.
+    ServiceAccountTarget {
+        human: bool,
+        active: bool,
+    },
+    /// A token request for such a user (M3 S0), with the `admin` scope or
+    /// with `read_api` alone.
+    ServiceAccountTokenRequest {
+        human: bool,
+        active: bool,
+        admin_scope: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,6 +409,10 @@ impl Actor {
             }
             Actor::MaintainerTokenReadApi => token(false, &[Scope::ReadApi]),
             Actor::AdminTokenMergeApproveAdmin => token(true, &[Scope::MergeApprove, Scope::Admin]),
+            Actor::ServiceAccountNonMemberTokenReadApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi])
+            }
+            Actor::DevTokenUserEmail => token(false, &[Scope::UserEmail]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -421,7 +443,8 @@ impl Actor {
             | Actor::DevTokenMergeApprove
             | Actor::AgentTokenMergeApprove
             | Actor::ServiceAccountTokenMergeApprove
-            | Actor::BotTokenMergeApprove => Some(Role::Developer),
+            | Actor::BotTokenMergeApprove
+            | Actor::DevTokenUserEmail => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -449,7 +472,8 @@ impl Actor {
             | Actor::BotAdminSession
             | Actor::AdminTokenMergeExecuteAdmin
             | Actor::AdminTokenMergeExecute
-            | Actor::AdminTokenMergeApproveAdmin => None,
+            | Actor::AdminTokenMergeApproveAdmin
+            | Actor::ServiceAccountNonMemberTokenReadApi => None,
         }
     }
 
@@ -476,6 +500,7 @@ impl Actor {
             Actor::ServiceAccountTokenMergeApprove | Actor::BotTokenMergeApprove => {
                 Some(Actor::DevTokenMergeApprove)
             }
+            Actor::ServiceAccountNonMemberTokenReadApi => Some(Actor::NonMemberTokenReadApi),
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
@@ -509,7 +534,8 @@ impl Actor {
             | Actor::DevTokenMergeApprove
             | Actor::AgentTokenMergeApprove
             | Actor::MaintainerTokenReadApi
-            | Actor::AdminTokenMergeApproveAdmin => None,
+            | Actor::AdminTokenMergeApproveAdmin
+            | Actor::DevTokenUserEmail => None,
         }
     }
 
@@ -793,7 +819,35 @@ impl Fixture {
             },
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::Discussion(d) => d.resource(role),
+            Fixture::ServiceAccountTarget { human, active } => {
+                Resource::ServiceAccount(service_account_view(human, active))
+            }
+            Fixture::ServiceAccountTokenRequest {
+                human,
+                active,
+                admin_scope,
+            } => Resource::ServiceAccountTokenRequest {
+                account: service_account_view(human, active),
+                scopes: if admin_scope {
+                    vec![Scope::ReadApi, Scope::Admin]
+                } else {
+                    vec![Scope::ReadApi]
+                },
+            },
         }
+    }
+}
+
+/// The target of a service account row (M3 S0).
+#[cfg(test)]
+fn service_account_view(human: bool, active: bool) -> crate::model::ServiceAccountView {
+    crate::model::ServiceAccountView {
+        kind: if human {
+            AccountKind::Human
+        } else {
+            AccountKind::ServiceAccount
+        },
+        active,
     }
 }
 
@@ -821,6 +875,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_conditions::CONDITION_ROWS,
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
+        crate::matrix_rows_service_accounts::SERVICE_ACCOUNT_ROWS,
     ]
     .concat()
 });

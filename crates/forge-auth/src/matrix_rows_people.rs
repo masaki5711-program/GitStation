@@ -43,8 +43,19 @@ const MERGER: (W, W) = (W::ServiceAccountTokenMergeExecute, W::BotTokenMergeExec
 /// M3 R5: an approval needs `merge_approve`.
 const APPROVER: (W, W) = (W::ServiceAccountTokenMergeApprove, W::BotTokenMergeApprove);
 
+/// M3 S0: a service account target, active.
+const SA: F = F::ServiceAccountTarget {
+    human: false,
+    active: true,
+};
+const SA_TOKEN: F = F::ServiceAccountTokenRequest {
+    human: false,
+    active: true,
+    admin_scope: false,
+};
+
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 18] = [
+const GROUPS: [[Row; 2]; 21] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -73,6 +84,12 @@ const GROUPS: [[Row; 2]; 18] = [
         change: crate::model::CodeownersToggle::Suspend { minutes: Some(60) },
         deleted: false,
     }),
+    // M3 S0: creating a service account and issuing its token are session
+    // only (the twin is the administrator's session); who answers for one
+    // is a person's decision (the twin is the administrator's admin token).
+    both!(A::ServiceAccountCreate, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
+    both!(A::ServiceAccountTokenIssue, ADMIN_SESSION.0, ADMIN_SESSION.1, SA_TOKEN),
+    both!(A::ServiceAccountUpdate, ADMIN_TOKEN.0, ADMIN_TOKEN.1, SA),
 ];
 
 /// The rows, flattened (`matrix::ROWS` appends them), and the Owner

@@ -220,11 +220,18 @@ fn people_only_rows_are_allowed_for_the_human_twin() {
 
 /// The reverse direction: on every allowed row of an action not kept for
 /// people, a service account or a bot with the same role and scopes is
-/// allowed too (the kind decides nothing there; commenting stays open).
+/// allowed too (the kind decides nothing there; commenting stays open) —
+/// except where M3 S0 made the kind decide on purpose, each with its own
+/// log reason: a service account sees member projects only
+/// (`service_account_not_member`, FG-REPO-0005) and neither kind creates in
+/// its own personal namespace (`non_person_namespace`); a service account
+/// that is a Guest of an internal project reads by its Guest role.
 #[test]
 fn only_people_only_actions_refuse_by_account_kind() {
     use crate::matrix::{Expect, ROWS};
     let mut checked = 0;
+    let mut by_design = 0;
+    let mut unexpected = Vec::new();
     for r in ROWS
         .iter()
         .filter(|r| !r.action.is_people_only() && r.expect == Expect::Allow)
@@ -232,16 +239,43 @@ fn only_people_only_actions_refuse_by_account_kind() {
         for kind in [AccountKind::ServiceAccount, AccountKind::Bot] {
             let principal = r.actor.principal().with_kind(kind);
             let resource = r.fixture.resource(r.actor);
-            assert!(
-                authorize(&principal, r.action, &resource).is_ok(),
-                "{:?} {:?} {:?} refused for {}",
-                r.action,
-                r.actor,
-                r.fixture,
-                kind.as_str()
-            );
-            checked += 1;
+            match authorize(&principal, r.action, &resource) {
+                Ok(()) => checked += 1,
+                Err(e) => {
+                    let why = reason(&e);
+                    let designed = match (kind, why.as_str()) {
+                        (AccountKind::ServiceAccount, "service_account_not_member") => {
+                            e.code() == ErrorCode::NotFound
+                        }
+                        // A Guest member of an internal project reads by
+                        // its own role (a person reads it as a Reporter).
+                        (AccountKind::ServiceAccount, "") => {
+                            e.code() == ErrorCode::Forbidden
+                                && e.context()
+                                    .iter()
+                                    .any(|(k, v)| *k == "actual_role" && v == "guest")
+                        }
+                        (
+                            AccountKind::ServiceAccount | AccountKind::Bot,
+                            "non_person_namespace",
+                        ) => e.code() == ErrorCode::Forbidden && r.action == Action::ProjectCreate,
+                        _ => false,
+                    };
+                    if !designed {
+                        unexpected.push(format!(
+                            "{:?} {:?} {:?} refused for {} ({why})",
+                            r.action,
+                            r.actor,
+                            r.fixture,
+                            kind.as_str()
+                        ));
+                    }
+                    by_design += 1;
+                }
+            }
         }
     }
+    assert!(unexpected.is_empty(), "{}", unexpected.join("; "));
     assert!(checked > 100, "{checked}");
+    assert!(by_design > 0, "the M3 S0 rules are exercised");
 }

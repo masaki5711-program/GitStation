@@ -23,6 +23,7 @@ mod matrix_rows_conditions;
 mod matrix_rows_discussion;
 mod matrix_rows_merge;
 mod matrix_rows_people;
+mod matrix_rows_service_accounts;
 mod merge_request_ctx;
 mod model;
 mod prove;
@@ -35,16 +36,17 @@ pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest,
 pub use model::{
     AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
     MergeRequestEdit, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind,
-    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, TombstoneRelease, TransferTarget,
-    UnresolvedReason, Visibility,
+    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView,
+    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,
     LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection,
     LoadedTarget, LoadedTombstone, LoadedTransferTarget, LoadedUserNamespace, ParentCtx,
-    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, SessionCtx, TokenCtx,
-    TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx,
-    UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
+    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, ServiceAccountCtx,
+    ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx,
+    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx,
+    UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 
@@ -61,6 +63,9 @@ mod discussion_tests;
 
 #[cfg(test)]
 mod merge_request_tests;
+
+#[cfg(test)]
+mod service_account_tests;
 
 #[cfg(test)]
 #[path = "ref_updates_tests.rs"]

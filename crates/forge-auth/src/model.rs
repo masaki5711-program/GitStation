@@ -424,6 +424,25 @@ pub enum Resource {
         via: ResolvedVia,
         view: NamespaceView,
     },
+    /// The user an administration route of service accounts acts on
+    /// (`ServiceAccountRead`, `ServiceAccountUpdate`,
+    /// `ServiceAccountTokenList`, `ServiceAccountTokenRevoke`; M3 S0), as
+    /// loaded from its row: a user of another kind is not found.
+    ServiceAccount(ServiceAccountView),
+    /// A token about to be issued for a service account
+    /// (`ServiceAccountTokenIssue`, M3 S0) with these scopes.
+    ServiceAccountTokenRequest {
+        account: ServiceAccountView,
+        scopes: Vec<Scope>,
+    },
+}
+
+/// A user as a service account route sees it (M3 S0): its kind
+/// (`users.kind`) and whether it is active, read from its row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceAccountView {
+    pub kind: AccountKind,
+    pub active: bool,
 }
 
 /// What a `MergeRequestUpdate` changes besides the title and the

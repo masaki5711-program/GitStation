@@ -40,7 +40,15 @@
 //!    — the account kind joined the actions kept for people here), the
 //!    thread's starter or a Developer who is not the merge request's
 //!    author (`author_foreign_discussion`, administrators included);
-//! 7. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
+//! 7. service accounts (M3 S0): see only the projects they are members of
+//!    (an internal project is no exception: `FG-REPO-0005
+//!    reason=service_account_not_member`) and create nothing in their own
+//!    personal namespace (`non_person_namespace`, a bot too); the
+//!    administration routes of service accounts need administrator rights,
+//!    and a target of another kind is not found (`not_service_account`);
+//!    issuing their tokens is a person's, in a web session, never with
+//!    `admin` and never for a disabled account (`target_disabled`);
+//! 8. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, `FG-GIT-0017` (a create or fast-forward of a branch
 //!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
@@ -55,7 +63,8 @@ use forge_core::merge_conditions::MAX_CODEOWNERS_SUSPENSION_MINUTES;
 use crate::model::{
     AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
     MergeRequestState, NamespaceView, Principal, ProjectView, RefKind, RefUpdate, ResolvedVia,
-    Resource, Role, Scope, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    Resource, Role, Scope, ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason,
+    Visibility,
 };
 
 /// Decide whether `principal` may perform `action` on `resource`.
@@ -95,6 +104,11 @@ pub fn authorize(
         return Err(deny(ErrorCode::AccountDisabled));
     }
     let admin = principal.admin_rights();
+    let kind = principal.account_kind();
+    // The role that applies to reading for this caller: on an internal
+    // project every signed-in person reads like a Reporter, a service
+    // account only by membership (M3 S0).
+    let read_role = |p: &ProjectView| read_role(kind, p);
 
     // A session-only action (ADR-0021 §17): no token, whatever its scopes,
     // before anything about the resource is decided.
@@ -138,8 +152,12 @@ pub fn authorize(
 
     // Visibility before anything else that could reveal existence.
     if let Some((project, via)) = project_of(resource) {
-        if !(admin || can_see(project)) {
+        if !(admin || can_see(kind, project)) {
             let reason = match via {
+                // An internal project a person would see (M3 S0).
+                ResolvedVia::Live | ResolvedVia::Moved if can_see(AccountKind::Human, project) => {
+                    "service_account_not_member"
+                }
                 ResolvedVia::Live => "not_visible",
                 ResolvedVia::Moved => "tombstone_not_visible",
             };
@@ -293,6 +311,11 @@ pub fn authorize(
 
         (Action::ProjectCreate, Resource::Group { role }) => need(Role::Maintainer, *role),
         (Action::ProjectCreate, Resource::Namespace { owner }) => {
+            // M3 S0: the personal namespace of a service account or a bot
+            // holds no projects (they work in their members' projects).
+            if *owner == user && kind != AccountKind::Human {
+                return Err(refused("non_person_namespace"));
+            }
             if admin || *owner == user {
                 Ok(())
             } else {
@@ -824,6 +847,51 @@ pub fn authorize(
             need(Role::Developer, project.role)
         }
 
+        // --- service accounts (M3 S0, ADR-0019 Addendum S0) ---
+        // Creating one is a person's, an administrator's web session (a
+        // token was refused above as session-only).
+        (Action::ServiceAccountCreate, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+        (Action::ServiceAccountList, Resource::Instance) => admin_only(),
+        // Reading, listing and revoking its tokens: administrator rights
+        // (an `admin`-scoped token included: a leak is answered at once).
+        (
+            Action::ServiceAccountRead
+            | Action::ServiceAccountTokenList
+            | Action::ServiceAccountTokenRevoke,
+            Resource::ServiceAccount(account),
+        ) => {
+            admin_only()?;
+            service_account(account)
+        }
+        // Who answers for it, and why it exists: a person's decision.
+        (Action::ServiceAccountUpdate, Resource::ServiceAccount(account)) => {
+            people_only()?;
+            admin_only()?;
+            service_account(account)
+        }
+        // Issuing its token: a person in a web session (refused above for
+        // every token), with administrator rights, for an active service
+        // account, never with `admin` (a service account has no
+        // administrator rights to lend).
+        (
+            Action::ServiceAccountTokenIssue,
+            Resource::ServiceAccountTokenRequest { account, scopes },
+        ) => {
+            people_only()?;
+            admin_only()?;
+            service_account(account)?;
+            if !account.active {
+                return Err(refused("target_disabled"));
+            }
+            if scopes.contains(&Scope::Admin) {
+                return Err(refused("admin_scope_for_service_account"));
+            }
+            Ok(())
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -888,6 +956,13 @@ pub fn authorize(
             | Action::ApprovalRuleManage
             | Action::MergeSettingsManage
             | Action::CodeownersEnforcementToggle
+            | Action::ServiceAccountCreate
+            | Action::ServiceAccountList
+            | Action::ServiceAccountRead
+            | Action::ServiceAccountUpdate
+            | Action::ServiceAccountTokenIssue
+            | Action::ServiceAccountTokenList
+            | Action::ServiceAccountTokenRevoke
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
@@ -909,7 +984,9 @@ pub fn authorize(
             | Resource::MergeRequest { .. }
             | Resource::Discussion { .. }
             | Resource::CodeownersEnforcement { .. }
-            | Resource::MergeSettingsChange { .. },
+            | Resource::MergeSettingsChange { .. }
+            | Resource::ServiceAccount(_)
+            | Resource::ServiceAccountTokenRequest { .. },
         ) => wrong_resource(),
     }
 }
@@ -979,7 +1056,9 @@ fn project_of(resource: &Resource) -> Option<(&ProjectView, ResolvedVia)> {
         | Resource::Admission { .. }
         | Resource::GroupTransfer { .. }
         | Resource::UserRename { .. }
-        | Resource::Tombstone(_) => None,
+        | Resource::Tombstone(_)
+        | Resource::ServiceAccount(_)
+        | Resource::ServiceAccountTokenRequest { .. } => None,
     }
 }
 
@@ -1027,7 +1106,9 @@ fn hidden_target(resource: &Resource, admin: bool) -> Option<&'static str> {
         | Resource::MergeRequest { .. }
         | Resource::Discussion { .. }
         | Resource::CodeownersEnforcement { .. }
-        | Resource::MergeSettingsChange { .. } => None,
+        | Resource::MergeSettingsChange { .. }
+        | Resource::ServiceAccount(_)
+        | Resource::ServiceAccountTokenRequest { .. } => None,
     }
 }
 
@@ -1046,17 +1127,40 @@ fn branches(
     }
 }
 
-/// Members see their projects; every signed-in user sees internal ones.
-/// (Administrator rights are checked by the caller.)
-fn can_see(p: &ProjectView) -> bool {
-    p.role.is_some() || p.visibility == Visibility::Internal
+/// Members see their projects; every signed-in person sees internal ones,
+/// a service account only its own (M3 S0, plan 11 §5 S0: an integration
+/// reads what it was made a member of, nothing else). (Administrator rights
+/// are checked by the caller.)
+fn can_see(kind: AccountKind, p: &ProjectView) -> bool {
+    p.role.is_some() || (p.visibility == Visibility::Internal && sees_internal(kind))
+}
+
+/// Whether the account sees internal projects without a membership.
+fn sees_internal(kind: AccountKind) -> bool {
+    match kind {
+        AccountKind::Human | AccountKind::Bot => true,
+        AccountKind::ServiceAccount => false,
+    }
 }
 
 /// The role that applies to reading: on an internal project every signed-in
-/// user reads like a Reporter.
-fn read_role(p: &ProjectView) -> Option<Role> {
+/// person reads like a Reporter (a service account by its membership only).
+fn read_role(kind: AccountKind, p: &ProjectView) -> Option<Role> {
     match p.visibility {
-        Visibility::Internal => Some(p.role.map_or(Role::Reporter, |r| r.max(Role::Reporter))),
-        Visibility::Private => p.role,
+        Visibility::Internal if sees_internal(kind) => {
+            Some(p.role.map_or(Role::Reporter, |r| r.max(Role::Reporter)))
+        }
+        Visibility::Internal | Visibility::Private => p.role,
+    }
+}
+
+/// A service account route's target must be one: another kind is the same
+/// 404 as an absent user (`reason=not_service_account`).
+fn service_account(account: &ServiceAccountView) -> Result<(), ForgeError> {
+    match account.kind {
+        AccountKind::ServiceAccount => Ok(()),
+        AccountKind::Human | AccountKind::Bot => {
+            Err(ForgeError::new(ErrorCode::NotFound).with_context("reason", "not_service_account"))
+        }
     }
 }
