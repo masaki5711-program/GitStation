@@ -643,3 +643,94 @@ async fn the_approved_head_walk_is_bounded() {
     assert_eq!(over[0].approved_head, None, "past the cap: never carried");
     w.t.drop_now().await;
 }
+
+impl World {
+    /// `(action, approver_id)` of the audit rows of `request`, by id.
+    async fn audit_of(&self, request: &str) -> Vec<(String, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT action, (details ->> 'approver_id')::bigint FROM forge.audit_log \
+             WHERE request_id = $1 ORDER BY id",
+        )
+        .bind(request)
+        .fetch_all(&mut self.t.superuser().await)
+        .await
+        .expect("audit")
+    }
+
+    /// `(event_type, approver_id)` of the events of `request`, by id.
+    async fn events_of(&self, request: &str) -> Vec<(String, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT event_type, (payload ->> 'approver_id')::bigint FROM forge.events \
+             WHERE request_id = $1 ORDER BY id",
+        )
+        .bind(request)
+        .fetch_all(&mut self.t.superuser().await)
+        .await
+        .expect("events")
+    }
+}
+
+/// R6 re-review (MEDIUM): one carry keeps the approval whose approved head
+/// the plan allows — found through a multi-hop chain of ended, carried
+/// rows — and ends the other (`new_commits`); every live approval yields
+/// exactly one audit row and one event in that change (plus the push's
+/// own).
+#[tokio::test]
+async fn a_carry_keeps_or_ends_each_approval_by_its_approved_head() {
+    let w = world().await;
+    w.keep_approvals().await;
+    assert!(matches!(
+        w.approve(w.bob, "req-approve-bob").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    w.carry("req-v2", ('a', 'b'), &['a']).await;
+    w.carry("req-v3", ('b', 'c'), &['a']).await;
+    assert!(matches!(
+        w.approve(w.alice, "req-approve-alice").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    let heads = approved_heads(&w.t.db, w.mr.id).await.expect("heads");
+    assert_eq!(
+        heads
+            .iter()
+            .map(|h| h.approved_head.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(oid('a')), Some(oid('c'))],
+        "bob's through two ended rows, alice's on c"
+    );
+    // The plan allows only the change from `a` (bob's approved head).
+    w.carry("req-v4", ('c', 'd'), &['a']).await;
+    let bob = Some(w.bob.get());
+    let alice = Some(w.alice.get());
+    let mut audit = w.audit_of("req-v4").await;
+    audit.sort();
+    assert_eq!(
+        audit,
+        vec![
+            ("merge_request.approved".to_owned(), bob),
+            ("merge_request.pushed".to_owned(), None),
+            ("merge_request.unapproved".to_owned(), alice),
+        ]
+    );
+    let mut events = w.events_of("req-v4").await;
+    events.sort();
+    assert_eq!(
+        events,
+        vec![
+            ("merge_request.approved".to_owned(), bob),
+            ("merge_request.pushed".to_owned(), None),
+            ("merge_request.unapproved".to_owned(), alice),
+        ]
+    );
+    let live = w.live().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].approver, w.bob);
+    assert_eq!(live[0].head_sha, oid('d'));
+    let after = approved_heads(&w.t.db, w.mr.id).await.expect("heads");
+    assert_eq!(
+        after[0].approved_head,
+        Some(oid('a')),
+        "still bob's first head"
+    );
+    w.t.drop_now().await;
+}
