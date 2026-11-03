@@ -1,8 +1,9 @@
 // `/{project}/-/settings`: name and description, visibility, protected refs,
 // merging, approval rules and merge conditions (U2, MergeSettings.tsx),
-// move / rename and delete. Every control is there for everyone who can see
-// the page; what the person may not do is refused by the server with its
-// reason (user_message + request_id), shown at the control.
+// move / rename and delete. The older sections show every control to everyone
+// who can see the page; what the person may not do is refused by the server
+// with its reason (user_message + request_id), shown at the control. The merge
+// sections show edit controls only from the viewer flags (read-only otherwise).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type SyntheticEvent } from 'react';
 import { useTranslation } from 'react-i18next';
