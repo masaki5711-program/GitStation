@@ -24,7 +24,8 @@
   - 結びつけを解除すると、そのプロジェクトの開いたリンクのうち、その結びつけの作業項目のものは `unlink_source = unbound` で終わる
     （監査 `integration.unbound` の `work_item_links_ended` が数。`work_item.unlinked` のイベントは出ない）。
   - データベースが裏付ける: 人のリンク・解除には同じトランザクションの `work_item.*` の監査の行、自動のリンクには `work-item-sync` の前進が要る
-    （トリガー `merge_request_work_items_audited`。違反は `FG-DB-0013`、制約名 `merge_request_work_items_audited` / `_derived`）。
+    （トリガー `merge_request_work_items_audited`。違反は `FG-DB-0013` の `reason=work_item_link_unaudited` / `derived_work_item_link`、
+    制約名 `merge_request_work_items_audited` / `_derived`。監査の行はその作業項目を名指す必要がある）。
   - 結ばれていないプロジェクトでは何も見つけない（手でのリンクは `FG-INT-0018`）。結ぶ前からある MR は、次のイベント（編集・push・コメント）でリンクされる。
   - 自動のリンクは MR あたり 20 まで（超えた分はログ `forge.work_items.detected_capped`）、手のリンクは 50 まで（`FG-INT-0019`）、
     1 つのイベントの作業項目は 100 まで（`forge.work_items.event_items_capped`）。

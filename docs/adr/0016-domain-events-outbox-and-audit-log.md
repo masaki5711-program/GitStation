@@ -1081,3 +1081,17 @@ Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding
      年に数百万行・数百 MB 程度。イベントの保持（C7、既定 90 日）でイベントと一緒に消すまで増え続けるので、C7 はこの表の削除を含める。
    - `GET …/work-items` の答えは、MR を読める人（Reporter 以上）に結びつけの kanflow のプロジェクトの id（`project_id`）を見せる。
      同じ値は `GET /api/v1/projects/{id}/integration-bindings`（`ProjectRead`）でも読め、秘密ではないので受け入れる。
+
+### I1b の再レビュー（2026-11-03）で変えた点
+
+1. **FG-DB-0013 の `reason`**: トリガーの制約名を `reason` に対応させた（`merge_request_work_items_audited` →
+   `work_item_link_unaudited`、`merge_request_work_items_derived` → `derived_work_item_link`。後者は `derived_` で始まるので、購読者の中なら
+   C5 の派生の拒否と同じくイベントの失敗に数える）。以前は `xf002_unknown` になっていた。
+2. **監査の行は作業項目を名指す**（追記のマイグレーション `20261116100300`）: 人のリンク・解除・`converted` は、同じトランザクションの
+   `work_item.*` の監査の行のうち `details.work_item_id` がその行の作業項目のものだけで満たされる（結びつけの解除の `unbound` は、
+   多くのリンクを一度に終わらせるので `integration.unbound` の行 1 つで満たす）。**受け入れた残り**: これは事故の水準の制御で、
+   forge_app は監査の行も自分で書ける（C5 の派生イベントの検査と同じ。ADR-0018 の封印が後から改ざんを見つける）。
+3. **錠の順**: 購読者は `repository.pushed` と `work_item.*` の処理でも、`merge_request.*` と同じく先にプロジェクトの行を `FOR SHARE` で取る。
+4. **I1c への依存**: 結びつけの解除では `work_item.unlinked` を出さない（上の 5）。これが正しいのは、I1c の履歴のカーソルが
+   結びつけの世代に結びつき、解除・付け替えのあとは必ず 410（`visible_set_changed`）になって kanflow が開発状況 API から取り直すこと
+   が前提である。I1c はこれを満たすこと（満たせないなら、解除で終わらせたリンクのイベントを別の方法で届ける）。
