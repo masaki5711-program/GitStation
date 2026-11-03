@@ -440,6 +440,53 @@ async fn agents_comment_but_only_people_who_may_resolve_resolve() {
     w.t.drop_now().await;
 }
 
+/// MR B0: a discussion names who started it and every note its author
+/// (`author`: username and display name, read with the rows), on the
+/// start, a reply and the list.
+#[tokio::test]
+async fn discussion_note_carries_author_name() {
+    let w = world().await;
+    let rita = json!({"username": "rita", "display_name": "rita"});
+    let bob = json!({"username": "bob", "display_name": "bob"});
+    let (status, thread) = w
+        .post(
+            "/discussions",
+            session(w.rita),
+            Some(json!({"body": "first"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    assert_eq!(thread["author"], rita);
+    assert_eq!(thread["started_by"], json!(w.rita.get()), "the id stays");
+    assert_eq!(thread["notes"][0]["author"], rita);
+    let d = thread["id"].as_i64().expect("id");
+    let (status, replied) = w
+        .post(
+            &format!("/discussions/{d}/notes"),
+            session(w.bob),
+            Some(json!({"body": "second"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replied}");
+    assert_eq!(replied["author"], rita, "the starter, not the replier");
+    assert_eq!(replied["notes"][1]["author"], bob);
+    assert_eq!(replied["notes"][1]["author_id"], json!(w.bob.get()));
+    let (status, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/discussions"),
+        session(w.dave),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let listed = &list["discussions"][0];
+    assert_eq!(listed["author"], rita);
+    assert_eq!(listed["notes"][0]["author"], rita);
+    assert_eq!(listed["notes"][1]["author"], bob);
+    w.t.drop_now().await;
+}
+
 /// An invisible project's thread, a missing merge request and a missing
 /// thread are the same 404 on every discussion route.
 #[tokio::test]

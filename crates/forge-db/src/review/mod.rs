@@ -93,6 +93,49 @@ pub use commands::{
 /// The most merge requests one list call returns.
 pub const MAX_PAGE: usize = 100;
 
+/// A user as the merge request screens name them (MR B0): read with the
+/// row it belongs to, never looked up separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserName {
+    pub username: String,
+    pub display_name: String,
+}
+
+/// The username and display name of the user in `table.column`, as
+/// `{prefix}_username` and `{prefix}_display_name`: scalar sub-selects on
+/// `forge.users`' primary key, so the same text works in a `SELECT … FROM
+/// table` and in an `INSERT` / `UPDATE … RETURNING` (no join there). The
+/// column is table-qualified so a `users` column can never capture it.
+pub(crate) fn user_name_columns(table: &str, column: &str, prefix: &str) -> String {
+    format!(
+        "(SELECT u.username FROM forge.users u WHERE u.id = {table}.{column}) \
+         AS {prefix}_username, \
+         (SELECT u.display_name FROM forge.users u WHERE u.id = {table}.{column}) \
+         AS {prefix}_display_name"
+    )
+}
+
+/// The [`UserName`] read through [`user_name_columns`]; a missing one
+/// (unreachable: the foreign key keeps the user) is `FG-SYS-0001
+/// reason=<reason>` with `<context_key>=<id>`.
+pub(crate) fn user_name(
+    username: Option<String>,
+    display_name: Option<String>,
+    reason: &'static str,
+    context_key: &'static str,
+    id: i64,
+) -> Result<UserName, ForgeError> {
+    match (username, display_name) {
+        (Some(username), Some(display_name)) => Ok(UserName {
+            username,
+            display_name,
+        }),
+        _ => Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", reason)
+            .with_context(context_key, id)),
+    }
+}
+
 /// One merge request as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredMergeRequest {
@@ -103,6 +146,8 @@ pub struct StoredMergeRequest {
     pub title: String,
     pub description: String,
     pub author: UserId,
+    /// The author's names (MR B0).
+    pub author_name: UserName,
     pub source_branch: RefName,
     pub target_branch: RefName,
     pub state: MergeRequestState,
@@ -118,8 +163,14 @@ pub struct StoredMergeRequest {
     pub closed_by: Option<UserId>,
 }
 
-/// The columns of [`StoredMergeRequest`], in the order of [`Row`].
+/// The columns of [`StoredMergeRequest`], in the order of [`Row`]; the
+/// author's names are the sub-selects of [`user_name_columns`] (spelled
+/// out so this stays a constant), valid in `RETURNING` too.
 pub(crate) const COLUMNS: &str = "id, project_id, iid, title, description, author_id, \
+     (SELECT u.username FROM forge.users u WHERE u.id = merge_requests.author_id) \
+     AS author_username, \
+     (SELECT u.display_name FROM forge.users u WHERE u.id = merge_requests.author_id) \
+     AS author_display_name, \
      source_branch, target_branch, state, draft, head_sha, revision, \
      to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS created_at, \
      to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS updated_at, \
@@ -135,6 +186,8 @@ pub(crate) struct Row {
     title: String,
     description: String,
     author_id: i64,
+    author_username: Option<String>,
+    author_display_name: Option<String>,
     source_branch: String,
     target_branch: String,
     state: String,
@@ -175,6 +228,13 @@ impl Row {
             title: self.title,
             description: self.description,
             author: UserId::new(self.author_id),
+            author_name: user_name(
+                self.author_username,
+                self.author_display_name,
+                "stored_author_missing",
+                "merge_request_id",
+                id,
+            )?,
             draft: self.draft,
             head_sha: self.head_sha,
             revision: self.revision,

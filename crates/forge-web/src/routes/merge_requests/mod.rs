@@ -37,7 +37,9 @@ use forge_core::{
     parse_positive_id, MergeRequestState, ProjectId, ProjectRepository, RefName, UserId,
 };
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::{EditFields, NewFields, Review, ReviewRequest, StoredMergeRequest, MAX_PAGE};
+use forge_review::{
+    EditFields, NewFields, Review, ReviewRequest, StoredMergeRequest, UserName, MAX_PAGE,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -193,6 +195,23 @@ pub struct VersionRefsPurged {
     pub already_purged: Vec<i64>,
 }
 
+/// A user as the merge request screens name them (MR B0).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UserNameBody {
+    pub username: String,
+    pub display_name: String,
+}
+
+impl From<UserName> for UserNameBody {
+    fn from(name: UserName) -> Self {
+        Self {
+            username: name.username,
+            display_name: name.display_name,
+        }
+    }
+}
+
 // Built only by `body_of`; its doc comment is the schema description.
 /// One merge request as the API shows it.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -213,6 +232,8 @@ pub struct MergeRequestBody {
     pub target_branch: String,
     #[schema(minimum = 1)]
     pub author_id: i64,
+    /// The author's names (read with the merge request).
+    pub author: UserNameBody,
     /// The head commit of the latest version (`null` until versions are
     /// recorded).
     pub head_sha: Option<String>,
@@ -247,6 +268,7 @@ fn body_of(mr: &StoredMergeRequest) -> MergeRequestBody {
         source_branch: short(&mr.source_branch),
         target_branch: short(&mr.target_branch),
         author_id: mr.author.get(),
+        author: mr.author_name.clone().into(), // clone: the row is borrowed
         head_sha: mr.head_sha.clone(),
         created_at: mr.created_at.clone(),
         updated_at: mr.updated_at.clone(),

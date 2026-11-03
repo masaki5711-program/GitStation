@@ -1575,6 +1575,8 @@ export interface components {
         };
         /** @description One discussion of a merge request. */
         DiscussionBody: {
+            /** @description The names of who started it (`started_by`, the first note's author). */
+            author: components["schemas"]["UserNameBody"];
             /** @description UTC, RFC 3339. */
             created_at: string;
             /** Format: int64 */
@@ -1766,6 +1768,8 @@ export interface components {
         };
         /** @description One merge request as the API shows it. */
         MergeRequestBody: {
+            /** @description The author's names (read with the merge request). */
+            author: components["schemas"]["UserNameBody"];
             /** Format: int64 */
             author_id: number;
             closed_at?: string | null;
@@ -1941,6 +1945,8 @@ export interface components {
         };
         /** @description One note of a discussion. */
         NoteBody: {
+            /** @description The author's names (read with the note). */
+            author: components["schemas"]["UserNameBody"];
             /** Format: int64 */
             author_id: number;
             /** @description As written (never rendered by the server). */
@@ -2446,6 +2452,11 @@ export interface components {
             display_name: string;
             /** Format: int64 */
             id: number;
+            username: string;
+        };
+        /** @description A user as the merge request screens name them (MR B0). */
+        UserNameBody: {
+            display_name: string;
             username: string;
         };
         /** @description The matches of a search. */

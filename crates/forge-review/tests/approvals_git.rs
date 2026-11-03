@@ -244,6 +244,10 @@ fn placeholder_mr() -> StoredMergeRequest {
         title: String::new(),
         description: String::new(),
         author: UserId::new(0),
+        author_name: forge_review::UserName {
+            username: String::new(),
+            display_name: String::new(),
+        },
         source_branch: branch("feature"),
         target_branch: branch("main"),
         state: forge_core::MergeRequestState::Open,

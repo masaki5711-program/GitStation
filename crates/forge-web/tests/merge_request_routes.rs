@@ -284,6 +284,58 @@ async fn merge_requests_are_opened_listed_read_edited_closed_and_reopened_throug
     t.drop_now().await;
 }
 
+/// MR B0: every merge request answer names its author (`author`:
+/// username and display name, read with the row) — the create, the read,
+/// the list, an edit and a close — so the screens need no user lookup.
+#[tokio::test]
+async fn merge_request_body_carries_author_name() {
+    let t = FreshDb::migrated().await;
+    let olga = user(&t, "olga").await;
+    let dave = users::create(
+        &t.db,
+        &ctx("req-user-dave"),
+        &NewUser::human("dave.k", "Dave Kowalski", "dave@example.test"),
+    )
+    .await
+    .expect("dave")
+    .user_id;
+    let web = web(&t, olga, &[(dave, Role::Developer)]).await;
+    let p = web.project_id.get();
+    let r = || router(&t.db);
+    let list = format!("/api/v1/projects/{p}/merge-requests");
+    let one = format!("{list}/1");
+    let author = json!({"username": "dave.k", "display_name": "Dave Kowalski"});
+
+    let opened = call(
+        r(),
+        "POST",
+        &list,
+        session(dave),
+        Some(json!({"title": "T", "source_branch": "feature", "target_branch": "main"})),
+    )
+    .await;
+    assert_eq!(opened.status, StatusCode::CREATED, "{}", opened.json);
+    assert_eq!(opened.json["author"], author);
+    assert_eq!(opened.json["author_id"], dave.get(), "the id stays");
+    let read = call(r(), "GET", &one, session(olga), None).await;
+    assert_eq!(read.json["author"], author, "{}", read.json);
+    let listed = call(r(), "GET", &list, session(olga), None).await;
+    assert_eq!(listed.json["merge_requests"][0]["author"], author);
+    let edited = call(
+        r(),
+        "PATCH",
+        &one,
+        session(olga),
+        Some(json!({"title": "U"})),
+    )
+    .await;
+    assert_eq!(edited.status, StatusCode::OK, "{}", edited.json);
+    assert_eq!(edited.json["author"], author, "the author, not the editor");
+    let closed = call(r(), "POST", &format!("{one}/close"), session(olga), None).await;
+    assert_eq!(closed.json["author"], author);
+    t.drop_now().await;
+}
+
 /// ADR-0024 §12: every merge request route answers the same 404 body
 /// (FG-REPO-0005, the same user message) for an invisible project, a
 /// missing project and — on the routes of one merge request — a missing
