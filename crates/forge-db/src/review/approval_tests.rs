@@ -427,11 +427,13 @@ async fn approval_rules_are_put_replaced_and_removed() {
 }
 
 /// M3 R6 (ADR-0024 §8.2): with `reset_approvals_on_push = false` and the
-/// change allowed by forge-review (`carry_from` = the recorded head), a new
-/// head carries the live approvals (old row `carried`, new row with
-/// `carried_from`, one `merge_request.approved` each); the default
-/// setting, a protected target or a `carry_from` that is no longer the
-/// head end them with `new_commits`.
+/// change allowed by forge-review (a [`CarryPlan`] for the recorded head),
+/// a new head carries the live approvals whose approved head the plan
+/// allows (old row `carried`, new row with `carried_from`, one
+/// `merge_request.approved` each); the default setting, a protected
+/// target, a plan for another head than the recorded one, or (R6 review
+/// round 2) an approved head the plan does not name end them with
+/// `new_commits`.
 #[tokio::test]
 async fn approvals_are_carried_only_when_every_condition_holds() {
     let w = world().await;
@@ -444,7 +446,10 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
         w.mr.id,
         &oid('b'),
         None,
-        Some(&oid('a')),
+        Some(&CarryPlan {
+            from: oid('a'),
+            approved_heads: vec![oid('a')],
+        }),
     )
     .await
     .expect("v2");
@@ -474,7 +479,10 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
         w.mr.id,
         &oid('c'),
         None,
-        Some(&oid('a')),
+        Some(&CarryPlan {
+            from: oid('a'),
+            approved_heads: vec![oid('a')],
+        }),
     )
     .await
     .expect("v3");
@@ -486,7 +494,10 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
         w.mr.id,
         &oid('d'),
         None,
-        Some(&oid('c')),
+        Some(&CarryPlan {
+            from: oid('c'),
+            approved_heads: vec![oid('c')],
+        }),
     )
     .await
     .expect("v4");
@@ -506,6 +517,38 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
     .await
     .expect("old row");
     assert_eq!(reason, "carried");
+    let heads = approved_heads(&w.t.db, w.mr.id)
+        .await
+        .expect("approved heads");
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].approval, live[0].id);
+    assert_eq!(
+        heads[0].approved_head,
+        oid('c'),
+        "followed back to the approval"
+    );
+    // R6 review round 2: the carried approval's approved head is still
+    // `c`, not the recorded head `d` — a plan allowing only `d` (the
+    // change from the previous head) ends it.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v5"),
+        w.mr.id,
+        &oid('e'),
+        None,
+        Some(&CarryPlan {
+            from: oid('d'),
+            approved_heads: vec![oid('d')],
+        }),
+    )
+    .await
+    .expect("v5");
+    assert!(
+        w.live().await.is_empty(),
+        "an approval is measured from the head it was given on"
+    );
+    let (again, _) = w.approve(w.bob, "req-approve-e").await;
+    assert!(matches!(again, ApproveOutcome::Approved { .. }));
     // A protected target: never carried.
     crate::protected_refs::create(
         &w.t.db,
@@ -518,14 +561,17 @@ async fn approvals_are_carried_only_when_every_condition_holds() {
     .expect("protect");
     record_mr_version_carrying(
         &w.t.db,
-        &system("req-v5"),
+        &system("req-v6"),
         w.mr.id,
-        &oid('e'),
+        &oid('f'),
         None,
-        Some(&oid('d')),
+        Some(&CarryPlan {
+            from: oid('e'),
+            approved_heads: vec![oid('e')],
+        }),
     )
     .await
-    .expect("v5");
+    .expect("v6");
     assert!(w.live().await.is_empty(), "a protected target ends them");
     w.t.drop_now().await;
 }

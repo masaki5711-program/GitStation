@@ -139,7 +139,7 @@ async fn refresh_locked(
                 let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
                 ctx.actor_label = Some(ACTOR_LABEL.to_owned());
                 // M3 R6 (ADR-0024 §8.2): may the new head carry the approvals?
-                let carry = crate::versions_carry::carry_from(
+                let carry = crate::versions_carry::carry_plan(
                     db,
                     refs,
                     lock.deadline(),

@@ -2053,3 +2053,79 @@ async fn several_matching_rules_combine_to_the_strictest() {
     assert_eq!(status.discussions, Some(0), "required by the second rule");
     w.t.drop_now().await;
 }
+
+/// The files of `head` plus `n` new one-line files named `<prefix><i>.txt`.
+fn with_new_files(prefix: &str, n: usize) -> Vec<(String, String)> {
+    (0..n)
+        .map(|i| (format!("{prefix}{i}.txt"), "g\n".to_owned()))
+        .collect()
+}
+
+/// R6 review round 2 (HIGH): the carry limits are cumulative — measured
+/// from the head each approval was given on, not from the previous head.
+/// Two pushes of 30 new files each carry the first time (30 files from the
+/// approved head) and end the approval the second time (60 files from the
+/// approved head), although each push alone is under the limit. An
+/// approval given on the intermediate head is measured from there and is
+/// still carried.
+#[tokio::test]
+async fn the_carry_limits_count_from_the_approved_head() {
+    let mut w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    w.approve(w.rita)
+        .await
+        .expect("rita approves the first head");
+    let first = with_new_files("a", 30);
+    let mut files: Vec<(&str, &str)> = vec![("README.md", "base\n"), ("f.txt", "f\n")];
+    files.extend(first.iter().map(|(n, c)| (n.as_str(), c.as_str())));
+    w.push_next(&files, "req-push-2").await;
+    let carried_sql = "SELECT count(*) AS n FROM forge.events \
+        WHERE event_type = 'merge_request.approved' AND payload ->> 'carried_from' IS NOT NULL";
+    assert_eq!(
+        count(&w.t, carried_sql).await,
+        1,
+        "a single small push carries"
+    );
+    w.approve(w.mara)
+        .await
+        .expect("mara approves the second head");
+    let second = with_new_files("b", 30);
+    files.extend(second.iter().map(|(n, c)| (n.as_str(), c.as_str())));
+    w.push_next(&files, "req-push-3").await;
+    let ended = w
+        .t
+        .json_rows(
+            "SELECT (payload ->> 'approver_id')::bigint AS approver FROM forge.events              WHERE event_type = 'merge_request.unapproved'              AND payload ->> 'reason' = 'new_commits'",
+        )
+        .await;
+    let ended: Vec<i64> = ended
+        .iter()
+        .filter_map(|r| r.get("approver").and_then(serde_json::Value::as_i64))
+        .collect();
+    assert_eq!(
+        ended,
+        vec![w.rita.get()],
+        "60 files since rita's approval end it; 30 since mara's do not"
+    );
+    let live = w
+        .t
+        .json_rows(
+            "SELECT approver_id, carried_from FROM forge.merge_request_approvals              WHERE revoked_at IS NULL",
+        )
+        .await;
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!(live[0]["approver_id"].as_i64(), Some(w.mara.get()));
+    assert!(
+        live[0]["carried_from"].is_i64(),
+        "mara's approval was carried"
+    );
+    w.t.drop_now().await;
+}

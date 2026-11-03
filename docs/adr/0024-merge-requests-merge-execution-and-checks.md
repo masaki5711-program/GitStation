@@ -1508,3 +1508,14 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
 - **既知の窓**: ジョブの最後の判定（tx1b）の後・`update-ref` の前に変わった設定とマージの条件は、そのマージに反映されない（権限の窓と同じ、
   §4.2・R4 の節）。**直接の push の禁止は forge-web の push の経路（receive-pack の前の判定）でだけ効く**。サーバーのフック
   （pre-receive）で守るのは X8。
+
+### R6 の独立レビュー（2 回目）で決めたこと（2026-11-03）
+
+- **引き継ぎの上限は承認した head から数える（HIGH、改訂）**: 1 回目の上限（50 ファイル・1 000 行、`special_path` などの除外）は
+  前の head からの差分で見ていたため、上限の中の push を何度も重ねれば、見ていない大量の変更に承認が残った。今は **各承認が人によって
+  与えられた head**（`carried_from` を承認の行までたどった先。forge-db `approved_heads`、スキーマの変更なし）から新しい head への差分で
+  `may_carry_approvals` を決める。版の記録は承認した head ごとに 1 回決め（ログ `forge.review.approvals_carry_decided` に
+  `approved_head`）、許された head を `CarryPlan` で forge-db に渡す。forge-db は MR の行のロックの下で承認した head を読み直し、
+  許された head の承認だけを写し、他は `new_commits` で消す（承認ごとにイベントは 1 つのまま）。途中の head で新しく承認した人は
+  その head から数える。テスト `the_carry_limits_count_from_the_approved_head`（30 ファイルの push 2 回: 1 回目は写り、2 回目で最初の
+  承認は消え、途中の承認は写る）、`approvals_are_carried_only_when_every_condition_holds`。

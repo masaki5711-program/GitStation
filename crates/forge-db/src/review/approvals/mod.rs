@@ -31,7 +31,7 @@ mod commands;
 mod rules;
 
 pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveOutcome, Classify};
-pub(crate) use commands::{carry_on, revoke_on};
+pub(crate) use commands::{carry_some_on, revoke_on};
 pub use rules::{
     put_approval_rule_mr_decided, remove_approval_rule_mr_decided, NewApprovalRule, RuleOutcome,
     MAX_RULES, MAX_RULE_APPROVERS,
@@ -150,6 +150,67 @@ impl ApprovalRow {
                 .transpose()?,
         })
     }
+}
+
+/// A live approval and the head a person gave it on (M3 R6 review round
+/// 2): a carried approval's `carried_from` chain followed back to the
+/// approval without one. The carry limits of ADR-0024 §8.2 are measured
+/// from this head — cumulative over every carried push, never per push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedHead {
+    pub approval: ApprovalId,
+    pub approved_head: ObjectId,
+}
+
+/// The [`ApprovedHead`] of every live approval of `mr`, oldest first.
+/// More than [`MAX_APPROVALS`] is `FG-SYS-0001 reason=approvals_over_cap`.
+pub(crate) async fn approved_heads_on(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+) -> Result<Vec<ApprovedHead>, ForgeError> {
+    // carried_from always names an older row of the same merge request
+    // (the approvals guard keeps it), so the chain ends.
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "WITH RECURSIVE chain (live_id, carried_from, head_sha) AS (              SELECT id, carried_from, head_sha FROM forge.merge_request_approvals              WHERE merge_request_id = $1 AND revoked_at IS NULL            UNION ALL              SELECT c.live_id, a.carried_from, a.head_sha              FROM chain c JOIN forge.merge_request_approvals a ON a.id = c.carried_from          )          SELECT live_id, head_sha FROM chain WHERE carried_from IS NULL          ORDER BY live_id LIMIT $2",
+    )
+    .bind(mr.get())
+    .bind(MAX_APPROVALS + 1)
+    .fetch_all(conn)
+    .await
+    .map_err(|e| query_error("review.approved_heads", e))?;
+    if rows.len() as i64 > MAX_APPROVALS {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "approvals_over_cap")
+            .with_context("merge_request_id", mr.get()));
+    }
+    rows.into_iter()
+        .map(|(id, head)| {
+            Ok(ApprovedHead {
+                approval: ApprovalId::new(id),
+                approved_head: ObjectId::parse(&head)
+                    .map_err(|_| stored_invalid("stored_approval_sha_invalid", id))?,
+            })
+        })
+        .collect()
+}
+
+/// [`approved_heads_on`] on the read pool (the version job's carry
+/// decision, before the merge request is locked; forge-db reads them again
+/// under the lock).
+pub async fn approved_heads(db: &Db, mr: MergeRequestId) -> Result<Vec<ApprovedHead>, ForgeError> {
+    const QUERY: &str = "review.approved_heads";
+    db.within(QUERY, async {
+        let mut tx = db
+            .pool()
+            .executor()
+            .begin()
+            .await
+            .map_err(|e| read_query_error(QUERY, e))?;
+        let heads = approved_heads_on(&mut tx, mr).await?;
+        tx.commit().await.map_err(|e| read_query_error(QUERY, e))?;
+        Ok(heads)
+    })
+    .await
 }
 
 /// The live approvals of `mr`, oldest first.

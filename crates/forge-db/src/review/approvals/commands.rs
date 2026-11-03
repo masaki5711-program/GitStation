@@ -87,23 +87,25 @@ fn entry(
     ))
 }
 
-/// End the live approvals of `mr` (all, or `only`'s) with `reason`, on
-/// `conn`; the ended rows.
+/// End the live approvals of `mr` (all, or `only`'s; never those in
+/// `except`) with `reason`, on `conn`; the ended rows.
 async fn end_on(
     conn: &mut PgConnection,
     mr: &StoredMergeRequest,
     reason: UnapproveReason,
     only: Option<UserId>,
+    except: &[i64],
 ) -> Result<Vec<StoredApproval>, ForgeError> {
     let rows: Vec<ApprovalRow> = sqlx::query_as(&format!(
         "UPDATE forge.merge_request_approvals SET revoked_at = now(), revoked_reason = $2 \
          WHERE merge_request_id = $1 AND revoked_at IS NULL \
-         AND ($3::bigint IS NULL OR approver_id = $3) RETURNING {}",
+         AND ($3::bigint IS NULL OR approver_id = $3) AND NOT (id = ANY ($4)) RETURNING {}",
         approval_columns()
     ))
     .bind(mr.id.get())
     .bind(reason.as_str())
     .bind(only.map(UserId::get))
+    .bind(except)
     .fetch_all(conn)
     .await
     .map_err(|e| query_error("review.approvals_end", e))?;
@@ -151,7 +153,7 @@ pub(crate) async fn revoke_on(
     reason: UnapproveReason,
 ) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
     let ended = tx
-        .step(|c| async move { end_on(c, mr, reason, None).await })
+        .step(|c| async move { end_on(c, mr, reason, None, &[]).await })
         .await?;
     ended_records(mr, ended, reason)
 }
@@ -164,14 +166,14 @@ pub(crate) async fn revoke_on(
 /// carried approval (`carried_from`, `uncounted_reason = carried`: the job
 /// does not evaluate), never an unapprove as well — a change stays within
 /// its 100 events (at most 50 live approvals plus the push's own event).
-pub(crate) async fn carry_on(
+async fn carry_on(
     tx: &mut ChangeTx,
     mr: &StoredMergeRequest,
     head: &ObjectId,
 ) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
     let reason = UnapproveReason::Carried;
     let ended = tx
-        .step(|c| async move { end_on(c, mr, reason, None).await })
+        .step(|c| async move { end_on(c, mr, reason, None, &[]).await })
         .await?;
     let mut rows = Vec::with_capacity(ended.len());
     let mut events = Vec::with_capacity(ended.len());
@@ -216,6 +218,29 @@ pub(crate) async fn carry_on(
         rows.push(audit);
         events.push(event);
     }
+    Ok((rows, events))
+}
+
+/// Carry the live approvals of `mr` whose ids are in `keep` to `head` and
+/// end the others with `new_commits`, inside `tx` (M3 R6 review round 2:
+/// the version job allowed the change from each kept approval's approved
+/// head, [`super::approved_heads_on`]). Each live approval yields exactly
+/// one event, either way.
+pub(crate) async fn carry_some_on(
+    tx: &mut ChangeTx,
+    mr: &StoredMergeRequest,
+    head: &ObjectId,
+    keep: &[i64],
+) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
+    let reason = UnapproveReason::NewCommits;
+    let ended = tx
+        .step(|c| async move { end_on(c, mr, reason, None, keep).await })
+        .await?;
+    let (mut rows, mut events) = ended_records(mr, ended, reason)?;
+    // Only the kept ones are live now.
+    let (mut carried_rows, mut carried_events) = carry_on(tx, mr, head).await?;
+    rows.append(&mut carried_rows);
+    events.append(&mut carried_events);
     Ok((rows, events))
 }
 
@@ -284,7 +309,7 @@ pub async fn approve_mr_decided<P>(
             };
             let mr_ref = &mr;
             let ended = tx
-                .step(|c| async move { end_on(c, mr_ref, reason, Some(viewer)).await })
+                .step(|c| async move { end_on(c, mr_ref, reason, Some(viewer), &[]).await })
                 .await?;
             let (rows, evs) = ended_records(&mr, ended, reason)?;
             affected.extend(rows);
@@ -372,7 +397,7 @@ pub async fn unapprove_mr_decided<P>(
         let reason = UnapproveReason::Unapproved;
         let mr_ref = &mr;
         let mut ended = tx
-            .step(|c| async move { end_on(c, mr_ref, reason, Some(viewer)).await })
+            .step(|c| async move { end_on(c, mr_ref, reason, Some(viewer), &[]).await })
             .await?;
         // clone: the answer keeps the row
         let Some(first) = ended.first().cloned() else {

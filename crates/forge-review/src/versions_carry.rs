@@ -1,15 +1,18 @@
 //! The version job's carry decision (M3 R6, ADR-0024 §8.2): before the new
-//! head is recorded, decide whether its change may carry the approvals of
-//! the recorded head ([`crate::approvals::carry::may_carry_approvals`]).
-//! The git reads run only when the project keeps approvals on push and the
-//! target is unprotected; every read is bounded by the refs lock's
-//! deadline. A git failure or an exhausted deadline is "no carry" (the
-//! approvals end, the default), logged once; only the database is an error.
-//! forge-db decides again under the merge request's lock
+//! head is recorded, decide which live approvals the new head may carry
+//! ([`crate::approvals::carry::may_carry_approvals`]). R6 review round 2:
+//! the change is measured from the head each approval was given on
+//! (`forge_db::review::approved_heads`, the `carried_from` chain followed
+//! back), so the limits are cumulative over every carried push — never
+//! per push. The git reads run only when the project keeps approvals on
+//! push and the target is unprotected; every read is bounded by the refs
+//! lock's deadline. A git failure or an exhausted deadline is "no carry"
+//! (the approvals end, the default), logged once; only the database is an
+//! error. forge-db decides again under the merge request's lock
 //! (`record_mr_version_carrying`).
 
 use forge_core::{ObjectId, RepoId, RequestId};
-use forge_db::review::StoredMergeRequest;
+use forge_db::review::{CarryPlan, StoredMergeRequest};
 use forge_db::Db;
 use forge_errors::ForgeError;
 use forge_git::review_changes::ChangeListing;
@@ -21,9 +24,9 @@ use crate::approvals::carry::{
 use crate::approvals::codeowners;
 use crate::version_refs::{git_budget, Deadline, VersionRefs};
 
-/// The head to carry from (`Some(recorded head)`) when the change from it
-/// to `tip` may carry the approvals.
-pub(crate) async fn carry_from(
+/// The approved heads whose change to `tip` may carry their approvals, for
+/// the recorded head (`None`: nothing is carried).
+pub(crate) async fn carry_plan(
     db: &Db,
     refs: &VersionRefs,
     deadline: Deadline,
@@ -31,7 +34,7 @@ pub(crate) async fn carry_from(
     stored: &StoredMergeRequest,
     tip: &ObjectId,
     request_id: &RequestId,
-) -> Result<Option<ObjectId>, ForgeError> {
+) -> Result<Option<CarryPlan>, ForgeError> {
     let Some(previous) = stored
         .head_sha
         .as_deref()
@@ -49,37 +52,72 @@ pub(crate) async fn carry_from(
         return Ok(None);
     }
     let rules = forge_db::protected_refs::rules_for(db, stored.project_id).await?;
-    let target_protected = !rules.levels(&stored.target_branch).is_empty();
-    let (changes, codeowners) = if target_protected {
-        (CarryChanges::Unknown("skipped"), CarryCodeowners::Unknown)
-    } else {
-        (
-            changed(refs, deadline, repo, &previous, tip, request_id).await,
-            target_codeowners(refs, deadline, repo, stored, request_id).await,
-        )
-    };
-    let inputs = CarryInputs {
-        reset_approvals_on_push: false,
-        target_protected,
-        changes,
-        codeowners,
-    };
-    let decided = tokio::task::spawn_blocking(move || may_carry_approvals(&inputs))
-        .await
-        .unwrap_or(Err("decision_failed"));
+    if !rules.levels(&stored.target_branch).is_empty() {
+        log_decision(
+            request_id,
+            stored,
+            (&previous, None, tip),
+            Err("target_protected"),
+        );
+        return Ok(None);
+    }
+    let mut approved: Vec<ObjectId> = Vec::new();
+    for a in forge_db::review::approved_heads(db, stored.id).await? {
+        if !approved.contains(&a.approved_head) {
+            approved.push(a.approved_head);
+        }
+    }
+    if approved.is_empty() {
+        return Ok(None);
+    }
+    let codeowners = target_codeowners(refs, deadline, repo, stored, request_id).await;
+    let mut allowed = Vec::with_capacity(approved.len());
+    for head in approved {
+        let changes = if &head == tip {
+            // Back to the head the approval was given on: nothing new.
+            CarryChanges::Known(Vec::new())
+        } else {
+            changed(refs, deadline, repo, &head, tip, request_id).await
+        };
+        let inputs = CarryInputs {
+            reset_approvals_on_push: false,
+            target_protected: false,
+            changes,
+            codeowners: codeowners.clone(), // clone: one decision per approved head
+        };
+        let decided = tokio::task::spawn_blocking(move || may_carry_approvals(&inputs))
+            .await
+            .unwrap_or(Err("decision_failed"));
+        log_decision(request_id, stored, (&previous, Some(&head), tip), decided);
+        if decided.is_ok() {
+            allowed.push(head);
+        }
+    }
+    Ok((!allowed.is_empty()).then_some(CarryPlan {
+        from: previous,
+        approved_heads: allowed,
+    }))
+}
+
+fn log_decision(
+    request_id: &RequestId,
+    stored: &StoredMergeRequest,
+    (from, approved_head, to): (&ObjectId, Option<&ObjectId>, &ObjectId),
+    decided: Result<(), &'static str>,
+) {
     tracing::info!(
         target: "forge_review",
         event = "forge.review.approvals_carry_decided",
         request_id = %request_id,
         merge_request_id = stored.id.get(),
         project_id = stored.project_id.get(),
-        from = previous.as_str(),
-        to = tip.as_str(),
+        from = from.as_str(),
+        approved_head = approved_head.map(ObjectId::as_str),
+        to = to.as_str(),
         carry = decided.is_ok(),
         reason = decided.err().unwrap_or("allowed"),
-        "whether a new head carries the approvals (reset_approvals_on_push = false)"
+        "whether a new head carries the approvals given on approved_head (reset_approvals_on_push = false)"
     );
-    Ok(decided.ok().map(|()| previous))
 }
 
 /// The entries changed from `from` to `to` with their modes and line

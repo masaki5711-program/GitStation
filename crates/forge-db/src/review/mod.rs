@@ -49,10 +49,11 @@ mod version_refs;
 pub mod versions;
 
 pub use approvals::{
-    approval_facts, approval_rules, approve_mr_decided, owners, put_approval_rule_mr_decided,
-    range_pushers, remove_approval_rule_mr_decided, unapprove_mr_decided, ApprovalFacts,
-    ApproveOutcome, ApproverFacts, CommitPusher, NewApprovalRule, Owners, RuleOutcome,
-    StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES, MAX_RULE_APPROVERS,
+    approval_facts, approval_rules, approve_mr_decided, approved_heads, owners,
+    put_approval_rule_mr_decided, range_pushers, remove_approval_rule_mr_decided,
+    unapprove_mr_decided, ApprovalFacts, ApproveOutcome, ApprovedHead, ApproverFacts, CommitPusher,
+    NewApprovalRule, Owners, RuleOutcome, StoredApproval, StoredApprovalRule, MAX_APPROVALS,
+    MAX_RULES, MAX_RULE_APPROVERS,
 };
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,
@@ -80,8 +81,8 @@ pub use version_refs::{
 };
 pub use versions::{
     list_versions, read_versions, record_mr_version, record_mr_version_carrying, refresh_job,
-    refresh_payload, refresh_target, RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion,
-    VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
+    refresh_payload, refresh_target, CarryPlan, RefreshRequest, RefreshTarget, RefreshTrigger,
+    StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
 };
 
 pub use commands::{
