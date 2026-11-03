@@ -520,6 +520,7 @@ fn ids(ids: &[UserId]) -> String {
 /// pool; `None` before the S0 migration (the doctor skips).
 pub async fn health(db: &Db, within: Duration) -> Result<Option<Health>, ForgeError> {
     const QUERY: &str = "service_accounts.health";
+    // Whole seconds as a bigint interval (no float cast; S0 review).
     let within_secs = i64::try_from(within.as_secs()).unwrap_or(i64::MAX);
     db.within(QUERY, async {
         let mut conn = db.acquire().await?;
@@ -545,7 +546,7 @@ pub async fn health(db: &Db, within: Duration) -> Result<Option<Health>, ForgeEr
                    GROUP BY t.user_id), \
                  expiring AS ( \
                    SELECT user_id, expires_at FROM last \
-                   WHERE expires_at <= now() + make_interval(secs => $1::double precision)), \
+                   WHERE expires_at <= now() + $1::bigint * interval '1 second'), \
                  ownerless AS ( \
                    SELECT sa.id FROM sa \
                    LEFT JOIN forge.service_account_profiles p ON p.user_id = sa.id \
@@ -560,7 +561,7 @@ pub async fn health(db: &Db, within: Duration) -> Result<Option<Health>, ForgeEr
                    COALESCE((SELECT array_agg(id ORDER BY id) FROM \
                      (SELECT id FROM ownerless ORDER BY id LIMIT $2) o), '{}')",
             )
-            .bind(within_secs as f64)
+            .bind(within_secs)
             .bind(SHOWN_IDS)
             .fetch_one(&mut *conn)
             .await

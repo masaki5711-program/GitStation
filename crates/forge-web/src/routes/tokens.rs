@@ -85,8 +85,9 @@ pub struct TokenList {
     pub items: Vec<TokenBody>,
 }
 
-/// A created token: the secret, shown this once.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+/// A created token: the secret, shown this once. `Debug` is written by
+/// hand and never prints the secret (S0 review).
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreatedToken {
     #[schema(minimum = 1)]
@@ -99,6 +100,23 @@ pub struct CreatedToken {
     /// The whole token. It is never shown again: store it now.
     pub token: String,
 }
+
+impl std::fmt::Debug for CreatedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedToken")
+            .field("id", &self.id)
+            .field("public_id", &self.public_id)
+            .field("name", &self.name)
+            .field("scopes", &self.scopes)
+            .field("expires_at", &self.expires_at)
+            .field("is_agent", &self.is_agent)
+            .field("token", &REDACTED)
+            .finish()
+    }
+}
+
+/// What a `Debug` print shows instead of a token's secret.
+pub(crate) const REDACTED: &str = "<redacted>";
 
 pub(crate) fn token_body(t: &TokenInfo) -> TokenBody {
     TokenBody {
@@ -299,5 +317,28 @@ pub async fn revoke(state: AppState, request: Dispatched<TokenCtx>) -> Response 
     match done {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_created_tokens_debug_never_shows_the_secret() {
+        let secret = "fgp_00000000000000a1_c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0";
+        let created = CreatedToken {
+            id: 1,
+            public_id: "00000000000000a1".to_owned(),
+            name: "ci".to_owned(),
+            scopes: vec!["read_api".to_owned()],
+            expires_at: "2027-01-01T00:00:00Z".to_owned(),
+            is_agent: false,
+            token: secret.to_owned(),
+        };
+        let printed = format!("{created:?} {created:#?}");
+        assert!(!printed.contains("c2VjcmV0"), "{printed}");
+        assert!(printed.contains(REDACTED), "{printed}");
+        assert!(printed.contains("00000000000000a1"), "{printed}");
     }
 }

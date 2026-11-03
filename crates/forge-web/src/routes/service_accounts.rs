@@ -187,8 +187,9 @@ pub struct ServiceAccountTokenList {
     pub items: Vec<ServiceAccountTokenBody>,
 }
 
-/// An issued token: the secret, shown this once.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+/// An issued token: the secret, shown this once. `Debug` is written by
+/// hand and never prints the secret (S0 review).
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IssuedServiceAccountToken {
     #[schema(minimum = 1)]
@@ -204,6 +205,22 @@ pub struct IssuedServiceAccountToken {
     pub issued_by_user_id: i64,
     /// The whole token. It is never shown again: hand it to the owner now.
     pub token: String,
+}
+
+impl std::fmt::Debug for IssuedServiceAccountToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IssuedServiceAccountToken")
+            .field("id", &self.id)
+            .field("service_account_id", &self.service_account_id)
+            .field("public_id", &self.public_id)
+            .field("name", &self.name)
+            .field("scopes", &self.scopes)
+            .field("expires_at", &self.expires_at)
+            .field("is_agent", &self.is_agent)
+            .field("issued_by_user_id", &self.issued_by_user_id)
+            .field("token", &crate::routes::tokens::REDACTED)
+            .finish()
+    }
 }
 
 fn body(a: ServiceAccount) -> ServiceAccountBody {
@@ -624,5 +641,32 @@ pub async fn revoke(state: AppState, request: Dispatched<ServiceAccountTokenCtx>
     match done {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_issued_tokens_debug_never_shows_the_secret() {
+        let issued = IssuedServiceAccountToken {
+            id: 31,
+            service_account_id: 42,
+            public_id: "00000000000000a1".to_owned(),
+            name: "feed".to_owned(),
+            scopes: vec!["read_api".to_owned()],
+            expires_at: "2027-01-01T00:00:00Z".to_owned(),
+            is_agent: false,
+            issued_by_user_id: 1,
+            token: "fgp_00000000000000a1_c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0".to_owned(),
+        };
+        let printed = format!("{issued:?} {issued:#?}");
+        assert!(!printed.contains("c2VjcmV0"), "{printed}");
+        assert!(
+            printed.contains(crate::routes::tokens::REDACTED),
+            "{printed}"
+        );
+        assert!(printed.contains("00000000000000a1"), "{printed}");
     }
 }
