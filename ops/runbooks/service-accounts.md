@@ -37,6 +37,21 @@
 するため）。管理画面はまだ無い（後続の MR）。それまでは管理者がブラウザでサインインし、同じタブの開発者ツールのコンソールから API を呼ぶ（下の A・B）。
 Web セッションの CSRF の値は `GET /api/v1/session` の `csrf_token` で、ヘッダー `X-GitStation-CSRF` で送る。
 
+## 導入の前の確認（マイグレーション 20261113100000 を当てる前に一度）
+
+20261113100000 の `users` の CHECK（`users_service_account_no_personal_data`、`users_service_account_not_admin`）は **既存の行も検証する**。
+違反する行が 1 つでもあると、マイグレーションは全体が失敗する（何も適用されない）。`forge db migrate` の前に、対象の DB で読み取りで確かめる。
+どちらも 0 でなければ、先に該当のサービスアカウントの扱いを決める（人に変える・個人の情報を消すのは承認した手順で）。
+
+```sql
+SELECT count(*) FILTER (WHERE email IS NOT NULL OR employee_number IS NOT NULL
+         OR external_id IS NOT NULL) AS with_personal_data,
+       count(*) FILTER (WHERE is_admin) AS administrators
+FROM forge.users WHERE kind = 'service_account';
+```
+
+20261113100100 から、利用者の `kind` は変えられない（`users_kind_immutable`。変えようとすると SQLSTATE 23514）。
+
 ## Diagnose（読み取りのみ）
 
 1. 一覧と、各アカウントの持ち主・有効なトークンの数・いちばん遅い期限を見る（`admin` スコープのトークン）。
