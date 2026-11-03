@@ -1408,7 +1408,9 @@ fn a_direct_push_to_a_branch_with_the_ban_is_fg_git_0017() {
     s.rt.block_on(t.commit_audited(
         ("project", pid),
         &[format!(
-            "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id,              direct_push_forbidden) SELECT id, project_id, true FROM forge.protected_refs              WHERE project_id = {pid} AND pattern = 'refs/heads/main'"
+            "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+             direct_push_forbidden) SELECT id, project_id, true FROM forge.protected_refs \
+             WHERE project_id = {pid} AND pattern = 'refs/heads/main'"
         )],
     ));
     let work = s.work();

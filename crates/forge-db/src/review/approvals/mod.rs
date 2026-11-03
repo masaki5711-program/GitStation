@@ -470,14 +470,14 @@ pub async fn owners(
 ) -> Result<Owners, ForgeError> {
     const QUERY: &str = "review.codeowners_owners";
     db.within(QUERY, async {
-        let users: Vec<(String, i64)> =
-            sqlx::query_as(
-                "SELECT username, id FROM forge.users WHERE username = ANY($1)                  AND state = 'active'",
-            )
-                .bind(usernames)
-                .fetch_all(db.pool().executor())
-                .await
-                .map_err(|e| read_query_error(QUERY, e))?;
+        let users: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT username, id FROM forge.users WHERE username = ANY($1) \
+             AND state = 'active'",
+        )
+        .bind(usernames)
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
         let groups: Vec<(String, i64)> = sqlx::query_as(
             "SELECT full_path, owner_id FROM forge.namespaces \
              WHERE kind = 'group' AND full_path = ANY($1)",

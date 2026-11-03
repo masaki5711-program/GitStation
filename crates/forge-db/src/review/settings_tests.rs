@@ -559,7 +559,8 @@ async fn a_failing_restore_does_not_stop_the_batch() {
         w.t.commit_audited(
             ("project", project.get()),
             &[format!(
-                "UPDATE forge.merge_settings SET codeowners_suspended_at = now() - interval '2 hours',                  codeowners_enforced_off_until = now() - interval '1 hour' WHERE project_id = {}",
+                "UPDATE forge.merge_settings SET codeowners_suspended_at = now() - interval '2 hours', \
+                 codeowners_enforced_off_until = now() - interval '1 hour' WHERE project_id = {}",
                 project.get()
             )],
         )

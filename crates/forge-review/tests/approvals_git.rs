@@ -2100,10 +2100,11 @@ async fn the_carry_limits_count_from_the_approved_head() {
     let second = with_new_files("b", 30);
     files.extend(second.iter().map(|(n, c)| (n.as_str(), c.as_str())));
     w.push_next(&files, "req-push-3").await;
-    let ended = w
-        .t
-        .json_rows(
-            "SELECT (payload ->> 'approver_id')::bigint AS approver FROM forge.events              WHERE event_type = 'merge_request.unapproved'              AND payload ->> 'reason' = 'new_commits'",
+    let ended =
+        w.t.json_rows(
+            "SELECT (payload ->> 'approver_id')::bigint AS approver FROM forge.events \
+             WHERE event_type = 'merge_request.unapproved' \
+             AND payload ->> 'reason' = 'new_commits'",
         )
         .await;
     let ended: Vec<i64> = ended
@@ -2115,10 +2116,10 @@ async fn the_carry_limits_count_from_the_approved_head() {
         vec![w.rita.get()],
         "60 files since rita's approval end it; 30 since mara's do not"
     );
-    let live = w
-        .t
-        .json_rows(
-            "SELECT approver_id, carried_from FROM forge.merge_request_approvals              WHERE revoked_at IS NULL",
+    let live =
+        w.t.json_rows(
+            "SELECT approver_id, carried_from FROM forge.merge_request_approvals \
+             WHERE revoked_at IS NULL",
         )
         .await;
     assert_eq!(live.len(), 1, "{live:?}");
