@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import axe from 'axe-core';
 import { chromium } from 'playwright';
 
+import { mergeBackend } from './journey-merge.mjs';
 import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
@@ -52,6 +53,7 @@ function backend() {
   const unexpected = [];
   const settings = settingsBackend(CSRF);
   const mergeRequests = mrBackend(CSRF, user);
+  const merging = mergeBackend(CSRF, user);
   let nextId = 9;
   const handle = (req, res, url, body) => {
     const path = url.pathname;
@@ -95,7 +97,8 @@ function backend() {
       }), true;
     }
     // Merge requests first: the settings fake claims every /projects/7/ path.
-    const mr = mergeRequests.answer(req, url, body);
+    // !5 (approve and merge, U2) before the U1 fake, which answers 404 for it.
+    const mr = merging.answer(req, url, body) ?? mergeRequests.answer(req, url, body);
     if (mr !== null) {
       if (mr.error) return sendError(res, mr.status, ...mr.error), true;
       return sendJson(res, mr.status, mr.body), true;
@@ -183,7 +186,7 @@ function backend() {
     unexpected.push(key);
     return sendError(res, 500, 'Unexpected test request.', 'req-unexpected'), true;
   };
-  return { handle, unexpected, projects };
+  return { handle, unexpected, projects, settings };
 }
 
 async function main() {
@@ -205,8 +208,9 @@ async function main() {
     const page = await context.newPage();
     page.on('console', (msg) => {
       // The browser logs every 4xx as a console error; the journey causes a
-      // 401 (signed out), a 404 (unknown path), a 409 (duplicate or the last-administrator guard) and a 429 (rename limit) on purpose.
-      if (/Failed to load resource: the server responded with a status of (401|404|409|429)/.test(msg.text())) return;
+      // 401 (signed out), a 403 (a merge refused, U2), a 404 (unknown path), a 409 (duplicate, the
+      // last-administrator guard, a stale view or stale merge settings) and a 429 (rename limit) on purpose.
+      if (/Failed to load resource: the server responded with a status of (401|403|404|409|429)/.test(msg.text())) return;
       if (msg.type() === 'error' || /Content Security Policy/i.test(msg.text())) {
         problems.push(`console ${msg.type()}: ${msg.text()}`);
       }
@@ -391,6 +395,61 @@ async function main() {
     await page.getByRole('button', { name: 'Protect a ref' }).click();
     await page.getByRole('cell', { name: /refs\/heads\/release/ }).or(page.getByRole('rowheader', { name: /release/ })).first().waitFor();
     await check('24-settings');
+
+    // 6c'. The merge sections (U2): methods saved with expected_updated_at; a
+    // save after someone else's is refused 409 and read again; CODEOWNERS
+    // suspended; an approval rule from the pickers; merge conditions whose
+    // required check blocks every merge (the warning stays on screen).
+    const merging = page.getByRole('region', { name: 'Merging' });
+    const savedLine = merging.getByText('The merge settings were saved.');
+    await merging.getByRole('checkbox', { name: 'Fast-forward' }).check();
+    await merging.getByRole('button', { name: 'Save merge settings' }).click();
+    await savedLine.waitFor();
+    fake.settings.changeMergeSettingsElsewhere();
+    await merging.getByRole('checkbox', { name: 'Delete the source branch after a merge' }).check();
+    await merging.getByRole('button', { name: 'Save merge settings' }).click();
+    const staleSettings = merging.getByRole('alert');
+    await staleSettings.waitFor();
+    const staleText = await staleSettings.innerText();
+    if (!staleText.includes('changed by someone else') || !staleText.includes('req-ms-409') || staleText.includes('FG-')) {
+      problems.push(`merge settings 409 text: ${staleText}`);
+    }
+    await check('24a-merge-settings-409');
+    await merging.getByRole('button', { name: 'Reload the settings' }).click();
+    await merging.getByRole('alert').waitFor({ state: 'detached' });
+    await merging.getByRole('checkbox', { name: 'Delete the source branch after a merge' }).check();
+    await merging.getByRole('button', { name: 'Save merge settings' }).click();
+    await savedLine.waitFor();
+    await merging.getByLabel('Suspend for (minutes)').fill('30');
+    await merging.getByRole('button', { name: 'Suspend CODEOWNERS' }).click();
+    await merging.getByText(/CODEOWNERS approval is suspended until/).waitFor();
+    await page.getByRole('button', { name: 'Add an approval rule' }).click();
+    const ruleDialog = page.getByRole('dialog');
+    await ruleDialog.getByLabel('Name', { exact: true }).fill('leads');
+    await ruleDialog.getByLabel('Find a user').fill('jir');
+    await ruleDialog.getByRole('button', { name: 'Search' }).click();
+    await ruleDialog.getByRole('button', { name: 'Add Jiro Suzuki' }).click();
+    await ruleDialog.getByLabel('Group', { exact: true }).selectOption('acme');
+    await ruleDialog.getByRole('button', { name: 'Add the group' }).click();
+    await ruleDialog.getByRole('button', { name: 'Remove acme' }).waitFor();
+    await check('24b-approval-rule-dialog');
+    await ruleDialog.getByRole('button', { name: 'Save the rule' }).click();
+    await page.getByRole('rowheader', { name: 'leads' }).waitFor();
+    await page.getByRole('row', { name: /leads.*jiro, acme/ }).waitFor();
+    await page.getByRole('button', { name: 'Change the conditions of refs/heads/main' }).click();
+    const conditionsDialog = page.getByRole('dialog');
+    await conditionsDialog.getByLabel('Required checks (one per line)').fill('ci/gates');
+    await conditionsDialog.getByLabel('Forbid direct pushes (merges only)').check();
+    await conditionsDialog.getByText(/cannot change at all/).waitFor();
+    await check('24c-merge-conditions-dialog');
+    await conditionsDialog.getByRole('button', { name: 'Save the conditions' }).click();
+    const blockedNote = page.getByRole('note').filter({ hasText: 'every merge into this branch is blocked' });
+    await blockedNote.waitFor();
+    if (!(await blockedNote.innerText()).includes('cannot change at all')) {
+      problems.push('merge conditions: the "branch cannot change" warning is missing');
+    }
+    if (/work item/i.test(await page.locator('main').innerText())) problems.push('merge conditions offer a work item link before I1');
+    await check('24d-merge-sections');
     await page.getByLabel('Last part of the path').fill('forge-web-2');
     await page.getByRole('button', { name: 'Move or rename' }).click();
     const refusal = page.getByRole('alert').filter({ hasText: 'renamed or moved too often' });
@@ -548,6 +607,77 @@ async function main() {
       if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
       await check(name);
     }
+    await page.setViewportSize({ width: 1100, height: 800 });
+
+    // 6e. Approve and merge (U2): !5 is a draft with three reasons. The first
+    // approve finds a version pushed meanwhile (409, reload, approve again) ->
+    // one reason -> mark as ready -> merge: the first request is refused 403 in
+    // the dialog -> merge again -> queued -> executing -> applied. The fake
+    // refuses any unsafe request without the CSRF header.
+    const conditions = page.getByRole('region', { name: 'Merge conditions' });
+    const reasonItems = conditions.getByTestId('mr-conditions').locator('li');
+    await page.goto(`${base}/acme/forge-web/-/pull/5`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 1, name: /Add the pump spec/ }).waitFor();
+    await statusIs('It is still a draft', 'merge: draft');
+    await reasonItems.nth(2).waitFor();
+    if ((await reasonItems.count()) !== 3) problems.push(`merge: ${await reasonItems.count()} reasons, expected 3`);
+    await check('48-merge-conditions');
+    await conditions.getByRole('button', { name: 'Approve' }).click();
+    const staleView = conditions.getByRole('alert');
+    await staleView.waitFor();
+    const staleViewText = await staleView.innerText();
+    if (!staleViewText.includes('A new version was pushed') || !staleViewText.includes('req-stale-view') || staleViewText.includes('FG-')) {
+      problems.push(`approve 409 text: ${staleViewText}`);
+    }
+    await check('49-approve-stale');
+    await conditions.getByRole('button', { name: 'Reload the merge request' }).click();
+    await conditions.getByRole('alert').waitFor({ state: 'detached' });
+    await conditions.getByRole('button', { name: 'Approve' }).click();
+    await conditions.getByText('You approved this version.').waitFor();
+    await conditions.getByRole('button', { name: 'Withdraw my approval' }).waitFor();
+    if ((await reasonItems.count()) !== 1) problems.push(`merge: ${await reasonItems.count()} reasons after approving, expected 1`);
+    await page.getByRole('button', { name: 'Mark as ready' }).click();
+    await statusIs('Ready to merge', 'merge: ready');
+    await conditions.getByText('Every condition is met.').waitFor();
+    await conditions.getByRole('button', { name: 'Merge…' }).click();
+    const mergeDialog = page.getByRole('dialog');
+    await mergeDialog.getByRole('radio', { name: 'Squash' }).check();
+    await check('50-merge-dialog');
+    await mergeDialog.getByRole('button', { name: 'Merge', exact: true }).click();
+    const mergeRefused = mergeDialog.getByRole('alert');
+    await mergeRefused.waitFor();
+    const mergeRefusedText = await mergeRefused.innerText();
+    if (!mergeRefusedText.includes('You may not merge into main right now.') || !mergeRefusedText.includes('req-merge-403') || mergeRefusedText.includes('FG-')) {
+      problems.push(`merge 403 text: ${mergeRefusedText}`);
+    }
+    await check('51-merge-refused');
+    await mergeDialog.getByRole('button', { name: 'Cancel' }).click();
+    await mergeDialog.waitFor({ state: 'hidden' });
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Merge…', null, { timeout: 5000 }).catch(async () => {
+      problems.push(`merge cancel: the focus is on "${await page.evaluate(() => document.activeElement?.textContent ?? '')}"`);
+    });
+    await conditions.getByRole('button', { name: 'Merge…' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Merge', exact: true }).click();
+    await page
+      .waitForFunction(
+        () => document.querySelector('[data-testid="mr-merge-progress"]')?.textContent?.includes('Merged into main.') === true,
+        null,
+        { timeout: 20_000 },
+      )
+      .catch(async () => {
+        problems.push(`merge: progress is "${await page.getByTestId('mr-merge-progress').textContent()}"`);
+      });
+    const progressFocus = await page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? '');
+    if (progressFocus !== 'mr-merge-progress') problems.push(`merge: the focus is on "${progressFocus}", not the progress`);
+    await check('52-merged');
+    await page.setViewportSize({ width: 375, height: 800 });
+    await page.goto(`${base}/acme/forge-web/-/pull/5`, { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { level: 1 }).first().waitFor();
+    const mergedOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    if (mergedOverflow > 0) problems.push(`53-merged-375: the page scrolls sideways by ${mergedOverflow}px at 375px`);
+    await check('53-merged-375');
     await page.setViewportSize({ width: 1100, height: 800 });
 
     // 7. Sign out: a real form POST with the CSRF token; back to the sign-in screen.

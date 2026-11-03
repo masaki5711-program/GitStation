@@ -95,6 +95,8 @@ export function mrBackend(csrf, user) {
       checks: [],
       discussions: { unresolved },
       codeowners: { enforced: true, suspended_until: null },
+      // U2: no action here (the approve-and-merge journey is journey-merge.mjs).
+      viewer: { can_approve: false, can_unapprove: false, can_merge: false, can_mark_ready: false, approved_by_me: false },
     };
   }
 
