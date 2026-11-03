@@ -212,6 +212,17 @@ person (`owner_kind` on `Resource::Namespace` / `TransferTarget::PersonalNamespa
 satisfies nothing else. Rows `src/matrix_rows_service_accounts.rs`, tests
 `src/service_account_tests.rs`.
 
+**Integrations (M3 I1a, ADR-0016 Amendment I1a)**: `IntegrationManage` (create,
+enable / disable, event types) is an administrator's web session only and
+people only (`FG-AUTH-0002 session_required` for every token, an `admin`-scoped
+one included); `IntegrationRead` needs administrator rights and is people only
+(`admin` + `read_api` on a token); `IntegrationBindingManage` is Maintainer
+and above on the project, people only, `api` (pending deletion and visibility
+decided as for every project resource). Contexts `IntegrationCtx` (the
+instance) and `IntegrationBindingCtx` (the project, with the integration id in
+the proof). Rows `src/matrix_rows_integrations.rs` (twins in
+`matrix_rows_people.rs`).
+
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).
 

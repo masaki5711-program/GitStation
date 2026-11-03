@@ -20,6 +20,7 @@ pub mod error;
 pub mod gitcfg;
 pub mod hosting;
 pub mod http;
+pub mod integrations;
 pub mod mr_approvals;
 pub mod mr_conditions;
 pub mod mr_discussions;

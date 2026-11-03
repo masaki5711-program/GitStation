@@ -87,6 +87,17 @@ gstn admin service-account revoke-token <id> <token id> --yes   # 漏えいの�
 
 作成とトークンの発行は管理者の Web セッションだけ（トークンからは FG-AUTH-0002）。手順は Runbook `service-accounts`。
 
+連携（M3 I1a）。管理者の一覧・詳細・結びつけ（トークンは `admin` スコープ）と、プロジェクトの結びつけ（Maintainer）:
+
+```
+gstn admin integration list|view <id>|bindings <id>
+gstn integration-binding list --project <id>
+gstn integration-binding set --project <id> --integration <id> --external-project <kanflow の id>
+gstn integration-binding remove --project <id> --integration <id> --yes
+```
+
+連携の登録と変更は管理者の Web セッションだけ（トークンからは FG-AUTH-0002）。手順は Runbook `integrations`。
+
 id は正の整数。破壊的な操作（`project delete` / `member remove` / `protected-ref remove`）は
 `--yes` が必須で、無いときは何も送らずに終了コード 2 で終わる（`gstn` は対話で確認しない）。
 `--all` は `next_cursor`（member は `next_after`、mr は `next_before`）を、件数・サイズ・ページ数の上限つきで辿る。

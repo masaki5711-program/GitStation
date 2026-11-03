@@ -4,6 +4,7 @@
 use crate::approval::ApprovalRuleChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+use crate::integration::IntegrationChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::move_details::{MoveSummary, TombstoneKind};
@@ -345,6 +346,10 @@ pub enum AuditDetails {
     /// ADR-0024 §12): audit-only, on the project. Shapes:
     /// [`MergeRuleChange::to_value`].
     ProtectedRefMergeRule(MergeRuleChange),
+    /// `integration.*` (M3 I1a, plan 11 §5 I1): audit-only; created /
+    /// updated on (`integration`, id), bound / unbound on the project.
+    /// Shapes: [`IntegrationChange::to_value`].
+    Integration(IntegrationChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -500,6 +505,7 @@ impl AuditDetails {
             Self::ApprovalRule(change) => change.action(),
             Self::MergeSettings { change, .. } => change.action(),
             Self::ProtectedRefMergeRule(change) => change.action(),
+            Self::Integration(change) => change.action(),
         }
     }
 
@@ -550,7 +556,8 @@ impl AuditDetails {
             Self::MergeRequest(change) => Some(change.transition().event_type()),
             Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
-            | Self::ProtectedRefMergeRule(_) => None,
+            | Self::ProtectedRefMergeRule(_)
+            | Self::Integration(_) => None,
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
                 MergeSettingsChange::CodeownersEnforcementChanged { .. } => {
@@ -943,6 +950,7 @@ impl AuditDetails {
             Self::ApprovalRule(change) => change.to_value(),
             Self::MergeSettings { project, change } => change.to_value(*project),
             Self::ProtectedRefMergeRule(change) => change.to_value(),
+            Self::Integration(change) => change.to_value(),
         }
     }
 
@@ -1016,7 +1024,8 @@ impl AuditDetails {
             | Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
             | Self::MergeSettings { .. }
-            | Self::ProtectedRefMergeRule(_) => self.to_value(),
+            | Self::ProtectedRefMergeRule(_)
+            | Self::Integration(_) => self.to_value(),
         }
     }
 }

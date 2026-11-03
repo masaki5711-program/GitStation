@@ -927,6 +927,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
         crate::matrix_rows_service_accounts::SERVICE_ACCOUNT_ROWS,
+        crate::matrix_rows_integrations::INTEGRATION_ROWS,
     ]
     .concat()
 });
