@@ -34,6 +34,8 @@ use crate::runtime::block_on;
 
 // M3 C1: required checks have a reporter.
 mod checks;
+// M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
+mod maintenance;
 mod oidc;
 mod render;
 // ── D4 MR3b ──
@@ -71,7 +73,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 20] = [
+const DB_CHECKS: [&str; 23] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -104,6 +106,10 @@ const DB_CHECKS: [&str; 20] = [
     "service_accounts.ownerless",
     // M3 C1: every required check namespace has a reporter (warn).
     "checks.reporters",
+    // M3 O3: the repository maintenance ledger.
+    "repositories.maintenance",
+    "repositories.integrity",
+    "repositories.refs",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -237,6 +243,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let merges = review::merges_check(db).await;
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     let reporters = checks::reporters_check(db).await;
+    let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     vec![
         bootstrap,
         connections,
@@ -258,6 +265,9 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         sa_expiring,
         sa_ownerless,
         reporters,
+        maintained,
+        integrity,
+        refs,
     ]
 }
 

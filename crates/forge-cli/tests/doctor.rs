@@ -74,6 +74,10 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         // M3 S0: no service account yet.
         "ok    service_accounts.tokens_expiring",
         "ok    service_accounts.ownerless",
+        // M3 O3: no repository yet, nothing maintained or overdue.
+        "ok    repositories.maintenance",
+        "ok    repositories.integrity",
+        "ok    repositories.refs",
         "ok    storage",
         "ok    git",
     ] {

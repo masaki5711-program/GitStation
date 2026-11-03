@@ -279,3 +279,45 @@ mod record_push {
         t.drop_now().await;
     }
 }
+
+/// M3 O3: `forge admin repo maintain` enqueues one maintenance job for a
+/// ready repository (its own key per request) and refuses one that is not
+/// ready (NotFound with the state).
+#[tokio::test]
+async fn maintain_enqueues_one_job_for_a_ready_repository() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let p = project(&t, "mia").await;
+    let err = maintain_with(&t.db, &rid("req-cli-mt-0"), p.repository_id.get())
+        .await
+        .expect_err("still provisioning");
+    assert_eq!(err.code(), ErrorCode::NotFound);
+    assert!(err.to_string().contains("state=provisioning"), "{err}");
+    let mut runner = JobRunner::new(t.db.clone(), WorkerId::generate()); // clone: pool handles
+    runner
+        .register(Arc::new(
+            ProvisionHandler::new(&t.db, storage.clone()).expect("handler"), // clone: test handles
+        ))
+        .expect("register");
+    runner
+        .run_once()
+        .await
+        .expect("claim")
+        .expect("provisioned");
+    let out = maintain_with(&t.db, &rid("req-cli-mt-1"), p.repository_id.get())
+        .await
+        .expect("queued");
+    assert!(
+        out.contains("maintenance job") && out.contains("queued"),
+        "{out}"
+    );
+    let again = maintain_with(&t.db, &rid("req-cli-mt-1"), p.repository_id.get())
+        .await
+        .expect("same request");
+    assert!(again.contains("already queued"), "{again}");
+    let jobs = t
+        .json_rows("SELECT dedup_key FROM forge.jobs WHERE kind = 'repository.maintain'")
+        .await;
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    t.drop_now().await;
+}
