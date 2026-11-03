@@ -187,8 +187,8 @@ pub struct ServiceAccountTokenList {
     pub items: Vec<ServiceAccountTokenBody>,
 }
 
-/// An issued token: the secret, shown this once. `Debug` is written by
-/// hand and never prints the secret (S0 review).
+// `Debug` is written by hand below: it never prints the secret (S0 review).
+/// An issued token: the secret, shown this once.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IssuedServiceAccountToken {
