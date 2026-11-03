@@ -148,7 +148,8 @@
     "files": "ファイル",
     "commits": "コミット",
     "compare": "比較",
-    "switchGo": "切り替える"
+    "switchGo": "切り替える",
+    "pulls": "MR"
   },
   "tree": {
     "title": "ファイル",
@@ -265,9 +266,10 @@
     "change": "変更",
     "lineAdded": "追加",
     "lineRemoved": "削除",
-    "show": "差分を表示（{{count}} 行）",
     "files": "変更されたファイル: {{count}}",
-    "truncated": "変更が多いため、差分の一部しか表示していません。"
+    "truncated": "変更が多いため、差分の一部しか表示していません。",
+    "show_one": "差分を表示（{{count}} 行）",
+    "show_other": "差分を表示（{{count}} 行）"
   },
   "markdown": {
     "externalImage": "外部の画像（表示しません）",
@@ -446,5 +448,125 @@
     "restore": "復元",
     "restoreOf": "{{name}} を復元",
     "title": "削除待ちのプロジェクト"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "マージできます",
+      "generic": "今はマージできません。変更の内容を確認してください",
+      "notOpen": "この変更依頼はもう開いていません",
+      "draft": "下書きの状態です",
+      "mergeInProgress": "マージを実行中です",
+      "sourceBranchMissing": "元のブランチがありません",
+      "mergeabilityUnknown": "確認待ち。push で更新されます",
+      "conflict": "他の変更とぶつかっています",
+      "ffNotPossible": "先頭に追いつけていません。最新の状態を取り込んでください",
+      "nothingToMerge": "取り込む変更がありません",
+      "configChange": "設定ファイルの変更に、管理者の承認が必要です",
+      "changedPathsUnknown": "変更されたファイルを読み取れませんでした",
+      "codeownersInvalid": "コードオーナーの定義が使えません。管理者に知らせてください",
+      "approvalsMissing": "承認が足りません（{{rule}}: 必要 {{required}} 件・承認済み {{counted}} 件）",
+      "approvalsMissingProtected": "承認が足りません（必要 {{required}} 件・承認済み {{counted}} 件）",
+      "codeownerMissing": "{{pattern}} の担当者（{{owners}}）の承認が必要です",
+      "checkMissing": "必須の確認「{{name}}」の結果がまだありません",
+      "checkFailed": "必須の確認「{{name}}」が成功していません（{{status}} / {{conclusion}}）",
+      "unresolved": "解決していないスレッドが {{n}} 件あります",
+      "next": {
+        "firstUnresolved": "最初の未解決スレッドを開く",
+        "changes": "変更を見る",
+        "push": "修正を push する"
+      },
+      "checking": "マージできるか確かめています…",
+      "hint": {
+        "approvals": "レビューする人の承認を待っています。",
+        "owners": "そのファイルの担当者の承認を待っています。",
+        "checks": "チェックの結果を待っています。",
+        "merging": "マージが終わるのを待っています。",
+        "maintainer": "Maintainer の承認を待っています。",
+        "retry": "しばらくしてから開き直してください。続くときは管理者に知らせてください。",
+        "draft": "準備ができたら、作成した人が下書きを外します。",
+        "notOpen": "さらに変更を出すときは、新しい変更依頼を作ります。",
+        "codeowners": "CODEOWNERS のファイルが直るまでマージできません。",
+        "nothing": "取り込み先に同じ変更が既に入っています。"
+      }
+    },
+    "number": "!{{iid}}",
+    "draft": "下書き",
+    "opened": "{{author}} が {{date}} に作成",
+    "branches": "{{source}} から {{target}} へ",
+    "state": {
+      "open": "開いている",
+      "merged": "マージ済み",
+      "closed": "閉じた",
+      "all": "すべて"
+    },
+    "list": {
+      "title": "変更依頼（MR）",
+      "new": "変更依頼を作る",
+      "filterLabel": "表示する変更依頼",
+      "empty": "ここに表示する変更依頼はありません。",
+      "older": "古い変更依頼を見る",
+      "newest": "最新に戻る",
+      "emptyOpen": "開いている変更依頼はありません。"
+    },
+    "new": {
+      "title": "新しい変更依頼",
+      "source": "変更のあるブランチ",
+      "target": "取り込み先のブランチ",
+      "choose": "ブランチを選んでください",
+      "defaultBranch": "{{name}}（既定）",
+      "titleLabel": "タイトル",
+      "description": "説明（省略できます。Markdown が使えます）",
+      "submit": "変更依頼を作る",
+      "sourceRequired": "変更のあるブランチを選んでください。",
+      "targetRequired": "取り込み先のブランチを選んでください。",
+      "sameBranch": "2 つのブランチが同じです。変更のあるブランチに別のものを選んでください。",
+      "titleRequired": "タイトルを入力してください。",
+      "titleTooLong": "タイトルは 255 文字までです。",
+      "noBranches": "このリポジトリにはまだブランチがありません。先にブランチを push してください。"
+    },
+    "view": {
+      "tabsLabel": "変更依頼の画面",
+      "overview": "概要",
+      "changes": "変更",
+      "description": "説明",
+      "noDescription": "説明はありません。"
+    },
+    "threads": {
+      "title": "スレッド",
+      "empty": "まだコメントはありません。",
+      "truncated": "スレッドが多いため、一部だけを表示しています。",
+      "resolvedCount": "解決済み {{n}} 件"
+    },
+    "thread": {
+      "title": "{{author}} のスレッド",
+      "resolved": "解決済み",
+      "unresolved": "未解決",
+      "resolve": "解決にする",
+      "unresolve": "未解決に戻す",
+      "reply": "返信する",
+      "replyLabel": "返信",
+      "replySubmit": "返信を送る",
+      "outdated": "この行は後の版で書き換えられました。",
+      "outdatedUnknown": "後の版でこの行が変わったかを確かめられませんでした。もう一度見てください。",
+      "resolvedNotice": "スレッドを解決にしました。",
+      "reopenedNotice": "スレッドを未解決に戻しました。"
+    },
+    "comment": {
+      "label": "コメントを書く",
+      "help": "Markdown が使えます。",
+      "submit": "コメントする",
+      "required": "コメントを入力してください。",
+      "sending": "送っています…"
+    },
+    "diff": {
+      "version": "版 {{version}}（最新）",
+      "noVersion": "まだ版が記録されていません。push を読み取ると、ここに変更が表示されます。",
+      "purged": "この版の変更は削除されました（秘密情報を消すためなど）。もう表示できません。",
+      "column": "コメント",
+      "lineNew": "{{path}} の {{line}} 行目",
+      "lineOld": "{{path}} の削除した {{line}} 行目",
+      "commentOn": "{{where}}にコメントする",
+      "yourComment": "コメント: {{where}}"
+    }
   }
 }

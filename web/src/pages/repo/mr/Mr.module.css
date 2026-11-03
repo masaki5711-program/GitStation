@@ -1,0 +1,79 @@
+/* The merge request screens (U1). Tokens only (src/styles/tokens.css). */
+
+.filter {
+  margin-bottom: var(--gs-space-3);
+}
+
+.filterList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-1) var(--gs-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.filterLink {
+  composes: interactive from '../../../components/controls.module.css';
+  display: inline-block;
+  padding: var(--gs-space-1) 0;
+  border-bottom: 3px solid transparent;
+}
+
+.filterLink[aria-current='page'] {
+  border-bottom-color: var(--gs-color-link);
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--gs-color-border);
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gs-space-1);
+  padding: var(--gs-space-3) 0;
+  border-bottom: 1px solid var(--gs-color-border);
+}
+
+.itemTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-2);
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  padding: var(--gs-space-4) 0;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--gs-space-4);
+  margin: var(--gs-space-3) 0 0;
+}
+
+.form {
+  max-width: 48rem;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gs-space-3);
+  margin-top: var(--gs-space-4);
+}
+
+/* !iid: digits of one width, so a list of numbers lines up. */
+.number {
+  font-variant-numeric: tabular-nums;
+}

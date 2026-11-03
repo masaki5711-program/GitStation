@@ -46,6 +46,8 @@ export const VIEW_WORDS = [
   'tags',
   'settings',
   'members',
+  'pulls',
+  'pull',
   'docs',
 ] as const;
 

@@ -35,6 +35,21 @@ export const compareUrl = (project: string, from?: string, to?: string) =>
     ? `${base(project)}/-/compare`
     : `${base(project)}/-/compare/${encodePath(from)}...${encodePath(to)}`;
 
+/** The merge request list (ADR-0015 amendment B0: `pulls`); `state` and
+ * `before` (the previous page's `next_before`) are the query. */
+export const pullsUrl = (project: string, query?: { state: string; before?: number }) => {
+  if (query === undefined) return `${base(project)}/-/pulls`;
+  const q = new URLSearchParams({ state: query.state });
+  if (query.before !== undefined) q.set('before', String(query.before));
+  return `${base(project)}/-/pulls?${q.toString()}`;
+};
+
+export const newPullUrl = (project: string) => `${base(project)}/-/pulls/new`;
+
+/** One merge request; `changes`: its diff tab. */
+export const pullUrl = (project: string, iid: number, tab?: 'changes') =>
+  tab === undefined ? `${base(project)}/-/pull/${iid}` : `${base(project)}/-/pull/${iid}/${tab}`;
+
 /** Server routes (not screens): plain links, never router links. */
 export const rawUrl = (project: string, ref: string, path: string) =>
   withPath(`${base(project)}/-/raw/${encodePath(ref)}`, path);

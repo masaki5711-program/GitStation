@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import axe from 'axe-core';
 import { chromium } from 'playwright';
 
+import { mrBackend } from './journey-mr.mjs';
 import { PNG, REFS, browse } from './journey-repo.mjs';
 import { SECRET, settingsBackend } from './journey-settings.mjs';
 import { dist, listen, redirect, sendError, sendJson, shellCsp, standIn } from './standin.mjs';
@@ -50,6 +51,7 @@ function backend() {
   const projects = [forgeWeb];
   const unexpected = [];
   const settings = settingsBackend(CSRF);
+  const mergeRequests = mrBackend(CSRF, user);
   let nextId = 9;
   const handle = (req, res, url, body) => {
     const path = url.pathname;
@@ -91,6 +93,12 @@ function backend() {
         csrf_token: CSRF,
         user,
       }), true;
+    }
+    // Merge requests first: the settings fake claims every /projects/7/ path.
+    const mr = mergeRequests.answer(req, url, body);
+    if (mr !== null) {
+      if (mr.error) return sendError(res, mr.status, ...mr.error), true;
+      return sendJson(res, mr.status, mr.body), true;
     }
     const more = settings.answer(req, url, body, forgeWeb);
     if (more !== null) {
@@ -458,6 +466,82 @@ async function main() {
     ]) {
       await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
       await h1(heading);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      if (overflow > 0) problems.push(`${name}: the page scrolls sideways by ${overflow}px at 375px`);
+      await check(name);
+    }
+    await page.setViewportSize({ width: 1100, height: 800 });
+
+    // 6d. Merge requests (U1): list -> create -> overview (status line) ->
+    // changes -> a line comment -> resolve it on the overview -> the status
+    // line changes. The fake refuses any unsafe request without the CSRF header.
+    const statusLine = page.getByTestId('mr-status');
+    const statusIs = (text, step) =>
+      page
+        .waitForFunction(
+          (want) => document.querySelector('[data-testid="mr-status"]')?.textContent === want,
+          text,
+          { timeout: 10_000 },
+        )
+        .catch(async () => {
+          problems.push(`${step}: status line is "${await statusLine.textContent()}", expected "${text}"`);
+        });
+    await page.goto(`${base}/acme/forge-web/-/pulls`, { waitUntil: 'networkidle' });
+    await h1('Merge requests');
+    await page.getByRole('link', { name: 'Describe the press line' }).waitFor();
+    await check('40-mr-list');
+    await page.getByRole('link', { name: 'New merge request' }).first().click();
+    await h1('New merge request');
+    await expectPath('/acme/forge-web/-/pulls/new', 'mr create');
+    await page.getByLabel('Branch with the changes').selectOption('dev');
+    if ((await page.getByLabel('Branch to merge into').inputValue()) !== 'main') {
+      problems.push('mr create: the target did not start at the default branch');
+    }
+    await page.getByLabel('Title').fill('Add the pump spec');
+    await check('41-mr-create');
+    await page.getByRole('button', { name: 'Create merge request' }).click();
+    await expectPath('/acme/forge-web/-/pull/2', 'mr created');
+    await page.getByRole('heading', { level: 1, name: /Add the pump spec/ }).waitFor();
+    await statusIs('Ready to merge', 'mr overview');
+    await check('42-mr-overview');
+    await page.getByRole('navigation', { name: 'Merge request views' }).getByRole('link', { name: 'Changes' }).click();
+    await expectPath('/acme/forge-web/-/pull/2/changes', 'mr changes');
+    await page.getByRole('button', { name: 'Comment on line 3 of src/lib.rs' }).click();
+    await page.getByLabel('Your comment: line 3 of src/lib.rs').fill('Why is the sum here?');
+    await page.getByRole('button', { name: 'Comment', exact: true }).click();
+    await page.getByText('Why is the sum here?').waitFor();
+    await statusIs('Unresolved threads: 1', 'mr after the line comment');
+    await check('43-mr-changes');
+    await page.getByRole('navigation', { name: 'Merge request views' }).getByRole('link', { name: 'Overview' }).click();
+    await expectPath('/acme/forge-web/-/pull/2', 'mr back to overview');
+    await page.getByRole('button', { name: 'Open the first unresolved thread' }).click();
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? '');
+    if (!focused.startsWith('thread-')) problems.push(`mr next: the focus is on "${focused}", not a thread`);
+    await page.getByRole('button', { name: 'Resolve thread' }).click();
+    await statusIs('Ready to merge', 'mr after resolve');
+    // The resolved thread is folded behind its count, which takes the focus.
+    await page.getByText('Resolved threads: 1', { exact: true }).waitFor();
+    const afterResolve = await page.evaluate(() => document.activeElement?.textContent ?? '');
+    if (afterResolve !== 'Resolved threads: 1') problems.push(`mr resolve: the focus is on "${afterResolve}"`);
+    // Cancel on a line comment gives the focus back to that line's button.
+    await page.goto(`${base}/acme/forge-web/-/pull/2/changes`, { waitUntil: 'networkidle' });
+    await page.getByRole('button', { name: 'Comment on line 2 of src/lib.rs' }).click();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    const back = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? '');
+    if (back !== 'Comment on line 2 of src/lib.rs') problems.push(`mr cancel: the focus is on "${back}"`);
+    await page.goto(`${base}/acme/forge-web/-/pull/2`, { waitUntil: 'networkidle' });
+    await page.getByText('Resolved threads: 1', { exact: true }).waitFor();
+    await check('44-mr-resolved');
+    await page.setViewportSize({ width: 375, height: 800 });
+    for (const [path, name] of [
+      ['/acme/forge-web/-/pulls', '45-mr-list-375'],
+      ['/acme/forge-web/-/pull/2', '46-mr-overview-375'],
+      ['/acme/forge-web/-/pull/2/changes', '47-mr-changes-375'],
+    ]) {
+      await page.goto(`${base}${path}`, { waitUntil: 'networkidle' });
+      await page.getByRole('heading', { level: 1 }).first().waitFor();
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
