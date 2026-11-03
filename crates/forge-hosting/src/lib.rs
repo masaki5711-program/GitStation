@@ -30,6 +30,8 @@ pub mod accounts;
 mod merge_rules;
 mod moves;
 mod operator;
+// M3 S0: service accounts and their tokens.
+pub mod service_accounts;
 
 pub use forge_db::namespaces::MoveOutcome;
 pub use merge_rules::MergeRuleAsk;

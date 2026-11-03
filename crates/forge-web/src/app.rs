@@ -414,8 +414,10 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    account_routes(history_routes(browse_routes(git_routes(shell_routes(
-        merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
+    service_account_routes(account_routes(history_routes(browse_routes(git_routes(
+        shell_routes(merge_request_routes(member_routes(move_routes(
+            hosting_routes(fixed),
+        )))),
     )))))
 }
 
@@ -530,6 +532,78 @@ fn account_routes(registry: Registry<AppState>) -> Registry<AppState> {
             d::disable,
         )
         .responds::<d::Disabled>(Verb::Post, d::DISABLE)
+}
+
+/// Service accounts and their tokens (M3 S0, plan 11 §5 S0, ADR-0019
+/// Addendum S0): administrators; create and issue in a web session only.
+fn service_account_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::service_accounts as sa;
+    registry
+        .route(
+            Verb::Get,
+            sa::COLLECTION,
+            Action::ServiceAccountList,
+            "Every service account with its owner and token summary (administrators)",
+            sa::list,
+        )
+        .responds::<sa::ServiceAccountList>(Verb::Get, sa::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            sa::COLLECTION,
+            Action::ServiceAccountCreate,
+            "Create a service account owned by a person (an administrator's web session only)",
+            sa::MAX_BODY,
+            sa::NewAccount,
+            sa::create,
+        )
+        .responds_created::<sa::ServiceAccountBody>(Verb::Post, sa::COLLECTION)
+        .route_with(
+            Verb::Get,
+            sa::ONE,
+            Action::ServiceAccountRead,
+            "One service account (administrators; another kind of user is not found)",
+            sa::ACCOUNT,
+            sa::read,
+        )
+        .responds::<sa::ServiceAccountBody>(Verb::Get, sa::ONE)
+        .route_with_body(
+            Verb::Patch,
+            sa::ONE,
+            Action::ServiceAccountUpdate,
+            "Change a service account's display name, purpose or owner (administrators, people only)",
+            sa::MAX_BODY,
+            sa::ACCOUNT,
+            sa::update,
+        )
+        .responds::<sa::UpdatedServiceAccount>(Verb::Patch, sa::ONE)
+        .route_with(
+            Verb::Get,
+            sa::TOKENS,
+            Action::ServiceAccountTokenList,
+            "A service account's tokens with their issuer (administrators; never a secret)",
+            sa::ACCOUNT_TOKENS,
+            sa::tokens,
+        )
+        .responds::<sa::ServiceAccountTokenList>(Verb::Get, sa::TOKENS)
+        .route_with_body(
+            Verb::Post,
+            sa::TOKENS,
+            Action::ServiceAccountTokenIssue,
+            "Issue a token for an active service account (an administrator's web session only; never admin; the secret is shown once)",
+            sa::MAX_BODY,
+            sa::TokenRequest,
+            sa::issue,
+        )
+        .responds_created::<sa::IssuedServiceAccountToken>(Verb::Post, sa::TOKENS)
+        .route_with(
+            Verb::Delete,
+            sa::TOKEN,
+            Action::ServiceAccountTokenRevoke,
+            "Revoke a service account's token (administrators, an admin-scoped token included)",
+            sa::TokenToRevoke,
+            sa::revoke,
+        )
+        .responds_no_content(Verb::Delete, sa::TOKEN)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

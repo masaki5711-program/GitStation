@@ -100,7 +100,7 @@ pub struct CreatedToken {
     pub token: String,
 }
 
-fn token_body(t: &TokenInfo) -> TokenBody {
+pub(crate) fn token_body(t: &TokenInfo) -> TokenBody {
     TokenBody {
         id: t.token_id,
         public_id: t.public_id.clone(), // clone: the row is borrowed
@@ -132,7 +132,7 @@ fn found<R>(ctx: R) -> Lookup<R> {
 
 /// The scope names of a create body; an unknown or empty list is
 /// `FG-WEB-0006 reason=field_invalid field=scopes`.
-fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
+pub(crate) fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
     let invalid = |rule| {
         request_invalid("field_invalid")
             .with_context("field", "scopes")
@@ -150,7 +150,7 @@ fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
         .collect()
 }
 
-fn expiry(days: Option<u32>) -> Result<Option<Duration>, ForgeError> {
+pub(crate) fn expiry(days: Option<u32>) -> Result<Option<Duration>, ForgeError> {
     let Some(days) = days else {
         return Ok(None);
     };

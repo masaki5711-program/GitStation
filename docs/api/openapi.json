@@ -941,6 +941,39 @@
         ],
         "type": "object"
       },
+      "CreateServiceAccount": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/admin/service-accounts`.",
+        "properties": {
+          "display_name": {
+            "description": "1..=255 characters (default: the username).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "description": "The person who answers for it (an active human user's id).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "purpose": {
+            "description": "Why it exists, 1..=500 characters, one line (one account per\npurpose).",
+            "type": "string"
+          },
+          "username": {
+            "description": "Also its personal namespace's path (a top-level segment).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "owner_id",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "CreateToken": {
         "additionalProperties": false,
         "description": "`POST /api/v1/user/tokens`.",
@@ -1429,6 +1462,100 @@
           "items",
           "next_cursor",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "IssueServiceAccountToken": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/admin/service-accounts/{id}/tokens`.",
+        "properties": {
+          "expires_in_days": {
+            "description": "Days until it expires, 1..=365 (default 90).",
+            "format": "int32",
+            "maximum": 365,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "is_agent": {
+            "description": "The token is for an AI agent (ADR-0017 §4.0); default false.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "1..=100 characters, no control or invisible format characters.",
+            "type": "string"
+          },
+          "scopes": {
+            "description": "`read_repository`, `write_repository`, `read_api`, `api`,\n`merge_execute`, `merge_approve`, `user_email`; never `admin`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "type": "object"
+      },
+      "IssuedServiceAccountToken": {
+        "additionalProperties": false,
+        "description": "An issued token: the secret, shown this once.",
+        "properties": {
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "is_agent": {
+            "type": "boolean"
+          },
+          "issued_by_user_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "service_account_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "token": {
+            "description": "The whole token. It is never shown again: hand it to the owner now.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "service_account_id",
+          "public_id",
+          "name",
+          "scopes",
+          "expires_at",
+          "is_agent",
+          "issued_by_user_id",
+          "token"
         ],
         "type": "object"
       },
@@ -2172,6 +2299,29 @@
         ],
         "type": "object"
       },
+      "OwnerBody": {
+        "additionalProperties": false,
+        "description": "The person a service account belongs to.",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "active"
+        ],
+        "type": "object"
+      },
       "PositionBody": {
         "additionalProperties": false,
         "description": "Where an inline discussion sits: a line of one side of one version's\ndiff (`GET …/versions/{version}/diff`).",
@@ -2776,6 +2926,180 @@
           "applies",
           "required",
           "counted"
+        ],
+        "type": "object"
+      },
+      "ServiceAccountBody": {
+        "additionalProperties": false,
+        "description": "One service account (no personal data: it has none).",
+        "properties": {
+          "active_tokens": {
+            "description": "Active (not revoked, not expired) tokens.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "last_token_expiry": {
+            "description": "The latest expiry of an active token (UTC, RFC 3339).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OwnerBody",
+                "description": "`null` only for an account created before M3 S0."
+              }
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "`active` or `disabled`.",
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name",
+          "state",
+          "owner",
+          "purpose",
+          "created_by",
+          "created_at",
+          "active_tokens",
+          "last_token_expiry"
+        ],
+        "type": "object"
+      },
+      "ServiceAccountList": {
+        "additionalProperties": false,
+        "description": "The service accounts.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceAccountBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More than 500 exist (only the first 500 by id are listed).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "ServiceAccountTokenBody": {
+        "additionalProperties": false,
+        "description": "One token of a service account (never the secret or its hash).",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "issued_by_user_id": {
+            "description": "The administrator who issued it (`null`: the operator CLI).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "public_id": {
+            "description": "The token's public part (`fgp_<public_id>_…`).",
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "public_id",
+          "name",
+          "scopes",
+          "created_at",
+          "expires_at",
+          "revoked_at",
+          "last_used_at",
+          "issued_by_user_id"
+        ],
+        "type": "object"
+      },
+      "ServiceAccountTokenList": {
+        "additionalProperties": false,
+        "description": "A service account's tokens.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceAccountTokenBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -3404,6 +3728,60 @@
         },
         "type": "object"
       },
+      "UpdateServiceAccount": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/admin/service-accounts/{id}`: the fields to change.",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner_id": {
+            "description": "A new owner (an active human user's id): offboarding hands it on.",
+            "format": "int64",
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "UpdatedServiceAccount": {
+        "additionalProperties": false,
+        "description": "What an update changed.",
+        "properties": {
+          "fields": {
+            "description": "The fields that changed: `display_name`, `purpose`, `owner`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "description": "`updated`, or `unchanged` (nothing was written).",
+            "type": "string"
+          },
+          "service_account": {
+            "$ref": "#/components/schemas/ServiceAccountBody"
+          }
+        },
+        "required": [
+          "outcome",
+          "fields",
+          "service_account"
+        ],
+        "type": "object"
+      },
       "UserName": {
         "additionalProperties": false,
         "description": "One search match: names only.",
@@ -3837,6 +4215,299 @@
         },
         "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
         "x-forge-action": "SessionLogout"
+      }
+    },
+    "/api/v1/admin/service-accounts": {
+      "get": {
+        "operationId": "get_api_v1_admin_service_accounts",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every service account with its owner and token summary (administrators)",
+        "x-forge-action": "ServiceAccountList"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_service_accounts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServiceAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a service account owned by a person (an administrator's web session only)",
+        "x-forge-action": "ServiceAccountCreate",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/admin/service-accounts/{id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_service_accounts_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One service account (administrators; another kind of user is not found)",
+        "x-forge-action": "ServiceAccountRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_admin_service_accounts_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateServiceAccount"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedServiceAccount"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Change a service account's display name, purpose or owner (administrators, people only)",
+        "x-forge-action": "ServiceAccountUpdate",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/admin/service-accounts/{id}/tokens": {
+      "get": {
+        "operationId": "get_api_v1_admin_service_accounts_id_tokens",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountTokenList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A service account's tokens with their issuer (administrators; never a secret)",
+        "x-forge-action": "ServiceAccountTokenList"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_service_accounts_id_tokens",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueServiceAccountToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedServiceAccountToken"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Issue a token for an active service account (an administrator's web session only; never admin; the secret is shown once)",
+        "x-forge-action": "ServiceAccountTokenIssue",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/admin/service-accounts/{id}/tokens/{token_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_admin_service_accounts_id_tokens_token_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "token_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Revoke a service account's token (administrators, an admin-scoped token included)",
+        "x-forge-action": "ServiceAccountTokenRevoke"
       }
     },
     "/api/v1/admin/users": {
