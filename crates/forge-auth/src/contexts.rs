@@ -819,13 +819,15 @@ impl ResourceCtx for CheckRunCtx {
     }
 }
 
-/// A check namespace grant change of a service account
-/// (`CheckNamespaceGrantManage`, M3 C1): the account row and the namespace
-/// of the path. The id is both, so the proof names the grant.
+/// A check namespace grant change of a service account on one project
+/// (`CheckNamespaceGrantManage`, M3 C1; review fix 1: a grant is for one
+/// project): the account row, the project and the namespace of the path.
+/// The id is all three, so the proof names the grant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckNamespaceGrantCtx {
     account: UserId,
     view: ServiceAccountView,
+    project: ProjectId,
     namespace: forge_core::CheckNamespace,
 }
 
@@ -833,11 +835,13 @@ impl CheckNamespaceGrantCtx {
     pub fn new(
         account: UserId,
         view: ServiceAccountView,
+        project: ProjectId,
         namespace: forge_core::CheckNamespace,
     ) -> Self {
         Self {
             account,
             view,
+            project,
             namespace,
         }
     }
@@ -846,11 +850,11 @@ impl CheckNamespaceGrantCtx {
 impl sealed::Sealed for CheckNamespaceGrantCtx {}
 
 impl ResourceCtx for CheckNamespaceGrantCtx {
-    type Id = (UserId, forge_core::CheckNamespace);
+    type Id = (UserId, ProjectId, forge_core::CheckNamespace);
     fn resource(&self) -> Resource {
         Resource::ServiceAccount(self.view)
     }
-    fn id(&self) -> (UserId, forge_core::CheckNamespace) {
-        (self.account, self.namespace)
+    fn id(&self) -> (UserId, ProjectId, forge_core::CheckNamespace) {
+        (self.account, self.project, self.namespace)
     }
 }

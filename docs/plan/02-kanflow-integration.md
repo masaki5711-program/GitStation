@@ -320,8 +320,8 @@ kanflow の画面で「ブランチを作る」を押したとき、forge では
 
 > **実装（M3 C1、2026-11-03、ADR-0024「実装で決めたこと（C1）」、`docs/api/checks.md`）**: 上の表から変えたところ —
 > **PATCH は無い**。同じコミット・同じ名前の `POST /projects/{id}/commits/{sha}/checks` が 1 行を上書きする（`id` は変わらず `revision`
-> が増える）。名前空間の割り当ては管理者が `PUT /api/v1/admin/service-accounts/{id}/check-namespaces/{ci|kanflow}` で行い、
-> 割り当てられたサービスアカウントが **Developer 以上のメンバーのプロジェクトにだけ** 書ける。`forge/` は HTTP から誰も書けず（X2）、
+> が増える）。名前空間の割り当ては管理者が **プロジェクトごとに** `PUT /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{ci|kanflow}`
+> で行い、割り当てられたサービスアカウントが **そのプロジェクトの Developer 以上のメンバーのとき** だけ書ける。`forge/` は HTTP から誰も書けず（X2）、
 > `ext/` は C1 では誰も書けない。kanflow の `kanflow/work-item` はこの API で報告する（`kanflow` の名前空間を kanflow のサービスアカウントに
 > 割り当てる）。`check.completed` は結論が変わった報告だけが出す。
 

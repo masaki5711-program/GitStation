@@ -37,7 +37,9 @@ use forge_errors::{ErrorCode, ForgeError};
 
 pub mod validate;
 
-pub use forge_db::checks::{CheckAnnotation, GrantOutcome, NewCheckRun, Reported, StoredCheckRun};
+pub use forge_db::checks::{
+    CheckAnnotation, Grant, GrantOutcome, NewCheckRun, Reported, StoredCheckRun,
+};
 pub use validate::{parse_name, AnnotationInput, ReportInput};
 
 /// The commit a full id names, if a branch or tag of the repository
@@ -164,19 +166,16 @@ impl Checks {
         Self { db, commits }
     }
 
-    /// Whether `user` holds a grant of `namespace` now (the report route's
-    /// loader; the write reads it again under the lock).
+    /// Whether `user` holds a grant of `namespace` on `project` now (the
+    /// report route's loader; the write reads it again under the lock). A
+    /// grant is for one project (review fix 1).
     pub async fn granted(
         &self,
         user: UserId,
+        project: ProjectId,
         namespace: CheckNamespace,
     ) -> Result<bool, ForgeError> {
-        if !checks::grantable(namespace) {
-            return Ok(false);
-        }
-        Ok(checks::grants_of(&self.db, user)
-            .await?
-            .contains(&namespace))
+        checks::granted(&self.db, user, project, namespace).await
     }
 
     /// The commit `sha` of `repo`, if a branch or tag reaches it
@@ -264,12 +263,12 @@ impl Checks {
     ) -> Result<GrantOutcome, ForgeError> {
         require(proof.action(), Action::CheckNamespaceGrantManage)?;
         let admin = caller(proof.principal(), Action::CheckNamespaceGrantManage)?;
-        let (target, namespace) = *proof.id();
+        let (target, project, namespace) = *proof.id();
         let ctx = change_context(request, proof.principal(), admin);
         let (outcome, ()) = checks::change_check_namespace_grant_decided(
             &self.db,
             &ctx,
-            (target, namespace, grant),
+            (target, project, namespace, grant),
             admin,
             |facts| {
                 let Some(t) = facts.target else {
@@ -281,7 +280,7 @@ impl Checks {
                     kind: t.kind,
                     active: t.active,
                 };
-                let fresh = CheckNamespaceGrantCtx::new(target, view, namespace);
+                let fresh = CheckNamespaceGrantCtx::new(target, view, project, namespace);
                 proof.reconfirm(account(facts.account), fresh).map(drop)
             },
         )
@@ -290,19 +289,24 @@ impl Checks {
     }
 
     /// The namespaces `user` holds grants of (the service account read).
-    pub async fn grants_of(&self, user: UserId) -> Result<Vec<CheckNamespace>, ForgeError> {
+    pub async fn grants_of(&self, user: UserId) -> Result<Vec<Grant>, ForgeError> {
         checks::grants_of(&self.db, user).await
     }
 
     /// The required names among `names` no active service account may
-    /// report (the merge rule's `unreportable_checks`): `forge/` (forge's
-    /// own checks arrive with X2) and every `ci/` / `kanflow/` name whose
-    /// namespace no active service account holds a grant of.
-    pub async fn unreportable(&self, names: &[CheckName]) -> Result<Vec<CheckName>, ForgeError> {
+    /// report on `project` (the merge rule's `unreportable_checks`):
+    /// `forge/` (forge's own checks arrive with X2) and every `ci/` /
+    /// `kanflow/` name whose namespace no active service account holds a
+    /// grant of on that project.
+    pub async fn unreportable(
+        &self,
+        project: ProjectId,
+        names: &[CheckName],
+    ) -> Result<Vec<CheckName>, ForgeError> {
         if names.is_empty() {
             return Ok(Vec::new());
         }
-        let reported = checks::reported_namespaces(&self.db).await?;
+        let reported = checks::reported_namespaces(&self.db, project).await?;
         Ok(names
             .iter()
             .filter(|n| !reported.contains(&n.namespace()))

@@ -452,6 +452,14 @@ async fn finish_steps(
         "projects.purge.finish.check_runs",
     )
     .await?;
+    // M3 C1 review: the check namespace grants of the project.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.check_namespace_grants WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.check_namespace_grants",
+    )
+    .await?;
     // M3 R6: the merge rules reference the protection rules.
     delete_rows(
         tx,

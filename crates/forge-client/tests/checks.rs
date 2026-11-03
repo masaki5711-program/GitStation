@@ -153,32 +153,55 @@ fn checks_list_reads_the_commit_and_prints_each_run() {
 fn the_grant_commands_call_their_routes() {
     let srv = Mock::start(|r| {
         if r.method == "GET" {
-            Resp::json(200, r#"{"namespaces":["ci"]}"#)
+            Resp::json(200, r#"{"grants":[{"project_id":7,"namespace":"ci"}]}"#)
         } else {
-            Resp::json(200, r#"{"namespaces":["ci"],"changed":true}"#)
+            Resp::json(
+                200,
+                r#"{"grants":[{"project_id":7,"namespace":"ci"}],"changed":true}"#,
+            )
         }
     });
     let sb = Sandbox::new();
     let o = gstn(
         &sb,
         &srv,
-        &["admin", "service-account", "grant-checks", "42", "ci"],
+        &[
+            "admin",
+            "service-account",
+            "grant-checks",
+            "42",
+            "--project",
+            "7",
+            "ci",
+        ],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert!(o.stdout.contains("ci/ granted"), "{}", o.stdout);
+    assert!(
+        o.stdout.contains("ci/ on project 7 granted"),
+        "{}",
+        o.stdout
+    );
     let o = gstn(
         &sb,
         &srv,
-        &["admin", "service-account", "revoke-checks", "42", "kanflow"],
+        &[
+            "admin",
+            "service-account",
+            "revoke-checks",
+            "42",
+            "--project",
+            "7",
+            "kanflow",
+        ],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     let o = gstn(
         &sb,
         &srv,
-        &["admin", "service-account", "check-namespaces", "42"],
+        &["admin", "service-account", "check-grants", "42"],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert!(o.stdout.contains("reports: ci/"), "{}", o.stdout);
+    assert!(o.stdout.contains("reports: ci/ on 7"), "{}", o.stdout);
     let seen: Vec<(String, String)> = srv
         .seen()
         .into_iter()
@@ -189,23 +212,33 @@ fn the_grant_commands_call_their_routes() {
         [
             (
                 "PUT".to_owned(),
-                "/api/v1/admin/service-accounts/42/check-namespaces/ci".to_owned()
+                "/api/v1/admin/service-accounts/42/check-grants/7/ci".to_owned()
             ),
             (
                 "DELETE".to_owned(),
-                "/api/v1/admin/service-accounts/42/check-namespaces/kanflow".to_owned()
+                "/api/v1/admin/service-accounts/42/check-grants/7/kanflow".to_owned()
             ),
             (
                 "GET".to_owned(),
-                "/api/v1/admin/service-accounts/42/check-namespaces".to_owned()
+                "/api/v1/admin/service-accounts/42/check-grants".to_owned()
             ),
         ]
     );
-    // forge/ and ext/ are never granted: refused before any request.
-    let o = gstn(
-        &sb,
-        &srv,
-        &["admin", "service-account", "grant-checks", "42", "forge"],
-    );
-    assert_eq!(o.code, 2, "{}", o.stderr);
+    // A grant names its project; forge/ and ext/ are never granted: both
+    // refused before any request.
+    for args in [
+        vec!["admin", "service-account", "grant-checks", "42", "ci"],
+        vec![
+            "admin",
+            "service-account",
+            "grant-checks",
+            "42",
+            "--project",
+            "7",
+            "forge",
+        ],
+    ] {
+        let o = gstn(&sb, &srv, &args);
+        assert_eq!(o.code, 2, "{args:?}: {}", o.stderr);
+    }
 }

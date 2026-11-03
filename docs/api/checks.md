@@ -20,7 +20,7 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 
 | 名前空間 | 書ける主体 |
 |---|---|
-| `ci/`・`kanflow/` | その名前空間を **管理者から割り当てられたサービスアカウント** で、プロジェクトの **Developer 以上のメンバー**。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
+| `ci/`・`kanflow/` | その名前空間を **そのプロジェクトについて** 管理者から割り当てられたサービスアカウントで、そのプロジェクトの **Developer 以上のメンバー**（割り当てはプロジェクトごと。別のプロジェクトの割り当て・`kanflow` だけの割り当ては `ci/` を書けない）。人（管理者を含む）・ボット・エージェントのトークンは拒否（`FG-AUTH-0003`、`reason=not_service_account` / `agent_token`）。割り当てが無い: `reason=namespace_not_granted` |
 | `forge/` | forge 自身の worker だけ（HTTP からは **管理者も** 拒否。`reason=forge_namespace_internal`）。forge のチェックは後の MR（X2） |
 | `ext/` | C1 では誰も書けない（`reason=ext_namespace_unavailable`）。`ext/` は必須のチェックにもできない（FG-REVIEW-0016） |
 
@@ -97,14 +97,20 @@ M3 C1（ADR-0024 §10・§11 と末尾の「実装で決めたこと（C1）」�
 
 ## 名前空間の割り当て（管理者、人だけ。`CheckNamespaceGrantManage`）
 
-- `PUT /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}`（`gstn admin service-account grant-checks <id> <ns>`）
-- `DELETE …/check-namespaces/{namespace}`（`gstn admin service-account revoke-checks <id> <ns>`）
-- `GET /api/v1/admin/service-accounts/{id}/check-namespaces`（`gstn admin service-account check-namespaces <id>`、`ServiceAccountRead`）
+割り当ては **サービスアカウント × プロジェクト × 名前空間**（レビューの修正 1）。全プロジェクトに効く割り当ては作らない
+（どのプロジェクトの Maintainer でも、`ci` を持つ別のチームのサービスアカウントを Developer に足せば、外せない必須のチェックを満たせて
+しまうため）。
+
+- `PUT /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}`（`gstn admin service-account grant-checks <id> --project <p> <ns>`）
+- `DELETE …/check-grants/{project_id}/{namespace}`（`gstn admin service-account revoke-checks <id> --project <p> <ns>`）
+- `GET /api/v1/admin/service-accounts/{id}/check-grants`（`gstn admin service-account check-grants <id>`、`ServiceAccountRead`）
 
 `{namespace}` は `ci` か `kanflow` だけ（それ以外は `FG-REVIEW-0020 reason=namespace_not_grantable`）。人のアカウントには割り当てられない
-（サービスアカウントでない id は `FG-REPO-0005`、DB のガード `check_namespace_grants_service_account` も拒む）。答えは
-`{ "namespaces": [...], "changed": 真偽 }`（`changed: false` は既にそうだった）。監査は `check_namespace.granted` / `.revoked`（アカウントに）。
+（サービスアカウントでない id は `FG-REPO-0005`、DB のガード `check_namespace_grants_service_account` も拒む）。存在しないプロジェクトは
+`FG-REPO-0005`。答えは `{ "grants": [{ "project_id", "namespace" }], "changed": 真偽 }`（`changed: false` は既にそうだった）。監査は
+`check_namespace.granted` / `.revoked`（**プロジェクトに**。`details` は `user_id`・`project_id`・`namespace`）。プロジェクトの完全削除で
+その割り当ても消える。割り当てとは別に、サービスアカウントはそのプロジェクトの Developer 以上のメンバーでなければ報告できない。
 
-保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **報告できる有効なサービスアカウントが 1 つも無い** 名前を
+保護ブランチのマージの条件の答え（`PUT …/merge-rule`）は、必須のチェックのうち **そのプロジェクトについて報告できる有効なサービスアカウントが 1 つも無い** 名前を
 `unreportable_checks: [...]` に並べ、そのとき `warnings: ["required_checks_unreportable"]` を付ける（`forge/` は X2 まで常にここに入る）。
 対処は runbook `checks-reporting`。

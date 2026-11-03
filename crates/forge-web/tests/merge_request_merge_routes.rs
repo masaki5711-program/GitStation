@@ -1994,11 +1994,38 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         body["unreportable_checks"],
         json!(["ci/gates", "forge/risk"])
     );
-    // The grant: administrators only, then it narrows the warning to the
-    // name without a reporter.
-    let grant_uri = format!(
-        "/api/v1/admin/service-accounts/{}/check-namespaces/ci",
+    // The grant: administrators only, for one project; then it narrows the
+    // warning to the name without a reporter. A grant on another project
+    // (review fix 1) changes nothing here.
+    let elsewhere = projects::create(
+        &w.t.db,
+        &ctx("req-elsewhere"),
+        &NewProject::new(
+            "elsewhere",
+            w.t.json_rows("SELECT id FROM forge.namespaces WHERE kind = 'user' AND owner_id = (SELECT id FROM forge.users WHERE username = 'olga')")
+                .await
+                .first()
+                .and_then(|r| r["id"].as_i64())
+                .map(forge_core::NamespaceId::new)
+                .expect("olga's namespace"),
+            "Elsewhere",
+            olga.principal.user().expect("olga"),
+        ),
+    )
+    .await
+    .expect("elsewhere")
+    .project_id
+    .get();
+    let elsewhere_uri = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{elsewhere}/ci",
         sa.get()
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &elsewhere_uri, ada.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let grant_uri = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/ci",
+        sa.get(),
+        w.project
     );
     let (status, body) = send(w.router.clone(), "PUT", &grant_uri, olga.clone(), None).await;
     assert_eq!(
@@ -2008,12 +2035,17 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
     );
     let (status, body) = send(w.router.clone(), "PUT", &grant_uri, ada.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body, json!({"namespaces": ["ci"], "changed": true}));
+    let both = json!([
+        {"project_id": w.project, "namespace": "ci"},
+        {"project_id": elsewhere, "namespace": "ci"}
+    ]);
+    assert_eq!(body, json!({"grants": both, "changed": true}));
     let (_, again) = send(w.router.clone(), "PUT", &grant_uri, ada.clone(), None).await;
     assert_eq!(again["changed"], false);
     let forge_grant = format!(
-        "/api/v1/admin/service-accounts/{}/check-namespaces/forge",
-        sa.get()
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/forge",
+        sa.get(),
+        w.project
     );
     let (status, body) = send(w.router.clone(), "PUT", &forge_grant, ada.clone(), None).await;
     assert_eq!(
@@ -2021,15 +2053,9 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
         (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0020"),
         "{body}"
     );
-    let grants_uri = format!(
-        "/api/v1/admin/service-accounts/{}/check-namespaces",
-        sa.get()
-    );
+    let grants_uri = format!("/api/v1/admin/service-accounts/{}/check-grants", sa.get());
     let (status, body) = send(w.router.clone(), "GET", &grants_uri, ada.clone(), None).await;
-    assert_eq!(
-        (status, body),
-        (StatusCode::OK, json!({"namespaces": ["ci"]}))
-    );
+    assert_eq!((status, body), (StatusCode::OK, json!({"grants": both})));
     let (_, listed) = send(
         w.router.clone(),
         "GET",

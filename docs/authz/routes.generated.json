@@ -114,7 +114,7 @@
   {
     "action": "ServiceAccountRead",
     "method": "GET",
-    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces",
+    "path": "/api/v1/admin/service-accounts/{id}/check-grants",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -122,7 +122,7 @@
   {
     "action": "CheckNamespaceGrantManage",
     "method": "PUT",
-    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+    "path": "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
     "public": false,
     "scope": "fixed",
     "word": "fixed"
@@ -130,7 +130,7 @@
   {
     "action": "CheckNamespaceGrantManage",
     "method": "DELETE",
-    "path": "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+    "path": "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

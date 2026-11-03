@@ -427,14 +427,15 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 
-# Which service account reports which namespace (ci / kanflow);
-# check_namespace.granted / .revoked are audited on the account.
+# Which service account reports which namespace (ci / kanflow) on which
+# project (20261115100100); check_namespace.granted / .revoked are audited
+# on the project.
 [tables.check_namespace_grants]
 guarded = false
 kind = "audited"
 ro_columns = ["*"]
-audit_resource = "user"
-audit_id_column = "user_id"
+audit_resource = "project"
+audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 C1 ──

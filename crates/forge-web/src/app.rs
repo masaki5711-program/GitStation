@@ -647,29 +647,29 @@ fn check_routes(registry: Registry<AppState>) -> Registry<AppState> {
             Verb::Get,
             c::GRANTS,
             Action::ServiceAccountRead,
-            "The check namespaces a service account reports (administrators)",
+            "The check namespace grants of a service account, by project (administrators)",
             c::GrantsOf,
             c::grants,
         )
-        .responds::<c::CheckNamespaces>(Verb::Get, c::GRANTS)
+        .responds::<c::CheckGrants>(Verb::Get, c::GRANTS)
         .route_with(
             Verb::Put,
             c::GRANT,
             Action::CheckNamespaceGrantManage,
-            "Let a service account report a check namespace (ci, kanflow; administrators, people only)",
+            "Let a service account report a check namespace on one project (ci, kanflow; administrators, people only)",
             c::GrantOf,
             c::grant,
         )
-        .responds::<c::CheckNamespaceGrant>(Verb::Put, c::GRANT)
+        .responds::<c::CheckGrantChange>(Verb::Put, c::GRANT)
         .route_with(
             Verb::Delete,
             c::GRANT,
             Action::CheckNamespaceGrantManage,
-            "Stop a service account reporting a check namespace (administrators, people only)",
+            "Stop a service account reporting a check namespace on one project (administrators, people only)",
             c::GrantOf,
             c::revoke,
         )
-        .responds::<c::CheckNamespaceGrant>(Verb::Delete, c::GRANT)
+        .responds::<c::CheckGrantChange>(Verb::Delete, c::GRANT)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

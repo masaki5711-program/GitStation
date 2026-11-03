@@ -25,12 +25,13 @@ this crate calls the check commands (`tests/decided_callers.rs`).
   (`created`, `completed_event`: `check.completed` only when the conclusion changed).
 - `list(&Authorized<ProjectCtx>, repo, &ObjectId) -> Vec<StoredCheckRun>`
   (`CheckRead`; by name, with annotations).
-- `granted(user, namespace)` (the route loader), `grants_of(user)`,
+- `granted(user, project, namespace)` (the route loader), `grants_of(user)` (by project),
   `change_grant(request, &Authorized<CheckNamespaceGrantCtx>, grant) -> GrantOutcome`
-  (`CheckNamespaceGrantManage`: administrators, people only; `ci` / `kanflow`).
-- `unreportable(&[CheckName])`: the required names no active service account may
-  report (`forge/`, and `ci/` / `kanflow/` without a granted active reporter) — the
-  merge rule's `unreportable_checks`.
+  (`CheckNamespaceGrantManage`: administrators, people only; `ci` / `kanflow`; **a grant is
+  for one project** — review fix 1).
+- `unreportable(project, &[CheckName])`: the required names no active service account may
+  report on that project (`forge/`, and `ci/` / `kanflow/` without a granted active
+  reporter there) — the merge rule's `unreportable_checks`.
 - `reporters(&Db)`: active reporters per namespace (doctor `checks.reporters`).
 - `validate::{parse_name, validate}`: the rules of docs/api/checks.md.
 

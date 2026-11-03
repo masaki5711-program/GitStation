@@ -86,17 +86,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
     // M3 C1: the check namespaces of a service account.
     (
         "GET",
-        "/api/v1/admin/service-accounts/{id}/check-namespaces",
-        Coverage::Command("admin service-account check-namespaces"),
+        "/api/v1/admin/service-accounts/{id}/check-grants",
+        Coverage::Command("admin service-account check-grants"),
     ),
     (
         "PUT",
-        "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+        "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
         Coverage::Command("admin service-account grant-checks"),
     ),
     (
         "DELETE",
-        "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}",
+        "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}",
         Coverage::Command("admin service-account revoke-checks"),
     ),
     ("GET", "/api/v1/admin/users", Coverage::Command("user list")),

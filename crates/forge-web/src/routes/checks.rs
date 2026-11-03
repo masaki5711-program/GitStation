@@ -15,10 +15,12 @@
 //!
 //! And the grants (administrators, people only):
 //!
-//! - `GET /api/v1/admin/service-accounts/{id}/check-namespaces`
-//!   (`ServiceAccountRead`): the namespaces the account reports.
-//! - `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}`
-//!   (`CheckNamespaceGrantManage`): grant or revoke `ci` / `kanflow`.
+//! - `GET /api/v1/admin/service-accounts/{id}/check-grants`
+//!   (`ServiceAccountRead`): the project and namespace pairs the account
+//!   reports.
+//! - `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}`
+//!   (`CheckNamespaceGrantManage`): grant or revoke `ci` / `kanflow` on one
+//!   project (review fix 1: a grant is for one project only).
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -39,10 +41,10 @@ use crate::routes::write::{absent, bounded, hosting, json, no_store};
 
 /// `POST` / `GET` the check runs of a commit.
 pub const CHECKS: &str = "/api/v1/projects/{id}/commits/{sha}/checks";
-/// `GET` the namespaces a service account reports.
-pub const GRANTS: &str = "/api/v1/admin/service-accounts/{id}/check-namespaces";
-/// `PUT` / `DELETE` one grant.
-pub const GRANT: &str = "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}";
+/// `GET` the grants of a service account.
+pub const GRANTS: &str = "/api/v1/admin/service-accounts/{id}/check-grants";
+/// `PUT` / `DELETE` one grant: a namespace on one project.
+pub const GRANT: &str = "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}";
 /// The body cap: the largest a JSON route may declare (64 KiB). The whole
 /// report — summary, URL and annotations, JSON-escaped — fits in it; a
 /// larger body is refused before it is read (docs/api/checks.md).
@@ -51,7 +53,7 @@ pub const MAX_BODY: usize = crate::body::MAX_JSON_BODY_BYTES;
 pub const SCHEMA_VERSION: u32 = 1;
 
 const ACCOUNTS_PREFIX: &str = "/api/v1/admin/service-accounts/";
-const GRANTS_TAIL: &str = "check-namespaces";
+const GRANTS_TAIL: &str = "check-grants";
 
 /// One annotation of a report.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -152,20 +154,29 @@ pub struct CheckRunList {
     pub check_runs: Vec<CheckRunBody>,
 }
 
-/// The namespaces a service account reports.
+/// One grant: a namespace a service account reports on one project.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CheckNamespaces {
-    /// `ci` / `kanflow`, sorted.
-    pub namespaces: Vec<String>,
+pub struct GrantBody {
+    #[schema(minimum = 1)]
+    pub project_id: i64,
+    /// `ci` or `kanflow`.
+    pub namespace: String,
 }
 
-/// A grant change's answer: the namespaces now, and whether the change
-/// wrote anything (`false`: the grant already was, or was not, there).
+/// The grants of a service account, by project then namespace.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
-pub struct CheckNamespaceGrant {
-    pub namespaces: Vec<String>,
+pub struct CheckGrants {
+    pub grants: Vec<GrantBody>,
+}
+
+/// A grant change's answer: the grants now, and whether the change wrote
+/// anything (`false`: the grant already was, or was not, there).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckGrantChange {
+    pub grants: Vec<GrantBody>,
     pub changed: bool,
 }
 
@@ -287,7 +298,7 @@ impl BodyLoader<AppState, ReportCheckRun> for ReportOf {
                     bounded(
                         state,
                         "check_grant_load",
-                        checks(state)?.granted(user, name.namespace()),
+                        checks(state)?.granted(user, id, name.namespace()),
                     )
                     .await?
                 }
@@ -455,7 +466,7 @@ fn grant_namespace(raw: &str) -> Result<CheckNamespace, ForgeError> {
         })
 }
 
-/// `GET …/{id}/check-namespaces`.
+/// `GET …/{id}/check-grants`.
 pub struct GrantsOf;
 
 impl Loader<AppState> for GrantsOf {
@@ -479,7 +490,7 @@ impl Loader<AppState> for GrantsOf {
     }
 }
 
-/// `PUT|DELETE …/{id}/check-namespaces/{namespace}`.
+/// `PUT|DELETE …/{id}/check-grants/{project_id}/{namespace}`.
 pub struct GrantOf;
 
 impl Loader<AppState> for GrantOf {
@@ -492,30 +503,40 @@ impl Loader<AppState> for GrantOf {
     ) -> LoadFuture<'a, CheckNamespaceGrantCtx> {
         Box::pin(async move {
             let (id, tail) = account_ids(parts.uri.path())?;
-            let raw = tail
-                .strip_prefix("check-namespaces/")
-                .filter(|raw| !raw.contains('/'))
+            let (project, raw) = tail
+                .strip_prefix("check-grants/")
+                .and_then(|rest| rest.split_once('/'))
+                .filter(|(_, raw)| !raw.contains('/'))
                 .ok_or_else(|| param_invalid("namespace", "missing"))?;
+            let project = parse_positive_id(project)
+                .map(ProjectId::new)
+                .ok_or_else(|| param_invalid("project_id", "not_positive_decimal"))?;
             let namespace = grant_namespace(raw)?;
             Ok(match account_view(state, id).await? {
-                Some(view) => found(CheckNamespaceGrantCtx::new(id, view, namespace)),
+                Some(view) => found(CheckNamespaceGrantCtx::new(id, view, project, namespace)),
                 None => absent(),
             })
         })
     }
 }
 
-async fn namespaces_of(state: &AppState, id: UserId) -> Result<Vec<String>, ForgeError> {
+async fn grants_of(state: &AppState, id: UserId) -> Result<Vec<GrantBody>, ForgeError> {
     let grants = bounded(state, "check_grants_load", checks(state)?.grants_of(id)).await?;
-    Ok(grants.iter().map(|n| n.as_str().to_owned()).collect())
+    Ok(grants
+        .iter()
+        .map(|g| GrantBody {
+            project_id: g.project.get(),
+            namespace: g.namespace.as_str().to_owned(),
+        })
+        .collect())
 }
 
-/// `GET …/{id}/check-namespaces` → `200`.
+/// `GET …/{id}/check-grants` → `200`.
 pub async fn grants(state: AppState, request: Dispatched<ServiceAccountCtx>) -> Response {
     let w = request.into_write();
     let built = async {
-        json(CheckNamespaces {
-            namespaces: namespaces_of(&state, *w.proof.id()).await?,
+        json(CheckGrants {
+            grants: grants_of(&state, *w.proof.id()).await?,
         })
     }
     .await;
@@ -532,8 +553,8 @@ async fn change(
         let outcome = checks(&state)?
             .change_grant(&request_of(&w), &w.proof, grant)
             .await?;
-        json(CheckNamespaceGrant {
-            namespaces: namespaces_of(&state, w.proof.id().0).await?,
+        json(CheckGrantChange {
+            grants: grants_of(&state, w.proof.id().0).await?,
             changed: outcome == forge_checks::GrantOutcome::Changed,
         })
     }
@@ -541,14 +562,14 @@ async fn change(
     respond(&w.ctx, StatusCode::OK, built)
 }
 
-/// `PUT …/{id}/check-namespaces/{namespace}` → `200` the namespaces now
-/// (also when the grant was there already).
+/// `PUT …/{id}/check-grants/{project_id}/{namespace}` → `200` the grants
+/// now (also when the grant was there already).
 pub async fn grant(state: AppState, request: Dispatched<CheckNamespaceGrantCtx>) -> Response {
     change(state, request, true).await
 }
 
-/// `DELETE …/{id}/check-namespaces/{namespace}` → `200` the namespaces now
-/// (also when there was no such grant).
+/// `DELETE …/{id}/check-grants/{project_id}/{namespace}` → `200` the grants
+/// now (also when there was no such grant).
 pub async fn revoke(state: AppState, request: Dispatched<CheckNamespaceGrantCtx>) -> Response {
     change(state, request, false).await
 }

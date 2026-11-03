@@ -175,7 +175,7 @@ pub async fn put(state: AppState, request: Dispatched<RefProtectionCtx, PutMerge
         let unreportable = bounded(
             &state,
             "check_reporters_load",
-            crate::routes::checks::checks(&state)?.unreportable(&required),
+            crate::routes::checks::checks(&state)?.unreportable(w.proof.id().0, &required),
         )
         .await?;
         if !unreportable.is_empty() {

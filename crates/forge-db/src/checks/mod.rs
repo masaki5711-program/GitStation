@@ -18,9 +18,11 @@
 //!   never a shorter snapshot.
 //! - [`check_runs`]: the runs with their annotations (`GET …/checks`).
 //! - [`grant_check_namespace_decided`] / [`revoke_check_namespace_decided`]:
-//!   an administrator's grant (audit only, on the account); [`grants_of`],
-//!   [`reported_namespaces`] (the namespaces some active service account
-//!   may report) and [`reporters`] (doctor `checks.reporters`).
+//!   an administrator's grant of a namespace on one project (audit only, on
+//!   the project); [`grants_of`], [`granted`], [`reported_namespaces`] (the
+//!   namespaces some active service account may report on a project),
+//!   [`reporters`] and [`unreported_requirements`] (doctor
+//!   `checks.reporters`).
 
 use std::collections::BTreeMap;
 
@@ -381,20 +383,23 @@ pub async fn check_runs(
         .collect()
 }
 
-/// Whether `user` holds a grant of `namespace`, `FOR SHARE`.
+/// Whether `user` holds a grant of `namespace` for `project`, `FOR SHARE`
+/// (a grant is for one project: review fix 1).
 async fn granted_on(
     conn: &mut PgConnection,
     user: UserId,
+    project: ProjectId,
     namespace: CheckNamespace,
 ) -> Result<bool, ForgeError> {
     if !grantable(namespace) {
         return Ok(false);
     }
     let row: Option<i32> = sqlx::query_scalar(
-        "SELECT 1 FROM forge.check_namespace_grants WHERE user_id = $1 AND namespace = $2 \
-         FOR SHARE",
+        "SELECT 1 FROM forge.check_namespace_grants WHERE user_id = $1 AND project_id = $2 \
+         AND namespace = $3 FOR SHARE",
     )
     .bind(user.get())
+    .bind(project.get())
     .bind(namespace.as_str())
     .fetch_optional(conn)
     .await
@@ -435,7 +440,7 @@ pub async fn report_check_run_decided<P>(
         let caller = locked_access_facts(&mut tx, project, reporter, &locked).await?;
         let namespace = new.name.namespace();
         let granted = tx
-            .step(|c| async move { granted_on(c, reporter, namespace).await })
+            .step(|c| async move { granted_on(c, reporter, project, namespace).await })
             .await?;
         let decided = decide(&CheckReportFacts {
             account: caller.account,
@@ -676,7 +681,8 @@ fn project_audit_only(project: ProjectId, details: &AuditDetails) -> ChangeRecor
 
 /// What `decide` sees for a grant change: the administrator's account
 /// (locked) and the target's kind and state (locked `FOR SHARE`; `None`
-/// when no such user exists).
+/// when no such user exists). The project is locked `FOR SHARE` before
+/// (absent: `FG-REPO-0005 resource=project`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantFacts {
     pub account: Account,
@@ -691,6 +697,13 @@ pub enum GrantOutcome {
     Changed,
     /// The grant already was (or was not) there: nothing written.
     Unchanged,
+}
+
+/// One grant: a namespace a service account reports on one project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Grant {
+    pub project: ProjectId,
+    pub namespace: CheckNamespace,
 }
 
 fn not_grantable(namespace: CheckNamespace) -> ForgeError {
@@ -726,16 +739,38 @@ async fn lock_target(
     .transpose()
 }
 
-/// Grant (`grant = true`) or revoke `namespace` to service account `user`
-/// for administrator `admin`, after `decide` (forge-checks:
-/// `Authorized::reconfirm`) allowed it on the locked facts. `ci` and
-/// `kanflow` only (`FG-REVIEW-0020 reason=namespace_not_grantable`
-/// otherwise, before anything is locked). The table's guard refuses a
-/// grant to any account that is not a service account.
+/// `FG-REPO-0005 resource=project` unless `project` exists, the row locked
+/// `FOR SHARE` (a purge waits for the grant).
+async fn lock_project_shared(tx: &mut ChangeTx, project: ProjectId) -> Result<(), ForgeError> {
+    let row: Option<i64> = tx
+        .step(|c| async move {
+            sqlx::query_scalar("SELECT id FROM forge.projects WHERE id = $1 FOR SHARE")
+                .bind(project.get())
+                .fetch_optional(c)
+                .await
+                .map_err(|e| query_error("checks.grant_project", e))
+        })
+        .await?;
+    match row {
+        Some(_) => Ok(()),
+        None => Err(ForgeError::new(ErrorCode::NotFound)
+            .with_context("resource", "project")
+            .with_context("reason", "absent")),
+    }
+}
+
+/// Grant (`grant = true`) or revoke `namespace` on `project` to service
+/// account `user` for administrator `admin`, after `decide` (forge-checks:
+/// `Authorized::reconfirm`) allowed it on the locked facts. A grant is for
+/// one project only (review fix 1: a grant for every project let any
+/// project's Maintainer borrow another team's reporter). `ci` and `kanflow`
+/// only (`FG-REVIEW-0020 reason=namespace_not_grantable` otherwise, before
+/// anything is locked). The table's guard refuses a grant to any account
+/// that is not a service account. Audited on the project.
 pub async fn change_check_namespace_grant_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
-    (user, namespace, grant): (UserId, CheckNamespace, bool),
+    (user, project, namespace, grant): (UserId, ProjectId, CheckNamespace, bool),
     admin: UserId,
     decide: impl FnOnce(&GrantFacts) -> Result<P, ForgeError>,
 ) -> Result<(GrantOutcome, P), ForgeError> {
@@ -749,16 +784,18 @@ pub async fn change_check_namespace_grant_decided<P>(
     };
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
+        lock_project_shared(&mut tx, project).await?;
         let target = lock_target(&mut tx, user).await?;
         let account = tx.step(|c| lock_account(c, admin)).await?;
         let decided = decide(&GrantFacts { account, target })?;
         let changed: u64 = if grant {
             tx.step(|c| async move {
                 sqlx::query(
-                    "INSERT INTO forge.check_namespace_grants (user_id, namespace, granted_by) \
-                     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                    "INSERT INTO forge.check_namespace_grants (user_id, project_id, namespace, \
+                     granted_by) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
                 )
                 .bind(user.get())
+                .bind(project.get())
                 .bind(namespace.as_str())
                 .bind(admin.get())
                 .execute(c)
@@ -771,9 +808,10 @@ pub async fn change_check_namespace_grant_decided<P>(
             tx.step(|c| async move {
                 sqlx::query(
                     "DELETE FROM forge.check_namespace_grants WHERE user_id = $1 \
-                     AND namespace = $2",
+                     AND project_id = $2 AND namespace = $3",
                 )
                 .bind(user.get())
+                .bind(project.get())
                 .bind(namespace.as_str())
                 .execute(c)
                 .await
@@ -787,24 +825,27 @@ pub async fn change_check_namespace_grant_decided<P>(
         }
         let details = AuditDetails::CheckNamespaceGrant {
             user,
+            project,
             namespace,
             granted: grant,
         };
-        let record = ChangeRecord::audit_only(&details, "user", user.get());
-        Ok(Settle::Commit(record, (GrantOutcome::Changed, decided)))
+        Ok(Settle::Commit(
+            project_audit_only(project, &details),
+            (GrantOutcome::Changed, decided),
+        ))
     }
     .await;
     tx.settle(action, outcome).await
 }
 
-/// The namespaces `user` holds grants of (the read pool), sorted.
-pub async fn grants_of(db: &Db, user: UserId) -> Result<Vec<CheckNamespace>, ForgeError> {
+/// The grants `user` holds (the read pool), by project then namespace.
+pub async fn grants_of(db: &Db, user: UserId) -> Result<Vec<Grant>, ForgeError> {
     const QUERY: &str = "checks.grants_of";
-    let rows: Vec<String> = db
+    let rows: Vec<(i64, String)> = db
         .within(QUERY, async {
-            sqlx::query_scalar(
-                "SELECT namespace FROM forge.check_namespace_grants WHERE user_id = $1 \
-                 ORDER BY namespace",
+            sqlx::query_as(
+                "SELECT project_id, namespace FROM forge.check_namespace_grants \
+                 WHERE user_id = $1 ORDER BY project_id, namespace",
             )
             .bind(user.get())
             .fetch_all(db.pool().executor())
@@ -812,9 +853,46 @@ pub async fn grants_of(db: &Db, user: UserId) -> Result<Vec<CheckNamespace>, For
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    rows.iter()
-        .map(|raw| namespace_of(raw).ok_or_else(|| unknown_grant(raw)))
+    rows.into_iter()
+        .map(|(project, raw)| {
+            namespace_of(&raw)
+                .map(|namespace| Grant {
+                    project: ProjectId::new(project),
+                    namespace,
+                })
+                .ok_or_else(|| unknown_grant(&raw))
+        })
         .collect()
+}
+
+/// Whether `user` holds a grant of `namespace` on `project` now (the read
+/// pool; the report route's loader — the write reads it again under the
+/// lock).
+pub async fn granted(
+    db: &Db,
+    user: UserId,
+    project: ProjectId,
+    namespace: CheckNamespace,
+) -> Result<bool, ForgeError> {
+    if !grantable(namespace) {
+        return Ok(false);
+    }
+    const QUERY: &str = "checks.granted";
+    let row: Option<i32> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT 1 FROM forge.check_namespace_grants WHERE user_id = $1 \
+                 AND project_id = $2 AND namespace = $3",
+            )
+            .bind(user.get())
+            .bind(project.get())
+            .bind(namespace.as_str())
+            .fetch_optional(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(row.is_some())
 }
 
 fn namespace_of(raw: &str) -> Option<CheckNamespace> {
@@ -827,8 +905,19 @@ fn unknown_grant(raw: &str) -> ForgeError {
         .with_context("raw", raw.chars().take(32).collect::<String>())
 }
 
-/// How many active service accounts hold a grant of each namespace (doctor
-/// `checks.reporters`; a namespace without one is absent).
+fn by_namespace(rows: Vec<(String, i64)>) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
+    rows.into_iter()
+        .map(|(raw, n)| {
+            namespace_of(&raw)
+                .map(|ns| (ns, n))
+                .ok_or_else(|| unknown_grant(&raw))
+        })
+        .collect()
+}
+
+/// How many grants of each namespace active service accounts hold, over
+/// all projects (doctor `checks.reporters`; a namespace without one is
+/// absent).
 pub async fn reporters(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
     const QUERY: &str = "checks.reporters";
     let rows: Vec<(String, i64)> = db
@@ -844,24 +933,24 @@ pub async fn reporters(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeEr
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    rows.into_iter()
-        .map(|(raw, n)| {
-            namespace_of(&raw)
-                .map(|ns| (ns, n))
-                .ok_or_else(|| unknown_grant(&raw))
-        })
-        .collect()
+    by_namespace(rows)
 }
 
 /// How many protected ref merge rules require a check of each namespace
-/// (doctor `checks.reporters`; a namespace no rule requires is absent).
-pub async fn required_namespaces(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
-    const QUERY: &str = "checks.required_namespaces";
+/// that no active service account may report on the rule's own project
+/// (doctor `checks.reporters`; empty: every required check has a reporter).
+pub async fn unreported_requirements(db: &Db) -> Result<BTreeMap<CheckNamespace, i64>, ForgeError> {
+    const QUERY: &str = "checks.unreported_requirements";
     let rows: Vec<(String, i64)> = db
         .within(QUERY, async {
             sqlx::query_as(
                 "SELECT split_part(c.name, '/', 1), count(DISTINCT r.protected_ref_id) \
                  FROM forge.protected_ref_merge_rules r, unnest(r.required_checks) AS c(name) \
+                 WHERE NOT EXISTS (SELECT 1 FROM forge.check_namespace_grants g \
+                 JOIN forge.users u ON u.id = g.user_id \
+                 WHERE g.project_id = r.project_id \
+                 AND g.namespace = split_part(c.name, '/', 1) \
+                 AND u.state = 'active' AND u.kind = 'service_account') \
                  GROUP BY 1 ORDER BY 1",
             )
             .fetch_all(db.pool().executor())
@@ -869,20 +958,34 @@ pub async fn required_namespaces(db: &Db) -> Result<BTreeMap<CheckNamespace, i64
             .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    rows.into_iter()
-        .map(|(raw, n)| {
-            namespace_of(&raw)
-                .map(|ns| (ns, n))
-                .ok_or_else(|| unknown_grant(&raw))
-        })
-        .collect()
+    by_namespace(rows)
 }
 
-/// The namespaces some active service account may report (the merge rule's
-/// `unreportable_checks`: a required name outside them has no granted
-/// reporter).
-pub async fn reported_namespaces(db: &Db) -> Result<Vec<CheckNamespace>, ForgeError> {
-    Ok(reporters(db).await?.into_keys().collect())
+/// The namespaces some active service account may report on `project`
+/// (the merge rule's `unreportable_checks`: a required name outside them
+/// has no granted reporter there).
+pub async fn reported_namespaces(
+    db: &Db,
+    project: ProjectId,
+) -> Result<Vec<CheckNamespace>, ForgeError> {
+    const QUERY: &str = "checks.reported_namespaces";
+    let rows: Vec<String> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "SELECT DISTINCT g.namespace FROM forge.check_namespace_grants g \
+                 JOIN forge.users u ON u.id = g.user_id \
+                 WHERE g.project_id = $1 AND u.state = 'active' \
+                 AND u.kind = 'service_account' ORDER BY 1",
+            )
+            .bind(project.get())
+            .fetch_all(db.pool().executor())
+            .await
+            .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    rows.iter()
+        .map(|raw| namespace_of(raw).ok_or_else(|| unknown_grant(raw)))
+        .collect()
 }
 
 #[cfg(test)]

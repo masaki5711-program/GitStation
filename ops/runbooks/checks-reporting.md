@@ -34,7 +34,7 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
    `required_check_not_successful` は報告はあるが `completed` / `success` でない（`neutral` と実行中を含む）。
 2. コミットの報告を読む: `gstn checks list --project <id> --sha <head_sha> --json`。**今の head の SHA** で読む（古い head の報告は数えない）。
 3. 報告した主体と割り当てを確かめる（管理者）:
-   - `gstn admin service-account check-namespaces <id>`（割り当てられた名前空間）
+   - `gstn admin service-account check-grants <id>`（割り当て。**プロジェクトごと**: 報告先のプロジェクトの行があるか）
    - そのサービスアカウントがプロジェクトの Developer 以上のメンバーか（`gstn member list --project <id>`）
 4. 拒否のログ: `error_code=FG-AUTH-0003 action=CheckWrite` の `reason`（上の Trigger の一覧）。`FG-REVIEW-0020` は `reason`（`name_invalid`、
    `too_many_annotations` など。本文・URL・注釈の文面はログに出ない）、`FG-REVIEW-0021` は `limit`・`head_sha`。
@@ -59,13 +59,14 @@ Checks API（M3 C1、ADR-0024 §10、`docs/api/checks.md`）で、CI や kanflow
 ### A. 名前空間をサービスアカウントに割り当てる（報告できる主体が無い）
 
 1. 報告に使うサービスアカウントを用意する（Runbook `service-accounts`）。目的ごとに 1 つ（CI の報告用、kanflow 用）。
-2. 名前空間を割り当てる `[MUTATING — needs approval]`（ロールバック: `gstn admin service-account revoke-checks <id> ci`）:
+2. 名前空間を **報告先のプロジェクトについて** 割り当てる `[MUTATING — needs approval]`（ロールバック:
+   `gstn admin service-account revoke-checks <id> --project <p> ci`）。割り当てはプロジェクトごとで、別のプロジェクトの割り当ては効かない:
 
    ```
-   gstn admin service-account grant-checks <service_account_id> ci
+   gstn admin service-account grant-checks <service_account_id> --project <project_id> ci
    ```
 
-   （API: `PUT /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}`。管理者だけ。`ci` と `kanflow` だけを割り当てられる）
+   （API: `PUT /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}`。管理者だけ。`ci` と `kanflow` だけを割り当てられる）
 3. サービスアカウントを報告先のプロジェクトの Developer 以上のメンバーにする `[MUTATING — needs approval]`（ロールバック: メンバーから外す）。
 
 ### B. 報告の形を直す（FG-REVIEW-0020 / 0021）

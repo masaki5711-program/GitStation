@@ -47,6 +47,12 @@ const fn run(namespace: Ns, granted: bool, project: P) -> F {
 
 /// A `ci/` report on a private project, the reporter holding the grant.
 const CI: F = run(Ns::Ci, true, P::Private);
+/// No grant of `ci` on the report's project — also the two cases of review
+/// fix 1, which the loader turns into exactly this input: a grant of `ci`
+/// on another project only, and a `kanflow` grant only (the grant is read
+/// for the report's project and the name's namespace; proved end to end by
+/// forge-checks' `a_grant_on_one_project_never_reports_on_another` and the
+/// route E2E).
 const CI_UNGRANTED: F = run(Ns::Ci, false, P::Private);
 const KANFLOW: F = run(Ns::Kanflow, true, P::Private);
 /// `granted` is a grant of the name's own namespace (`false`: the reporter

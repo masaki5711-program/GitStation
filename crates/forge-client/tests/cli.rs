@@ -940,7 +940,7 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "admin service-account update",
             "admin service-account tokens",
             "admin service-account revoke-token",
-            "admin service-account check-namespaces",
+            "admin service-account check-grants",
             "admin service-account grant-checks",
             "admin service-account revoke-checks",
             "checks report",

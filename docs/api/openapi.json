@@ -764,40 +764,39 @@
         ],
         "type": "object"
       },
-      "CheckNamespaceGrant": {
+      "CheckGrantChange": {
         "additionalProperties": false,
-        "description": "A grant change's answer: the namespaces now, and whether the change\nwrote anything (`false`: the grant already was, or was not, there).",
+        "description": "A grant change's answer: the grants now, and whether the change wrote\nanything (`false`: the grant already was, or was not, there).",
         "properties": {
           "changed": {
             "type": "boolean"
           },
-          "namespaces": {
+          "grants": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/GrantBody"
             },
             "type": "array"
           }
         },
         "required": [
-          "namespaces",
+          "grants",
           "changed"
         ],
         "type": "object"
       },
-      "CheckNamespaces": {
+      "CheckGrants": {
         "additionalProperties": false,
-        "description": "The namespaces a service account reports.",
+        "description": "The grants of a service account, by project then namespace.",
         "properties": {
-          "namespaces": {
-            "description": "`ci` / `kanflow`, sorted.",
+          "grants": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/GrantBody"
             },
             "type": "array"
           }
         },
         "required": [
-          "namespaces"
+          "grants"
         ],
         "type": "object"
       },
@@ -1666,6 +1665,26 @@
           "error_code",
           "user_message",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "GrantBody": {
+        "additionalProperties": false,
+        "description": "One grant: a namespace a service account reports on one project.",
+        "properties": {
+          "namespace": {
+            "description": "`ci` or `kanflow`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "project_id",
+          "namespace"
         ],
         "type": "object"
       },
@@ -4868,9 +4887,9 @@
         "x-forge-max-body-bytes": 4096
       }
     },
-    "/api/v1/admin/service-accounts/{id}/check-namespaces": {
+    "/api/v1/admin/service-accounts/{id}/check-grants": {
       "get": {
-        "operationId": "get_api_v1_admin_service_accounts_id_check_namespaces",
+        "operationId": "get_api_v1_admin_service_accounts_id_check_grants",
         "parameters": [
           {
             "in": "path",
@@ -4888,7 +4907,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckNamespaces"
+                  "$ref": "#/components/schemas/CheckGrants"
                 }
               }
             },
@@ -4905,13 +4924,13 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "The check namespaces a service account reports (administrators)",
+        "summary": "The check namespace grants of a service account, by project (administrators)",
         "x-forge-action": "ServiceAccountRead"
       }
     },
-    "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}": {
+    "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}": {
       "delete": {
-        "operationId": "delete_api_v1_admin_service_accounts_id_check_namespaces_namespace",
+        "operationId": "delete_api_v1_admin_service_accounts_id_check_grants_project_id_namespace",
         "parameters": [
           {
             "in": "path",
@@ -4930,6 +4949,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -4937,7 +4966,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckNamespaceGrant"
+                  "$ref": "#/components/schemas/CheckGrantChange"
                 }
               }
             },
@@ -4954,11 +4983,11 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Stop a service account reporting a check namespace (administrators, people only)",
+        "summary": "Stop a service account reporting a check namespace on one project (administrators, people only)",
         "x-forge-action": "CheckNamespaceGrantManage"
       },
       "put": {
-        "operationId": "put_api_v1_admin_service_accounts_id_check_namespaces_namespace",
+        "operationId": "put_api_v1_admin_service_accounts_id_check_grants_project_id_namespace",
         "parameters": [
           {
             "in": "path",
@@ -4977,6 +5006,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -4984,7 +5023,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CheckNamespaceGrant"
+                  "$ref": "#/components/schemas/CheckGrantChange"
                 }
               }
             },
@@ -5001,7 +5040,7 @@
             "description": "Error: registered code, localized message, request id"
           }
         },
-        "summary": "Let a service account report a check namespace (ci, kanflow; administrators, people only)",
+        "summary": "Let a service account report a check namespace on one project (ci, kanflow; administrators, people only)",
         "x-forge-action": "CheckNamespaceGrantManage"
       }
     },

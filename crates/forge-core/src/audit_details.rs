@@ -352,9 +352,10 @@ pub enum AuditDetails {
     /// Shapes: [`CheckRunChange::to_value`].
     CheckRun(CheckRunChange),
     /// `check_namespace.granted` / `.revoked` (M3 C1), audit only, on the
-    /// service account: `{"user_id","namespace"}`.
+    /// project the grant is for: `{"user_id","project_id","namespace"}`.
     CheckNamespaceGrant {
         user: UserId,
+        project: ProjectId,
         namespace: crate::merge_conditions::CheckNamespace,
         granted: bool,
     },
@@ -963,9 +964,13 @@ impl AuditDetails {
             Self::ProtectedRefMergeRule(change) => change.to_value(),
             Self::CheckRun(change) => change.to_value(),
             Self::CheckNamespaceGrant {
-                user, namespace, ..
+                user,
+                project,
+                namespace,
+                ..
             } => serde_json::json!({
                 "user_id": user.get(),
+                "project_id": project.get(),
                 "namespace": namespace.as_str(),
             }),
         }

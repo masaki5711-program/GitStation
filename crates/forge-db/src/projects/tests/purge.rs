@@ -116,6 +116,19 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
     let t = FreshDb::migrated().await;
     let alice = user(&t, "alice").await;
     let bob = user(&t, "bob").await;
+    let reporter = crate::service_accounts::create(
+        &t.db,
+        &ctx("req-sa"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "ci-runner".to_owned(),
+            display_name: "CI".to_owned(),
+            owner: alice.user_id,
+            purpose: "synthetic CI reporter".to_owned(),
+        },
+        alice.user_id,
+    )
+    .await
+    .expect("service account");
     let web = expired(&t, &alice, "web").await;
     let id = web.project_id.get();
     t.commit_audited(
@@ -184,6 +197,13 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                  path, start_line, end_line, level, message) SELECT id, project_id, 0, \
                  'src/lib.rs', 1, 1, 'notice', 'synthetic' FROM forge.check_runs \
                  WHERE project_id = {id}"
+            ),
+            // M3 C1 review: a check namespace grant on the project goes too.
+            format!(
+                "INSERT INTO forge.check_namespace_grants (user_id, project_id, namespace, \
+                 granted_by) VALUES ({s}, {id}, 'ci', {a})",
+                s = reporter.user_id.get(),
+                a = alice.user_id.get()
             ),
             // M3 R4: a merge attempt goes with them (it starts queued).
             format!(
@@ -307,6 +327,7 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
         "merge_request_merges",
         "check_runs",
         "check_annotations",
+        "check_namespace_grants",
     ] {
         let rows = count(
             &mut su,

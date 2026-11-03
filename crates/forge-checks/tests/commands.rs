@@ -111,6 +111,8 @@ struct World {
     admin: UserId,
     ci: UserId,
     web: CreatedProject,
+    /// Another project the service account is a Developer member of.
+    other: CreatedProject,
     checks: Checks,
     commits: Arc<Commits>,
 }
@@ -151,6 +153,22 @@ async fn world() -> World {
     )
     .await
     .expect("member");
+    let other = projects::create(
+        &t.db,
+        &system("req-project-other"),
+        &NewProject::new("other", admin.namespace_id, "Other", admin.user_id),
+    )
+    .await
+    .expect("other");
+    projects::add_member(
+        &t.db,
+        &system("req-member-other"),
+        other.project_id,
+        ci.user_id,
+        Role::Developer,
+    )
+    .await
+    .expect("member");
     let commits = Commits::with(&[HEAD]);
     let checks = Checks::new(t.db.clone(), commits.clone());
     World {
@@ -158,6 +176,7 @@ async fn world() -> World {
         admin: admin.user_id,
         ci: ci.user_id,
         web,
+        other,
         checks,
         commits,
     }
@@ -176,10 +195,14 @@ impl World {
     }
 
     async fn loaded(&self, who: &Principal) -> LoadedProject {
+        self.loaded_on(self.web.project_id, who).await
+    }
+
+    async fn loaded_on(&self, project: ProjectId, who: &Principal) -> LoadedProject {
         let record = self
             .t
             .db
-            .load_project(self.web.project_id, who.user())
+            .load_project(project, who.user())
             .await
             .expect("load")
             .expect("project");
@@ -192,6 +215,10 @@ impl World {
     }
 
     async fn grant(&self, on: bool) -> GrantOutcome {
+        self.grant_ns(CheckNamespace::Ci, on).await
+    }
+
+    async fn grant_ns(&self, namespace: CheckNamespace, on: bool) -> GrantOutcome {
         let admin = admin_session(self.admin);
         let view = ServiceAccountView {
             kind: AccountKind::ServiceAccount,
@@ -200,7 +227,7 @@ impl World {
         let proof = prove(
             &admin,
             Action::CheckNamespaceGrantManage,
-            CheckNamespaceGrantCtx::new(self.ci, view, CheckNamespace::Ci),
+            CheckNamespaceGrantCtx::new(self.ci, view, self.web.project_id, namespace),
         )
         .expect("an administrator manages grants");
         self.checks
@@ -217,17 +244,27 @@ impl World {
         head: &str,
         name: &str,
     ) -> Result<Authorized<CheckRunCtx>, ForgeError> {
+        self.proof_on(self.web.project_id, who, head, name).await
+    }
+
+    async fn proof_on(
+        &self,
+        project: ProjectId,
+        who: &Principal,
+        head: &str,
+        name: &str,
+    ) -> Result<Authorized<CheckRunCtx>, ForgeError> {
         let name = parse_name(name).expect("name");
         let user = who.user().expect("signed in");
         let granted = self
             .checks
-            .granted(user, name.namespace())
+            .granted(user, project, name.namespace())
             .await
             .expect("grant read");
         prove(
             who,
             Action::CheckWrite,
-            CheckRunCtx::new(self.loaded(who).await, sha(head), name, granted),
+            CheckRunCtx::new(self.loaded_on(project, who).await, sha(head), name, granted),
         )
     }
 
@@ -396,12 +433,58 @@ async fn unreportable_names_are_the_ones_without_a_granted_reporter() {
         .iter()
         .map(|n| parse_name(n).expect("name"))
         .collect();
-    assert_eq!(w.checks.unreportable(&names).await.expect("all"), names);
+    assert_eq!(
+        w.checks
+            .unreportable(w.project(), &names)
+            .await
+            .expect("all"),
+        names
+    );
     assert_eq!(w.grant(true).await, GrantOutcome::Changed);
     assert_eq!(
-        w.checks.unreportable(&names).await.expect("ci granted"),
+        w.checks
+            .unreportable(w.project(), &names)
+            .await
+            .expect("ci granted"),
         names[1..].to_vec()
     );
-    assert!(w.checks.unreportable(&[]).await.expect("none").is_empty());
+    assert!(w
+        .checks
+        .unreportable(w.project(), &[])
+        .await
+        .expect("none")
+        .is_empty());
+    w.t.drop_now().await;
+}
+
+/// Review fix 1 (security MEDIUM): a grant is for one project. A service
+/// account granted `ci` for `web` that a Maintainer of `other` adds as a
+/// Developer cannot report `ci/` there; a `kanflow` grant never covers
+/// `ci/`.
+#[tokio::test]
+async fn a_grant_on_one_project_never_reports_on_another() {
+    let w = world().await;
+    assert_eq!(w.grant(true).await, GrantOutcome::Changed);
+    let who = w.reporter();
+    let err = w
+        .proof_on(w.other.project_id, &who, HEAD, "ci/gates")
+        .await
+        .expect_err("granted for web only");
+    assert_reason(&err, ErrorCode::Forbidden, "namespace_not_granted");
+    assert_eq!(
+        w.grant_ns(CheckNamespace::Kanflow, true).await,
+        GrantOutcome::Changed
+    );
+    assert_eq!(w.grant(false).await, GrantOutcome::Changed);
+    let err = w
+        .proof(&who, HEAD, "ci/gates")
+        .await
+        .expect_err("kanflow does not cover ci");
+    assert_reason(&err, ErrorCode::Forbidden, "namespace_not_granted");
+    let proof = w
+        .proof(&who, HEAD, "kanflow/work-item")
+        .await
+        .expect("kanflow is granted");
+    assert_eq!(proof.action(), Action::CheckWrite);
     w.t.drop_now().await;
 }

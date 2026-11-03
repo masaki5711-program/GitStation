@@ -126,15 +126,15 @@ export interface paths {
         patch: operations["patch_api_v1_admin_service_accounts_id"];
         trace?: never;
     };
-    "/api/v1/admin/service-accounts/{id}/check-namespaces": {
+    "/api/v1/admin/service-accounts/{id}/check-grants": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** The check namespaces a service account reports (administrators) */
-        get: operations["get_api_v1_admin_service_accounts_id_check_namespaces"];
+        /** The check namespace grants of a service account, by project (administrators) */
+        get: operations["get_api_v1_admin_service_accounts_id_check_grants"];
         put?: never;
         post?: never;
         delete?: never;
@@ -143,7 +143,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}": {
+    "/api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}": {
         parameters: {
             query?: never;
             header?: never;
@@ -151,11 +151,11 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Let a service account report a check namespace (ci, kanflow; administrators, people only) */
-        put: operations["put_api_v1_admin_service_accounts_id_check_namespaces_namespace"];
+        /** Let a service account report a check namespace on one project (ci, kanflow; administrators, people only) */
+        put: operations["put_api_v1_admin_service_accounts_id_check_grants_project_id_namespace"];
         post?: never;
-        /** Stop a service account reporting a check namespace (administrators, people only) */
-        delete: operations["delete_api_v1_admin_service_accounts_id_check_namespaces_namespace"];
+        /** Stop a service account reporting a check namespace on one project (administrators, people only) */
+        delete: operations["delete_api_v1_admin_service_accounts_id_check_grants_project_id_namespace"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1556,17 +1556,16 @@ export interface components {
             push_min_role: components["schemas"]["RoleName"];
         };
         /**
-         * @description A grant change's answer: the namespaces now, and whether the change
-         *     wrote anything (`false`: the grant already was, or was not, there).
+         * @description A grant change's answer: the grants now, and whether the change wrote
+         *     anything (`false`: the grant already was, or was not, there).
          */
-        CheckNamespaceGrant: {
+        CheckGrantChange: {
             changed: boolean;
-            namespaces: string[];
+            grants: components["schemas"]["GrantBody"][];
         };
-        /** @description The namespaces a service account reports. */
-        CheckNamespaces: {
-            /** @description `ci` / `kanflow`, sorted. */
-            namespaces: string[];
+        /** @description The grants of a service account, by project then namespace. */
+        CheckGrants: {
+            grants: components["schemas"]["GrantBody"][];
         };
         /** @description One check run (docs/api/checks.md). */
         CheckRunBody: {
@@ -1875,6 +1874,13 @@ export interface components {
             error_code: string;
             request_id: string;
             user_message: string;
+        };
+        /** @description One grant: a namespace a service account reports on one project. */
+        GrantBody: {
+            /** @description `ci` or `kanflow`. */
+            namespace: string;
+            /** Format: int64 */
+            project_id: number;
         };
         /** @description A group as the API shows it. */
         GroupBody: {
@@ -3287,7 +3293,7 @@ export interface operations {
             };
         };
     };
-    get_api_v1_admin_service_accounts_id_check_namespaces: {
+    get_api_v1_admin_service_accounts_id_check_grants: {
         parameters: {
             query?: never;
             header?: never;
@@ -3304,7 +3310,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckNamespaces"];
+                    "application/json": components["schemas"]["CheckGrants"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -3318,13 +3324,14 @@ export interface operations {
             };
         };
     };
-    put_api_v1_admin_service_accounts_id_check_namespaces_namespace: {
+    put_api_v1_admin_service_accounts_id_check_grants_project_id_namespace: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 id: number;
                 namespace: string;
+                project_id: number;
             };
             cookie?: never;
         };
@@ -3336,7 +3343,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckNamespaceGrant"];
+                    "application/json": components["schemas"]["CheckGrantChange"];
                 };
             };
             /** @description Error: registered code, localized message, request id */
@@ -3350,13 +3357,14 @@ export interface operations {
             };
         };
     };
-    delete_api_v1_admin_service_accounts_id_check_namespaces_namespace: {
+    delete_api_v1_admin_service_accounts_id_check_grants_project_id_namespace: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 id: number;
                 namespace: string;
+                project_id: number;
             };
             cookie?: never;
         };
@@ -3368,7 +3376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CheckNamespaceGrant"];
+                    "application/json": components["schemas"]["CheckGrantChange"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

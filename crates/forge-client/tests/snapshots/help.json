@@ -5411,34 +5411,35 @@
         }
       ],
       "examples": [
-        "gstn admin service-account check-namespaces 42 --json"
+        "gstn admin service-account check-grants 42 --json"
       ],
-      "name": "admin service-account check-namespaces",
+      "name": "admin service-account check-grants",
       "output": {
         "properties": {
-          "namespaces": {
+          "grants": {
             "items": {
-              "enum": [
-                "ci",
-                "kanflow"
-              ]
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
             },
             "type": "array"
           }
         },
         "required": [
-          "namespaces"
+          "grants"
         ],
         "type": "object"
       },
       "routes": [
-        "GET /api/v1/admin/service-accounts/{id}/check-namespaces"
+        "GET /api/v1/admin/service-accounts/{id}/check-grants"
       ],
       "scopes": [
         "read_api",
         "admin"
       ],
-      "summary": "The check namespaces a service account may report (M3 C1; administrators)."
+      "summary": "The check namespaces a service account may report, per project (M3 C1; administrators)."
     },
     {
       "args": [
@@ -5446,6 +5447,13 @@
           "description": "The service account's user id.",
           "kind": "positional",
           "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project the grant is for.",
+          "kind": "option",
+          "name": "--project",
           "repeatable": false,
           "required": true
         },
@@ -5458,7 +5466,7 @@
         }
       ],
       "examples": [
-        "gstn admin service-account grant-checks 42 ci"
+        "gstn admin service-account grant-checks 42 --project 7 ci"
       ],
       "name": "admin service-account grant-checks",
       "output": {
@@ -5466,30 +5474,31 @@
           "changed": {
             "type": "boolean"
           },
-          "namespaces": {
+          "grants": {
             "items": {
-              "enum": [
-                "ci",
-                "kanflow"
-              ]
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
             },
             "type": "array"
           }
         },
         "required": [
-          "namespaces",
+          "grants",
           "changed"
         ],
         "type": "object"
       },
       "routes": [
-        "PUT /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}"
+        "PUT /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}"
       ],
       "scopes": [
         "api",
         "admin"
       ],
-      "summary": "Let a service account report checks of a namespace (ci or kanflow; administrators, people only). It reports only on projects it is a Developer member of; forge/ and ext/ are never granted."
+      "summary": "Let a service account report checks of a namespace (ci or kanflow) on one project (administrators, people only). A grant is for that project only, and the account must also be a Developer member there; forge/ and ext/ are never granted."
     },
     {
       "args": [
@@ -5497,6 +5506,13 @@
           "description": "The service account's user id.",
           "kind": "positional",
           "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The project the grant is for.",
+          "kind": "option",
+          "name": "--project",
           "repeatable": false,
           "required": true
         },
@@ -5509,7 +5525,7 @@
         }
       ],
       "examples": [
-        "gstn admin service-account revoke-checks 42 ci"
+        "gstn admin service-account revoke-checks 42 --project 7 ci"
       ],
       "name": "admin service-account revoke-checks",
       "output": {
@@ -5517,30 +5533,31 @@
           "changed": {
             "type": "boolean"
           },
-          "namespaces": {
+          "grants": {
             "items": {
-              "enum": [
-                "ci",
-                "kanflow"
-              ]
+              "required": [
+                "project_id",
+                "namespace"
+              ],
+              "type": "object"
             },
             "type": "array"
           }
         },
         "required": [
-          "namespaces",
+          "grants",
           "changed"
         ],
         "type": "object"
       },
       "routes": [
-        "DELETE /api/v1/admin/service-accounts/{id}/check-namespaces/{namespace}"
+        "DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{namespace}"
       ],
       "scopes": [
         "api",
         "admin"
       ],
-      "summary": "Stop a service account reporting checks of a namespace (administrators, people only); its reported runs stay."
+      "summary": "Stop a service account reporting checks of a namespace on one project (administrators, people only); its reported runs stay."
     },
     {
       "args": [

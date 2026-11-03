@@ -662,8 +662,9 @@ async fn annotations_are_bounded_relative_and_well_formed_by_constraint_name() {
 }
 
 #[tokio::test]
-async fn grants_go_to_service_accounts_and_are_audited_on_the_account() {
+async fn grants_go_to_service_accounts_per_project_and_are_audited_on_it() {
     let w = world().await;
+    let p = w.project();
     let grant = |user: UserId, ns: CheckNamespace, on: bool, req: &'static str| {
         let db = w.t.db.clone(); // clone: the future owns its handle
         let admin = w.alice;
@@ -671,7 +672,7 @@ async fn grants_go_to_service_accounts_and_are_audited_on_the_account() {
             change_check_namespace_grant_decided(
                 &db,
                 &as_user(admin, req),
-                (user, ns, on),
+                (user, p, ns, on),
                 admin,
                 |_| Ok(()),
             )
@@ -693,12 +694,40 @@ async fn grants_go_to_service_accounts_and_are_audited_on_the_account() {
     );
     assert_eq!(
         grants_of(&w.t.db, w.ci).await.expect("grants"),
-        [CheckNamespace::Ci]
+        [Grant {
+            project: p,
+            namespace: CheckNamespace::Ci
+        }]
     );
     assert_eq!(
-        reported_namespaces(&w.t.db).await.expect("reported"),
+        reported_namespaces(&w.t.db, p).await.expect("reported"),
         [CheckNamespace::Ci]
     );
+    // Review fix 1: the grant is for this project only.
+    let elsewhere = ProjectId::new(p.get() + 1000);
+    assert!(reported_namespaces(&w.t.db, elsewhere)
+        .await
+        .expect("none")
+        .is_empty());
+    assert!(granted(&w.t.db, w.ci, p, CheckNamespace::Ci)
+        .await
+        .expect("read"));
+    assert!(!granted(&w.t.db, w.ci, elsewhere, CheckNamespace::Ci)
+        .await
+        .expect("read"));
+    assert!(!granted(&w.t.db, w.ci, p, CheckNamespace::Kanflow)
+        .await
+        .expect("read"));
+    let err = change_check_namespace_grant_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-g-absent"),
+        (w.ci, elsewhere, CheckNamespace::Ci, true),
+        w.alice,
+        |_| Ok(()),
+    )
+    .await
+    .expect_err("no such project");
+    assert_reason(&err, ErrorCode::NotFound, "absent");
     // A person cannot hold a grant: the guard refuses it by name.
     let err = grant(w.alice, CheckNamespace::Kanflow, true, "req-g3")
         .await
@@ -725,25 +754,30 @@ async fn grants_go_to_service_accounts_and_are_audited_on_the_account() {
         GrantOutcome::Changed
     );
     assert!(grants_of(&w.t.db, w.ci).await.expect("grants").is_empty());
-    let rows: Vec<(String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT action, resource_type, resource_id FROM forge.audit_log \
+    let rows: Vec<(String, String, Option<i64>, serde_json::Value)> = sqlx::query_as(
+        "SELECT action, resource_type, resource_id, details FROM forge.audit_log \
          WHERE action LIKE 'check_namespace.%' ORDER BY id",
     )
     .fetch_all(&mut w.t.superuser().await)
     .await
     .expect("audit");
+    let details = serde_json::json!({
+        "user_id": w.ci.get(), "project_id": p.get(), "namespace": "ci"
+    });
     assert_eq!(
         rows,
         [
             (
                 "check_namespace.granted".to_owned(),
-                "user".to_owned(),
-                Some(w.ci.get())
+                "project".to_owned(),
+                Some(p.get()),
+                details.clone()
             ),
             (
                 "check_namespace.revoked".to_owned(),
-                "user".to_owned(),
-                Some(w.ci.get())
+                "project".to_owned(),
+                Some(p.get()),
+                details
             ),
         ]
     );
@@ -774,10 +808,11 @@ async fn a_run_keeps_its_identity_and_counts_its_writes() {
     w.t.drop_now().await;
 }
 
-/// Doctor `checks.reporters`: the namespaces the merge rules require, and
-/// the active service accounts that may report each.
+/// Doctor `checks.reporters`: the namespaces the merge rules require that
+/// no active service account may report on the rule's project, and the
+/// active reporters of each namespace.
 #[tokio::test]
-async fn required_namespaces_and_reporters_are_counted() {
+async fn unreported_requirements_and_reporters_are_counted() {
     let w = world().await;
     let p = w.project().get();
     w.t.commit_audited(
@@ -795,22 +830,30 @@ async fn required_namespaces_and_reporters_are_counted() {
         ],
     )
     .await;
-    let required = required_namespaces(&w.t.db).await.expect("required");
+    let unreported = unreported_requirements(&w.t.db).await.expect("required");
     assert_eq!(
-        required.into_iter().collect::<Vec<_>>(),
+        unreported.into_iter().collect::<Vec<_>>(),
         [(CheckNamespace::Ci, 1), (CheckNamespace::Forge, 1)]
     );
     assert!(reporters(&w.t.db).await.expect("none").is_empty());
     let (granted, ()) = change_check_namespace_grant_decided(
         &w.t.db,
         &as_user(w.alice, "req-grant"),
-        (w.ci, CheckNamespace::Ci, true),
+        (w.ci, w.project(), CheckNamespace::Ci, true),
         w.alice,
         |_| Ok(()),
     )
     .await
     .expect("grant");
     assert_eq!(granted, GrantOutcome::Changed);
+    assert_eq!(
+        unreported_requirements(&w.t.db)
+            .await
+            .expect("forge only")
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [(CheckNamespace::Forge, 1)]
+    );
     assert_eq!(
         reporters(&w.t.db)
             .await

@@ -1244,25 +1244,32 @@ pub enum ServiceAccountCommand {
         #[arg(value_parser = parse_id)]
         id: i64,
     },
-    /// The check namespaces a service account reports (M3 C1).
-    #[command(name = "check-namespaces")]
-    CheckNamespaces {
+    /// The check namespace grants of a service account, by project (M3 C1).
+    #[command(name = "check-grants")]
+    CheckGrants {
         #[arg(value_parser = parse_id)]
         id: i64,
     },
-    /// Let a service account report a check namespace (ci, kanflow).
+    /// Let a service account report a check namespace (ci, kanflow) on one
+    /// project.
     #[command(name = "grant-checks")]
     GrantChecks {
         #[arg(value_parser = parse_id)]
         id: i64,
+        /// The project the grant is for.
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
         #[arg(value_parser = parse_grant_namespace)]
         namespace: String,
     },
-    /// Stop a service account reporting a check namespace.
+    /// Stop a service account reporting a check namespace on one project.
     #[command(name = "revoke-checks")]
     RevokeChecks {
         #[arg(value_parser = parse_id)]
         id: i64,
+        /// The project the grant is for.
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
         #[arg(value_parser = parse_grant_namespace)]
         namespace: String,
     },
