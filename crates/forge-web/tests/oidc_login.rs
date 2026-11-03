@@ -301,19 +301,18 @@ async fn refused_accounts_get_no_session() {
     let _off = forge_db::users::disable(&t.db, &system(), alice)
         .await
         .expect("disable");
+    // A bot cannot be linked (M3 S0, user_identities_human_guard): the
+    // sign-in finds it by its employee number and refuses it (not_human).
     let robot = forge_db::users::NewUser {
         kind: forge_core::UserKind::Bot,
         email: None,
+        employee_number: Some("SYN0900".to_owned()),
         ..forge_db::users::NewUser::human("robot", "Robot", "unused@example.test")
     };
-    let robot = forge_db::users::create(&t.db, &system(), &robot)
+    let _robot = forge_db::users::create(&t.db, &system(), &robot)
         .await
         .expect("robot")
         .user_id;
-    let _linked =
-        forge_oidc::operator_link_identity(&t.db, &system(), robot, &op.issuer, "sub-robot")
-            .await
-            .expect("link robot");
 
     let cases = [
         ("user_disabled", json!({"sub": "sub-off"})),
