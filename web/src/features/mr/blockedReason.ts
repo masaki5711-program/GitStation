@@ -3,10 +3,12 @@
 // caller renders `t(key, values)`. Only the first reason is shown; anything
 // not understood becomes the generic line, never an exception.
 //
-// `next` may only point at what U1 has. Approve and merge are U2.
-import type { MergeStatus } from '../../api/types';
+// `next` points at what the screen has: the threads, the changes, a push,
+// and (U2) "Mark as ready" when the viewer flags allow it. The conditions
+// panel (ConditionsPanel) words every reason with reasonLine().
+import type { MergeStatus, StatusReason } from '../../api/types';
 
-export type NextTarget = 'first_unresolved' | 'changes' | 'push' | 'wait' | 'none';
+export type NextTarget = 'first_unresolved' | 'changes' | 'push' | 'mark_ready' | 'wait' | 'none';
 
 export interface BlockedReason {
   key: string;
@@ -28,6 +30,8 @@ export function nextKey(next: NextTarget): string | null {
       return t('mr.status.next.changes');
     case 'push':
       return t('mr.status.next.push');
+    case 'mark_ready':
+      return t('mr.status.next.markReady');
     // Nothing to press: the line's hint (statusHint) names what is waited for.
     case 'wait':
     case 'none':
@@ -67,6 +71,15 @@ export function blockedReason(status: MergeStatus): BlockedReason {
   if (status.mergeable) return { key: t('mr.status.mergeable'), values: {}, next: 'none' };
   const first = status.reasons[0];
   if (first === undefined) return generic();
+  const line = reasonLine(first);
+  // A draft the viewer may take out of draft: "next" is that button (the
+  // flag is the server's answer, never guessed from a role).
+  if (first.reason === 'draft' && status.viewer.can_mark_ready) return { ...line, next: 'mark_ready' };
+  return line;
+}
+
+/** One reason in words (the status line's first, every line of the panel). */
+export function reasonLine(first: StatusReason): BlockedReason {
   const d = parseDetail(first.detail);
   const plain = (key: string, next: NextTarget): BlockedReason => ({ key, values: {}, next });
 
@@ -161,7 +174,7 @@ export function statusHint(status: MergeStatus): string | null {
     case 'changed_paths_unknown':
       return t('mr.status.hint.retry');
     case 'draft':
-      return t('mr.status.hint.draft');
+      return status.viewer.can_mark_ready ? null : t('mr.status.hint.draft');
     case 'not_open':
       return t('mr.status.hint.notOpen');
     case 'codeowners_invalid':
@@ -188,5 +201,32 @@ export function statusTone(status: MergeStatus): StatusTone {
       return 'info';
     default:
       return 'blocked';
+  }
+}
+
+/** Why an approval does not count (`uncounted_reason`), as words. A name
+ * this screen does not know is the generic "it does not count now". */
+export function uncountedKey(reason: string | null): string {
+  switch (reason) {
+    case 'stale':
+      return t('mr.uncounted.stale');
+    case 'inactive':
+      return t('mr.uncounted.inactive');
+    case 'not_human':
+      return t('mr.uncounted.notHuman');
+    case 'role_insufficient':
+      return t('mr.uncounted.roleInsufficient');
+    case 'author':
+      return t('mr.uncounted.author');
+    case 'committer':
+      return t('mr.uncounted.committer');
+    case 'committers_unknown':
+      return t('mr.uncounted.committersUnknown');
+    case 'not_in_rule':
+      return t('mr.uncounted.notInRule');
+    case 'carried':
+      return t('mr.uncounted.carried');
+    default:
+      return t('mr.uncounted.other');
   }
 }

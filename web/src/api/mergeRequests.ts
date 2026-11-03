@@ -5,7 +5,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SESSION_KEY } from '../session/session';
 import { ApiFailure, call } from './client';
 import { useApi } from './context';
-import type { CreateMergeRequestBody, MergeStatus, Position } from './types';
+import type {
+  CreateMergeRequestBody,
+  LatestMerge,
+  MergeAttempt,
+  MergeStatus,
+  Position,
+} from './types';
 
 export type MrState = 'open' | 'closed' | 'merged' | 'all';
 export interface MrListFilter {
@@ -23,6 +29,9 @@ export const mrKeys = {
   versions: (project: number, iid: number) => ['mr', project, iid, 'versions'] as const,
   diff: (project: number, iid: number, version: number) =>
     ['mr', project, iid, 'diff', version] as const,
+  merge: (project: number, iid: number) => ['mr', project, iid, 'merge'] as const,
+  /** Everything of one merge request (a reload after a stale view). */
+  whole: (project: number, iid: number) => ['mr', project, iid] as const,
 };
 
 /** A merge request number from the address (`/-/pull/{iid}`): a positive
@@ -249,4 +258,173 @@ export function useUnresolve(project: number, iid: number) {
     onSuccess: after,
     onError: refreshSession,
   });
+}
+
+/** After an approval changes, the status (counts, viewer flags) is stale. */
+function useAfterApprovalChange(project: number, iid: number) {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) });
+}
+
+/** Approve the head the person saw (`sha` from the status they read): the
+ * server refuses another head (409 stale view) rather than approving code
+ * nobody looked at. */
+export function useApprove(project: number, iid: number) {
+  const api = useApi();
+  const refreshSession = useRefreshSessionOn403();
+  const after = useAfterApprovalChange(project, iid);
+  return useMutation({
+    mutationFn: (sha: string) =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/approve', {
+          params: { path: { id: project, iid: String(iid) } },
+          body: { sha },
+        }),
+      ),
+    onSuccess: after,
+    onError: refreshSession,
+  });
+}
+
+export function useUnapprove(project: number, iid: number) {
+  const api = useApi();
+  const refreshSession = useRefreshSessionOn403();
+  const after = useAfterApprovalChange(project, iid);
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/unapprove', {
+          params: { path: { id: project, iid: String(iid) } },
+        }),
+      ),
+    onSuccess: after,
+    onError: refreshSession,
+  });
+}
+
+/** Take a draft out of draft (`PATCH …` with `draft: false` only). */
+export function useMarkReady(project: number, iid: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const refreshSession = useRefreshSessionOn403();
+  return useMutation({
+    mutationFn: () =>
+      call(() =>
+        api.PATCH('/api/v1/projects/{id}/merge-requests/{iid}', {
+          params: { path: { id: project, iid: String(iid) } },
+          body: { draft: false },
+        }),
+      ),
+    onSuccess: async (next) => {
+      queryClient.setQueryData(mrKeys.one(project, iid), next);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) }),
+        queryClient.invalidateQueries({ queryKey: ['mr', project, 'list'] }),
+      ]);
+    },
+    onError: refreshSession,
+  });
+}
+
+/** Read everything of one merge request again (after a stale view). */
+export function useReloadMergeRequest(project: number, iid: number) {
+  const queryClient = useQueryClient();
+  return () => queryClient.invalidateQueries({ queryKey: mrKeys.whole(project, iid) });
+}
+
+export interface StartMerge {
+  /** The head the person saw (from the status). */
+  sha: string;
+  method: string;
+  deleteSourceBranch: boolean;
+}
+
+/** Ask for a merge (202: the attempt is queued; the job does the rest). */
+export function useStartMerge(project: number, iid: number) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const refreshSession = useRefreshSessionOn403();
+  return useMutation({
+    mutationFn: (input: StartMerge) =>
+      call(() =>
+        api.POST('/api/v1/projects/{id}/merge-requests/{iid}/merge', {
+          params: { path: { id: project, iid: String(iid) } },
+          body: {
+            sha: input.sha,
+            method: input.method,
+            delete_source_branch: input.deleteSourceBranch,
+          },
+        }),
+      ),
+    onSuccess: (attempt) => {
+      const latest: LatestMerge = { iid, merge: attempt };
+      queryClient.setQueryData(mrKeys.merge(project, iid), latest);
+      return queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) });
+    },
+    onError: refreshSession,
+  });
+}
+
+/** The attempt states after which nothing changes any more. */
+export function isFinished(attempt: Pick<MergeAttempt, 'state'> | null | undefined): boolean {
+  const s = attempt?.state;
+  return s === 'applied' || s === 'superseded' || s === 'failed';
+}
+
+/** The merge attempt is read every 1 s at first, then less often up to every
+ * 5 s; after 2 minutes the screen stops asking (the merge goes on in the
+ * server; the person may leave). */
+export const MERGE_POLL_FIRST_MS = 1000;
+export const MERGE_POLL_MAX_MS = 5000;
+export const MERGE_POLL_GIVE_UP_MS = 120_000;
+
+/** The wait before the next read: 1 s, 2 s, 4 s, then 5 s; `false` once the
+ * attempt finished or the time is up. Pure (tests/mr-merge.test.tsx). */
+export function mergePollDelay(
+  reads: number,
+  elapsedMs: number,
+  attempt: Pick<MergeAttempt, 'state'> | null | undefined,
+): number | false {
+  if (isFinished(attempt) || elapsedMs >= MERGE_POLL_GIVE_UP_MS) return false;
+  const n = Math.max(0, reads - 1);
+  return Math.min(MERGE_POLL_FIRST_MS * 2 ** Math.min(n, 3), MERGE_POLL_MAX_MS);
+}
+
+/** The latest merge attempt, read while it runs. `since`: when the screen
+ * started watching (Date.now()); `null`: not watching (nothing is read). */
+export function useMergeAttempt(project: number, iid: number, since: number | null, minMergeId = 0) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useQuery<LatestMerge>({
+    queryKey: mrKeys.merge(project, iid),
+    enabled: valid(iid) && since !== null,
+    // The 202 answer is the first state; the next read is the poll's.
+    staleTime: MERGE_POLL_FIRST_MS,
+    refetchInterval: (query) => {
+      if (since === null) return false;
+      // An attempt older than the one started here is not finished news.
+      const cached = query.state.data?.merge ?? null;
+      const current = cached !== null && cached.merge_id >= minMergeId ? cached : null;
+      return mergePollDelay(query.state.dataUpdateCount, Date.now() - since, current);
+    },
+    queryFn: async ({ signal }) => {
+      const latest = await call(() =>
+        api.GET('/api/v1/projects/{id}/merge-requests/{iid}/merge', {
+          signal,
+          params: { path: { id: project, iid: String(iid) } },
+        }),
+      );
+      // A finished merge changes the merge request (state, status): read it again.
+      if (isFinished(latest.merge)) {
+        void queryClient.invalidateQueries({ queryKey: mrKeys.one(project, iid) });
+        void queryClient.invalidateQueries({ queryKey: mrKeys.status(project, iid) });
+      }
+      return latest;
+    },
+  });
+}
+
+/** The newest version of a list (what the Changes tab renders), or null. */
+export function latestVersion<V extends { version: number }>(list: readonly V[]): V | null {
+  return list.reduce<V | null>((best, v) => (best === null || v.version > best.version ? v : best), null);
 }

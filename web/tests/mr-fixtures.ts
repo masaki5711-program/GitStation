@@ -121,14 +121,56 @@ export function versionDiff(n: number, diff: unknown) {
   };
 }
 
+/** U2: a project's merge settings as `GET …/merge-settings` answers them. */
+export function mergeSettings(over: Record<string, unknown> = {}) {
+  return {
+    project_id: 7,
+    allowed_methods: ['merge_commit', 'squash'],
+    default_method: 'merge_commit',
+    delete_source_default: false,
+    reset_approvals_on_push: true,
+    committer_approvals_excluded: true,
+    codeowners: { enforced: true, suspended_at: null, suspended_until: null },
+    stored: true,
+    updated_at: '2026-11-03T01:02:03.123456Z',
+    viewer: { can_manage: false, can_loosen: false, can_suspend_codeowners: false },
+    ...over,
+  };
+}
+
+export function attempt(state: string, over: Record<string, unknown> = {}) {
+  return {
+    merge_id: 41,
+    iid: 3,
+    state,
+    method: 'squash',
+    head_sha: 'b'.repeat(40),
+    target_branch: 'main',
+    delete_source_branch: true,
+    expected_old: null,
+    new_sha: null,
+    reason: null,
+    error_code: null,
+    source_outcome: null,
+    request_id: 'req-merge-1',
+    created_at: '2026-11-03T01:00:00Z',
+    updated_at: '2026-11-03T01:00:00Z',
+    finished_at: null,
+    ...over,
+  };
+}
+
 export function mrRoutes(over: Record<string, Handler> = {}): Record<string, Handler> {
   return repoRoutes({
     [`GET ${MR_API}`]: () => json(200, { merge_requests: [mr(3)], next_before: null }),
     [`GET ${MR_API}/3`]: () => json(200, mr(3)),
     [`GET ${MR_API}/3/status`]: () => json(200, status([])),
     [`GET ${MR_API}/3/discussions`]: () => json(200, discussions([])),
-    [`GET ${MR_API}/3/versions`]: () => json(200, versions([version(1)])),
+    // The version on screen is the head the status is about (U2 review HIGH 1).
+    [`GET ${MR_API}/3/versions`]: () => json(200, versions([version(1, { head_sha: 'b'.repeat(40) })])),
     [`GET ${MR_API}/3/versions/1/diff`]: () => json(200, versionDiff(1, DIFF)),
+    // U2: the latest merge attempt (read while a merge runs).
+    [`GET ${MR_API}/3/merge`]: () => json(200, { iid: 3, merge: null }),
     ...over,
   });
 }

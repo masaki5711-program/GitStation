@@ -1,6 +1,8 @@
 // Words for API enums. Literal keys only (the dictionary gate reads them).
 import type { TFunction } from 'i18next';
 
+import type { BadgeTone } from './mr/StateBadge';
+
 export function visibilityLabel(t: TFunction, v: string): string {
   return v === 'internal' ? t('visibility.internal') : t('visibility.private');
 }
@@ -68,4 +70,47 @@ export function formatDate(iso: string, language: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return new Intl.DateTimeFormat(language, { dateStyle: 'medium' }).format(d);
+}
+
+/** A merge method (`merge_commit` / `squash` / `fast_forward`); an unknown
+ * name is shown as it is. */
+export function mergeMethodLabel(t: TFunction, method: string): string {
+  switch (method) {
+    case 'merge_commit':
+      return t('mr.merge.method.mergeCommit');
+    case 'squash':
+      return t('mr.merge.method.squash');
+    case 'fast_forward':
+      return t('mr.merge.method.fastForward');
+    default:
+      return method;
+  }
+}
+
+/** Help for each merge method (the dialog and the settings). */
+export function mergeMethodHelp(t: TFunction, method: string): string {
+  switch (method) {
+    case 'merge_commit':
+      return t('mr.merge.method.mergeCommitHelp');
+    case 'squash':
+      return t('mr.merge.method.squashHelp');
+    case 'fast_forward':
+      return t('mr.merge.method.fastForwardHelp');
+    default:
+      return '';
+  }
+}
+
+/** A required check's run as the shared state badge: no report is never a
+ * success (docs/api/merge-status.md), a run still going is neutral, and only
+ * `completed` / `success` is green. */
+export function checkBadge(
+  t: TFunction,
+  status: string | null,
+  conclusion: string | null,
+): { tone: BadgeTone; label: string } {
+  if (status === null) return { tone: 'draft', label: t('mr.check.none') };
+  if (status !== 'completed') return { tone: 'draft', label: t('mr.check.running') };
+  if (conclusion === 'success') return { tone: 'open', label: t('mr.check.success') };
+  return { tone: 'unresolved', label: t('mr.check.failed', { conclusion: conclusion ?? '-' }) };
 }

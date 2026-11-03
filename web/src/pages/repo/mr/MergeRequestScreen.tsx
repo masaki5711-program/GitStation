@@ -2,7 +2,8 @@
 // status (why it is stopped, what next), and the tabs Overview (description
 // and threads) and Changes. The status line and the threads read on their
 // own: a failure of one shows in its place only, with its request_id.
-// Approve and merge are U2.
+// The Overview starts with the merge conditions panel (U2: every reason,
+// approve / withdraw, merge).
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router';
@@ -14,12 +15,14 @@ import { QueryError } from '../../../components/QueryError';
 import { formatDate, formatDateTime, mrStateLabel } from '../../../features/labels';
 import { MarkdownView } from '../../../features/MarkdownView';
 import { CommentForm } from '../../../features/mr/CommentForm';
+import { ConditionsPanel } from '../../../features/mr/ConditionsPanel';
 import { DiscussionThread, threadElementId } from '../../../features/mr/DiscussionThread';
 import { MrChanges } from '../../../features/mr/MrChanges';
 import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
 import { useThreadToggle } from '../../../features/mr/useThreadToggle';
+import { ViewedHeadProvider } from '../../../features/mr/viewedHead';
 import { pullUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
@@ -66,6 +69,7 @@ export function MergeRequestScreen({
         };
 
   return (
+    <ViewedHeadProvider projectId={projectId} project={project} iid={iid} mr={mr.data}>
     <Announcer>
       <Header mr={mr.data} />
       <StatusLine
@@ -112,6 +116,7 @@ export function MergeRequestScreen({
         </section>
       )}
     </Announcer>
+    </ViewedHeadProvider>
   );
 }
 
@@ -233,6 +238,7 @@ function Overview({
 
   return (
     <>
+      <ConditionsPanel projectId={projectId} iid={mr.iid} sourceBranch={mr.source_branch} />
       <section aria-labelledby="mr-description-title">
         <h2 id="mr-description-title" className={repo.sectionTitle}>
           {t('mr.view.description')}
