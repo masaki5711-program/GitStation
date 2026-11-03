@@ -91,6 +91,13 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 タグの作成・削除、既にあるコミットへのブランチ、ほかの無関係な大きな push、prune（オブジェクトの削除）は、この判定に影響しない
 （行を読むだけで履歴をたどらない）。
 
+### 承認の規則が読めない・承認者の名前が出ない
+
+| ログ | 意味 | 対処 |
+|---|---|---|
+| `FG-SYS-0001 reason=stored_approval_rule_invalid`（`approval_rule_id`） | 保存された承認の規則の `target_pattern` をこの版が読めない。その project の評価（`GET …/approvals`、`…/status`、マージ）と規則の一覧が失敗する（読めない規則を飛ばすと条件が緩むので閉じる側） | 読む: `SELECT id, name, target_pattern, updated_at FROM forge.approval_rules WHERE id = <approval_rule_id>;`。Maintainer が `gstn approval-rule remove --project <id> --name <name> --yes` で消し、正しい pattern で作り直す `[MUTATING — needs approval]`（戻し方: 同じ値で `gstn approval-rule set`） |
+| warn `forge.web.approver_names_incomplete`（`error_code`、`request_id`、`project_id`、`missing_users`、`missing_groups`） | 規則の答えで名前を引けない承認者がいた（グループの namespace の行が無い、または名前の読み取りの失敗・時間切れ）。その承認者は `users` / `groups` から外れるが `user_ids` / `group_ids` には残る。**マージの判定には影響しない**（評価は id だけを読む）。画面はその規則の保存を出さない | 読み取りの失敗なら `error_code` のコードの runbook。名前が無いなら `SELECT g.id, n.id FROM forge.groups g LEFT JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id WHERE g.id = ANY('{<group_ids>}');` で namespace の行の欠けを確かめ、runbook namespace-data へ |
+
 ## Diagnose（読み取りのみ）
 
 1. `gstn mr approvals --project <id> --iid <n> --json` で `approvals`・`rules`・`codeowners`・`blocked_by` を見る。

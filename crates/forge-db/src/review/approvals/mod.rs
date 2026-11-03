@@ -18,7 +18,7 @@
 //!   [`remove_approval_rule_mr_decided`] (`approval_rule.put` /
 //!   `.removed`, audit only).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use forge_core::ids::{ApprovalId, ApprovalRuleId, GroupId, MergeRequestId, ProjectId, UserId};
 use forge_core::{ObjectId, RefName, RefPattern, RepoId, Role, UnapproveReason, UserKind};
@@ -78,6 +78,95 @@ pub struct StoredApprovalRule {
     /// Who may approve for it (both empty: any eligible person).
     pub users: Vec<UserId>,
     pub groups: Vec<GroupId>,
+    /// UTC, RFC 3339 to the microsecond: the token a rule write's
+    /// `expected_updated_at` compares (U2 follow-up, FG-REVIEW-0018).
+    pub updated_at: String,
+}
+
+/// An approver user of a rule, named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedUser {
+    pub id: UserId,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// An approver group of a rule, named (its full path is what a rule write
+/// names it by).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedGroup {
+    pub id: GroupId,
+    pub full_path: String,
+    pub display_name: String,
+}
+
+/// The names of approvers (U2 follow-up): for the rule answers only, never
+/// for a merge decision. An id without a name (a group whose namespace row
+/// is missing) is absent from the map.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ApproverNames {
+    pub users: BTreeMap<UserId, NamedUser>,
+    pub groups: BTreeMap<GroupId, NamedGroup>,
+}
+
+/// The names of `users` and `groups` now (read pool, two bounded
+/// statements: at most `MAX_RULES × MAX_RULE_APPROVERS` ids).
+pub async fn approver_names(
+    db: &Db,
+    users: &[UserId],
+    groups: &[GroupId],
+) -> Result<ApproverNames, ForgeError> {
+    const QUERY: &str = "review.approver_names";
+    let user_ids: Vec<i64> = users.iter().map(|u| u.get()).collect();
+    let group_ids: Vec<i64> = groups.iter().map(|g| g.get()).collect();
+    db.within(QUERY, async {
+        let named_users: Vec<(i64, String, String)> =
+            sqlx::query_as("SELECT id, username, display_name FROM forge.users WHERE id = ANY($1)")
+                .bind(&user_ids)
+                .fetch_all(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error(QUERY, e))?;
+        let named_groups: Vec<(i64, String, String)> = sqlx::query_as(
+            "SELECT g.id, n.full_path, g.display_name FROM forge.groups g \
+             JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = g.id \
+             WHERE g.id = ANY($1)",
+        )
+        .bind(&group_ids)
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
+        Ok(ApproverNames {
+            users: named_users
+                .into_iter()
+                .map(|(id, username, display_name)| {
+                    let id = UserId::new(id);
+                    (
+                        id,
+                        NamedUser {
+                            id,
+                            username,
+                            display_name,
+                        },
+                    )
+                })
+                .collect(),
+            groups: named_groups
+                .into_iter()
+                .map(|(id, full_path, display_name)| {
+                    let id = GroupId::new(id);
+                    (
+                        id,
+                        NamedGroup {
+                            id,
+                            full_path,
+                            display_name,
+                        },
+                    )
+                })
+                .collect(),
+        })
+    })
+    .await
 }
 
 /// The approval facts of one merge request.

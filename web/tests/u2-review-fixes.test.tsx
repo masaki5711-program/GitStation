@@ -2,8 +2,9 @@
 // HIGH 1: approve / merge send the head of the version on screen (the
 //   versions the Changes tab renders), never a status head read later; when
 //   the two differ the actions hide behind "a new version was pushed — reload".
-// HIGH 2: an approval rule dialog never offers Save before the approver names
-//   were read (nor when they failed), so a PUT cannot drop the approvers.
+// HIGH 2: an approval rule dialog never offers Save before its form is
+//   there (the group choices read, or their failure shown); the approvers come
+//   from the rule's own names (U2 follow-up), so a PUT cannot drop them.
 // HIGH 3: Enter in the user search runs the search, not the rule form.
 // MEDIUM focus: dialogs give the focus back to their opener; saving the merge
 //   settings keeps the focus on Save.
@@ -11,7 +12,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { RULE, settingsRoutes } from './merge-settings-fixtures';
-import { mockServer } from './mock';
+import { LISTED_GROUP, mockServer, page } from './mock';
 import { MR_API, MR_SCREENS, attempt, mergeSettings, mrRoutes, status, version, versions } from './mr-fixtures';
 import { json, renderApp } from './render';
 
@@ -99,7 +100,7 @@ describe('HIGH 1: the head that was on screen', () => {
 });
 
 describe('HIGH 2: approval rule names', () => {
-  it('names still loading: no Save; once they arrive the form starts from them and keeps the approvers', async () => {
+  it('group choices still loading: no Save; once they arrive the form keeps the rule\'s approvers', async () => {
     let release: () => void = () => undefined;
     const late = new Promise<void>((r) => {
       release = r;
@@ -107,12 +108,9 @@ describe('HIGH 2: approval rule names', () => {
     const server = mockServer(
       settingsRoutes({
         'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [RULE] }),
-        'GET /api/v1/projects/7/members': async () => {
+        'GET /api/v1/groups': async () => {
           await late;
-          return json(200, {
-            members: [{ user_id: 6, username: 'jiro', display_name: 'Jiro Suzuki', role: 'developer', active: true, created_at: '2026-10-02T00:00:00Z' }],
-            next_after: null,
-          });
+          return page([LISTED_GROUP]);
         },
         'PUT /api/v1/projects/7/approval-rules/leads': () => json(200, RULE),
       }),
@@ -132,15 +130,16 @@ describe('HIGH 2: approval rule names', () => {
       target_pattern: 'refs/heads/main',
       users: ['jiro'],
       groups: ['acme'],
+      expected_updated_at: RULE.updated_at,
     });
   });
 
-  it('names that cannot be read: the reason and request id, and no Save', async () => {
+  it('group choices that cannot be read: the reason and request id, and no Save', async () => {
     const server = mockServer(
       settingsRoutes({
         'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [RULE] }),
-        'GET /api/v1/projects/7/members': () =>
-          json(503, { error_code: 'FG-DB-0001', user_message: 'Members could not be read.', request_id: 'req-names-1' }),
+        'GET /api/v1/groups': () =>
+          json(503, { error_code: 'FG-DB-0001', user_message: 'Groups could not be read.', request_id: 'req-names-1' }),
       }),
     );
     await renderApp({ fetch: server.fetch, path: '/acme/forge-web/-/settings', lang: 'en' });

@@ -477,6 +477,8 @@ pub enum ApprovalRuleCommand {
     },
     /// Create or replace a rule (Maintainer): how many approvals, for which
     /// targets, from whom (no --user and no --group: any eligible person).
+    /// Refused (FG-REVIEW-0018) when the rule changed after gstn read it:
+    /// run it again.
     Set {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
@@ -561,7 +563,9 @@ pub enum CodeownersCommand {
 #[derive(Subcommand, Debug)]
 pub enum MergeRuleCommand {
     /// Set a protected branch rule's merge conditions (Maintainer). Options
-    /// left out keep their current value (read first).
+    /// left out keep their current value (read first). Refused
+    /// (FG-REVIEW-0019) when they changed after gstn read them: run it
+    /// again.
     Set {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,

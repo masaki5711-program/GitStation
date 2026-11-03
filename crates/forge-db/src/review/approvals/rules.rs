@@ -3,6 +3,13 @@
 //! project row and the caller are locked. A change is audited on the
 //! project (`approval_rule.put` / `approval_rule.removed`, no event) and
 //! never touches approvals: it only changes what `evaluate_merge()` reads.
+//!
+//! U2 follow-up: a put names the rule it read (`expected_updated_at`;
+//! `None`: create only) and a rule otherwise as locked is
+//! `FG-REVIEW-0018` — nothing is replaced, re-created or overwritten
+//! silently. `updated_at` is stamped with `clock_timestamp()` under the
+//! project row lock (as the merge settings, ADR-0024 U2) and read to the
+//! microsecond.
 
 use std::collections::BTreeMap;
 
@@ -49,6 +56,7 @@ struct RuleRow {
     name: String,
     target_pattern: Option<String>,
     required_approvals: i32,
+    updated_at: String,
     user_id: Option<i64>,
     group_id: Option<i64>,
 }
@@ -59,13 +67,18 @@ fn invalid_rule(id: i64) -> ForgeError {
         .with_context("approval_rule_id", id)
 }
 
-/// The rules of `project` with their approvers, by name.
+/// The rules of `project` with their approvers (ids only: the merge
+/// evaluation reads this, and a name is never a reason it cannot decide —
+/// review round; names are [`super::approver_names`]'s), by name: one
+/// statement of at most `MAX_RULES × MAX_RULE_APPROVERS` rows.
 pub(super) async fn rules_on(
     conn: &mut PgConnection,
     project: ProjectId,
 ) -> Result<Vec<StoredApprovalRule>, ForgeError> {
     let rows: Vec<RuleRow> = sqlx::query_as(
-        "SELECT r.id, r.name, r.target_pattern, r.required_approvals, a.user_id, a.group_id \
+        "SELECT r.id, r.name, r.target_pattern, r.required_approvals, \
+         to_char(r.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+         AS updated_at, a.user_id, a.group_id \
          FROM forge.approval_rules r \
          LEFT JOIN forge.approval_rule_approvers a ON a.rule_id = r.id \
          WHERE r.project_id = $1 ORDER BY r.name, a.id",
@@ -95,6 +108,7 @@ pub(super) async fn rules_on(
                         required_approvals: row.required_approvals,
                         users: Vec::new(),
                         groups: Vec::new(),
+                        updated_at: row.updated_at.clone(), // clone: as above
                     })
             }
         };
@@ -152,6 +166,33 @@ fn audit(project: ProjectId, change: ApprovalRuleChange) -> ChangeRecord {
     }
 }
 
+/// The rule as locked is the one the caller read (U2 follow-up): the same
+/// `updated_at`, or no rule for `None` (create only). `FG-REVIEW-0018`
+/// otherwise — `rule_exists`, `rule_gone` or `stale_rule`.
+fn unchanged_since(
+    project: ProjectId,
+    name: &str,
+    expected: Option<&str>,
+    current: Option<&StoredApprovalRule>,
+) -> Result<(), ForgeError> {
+    let actual = current.map(|r| r.updated_at.as_str());
+    if actual == expected {
+        return Ok(());
+    }
+    let reason = match (expected, actual) {
+        (None, Some(_)) => "rule_exists",
+        (Some(_), None) => "rule_gone",
+        _ => "stale_rule",
+    };
+    Err(ForgeError::new(ErrorCode::ApprovalRuleChanged)
+        .with_context("action", "ApprovalRuleManage")
+        .with_context("reason", reason)
+        .with_context("project_id", project.get())
+        .with_context("approval_rule", name.to_owned())
+        .with_context("expected", expected.unwrap_or("none").to_owned())
+        .with_context("actual", actual.unwrap_or("none").to_owned()))
+}
+
 fn same(stored: &StoredApprovalRule, new: &NewApprovalRule) -> bool {
     let sorted = |v: &[i64]| {
         let mut v = v.to_vec();
@@ -170,13 +211,17 @@ fn same(stored: &StoredApprovalRule, new: &NewApprovalRule) -> bool {
 /// Create rule `new.name` of `project`, or replace it (its approvers
 /// entirely), after `decide` on the locked project facts. More than
 /// [`MAX_RULES`] rules is `FG-WEB-0006 rule=too_many_rules`; an unknown
-/// user or group `rule=unknown_user|unknown_group`.
+/// user or group `rule=unknown_user|unknown_group`. `expected_updated_at`
+/// is the rule's `updated_at` the caller read (`None`: no such rule, create
+/// only); another rule as locked is `FG-REVIEW-0018` (module docs), decided
+/// after `decide` and before anything is compared or written.
 pub async fn put_approval_rule_mr_decided<P>(
     db: &Db,
     ctx: &ChangeContext,
     project: ProjectId,
     viewer: UserId,
     new: &NewApprovalRule,
+    expected_updated_at: Option<&str>,
     decide: impl FnOnce(&MergeRequestFacts) -> Result<P, ForgeError>,
 ) -> Result<(RuleOutcome, StoredApprovalRule, P), ForgeError> {
     const ACTION: &str = "approval_rule.put";
@@ -199,6 +244,7 @@ pub async fn put_approval_rule_mr_decided<P>(
             .step(|c| async move { rules_on(c, project).await })
             .await?;
         let existing = current.iter().find(|r| r.name == new.name);
+        unchanged_since(project, &new.name, expected_updated_at, existing)?;
         if let Some(existing) = existing {
             if same(existing, new) {
                 return Ok(Settle::Discard((
@@ -221,7 +267,8 @@ pub async fn put_approval_rule_mr_decided<P>(
                         .map_err(|e| query_error("review.approval_rule_clear", e))?;
                     sqlx::query_scalar(
                         "UPDATE forge.approval_rules SET target_pattern = $2, \
-                         required_approvals = $3, updated_at = now() WHERE id = $1 RETURNING id",
+                         required_approvals = $3, updated_at = clock_timestamp() \
+                         WHERE id = $1 RETURNING id",
                     )
                     .bind(id.get())
                     .bind(new.target_pattern.as_ref().map(RefPattern::as_str))
@@ -236,7 +283,9 @@ pub async fn put_approval_rule_mr_decided<P>(
                 tx.step(|c| async move {
                     sqlx::query_scalar(
                         "INSERT INTO forge.approval_rules (project_id, name, target_pattern, \
-                         required_approvals) VALUES ($1, $2, $3, $4) RETURNING id",
+                         required_approvals, created_at, updated_at) \
+                         VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp()) \
+                         RETURNING id",
                     )
                     .bind(project.get())
                     .bind(&new.name)

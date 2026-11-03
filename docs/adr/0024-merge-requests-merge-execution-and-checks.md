@@ -1568,3 +1568,50 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   時刻になりうる）。自動復帰（`restore_one`）も他の書き手と同じ順（プロジェクトの行 → 設定の行）でロックする。テスト
   `stale_merge_settings_put_is_409`、`updated_at_follows_the_commit_order`、`the_restore_waits_for_the_project_row`。
   `gstn merge-settings set` は読んだ `updated_at` を送る。
+
+## 実装で決めたこと（U2 の続き `feat/review-rule-concurrency`、2026-11-03）
+
+U2 のレビューで見つかった、規則の書き込みの「後から保存した人が黙って勝つ」問題と、承認者の名前の引き方の決定。
+
+- **承認の規則と保護したブランチのマージの規則にも楽観的な同時編集の検出**: `PUT …/approval-rules/{name}` と
+  `PUT …/protected-refs/{rule_id}/merge-rule` は `expected_updated_at`（読んだ規則の `updated_at`。不透明な文字列で、
+  マイクロ秒までの RFC 3339）を **必須** にする（欄が無い要求は `FG-WEB-0006 reason=missing_field`。任意にすると古い
+  クライアントが他人の変更を黙って上書きし続ける。マージの設定と同じ理由）。**`null` は「まだ無い」＝作るだけ**: 名前で
+  作るか置き換える `PUT` が、同じ名前を足そうとした 2 人目の保存で 1 人目の規則を置き換えないため（`If-None-Match: *` は
+  使わない。本文の欄 1 つで、作る・置き換えるの両方を同じ形で言えるほうが gstn と画面に易しい）。
+- **比べる場所**: 書き込みのトランザクションの中、プロジェクトの行（マージの規則は保護の規則の行とマージの規則の行も）を
+  ロックし、`decide`（`reconfirm` による再認可）を通った **後**、何かを比べたり書いたりする **前**。同じ値の保存でも古い読み
+  取りなら断る（読んでいない欄を誰かが変えたかもしれない。マージの設定と同じ）。違えば何も書かずに 409。
+- **新しいコードを 2 つ**: FG-REVIEW-0017（`MergeSettingsChanged`）は使い回さない。利用者への文が「マージの設定」を名指しし、
+  診断の監査の行（`merge_settings.%`）も違うため。**FG-REVIEW-0018 `ApprovalRuleChanged`**（監査 `approval_rule.%`）と
+  **FG-REVIEW-0019 `MergeRuleChanged`**（監査 `protected_ref.merge_rule_%`）。どちらも 409、info、`reason` は
+  `stale_rule`（値が違う）・`rule_exists`（`null` なのに既にある）・`rule_gone`（値を送ったのに読んだ後に消された。黙って作り
+  直さない）。ログには `expected` / `actual`（無いときは `none`）と `project_id`、承認の規則は名前、マージの規則は
+  `protected_ref_id`。テスト `stale_approval_rule_put_is_409`、`create_only_approval_rule_put_refuses_existing_name`、
+  `stale_merge_rule_put_is_409`。マージのジョブの再試行の分類では両方とも「やり直しても通らない」。
+- **時刻の付け方**: 両方の表の `updated_at` は、作るときも置き換えるときもロックの下で `clock_timestamp()`（`now()` は
+  トランザクションの始まりなので、ロックを待った書き込みが先に終わった書き込みより前の時刻になりうる）。読むときはマイクロ秒まで。
+  何も変わらない保存（`Unchanged`）は時刻を進めない。マイグレーションは足さない（列は既にあり、付け方だけを変えた）。
+- **承認者の名前は規則の答えに含める（新しい経路を作らない）**: `GET …/approval-rules` の各規則（と `PUT` の答え）に
+  `users: [{id, username, display_name}]`、`groups: [{id, full_path, display_name}]` を足す（`user_ids` / `group_ids` は残す。
+  足すだけ）。比べた案の `GET /api/v1/users?ids=` は、新しい経路・新しい行列の行・件数の上限・画面での 2 度目の読み取りが要るのに、
+  欲しいのは「この規則が名指ししている人」だけで、規則を読める人はその id を既に見ている。名前の見える範囲は規則と同じ
+  `ProjectRead`（サインインした人。プロジェクトのメンバーの一覧 `MemberList` と同じ範囲で、利用者の検索 `UserSearch` より広くない。
+  グループは社内向けでサインインした人全員に見える）。
+- **名前はマージの判定に入れない（レビューの指摘 MEDIUM）**: 規則の読み取り（`rules_on`）は評価（`approval_facts`）と共有なので
+  id だけを読む。名前は規則の答え（`GET` / `PUT`）を組むときだけ、別の 2 つの有界な問い合わせ（`approver_names`、最大 20 × 50 の id）
+  で引く。名前を引けない承認者（グループの namespace の行が無い。`namespaces.owner_id` に FK は無い）や名前の読み取りの失敗では、
+  答えを失敗にせず、その承認者を `users` / `groups` から外し（`user_ids` / `group_ids` には残す）、warn
+  `forge.web.approver_names_incomplete`（`error_code`、`request_id`、`project_id`、`missing_users`、`missing_groups`）を 1 行出す
+  （runbook merge-blocked）。画面は `users` と `user_ids`（`groups` と `group_ids`）の数が違う規則の保存を出さない（保存すると外れた
+  承認者を消してしまうため）。テスト `a_group_without_its_namespace_row_never_blocks_the_merge_decision`。
+- **名前の見える範囲（レビューの指摘 LOW、決定）**: 承認者の `username` / `display_name` は `ProjectRead` の人すべて（社内向けの
+  プロジェクトではメンバーでない社内の人も）に見える。これは受け入れる: 同じ欄はサインインした人なら誰でも利用者の検索
+  （`UserSearch`、`GET /api/v1/users?search=`）で引け、プロジェクトのメンバーの一覧（`MemberList`、`ProjectRead` と同じ範囲）にも
+  出る。グループの `full_path` / `display_name` もサインインした人全員に見える（グループは社内向け）。新しく見えるようになるのは
+  「この規則がこの人・このグループを名指ししている」ことだけで、それは id として前から同じ範囲に見えていた。
+- **画面**: 規則の書き込みは答えの名前（`username` / `full_path`）のまま送れるので、「最初の 100 人のメンバーに居ない承認者が
+  居る規則は保存できない」制限をやめる（メンバー一覧での名前引きを外す。グループの選択肢の一覧は残す）。409 は他の保存と同じ
+  「読み直す」行で扱い、作るときは `null` を送る。
+- 残すこと: 承認者が無効にされた規則を保存し直すと、その名前は `FG-WEB-0006 rule=unknown_user` で断られる（前からの動き）。
+  画面でその人を外して保存すれば通る。答えに `active` を足すかは、使う場面が出てから決める。

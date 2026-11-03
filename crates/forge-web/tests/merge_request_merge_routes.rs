@@ -688,7 +688,11 @@ async fn the_approval_routes_approve_evaluate_and_withdraw() {
 async fn the_approval_rule_routes_manage_rules_that_block_the_merge() {
     let w = world().await;
     let olga = w.owner().await;
-    let rule = json!({"target_pattern": "refs/heads/main", "required_approvals": 1});
+    let rule = json!({
+        "target_pattern": "refs/heads/main",
+        "required_approvals": 1,
+        "expected_updated_at": null
+    });
     let (status, body) = send(
         w.router.clone(),
         "PUT",
@@ -913,7 +917,11 @@ async fn the_merge_rule_routes_and_the_status_contract() {
     assert!(created["merge_rule"].is_null());
     let rule = created["id"].as_i64().expect("rule id");
     let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
-    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    // U2 follow-up: every put names the merge rule it read (`null`: none).
+    let put = |who: Caller, mut body: Value| {
+        body["expected_updated_at"] = Value::Null;
+        send(w.router.clone(), "PUT", &uri, who, Some(body))
+    };
     let (status, body) = put(olga.clone(), json!({"required_checks": ["ext/sonar"]})).await;
     assert_eq!(
         (status, code(&body)),
@@ -1501,5 +1509,365 @@ async fn a_settings_write_without_expected_updated_at_is_missing_field() {
     let line = logged.to_string();
     assert!(line.contains("missing_field"), "{line}");
     assert!(line.contains("expected_updated_at"), "{line}");
+    w.t.drop_now().await;
+}
+
+// ── U2 follow-up: the rules' optimistic concurrency and approver names ──
+
+/// A refusal of a stale or create-only save: 409 with the code and the
+/// request id only.
+fn conflict(status: StatusCode, body: &Value, wanted: &str) {
+    assert_eq!(
+        (status, code(body)),
+        (StatusCode::CONFLICT, wanted),
+        "{body}"
+    );
+    assert!(body["request_id"].is_string(), "{body}");
+}
+
+impl World {
+    async fn approval_rules(&self, who: &Caller) -> Value {
+        let (status, list) = send(
+            self.router.clone(),
+            "GET",
+            &self.rules_uri(""),
+            who.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        list
+    }
+}
+
+/// Two Maintainers edit one approval rule: the second save, made on what
+/// was read before the first, is FG-REVIEW-0018 and the first stays — even
+/// with the same values. Read again, saved again. A rule removed in
+/// between is a conflict too (never re-created silently), and a write
+/// without `expected_updated_at` is FG-WEB-0006.
+#[tokio::test]
+async fn stale_approval_rule_put_is_409() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let mia = w.member("mia", Role::Maintainer).await;
+    let uri = w.rules_uri("/review");
+    let put = |who: Caller, required: i32, expected: Value| {
+        send(
+            w.router.clone(),
+            "PUT",
+            &uri,
+            who,
+            Some(json!({"required_approvals": required, "expected_updated_at": expected})),
+        )
+    };
+    let (status, created) = put(olga.clone(), 1, Value::Null).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let read = created["updated_at"].clone();
+    let stamp = read.as_str().expect("updated_at");
+    // RFC 3339 to the microsecond: two saves within a second differ.
+    assert_eq!(stamp.len(), "2026-11-03T00:00:00.000000Z".len(), "{stamp}");
+    let list = w.approval_rules(&mia).await;
+    assert_eq!(list["rules"][0]["updated_at"], read, "{list}");
+    // olga saves first …
+    let (status, first) = put(olga.clone(), 2, read.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let latest = first["updated_at"].clone();
+    assert_ne!(latest, read);
+    // … mia saves on what she read before: refused, olga's change stays.
+    let (status, body) = put(mia.clone(), 3, read.clone()).await;
+    conflict(status, &body, "FG-REVIEW-0018");
+    let (status, body) = put(mia.clone(), 2, read.clone()).await;
+    conflict(status, &body, "FG-REVIEW-0018");
+    let list = w.approval_rules(&mia).await;
+    assert_eq!(list["rules"][0]["required_approvals"], 2, "{list}");
+    assert_eq!(list["rules"][0]["updated_at"], latest, "{list}");
+    // Read again, saved again; an unchanged save keeps the stamp.
+    let (status, body) = put(mia.clone(), 3, latest.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let newest = body["updated_at"].clone();
+    assert_ne!(newest, latest);
+    let (status, body) = put(mia.clone(), 3, newest.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["updated_at"], newest, "unchanged: {body}");
+    // Removed in between: the stale save does not bring it back.
+    let (status, _) = send(w.router.clone(), "DELETE", &uri, olga.clone(), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = put(mia.clone(), 3, newest).await;
+    conflict(status, &body, "FG-REVIEW-0018");
+    let list = w.approval_rules(&mia).await;
+    assert_eq!(list["rules"], json!([]), "{list}");
+    // Without the field: refused before anything is decided.
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &uri,
+        olga.clone(),
+        Some(json!({"required_approvals": 1})),
+    )
+    .await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    w.t.drop_now().await;
+}
+
+/// `expected_updated_at: null` means "create": a rule that already has
+/// the name is never replaced by it (two people adding the same name).
+#[tokio::test]
+async fn create_only_approval_rule_put_refuses_existing_name() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let mia = w.member("mia", Role::Maintainer).await;
+    let uri = w.rules_uri("/review");
+    let create = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let (status, created) = create(
+        olga.clone(),
+        json!({"required_approvals": 2, "users": ["dave"], "expected_updated_at": null}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, body) = create(
+        mia.clone(),
+        json!({"required_approvals": 1, "expected_updated_at": null}),
+    )
+    .await;
+    conflict(status, &body, "FG-REVIEW-0018");
+    let list = w.approval_rules(&mia).await;
+    assert_eq!(list["rules"].as_array().map(Vec::len), Some(1), "{list}");
+    assert_eq!(list["rules"][0]["required_approvals"], 2, "{list}");
+    assert_eq!(list["rules"][0]["updated_at"], created["updated_at"]);
+    assert_eq!(list["rules"][0]["users"][0]["username"], "dave", "{list}");
+    w.t.drop_now().await;
+}
+
+/// The rule's approvers come with their names (U2 follow-up: the screen
+/// needs no member list to name them), for everyone who reads the rules;
+/// an outsider gets the not-found answer.
+#[tokio::test]
+async fn the_approval_rule_get_names_its_approvers() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let olga_id = olga.principal.user().expect("olga");
+    let qa = forge_db::groups::create(
+        &w.t.db,
+        &ctx("req-group-qa"),
+        &forge_db::groups::NewGroup {
+            segment: "qa".to_owned(),
+            parent: None,
+            display_name: "Quality".to_owned(),
+            description: String::new(),
+            owner: olga_id,
+        },
+    )
+    .await
+    .expect("group");
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/review"),
+        olga.clone(),
+        Some(json!({
+            "required_approvals": 1,
+            "users": ["olga", "dave"],
+            "groups": ["qa"],
+            "expected_updated_at": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let mut users = vec![
+        json!({"id": w.dev_id.get(), "username": "dave", "display_name": "dave"}),
+        json!({"id": olga_id.get(), "username": "olga", "display_name": "olga"}),
+    ];
+    users.sort_by_key(|u| u["id"].as_i64());
+    let users = Value::Array(users);
+    let groups = json!([
+        {"id": qa.group_id.get(), "full_path": "qa", "display_name": "Quality"}
+    ]);
+    // The write's answer names them too, in id order as `user_ids`.
+    assert_eq!(body["users"], users, "{body}");
+    assert_eq!(body["groups"], groups, "{body}");
+    let list = w.approval_rules(&w.dev).await;
+    assert_eq!(list["rules"][0]["users"], users, "{list}");
+    assert_eq!(list["rules"][0]["groups"], groups, "{list}");
+    let (status, body) = send(
+        w.router.clone(),
+        "GET",
+        &w.rules_uri(""),
+        w.outsider.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}
+
+/// The merge rule of a protected branch: a save on a stale read is
+/// FG-REVIEW-0019 and the other change stays; `null` creates only; a
+/// merge rule removed in between is a conflict; without the field
+/// FG-WEB-0006.
+#[tokio::test]
+async fn stale_merge_rule_put_is_409() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let mia = w.member("mia", Role::Maintainer).await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "maintainer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let rule = created["id"].as_i64().expect("rule id");
+    let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let put = |who: Caller, approvals: u32, expected: Value| {
+        send(
+            w.router.clone(),
+            "PUT",
+            &uri,
+            who,
+            Some(json!({"required_approvals": approvals, "expected_updated_at": expected})),
+        )
+    };
+    let read_merge_rule = || async {
+        let (status, list) = send(
+            w.router.clone(),
+            "GET",
+            &w.project_uri("/protected-refs"),
+            mia.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        list["rules"][0]["merge_rule"].clone()
+    };
+    let (status, body) = put(olga.clone(), 1, Value::Null).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let read = body["merge_rule"]["updated_at"].clone();
+    let stamp = read.as_str().expect("updated_at");
+    assert_eq!(stamp.len(), "2026-11-03T00:00:00.000000Z".len(), "{stamp}");
+    assert_eq!(read_merge_rule().await["updated_at"], read);
+    // Create-only: a merge rule exists already.
+    let (status, body) = put(mia.clone(), 2, Value::Null).await;
+    conflict(status, &body, "FG-REVIEW-0019");
+    // olga saves first, mia on her old read: refused, olga's stays.
+    let (status, body) = put(olga.clone(), 2, read.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let latest = body["merge_rule"]["updated_at"].clone();
+    assert_ne!(latest, read);
+    let (status, body) = put(mia.clone(), 3, read.clone()).await;
+    conflict(status, &body, "FG-REVIEW-0019");
+    let (status, body) = put(mia.clone(), 2, read.clone()).await;
+    conflict(status, &body, "FG-REVIEW-0019");
+    let now = read_merge_rule().await;
+    assert_eq!(now["required_approvals"], 2, "{now}");
+    assert_eq!(now["updated_at"], latest, "{now}");
+    // Read again, saved again.
+    let (status, body) = put(mia.clone(), 3, latest.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let newest = body["merge_rule"]["updated_at"].clone();
+    assert_ne!(newest, latest);
+    // Removed in between: the stale save does not bring it back.
+    let (status, _) = send(w.router.clone(), "DELETE", &uri, olga.clone(), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = put(mia.clone(), 3, newest).await;
+    conflict(status, &body, "FG-REVIEW-0019");
+    assert!(read_merge_rule().await.is_null());
+    // Without the field: refused before anything is decided.
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &uri,
+        olga.clone(),
+        Some(json!({"required_approvals": 1})),
+    )
+    .await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    w.t.drop_now().await;
+}
+
+/// Review round (MEDIUM): an approver's name is cosmetic. A group whose
+/// namespace row is missing (no FK holds it) never blocks the merge
+/// evaluation — it reads ids only — and the rule list still answers: the
+/// unnamed approver stays in `group_ids`, is left out of `groups`, and one
+/// warn carries the error code and the request id.
+#[tokio::test]
+async fn a_group_without_its_namespace_row_never_blocks_the_merge_decision() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let olga_id = olga.principal.user().expect("olga");
+    let qa = forge_db::groups::create(
+        &w.t.db,
+        &ctx("req-group-qa"),
+        &forge_db::groups::NewGroup {
+            segment: "qa".to_owned(),
+            parent: None,
+            display_name: "Quality".to_owned(),
+            description: String::new(),
+            owner: olga_id,
+        },
+    )
+    .await
+    .expect("group");
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/review"),
+        olga.clone(),
+        Some(json!({
+            "required_approvals": 1,
+            "users": ["olga"],
+            "groups": ["qa"],
+            "expected_updated_at": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    w.t.exec_superuser(&format!(
+        "ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
+         DELETE FROM forge.namespaces WHERE kind = 'group' AND owner_id = {}; \
+         ALTER TABLE forge.namespaces ENABLE TRIGGER USER;",
+        qa.group_id.get()
+    ))
+    .await;
+    // The merge decision reads ids only: it still decides.
+    let (status, approvals) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/approvals"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{approvals}");
+    assert_eq!(approvals["rules"][0]["name"], "review", "{approvals}");
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["mergeable"], false, "the rule still blocks: {s}");
+    // The list answers with what can be named, and says so once in the log.
+    let logs = Captured::default();
+    let guard = logs.install();
+    let list = w.approval_rules(&w.dev).await;
+    drop(guard);
+    let rule = &list["rules"][0];
+    assert_eq!(rule["group_ids"], json!([qa.group_id.get()]), "{list}");
+    assert_eq!(rule["groups"], json!([]), "{list}");
+    assert_eq!(rule["users"][0]["username"], "olga", "{list}");
+    let warned = logs.named("forge.web.approver_names_incomplete");
+    assert_eq!(warned.len(), 1, "{:?}", logs.events());
+    assert_eq!(warned[0]["error_code"], "FG-SYS-0001", "{}", warned[0]);
+    assert!(warned[0]["request_id"].is_string(), "{}", warned[0]);
+    assert_eq!(warned[0]["missing_groups"], 1, "{}", warned[0]);
     w.t.drop_now().await;
 }

@@ -444,8 +444,7 @@
       "who": "Who may approve",
       "anyone": "Anyone who may approve",
       "anyoneHelp": "With no user and no group, anyone who may approve counts.",
-      "unknownUser": "user #{{id}}",
-      "unknownGroup": "group #{{id}}",
+      "namesMissing": "Some approvers of this rule could not be shown by name, so saving here would remove them and is not offered. Reload the page later, or change the rule with gstn approval-rule.",
       "users": "Users",
       "groups": "Groups",
       "group": "Group",
@@ -467,7 +466,6 @@
       "deleted": "The rule {{name}} was deleted.",
       "save": "Save the rule",
       "saved": "The rule {{name}} was saved.",
-      "unnamed": "Some approvers of this rule cannot be shown by name: they are not direct members of this project or groups you can see. Saving here would remove them, so it is not offered. Change the rule with gstn approval-rule, or delete it and create it again with the approvers you want.",
       "tableLabel": "List of approval rules",
       "nameTaken": "A rule with this name exists. Change that rule in the list, or choose another name."
     },

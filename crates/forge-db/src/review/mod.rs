@@ -49,11 +49,11 @@ mod version_refs;
 pub mod versions;
 
 pub use approvals::{
-    approval_facts, approval_rules, approve_mr_decided, approved_heads, owners,
+    approval_facts, approval_rules, approve_mr_decided, approved_heads, approver_names, owners,
     put_approval_rule_mr_decided, range_pushers, remove_approval_rule_mr_decided,
-    unapprove_mr_decided, ApprovalFacts, ApproveOutcome, ApprovedHead, ApproverFacts, CommitPusher,
-    NewApprovalRule, Owners, RuleOutcome, StoredApproval, StoredApprovalRule, MAX_APPROVALS,
-    MAX_RULES, MAX_RULE_APPROVERS,
+    unapprove_mr_decided, ApprovalFacts, ApproveOutcome, ApprovedHead, ApproverFacts,
+    ApproverNames, CommitPusher, NamedGroup, NamedUser, NewApprovalRule, Owners, RuleOutcome,
+    StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES, MAX_RULE_APPROVERS,
 };
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,

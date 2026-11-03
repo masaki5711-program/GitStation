@@ -226,6 +226,10 @@ pub fn merge_rule_cmd(
                     .map_or_else(|| keep("require_resolved_discussions", json!(false)), Value::Bool),
                 "direct_push_forbidden": direct_push_forbidden
                     .map_or_else(|| keep("direct_push_forbidden", json!(false)), Value::Bool),
+                // U2 follow-up: the merge rule this replaces (`null`: none
+                // yet); changed in between is FG-REVIEW-0019 (run it
+                // again), never overwritten.
+                "expected_updated_at": keep("updated_at", Value::Null),
             });
             let body = call(
                 &c,

@@ -203,7 +203,9 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CodeownersInvalid
         | ErrorCode::ApprovalLimitReached
         | ErrorCode::RequiredCheckNamespaceNotAllowed
-        | ErrorCode::MergeSettingsChanged => false,
+        | ErrorCode::MergeSettingsChanged
+        | ErrorCode::ApprovalRuleChanged
+        | ErrorCode::MergeRuleChanged => false,
     }
 }
 
