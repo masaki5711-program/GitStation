@@ -705,7 +705,8 @@
       "withdrawn": "Persetujuan Anda ditarik.",
       "unchanged": "Tidak ada yang berubah.",
       "reload": "Muat ulang merge request",
-      "newVersion": "Versi baru di-push. Muat ulang merge request untuk melihatnya sebelum menyetujui atau merge."
+      "newVersion": "Versi baru di-push. Periksa sebelum menyetujui atau merge.",
+      "reviewNew": "Periksa versi baru"
     },
     "merge": {
       "open": "Merge…",

@@ -705,7 +705,8 @@
       "withdrawn": "承認を取り消しました。",
       "unchanged": "変わりはありません。",
       "reload": "MR を読み直す",
-      "newVersion": "新しい版が push されました。承認やマージの前に、MR を読み直して確かめてください。"
+      "newVersion": "新しい版が push されました。承認やマージの前に確かめてください。",
+      "reviewNew": "新しい版を確かめる"
     },
     "merge": {
       "open": "マージ…",

@@ -22,6 +22,7 @@ import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
 import { useThreadToggle } from '../../../features/mr/useThreadToggle';
+import { ViewedHeadProvider } from '../../../features/mr/viewedHead';
 import { pullUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
@@ -68,6 +69,7 @@ export function MergeRequestScreen({
         };
 
   return (
+    <ViewedHeadProvider projectId={projectId} project={project} iid={iid} mr={mr.data}>
     <Announcer>
       <Header mr={mr.data} />
       <StatusLine
@@ -114,6 +116,7 @@ export function MergeRequestScreen({
         </section>
       )}
     </Announcer>
+    </ViewedHeadProvider>
   );
 }
 

@@ -5,9 +5,10 @@
 import { useTranslation } from 'react-i18next';
 
 import { ApiFailure } from '../../api/client';
-import { useReloadMergeRequest } from '../../api/mergeRequests';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
+import { focusWhenNoDialog } from '../../ui/focus';
+import { useViewedHead } from './viewedHead';
 
 /** The view the person acted on is out of date (409 on an MR action). */
 export function isStale(error: unknown): boolean {
@@ -15,11 +16,10 @@ export function isStale(error: unknown): boolean {
 }
 
 export function ActionError({
-  projectId,
-  iid,
   error,
   onReload,
 }: {
+  /** The merge request (kept for the callers; the reload is the screen's). */
   projectId: number;
   iid: number;
   error: unknown;
@@ -27,7 +27,8 @@ export function ActionError({
   onReload?: () => void;
 }) {
   const { t } = useTranslation();
-  const reload = useReloadMergeRequest(projectId, iid);
+  // An explicit reload: the head read now is the one the screen shows.
+  const { reload } = useViewedHead();
   return (
     <div>
       <QueryError error={error} />
@@ -36,7 +37,10 @@ export function ActionError({
           type="button"
           className={controls.button}
           onClick={() => {
-            void reload();
+            void reload().then(() => {
+              // The button goes away with the error: the conditions take the focus.
+              focusWhenNoDialog(() => document.getElementById('mr-conditions-title'));
+            });
             onReload?.();
           }}
         >

@@ -318,3 +318,18 @@
 .checkItem code {
   overflow-wrap: anywhere;
 }
+
+.newVersion {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gs-space-2) var(--gs-space-3);
+  align-items: center;
+}
+
+.newVersion:has(> p:empty) {
+  display: none;
+}
+
+.empty {
+  margin: 0;
+}

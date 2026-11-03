@@ -705,7 +705,8 @@
       "withdrawn": "Your approval was withdrawn.",
       "unchanged": "Nothing changed.",
       "reload": "Reload the merge request",
-      "newVersion": "A new version was pushed. Reload the merge request to see it before approving or merging."
+      "newVersion": "A new version was pushed. Review it before approving or merging.",
+      "reviewNew": "Review the new version"
     },
     "merge": {
       "open": "Merge…",

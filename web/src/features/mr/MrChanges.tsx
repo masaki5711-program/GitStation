@@ -28,6 +28,7 @@ import { CommentForm } from './CommentForm';
 import { DiscussionThread } from './DiscussionThread';
 import { useThreadToggle } from './useThreadToggle';
 import styles from './Mr.module.css';
+import { useViewedHead } from './viewedHead';
 
 /** Where a comment on this line goes (null: the line has no side to name). */
 export function positionOf(file: DiffFile, row: LineRow, version: number): Position | null {
@@ -53,6 +54,16 @@ export function MrChanges({
 }) {
   const { t } = useTranslation();
   const list = useVersions(projectId, iid);
+  const viewed = useViewedHead();
+  const shown = useRef(false);
+  const first = list.isSuccess ? latestVersion(list.data.versions) : null;
+  // Opening Changes shows the newest version: that head counts as seen. Only
+  // the first version this tab renders, never one a later refetch brings.
+  useEffect(() => {
+    if (shown.current || !list.isSuccess) return;
+    shown.current = true;
+    if (first !== null && !first.refs_purged) viewed.accept(first.head_sha);
+  }, [list.isSuccess, first, viewed]);
   if (list.isPending) return <Loading />;
   if (list.isError) {
     return (

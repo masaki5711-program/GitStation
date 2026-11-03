@@ -6,10 +6,10 @@
 // shown only when the server said the request would be allowed (`viewer`),
 // never guessed from a role; the server decides again when it is pressed.
 //
-// Approve and merge name the head of the version on screen (the newest of
-// the versions the Changes tab renders), never a status head read later: when
-// the status is about another head (a push came in), the actions give way to
-// "a new version was pushed — reload" (review HIGH, 2026-11-03).
+// Approve and merge name the head the screen showed (viewedHead.tsx: state
+// of the merge request screen, never moved by a background refetch). When the
+// status or the newest version is about another head (a push came in), the
+// actions give way to "a new version was pushed — review it" (review HIGH).
 import type { TFunction } from 'i18next';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +18,6 @@ import {
   latestVersion,
   useApprove,
   useMergeStatus,
-  useReloadMergeRequest,
   useUnapprove,
   useVersions,
 } from '../../api/mergeRequests';
@@ -29,6 +28,7 @@ import controls from '../../components/controls.module.css';
 import { checkBadge, formatDateTime } from '../labels';
 import { ActionError } from './ActionError';
 import { StateBadge } from './StateBadge';
+import { useViewedHead } from './viewedHead';
 import { reasonLine, uncountedKey } from './blockedReason';
 import { MergeButton, MergeProgress } from './MergeControl';
 import styles from './Mr.module.css';
@@ -45,8 +45,13 @@ export function ConditionsPanel({
   const { t } = useTranslation();
   const status = useMergeStatus(projectId, iid);
   const versions = useVersions(projectId, iid);
-  /** The head of the version on screen; null until the versions are read. */
-  const viewedHead = versions.isSuccess ? (latestVersion(versions.data.versions)?.head_sha ?? null) : null;
+  const viewed = useViewedHead();
+  const newest = versions.isSuccess ? (latestVersion(versions.data.versions)?.head_sha ?? null) : null;
+  // A head newer than the one shown: the status's, or the newest version's.
+  const pushed =
+    viewed.known &&
+    ((status.data?.head_sha !== undefined && status.data.head_sha !== null && status.data.head_sha !== viewed.head) ||
+      (newest !== null && newest !== viewed.head));
   /** When the screen began following a merge attempt (null: not following). */
   const [since, setSince] = useState<number | null>(null);
   const [startedHere, setStartedHere] = useState(false);
@@ -73,6 +78,23 @@ export function ConditionsPanel({
           }}
         />
       )}
+      {/* Stays mounted: the line appearing is read out. */}
+      <div className={styles.newVersion}>
+        <p role="status" data-testid="mr-new-version" className={pushed ? styles.warningLine : styles.empty}>
+          {pushed ? t('mr.actions.newVersion') : ''}
+        </p>
+        {pushed && (
+          <button
+            type="button"
+            className={controls.primary}
+            onClick={() => {
+              void viewed.reviewNew();
+            }}
+          >
+            {t('mr.actions.reviewNew')}
+          </button>
+        )}
+      </div>
       {status.isSuccess && (
         <>
           <Reasons status={status.data} />
@@ -82,7 +104,7 @@ export function ConditionsPanel({
             projectId={projectId}
             iid={iid}
             status={status.data}
-            viewedHead={versions.isSuccess ? viewedHead : null}
+            viewedHead={pushed || !viewed.known ? null : viewed.head}
             sourceBranch={sourceBranch}
             onMergeStarted={(mergeId) => {
               setStartedHere(true);
@@ -209,13 +231,10 @@ function Actions({
   const { t } = useTranslation();
   const approve = useApprove(projectId, iid);
   const unapprove = useUnapprove(projectId, iid);
-  const reload = useReloadMergeRequest(projectId, iid);
   const [result, setResult] = useState('');
   const v = status.viewer;
-  // The status is about another head than the version on screen: a push
-  // came in after it was read. Nothing may be approved or merged unseen.
-  const pushed = viewedHead !== null && status.head_sha !== null && viewedHead !== status.head_sha;
-  const head = pushed ? null : viewedHead;
+  // Null when a newer head than the one shown exists (the panel's line says so).
+  const head = viewedHead;
   // `can_unapprove` pairs with `approved_by_me` (docs/api/merge-status.md).
   const mayApprove = v.can_approve && !v.approved_by_me && head !== null;
   const mayWithdraw = v.can_unapprove && v.approved_by_me;
@@ -237,20 +256,6 @@ function Actions({
 
   return (
     <>
-      {pushed && (
-        <div className={styles.actions}>
-          <p className={styles.warningLine}>{t('mr.actions.newVersion')}</p>
-          <button
-            type="button"
-            className={controls.primary}
-            onClick={() => {
-              void reload();
-            }}
-          >
-            {t('mr.actions.reload')}
-          </button>
-        </div>
-      )}
       {(mayApprove || mayWithdraw || mayMerge) && (
         <div className={styles.actions} role="group" aria-label={t('mr.actions.label')}>
           {(mayApprove || mayWithdraw) && (

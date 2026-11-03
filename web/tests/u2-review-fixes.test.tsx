@@ -39,15 +39,18 @@ describe('HIGH 1: the head that was on screen', () => {
     );
     await renderApp({ fetch: server.fetch, path: `${MR_SCREENS}/pull/3`, lang: 'en' });
     const region = await screen.findByRole('region', { name: 'Merge conditions' });
+    // (Re-review: the line now says "review it"; its button opens Changes.)
     expect(
-      await within(region).findByText('A new version was pushed. Reload the merge request to see it before approving or merging.'),
+      await within(region).findByText('A new version was pushed. Review it before approving or merging.'),
     ).toBeTruthy();
     expect(within(region).queryByRole('button', { name: 'Approve' })).toBeNull();
     expect(within(region).queryByRole('button', { name: 'Merge…' })).toBeNull();
-    // Reading again shows the new version; then approving names it.
+    // Reviewing the new version, then back on Overview, approving names it.
     viewed = C;
-    fireEvent.click(within(region).getByRole('button', { name: 'Reload the merge request' }));
-    fireEvent.click(await within(region).findByRole('button', { name: 'Approve' }));
+    fireEvent.click(within(region).getByRole('button', { name: 'Review the new version' }));
+    await screen.findByText('Version 1 (the latest)');
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Merge request views' })).getByRole('link', { name: 'Overview' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
     await waitFor(() => {
       expect(server.to('POST', `${MR_API}/3/approve`)).toHaveLength(1);
     });
