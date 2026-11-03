@@ -287,7 +287,19 @@ impl Subscriber for MergeRequestRefresh {
     fn handle<'a>(&'a self, event: &'a SourceEvent, tx: &'a mut DerivedTx<'_>) -> HandleFuture<'a> {
         Box::pin(async move {
             let Some(kind) = EventType::parse(&event.event_type) else {
-                // A type this build does not know (a newer writer): not ours.
+                // A type this build does not know (a newer writer). This
+                // subscriber is independent (failing would quarantine the
+                // event, and it reacts to pushes only), so it goes on, but
+                // never silently (I1b review).
+                tracing::warn!(
+                    target: "forge_db",
+                    event = "forge.subscribers.unknown_event_type",
+                    subscriber = REFRESH_SUBSCRIBER,
+                    request_id = %event.request_id,
+                    source_seq = event.seq,
+                    event_type = %event.event_type,
+                    "an event type this build does not know was passed over"
+                );
                 return Ok(());
             };
             match kind {

@@ -48,6 +48,13 @@ pub(crate) struct BoundTo {
     pub external_project_id: String,
 }
 
+impl BoundTo {
+    /// Whether `item` is a work item of this binding.
+    pub(crate) fn owns(&self, item: &WorkItem) -> bool {
+        item.integration == self.integration && item.external_project_id == self.external_project_id
+    }
+}
+
 fn stored_invalid(field: &'static str, id: i64) -> ForgeError {
     ForgeError::new(ErrorCode::Internal)
         .with_context("reason", "stored_work_item_invalid")

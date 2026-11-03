@@ -147,6 +147,11 @@ impl WorkItemSync {
     ) -> Result<(), ForgeError> {
         let project = project_of(event)?;
         let id = MergeRequestId::new(positive(event, "merge_request_id")?);
+        // The lock order of every writer of links: the project row, then
+        // the merge request (a person's link and an unbinding lock the
+        // project FOR UPDATE first): the binding read below cannot change
+        // under the step, and no cycle can form.
+        lock_project(tx, project).await?;
         let row: Option<(i64, i64, String, String)> = sqlx::query_as(
             "SELECT project_id, iid, title, source_branch FROM forge.merge_requests \
              WHERE id = $1 FOR NO KEY UPDATE",
@@ -162,20 +167,25 @@ impl WorkItemSync {
         if row_project != project.get() {
             return Err(bad_payload(event, "project_id"));
         }
-        if let Some(bound) = binding_of(tx.conn(), project).await? {
-            Self::sync_links(
-                event,
-                tx,
-                (project, id, iid),
-                &bound,
-                &title,
-                &source_branch,
-            )
-            .await?;
-        }
+        // Without a binding no work item is recorded: PBI numbers are per
+        // kanflow project, and only the current binding's are this
+        // project's (I1b review).
+        let Some(bound) = binding_of(tx.conn(), project).await? else {
+            return Ok(());
+        };
+        Self::sync_links(
+            event,
+            tx,
+            (project, id, iid),
+            &bound,
+            &title,
+            &source_branch,
+        )
+        .await?;
         let items: Vec<i64> = open_links(tx.conn(), id)
             .await?
             .into_iter()
+            .filter(|l| bound.owns(&l.work_item))
             .map(|l| l.work_item.id)
             .collect();
         let items = bounded_items(event, items);
@@ -299,27 +309,33 @@ impl WorkItemSync {
         if branches.is_empty() {
             return Ok(());
         }
+        // The current binding's work items only (I1b review); none without.
+        let Some(bound) = binding_of(tx.conn(), project).await? else {
+            return Ok(());
+        };
         let mut items: Vec<i64> = Vec::new();
-        if let Some(bound) = binding_of(tx.conn(), project).await? {
-            let names: Vec<&str> = branches
-                .iter()
-                .map(|b| b.strip_prefix(BRANCH_PREFIX).unwrap_or(b))
-                .collect();
-            // One more than recorded, so the overflow is logged.
-            let (references, _) = detected(&names, MAX_EVENT_WORK_ITEMS + 1);
-            for reference in &references {
-                items.push(work_item(tx.conn(), &bound, reference).await?.id);
-            }
+        let names: Vec<&str> = branches
+            .iter()
+            .map(|b| b.strip_prefix(BRANCH_PREFIX).unwrap_or(b))
+            .collect();
+        // One more than recorded, so the overflow is logged.
+        let (references, _) = detected(&names, MAX_EVENT_WORK_ITEMS + 1);
+        for reference in &references {
+            items.push(work_item(tx.conn(), &bound, reference).await?.id);
         }
         let from_merge_requests: Vec<i64> = sqlx::query_scalar(
             "SELECT DISTINCT l.work_item_id FROM forge.merge_request_work_items AS l \
              JOIN forge.merge_requests AS m ON m.id = l.merge_request_id \
+             JOIN forge.work_items AS w ON w.id = l.work_item_id \
              WHERE m.project_id = $1 AND m.state = 'open' AND m.source_branch = ANY($2) \
-             AND l.unlinked_at IS NULL ORDER BY l.work_item_id LIMIT $3",
+             AND l.unlinked_at IS NULL AND w.integration_id = $4 \
+             AND w.external_project_id = $5 ORDER BY l.work_item_id LIMIT $3",
         )
         .bind(project.get())
         .bind(&branches)
         .bind(i64::try_from(MAX_EVENT_WORK_ITEMS + 1).unwrap_or(i64::MAX))
+        .bind(bound.integration.get())
+        .bind(&bound.external_project_id)
         .fetch_all(tx.conn())
         .await
         .map_err(|e| query_error("work_items.sync.push_links", e))?;
@@ -329,9 +345,37 @@ impl WorkItemSync {
     }
 
     async fn on_link(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
+        let project = project_of(event)?;
         let item = positive(event, "work_item_id")?;
+        // Recorded only while the work item is the current binding's.
+        let Some(bound) = binding_of(tx.conn(), project).await? else {
+            return Ok(());
+        };
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM forge.work_items WHERE id = $1 \
+             AND integration_id = $2 AND external_project_id = $3)",
+        )
+        .bind(item)
+        .bind(bound.integration.get())
+        .bind(&bound.external_project_id)
+        .fetch_one(tx.conn())
+        .await
+        .map_err(|e| query_error("work_items.sync.link_owner", e))?;
+        if !owned {
+            return Ok(());
+        }
         record_event_items(tx.conn(), event.seq, &[item]).await
     }
+}
+
+/// Lock `project`'s row `FOR SHARE` (see `on_merge_request`).
+async fn lock_project(tx: &mut DerivedTx<'_>, project: ProjectId) -> Result<(), ForgeError> {
+    sqlx::query("SELECT 1 FROM forge.projects WHERE id = $1 FOR SHARE")
+        .bind(project.get())
+        .execute(tx.conn())
+        .await
+        .map_err(|e| query_error("work_items.sync.project_lock", e))?;
+    Ok(())
 }
 
 impl Subscriber for WorkItemSync {
@@ -346,9 +390,16 @@ impl Subscriber for WorkItemSync {
     fn handle<'a>(&'a self, event: &'a SourceEvent, tx: &'a mut DerivedTx<'_>) -> HandleFuture<'a> {
         Box::pin(async move {
             let Some(kind) = EventType::parse(&event.event_type) else {
-                // A type this build does not know (a newer writer): no
-                // work item it could name is known here either.
-                return Ok(());
+                // A type this build does not know (a newer writer). This
+                // subscriber is ordered: skipping it could lose the links
+                // it carries, so it fails (stuck after five, FG-DB-0008;
+                // the worker logs it with the event's seq and request id)
+                // until a build that knows it runs (I1b review).
+                return Err(ForgeError::new(ErrorCode::Internal)
+                    .with_context("reason", "unknown_event_type")
+                    .with_context("subscriber", WORK_ITEM_SYNC)
+                    .with_context("event_type", event.event_type.clone()) // clone: the context owns it
+                    .with_context("seq", event.seq));
             };
             match kind {
                 EventType::MergeRequestOpened

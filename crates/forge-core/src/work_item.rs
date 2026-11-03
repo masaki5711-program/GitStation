@@ -60,13 +60,15 @@ impl std::fmt::Display for WorkItemRef {
 pub fn find_refs(text: &str) -> Vec<WorkItemRef> {
     let bytes = text.as_bytes();
     let mut found: Vec<WorkItemRef> = Vec::new();
+    // Duplicates by a set: a text may hold many references (a 1 KiB branch
+    // name ~170), so no quadratic scan.
+    let mut seen = std::collections::HashSet::new();
     let mut at = 0;
     while let Some(start) = next_pbi(bytes, at) {
         match match_at(bytes, start) {
             Some((number, end)) => {
-                let reference = WorkItemRef::of_number(number);
-                if !found.contains(&reference) {
-                    found.push(reference);
+                if seen.insert(number) {
+                    found.push(WorkItemRef::of_number(number));
                 }
                 at = end;
             }

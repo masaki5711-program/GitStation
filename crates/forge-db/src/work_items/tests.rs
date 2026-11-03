@@ -1052,3 +1052,109 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
     );
     w.t.drop_now().await;
 }
+
+/// I1b review (security / rust MEDIUM): an ordered subscriber that meets a
+/// type it does not know stops and alerts instead of skipping it (a newer
+/// writer's event may carry links this build would lose).
+#[tokio::test]
+async fn an_unknown_event_type_stops_work_item_sync() {
+    let w = world().await;
+    drain(&w.t).await;
+    w.t.exec_superuser(
+        "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, request_id) \
+         VALUES ('system', 'future.happened', 'succeeded', 'repository', 'r-future'); \
+         INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+         aggregate_id, actor_kind, request_id, payload) VALUES (gen_random_uuid(), \
+         'future.happened', 1, 'repository', 1, 'system', 'r-future', '{}')",
+    )
+    .await;
+    crate::sequencer::run_once(
+        &w.t.db,
+        crate::sequencer::BatchSize::MAX,
+        crate::sequencer::AuditSequencing::Skip,
+    )
+    .await
+    .expect("sequencer");
+    for attempt in 1..=4 {
+        let Progress::Failed(incident) = subscribers::run_once(&w.t.db, &WorkItemSync)
+            .await
+            .expect("step")
+        else {
+            panic!("attempt {attempt} is a counted failure");
+        };
+        assert_reason(&incident.error, ErrorCode::Internal, "unknown_event_type");
+        let text = incident.error.to_string();
+        assert!(text.contains("future.happened"), "{text}");
+    }
+    let Progress::Stuck(incident) = subscribers::run_once(&w.t.db, &WorkItemSync)
+        .await
+        .expect("step")
+    else {
+        panic!("the fifth failure stops it");
+    };
+    assert_reason(&incident.error, ErrorCode::SubscriberLag, "stuck");
+    w.t.drop_now().await;
+}
+
+/// (external project, ref) of the newest event of `event_type`.
+async fn items_of_last(t: &FreshDb, event_type: &str) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT w.external_project_id, w.ref FROM forge.event_work_items AS e \
+         JOIN forge.work_items AS w ON w.id = e.work_item_id \
+         WHERE e.seq = (SELECT max(seq) FROM forge.events WHERE event_type = $1) \
+         ORDER BY 1, 2",
+    )
+    .bind(event_type)
+    .fetch_all(&mut t.superuser().await)
+    .await
+    .expect("event work items")
+}
+
+/// I1b review (security MEDIUM): after the project is bound to another
+/// kanflow project, its events name only the current binding's work items
+/// (never the old project's PBI of the same number).
+#[tokio::test]
+async fn events_record_only_the_current_bindings_work_items() {
+    let w = world().await;
+    let mr = open(&w, "Fix", "fix").await;
+    drain(&w.t).await;
+    // A person's link to the old binding's PBI-1 (detection never ends it).
+    assert_eq!(
+        link(&w, &mr, "PBI-1", "req-link-old").await,
+        LinkOutcome::Changed
+    );
+    integrations::unbind_decided(
+        &w.t.db,
+        &system("req-unbind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        |_| Ok(()),
+    )
+    .await
+    .expect("unbind");
+    let (_bound, _, ()) = integrations::bind_decided(
+        &w.t.db,
+        &system("req-rebind"),
+        w.web.project_id,
+        w.alice,
+        w.integration,
+        "kf-2",
+        |_| Ok(()),
+    )
+    .await
+    .expect("rebind");
+    retitle(&w, &mr, "Fix (PBI-1) again", "req-edit-rebound").await;
+    push(
+        &w,
+        &w.web,
+        "req-push-rebound",
+        vec![created_branch("refs/heads/fix")],
+    )
+    .await;
+    drain(&w.t).await;
+    let current = [("kf-2".to_owned(), "PBI-1".to_owned())];
+    assert_eq!(items_of_last(&w.t, "merge_request.updated").await, current);
+    assert_eq!(items_of_last(&w.t, "repository.pushed").await, current);
+    w.t.drop_now().await;
+}
