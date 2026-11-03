@@ -27,7 +27,9 @@ use forge_core::ids::{ProjectId, RepoId};
 use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError};
 
-use crate::jobs::{enqueue, DedupKey, Enqueued, JobKind, JobTimeout, MaxAttempts, NewJob};
+use crate::jobs::{
+    enqueue, DedupKey, Enqueued, JobKind, JobTimeout, MaxAttempts, NewJob, LEASE_SLACK,
+};
 use crate::{query_error, read_query_error, Db};
 
 /// The kind of the maintenance job.
@@ -243,7 +245,7 @@ async fn enqueue_if_live(db: &Db, job: &NewJob) -> Result<Option<Enqueued>, Forg
 
 /// Enqueue one maintenance of `repo` now (`forge admin repo maintain`).
 /// `FG-REPO-0005`-style refusals are the caller's: this checks only that
-/// the repository exists and is ready (`FG-SYS-0003 NotFound` otherwise,
+/// the repository exists and is ready (`FG-REPO-0005 NotFound` otherwise,
 /// with `state`).
 pub async fn enqueue_now(
     db: &Db,
@@ -285,40 +287,112 @@ pub struct Started {
     pub fsck_ok: Option<bool>,
     /// Seconds since the last full fsck (`None`: never).
     pub full_fsck_age_secs: Option<i64>,
-    /// Consecutive failed runs before this one.
+    /// Consecutive failed runs before this one (a lost run counted).
     pub failures: i32,
+    /// The previous run was still `running` past [`STALE_RUNNING_AFTER`]:
+    /// it crashed or was dead-lettered without a ledger write. It was
+    /// counted as a failure here (the caller logs it once, FG-DB-0007).
+    pub lost_previous: bool,
+}
+
+/// `(project_id, fsck_ok, full fsck age, failures, lost_previous)`.
+type StartRow = (i64, Option<bool>, Option<i64>, i32, bool);
+
+/// A row still `running` this long after its start belongs to a run that
+/// is gone: the job's lease (its timeout plus the queue's slack) is over.
+pub const STALE_RUNNING_AFTER: Duration = MAINTAIN_JOB_TIMEOUT.saturating_add(LEASE_SLACK);
+
+fn secs(d: Duration) -> i64 {
+    i64::try_from(d.as_secs()).unwrap_or(i64::MAX)
 }
 
 /// Mark the run of `repo` as started (`outcome = 'running'`), creating the
 /// row on the first run. `None`: the repository is not `ready` — nothing
 /// is written and the job does nothing.
+///
+/// - The repository row is read `FOR SHARE` (the purge's `FOR UPDATE` and
+///   this insert never interleave: the purge deletes the ledger row after
+///   it, review LOW).
+/// - A first row gets `next_due_at = ready_at` — the due time the
+///   scheduler keyed the job with — so a pass while it runs finds the same
+///   key and dedups (review MEDIUM: `now()` here made the key drift and a
+///   second job was enqueued on a repository's first run).
+/// - A previous run still `running` past [`STALE_RUNNING_AFTER`] is
+///   counted as a failure ([`Started::lost_previous`]).
 pub async fn start(db: &Db, repo: RepoId) -> Result<Option<Started>, ForgeError> {
     const QUERY: &str = "maintenance.start";
-    let row: Option<(i64, Option<bool>, Option<i64>, i32)> = db
+    let row: Option<StartRow> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "INSERT INTO forge.repository_maintenance AS m \
+                "WITH r AS (SELECT id, project_id, ready_at FROM forge.repositories \
+                     WHERE id = $1 AND state = 'ready' FOR SHARE), \
+                 prev AS (SELECT outcome = 'running' \
+                     AND last_started_at < now() - make_interval(secs => $2::double precision) \
+                     AS lost FROM forge.repository_maintenance WHERE repo_id = $1) \
+                 INSERT INTO forge.repository_maintenance AS m \
                      (repo_id, project_id, last_started_at, outcome, next_due_at) \
-                 SELECT r.id, r.project_id, now(), 'running', now() \
-                 FROM forge.repositories r WHERE r.id = $1 AND r.state = 'ready' \
+                 SELECT r.id, r.project_id, now(), 'running', coalesce(r.ready_at, now()) \
+                 FROM r \
                  ON CONFLICT (repo_id) DO UPDATE SET last_started_at = now(), \
                      outcome = 'running', error_code = NULL, skipped_reason = NULL, \
+                     failures = CASE WHEN m.outcome = 'running' AND m.last_started_at \
+                         < now() - make_interval(secs => $2::double precision) \
+                         THEN m.failures + 1 ELSE m.failures END, \
                      updated_at = now() \
                  RETURNING m.project_id, m.fsck_ok, \
-                     floor(extract(epoch FROM now() - m.last_full_fsck_at))::bigint, m.failures",
+                     floor(extract(epoch FROM now() - m.last_full_fsck_at))::bigint, m.failures, \
+                     coalesce((SELECT lost FROM prev), false)",
             )
             .bind(repo.get())
+            .bind(secs(STALE_RUNNING_AFTER))
             .fetch_optional(db.write_pool())
             .await
             .map_err(|e| query_error(QUERY, e).with_context("repo_id", repo.get()))
         })
         .await?;
-    Ok(row.map(|(project, fsck_ok, age, failures)| Started {
+    Ok(row.map(|(project, fsck_ok, age, failures, lost)| Started {
         project_id: ProjectId::new(project),
         fsck_ok,
         full_fsck_age_secs: age,
         failures,
+        lost_previous: lost,
     }))
+}
+
+/// End the rows still `running` past [`STALE_RUNNING_AFTER`] whose job is
+/// no longer live (crashed, then dead-lettered): `failed` with
+/// `FG-DB-0007` (the lease expired), `failures + 1`, due again after
+/// `retry_after`. Without it such a row keeps its due time and the
+/// scheduler enqueues it again every pass (review MEDIUM). At most 100 per
+/// call; the scheduler runs it every pass, inside the window or not.
+pub async fn reap_stale_running(db: &Db, retry_after: Duration) -> Result<Vec<RepoId>, ForgeError> {
+    const QUERY: &str = "maintenance.reap_stale_running";
+    let ids: Vec<i64> = db
+        .within(QUERY, async {
+            sqlx::query_scalar(
+                "UPDATE forge.repository_maintenance m SET outcome = 'failed', \
+                     error_code = 'FG-DB-0007', skipped_reason = NULL, \
+                     failures = m.failures + 1, last_finished_at = now(), \
+                     next_due_at = now() + make_interval(secs => $3::double precision), \
+                     updated_at = now() \
+                 WHERE m.repo_id IN (SELECT s.repo_id FROM forge.repository_maintenance s \
+                     WHERE s.outcome = 'running' \
+                       AND s.last_started_at < now() - make_interval(secs => $2::double precision) \
+                       AND NOT EXISTS (SELECT 1 FROM forge.jobs j WHERE j.kind = $1 \
+                           AND j.state IN ('queued', 'running') \
+                           AND j.payload->>'repo_id' = s.repo_id::text) \
+                     ORDER BY s.repo_id LIMIT 100 FOR UPDATE SKIP LOCKED) \
+                 RETURNING m.repo_id",
+            )
+            .bind(MAINTAIN_JOB)
+            .bind(secs(STALE_RUNNING_AFTER))
+            .bind(secs(retry_after))
+            .fetch_all(db.write_pool())
+            .await
+            .map_err(|e| query_error(QUERY, e))
+        })
+        .await?;
+    Ok(ids.into_iter().map(RepoId::new).collect())
 }
 
 /// The end of a run, as [`finish`] records it.
@@ -363,6 +437,8 @@ pub async fn finish(db: &Db, repo: RepoId, end: &Finish) -> Result<bool, ForgeEr
                      last_fsck_at = CASE WHEN $8::text IS NULL THEN last_fsck_at ELSE now() END, \
                      last_fsck_mode = coalesce($8, last_fsck_mode), \
                      fsck_ok = coalesce($9, fsck_ok), \
+                     last_success_at = CASE WHEN $2 = 'succeeded' THEN now() \
+                                            ELSE last_success_at END, \
                      last_full_fsck_at = CASE WHEN $8 = 'full' AND $9 THEN now() \
                                               ELSE last_full_fsck_at END, \
                      next_due_at = now() + make_interval(secs => $10::double precision), \
@@ -489,6 +565,15 @@ pub struct MaintenanceReport {
     pub refs_list: Vec<Flagged>,
     /// The largest ref count measured.
     pub refs_max: i64,
+    /// Rows still `running` past [`STALE_RUNNING_AFTER`] (value: seconds
+    /// since the start): a run that is gone and not reaped yet.
+    pub stale_running: i64,
+    pub stale_running_list: Vec<Flagged>,
+    /// Ready repositories whose last success (never: `ready_at`) is older
+    /// than twice the interval (value: seconds since): skipped or failing
+    /// every night without ever turning overdue.
+    pub no_recent_success: i64,
+    pub no_recent_success_list: Vec<Flagged>,
 }
 
 const OVERDUE_SQL: &str = "SELECT r.id, \
@@ -506,12 +591,28 @@ const FAILING_SQL: &str = "SELECT repo_id, failures::bigint, error_code, count(*
 const CORRUPT_SQL: &str = "SELECT repo_id, 0::bigint, error_code, count(*) OVER () \
      FROM forge.repository_maintenance \
      WHERE fsck_ok = false ORDER BY repo_id LIMIT $1";
+const STALE_RUNNING_SQL: &str = "SELECT repo_id, \
+     floor(extract(epoch FROM clock_timestamp() - last_started_at))::bigint AS v, NULL::text, \
+     count(*) OVER () \
+     FROM forge.repository_maintenance \
+     WHERE outcome = 'running' \
+         AND last_started_at < clock_timestamp() - make_interval(secs => $1::double precision) \
+     ORDER BY v DESC, repo_id LIMIT $2";
+const NO_RECENT_SUCCESS_SQL: &str = "SELECT r.id, \
+     floor(extract(epoch FROM clock_timestamp() - coalesce(m.last_success_at, r.ready_at)))::bigint \
+         AS v, \
+     m.error_code, count(*) OVER () \
+     FROM forge.repositories r \
+     LEFT JOIN forge.repository_maintenance m ON m.repo_id = r.id \
+     WHERE r.state = 'ready' AND coalesce(m.last_success_at, r.ready_at) \
+         < clock_timestamp() - make_interval(secs => $1::double precision) \
+     ORDER BY v DESC, r.id LIMIT $2";
 const REFS_SQL: &str = "SELECT repo_id, refs, NULL::text, count(*) OVER () \
      FROM forge.repository_maintenance \
      WHERE refs > $1 ORDER BY refs DESC, repo_id LIMIT $2";
 
 /// The doctor report: `interval` the configured maintenance interval,
-/// `refs_warn` the ref count to warn above. Read pool only, five bounded
+/// `refs_warn` the ref count to warn above. Read pool only, seven bounded
 /// statements. `None` before the migration of the ledger.
 pub async fn report(
     db: &Db,
@@ -556,6 +657,18 @@ pub async fn report(
             .fetch_all(pool)
             .await
             .map_err(q)?;
+        let stale_running: Vec<FlagRow> = sqlx::query_as(STALE_RUNNING_SQL)
+            .bind(secs(STALE_RUNNING_AFTER))
+            .bind(REPORT_LIST_MAX)
+            .fetch_all(pool)
+            .await
+            .map_err(q)?;
+        let no_recent: Vec<FlagRow> = sqlx::query_as(NO_RECENT_SUCCESS_SQL)
+            .bind(interval_secs.saturating_mul(2))
+            .bind(REPORT_LIST_MAX)
+            .fetch_all(pool)
+            .await
+            .map_err(q)?;
         let refs_max: Option<i64> =
             sqlx::query_scalar("SELECT max(refs) FROM forge.repository_maintenance")
                 .fetch_one(pool)
@@ -565,6 +678,8 @@ pub async fn report(
         let (failing, failing_list) = split(failing);
         let (corrupt, corrupt_list) = split(corrupt);
         let (refs_over, refs_list) = split(refs);
+        let (stale_running, stale_running_list) = split(stale_running);
+        let (no_recent_success, no_recent_success_list) = split(no_recent);
         Ok(Some(MaintenanceReport {
             overdue,
             overdue_list,
@@ -575,6 +690,10 @@ pub async fn report(
             refs_over,
             refs_list,
             refs_max: refs_max.unwrap_or(0),
+            stale_running,
+            stale_running_list,
+            no_recent_success,
+            no_recent_success_list,
         }))
     })
     .await

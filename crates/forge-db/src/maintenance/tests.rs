@@ -321,3 +321,156 @@ async fn the_window_time_zone_is_resolved_by_the_database() {
     assert!(err.to_string().contains("maintenance.window_time_zone"));
     t.drop_now().await;
 }
+
+/// Review MEDIUM: a repository's first run keeps the due time its job was
+/// keyed with, so a scheduling pass while it runs dedups instead of
+/// enqueueing a second job.
+#[tokio::test]
+async fn a_first_run_keeps_its_due_key_so_the_scheduler_dedups() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 1).await;
+    let r = repos[0].repository_id;
+    let first = schedule_due(&t.db, 5, &rid()).await.expect("schedule");
+    assert!(
+        matches!(first[0].enqueued, Enqueued::Queued(_)),
+        "{first:?}"
+    );
+    // The key has whole seconds: start in a later second than `ready_at`.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    start(&t.db, r).await.expect("start").expect("ready");
+    let again = schedule_due(&t.db, 5, &rid()).await.expect("again");
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert_eq!(again[0].enqueued, Enqueued::Deduped);
+    assert_eq!(maintain_jobs(&t).await.len(), 1, "one job, not two");
+    t.drop_now().await;
+}
+
+/// Age the running row of `repo` (operational state: no audit row).
+async fn started_hours_ago(t: &FreshDb, repo: RepoId, hours: i64) {
+    t.exec_superuser(&format!(
+        "UPDATE forge.repository_maintenance SET last_started_at = now() - interval '{hours} hours' \
+         WHERE repo_id = {}",
+        repo.get()
+    ))
+    .await;
+}
+
+/// Review MEDIUM: a run that crashed and was dead-lettered left its row
+/// `running`; the reaper records it as a failure (FG-DB-0007), counts it,
+/// and moves its due time, so the scheduler does not enqueue it again
+/// every pass. doctor sees it as stale until then.
+#[tokio::test]
+async fn a_lost_run_is_counted_as_a_failure_and_not_requeued_every_pass() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 1).await;
+    let r = repos[0].repository_id;
+    start(&t.db, r).await.expect("start").expect("ready");
+    started_hours_ago(&t, r, 2).await;
+    let rep = super::report(&t.db, Duration::from_secs(7 * 86_400), 100_000)
+        .await
+        .expect("report")
+        .expect("migrated");
+    assert_eq!(rep.stale_running, 1);
+    assert_eq!(rep.stale_running_list[0].repo_id, r);
+    let reaped = reap_stale_running(&t.db, Duration::from_secs(12 * 3600))
+        .await
+        .expect("reap");
+    assert_eq!(reaped, [r]);
+    let row = super::row(&t.db, r).await.expect("row").expect("exists");
+    assert_eq!(row.outcome, Some(Outcome::Failed));
+    assert_eq!(row.error_code.as_deref(), Some("FG-DB-0007"));
+    assert_eq!(row.failures, 1);
+    assert!(row.due_in_secs > 11 * 3600, "{}", row.due_in_secs);
+    assert!(
+        schedule_due(&t.db, 5, &rid())
+            .await
+            .expect("schedule")
+            .is_empty(),
+        "not due again at once"
+    );
+    assert!(reap_stale_running(&t.db, Duration::from_secs(60))
+        .await
+        .expect("again")
+        .is_empty());
+    t.drop_now().await;
+}
+
+/// A row still `running` while its job is live is not reaped (a long run
+/// whose lease the queue still holds).
+#[tokio::test]
+async fn a_running_row_with_a_live_job_is_not_reaped() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 1).await;
+    let r = repos[0].repository_id;
+    enqueue_now(&t.db, r, &rid()).await.expect("enqueue");
+    start(&t.db, r).await.expect("start").expect("ready");
+    started_hours_ago(&t, r, 2).await;
+    assert!(reap_stale_running(&t.db, Duration::from_secs(60))
+        .await
+        .expect("reap")
+        .is_empty());
+    t.drop_now().await;
+}
+
+/// A retried job that starts over a previous run still `running` past the
+/// lease counts that lost run as a failure.
+#[tokio::test]
+async fn start_counts_a_lost_previous_run() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 1).await;
+    let r = repos[0].repository_id;
+    let s = start(&t.db, r).await.expect("start").expect("ready");
+    assert!(!s.lost_previous);
+    // A fresh `running` row (a concurrent run) is not a lost one.
+    let s = start(&t.db, r).await.expect("start").expect("ready");
+    assert!(!s.lost_previous);
+    assert_eq!(s.failures, 0);
+    started_hours_ago(&t, r, 2).await;
+    let s = start(&t.db, r).await.expect("start").expect("ready");
+    assert!(s.lost_previous);
+    assert_eq!(s.failures, 1);
+    t.drop_now().await;
+}
+
+/// Review MEDIUM: a repository skipped every night is never failed nor
+/// overdue; doctor sees that no run succeeded within twice the interval.
+/// A success clears it.
+#[tokio::test]
+async fn no_recent_success_is_reported_until_a_run_succeeds() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 2).await;
+    let r = repos[0].repository_id;
+    start(&t.db, r).await.expect("start").expect("ready");
+    let skipped = Finish {
+        outcome: Outcome::Skipped,
+        error_code: None,
+        skipped_reason: Some("incoming_push"),
+        counts: None,
+        fsck: None,
+        next_due_in: Duration::from_secs(3600),
+    };
+    finish(&t.db, r, &skipped).await.expect("finish");
+    t.exec_superuser(&format!(
+        "UPDATE forge.repository_maintenance SET last_success_at = now() - interval '15 days' \
+         WHERE repo_id = {}",
+        r.get()
+    ))
+    .await;
+    let week = Duration::from_secs(7 * 86_400);
+    let rep = super::report(&t.db, week, 100_000)
+        .await
+        .expect("report")
+        .expect("migrated");
+    assert_eq!((rep.no_recent_success, rep.overdue, rep.failing), (1, 0, 0));
+    assert_eq!(rep.no_recent_success_list[0].repo_id, r);
+    start(&t.db, r).await.expect("start").expect("ready");
+    finish(&t.db, r, &succeeded((1, 1, 1), ("connectivity", true)))
+        .await
+        .expect("finish");
+    let rep = super::report(&t.db, week, 100_000)
+        .await
+        .expect("report")
+        .expect("migrated");
+    assert_eq!(rep.no_recent_success, 0, "a success clears it");
+    t.drop_now().await;
+}
