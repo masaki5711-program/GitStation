@@ -11,6 +11,7 @@ pub mod dedup_key;
 pub mod discussion;
 pub mod event_type;
 pub mod ids;
+pub mod integration;
 pub mod list_page;
 pub mod merge;
 pub mod merge_conditions;
@@ -51,9 +52,10 @@ pub use dedup_key::{DedupKey, DedupPart};
 pub use discussion::{CommentAction, DiscussionKind, DiscussionSide};
 pub use event_type::{EventType, VisibilityClass};
 pub use ids::{
-    ApprovalId, ApprovalRuleId, DiscussionId, GroupId, MergeRequestId, NamespaceId, NoteId,
-    ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
+    ApprovalId, ApprovalRuleId, DiscussionId, GroupId, IntegrationId, MergeRequestId, NamespaceId,
+    NoteId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId,
 };
+pub use integration::{IntegrationChange, IntegrationField, IntegrationKind};
 pub use list_page::{GroupListing, GroupPageLoader, ProjectPageLoader};
 pub use merge::{MergeMethod, MergeState, SourceOutcome};
 pub use merge_conditions::{
@@ -98,6 +100,8 @@ mod cursor_tests;
 mod dedup_key_tests;
 #[cfg(test)]
 mod event_type_tests;
+#[cfg(test)]
+mod integration_tests;
 #[cfg(test)]
 mod merge_request_tests;
 #[cfg(test)]

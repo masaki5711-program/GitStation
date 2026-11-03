@@ -24,6 +24,8 @@ pub mod projects;
 pub mod protected_ref_merge_rules;
 pub mod protected_refs;
 pub mod service_accounts;
+// M3 I1a: integrations and project bindings.
+pub mod integrations;
 pub mod session;
 pub mod shell;
 pub mod tokens;

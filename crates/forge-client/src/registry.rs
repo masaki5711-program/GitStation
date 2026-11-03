@@ -58,6 +58,7 @@ const COMMIT_DETAIL_SCHEMA: &str = r#"{"type":"object","required":["commit","mes
 const SA_SCHEMA: &str = r#"{"type":"object","required":["id","username","display_name","state","owner","purpose","created_by","created_at","active_tokens","last_token_expiry"],"properties":{"id":{"type":"integer"},"username":{"type":"string"},"display_name":{"type":"string"},"state":{"enum":["active","disabled"]},"owner":{"type":["object","null"],"required":["id","username","active"]},"purpose":{"type":["string","null"]},"created_by":{"type":["integer","null"]},"created_at":{"type":"string"},"active_tokens":{"type":"integer"},"last_token_expiry":{"type":["string","null"]}}}"#;
 
 const CHECK_RUN_SCHEMA: &str = r#"{"type":"object","required":["id","name","head_sha","status","conclusion","summary","details_url","annotations","reported_by","revision","created_at","updated_at","completed_at"],"properties":{"id":{"type":"integer"},"name":{"type":"string"},"head_sha":{"type":"string"},"status":{"enum":["queued","in_progress","completed"]},"conclusion":{"enum":["success","neutral","failure","error","action_required",null]},"summary":{"type":"string"},"details_url":{"type":["string","null"]},"annotations":{"type":"array","items":{"type":"object","required":["path","start_line","end_line","level","message","title"]}},"reported_by":{"type":"object","required":["id","username"]},"revision":{"type":"integer"},"created_at":{"type":"string"},"updated_at":{"type":"string"},"completed_at":{"type":["string","null"]}}}"#;
+const BINDINGS_SCHEMA: &str = r#"{"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"object","required":["integration_id","kind","project_id","external_project_id","granted_membership","created_by","created_at"]}}}}"#;
 
 const REVISION_PATH_SCHEMA: &str = r#"{"type":"object","required":["ref","path"],"properties":{"ref":{"type":"object","required":["type","name","full_name","commit"],"properties":{"type":{"enum":["branch","tag","commit"]},"name":{"type":"string"},"full_name":{"type":["string","null"]},"commit":{"type":"string"}}},"path":{"type":"string"}}}"#;
 
@@ -1045,6 +1046,69 @@ pub const COMMANDS: &[CommandSpec] = &[
         scopes: &["api", "admin"],
         routes: &["DELETE /api/v1/admin/service-accounts/{id}/tokens/{token_id}"],
         output: r#"{"type":"object","required":["service_account_id","id","revoked"],"properties":{"service_account_id":{"type":"integer"},"id":{"type":"integer"},"revoked":{"const":true}}}"#,
+    },
+    // ── M3 I1a: integrations (create and change: the browser only) ──
+    CommandSpec {
+        name: "admin integration list",
+        summary: "List every integration with its kind, service account, state and binding count (administrators, people only; at most 500, truncated says when more exist).",
+        args: &[],
+        examples: &["gstn admin integration list --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/integrations"],
+        output: r#"{"type":"object","required":["items","truncated"],"properties":{"items":{"type":"array","items":{"type":"object","required":["id","kind","service_account","enabled","event_types","bindings","created_by","created_at","updated_at"]}},"truncated":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "admin integration view",
+        summary: "Show one integration: kind, service account, enabled, event type allowlist, binding count (administrators, people only).",
+        args: &[arg("id", "positional", true, "The integration id.")],
+        examples: &["gstn admin integration view 3 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/integrations/{id}"],
+        output: r#"{"type":"object","required":["id","kind","service_account","enabled","event_types","bindings","created_by","created_at","updated_at"],"properties":{"id":{"type":"integer"},"kind":{"enum":["kanflow"]},"service_account":{"type":"object","required":["id","username"]},"enabled":{"type":"boolean"},"event_types":{"type":"array","items":{"type":"string"}},"bindings":{"type":"integer"},"created_by":{"type":["integer","null"]},"created_at":{"type":"string"},"updated_at":{"type":"string"}}}"#,
+    },
+    CommandSpec {
+        name: "admin integration bindings",
+        summary: "List the projects bound to an integration with their external project ids (administrators, people only; at most 200).",
+        args: &[arg("id", "positional", true, "The integration id.")],
+        examples: &["gstn admin integration bindings 3 --json"],
+        scopes: &["read_api", "admin"],
+        routes: &["GET /api/v1/admin/integrations/{id}/bindings"],
+        output: BINDINGS_SCHEMA,
+    },
+    CommandSpec {
+        name: "integration-binding list",
+        summary: "Show a project's integration binding, none or one (as reading the project).",
+        args: &[arg("--project", "option", true, "The project id.")],
+        examples: &["gstn integration-binding list --project 7 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/projects/{id}/integration-bindings"],
+        output: BINDINGS_SCHEMA,
+    },
+    CommandSpec {
+        name: "integration-binding set",
+        summary: "Bind a project to an external (kanflow) project of an integration (people only; Maintainer). Its service account becomes a Reporter of the project; a project already bound elsewhere is FG-INT-0016, a 201st binding of the integration FG-INT-0012. Binding again to the same external project answers unchanged.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--integration", "option", true, "The integration id (admin integration list)."),
+            arg("--external-project", "option", true, "The external project's id (A-Z a-z 0-9 . _ : -, at most 100)."),
+        ],
+        examples: &["gstn integration-binding set --project 7 --integration 3 --external-project kanflow:42 --json"],
+        scopes: &["api"],
+        routes: &["PUT /api/v1/projects/{id}/integration-bindings/{integration_id}"],
+        output: r#"{"type":"object","required":["outcome","binding"],"properties":{"outcome":{"enum":["bound","unchanged"]},"binding":{"type":"object","required":["integration_id","kind","project_id","external_project_id","granted_membership","created_by","created_at"]}}}"#,
+    },
+    CommandSpec {
+        name: "integration-binding remove",
+        summary: "Unbind a project from an integration (people only; Maintainer); the Reporter membership the binding granted is removed. Needs --yes.",
+        args: &[
+            arg("--project", "option", true, "The project id."),
+            arg("--integration", "option", true, "The integration id."),
+            arg("--yes", "flag", true, "Confirm (gstn never prompts)."),
+        ],
+        examples: &["gstn integration-binding remove --project 7 --integration 3 --yes"],
+        scopes: &["api"],
+        routes: &["DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}"],
+        output: r#"{"type":"object","required":["project_id","integration_id","unbound"],"properties":{"project_id":{"type":"integer"},"integration_id":{"type":"integer"},"unbound":{"const":true}}}"#,
     },
     CommandSpec {
         name: "admin service-account check-grants",

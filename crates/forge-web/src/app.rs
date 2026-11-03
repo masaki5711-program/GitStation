@@ -426,9 +426,9 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    check_routes(service_account_routes(account_routes(history_routes(
-        browse_routes(git_routes(shell_routes(merge_request_routes(
-            member_routes(move_routes(hosting_routes(fixed))),
+    check_routes(integration_routes(service_account_routes(account_routes(
+        history_routes(browse_routes(git_routes(shell_routes(
+            merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
         )))),
     ))))
 }
@@ -670,6 +670,87 @@ fn check_routes(registry: Registry<AppState>) -> Registry<AppState> {
             c::revoke,
         )
         .responds::<c::CheckGrantChange>(Verb::Delete, c::GRANT)
+}
+
+/// Integrations and project bindings (M3 I1a, plan 11 §5 I1, ADR-0016
+/// Amendment I1a): the administration's routes and a project's binding.
+fn integration_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::integrations as i;
+    registry
+        .route(
+            Verb::Get,
+            i::COLLECTION,
+            Action::IntegrationRead,
+            "Every integration with its service account and binding count (administrators, people only)",
+            i::list,
+        )
+        .responds::<i::IntegrationList>(Verb::Get, i::COLLECTION)
+        .route_with_body(
+            Verb::Post,
+            i::COLLECTION,
+            Action::IntegrationManage,
+            "Create a kanflow integration acting as a service account (an administrator's web session only)",
+            i::MAX_BODY,
+            i::NewIntegration,
+            i::create,
+        )
+        .responds_created::<i::IntegrationBody>(Verb::Post, i::COLLECTION)
+        .route_with(
+            Verb::Get,
+            i::ONE,
+            Action::IntegrationRead,
+            "One integration (administrators, people only)",
+            i::INTEGRATION,
+            i::read,
+        )
+        .responds::<i::IntegrationBody>(Verb::Get, i::ONE)
+        .route_with_body(
+            Verb::Patch,
+            i::ONE,
+            Action::IntegrationManage,
+            "Enable or disable an integration or replace its event type allowlist (an administrator's web session only)",
+            i::MAX_BODY,
+            i::INTEGRATION,
+            i::update,
+        )
+        .responds::<i::UpdatedIntegration>(Verb::Patch, i::ONE)
+        .route_with(
+            Verb::Get,
+            i::BINDINGS,
+            Action::IntegrationRead,
+            "The projects bound to an integration (administrators, people only)",
+            i::INTEGRATION_BINDINGS,
+            i::bindings,
+        )
+        .responds::<i::IntegrationBindingList>(Verb::Get, i::BINDINGS)
+        .route_with(
+            Verb::Get,
+            i::PROJECT_BINDINGS,
+            Action::ProjectRead,
+            "A project's integration binding, none or one (as reading the project)",
+            i::BindingsOf,
+            i::project_bindings,
+        )
+        .responds::<i::IntegrationBindingList>(Verb::Get, i::PROJECT_BINDINGS)
+        .route_with_body(
+            Verb::Put,
+            i::PROJECT_BINDING,
+            Action::IntegrationBindingManage,
+            "Bind a project to an external (kanflow) project of an integration; its service account becomes a Reporter (people only; Maintainer)",
+            i::MAX_BODY,
+            i::BindingOf,
+            i::bind,
+        )
+        .responds::<i::BoundProject>(Verb::Put, i::PROJECT_BINDING)
+        .route_with(
+            Verb::Delete,
+            i::PROJECT_BINDING,
+            Action::IntegrationBindingManage,
+            "Unbind a project from an integration; the membership the binding granted is removed (people only; Maintainer)",
+            i::BindingOf,
+            i::unbind,
+        )
+        .responds_no_content(Verb::Delete, i::PROJECT_BINDING)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

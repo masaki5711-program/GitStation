@@ -5401,6 +5401,337 @@
       "summary": "Revoke one of a service account's tokens at once, e.g. after a leak (administrators; an admin-scoped token works). Needs --yes."
     },
     {
+      "args": [],
+      "examples": [
+        "gstn admin integration list --json"
+      ],
+      "name": "admin integration list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "id",
+                "kind",
+                "service_account",
+                "enabled",
+                "event_types",
+                "bindings",
+                "created_by",
+                "created_at",
+                "updated_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/integrations"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List every integration with its kind, service account, state and binding count (administrators, people only; at most 500, truncated says when more exist)."
+    },
+    {
+      "args": [
+        {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin integration view 3 --json"
+      ],
+      "name": "admin integration view",
+      "output": {
+        "properties": {
+          "bindings": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "kanflow"
+            ]
+          },
+          "service_account": {
+            "required": [
+              "id",
+              "username"
+            ],
+            "type": "object"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "service_account",
+          "enabled",
+          "event_types",
+          "bindings",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/integrations/{id}"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "Show one integration: kind, service account, enabled, event type allowlist, binding count (administrators, people only)."
+    },
+    {
+      "args": [
+        {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn admin integration bindings 3 --json"
+      ],
+      "name": "admin integration bindings",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "integration_id",
+                "kind",
+                "project_id",
+                "external_project_id",
+                "granted_membership",
+                "created_by",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/admin/integrations/{id}/bindings"
+      ],
+      "scopes": [
+        "read_api",
+        "admin"
+      ],
+      "summary": "List the projects bound to an integration with their external project ids (administrators, people only; at most 200)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn integration-binding list --project 7 --json"
+      ],
+      "name": "integration-binding list",
+      "output": {
+        "properties": {
+          "items": {
+            "items": {
+              "required": [
+                "integration_id",
+                "kind",
+                "project_id",
+                "external_project_id",
+                "granted_membership",
+                "created_by",
+                "created_at"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/integration-bindings"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a project's integration binding, none or one (as reading the project)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The integration id (admin integration list).",
+          "kind": "option",
+          "name": "--integration",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The external project's id (A-Z a-z 0-9 . _ : -, at most 100).",
+          "kind": "option",
+          "name": "--external-project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn integration-binding set --project 7 --integration 3 --external-project kanflow:42 --json"
+      ],
+      "name": "integration-binding set",
+      "output": {
+        "properties": {
+          "binding": {
+            "required": [
+              "integration_id",
+              "kind",
+              "project_id",
+              "external_project_id",
+              "granted_membership",
+              "created_by",
+              "created_at"
+            ],
+            "type": "object"
+          },
+          "outcome": {
+            "enum": [
+              "bound",
+              "unchanged"
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "binding"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/integration-bindings/{integration_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Bind a project to an external (kanflow) project of an integration (people only; Maintainer). Its service account becomes a Reporter of the project; a project already bound elsewhere is FG-INT-0016, a 201st binding of the integration FG-INT-0012. Binding again to the same external project answers unchanged."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The integration id.",
+          "kind": "option",
+          "name": "--integration",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm (gstn never prompts).",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn integration-binding remove --project 7 --integration 3 --yes"
+      ],
+      "name": "integration-binding remove",
+      "output": {
+        "properties": {
+          "integration_id": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "integer"
+          },
+          "unbound": {
+            "const": true
+          }
+        },
+        "required": [
+          "project_id",
+          "integration_id",
+          "unbound"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Unbind a project from an integration (people only; Maintainer); the Reporter membership the binding granted is removed. Needs --yes."
+    },
+    {
       "args": [
         {
           "description": "The service account's user id.",

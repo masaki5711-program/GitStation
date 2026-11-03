@@ -17,6 +17,7 @@ mod action;
 mod authorize;
 mod codeowners_ctx;
 mod contexts;
+mod integration_ctx;
 pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
@@ -24,6 +25,7 @@ mod matrix_rows_approval;
 mod matrix_rows_checks;
 mod matrix_rows_conditions;
 mod matrix_rows_discussion;
+mod matrix_rows_integrations;
 mod matrix_rows_merge;
 mod matrix_rows_people;
 mod matrix_rows_service_accounts;
@@ -36,6 +38,7 @@ mod viewer;
 pub use action::Action;
 pub use authorize::authorize;
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
+pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
     AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,

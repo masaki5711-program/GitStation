@@ -216,6 +216,26 @@ actions! {
     /// administrators, an `admin`-scoped token included (a leak is answered
     /// from wherever the administrator is, ADR-0019 Addendum S0).
     ServiceAccountTokenRevoke,
+    // --- REST API: integrations (M3 I1a, plan 11 §5 I1, ADR-0016 §7) ---
+    /// `POST /api/v1/admin/integrations`, `PATCH …/{id}`: create an
+    /// integration (kanflow) acting as a service account, enable or
+    /// disable it, change its event type allowlist. A human
+    /// administrator's web session only: every token, an `admin`-scoped
+    /// one included, is `FG-AUTH-0002 reason=session_required` (an
+    /// integration's reach is a person's decision; the emergency stop with
+    /// a token is disabling its service account, `UserDisable`).
+    IntegrationManage,
+    /// `GET /api/v1/admin/integrations`, `…/{id}`, `…/{id}/bindings`:
+    /// administrators, people only (agents, service accounts and bots are
+    /// refused); a token needs `admin` and `read_api`.
+    IntegrationRead,
+    /// `PUT|DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}`:
+    /// bind a project to an external (kanflow) project, or unbind it.
+    /// People only (agents, service accounts and bots are refused; acting
+    /// for a person with an assertion comes with S2); Maintainer and
+    /// above; `api`. Binding makes the integration's service account a
+    /// Reporter of the project, so it is a membership change.
+    IntegrationBindingManage,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -308,6 +328,7 @@ impl Action {
                 | Action::MergeRequestVersionRefsPurge
                 | Action::ServiceAccountCreate
                 | Action::ServiceAccountTokenIssue
+                | Action::IntegrationManage
         )
     }
 
@@ -343,6 +364,9 @@ impl Action {
                 | Action::ServiceAccountUpdate
                 | Action::ServiceAccountTokenIssue
                 | Action::CheckNamespaceGrantManage
+                | Action::IntegrationManage
+                | Action::IntegrationRead
+                | Action::IntegrationBindingManage
         )
     }
 
@@ -372,6 +396,7 @@ impl Action {
             | Action::MergeRequestVersionRefsPurge
             | Action::ServiceAccountCreate
             | Action::ServiceAccountTokenIssue
+            | Action::IntegrationManage
             | Action::OidcBackchannelLogout => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
@@ -395,6 +420,7 @@ impl Action {
             | Action::ServiceAccountRead
             | Action::ServiceAccountTokenList
             | Action::CheckRead
+            | Action::IntegrationRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -426,7 +452,8 @@ impl Action {
             | Action::ServiceAccountUpdate
             | Action::ServiceAccountTokenRevoke
             | Action::CheckWrite
-            | Action::CheckNamespaceGrantManage => Some(Scope::Api),
+            | Action::CheckNamespaceGrantManage
+            | Action::IntegrationBindingManage => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.

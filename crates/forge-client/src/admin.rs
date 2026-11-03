@@ -1,4 +1,5 @@
-//! `gstn admin service-account …` (M3 S0, ADR-0019 Addendum S0): the
+//! `gstn admin service-account …` (M3 S0, ADR-0019 Addendum S0; `gstn
+//! admin integration …` is `integrations.rs`, M3 I1a): the
 //! token-usable half of the service account administration — list, view,
 //! update, its tokens, revoke one (an `admin`-scoped token). Creating an
 //! account and issuing its token are an administrator's web session only
@@ -13,6 +14,7 @@ use crate::cli::{AdminCommand, Cli, ServiceAccountCommand};
 use crate::error::Result;
 use crate::hosting::{call, client, confirm, list_human, text};
 use crate::http::Method;
+use crate::integrations::integration;
 use serde_json::{json, Map, Value};
 
 const ACCOUNT_KEYS: [&str; 5] = [
@@ -58,6 +60,7 @@ fn grants(body: &Value) -> String {
 pub fn admin(cli: &Cli, cmd: &AdminCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result<()> {
     match cmd {
         AdminCommand::ServiceAccount { command } => service_account(cli, command, env, io),
+        AdminCommand::Integration { command } => integration(cli, command, env, io),
     }
 }
 

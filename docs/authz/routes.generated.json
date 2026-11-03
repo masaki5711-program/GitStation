@@ -80,6 +80,46 @@
     "word": "project_permalink"
   },
   {
+    "action": "IntegrationRead",
+    "method": "GET",
+    "path": "/api/v1/admin/integrations",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationManage",
+    "method": "POST",
+    "path": "/api/v1/admin/integrations",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationRead",
+    "method": "GET",
+    "path": "/api/v1/admin/integrations/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationManage",
+    "method": "PATCH",
+    "path": "/api/v1/admin/integrations/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationRead",
+    "method": "GET",
+    "path": "/api/v1/admin/integrations/{id}/bindings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ServiceAccountList",
     "method": "GET",
     "path": "/api/v1/admin/service-accounts",
@@ -363,6 +403,30 @@
     "action": "CheckWrite",
     "method": "POST",
     "path": "/api/v1/projects/{id}/commits/{sha}/checks",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/integration-bindings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationBindingManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/integration-bindings/{integration_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationBindingManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/integration-bindings/{integration_id}",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

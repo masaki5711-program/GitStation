@@ -95,6 +95,7 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "users_kind_immutable",
             "service_account_profiles_kind_guard",
             "user_identities_human_guard",
+            "integrations_service_account_guard",
             "check_runs_guard",
             "check_namespace_grants_kind_guard"
         ]

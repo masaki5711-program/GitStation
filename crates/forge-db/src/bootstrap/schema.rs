@@ -53,6 +53,8 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.users_kind_immutable()",
     "forge.service_account_profiles_kind_guard()",
     "forge.user_identities_human_guard()",
+    // ── M3 I1a: an integration's service account (20261114100000) ──
+    "forge.integrations_service_account_guard()",
     // ── M3 C1: check runs and namespace grants (20261115100000) ──
     "forge.check_runs_guard()",
     "forge.check_namespace_grants_kind_guard()",
@@ -165,6 +167,14 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "user_identities_human_guard",
         "CREATE TRIGGER user_identities_human_guard BEFORE INSERT OR UPDATE OF user_id ON \
          forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_guard()",
+    ),
+    // ── M3 I1a: an integration acts as one service account (20261114100000) ──
+    (
+        "integrations",
+        "integrations_service_account_guard",
+        "CREATE TRIGGER integrations_service_account_guard BEFORE INSERT OR UPDATE OF \
+         service_account_id ON forge.integrations FOR EACH ROW EXECUTE FUNCTION \
+         forge.integrations_service_account_guard()",
     ),
     // ── M3 C1: a check run's identity; grants to service accounts only (20261115100000) ──
     (
@@ -627,6 +637,33 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 "forge_ro:SELECT",
             ]),
         ),
+        // ── M3 I1a: integrations (no DELETE) and their bindings (deleted
+        // by unbinding and the purge; UPDATE of granted_membership only,
+        // 20261114100100 / 20261114100200: a removal or role change of the
+        // granted membership clears it) (20261114100000) ──
+        (
+            "forge.integrations",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.integration_bindings",
+            [
+                plain(&[
+                    "forge_app:SELECT",
+                    "forge_app:INSERT",
+                    "forge_app:DELETE",
+                    "forge_ro:SELECT",
+                ]),
+                // Column-level since 20261114100200 (re-review).
+                columns("forge_app", "UPDATE", &["granted_membership"]),
+            ]
+            .concat(),
+        ),
         // ── M3 C1: check runs, annotations (removed by the purge) and the
         // namespace grants (a revoke deletes) (20261115100000) ──
         ("forge.check_runs", operational()),
@@ -792,6 +829,9 @@ const LATER_TABLES: &[&str] = &[
     "protected_ref_merge_rules",
     // ── M3 S0: service accounts (migration 20261113100000) ──
     "service_account_profiles",
+    // ── M3 I1a: integrations (migration 20261114100000) ──
+    "integrations",
+    "integration_bindings",
     // ── M3 C1: the Checks API (migration 20261115100000) ──
     "check_runs",
     "check_annotations",

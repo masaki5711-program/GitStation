@@ -95,6 +95,21 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["updated_at"]),
                 txn_audited_columns: vec![],
             },
+            // M3 I1a: a project's binding on the project, an integration on itself.
+            AuditedTable {
+                name: "integration_bindings".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "integrations".into(),
+                audit_resource: AuditResource::Literal("integration".into()),
+                audit_id_column: "id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
             // M3 R1a: merge requests and their iid counter, on the project.
             AuditedTable {
                 name: "merge_request_approvals".into(),

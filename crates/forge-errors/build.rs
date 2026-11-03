@@ -35,8 +35,9 @@ struct Entry {
 }
 
 // M3 R1a (ADR-0024, plan 11 §11.4): REVIEW for merge requests.
-const AREAS: [&str; 11] = [
-    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI", "REVIEW",
+// M3 I1a (plan 11 §11.4, 02 §9): INT for the kanflow integration.
+const AREAS: [&str; 12] = [
+    "AUTH", "GIT", "REPO", "DB", "CI", "DEPLOY", "DOC", "WEB", "SYS", "CLI", "REVIEW", "INT",
 ];
 
 fn main() {

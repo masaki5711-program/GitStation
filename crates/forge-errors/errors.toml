@@ -1669,6 +1669,49 @@ diagnosis = "The log event carries `reason=stale_settings`, `expected` and `actu
 fix = "Read the settings again (`gstn merge-settings show --project <id>`, or reload the screen), check the other change, and save again with the new `updated_at` (`gstn merge-settings set` reads it by itself)."
 test = "stale_merge_settings_put_is_409"
 
+# ── M3 I1a: integrations and project bindings (plan 11 §5 I1, 02 §9, §11.3) ──
+[[error]]
+code = "FG-INT-0012"
+name = "IntegrationLimitReached"
+http_status = 409
+severity = "info"
+user_message_ja = "この連携に結びつけられるプロジェクトの上限に達しました。使っていない結びつけを解除してから、もう一度試してください。"
+user_message_en = "This integration is bound to the maximum number of projects. Unbind a project it no longer needs, then try again."
+user_message_id = "Integrasi ini sudah terikat ke jumlah proyek maksimum. Lepaskan ikatan proyek yang tidak lagi diperlukan, lalu coba lagi."
+cause = "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}` would bind a 201st project to one integration (ADR-0016 §1, §7: at most 200 bindings per integration, because the event feed decides every bound project on every read). The count is taken under the integration's row lock, so two binds at once cannot both pass. Nothing was written. Webhooks (20 per project, I2) will reuse this code with their own `limit`."
+diagnosis = "The log event carries `reason=binding_limit`, `limit` (200), `integration_id` and `project_id`, with `action=IntegrationBindingManage`. Count the bindings: SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>; `GET /api/v1/admin/integrations/{integration_id}/bindings` lists them (administrators)."
+fix = "Unbind projects the integration no longer needs (`DELETE /api/v1/projects/{id}/integration-bindings/{integration_id}`, a Maintainer of that project), or split the work over a second integration with its own service account (runbook integrations). The limit is fixed in code (forge-db `integrations::MAX_BINDINGS`)."
+runbook = "integrations"
+test = "binding_limit_200_is_int_0012"
+
+[[error]]
+code = "FG-INT-0016"
+name = "BindingConflict"
+http_status = 409
+severity = "info"
+user_message_ja = "このプロジェクトは、すでに別の連携先のプロジェクトに結びついています。先に今の結びつけを解除してください。"
+user_message_en = "This project is already bound to another project of an integration. Unbind it first."
+user_message_id = "Proyek ini sudah terikat ke proyek lain dari sebuah integrasi. Lepaskan ikatannya terlebih dahulu."
+cause = "A bind named a forge project that already has a binding (`forge.integration_bindings` has at most one row per project, index `integration_bindings_one_per_project`): to another integration, or to the same integration with another `external_project_id` (02 §2: one forge project is never bound to two kanflow projects, or `PBI-123` would be ambiguous). The binding is not moved silently. Nothing was written."
+diagnosis = "The log event carries `reason` (`bound_to_other_integration` or `bound_to_other_external_project`), `project_id`, `integration_id` (the requested one) and `bound_integration_id`, with `action=IntegrationBindingManage`; never the external project ids. `GET /api/v1/projects/{id}/integration-bindings` shows the current binding."
+fix = "If the project really moves to another kanflow project, a Maintainer unbinds it first (`DELETE /api/v1/projects/{id}/integration-bindings/{bound_integration_id}`), then binds it again (runbook integrations). Binding the same project to the same external project again is not an error (it answers `unchanged`)."
+runbook = "integrations"
+test = "binding_second_kanflow_project_is_refused"
+
+# ── M3 I1a review: a stopped integration or account gains no binding ──
+[[error]]
+code = "FG-INT-0017"
+name = "IntegrationDisabled"
+http_status = 409
+severity = "info"
+user_message_ja = "この連携は今は使えません（連携かそのサービスアカウントが無効です）。管理者に連絡してください。"
+user_message_en = "This integration cannot be used now (the integration or its service account is disabled). Contact the administrator."
+user_message_id = "Integrasi ini tidak dapat digunakan sekarang (integrasi atau akun layanannya dinonaktifkan). Hubungi administrator."
+cause = "A bind named an integration that is disabled (`integrations.enabled = false`: an administrator stopped it, runbook integrations C) or whose service account is disabled (I1a review: a bind grants that account a Reporter membership, so a stopped integration must not gain projects, and a disabled account must not collect memberships that come alive when it is enabled again). Both are read under the integration's row lock and the account's row lock (FOR SHARE), so a disable that commits first is seen. Nothing was written. Unbinding still works for a disabled integration (it only takes access away)."
+diagnosis = "The log event carries `reason` (`integration_disabled` or `service_account_disabled`), `integration_id`, `service_account_id` and `project_id`, with `action=IntegrationBindingManage`. `gstn admin integration view <integration_id> --json` shows `enabled` and the service account; `gstn admin service-account view <service_account_id>` shows its `state`."
+fix = "If the stop was intended, nothing to do. Otherwise, after checking why it was stopped (runbook integrations, service-accounts), an administrator enables the integration again in the browser session (`PATCH /api/v1/admin/integrations/{id}` with `enabled: true`) or enables its service account; then bind again."
+runbook = "integrations"
+test = "binding_a_disabled_integration_is_refused"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"

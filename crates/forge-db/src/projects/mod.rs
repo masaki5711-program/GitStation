@@ -43,7 +43,9 @@ pub use member_writes::{
     add_member_decided, change_member_decided, remove_member_decided, ProjectMemberFacts,
 };
 pub(crate) use members::lock_project;
+// M3 I1a: a binding grants the service account its Reporter membership.
 pub use members::{add_member, change_member, remove_member};
+pub(crate) use members::{direct_role_for_update, member_candidate};
 pub use moves::{move_decided, ProjectMoveFacts};
 pub use ownership::{ownerless, Ownerless};
 pub use update::{

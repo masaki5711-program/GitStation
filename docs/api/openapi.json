@@ -525,6 +525,20 @@
         ],
         "type": "object"
       },
+      "BindProject": {
+        "additionalProperties": false,
+        "description": "`PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`.",
+        "properties": {
+          "external_project_id": {
+            "description": "The external (kanflow) project's id: 1..=100 characters of\n`A-Z a-z 0-9 . _ : -`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "external_project_id"
+        ],
+        "type": "object"
+      },
       "BlameBody": {
         "additionalProperties": false,
         "description": "A blamed file.",
@@ -735,6 +749,24 @@
         "required": [
           "reason",
           "detail"
+        ],
+        "type": "object"
+      },
+      "BoundProject": {
+        "additionalProperties": false,
+        "description": "What a bind did, and the binding as stored.",
+        "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/IntegrationBindingBody"
+          },
+          "outcome": {
+            "description": "`bound`, or `unchanged` (it was bound so already; nothing written).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "binding"
         ],
         "type": "object"
       },
@@ -1140,6 +1172,37 @@
         "required": [
           "path",
           "display_name"
+        ],
+        "type": "object"
+      },
+      "CreateIntegration": {
+        "additionalProperties": false,
+        "description": "`POST /api/v1/admin/integrations`.",
+        "properties": {
+          "event_types": {
+            "description": "The event type allowlist of its feed: `*` (every integration-class\nevent, the default), a type (`merge_request.opened`) or a family\n(`merge_request.*`) of the integration class; 1..=64 entries.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "`kanflow` (the only kind).",
+            "type": "string"
+          },
+          "service_account_id": {
+            "description": "The service account it acts as (one integration per account).",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "service_account_id"
         ],
         "type": "object"
       },
@@ -1776,6 +1839,169 @@
           "items",
           "next_cursor",
           "has_more"
+        ],
+        "type": "object"
+      },
+      "IntegrationAccountBody": {
+        "additionalProperties": false,
+        "description": "The service account an integration acts as.",
+        "properties": {
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username"
+        ],
+        "type": "object"
+      },
+      "IntegrationBindingBody": {
+        "additionalProperties": false,
+        "description": "One binding of a project to an external project.",
+        "properties": {
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "external_project_id": {
+            "type": "string"
+          },
+          "granted_membership": {
+            "description": "The binding made the integration's service account a Reporter of\nthe project (unbinding removes that membership).",
+            "type": "boolean"
+          },
+          "integration_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`kanflow`.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "integration_id",
+          "kind",
+          "project_id",
+          "external_project_id",
+          "granted_membership",
+          "created_by",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "IntegrationBindingList": {
+        "additionalProperties": false,
+        "description": "Bindings (an integration's, or a project's: none or one).",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationBindingBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "IntegrationBody": {
+        "additionalProperties": false,
+        "description": "One integration (no secrets: it has none yet).",
+        "properties": {
+          "bindings": {
+            "description": "How many projects are bound to it (at most 200).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "created_at": {
+            "description": "UTC, RFC 3339.",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "event_types": {
+            "description": "Sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "description": "`kanflow`.",
+            "type": "string"
+          },
+          "service_account": {
+            "$ref": "#/components/schemas/IntegrationAccountBody"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "service_account",
+          "enabled",
+          "event_types",
+          "bindings",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "IntegrationList": {
+        "additionalProperties": false,
+        "description": "The integrations.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationBody"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "More than 500 exist (only the first 500 by id are listed).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "truncated"
         ],
         "type": "object"
       },
@@ -4188,6 +4414,29 @@
         },
         "type": "object"
       },
+      "UpdateIntegration": {
+        "additionalProperties": false,
+        "description": "`PATCH /api/v1/admin/integrations/{id}`: the fields to change.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "event_types": {
+            "description": "Replaces the allowlist (the rules of `CreateIntegration`).",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "UpdateMergeRequest": {
         "additionalProperties": false,
         "description": "`PATCH …/merge-requests/{iid}`: every field optional (absent =\nunchanged).",
@@ -4266,6 +4515,32 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UpdatedIntegration": {
+        "additionalProperties": false,
+        "description": "What an update changed.",
+        "properties": {
+          "fields": {
+            "description": "The fields that changed: `enabled`, `event_types`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "integration": {
+            "$ref": "#/components/schemas/IntegrationBody"
+          },
+          "outcome": {
+            "description": "`updated`, or `unchanged` (nothing was written).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "fields",
+          "integration"
+        ],
         "type": "object"
       },
       "UpdatedServiceAccount": {
@@ -4727,6 +5002,205 @@
         },
         "summary": "End the caller's own web session and 303 to the identity provider's logout (form post, sessions only)",
         "x-forge-action": "SessionLogout"
+      }
+    },
+    "/api/v1/admin/integrations": {
+      "get": {
+        "operationId": "get_api_v1_admin_integrations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Every integration with its service account and binding count (administrators, people only)",
+        "x-forge-action": "IntegrationRead"
+      },
+      "post": {
+        "operationId": "post_api_v1_admin_integrations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntegration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationBody"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Create a kanflow integration acting as a service account (an administrator's web session only)",
+        "x-forge-action": "IntegrationManage",
+        "x-forge-max-body-bytes": 8192
+      }
+    },
+    "/api/v1/admin/integrations/{id}": {
+      "get": {
+        "operationId": "get_api_v1_admin_integrations_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "One integration (administrators, people only)",
+        "x-forge-action": "IntegrationRead"
+      },
+      "patch": {
+        "operationId": "patch_api_v1_admin_integrations_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIntegration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatedIntegration"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Enable or disable an integration or replace its event type allowlist (an administrator's web session only)",
+        "x-forge-action": "IntegrationManage",
+        "x-forge-max-body-bytes": 8192
+      }
+    },
+    "/api/v1/admin/integrations/{id}/bindings": {
+      "get": {
+        "operationId": "get_api_v1_admin_integrations_id_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationBindingList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The projects bound to an integration (administrators, people only)",
+        "x-forge-action": "IntegrationRead"
       }
     },
     "/api/v1/admin/service-accounts": {
@@ -6442,6 +6916,151 @@
         "summary": "Report a check run on a commit; the same name again updates it (ci/, kanflow/: a service account holding the namespace, Developer member; forge/ and ext/ are refused)",
         "x-forge-action": "CheckWrite",
         "x-forge-max-body-bytes": 65536
+      }
+    },
+    "/api/v1/projects/{id}/integration-bindings": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_integration_bindings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationBindingList"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "A project's integration binding, none or one (as reading the project)",
+        "x-forge-action": "ProjectRead"
+      }
+    },
+    "/api/v1/projects/{id}/integration-bindings/{integration_id}": {
+      "delete": {
+        "operationId": "delete_api_v1_projects_id_integration_bindings_integration_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Unbind a project from an integration; the membership the binding granted is removed (people only; Maintainer)",
+        "x-forge-action": "IntegrationBindingManage"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_integration_bindings_integration_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "integration_id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindProject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundProject"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Bind a project to an external (kanflow) project of an integration; its service account becomes a Reporter (people only; Maintainer)",
+        "x-forge-action": "IntegrationBindingManage",
+        "x-forge-max-body-bytes": 8192
       }
     },
     "/api/v1/projects/{id}/members": {

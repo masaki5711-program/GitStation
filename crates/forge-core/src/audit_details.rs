@@ -5,6 +5,7 @@ use crate::approval::ApprovalRuleChange;
 use crate::checks::CheckRunChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
+use crate::integration::IntegrationChange;
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
 use crate::merge_request::{MergeRequestChange, MergeRequestVersionChange};
 use crate::move_details::{MoveSummary, TombstoneKind};
@@ -359,6 +360,10 @@ pub enum AuditDetails {
         namespace: crate::merge_conditions::CheckNamespace,
         granted: bool,
     },
+    /// `integration.*` (M3 I1a, plan 11 §5 I1): audit-only; created /
+    /// updated on (`integration`, id), bound / unbound on the project.
+    /// Shapes: [`IntegrationChange::to_value`].
+    Integration(IntegrationChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -517,6 +522,7 @@ impl AuditDetails {
             Self::CheckRun(change) => change.action(),
             Self::CheckNamespaceGrant { granted: true, .. } => "check_namespace.granted",
             Self::CheckNamespaceGrant { granted: false, .. } => "check_namespace.revoked",
+            Self::Integration(change) => change.action(),
         }
     }
 
@@ -568,7 +574,8 @@ impl AuditDetails {
             Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
             | Self::ProtectedRefMergeRule(_)
-            | Self::CheckNamespaceGrant { .. } => None,
+            | Self::CheckNamespaceGrant { .. }
+            | Self::Integration(_) => None,
             Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
@@ -973,6 +980,7 @@ impl AuditDetails {
                 "project_id": project.get(),
                 "namespace": namespace.as_str(),
             }),
+            Self::Integration(change) => change.to_value(),
         }
     }
 
@@ -1048,7 +1056,8 @@ impl AuditDetails {
             | Self::MergeSettings { .. }
             | Self::ProtectedRefMergeRule(_)
             | Self::CheckRun(_)
-            | Self::CheckNamespaceGrant { .. } => self.to_value(),
+            | Self::CheckNamespaceGrant { .. }
+            | Self::Integration(_) => self.to_value(),
         }
     }
 }

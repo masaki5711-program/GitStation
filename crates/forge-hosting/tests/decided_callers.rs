@@ -45,6 +45,9 @@ fn only_forge_hosting_calls_the_decided_commands() {
         // M3 R6: a protection rule's merge rule
         "put_merge_rule",
         "remove_merge_rule",
+        // M3 I1a: a project's integration binding
+        "bind",
+        "unbind",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))
