@@ -36,6 +36,7 @@ pub mod token;
 pub mod user_kind;
 pub mod web_keys;
 pub mod web_path;
+pub mod work_item;
 
 pub use approval::{ApprovalRuleChange, UnapproveReason, UncountedReason};
 pub use audit_details::{
@@ -84,6 +85,7 @@ pub use web_path::{
     log_safe_path, parse_positive_id, parse_web_path, GitRoute, InstanceRoute, ParsedPath,
     RouteWord, TailSegments,
 };
+pub use work_item::{find_refs, LinkSource, WorkItem, WorkItemChange, WorkItemRef};
 
 #[cfg(test)]
 mod audit_details_tests;
@@ -119,3 +121,5 @@ mod user_kind_tests;
 mod web_keys_tests;
 #[cfg(test)]
 mod web_path_tests;
+#[cfg(test)]
+mod work_item_tests;

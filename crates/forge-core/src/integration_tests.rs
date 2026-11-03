@@ -38,6 +38,9 @@ fn event_type_entries_admit_the_integration_class_only() {
         "repository.pushed",
         "repository.*",
         "project.*",
+        // M3 I1b: the work item links joined the integration class.
+        "work_item.*",
+        "work_item.linked",
     ] {
         assert!(event_type_entry_ok(ok), "{ok}");
     }
@@ -50,7 +53,7 @@ fn event_type_entries_admit_the_integration_class_only() {
         "token.*",
         "project.purged",
         "merge_request.nope",
-        "work_item.*",
+        "commit.*",
         ".*",
         "merge_*",
         "merge_request.**",

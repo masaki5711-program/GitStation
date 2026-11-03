@@ -128,7 +128,9 @@ fn all_lists_every_event_type_once() {
             "merge_request.approved",
             "merge_request.unapproved",
             "merge_settings.codeowners_enforcement_changed",
-            "merge_settings.codeowners_enforcement_restored"
+            "merge_settings.codeowners_enforcement_restored",
+            "work_item.linked",
+            "work_item.unlinked"
         ]
     );
 }

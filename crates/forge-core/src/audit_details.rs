@@ -13,6 +13,7 @@ use crate::repository::RepositoryState;
 use crate::role::{Role, Visibility};
 use crate::scope::Scope;
 use crate::user_kind::UserKind;
+use crate::work_item::WorkItemChange;
 
 /// A field an update changed (`project.updated`, `group.updated`): the
 /// name only, never the value (display names and descriptions are free
@@ -350,6 +351,11 @@ pub enum AuditDetails {
     /// updated on (`integration`, id), bound / unbound on the project.
     /// Shapes: [`IntegrationChange::to_value`].
     Integration(IntegrationChange),
+    /// `work_item.linked` / `.unlinked` by a person (M3 I1b): audited on
+    /// the project and published as the event (integration class; the
+    /// subscriber's detected links are derived events without audit rows).
+    /// Shapes: [`WorkItemChange::to_value`].
+    WorkItem(WorkItemChange),
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -506,6 +512,7 @@ impl AuditDetails {
             Self::MergeSettings { change, .. } => change.action(),
             Self::ProtectedRefMergeRule(change) => change.action(),
             Self::Integration(change) => change.action(),
+            Self::WorkItem(change) => change.action(),
         }
     }
 
@@ -554,6 +561,7 @@ impl AuditDetails {
             Self::RepositoryPurgeStarted { .. } => None,
             Self::ProjectPurged { .. } => Some(EventType::ProjectPurged),
             Self::MergeRequest(change) => Some(change.transition().event_type()),
+            Self::WorkItem(change) => Some(change.event_type()),
             Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
             | Self::ProtectedRefMergeRule(_)
@@ -951,6 +959,7 @@ impl AuditDetails {
             Self::MergeSettings { project, change } => change.to_value(*project),
             Self::ProtectedRefMergeRule(change) => change.to_value(),
             Self::Integration(change) => change.to_value(),
+            Self::WorkItem(change) => change.to_value(),
         }
     }
 
@@ -1025,7 +1034,8 @@ impl AuditDetails {
             | Self::ApprovalRule(_)
             | Self::MergeSettings { .. }
             | Self::ProtectedRefMergeRule(_)
-            | Self::Integration(_) => self.to_value(),
+            | Self::Integration(_)
+            | Self::WorkItem(_) => self.to_value(),
         }
     }
 }
