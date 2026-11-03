@@ -49,6 +49,10 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.push_unlisted_refs_guard()",
     // ── M3 R5 round 4: pushed commits never change (20261111100300) ──
     "forge.push_commits_guard()",
+    // ── M3 S0 review: 20261113100100, 20261113100200 ──
+    "forge.users_kind_immutable()",
+    "forge.service_account_profiles_kind_guard()",
+    "forge.user_identities_human_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -137,6 +141,27 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "CREATE TRIGGER push_commits_immutable BEFORE UPDATE ON \
          forge.push_commits FOR EACH ROW EXECUTE FUNCTION \
          forge.push_commits_guard()",
+    ),
+    // ── M3 S0: a user's kind never changes; the kinds of a profile and an
+    // identity (20261113100000, guarded since 20261113100100) ──
+    (
+        "users",
+        "users_kind_immutable",
+        "CREATE TRIGGER users_kind_immutable BEFORE UPDATE OF kind ON forge.users \
+         FOR EACH ROW EXECUTE FUNCTION forge.users_kind_immutable()",
+    ),
+    (
+        "service_account_profiles",
+        "service_account_profiles_kind_guard",
+        "CREATE TRIGGER service_account_profiles_kind_guard BEFORE INSERT OR UPDATE OF \
+         user_id, owner_user_id ON forge.service_account_profiles FOR EACH ROW EXECUTE \
+         FUNCTION forge.service_account_profiles_kind_guard()",
+    ),
+    (
+        "user_identities",
+        "user_identities_human_guard",
+        "CREATE TRIGGER user_identities_human_guard BEFORE INSERT OR UPDATE OF user_id ON \
+         forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -575,6 +600,16 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         // ── M3 R6: merge conditions, removed by the purge (20261112100000) ──
         ("forge.merge_settings", operational()),
         ("forge.protected_ref_merge_rules", operational()),
+        // ── M3 S0: service account profiles, no DELETE (20261113100000) ──
+        (
+            "forge.service_account_profiles",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
     ]
 }
 
@@ -641,6 +676,8 @@ const TOKENS_RO: &[&str] = &[
     "revoked_reason",
     "last_used_at",
     "is_agent",
+    // M3 S0 (20261113100000).
+    "issued_by_user_id",
 ];
 
 /// The read pool's columns of users (tables.toml `ro_columns`): not email,
@@ -731,6 +768,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 R6: merge conditions (migration 20261112100000) ──
     "merge_settings",
     "protected_ref_merge_rules",
+    // ── M3 S0: service accounts (migration 20261113100000) ──
+    "service_account_profiles",
 ];
 
 /// Every table the first migration creates.

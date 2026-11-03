@@ -91,7 +91,10 @@ fn the_embedded_ledger_lists_audited_change_present_as_guarded() {
             "merge_request_merges_guard",
             "merge_request_approvals_guard",
             "push_unlisted_refs_guard",
-            "push_commits_guard"
+            "push_commits_guard",
+            "users_kind_immutable",
+            "service_account_profiles_kind_guard",
+            "user_identities_human_guard"
         ]
     );
 }

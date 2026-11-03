@@ -85,8 +85,9 @@ pub struct TokenList {
     pub items: Vec<TokenBody>,
 }
 
+// `Debug` is written by hand below: it never prints the secret (S0 review).
 /// A created token: the secret, shown this once.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreatedToken {
     #[schema(minimum = 1)]
@@ -100,7 +101,24 @@ pub struct CreatedToken {
     pub token: String,
 }
 
-fn token_body(t: &TokenInfo) -> TokenBody {
+impl std::fmt::Debug for CreatedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreatedToken")
+            .field("id", &self.id)
+            .field("public_id", &self.public_id)
+            .field("name", &self.name)
+            .field("scopes", &self.scopes)
+            .field("expires_at", &self.expires_at)
+            .field("is_agent", &self.is_agent)
+            .field("token", &REDACTED)
+            .finish()
+    }
+}
+
+/// What a `Debug` print shows instead of a token's secret.
+pub(crate) const REDACTED: &str = "<redacted>";
+
+pub(crate) fn token_body(t: &TokenInfo) -> TokenBody {
     TokenBody {
         id: t.token_id,
         public_id: t.public_id.clone(), // clone: the row is borrowed
@@ -132,7 +150,7 @@ fn found<R>(ctx: R) -> Lookup<R> {
 
 /// The scope names of a create body; an unknown or empty list is
 /// `FG-WEB-0006 reason=field_invalid field=scopes`.
-fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
+pub(crate) fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
     let invalid = |rule| {
         request_invalid("field_invalid")
             .with_context("field", "scopes")
@@ -150,7 +168,7 @@ fn scopes(names: &[String]) -> Result<Vec<Scope>, ForgeError> {
         .collect()
 }
 
-fn expiry(days: Option<u32>) -> Result<Option<Duration>, ForgeError> {
+pub(crate) fn expiry(days: Option<u32>) -> Result<Option<Duration>, ForgeError> {
     let Some(days) = days else {
         return Ok(None);
     };
@@ -299,5 +317,28 @@ pub async fn revoke(state: AppState, request: Dispatched<TokenCtx>) -> Response 
     match done {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => w.ctx.fail(e).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_created_tokens_debug_never_shows_the_secret() {
+        let secret = "fgp_00000000000000a1_c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0";
+        let created = CreatedToken {
+            id: 1,
+            public_id: "00000000000000a1".to_owned(),
+            name: "ci".to_owned(),
+            scopes: vec!["read_api".to_owned()],
+            expires_at: "2027-01-01T00:00:00Z".to_owned(),
+            is_agent: false,
+            token: secret.to_owned(),
+        };
+        let printed = format!("{created:?} {created:#?}");
+        assert!(!printed.contains("c2VjcmV0"), "{printed}");
+        assert!(printed.contains(REDACTED), "{printed}");
+        assert!(printed.contains("00000000000000a1"), "{printed}");
     }
 }

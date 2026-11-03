@@ -157,6 +157,7 @@ fn token_audit_details_have_their_exact_shape_and_no_secret() {
         scopes: vec![crate::Scope::ReadApi, crate::Scope::WriteRepository],
         expires_at: "2027-01-28T00:00:00Z".to_owned(),
         is_agent: true,
+        issued_by: None,
     };
     let revoked = AuditDetails::TokenRevoked {
         token_id: 9,
@@ -190,6 +191,47 @@ fn token_audit_details_have_their_exact_shape_and_no_secret() {
             );
         }
     }
+}
+
+/// M3 S0: a token an administrator issued for a service account names the
+/// issuer; the service account rows carry ids and field names only (never
+/// the purpose text) and publish no event.
+#[test]
+fn service_account_audit_details_have_their_exact_shape() {
+    use crate::ids::NamespaceId;
+    use crate::ServiceAccountField;
+    let issued = AuditDetails::TokenCreated {
+        token_id: 9,
+        user: UserId::new(4),
+        public_id: "0123456789abcdef".to_owned(),
+        scopes: vec![crate::Scope::ReadApi],
+        expires_at: "2027-01-28T00:00:00Z".to_owned(),
+        is_agent: false,
+        issued_by: Some(UserId::new(1)),
+    };
+    assert_eq!(issued.to_value()["issued_by_user_id"], json!(1));
+    let created = AuditDetails::ServiceAccountCreated {
+        namespace_id: NamespaceId::new(5),
+        owner: UserId::new(2),
+        purpose_chars: 12,
+    };
+    assert_eq!(
+        created.to_value(),
+        json!({"namespace_id": 5, "owner_id": 2, "purpose_chars": 12})
+    );
+    let updated = AuditDetails::ServiceAccountUpdated {
+        owner_from: UserId::new(2),
+        owner_to: UserId::new(3),
+        fields: vec![ServiceAccountField::Owner, ServiceAccountField::Purpose],
+    };
+    assert_eq!(
+        updated.to_value(),
+        json!({"owner_from": 2, "owner_to": 3, "fields": ["owner", "purpose"]})
+    );
+    assert_eq!(created.action(), "service_account.created");
+    assert_eq!(updated.action(), "service_account.updated");
+    assert_eq!(created.event_type(), None);
+    assert_eq!(updated.event_type(), None);
 }
 
 #[test]

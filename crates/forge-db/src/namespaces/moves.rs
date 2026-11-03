@@ -95,10 +95,11 @@ pub enum TargetAccess {
         group: GroupId,
         role: Option<Role>,
     },
-    /// A personal namespace and its owner.
+    /// A personal namespace, its owner and the owner's `users.kind`.
     PersonalNamespace {
         namespace: NamespaceId,
         owner: UserId,
+        owner_kind: forge_core::UserKind,
     },
     /// A project namespace: never a valid parent (`target_kind`).
     Project {
@@ -419,10 +420,12 @@ pub(crate) async fn lock_target(
                     .with_context("reason", "namespace_owner_missing")
                     .with_context("user_id", owner_id));
             };
+            let owner_kind = crate::users::parse_kind(owner_id, &owner.0)?;
             (
                 TargetAccess::PersonalNamespace {
                     namespace: parent,
                     owner: UserId::new(owner_id),
+                    owner_kind,
                 },
                 Some(owner),
             )

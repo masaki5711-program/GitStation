@@ -20,7 +20,7 @@ A personal access token could not be issued because the request breaks a rule of
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled or active_limit) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`.
+The log event carries `reason` (expires_out_of_range, expires_malformed (a `--expires-in` that is not `<days>d`), scopes_empty, scope_unknown, name_length, nul_character, control_character, admin_scope_requires_admin, owner_bot, owner_disabled, active_limit or owner_not_service_account — the service account issue route named a user who is no service account, M3 S0) and, when forge_db::tokens::issue refused it, `user` (the owner id; `scope_unknown` and `expires_malformed` are refused by the CLI before the owner is looked up, so they carry no `user`); never the name or any token. For active_limit read the owner's tokens with `forge admin token list --user <name>`.
 
 ## 対処 (fix)
 

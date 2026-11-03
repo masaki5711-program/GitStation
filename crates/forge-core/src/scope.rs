@@ -24,11 +24,17 @@ pub enum Scope {
     /// `MergeExecute`, satisfied only by itself: `api`, `admin` and
     /// `merge_execute` do not satisfy it, and it satisfies nothing else.
     MergeApprove,
+    /// See people's e-mail addresses where an API answer offers them (M3
+    /// S0, plan 11 §5 S0; the event feed's actor, I1c). An addition to
+    /// `read_api`, never a substitute: it satisfies no other scope, and no
+    /// other scope satisfies it (`api` and `admin` included), so a token
+    /// sees addresses only when it was issued for that.
+    UserEmail,
 }
 
 impl Scope {
     /// Every scope, in declaration order.
-    pub const ALL: [Scope; 7] = [
+    pub const ALL: [Scope; 8] = [
         Scope::ReadRepository,
         Scope::WriteRepository,
         Scope::ReadApi,
@@ -36,6 +42,7 @@ impl Scope {
         Scope::Admin,
         Scope::MergeExecute,
         Scope::MergeApprove,
+        Scope::UserEmail,
     ];
 
     /// The scope named `name` (its `as_str`); `None` for any other string.
@@ -52,6 +59,7 @@ impl Scope {
             Scope::Admin => "admin",
             Scope::MergeExecute => "merge_execute",
             Scope::MergeApprove => "merge_approve",
+            Scope::UserEmail => "user_email",
         }
     }
 

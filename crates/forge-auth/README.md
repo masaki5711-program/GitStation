@@ -197,6 +197,21 @@ with administrator rights may request it.
 10. CSRF protection for session-backed changes; rate limits on login and tokens.
 11. Before M4: default protection for tags, or deploy only from protected refs.
 
+**Service accounts (M3 S0, ADR-0019 Addendum S0)**: `ServiceAccountCreate` and
+`ServiceAccountTokenIssue` are an administrator's web session only and people only
+(`FG-AUTH-0002 session_required` for every token); `ServiceAccountList` / `Read` /
+`TokenList` / `TokenRevoke` need administrator rights (an `admin`-scoped token
+included); `ServiceAccountUpdate` is people only. `Resource::ServiceAccount` /
+`ServiceAccountTokenRequest` carry the target's kind and state: another kind is
+`FG-REPO-0005 not_service_account`, issuing refuses `target_disabled` and the
+`admin` scope. As a caller a service account sees member projects only (internal
+too: `service_account_not_member`) and reads by its own role. Nobody, administrators
+included, creates or moves a project into a personal namespace whose owner is not a
+person (`owner_kind` on `Resource::Namespace` / `TransferTarget::PersonalNamespace`,
+`non_person_namespace`). `Scope::UserEmail`
+satisfies nothing else. Rows `src/matrix_rows_service_accounts.rs`, tests
+`src/service_account_tests.rs`.
+
 **Error codes owned**: FG-AUTH-0001..0004, FG-REPO-0005..0006,
 FG-GIT-0007..0010 (all `info`, no runbook: expected client conditions).
 

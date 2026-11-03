@@ -31,6 +31,25 @@ impl ChangedField {
     }
 }
 
+/// A field of a service account an update changed
+/// (`service_account.updated`, M3 S0): the name only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ServiceAccountField {
+    DisplayName,
+    Purpose,
+    Owner,
+}
+
+impl ServiceAccountField {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DisplayName => "display_name",
+            Self::Purpose => "purpose",
+            Self::Owner => "owner",
+        }
+    }
+}
+
 fn field_names(fields: &[ChangedField]) -> Vec<&'static str> {
     fields.iter().map(|f| f.as_str()).collect()
 }
@@ -105,6 +124,25 @@ pub enum AuditDetails {
         scopes: Vec<Scope>,
         expires_at: String,
         is_agent: bool,
+        /// The administrator who issued it for someone else (a service
+        /// account's token, M3 S0); `None` for one's own token and the
+        /// operator CLI's. In the JSON only when set.
+        issued_by: Option<UserId>,
+    },
+    /// `service_account.created` (M3 S0, audited on the account): the
+    /// account's personal namespace and the person who answers for it.
+    /// Never the purpose text (free text) — `purpose_chars` only.
+    ServiceAccountCreated {
+        namespace_id: NamespaceId,
+        owner: UserId,
+        purpose_chars: i64,
+    },
+    /// `service_account.updated` (M3 S0): the owner (from → to, when it
+    /// changed) and the names of the other fields changed.
+    ServiceAccountUpdated {
+        owner_from: UserId,
+        owner_to: UserId,
+        fields: Vec<ServiceAccountField>,
     },
     /// `token.revoked` (D3).
     TokenRevoked {
@@ -426,6 +464,8 @@ impl AuditDetails {
             Self::MemberRoleChanged { .. } => "member.role_changed",
             Self::MemberRemoved { .. } => "member.removed",
             Self::TokenCreated { .. } => "token.created",
+            Self::ServiceAccountCreated { .. } => "service_account.created",
+            Self::ServiceAccountUpdated { .. } => "service_account.updated",
             Self::TokenRevoked { .. } => "token.revoked",
             // ── D4 MR3b ──
             Self::RepositoryCreated { .. } => "repository.created",
@@ -475,7 +515,9 @@ impl AuditDetails {
             | Self::GroupCreated { .. }
             | Self::MemberAdded { .. }
             | Self::MemberRoleChanged { .. }
-            | Self::MemberRemoved { .. } => None,
+            | Self::MemberRemoved { .. }
+            | Self::ServiceAccountCreated { .. }
+            | Self::ServiceAccountUpdated { .. } => None,
             Self::ProjectCreated { .. } => Some(EventType::ProjectCreated),
             Self::TokenCreated { .. } => Some(EventType::TokenCreated),
             Self::TokenRevoked { .. } => Some(EventType::TokenRevoked),
@@ -543,7 +585,10 @@ impl AuditDetails {
     /// MemberAdded / MemberRemoved `{"user_id","role"}`,
     /// MemberRoleChanged `{"user_id","from","to"}`,
     /// TokenCreated `{"token_id","user_id","public_id","scopes","expires_at","is_agent"}`,
+    /// (+ `"issued_by_user_id"` when an administrator issued it, M3 S0),
     /// TokenRevoked `{"token_id","user_id","public_id"}`,
+    /// ServiceAccountCreated `{"namespace_id","owner_id","purpose_chars"}`,
+    /// ServiceAccountUpdated `{"owner_from","owner_to","fields"}`,
     /// RepositoryCreated `{"project_id","repository_id"}`,
     /// RepositoryReprovisionRequested `{"repository_id","job_id","holder_job_id",
     /// "holder_state"}` (`holder_state` = `succeeded` with its id, or `none`).
@@ -678,13 +723,38 @@ impl AuditDetails {
                 scopes,
                 expires_at,
                 is_agent,
+                issued_by,
+            } => {
+                let mut value = serde_json::json!({
+                    "token_id": token_id,
+                    "user_id": user.get(),
+                    "public_id": public_id,
+                    "scopes": scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    "expires_at": expires_at,
+                    "is_agent": is_agent,
+                });
+                if let (Some(by), serde_json::Value::Object(map)) = (issued_by, &mut value) {
+                    map.insert("issued_by_user_id".to_owned(), by.get().into());
+                }
+                value
+            }
+            Self::ServiceAccountCreated {
+                namespace_id,
+                owner,
+                purpose_chars,
             } => serde_json::json!({
-                "token_id": token_id,
-                "user_id": user.get(),
-                "public_id": public_id,
-                "scopes": scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-                "expires_at": expires_at,
-                "is_agent": is_agent,
+                "namespace_id": namespace_id.get(),
+                "owner_id": owner.get(),
+                "purpose_chars": purpose_chars,
+            }),
+            Self::ServiceAccountUpdated {
+                owner_from,
+                owner_to,
+                fields,
+            } => serde_json::json!({
+                "owner_from": owner_from.get(),
+                "owner_to": owner_to.get(),
+                "fields": fields.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
             }),
             Self::TokenRevoked {
                 token_id,
@@ -917,6 +987,8 @@ impl AuditDetails {
             | Self::MemberRemoved { .. }
             | Self::TokenCreated { .. }
             | Self::TokenRevoked { .. }
+            | Self::ServiceAccountCreated { .. }
+            | Self::ServiceAccountUpdated { .. }
             | Self::RepositoryCreated { .. }
             | Self::RepositoryReprovisionRequested { .. }
             | Self::ProjectMemberAdded { .. }

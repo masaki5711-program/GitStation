@@ -193,10 +193,16 @@ fn caller(proof: &Authorized<MergeRequestCtx>) -> Result<UserId, ForgeError> {
     })
 }
 
-/// The change context of a write by `principal`: actor `user`, the
-/// request id, the token and its scopes.
+/// The change context of a write by `principal`: actor `user`, or
+/// `service_account` when the caller's account is one (S0 review: a service
+/// account's comment is audited as its own), the request id, the token and
+/// its scopes.
 fn change_context(request: &ReviewRequest, principal: &Principal, user: UserId) -> ChangeContext {
-    let mut ctx = ChangeContext::new(Actor::User(user), request.request_id.clone());
+    let actor = match principal.account_kind() {
+        forge_auth::AccountKind::ServiceAccount => Actor::ServiceAccount(user),
+        forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot => Actor::User(user),
+    };
+    let mut ctx = ChangeContext::new(actor, request.request_id.clone());
     ctx.credential_id = request.credential_id;
     ctx.effective_scope = match principal.credential() {
         Credential::Session => Vec::new(),

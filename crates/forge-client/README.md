@@ -77,6 +77,16 @@ gstn protected-ref list|add|remove --yes --project ID
 gstn namespace resolve team/app                          # パスから project / group / user の id を引く
 ```
 
+サービスアカウントの管理（M3 S0、管理者。トークンは `admin` スコープ）:
+
+```
+gstn admin service-account list|view <id>|tokens <id>
+gstn admin service-account update <id> [--display-name X] [--purpose X] [--owner <user id>]
+gstn admin service-account revoke-token <id> <token id> --yes   # 漏えいのときはすぐに
+```
+
+作成とトークンの発行は管理者の Web セッションだけ（トークンからは FG-AUTH-0002）。手順は Runbook `service-accounts`。
+
 id は正の整数。破壊的な操作（`project delete` / `member remove` / `protected-ref remove`）は
 `--yes` が必須で、無いときは何も送らずに終了コード 2 で終わる（`gstn` は対話で確認しない）。
 `--all` は `next_cursor`（member は `next_after`、mr は `next_before`）を、件数・サイズ・ページ数の上限つきで辿る。

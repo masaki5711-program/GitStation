@@ -90,6 +90,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every service account with its owner and token summary (administrators) */
+        get: operations["get_api_v1_admin_service_accounts"];
+        put?: never;
+        /** Create a service account owned by a person (an administrator's web session only) */
+        post: operations["post_api_v1_admin_service_accounts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/service-accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One service account (administrators; another kind of user is not found) */
+        get: operations["get_api_v1_admin_service_accounts_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a service account's display name, purpose or owner (administrators, people only) */
+        patch: operations["patch_api_v1_admin_service_accounts_id"];
+        trace?: never;
+    };
+    "/api/v1/admin/service-accounts/{id}/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A service account's tokens with their issuer (administrators; never a secret) */
+        get: operations["get_api_v1_admin_service_accounts_id_tokens"];
+        put?: never;
+        /** Issue a token for an active service account (an administrator's web session only; never admin; the secret is shown once) */
+        post: operations["post_api_v1_admin_service_accounts_id_tokens"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/service-accounts/{id}/tokens/{token_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a service account's token (administrators, an admin-scoped token included) */
+        delete: operations["delete_api_v1_admin_service_accounts_id_tokens_token_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/users": {
         parameters: {
             query?: never;
@@ -1483,6 +1554,23 @@ export interface components {
             /** @description `developer`, `maintainer` or `owner`. */
             push_min_role: components["schemas"]["RoleName"];
         };
+        /** @description `POST /api/v1/admin/service-accounts`. */
+        CreateServiceAccount: {
+            /** @description 1..=255 characters (default: the username). */
+            display_name?: string | null;
+            /**
+             * Format: int64
+             * @description The person who answers for it (an active human user's id).
+             */
+            owner_id: number;
+            /**
+             * @description Why it exists, 1..=500 characters, one line (one account per
+             *     purpose).
+             */
+            purpose: string;
+            /** @description Also its personal namespace's path (a top-level segment). */
+            username: string;
+        };
         /** @description `POST /api/v1/user/tokens`. */
         CreateToken: {
             /**
@@ -1665,6 +1753,39 @@ export interface components {
             items: components["schemas"]["ListedGroup"][];
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
+        };
+        /** @description `POST /api/v1/admin/service-accounts/{id}/tokens`. */
+        IssueServiceAccountToken: {
+            /**
+             * Format: int32
+             * @description Days until it expires, 1..=365 (default 90).
+             */
+            expires_in_days?: number | null;
+            /** @description The token is for an AI agent (ADR-0017 §4.0); default false. */
+            is_agent?: boolean | null;
+            /** @description 1..=100 characters, no control or invisible format characters. */
+            name: string;
+            /**
+             * @description `read_repository`, `write_repository`, `read_api`, `api`,
+             *     `merge_execute`, `merge_approve`, `user_email`; never `admin`.
+             */
+            scopes: string[];
+        };
+        /** @description An issued token: the secret, shown this once. */
+        IssuedServiceAccountToken: {
+            expires_at: string;
+            /** Format: int64 */
+            id: number;
+            is_agent: boolean;
+            /** Format: int64 */
+            issued_by_user_id: number;
+            name: string;
+            public_id: string;
+            scopes: string[];
+            /** Format: int64 */
+            service_account_id: number;
+            /** @description The whole token. It is never shown again: hand it to the owner now. */
+            token: string;
         };
         /** @description A group as a list shows it. */
         ListedGroup: {
@@ -1986,6 +2107,13 @@ export interface components {
             /** Format: int64 */
             id: number;
         };
+        /** @description The person a service account belongs to. */
+        OwnerBody: {
+            active: boolean;
+            /** Format: int64 */
+            id: number;
+            username: string;
+        };
         /**
          * @description Where an inline discussion sits: a line of one side of one version's
          *     diff (`GET …/versions/{version}/diff`).
@@ -2260,6 +2388,57 @@ export interface components {
             /** Format: int32 */
             required: number;
         };
+        /** @description One service account (no personal data: it has none). */
+        ServiceAccountBody: {
+            /**
+             * Format: int64
+             * @description Active (not revoked, not expired) tokens.
+             */
+            active_tokens: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            created_by: number | null;
+            display_name: string;
+            /** Format: int64 */
+            id: number;
+            /** @description The latest expiry of an active token (UTC, RFC 3339). */
+            last_token_expiry: string | null;
+            owner: null | components["schemas"]["OwnerBody"];
+            purpose: string | null;
+            /** @description `active` or `disabled`. */
+            state: string;
+            username: string;
+        };
+        /** @description The service accounts. */
+        ServiceAccountList: {
+            items: components["schemas"]["ServiceAccountBody"][];
+            /** @description More than 500 exist (only the first 500 by id are listed). */
+            truncated: boolean;
+        };
+        /** @description One token of a service account (never the secret or its hash). */
+        ServiceAccountTokenBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            expires_at: string;
+            /** Format: int64 */
+            id: number;
+            /**
+             * Format: int64
+             * @description The administrator who issued it (`null`: the operator CLI).
+             */
+            issued_by_user_id: number | null;
+            last_used_at: string | null;
+            name: string;
+            /** @description The token's public part (`fgp_<public_id>_…`). */
+            public_id: string;
+            revoked_at: string | null;
+            scopes: string[];
+        };
+        /** @description A service account's tokens. */
+        ServiceAccountTokenList: {
+            items: components["schemas"]["ServiceAccountTokenBody"][];
+        };
         /** @description The caller's web session. */
         SessionBody: {
             /** @description When the session ends at the latest (RFC 3339, UTC). */
@@ -2511,6 +2690,24 @@ export interface components {
             description?: string | null;
             display_name?: string | null;
         };
+        /** @description `PATCH /api/v1/admin/service-accounts/{id}`: the fields to change. */
+        UpdateServiceAccount: {
+            display_name?: string | null;
+            /**
+             * Format: int64
+             * @description A new owner (an active human user's id): offboarding hands it on.
+             */
+            owner_id?: number | null;
+            purpose?: string | null;
+        };
+        /** @description What an update changed. */
+        UpdatedServiceAccount: {
+            /** @description The fields that changed: `display_name`, `purpose`, `owner`. */
+            fields: string[];
+            /** @description `updated`, or `unchanged` (nothing was written). */
+            outcome: string;
+            service_account: components["schemas"]["ServiceAccountBody"];
+        };
         /** @description One search match: names only. */
         UserName: {
             display_name: string;
@@ -2737,6 +2934,230 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_service_accounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_service_accounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceAccount"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_service_accounts_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_admin_service_accounts_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateServiceAccount"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatedServiceAccount"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_service_accounts_id_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountTokenList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_service_accounts_id_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IssueServiceAccountToken"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IssuedServiceAccountToken"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_admin_service_accounts_id_tokens_token_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                token_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {

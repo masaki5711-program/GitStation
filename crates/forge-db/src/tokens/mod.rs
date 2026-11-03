@@ -93,6 +93,9 @@ pub struct TokenInfo {
     pub expires_at: String,
     pub revoked_at: Option<String>,
     pub last_used_at: Option<String>,
+    /// The administrator who issued it for its owner (a service account's
+    /// token, M3 S0); `None` for one's own and the operator CLI's.
+    pub issued_by: Option<UserId>,
 }
 
 /// Who a valid token stands for (defined in forge-core so forge-web can
@@ -203,9 +206,35 @@ fn validate(new: &NewToken) -> Result<(i64, Vec<Scope>), ForgeError> {
 /// Errors (nothing is written): `FG-AUTH-0008` with `reason` =
 /// `expires_out_of_range`, `scopes_empty`, `name_length`, `nul_character`,
 /// `control_character`,
-/// `owner_bot`, `owner_disabled`, `admin_scope_requires_admin` or
-/// `active_limit`; `FG-REPO-0005` for an unknown owner.
+/// `owner_bot`, `owner_disabled`, `admin_scope_requires_admin`,
+/// `active_limit` or (for [`issue_for_service_account`])
+/// `owner_not_service_account`; `FG-REPO-0005` for an unknown owner.
 pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issued, ForgeError> {
+    issue_as(db, ctx, new, None).await
+}
+
+/// [`issue`] for a service account by the administrator `issued_by` (M3
+/// S0, ADR-0019 Addendum S0): the owner must be a `service_account`
+/// (`FG-AUTH-0008 reason=owner_not_service_account` otherwise, nothing
+/// written), and the row and the `token.created` audit row / event name
+/// the issuer (`tokens.issued_by_user_id`, `issued_by_user_id`). Every rule
+/// of [`issue`] holds as well (an `admin` scope is refused: a service
+/// account is never an administrator, `admin_scope_requires_admin`).
+pub async fn issue_for_service_account(
+    db: &Db,
+    ctx: &ChangeContext,
+    new: &NewToken,
+    issued_by: UserId,
+) -> Result<Issued, ForgeError> {
+    issue_as(db, ctx, new, Some(issued_by)).await
+}
+
+async fn issue_as(
+    db: &Db,
+    ctx: &ChangeContext,
+    new: &NewToken,
+    issued_by: Option<UserId>,
+) -> Result<Issued, ForgeError> {
     let user = new.user;
     // Every refusal names the owner (FG-AUTH-0008 diagnosis).
     let refuse = |reason: &'static str| request_invalid(reason).with_context("user", user.get());
@@ -230,6 +259,9 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
     };
     if kind == UserKind::Bot.as_str() {
         return Err(refuse("owner_bot"));
+    }
+    if issued_by.is_some() && kind != UserKind::ServiceAccount.as_str() {
+        return Err(refuse("owner_not_service_account"));
     }
     if state != "active" {
         return Err(refuse("owner_disabled"));
@@ -259,8 +291,8 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
         .step(|c| async move {
             sqlx::query_as(concat!(
                 "INSERT INTO forge.tokens (user_id, public_id, secret_sha256, name, scopes, \
-                 expires_at, is_agent) \
-                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6), $7) \
+                 expires_at, is_agent, issued_by_user_id) \
+                 VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6), $7, $8) \
                  RETURNING id, ",
                 utc!("expires_at")
             ))
@@ -271,6 +303,7 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
             .bind(&names)
             .bind(expires_secs as f64)
             .bind(new.is_agent)
+            .bind(issued_by.map(UserId::get))
             .fetch_one(c)
             .await
             .map_err(|e| crate::query_error("tokens.issue.insert", e))
@@ -283,6 +316,7 @@ pub async fn issue(db: &Db, ctx: &ChangeContext, new: &NewToken) -> Result<Issue
         scopes,
         expires_at: expires_at.clone(), // clone: the audit details and the result both keep it
         is_agent: new.is_agent,
+        issued_by,
     };
     tx.commit(with_event(&details, user.get(), token_id)?)
         .await?

@@ -135,6 +135,7 @@ async fn a_transfer_proof_is_bound_to_its_target_and_action() {
             LoadedTransferTarget::User(LoadedUserNamespace {
                 namespace: alice.namespace_id,
                 owner: alice.user_id,
+                owner_kind: forge_core::UserKind::Human,
             }),
         ),
     )

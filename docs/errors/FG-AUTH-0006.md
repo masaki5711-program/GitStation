@@ -16,12 +16,12 @@
 
 ## 原因 (cause)
 
-A request to create a user broke a rule of forge.users before anything was written: a human without an email, or a field that is empty, too long or holds a NUL character (display_name 1 to 255, email 1 to 320, employee_number 1 to 64, external_id 1 to 255 characters).
+A request to create a user broke a rule of forge.users before anything was written: a human without an email, or a field that is empty, too long or holds a NUL character (display_name 1 to 255, email 1 to 320, employee_number 1 to 64, external_id 1 to 255 characters). For a service account (M3 S0, forge_db::service_accounts::create / update): a purpose that is empty, blank, over 500 characters or holds a control character, or an owner that does not exist, is not a person (kind human) or is disabled.
 
 ## 調べ方 (diagnosis)
 
-The log event carries `reason` (email_missing, display_name_length, email_length, employee_number_length, external_id_length, nul_character) and `len`; the value itself is not logged (personal data). The same limits are CHECK constraints of forge.users (migration 20261028100100), so a request forge-db accepts is never refused by the database.
+The log event carries `reason` (email_missing, display_name_length, email_length, employee_number_length, external_id_length, nul_character; for a service account also service_account_personal_data (an e-mail, employee number or external id was given), service_account_admin, purpose_length, purpose_control_character, owner_absent, owner_not_human, owner_disabled — the owner ones with `owner`, the owner's user id) and `len`; the value itself is not logged (personal data, free text). The same limits are CHECK constraints of forge.users (migration 20261028100100) and forge.service_account_profiles (20261113100000), so a request forge-db accepts is never refused by the database.
 
 ## 対処 (fix)
 
-Correct the field named by `reason`; for LDAP accounts, fix the directory entry that fed it.
+Correct the field named by `reason`; for LDAP accounts, fix the directory entry that fed it. For owner_not_human / owner_disabled name an active person as the service account's owner (runbook service-accounts).

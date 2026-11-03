@@ -261,9 +261,15 @@ async fn named_target(
             namespace,
             group: LoadedGroup { id: group, role },
         },
-        Some(HostedParent::User { namespace, owner }) => {
-            LoadedTransferTarget::User(LoadedUserNamespace { namespace, owner })
-        }
+        Some(HostedParent::User {
+            namespace,
+            owner,
+            owner_kind,
+        }) => LoadedTransferTarget::User(LoadedUserNamespace {
+            namespace,
+            owner,
+            owner_kind,
+        }),
     })
 }
 

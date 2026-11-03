@@ -935,6 +935,11 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "user end-sessions",
             "token list",
             "token revoke",
+            "admin service-account list",
+            "admin service-account view",
+            "admin service-account update",
+            "admin service-account tokens",
+            "admin service-account revoke-token",
             "api",
             "help",
             "schema"

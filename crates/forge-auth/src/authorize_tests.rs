@@ -822,6 +822,7 @@ fn project_transfer_to_top_level_is_denied_for_admins() {
         },
         TransferTarget::PersonalNamespace {
             owner: crate::matrix::OTHER,
+            owner_kind: crate::AccountKind::Human,
         },
     ] {
         assert!(authorize(&admin_session(), Action::ProjectTransfer, &to(target)).is_ok());
@@ -879,7 +880,10 @@ fn group_transfer_needs_owner_on_both_sides() {
     assert!(authorize(&admin_session(), Action::GroupTransfer, &top).is_ok());
     let personal = Resource::GroupTransfer {
         source_role: Some(Role::Owner),
-        target: TransferTarget::PersonalNamespace { owner: ME },
+        target: TransferTarget::PersonalNamespace {
+            owner: ME,
+            owner_kind: crate::AccountKind::Human,
+        },
     };
     for caller in [session(), admin_session()] {
         let err = authorize(&caller, Action::GroupTransfer, &personal).expect_err("never");

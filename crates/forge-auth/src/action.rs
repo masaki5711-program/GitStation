@@ -170,6 +170,35 @@ actions! {
     /// Change a user's username and personal namespace path
     /// (`Resource::UserRename`, ADR-0015, D5): administrators only.
     UserRename,
+    // --- REST API: service accounts (M3 S0, ADR-0019 Addendum S0) ---
+    /// `POST /api/v1/admin/service-accounts`: create a service account
+    /// (an owner who is a person, a purpose). A human administrator's web
+    /// session only: every token is `FG-AUTH-0002 reason=session_required`.
+    ServiceAccountCreate,
+    /// `GET /api/v1/admin/service-accounts`: administrators; a token needs
+    /// the `admin` scope (and `read_api`).
+    ServiceAccountList,
+    /// `GET /api/v1/admin/service-accounts/{id}` (`Resource::ServiceAccount`):
+    /// administrators; a user of another kind is not found
+    /// (`reason=not_service_account`).
+    ServiceAccountRead,
+    /// `PATCH /api/v1/admin/service-accounts/{id}`: display name, purpose,
+    /// owner. Administrators, people only (who answers for an account is a
+    /// person's decision); `api` + `admin` on a token.
+    ServiceAccountUpdate,
+    /// `POST /api/v1/admin/service-accounts/{id}/tokens`
+    /// (`Resource::ServiceAccountTokenRequest`): issue a token for an active
+    /// service account. A human administrator's web session only (a token
+    /// never issues a token); never with `admin`; a disabled account is
+    /// refused (`target_disabled`).
+    ServiceAccountTokenIssue,
+    /// `GET /api/v1/admin/service-accounts/{id}/tokens`: administrators
+    /// (`admin` + `read_api` on a token).
+    ServiceAccountTokenList,
+    /// `DELETE /api/v1/admin/service-accounts/{id}/tokens/{token_id}`:
+    /// administrators, an `admin`-scoped token included (a leak is answered
+    /// from wherever the administrator is, ADR-0019 Addendum S0).
+    ServiceAccountTokenRevoke,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -260,6 +289,8 @@ impl Action {
                 | Action::SessionList
                 | Action::SessionRevoke
                 | Action::MergeRequestVersionRefsPurge
+                | Action::ServiceAccountCreate
+                | Action::ServiceAccountTokenIssue
         )
     }
 
@@ -291,6 +322,9 @@ impl Action {
                 | Action::ApprovalRuleManage
                 | Action::MergeSettingsManage
                 | Action::CodeownersEnforcementToggle
+                | Action::ServiceAccountCreate
+                | Action::ServiceAccountUpdate
+                | Action::ServiceAccountTokenIssue
         )
     }
 
@@ -318,6 +352,8 @@ impl Action {
             | Action::SessionContinue
             | Action::SessionLogout
             | Action::MergeRequestVersionRefsPurge
+            | Action::ServiceAccountCreate
+            | Action::ServiceAccountTokenIssue
             | Action::OidcBackchannelLogout => None,
             Action::RepoRead => Some(Scope::ReadRepository),
             Action::RepoPush => Some(Scope::WriteRepository),
@@ -337,6 +373,9 @@ impl Action {
             | Action::PathResolve
             | Action::MergeRequestRead
             | Action::MergeRequestList
+            | Action::ServiceAccountList
+            | Action::ServiceAccountRead
+            | Action::ServiceAccountTokenList
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate
@@ -364,7 +403,9 @@ impl Action {
             | Action::DiscussionResolve
             | Action::ApprovalRuleManage
             | Action::MergeSettingsManage
-            | Action::CodeownersEnforcementToggle => Some(Scope::Api),
+            | Action::CodeownersEnforcementToggle
+            | Action::ServiceAccountUpdate
+            | Action::ServiceAccountTokenRevoke => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.

@@ -432,13 +432,21 @@ fn group_and_namespace_contexts_decide_on_their_own_row() {
     let own = crate::UserNamespaceCtx::new(crate::LoadedUserNamespace {
         namespace: NamespaceId::new(7),
         owner: ME,
+        owner_kind: crate::AccountKind::Human,
     });
-    assert_eq!(own.resource(), Resource::Namespace { owner: ME });
+    assert_eq!(
+        own.resource(),
+        Resource::Namespace {
+            owner: ME,
+            owner_kind: crate::AccountKind::Human
+        }
+    );
     let proof = prove(&session(), Action::ProjectCreate, own).expect("own namespace");
     assert_eq!(proof.id(), &NamespaceId::new(7));
     let foreign = crate::UserNamespaceCtx::new(crate::LoadedUserNamespace {
         namespace: NamespaceId::new(8),
         owner: UserId::new(2),
+        owner_kind: crate::AccountKind::Human,
     });
     let err = prove(&session(), Action::ProjectCreate, foreign).expect_err("foreign");
     assert_eq!(err.code(), ErrorCode::Forbidden);
@@ -473,9 +481,16 @@ fn a_parent_context_is_the_namespace_id_and_the_parents_resource() {
     let personal = crate::ParentCtx::new(crate::LoadedParent::User(crate::LoadedUserNamespace {
         namespace: NamespaceId::new(6),
         owner: ME,
+        owner_kind: crate::AccountKind::Human,
     }));
     assert_eq!(personal.id(), NamespaceId::new(6));
-    assert_eq!(personal.resource(), Resource::Namespace { owner: ME });
+    assert_eq!(
+        personal.resource(),
+        Resource::Namespace {
+            owner: ME,
+            owner_kind: crate::AccountKind::Human
+        }
+    );
 }
 
 #[test]

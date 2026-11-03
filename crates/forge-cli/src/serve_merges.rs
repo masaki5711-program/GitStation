@@ -138,6 +138,7 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CsrfRejected
         | ErrorCode::LogoutTokenInvalid
         | ErrorCode::LoginNotConfigured
+        | ErrorCode::ServiceAccountTokenExpiring
         | ErrorCode::ProtectedRefForcePush
         | ErrorCode::ProtectedRefPushNotAllowed
         | ErrorCode::ProtectedRefDirectPushForbidden

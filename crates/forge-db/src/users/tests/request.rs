@@ -162,12 +162,44 @@ async fn a_taken_employee_number_or_external_id_is_user_identifier_taken() {
 #[tokio::test]
 async fn a_service_account_needs_no_email() {
     let t = FreshDb::migrated().await;
+    // M3 S0: no personal data and no administrator rights (both refused
+    // before anything is written; the CHECKs are the backstop).
+    for (refused, reason) in [
+        (
+            NewUser {
+                kind: UserKind::ServiceAccount,
+                ..human("svc-mail")
+            },
+            "service_account_personal_data",
+        ),
+        (
+            NewUser {
+                kind: UserKind::ServiceAccount,
+                email: None,
+                external_id: Some("cn=ci".into()),
+                auth_source: AuthSource::Ldap,
+                ..human("svc-ldap")
+            },
+            "service_account_personal_data",
+        ),
+        (
+            NewUser {
+                kind: UserKind::ServiceAccount,
+                email: None,
+                is_admin: true,
+                ..human("svc-admin")
+            },
+            "service_account_admin",
+        ),
+    ] {
+        let err = create(&t.db, &ctx("req-svc-refused"), &refused)
+            .await
+            .expect_err("refused");
+        assert_reason(&err, ErrorCode::UserRequestInvalid, reason);
+    }
     let svc = NewUser {
         kind: UserKind::ServiceAccount,
         email: None,
-        external_id: Some("cn=ci".into()),
-        auth_source: AuthSource::Ldap,
-        is_admin: true,
         ..human("svc-ci")
     };
     let created = create(&t.db, &ctx("req-svc"), &svc)
@@ -180,7 +212,7 @@ async fn a_service_account_needs_no_email() {
             .fetch_one(&mut su)
             .await
             .expect("row");
-    assert_eq!(row, ("service_account".into(), None, "ldap".into(), true));
+    assert_eq!(row, ("service_account".into(), None, "local".into(), false));
     let details: serde_json::Value =
         sqlx::query_scalar("SELECT details FROM forge.audit_log WHERE request_id = 'req-svc'")
             .fetch_one(&mut su)
@@ -188,7 +220,7 @@ async fn a_service_account_needs_no_email() {
             .expect("details");
     assert_eq!(
         details,
-        json!({"kind": "service_account", "namespace_id": created.namespace_id.get(), "is_admin": true})
+        json!({"kind": "service_account", "namespace_id": created.namespace_id.get(), "is_admin": false})
     );
     t.drop_now().await;
 }

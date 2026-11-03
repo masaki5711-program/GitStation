@@ -87,6 +87,13 @@ const SAFE_CONTEXT: &[&str] = &[
     "job_not_live",
     "too_old",
     // ── end D4 MR3b ──
+    // M3 S0 — FG-AUTH-0019 / FG-AUTH-0010 ownerless_service_account
+    // (service-accounts runbook): counts, user ids, a date, a window.
+    "expiring_service_accounts",
+    "ownerless_service_accounts",
+    "user_ids",
+    "soonest_expiry",
+    "within_days",
 ];
 
 /// `FG-… key=value …` with the allow-listed context only.

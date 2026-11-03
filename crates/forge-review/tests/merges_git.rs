@@ -1123,21 +1123,21 @@ enum Change {
     Removed,
     Demoted,
     Disabled,
-    BecameBot,
     SessionRevoked,
 }
 
 /// Review round 1 / ADR-0024 §5: the job decides on the requester as the
 /// database says now — removed from the project, demoted to Reporter,
-/// disabled, turned into a bot account, or the session revoked — each is
-/// refused at job time; the attempt is superseded and the ref never moves.
+/// disabled, or the session revoked — each is refused at job time; the
+/// attempt is superseded and the ref never moves. (Turning the account into
+/// a bot was a case until M3 S0: a user's kind can no longer change,
+/// `users_kind_immutable`, forge-db `a_users_kind_never_changes`.)
 #[tokio::test]
 async fn the_job_decides_on_the_requester_as_they_are_now() {
     for change in [
         Change::Removed,
         Change::Demoted,
         Change::Disabled,
-        Change::BecameBot,
         Change::SessionRevoked,
     ] {
         let mut w = world().await;
@@ -1186,16 +1186,6 @@ async fn the_job_decides_on_the_requester_as_they_are_now() {
                 let _disabled = forge_db::users::disable(&w.t.db, &system("req-change"), w.dev)
                     .await
                     .expect("disabled");
-            }
-            Change::BecameBot => {
-                w.t.commit_audited(
-                    ("user", w.dev.get()),
-                    &[format!(
-                        "UPDATE forge.users SET kind = 'bot' WHERE id = {}",
-                        w.dev.get()
-                    )],
-                )
-                .await;
             }
             Change::SessionRevoked => {
                 let _revoked = forge_db::sessions::revoke(

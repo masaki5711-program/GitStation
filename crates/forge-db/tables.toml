@@ -50,6 +50,12 @@ guarded_functions = [
     "push_unlisted_refs_guard",
     # M3 R5 round 4: the commits a push introduced are never changed.
     "push_commits_guard",
+    # M3 S0 review: a user's kind never changes; a profile belongs to a
+    # service account owned by a person; only a person has an identity
+    # (guarded since 20261113100200).
+    "users_kind_immutable",
+    "service_account_profiles_kind_guard",
+    "user_identities_human_guard",
 ]
 
 [tables.events]
@@ -160,7 +166,7 @@ kind = "audited"
 # Not secret_sha256 (ADR-0018: the read pool never sees token hashes).
 ro_columns = [
     "id", "user_id", "public_id", "name", "scopes", "created_at", "expires_at", "revoked_at",
-    "revoked_reason", "last_used_at", "is_agent",
+    "revoked_reason", "last_used_at", "is_agent", "issued_by_user_id",
 ]
 # token.created / token.revoked are audited on the owner (and publish events).
 audit_resource = "user"
@@ -381,6 +387,19 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 R5 ──
+
+# ── M3 S0: service accounts (ADR-0019 Addendum S0) ──
+# One profile per service account: its owner (a person), purpose and creator.
+# service_account.created / .updated are audited on the account.
+[tables.service_account_profiles]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "user"
+audit_id_column = "user_id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+# ── end M3 S0 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

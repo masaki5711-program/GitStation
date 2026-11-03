@@ -111,6 +111,12 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
+    /// Administration: service accounts (M3 S0).
+    #[command(disable_help_subcommand = true)]
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
     /// Call any REST API v1 route.
     Api(ApiArgs),
     /// Describe the commands (`--json` for machines).
@@ -1135,6 +1141,56 @@ pub enum UserCommand {
         #[arg(long)]
         reclaim: bool,
         /// Confirm the rename (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AdminCommand {
+    /// Service accounts: list, view, update, tokens, revoke-token (create and
+    /// issue in the browser).
+    #[command(name = "service-account", disable_help_subcommand = true)]
+    ServiceAccount {
+        #[command(subcommand)]
+        command: ServiceAccountCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceAccountCommand {
+    /// Every service account with its owner and token summary.
+    List,
+    /// One service account.
+    View {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// Change a service account's display name, purpose or owner.
+    Update {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(long = "display-name", value_parser = parse_text)]
+        display_name: Option<String>,
+        #[arg(long, value_parser = parse_text)]
+        purpose: Option<String>,
+        /// The new owner's user id (an active person).
+        #[arg(long, value_parser = parse_id)]
+        owner: Option<i64>,
+    },
+    /// A service account's tokens with their issuer (never a secret).
+    Tokens {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// Revoke one of a service account's tokens (a leak). Needs --yes.
+    #[command(name = "revoke-token")]
+    RevokeToken {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        #[arg(value_parser = parse_id)]
+        token_id: i64,
+        /// Confirm (gstn never prompts).
         #[arg(long)]
         yes: bool,
     },

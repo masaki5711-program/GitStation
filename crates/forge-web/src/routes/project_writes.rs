@@ -160,9 +160,15 @@ impl BodyLoader<AppState, CreateProject> for Parent {
                     namespace,
                     group: LoadedGroup { id: group, role },
                 },
-                Some(HostedParent::User { namespace, owner }) => {
-                    LoadedParent::User(LoadedUserNamespace { namespace, owner })
-                }
+                Some(HostedParent::User {
+                    namespace,
+                    owner,
+                    owner_kind,
+                }) => LoadedParent::User(LoadedUserNamespace {
+                    namespace,
+                    owner,
+                    owner_kind,
+                }),
             };
             let ctx = ParentCtx::new(loaded);
             if ctx.id() != namespace {

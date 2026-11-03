@@ -580,17 +580,22 @@ async fn linked_disabled_users_and_bots_are_refused_and_linked_admins_sign_in() 
     assert_eq!(err.code(), ErrorCode::LoginNotPermitted, "{err}");
     assert_eq!(reason(&err), "user_disabled");
 
-    // A bot, linked by the operator.
+    // A bot: the operator can no longer link one (M3 S0, FG-AUTH-0014
+    // not_human; user_identities_human_guard), so the sign-in finds it by
+    // its employee number — and refuses it all the same.
     let robot = forge_db::users::NewUser {
         kind: forge_core::UserKind::Bot,
         email: None,
+        employee_number: Some("SYN0900".to_owned()),
         ..forge_db::users::NewUser::human("robot", "Robot", "unused@example.test")
     };
     let robot = create(&t, robot).await;
-    let _done =
+    let refused =
         forge_oidc::operator_link_identity(&t.db, &system(), robot, &op.issuer, "sub-robot")
             .await
-            .expect("link robot");
+            .expect_err("a bot is never linked");
+    assert_eq!(refused.code(), ErrorCode::IdentityLinkConflict, "{refused}");
+    assert_eq!(reason(&refused), "not_human");
     let err = sign_in(
         &oidc,
         &op,

@@ -109,6 +109,18 @@ pub(crate) enum Actor {
     MaintainerTokenReadApi,
     /// Administrator with a `merge_approve` + `admin` token (R5 review).
     AdminTokenMergeApproveAdmin,
+    /// A service account without a role, with a `read_api` token (M3 S0:
+    /// it sees member projects only); the twin of `NonMemberTokenReadApi`.
+    ServiceAccountNonMemberTokenReadApi,
+    /// Developer with a `user_email` token only (M3 S0: it reads no API).
+    DevTokenUserEmail,
+    /// A service account that is a Guest member, with a `read_api` +
+    /// `read_repository` token (S0 review: it reads by its Guest role).
+    ServiceAccountGuestTokenRead,
+    /// A bot without a role, with a `read_api` token (S0 review: the
+    /// member-only rule is the service account's; a bot still sees
+    /// internal projects).
+    BotNonMemberTokenReadApi,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -151,6 +163,11 @@ pub(crate) enum Fixture {
     Group,
     OwnNamespace,
     ForeignNamespace,
+    /// Another user's personal namespace whose owner is a service account
+    /// (S0 review: nobody creates or moves a project into it).
+    ServiceAccountNamespace,
+    /// Moving a private project into a service account's namespace.
+    TransferToServiceAccountNamespace,
     /// Moving a private project the caller has the actor's role on to a
     /// visible group where the caller has `target`.
     Transfer {
@@ -286,6 +303,19 @@ pub(crate) enum Fixture {
     Mr(crate::matrix_review::MrFixture),
     /// A discussion of a merge request (M3 R3): `matrix_review.rs`.
     Discussion(crate::matrix_review::DiscussionFixture),
+    /// The user a service account route acts on (M3 S0): a service account
+    /// (`human: false`) or a person, active or disabled.
+    ServiceAccountTarget {
+        human: bool,
+        active: bool,
+    },
+    /// A token request for such a user (M3 S0), with the `admin` scope or
+    /// with `read_api` alone.
+    ServiceAccountTokenRequest {
+        human: bool,
+        active: bool,
+        admin_scope: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,6 +421,16 @@ impl Actor {
             }
             Actor::MaintainerTokenReadApi => token(false, &[Scope::ReadApi]),
             Actor::AdminTokenMergeApproveAdmin => token(true, &[Scope::MergeApprove, Scope::Admin]),
+            Actor::ServiceAccountNonMemberTokenReadApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi])
+            }
+            Actor::DevTokenUserEmail => token(false, &[Scope::UserEmail]),
+            Actor::ServiceAccountGuestTokenRead => token_of(
+                AccountKind::ServiceAccount,
+                false,
+                &[Scope::ReadApi, Scope::ReadRepository],
+            ),
+            Actor::BotNonMemberTokenReadApi => token_of(AccountKind::Bot, false, &[Scope::ReadApi]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -403,7 +443,9 @@ impl Actor {
     /// The actor's effective role on the row's project or group.
     pub(crate) fn role(self) -> Option<Role> {
         match self {
-            Actor::Guest | Actor::GuestTokenReadApi => Some(Role::Guest),
+            Actor::Guest | Actor::GuestTokenReadApi | Actor::ServiceAccountGuestTokenRead => {
+                Some(Role::Guest)
+            }
             Actor::Reporter => Some(Role::Reporter),
             Actor::Developer
             | Actor::DevTokenReadRepository
@@ -421,7 +463,8 @@ impl Actor {
             | Actor::DevTokenMergeApprove
             | Actor::AgentTokenMergeApprove
             | Actor::ServiceAccountTokenMergeApprove
-            | Actor::BotTokenMergeApprove => Some(Role::Developer),
+            | Actor::BotTokenMergeApprove
+            | Actor::DevTokenUserEmail => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -449,7 +492,9 @@ impl Actor {
             | Actor::BotAdminSession
             | Actor::AdminTokenMergeExecuteAdmin
             | Actor::AdminTokenMergeExecute
-            | Actor::AdminTokenMergeApproveAdmin => None,
+            | Actor::AdminTokenMergeApproveAdmin
+            | Actor::ServiceAccountNonMemberTokenReadApi
+            | Actor::BotNonMemberTokenReadApi => None,
         }
     }
 
@@ -476,6 +521,7 @@ impl Actor {
             Actor::ServiceAccountTokenMergeApprove | Actor::BotTokenMergeApprove => {
                 Some(Actor::DevTokenMergeApprove)
             }
+            Actor::ServiceAccountNonMemberTokenReadApi => Some(Actor::NonMemberTokenReadApi),
             Actor::Anonymous
             | Actor::Disabled
             | Actor::DisabledAdmin
@@ -509,7 +555,10 @@ impl Actor {
             | Actor::DevTokenMergeApprove
             | Actor::AgentTokenMergeApprove
             | Actor::MaintainerTokenReadApi
-            | Actor::AdminTokenMergeApproveAdmin => None,
+            | Actor::AdminTokenMergeApproveAdmin
+            | Actor::DevTokenUserEmail
+            | Actor::ServiceAccountGuestTokenRead
+            | Actor::BotNonMemberTokenReadApi => None,
         }
     }
 
@@ -607,8 +656,25 @@ impl Fixture {
             Fixture::InternalRef => branch_ff(internal),
             Fixture::DeletedRef => branch_ff(deleted),
             Fixture::Group => Resource::Group { role },
-            Fixture::OwnNamespace => Resource::Namespace { owner: ME },
-            Fixture::ForeignNamespace => Resource::Namespace { owner: OTHER },
+            Fixture::OwnNamespace => Resource::Namespace {
+                owner: ME,
+                owner_kind: actor.kind(),
+            },
+            Fixture::ForeignNamespace => Resource::Namespace {
+                owner: OTHER,
+                owner_kind: AccountKind::Human,
+            },
+            Fixture::ServiceAccountNamespace => Resource::Namespace {
+                owner: OTHER,
+                owner_kind: AccountKind::ServiceAccount,
+            },
+            Fixture::TransferToServiceAccountNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: OTHER,
+                    owner_kind: AccountKind::ServiceAccount,
+                },
+            ),
             Fixture::Transfer { target } => transfer(
                 private,
                 TransferTarget::Group {
@@ -617,12 +683,20 @@ impl Fixture {
                 },
             ),
             Fixture::TransferHiddenTarget => transfer(private, hidden),
-            Fixture::TransferToOwnNamespace => {
-                transfer(private, TransferTarget::PersonalNamespace { owner: ME })
-            }
-            Fixture::TransferToForeignNamespace => {
-                transfer(private, TransferTarget::PersonalNamespace { owner: OTHER })
-            }
+            Fixture::TransferToOwnNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: ME,
+                    owner_kind: actor.kind(),
+                },
+            ),
+            Fixture::TransferToForeignNamespace => transfer(
+                private,
+                TransferTarget::PersonalNamespace {
+                    owner: OTHER,
+                    owner_kind: AccountKind::Human,
+                },
+            ),
             Fixture::TransferToTopLevel => transfer(private, TransferTarget::TopLevel),
             Fixture::TransferDeletedSource => transfer(
                 deleted,
@@ -638,7 +712,10 @@ impl Fixture {
             Fixture::GroupTransferHiddenTarget => group_transfer(hidden),
             Fixture::GroupTransferToTopLevel => group_transfer(TransferTarget::TopLevel),
             Fixture::GroupTransferToNamespace => {
-                group_transfer(TransferTarget::PersonalNamespace { owner: ME })
+                group_transfer(TransferTarget::PersonalNamespace {
+                    owner: ME,
+                    owner_kind: actor.kind(),
+                })
             }
             Fixture::TransferRename => {
                 transfer(private, TransferTarget::CurrentParent { top_level: false })
@@ -793,7 +870,35 @@ impl Fixture {
             },
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::Discussion(d) => d.resource(role),
+            Fixture::ServiceAccountTarget { human, active } => {
+                Resource::ServiceAccount(service_account_view(human, active))
+            }
+            Fixture::ServiceAccountTokenRequest {
+                human,
+                active,
+                admin_scope,
+            } => Resource::ServiceAccountTokenRequest {
+                account: service_account_view(human, active),
+                scopes: if admin_scope {
+                    vec![Scope::ReadApi, Scope::Admin]
+                } else {
+                    vec![Scope::ReadApi]
+                },
+            },
         }
+    }
+}
+
+/// The target of a service account row (M3 S0).
+#[cfg(test)]
+fn service_account_view(human: bool, active: bool) -> crate::model::ServiceAccountView {
+    crate::model::ServiceAccountView {
+        kind: if human {
+            AccountKind::Human
+        } else {
+            AccountKind::ServiceAccount
+        },
+        active,
     }
 }
 
@@ -821,6 +926,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_conditions::CONDITION_ROWS,
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
+        crate::matrix_rows_service_accounts::SERVICE_ACCOUNT_ROWS,
     ]
     .concat()
 });

@@ -80,6 +80,62 @@
     "word": "project_permalink"
   },
   {
+    "action": "ServiceAccountList",
+    "method": "GET",
+    "path": "/api/v1/admin/service-accounts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountCreate",
+    "method": "POST",
+    "path": "/api/v1/admin/service-accounts",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountRead",
+    "method": "GET",
+    "path": "/api/v1/admin/service-accounts/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountUpdate",
+    "method": "PATCH",
+    "path": "/api/v1/admin/service-accounts/{id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountTokenList",
+    "method": "GET",
+    "path": "/api/v1/admin/service-accounts/{id}/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountTokenIssue",
+    "method": "POST",
+    "path": "/api/v1/admin/service-accounts/{id}/tokens",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ServiceAccountTokenRevoke",
+    "method": "DELETE",
+    "path": "/api/v1/admin/service-accounts/{id}/tokens/{token_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "UserAdminList",
     "method": "GET",
     "path": "/api/v1/admin/users",

@@ -412,7 +412,8 @@ pub async fn record_login(db: &Db, issuer: &str, subject: &str) -> Result<(), Fo
 /// another user is `FG-AUTH-0014 subject_linked`; a user with another
 /// identity of this issuer `already_linked` (re-linking needs a DELETE the
 /// application role does not have: a later, approved migration). An
-/// unknown user is `FG-REPO-0005`; an issuer or subject outside 1..=255
+/// unknown user is `FG-REPO-0005`; a service account or a bot
+/// `FG-AUTH-0014 not_human` (M3 S0); an issuer or subject outside 1..=255
 /// characters `FG-AUTH-0006` (`issuer_length` / `subject_length`).
 pub async fn link_by_operator(
     db: &Db,
@@ -433,19 +434,25 @@ pub async fn link_by_operator(
     }
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let known: Option<i64> = tx
+        let known: Option<String> = tx
             .step(|c| async move {
-                sqlx::query_scalar("SELECT id FROM forge.users WHERE id = $1 FOR UPDATE")
+                sqlx::query_scalar("SELECT kind FROM forge.users WHERE id = $1 FOR UPDATE")
                     .bind(user.get())
                     .fetch_optional(c)
                     .await
                     .map_err(|e| query_error("identities.link_by_operator.user", e))
             })
             .await?;
-        if known.is_none() {
+        let Some(kind) = known else {
             return Err(ForgeError::new(ErrorCode::NotFound)
                 .with_context("resource", RESOURCE)
                 .with_context("reason", "absent"));
+        };
+        // M3 S0: only a person signs in; a service account or a bot is
+        // never an identity's account (`user_identities_human_only` is the
+        // database's backstop).
+        if kind != UserKind::Human.as_str() {
+            return Err(conflict("not_human"));
         }
         let owner: Option<i64> = tx
             .step(|c| async move {

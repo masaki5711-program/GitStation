@@ -18,6 +18,8 @@
   有効な人間の管理者がいない（`reason=no_admin`）、または直接の有効な Owner のいない最上位のグループがある（`reason=ownerless_group`、`group_ids`）。
   D4 MR4 から、有効な Owner（直接・継承）のいないプロジェクトも `reason=ownerless_project`（`ownerless_projects`、`project_ids`）で出る
   （`forge_db::projects::ownerless`。doctor への配線は D4 の統合で行う）。
+- `forge doctor` の `service_accounts.ownerless` が `FAIL ... FG-AUTH-0010 reason=ownerless_service_account`（M3 S0）: 有効なサービスアカウントの
+  持ち主が無効化された（下の A の手順 0 の引き継ぎ漏れ）。引き継ぎは Runbook `service-accounts` の E。
 - `forge doctor` の `users.administration` が `warn ... no users yet`: 新しいインストールで利用者がまだいない（コードなし）。最初の管理者を作る（下の「復旧」）。
 
 ## Impact
@@ -82,6 +84,10 @@
 
 ### A. 通常の無効化（退職・異動）
 
+0. 対象が持ち主のサービスアカウントを引き継ぐ（M3 S0）。対象の user id を持ち主に持つアカウントを探し（`gstn admin service-account list --json` の
+   `owner.id`）、それぞれ新しい持ち主に替えるか、もう要らなければ無効化する（Runbook `service-accounts` の E）。`[MUTATING — needs approval]`
+   引き継がずに無効化すると、`forge doctor` の `service_accounts.ownerless` が FG-AUTH-0010 を出し続け、そのアカウントのトークンの差し替え・失効を決める人がいなくなる
+   （アカウント自体は動き続ける）。サービスアカウントを無効化するときも `gstn user disable <id> --yes`（トークンは同じ変更で失効する）。
 1. 対象が最後の管理者なら、先に別の有効な人間を管理者にする。**管理者を付与するコマンド・画面はまだない**（D3 時点）。対象が有効なあいだは
    `bootstrap-admin` も使えない（有効な管理者がいるため）。管理者の交代がどうしても必要なら、B の手順（`--force`）で無効化してから
    C の手順 2 で新しい管理者を立てる。
@@ -147,6 +153,7 @@ Owner の移譲を待てないときだけ使う。
 - 無効化した利用者の Web のセッション: 読み取りの接続で
   `SELECT count(*) FROM forge.web_sessions WHERE user_id = <id> AND revoked_at IS NULL AND absolute_expires_at > now()` が 0。
 - 監査の記録に、実行した手順ごとに 1 行ある（`user.disabled`、`user.admin_bootstrapped`）。
+- 対象が持ち主だったサービスアカウント: `forge doctor` の `service_accounts.ownerless` が `ok`（引き継ぎ・無効化の `service_account.updated` / `user.disabled` の行がある）。
 
 ## Escalate
 

@@ -1214,20 +1214,25 @@ async fn the_refresh_check_reads_the_account_again() {
         account_of(&t.db, alice).await.expect("alice"),
         crate::identities::LoginAccount::Active
     );
-    let mut su = t.superuser().await;
-    su_change(
-        &mut su,
-        alice,
-        &format!(
-            "UPDATE forge.users SET kind = 'bot' WHERE id = {}",
-            alice.get()
-        ),
+    // A user's kind never changes (users_kind_immutable, M3 S0): a bot is
+    // read as one from its own row.
+    let robot = crate::users::create(
+        &t.db,
+        &ctx("req-robot"),
+        &crate::users::NewUser {
+            kind: forge_core::UserKind::Bot,
+            email: None,
+            ..crate::users::NewUser::human("robot", "Robot", "unused@example.test")
+        },
     )
-    .await;
+    .await
+    .expect("robot")
+    .user_id;
     assert_eq!(
-        account_of(&t.db, alice).await.expect("bot"),
+        account_of(&t.db, robot).await.expect("bot"),
         crate::identities::LoginAccount::NotHuman
     );
+    let mut su = t.superuser().await;
     su_change(
         &mut su,
         alice,

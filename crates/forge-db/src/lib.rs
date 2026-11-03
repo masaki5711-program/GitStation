@@ -82,6 +82,9 @@ pub mod roles;
 // ── D3: personal access tokens ──
 pub mod tokens;
 // ── end D3 ──
+// ── M3 S0: service accounts (ADR-0019 Addendum S0) ──
+pub mod service_accounts;
+// ── end M3 S0 ──
 // ── M2 MR3: web sessions (ADR-0021 §5) ──
 pub mod sessions;
 // ── end M2 MR3 ──

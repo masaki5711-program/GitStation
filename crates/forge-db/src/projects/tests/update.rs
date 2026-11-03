@@ -288,7 +288,8 @@ async fn create_decided_sees_the_parent_and_refuses_before_writing() {
         parent,
         ParentAccess::User {
             namespace: alice.namespace_id,
-            owner: alice.user_id
+            owner: alice.user_id,
+            owner_kind: forge_core::UserKind::Human,
         }
     );
     assert!(trio(&mut su, created.project_id).await.is_some());
@@ -434,7 +435,8 @@ async fn load_parent_names_groups_users_and_refuses_projects() {
             .expect("user"),
         Some(ParentRecord::User {
             namespace: alice.namespace_id,
-            owner: alice.user_id
+            owner: alice.user_id,
+            owner_kind: forge_core::UserKind::Human,
         })
     );
     assert_eq!(
