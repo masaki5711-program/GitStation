@@ -41,3 +41,19 @@ export type Version = S['VersionBody'];
 export type VersionList = S['VersionsBody'];
 export type VersionDiff = S['VersionDiffBody'];
 export type CreateMergeRequestBody = S['CreateMergeRequest'];
+
+// U2: approve / merge / settings.
+export type StatusViewer = S['StatusViewerBody'];
+export type StatusApproval = S['StatusApprovalBody'];
+export type ApprovalAnswer = S['ApprovalAnswerBody'];
+/** One merge attempt (`queued` → … → `applied` / `superseded` / `failed`). */
+export type MergeAttempt = S['MergeAttemptBody'];
+/** `GET …/merge`: the latest attempt (`merge: null` when none). */
+export type LatestMerge = S['MergeStatusBody'];
+export type MergeSettings = S['MergeSettingsBody'];
+export type PutMergeSettingsBody = S['PutMergeSettings'];
+export type ApprovalRule = S['ApprovalRuleBody'];
+export type PutApprovalRuleBody = S['PutApprovalRule'];
+export type ProtectedRef = S['ProtectedRefBody'];
+export type MergeRule = S['MergeRuleBody'];
+export type PutMergeRuleBody = S['PutMergeRule'];

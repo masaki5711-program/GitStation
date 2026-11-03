@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import { apiError, mockServer, type Call, type Handler, page, PROJECT, RESOLVE_GROUP, RESOLVE_PROJECT, SESSION, signedIn, GROUP } from './mock';
 import { json, renderApp } from './render';
+import { mergeSettings } from './mr-fixtures';
 import { repoRoutes } from './repo-fixtures';
 
 const CSRF = SESSION.csrf_token;
@@ -18,6 +19,9 @@ const project = (over: Record<string, unknown> = {}) => ({
   'GET /api/v1/namespaces/resolve': () => json(200, ME),
   'GET /api/v1/projects/7': () => json(200, { ...PROJECT, ...over }),
   'GET /api/v1/projects/7/protected-refs': () => json(200, { rules: [] }),
+  // U2: the merge sections (read-only here: no viewer flag).
+  'GET /api/v1/projects/7/merge-settings': () => json(200, mergeSettings()),
+  'GET /api/v1/projects/7/approval-rules': () => json(200, { rules: [] }),
   'GET /api/v1/groups': () => page([]),
   'GET /api/v1/projects': () => page([]),
 });
@@ -87,6 +91,7 @@ describe('project settings', () => {
   it('a protected ref pattern is checked first; a valid one is created; removing asks', async () => {
     const rule = (id: number, pattern: string) => ({
       id, pattern, push_min_role: 'maintainer', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      merge_rule: null, warnings: [],
     });
     let rules = [rule(1, 'refs/heads/main')];
     const server = mockServer({
@@ -101,7 +106,8 @@ describe('project settings', () => {
       'DELETE /api/v1/projects/7/protected-refs/1': () => new Response(null, { status: 204 }),
     });
     await renderApp({ fetch: server.fetch, path: `${BASE}/settings`, lang: 'en' });
-    await screen.findByText('refs/heads/main');
+    // Also listed under the merge conditions of protected branches (U2).
+    await screen.findAllByText('refs/heads/main');
     const field = screen.getByLabelText('Pattern');
     fireEvent.change(field, { target: { value: 'main' } });
     click('Protect a ref');

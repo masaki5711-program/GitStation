@@ -1,8 +1,12 @@
 // Synthetic backend for the settings part of the browser journey (MR11):
 // project settings, protected refs, members, tokens, sessions, deleted
-// projects and administration. Stateful, so a created token appears in the
-// list; every unsafe request must carry the CSRF header. The shapes are those
-// of tests/settings.test.tsx (keep the two in step).
+// projects and administration; U2 adds the merge settings (with the
+// expected_updated_at check: another value is 409, as FG-REVIEW-0017), the
+// CODEOWNERS suspension, approval rules and the merge conditions of protected
+// branches (required checks answer the required_checks_unreportable warning).
+// Stateful, so a created token appears in the list; every unsafe request must
+// carry the CSRF header. The shapes are those of tests/settings.test.tsx and
+// tests/merge-settings-fixtures.ts (keep them in step).
 export const SECRET = 'fgp_abcd_JOURNEYSYNTHETICSECRET';
 
 export function settingsBackend(csrf) {
@@ -13,9 +17,32 @@ export function settingsBackend(csrf) {
       push_min_role: 'maintainer',
       created_at: '2026-10-01T00:00:00Z',
       updated_at: '2026-10-01T00:00:00Z',
+      merge_rule: null,
+      warnings: [],
     },
   ];
   let nextRule = 2;
+  const merge = {
+    project_id: 7,
+    allowed_methods: ['merge_commit', 'squash'],
+    default_method: 'merge_commit',
+    delete_source_default: false,
+    reset_approvals_on_push: true,
+    committer_approvals_excluded: true,
+    codeowners: { enforced: true, suspended_at: null, suspended_until: null },
+    stored: false,
+    updated_at: null,
+    viewer: { can_manage: true, can_loosen: true, can_suspend_codeowners: true },
+  };
+  let stamps = 0;
+  /** RFC 3339 to the microsecond, as forge answers (an opaque string to the client). */
+  const stamp = () => {
+    stamps += 1;
+    return `2026-11-03T01:00:${String(stamps).padStart(2, '0')}.123456Z`;
+  };
+  const approvalRules = [];
+  let nextApprovalRule = 1;
+  const groupIds = { acme: 3 };
   const members = [
     { user_id: 5, username: 'taro', display_name: 'Taro Yamada', role: 'owner', active: true, created_at: '2026-10-01T00:00:00Z' },
     { user_id: 6, username: 'jiro', display_name: 'Jiro Suzuki', role: 'developer', active: true, created_at: '2026-10-02T00:00:00Z' },
@@ -101,6 +128,8 @@ export function settingsBackend(csrf) {
         push_min_role: input.push_min_role,
         created_at: '2026-11-01T00:00:00Z',
         updated_at: '2026-11-01T00:00:00Z',
+        merge_rule: null,
+        warnings: [],
       };
       rules.push(rule);
       return json(rule, 201);
@@ -110,6 +139,84 @@ export function settingsBackend(csrf) {
       const at = rules.findIndex((r) => r.id === Number(rule[1]));
       if (at >= 0) rules.splice(at, 1);
       return { status: 204 };
+    }
+
+    if (key === 'GET /api/v1/projects/7/merge-settings') return json(merge);
+    if (key === 'PUT /api/v1/projects/7/merge-settings') {
+      if (!('expected_updated_at' in input)) {
+        return { status: 400, error: ['A field is missing.', 'req-ms-400', 'FG-WEB-0006'] };
+      }
+      if (input.expected_updated_at !== merge.updated_at) {
+        return {
+          status: 409,
+          error: ['The merge settings were changed by someone else. Read them again.', 'req-ms-409', 'FG-REVIEW-0017'],
+        };
+      }
+      const { expected_updated_at, ...values } = input;
+      void expected_updated_at;
+      Object.assign(merge, values, { stored: true, updated_at: stamp() });
+      return json(merge);
+    }
+    if (key === 'PUT /api/v1/projects/7/merge-settings/codeowners-enforcement') {
+      if (input.enforced) merge.codeowners = { enforced: true, suspended_at: null, suspended_until: null };
+      else {
+        if (!(input.for_minutes >= 1 && input.for_minutes <= 1440)) {
+          return { status: 403, error: ['The suspension must be 1 to 1440 minutes.', 'req-co-403', 'FG-AUTH-0003'] };
+        }
+        merge.codeowners = { enforced: false, suspended_at: '2026-11-03T01:00:00Z', suspended_until: '2026-11-03T01:30:00Z' };
+      }
+      merge.stored = true;
+      merge.updated_at = stamp();
+      return json(merge);
+    }
+    if (key === 'GET /api/v1/projects/7/approval-rules') return json({ rules: approvalRules });
+    const approvalRule = path.match(/^\/api\/v1\/projects\/7\/approval-rules\/([a-z0-9_.-]+)$/);
+    if (approvalRule && method === 'PUT') {
+      const user_ids = (input.users ?? []).map((u) => found.find((f) => f.username === u)?.id ?? 0);
+      const group_ids = (input.groups ?? []).map((g) => groupIds[g] ?? 0);
+      if (user_ids.includes(0) || group_ids.includes(0)) {
+        return { status: 422, error: ['An approver does not exist.', 'req-rule-422', 'FG-WEB-0006'] };
+      }
+      const existing = approvalRules.find((r) => r.name === approvalRule[1]);
+      const next = {
+        approval_rule_id: existing?.approval_rule_id ?? nextApprovalRule++,
+        name: approvalRule[1],
+        target_pattern: input.target_pattern ?? null,
+        required_approvals: input.required_approvals,
+        user_ids,
+        group_ids,
+      };
+      if (existing) Object.assign(existing, next);
+      else approvalRules.push(next);
+      return json(next);
+    }
+    if (approvalRule && method === 'DELETE') {
+      const at = approvalRules.findIndex((r) => r.name === approvalRule[1]);
+      if (at >= 0) approvalRules.splice(at, 1);
+      return { status: 204 };
+    }
+    const mergeRule = path.match(/^\/api\/v1\/projects\/7\/protected-refs\/(\d+)\/merge-rule$/);
+    if (mergeRule) {
+      const r = rules.find((x) => x.id === Number(mergeRule[1]));
+      if (r === undefined) return { status: 404, error: ['Not found.', 'req-mrule-404', 'FG-REPO-0013'] };
+      if (method === 'DELETE') {
+        r.merge_rule = null;
+        r.warnings = [];
+        return { status: 204 };
+      }
+      if (method === 'PUT') {
+        if ('require_work_item_link' in input) {
+          return { status: 400, error: ['Not available yet.', 'req-mrule-i1', 'FG-WEB-0006'] };
+        }
+        r.merge_rule = {
+          required_approvals: input.required_approvals ?? 0,
+          required_checks: input.required_checks ?? [],
+          require_resolved_discussions: input.require_resolved_discussions === true,
+          direct_push_forbidden: input.direct_push_forbidden === true,
+        };
+        r.warnings = r.merge_rule.required_checks.length > 0 ? ['required_checks_unreportable'] : [];
+        return json(r);
+      }
     }
 
     if (key === 'GET /api/v1/projects/7/members' || key === 'GET /api/v1/groups/3/members') {
@@ -181,5 +288,10 @@ export function settingsBackend(csrf) {
     }
     return null;
   }
-  return { answer, tokens };
+  /** Someone else saves the merge settings behind the page (the journey's 409). */
+  const changeMergeSettingsElsewhere = () => {
+    merge.stored = true;
+    merge.updated_at = stamp();
+  };
+  return { answer, tokens, changeMergeSettingsElsewhere };
 }

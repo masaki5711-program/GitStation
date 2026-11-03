@@ -9,7 +9,7 @@
 // Each open comment box has its own mutation (keyed by its line), so one
 // line's sending state never shows on another; when a box closes (cancel or
 // sent) the focus goes back to that line's button.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -17,6 +17,7 @@ import {
   useDiscussions,
   useVersionDiff,
   useVersions,
+  latestVersion,
 } from '../../api/mergeRequests';
 import type { Discussion, DiffFile, Position, Version } from '../../api/types';
 import repo from '../../pages/repo/Repo.module.css';
@@ -27,6 +28,7 @@ import { CommentForm } from './CommentForm';
 import { DiscussionThread } from './DiscussionThread';
 import { useThreadToggle } from './useThreadToggle';
 import styles from './Mr.module.css';
+import { useViewedHead } from './viewedHead';
 
 /** Where a comment on this line goes (null: the line has no side to name). */
 export function positionOf(file: DiffFile, row: LineRow, version: number): Position | null {
@@ -52,6 +54,18 @@ export function MrChanges({
 }) {
   const { t } = useTranslation();
   const list = useVersions(projectId, iid);
+  const viewed = useViewedHead();
+  const shown = useRef(false);
+  /** A version's diff was shown: its head counts as seen. Once per opening of
+   * the tab, so a version a later refetch brings is not taken unseen. */
+  const onShown = useCallback(
+    (head: string) => {
+      if (shown.current) return;
+      shown.current = true;
+      viewed.accept(head);
+    },
+    [viewed],
+  );
   if (list.isPending) return <Loading />;
   if (list.isError) {
     return (
@@ -63,10 +77,7 @@ export function MrChanges({
       />
     );
   }
-  const latest = list.data.versions.reduce<Version | null>(
-    (best, v) => (best === null || v.version > best.version ? v : best),
-    null,
-  );
+  const latest: Version | null = latestVersion(list.data.versions);
   if (latest === null) return <p className={styles.explain}>{t('mr.diff.noVersion')}</p>;
   if (latest.refs_purged) return <p className={styles.explain}>{t('mr.diff.purged')}</p>;
   return (
@@ -75,7 +86,9 @@ export function MrChanges({
       project={project}
       iid={iid}
       version={latest.version}
+      head={latest.head_sha}
       targetBranch={targetBranch}
+      onShown={onShown}
     />
   );
 }
@@ -85,16 +98,24 @@ function VersionChanges({
   project,
   iid,
   version,
+  head,
   targetBranch,
+  onShown,
 }: {
   projectId: number;
   project: string;
   iid: number;
   version: number;
+  head: string;
   targetBranch: string;
+  /** The diff of this version was shown (not when it is loading or failed). */
+  onShown: (head: string) => void;
 }) {
   const { t } = useTranslation();
   const diff = useVersionDiff(projectId, iid, version);
+  useEffect(() => {
+    if (diff.isSuccess) onShown(head);
+  }, [diff.isSuccess, head, onShown]);
   const threads = useDiscussions(projectId, iid);
   const toggle = useThreadToggle(projectId, iid);
   /** The line whose comment box is open (its position key). */
