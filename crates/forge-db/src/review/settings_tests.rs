@@ -661,11 +661,40 @@ async fn the_table_refuses_check_names_check_name_refuses() {
         "'ext/x'",
         "'ci/-x'",
         "'ci/'",
+        // R6 review round 2: one element holding two names would pass a
+        // space-joined match and then block every merge.
+        "'ci/a ci/b'",
+        "'ci/a', 'ci/b forge/c'",
     ] {
         let err = sqlx::query(&insert(bad)).execute(&mut su).await;
-        assert!(err.is_err(), "{bad} must be refused");
+        assert_eq!(
+            constraint_of(err),
+            Some("protected_ref_merge_rules_required_checks".to_owned()),
+            "{bad} must be refused by the CHECK"
+        );
     }
     let long = format!("'ci/{}'", "a".repeat(101));
-    assert!(sqlx::query(&insert(&long)).execute(&mut su).await.is_err());
+    assert_eq!(
+        constraint_of(sqlx::query(&insert(&long)).execute(&mut su).await),
+        Some("protected_ref_merge_rules_required_checks".to_owned())
+    );
+    // The CHECK accepts well-formed names (the audit trigger, deferred to
+    // the commit, is not reached: the transaction is rolled back).
+    let mut tx = sqlx::Connection::begin(&mut su).await.expect("begin");
+    sqlx::query(&insert("'ci/a', 'forge/b.c', 'kanflow/x/y'"))
+        .execute(&mut *tx)
+        .await
+        .expect("well-formed names pass the CHECK");
+    tx.rollback().await.expect("rollback");
     w.t.drop_now().await;
+}
+
+/// The constraint a failed statement violated.
+fn constraint_of(
+    result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
+) -> Option<String> {
+    match result {
+        Err(sqlx::Error::Database(e)) => e.constraint().map(str::to_owned),
+        _ => None,
+    }
 }
