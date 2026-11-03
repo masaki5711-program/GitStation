@@ -46,6 +46,8 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 - **承認のコミッターの規則への影響**: push の記録の先端（一覧の切れた push の `new`）のコミットが保守の prune で消えると、そのコミットに
   どの ref も向いていなければ「範囲に届かない」とみなす（`cat-file --batch-check` で確かめる）。どの ref も向いていない先端は、猶予より
   古いときだけ消える。
+- 保守の pack-refs と push・`update-ref` は `packed-refs.lock` を取り合う（書く側は 10 秒まで待つ）。残ったロック（FG-GIT-0020）は
+  Runbook `repo-maintenance`。
 - **秘密の除去（`secret-removal`）との関係**: 版の ref を Purge しても、その前に判定が書いた木・blob（秘密の中身を含みうる）は
   参照されないまま残る。秘密の除去の手順の prune（Runbook `secret-removal`）は、この判定の残りも同じく消す。閲覧の API は
   参照されないオブジェクトを ID で読ませない（ADR-0024 §2 の到達可能性）。

@@ -50,7 +50,7 @@ use forge_db::maintenance::{
 use forge_db::review::merges::{try_lock_merges, MERGE_JOB_TIMEOUT};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::maintenance::{Blocked, FsckMode, GcRun, RepositoryCounts};
+use forge_git::maintenance::{Blocked, FsckMode, GcRun, LockCleanup, RepositoryCounts};
 use forge_git::{Git, StorageRoot};
 
 use super::provision::Storage;
@@ -302,6 +302,19 @@ impl Inner {
             );
             return Ok(());
         };
+        if started.lost_previous {
+            // The run before this one ended without a ledger write (a crash,
+            // a lease that expired): counted as a failure by `start`.
+            tracing::warn!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_run_lost",
+                error_code = ErrorCode::JobLeaseExpired.id(),
+                request_id = %request_id,
+                repo_id = repo.get(),
+                failures = started.failures,
+                "the previous maintenance run of the repository ended without a record"
+            );
+        }
         let mode = self.fsck_mode(&started);
         tracing::info!(
             target: "forge_cli",
@@ -314,120 +327,75 @@ impl Inner {
             "repository maintenance started"
         );
         let deadline = RunDeadline::new(budget, self.cfg.step_timeout);
-        let end = self.steps(repo, mode, &deadline).await;
+        let end = self.steps(repo, mode, &deadline, request_id).await;
         let duration_ms = u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let finish = match &end {
+        let finish = self.finish_of(&end);
+        // The outcome is logged once the ledger holds it (review LOW): a
+        // failed write is its own event and the queue retries the job.
+        if let Err(e) = ledger::finish(&self.db, repo, &finish).await {
+            tracing::warn!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_ledger_failed",
+                error_code = e.code().id(),
+                request_id = %request_id,
+                repo_id = repo.get(),
+                outcome = finish.outcome.as_str(),
+                run_error_code = finish.error_code.map_or("", ErrorCode::id),
+                context = %context_of(&e),
+                "the maintenance run's outcome could not be recorded; the job is retried"
+            );
+            return Err(db_failure(e));
+        }
+        log_end(&end, request_id, repo, started.failures, duration_ms);
+        Ok(())
+    }
+
+    /// The ledger record of `end`.
+    fn finish_of(&self, end: &RunEnd) -> Finish {
+        match end {
             RunEnd::Done {
                 counts,
                 fsck,
                 skipped_step,
-            } => {
-                tracing::info!(
-                    target: "forge_cli",
-                    event = "forge.git.maintenance_completed",
-                    request_id = %request_id,
-                    repo_id = repo.get(),
-                    outcome = "succeeded",
-                    fsck_mode = fsck.as_str(),
-                    skipped_step = skipped_step.unwrap_or(""),
-                    objects = counts.objects(),
-                    loose_objects = counts.loose_objects,
-                    packs = counts.packs,
-                    size_pack_kib = counts.size_pack_kib,
-                    refs = counts.refs,
-                    duration_ms,
-                    "repository maintenance completed"
-                );
-                Finish {
-                    outcome: Outcome::Succeeded,
-                    error_code: None,
-                    skipped_reason: *skipped_step,
-                    counts: Some((counts.objects(), counts.size_pack_kib, counts.refs)),
-                    fsck: Some((fsck.as_str(), true)),
-                    next_due_in: self.cfg.interval,
-                }
-            }
-            RunEnd::Skipped(reason, fsck) => {
-                tracing::info!(
-                    target: "forge_cli",
-                    event = "forge.git.maintenance_skipped",
-                    request_id = %request_id,
-                    repo_id = repo.get(),
-                    reason = *reason,
-                    duration_ms,
-                    "repository maintenance skipped"
-                );
-                Finish {
-                    outcome: Outcome::Skipped,
-                    error_code: None,
-                    skipped_reason: Some(reason),
-                    counts: None,
-                    fsck: fsck.map(|m| (m.as_str(), true)),
-                    next_due_in: SKIP_RETRY,
-                }
-            }
-            RunEnd::Failed { error, fsck } => {
-                let code = error.code();
-                let corrupt = code == ErrorCode::RepositoryCorrupt;
-                let outcome = if corrupt {
+            } => Finish {
+                outcome: Outcome::Succeeded,
+                error_code: None,
+                skipped_reason: *skipped_step,
+                counts: Some((counts.objects(), counts.size_pack_kib, counts.refs)),
+                fsck: Some((fsck.as_str(), true)),
+                next_due_in: self.cfg.interval,
+            },
+            RunEnd::Skipped(reason, fsck) => Finish {
+                outcome: Outcome::Skipped,
+                error_code: None,
+                skipped_reason: Some(reason),
+                counts: None,
+                fsck: fsck.map(|m| (m.as_str(), true)),
+                next_due_in: SKIP_RETRY,
+            },
+            RunEnd::Failed { error, fsck } => Finish {
+                outcome: if error.code() == ErrorCode::RepositoryCorrupt {
                     Outcome::Corrupt
                 } else {
                     Outcome::Failed
-                };
-                let context = context_of(error);
-                let step = step_of(error);
-                // FG-GIT-0018 is a warn; the second failure in a row is an
-                // alert (error level), like doctor's `reason=failing`.
-                let failures = started.failures.saturating_add(1);
-                if corrupt || failures >= ALERT_AFTER_FAILURES {
-                    tracing::error!(
-                        target: "forge_cli",
-                        event = "forge.git.maintenance_completed",
-                        error_code = code.id(),
-                        request_id = %request_id,
-                        repo_id = repo.get(),
-                        outcome = outcome.as_str(),
-                        step = %step,
-                        failures,
-                        context = %context,
-                        duration_ms,
-                        "{}",
-                        code.entry().cause
-                    );
-                } else {
-                    tracing::warn!(
-                        target: "forge_cli",
-                        event = "forge.git.maintenance_completed",
-                        error_code = code.id(),
-                        request_id = %request_id,
-                        repo_id = repo.get(),
-                        outcome = outcome.as_str(),
-                        step = %step,
-                        failures,
-                        context = %context,
-                        duration_ms,
-                        "{}",
-                        code.entry().cause
-                    );
-                }
-                Finish {
-                    outcome,
-                    error_code: Some(code),
-                    skipped_reason: None,
-                    counts: None,
-                    fsck: fsck.map(|(m, ok)| (m.as_str(), ok)),
-                    next_due_in: FAILURE_RETRY,
-                }
-            }
-        };
-        ledger::finish(&self.db, repo, &finish)
-            .await
-            .map_err(db_failure)?;
-        Ok(())
+                },
+                error_code: Some(error.code()),
+                skipped_reason: None,
+                counts: None,
+                fsck: fsck.map(|(m, ok)| (m.as_str(), ok)),
+                next_due_in: FAILURE_RETRY,
+            },
+        }
     }
 
     /// Steps 2–7 (module docs).
-    async fn steps(&self, repo: RepoId, mode: FsckMode, deadline: &RunDeadline) -> RunEnd {
+    async fn steps(
+        &self,
+        repo: RepoId,
+        mode: FsckMode,
+        deadline: &RunDeadline,
+        request_id: &RequestId,
+    ) -> RunEnd {
         let failed = |error, fsck| RunEnd::Failed { error, fsck };
         let (git, root) = (&self.git, &self.root);
         match git.maintenance_blocker(root, repo).await {
@@ -449,6 +417,14 @@ impl Inner {
             Err(e) => return failed(e, None),
         }
         let ok = Some((mode, true));
+        // fsck may have taken long: a push may have started meanwhile.
+        match git.maintenance_blocker(root, repo).await {
+            Ok(None) => {}
+            Ok(Some(blocked @ Blocked::IncomingPush { .. })) => {
+                return RunEnd::Skipped(blocked.as_str(), Some(mode))
+            }
+            Err(e) => return failed(e, ok),
+        }
         let gc = match deadline.step() {
             Ok(t) => git.gc_objects(root, repo, self.cfg.prune_grace, t).await,
             Err(e) => Err(e),
@@ -458,7 +434,7 @@ impl Inner {
             Ok(GcRun::AlreadyRunning) => return RunEnd::Skipped("gc_running", Some(mode)),
             Err(e) => return failed(e, ok),
         }
-        let skipped_step = match self.pack_refs(repo, deadline).await {
+        let skipped_step = match self.pack_refs(repo, deadline, request_id).await {
             Ok(skipped) => skipped,
             Err(e) => return failed(e, ok),
         };
@@ -488,10 +464,12 @@ impl Inner {
         &self,
         repo: RepoId,
         deadline: &RunDeadline,
+        request_id: &RequestId,
     ) -> Result<Option<&'static str>, ForgeError> {
         let Some(lock) = try_lock_merges(&self.db, repo).await? else {
             return Ok(Some("pack_refs_merge_lock_held"));
         };
+        let step_started = std::time::SystemTime::now();
         let packed = match deadline.step() {
             // Never past the lock's own hold (a merge waits at most that).
             Ok(t) => {
@@ -501,14 +479,80 @@ impl Inner {
             }
             Err(e) => Err(e),
         };
+        if packed.is_err() {
+            // Still under the merge lock: a killed pack-refs may have left
+            // its `packed-refs.lock`, which would fail every later ref
+            // write that needs it (review HIGH).
+            self.clean_pack_refs_lock(repo, step_started, request_id)
+                .await;
+        }
         lock.release().await;
         packed.map(|()| None)
+    }
+}
+
+impl Inner {
+    /// After a failed pack-refs, under the merge lock: remove our own
+    /// `packed-refs.lock`; leave someone else's and alert (FG-GIT-0020).
+    /// A failure to look is logged with its code (the run's own error is
+    /// what the ledger records).
+    async fn clean_pack_refs_lock(
+        &self,
+        repo: RepoId,
+        step_started: std::time::SystemTime,
+        request_id: &RequestId,
+    ) {
+        match self
+            .git
+            .clear_own_packed_refs_lock(&self.root, repo, step_started)
+            .await
+        {
+            Ok(LockCleanup::Absent) => {}
+            Ok(LockCleanup::Removed) => tracing::warn!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_lock_removed",
+                request_id = %request_id,
+                repo_id = repo.get(),
+                "removed the packed-refs.lock the failed pack-refs left"
+            ),
+            Ok(LockCleanup::Foreign { age_secs }) => tracing::error!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_lock_left",
+                error_code = ErrorCode::RepositoryRefLockStale.id(),
+                request_id = %request_id,
+                repo_id = repo.get(),
+                age_secs,
+                "{}",
+                ErrorCode::RepositoryRefLockStale.entry().cause
+            ),
+            Err(e) => tracing::warn!(
+                target: "forge_cli",
+                event = "forge.git.maintenance_lock_check_failed",
+                error_code = e.code().id(),
+                request_id = %request_id,
+                repo_id = repo.get(),
+                context = %context_of(&e),
+                "could not check packed-refs.lock after a failed pack-refs"
+            ),
+        }
     }
 }
 
 /// One run of the schedule (module docs): `Next::AfterPeriod` always (a
 /// pass enqueues at most the free room; the runner drains it).
 pub(crate) async fn run_schedule(db: &Db, cfg: &MaintenanceConfig) -> Result<Next, ForgeError> {
+    // Every pass, inside the window or not: runs that are gone (crashed,
+    // then dead-lettered) are recorded as failures and leave the queue
+    // alone until their retry (review MEDIUM).
+    for repo in ledger::reap_stale_running(db, FAILURE_RETRY).await? {
+        tracing::warn!(
+            target: "forge_cli",
+            event = "forge.git.maintenance_run_lost",
+            error_code = ErrorCode::JobLeaseExpired.id(),
+            repo_id = repo.get(),
+            "a maintenance run ended without a record; counted as a failure"
+        );
+    }
     let minute = ledger::local_minute(db, &cfg.time_zone).await?;
     if !cfg.window.contains(minute) {
         return Ok(Next::AfterPeriod);
@@ -530,6 +574,82 @@ pub(crate) async fn run_schedule(db: &Db, cfg: &MaintenanceConfig) -> Result<Nex
         );
     }
     Ok(Next::AfterPeriod)
+}
+
+/// The one outcome event of a recorded run (module docs).
+fn log_end(end: &RunEnd, request_id: &RequestId, repo: RepoId, before: i32, duration_ms: u64) {
+    match end {
+        RunEnd::Done {
+            counts,
+            fsck,
+            skipped_step,
+        } => tracing::info!(
+            target: "forge_cli",
+            event = "forge.git.maintenance_completed",
+            request_id = %request_id,
+            repo_id = repo.get(),
+            outcome = "succeeded",
+            fsck_mode = fsck.as_str(),
+            skipped_step = skipped_step.unwrap_or(""),
+            objects = counts.objects(),
+            loose_objects = counts.loose_objects,
+            packs = counts.packs,
+            size_pack_kib = counts.size_pack_kib,
+            refs = counts.refs,
+            duration_ms,
+            "repository maintenance completed"
+        ),
+        RunEnd::Skipped(reason, _) => tracing::info!(
+            target: "forge_cli",
+            event = "forge.git.maintenance_skipped",
+            request_id = %request_id,
+            repo_id = repo.get(),
+            reason = *reason,
+            duration_ms,
+            "repository maintenance skipped"
+        ),
+        RunEnd::Failed { error, .. } => {
+            let code = error.code();
+            let corrupt = code == ErrorCode::RepositoryCorrupt;
+            let outcome = if corrupt { "corrupt" } else { "failed" };
+            let context = context_of(error);
+            let step = step_of(error);
+            // FG-GIT-0018 is a warn; the second failure in a row is an
+            // alert (error level), like doctor's `reason=failing`.
+            let failures = before.saturating_add(1);
+            if corrupt || failures >= ALERT_AFTER_FAILURES {
+                tracing::error!(
+                    target: "forge_cli",
+                    event = "forge.git.maintenance_completed",
+                    error_code = code.id(),
+                    request_id = %request_id,
+                    repo_id = repo.get(),
+                    outcome,
+                    step = %step,
+                    failures,
+                    context = %context,
+                    duration_ms,
+                    "{}",
+                    code.entry().cause
+                );
+            } else {
+                tracing::warn!(
+                    target: "forge_cli",
+                    event = "forge.git.maintenance_completed",
+                    error_code = code.id(),
+                    request_id = %request_id,
+                    repo_id = repo.get(),
+                    outcome,
+                    step = %step,
+                    failures,
+                    context = %context,
+                    duration_ms,
+                    "{}",
+                    code.entry().cause
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

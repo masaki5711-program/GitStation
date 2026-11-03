@@ -609,6 +609,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | FG-REVIEW-0011（R4 で登録） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | FG-REVIEW-0016（R6 で登録） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
 | FG-GIT-0018（O3 で登録） | RepositoryMaintenanceFailed（保守の手順の git の失敗、`step`。doctor `failing` / `overdue`） | 500 | warn（2 回続けて警報） | `repo-maintenance` | O3 |
+| FG-GIT-0020（O3 のレビューで登録） | RepositoryRefLockStale（誰も持たない `packed-refs.lock`。doctor `repositories.stale_locks`） | 500 | **alert** | `repo-maintenance` | O3 |
 | FG-GIT-0019（O3 で登録） | RepositoryCorrupt（保守の fsck の失敗、`mode`・`findings`） | 500 | **alert** | `repo-maintenance` | O3 |
 | FG-GIT-0017（R6 で登録） | ProtectedRefDirectPushForbidden（保護ブランチのマージの条件の直接の push の禁止。管理者も） | 403 | info | — | R6 |
 | FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
@@ -1774,3 +1775,45 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
 - **既知の残り**: Windows で、git の `PATH` の `cmd\git.exe` の起動の器を殺しても本物の git が残りうる（README の既知の穴。Job
   Object は子孫ごと殺すので、保守の手順では起きない）。完全削除とリポジトリの保守が重なると、Windows では開いているファイルのため
   ディレクトリの削除が失敗しうる（完全削除は次の回で再試行する）。
+
+### O3 の独立レビューで決めたこと（2026-11-03）
+
+`database-reviewer`・`git-protocol-reviewer`・`silent-failure-hunter`・`security-reviewer`（いずれも WARN、HIGH 1 件）への対処。
+
+- **HIGH: 殺された pack-refs が `packed-refs.lock` を残す**（その後の push と `update-ref` がすべて失敗する）。(a) 監督つきの手順の時間切れは
+  まずプロセスグループへ `SIGTERM`（git のシグナルハンドラがロックのファイルを消す）、リーダーの終わりを `waitid(WNOWAIT)` で最大 5 秒
+  待ってから `SIGKILL`（`stop=term|kill`）。Windows には穏やかな止め方が無い（Job Object を閉じるのは `TerminateProcess`）。
+  (b) pack-refs が失敗・時間切れなら、マージのロックを持ったまま、`packed-refs.lock` の時刻が **手順の開始以後** のときだけ消す（自分の
+  もの）。それより古いものは残し FG-GIT-0020 RepositoryRefLockStale（alert、新規）。doctor `repositories.stale_locks`（10 分より古い
+  `packed-refs.lock`、最大 10 000 リポジトリ、60 秒）。pack-refs 自身にも `core.packedRefsTimeout=10000`。
+- **pack-refs の長さ（測定）**: Windows の開発機・git 2.53 で loose の ref 100 000 本は 56〜70 秒、うち `packed-refs.lock` を持つのは約 6.6 秒。
+  書く側の 10 秒の上限に近いので、`maintenance.refs_warn`（100 000）がその目安（Runbook `repo-maintenance`）。上限は変えない。
+- **MEDIUM（database）: 最初の実行で重複のジョブ**: `start` が新しい行の `next_due_at` を `now()` にしていたため、重複の鍵（期日の秒）が
+  ずれ、実行中の次の回に 2 件目が積まれた。新しい行は `coalesce(ready_at, now())`（鍵を作った期日）。LOW: `start` はリポジトリの行を
+  `FOR SHARE` で読む（完全削除の `FOR UPDATE` と交互にならない）。
+- **MEDIUM（silent-failure）**: (1) 毎晩 skip されるリポジトリは failed にも overdue にもならなかった → 列 `last_success_at`
+  （マイグレーション 20261117100100。20261117100000 は編集しない）と doctor の `reason=no_recent_success`（間隔の 2 倍成功が無い）。
+  (2) 落ちた・dead になった実行は台帳を `running` のまま残し、期日が動かないので毎分積み直された → スケジューラーが毎回（窓の外でも）
+  リース（1 時間 + 30 秒）を過ぎ生きたジョブの無い `running` の行を `failed`・FG-DB-0007・`failures + 1`・12 時間後にする
+  （`reap_stale_running`）。`start` も前の実行がリースを過ぎて `running` なら失敗に数える（`lost_previous`、ログ
+  `forge.git.maintenance_run_lost`）。doctor `reason=stale_running`。理由の優先: failing → stale_running → no_recent_success → overdue。
+- **MEDIUM（git-protocol）**: quarantine の確かめを gc の直前にもう一度（fsck が長いことがある）。中身のある古い
+  `objects/tmp_objdir-incoming-*` は git の prune が猶予を過ぎたところでディレクトリごと消す（実際のディレクトリとファイルで確かめた:
+  `a_stale_quarantine_with_files_is_pruned_after_the_grace`）。forge 自身では消さない。
+- **MEDIUM（security）: Unix で失敗したリーダーの助手が残る**: 監督つきの取り込みは、リーダーの終わりを刈り取らずに見て、0 以外なら
+  グループを殺してから刈り取る。リーダーが終わった後もパイプを持ち続ける助手は 2 秒（`LINGER`）の後に木ごと殺す（そうしないと取り込みが
+  期限まで待った）。出力の上限に達したらグループをすぐ殺す。
+- **LOW**: `maintenance_completed` は台帳の書き込みの後に出す（書き込みの失敗は `forge.git.maintenance_ledger_failed` を `error_code` つきで
+  出し、キューが再試行）。fsck の exit 128 で「not a git repository」「dubious ownership」は FG-GIT-0018 `reason=fsck_unusable`（破損では
+  ない）。fsck の stdout の先頭は stderr と同じく redact する。Windows の Job Object の割り当ての隙は、停止状態での起動が `unsafe` 無しで
+  できないため残し、コメントを正した。`enqueue_now` の文書のコードを FG-REPO-0005 に直した。使われない索引
+  `repository_maintenance_due` を 20261117100100 で消した。古い形のオブジェクト（legacy）の fsck の扱いを Runbook に書いた。
+- **テスト**: `a_killed_pack_refs_lock_of_our_own_is_removed_and_a_foreign_one_kept`、
+  `a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one`、`a_stale_packed_refs_lock_is_reported`、
+  `a_timed_out_step_gets_sigterm_before_sigkill`（Unix のみ。Windows の開発機ではコンパイルだけ）、`a_dropped_maintenance_step_kills_its_tree`、
+  `helpers_die_when_a_maintenance_step_fails`、`a_first_run_keeps_its_due_key_so_the_scheduler_dedups`、
+  `a_lost_run_is_counted_as_a_failure_and_not_requeued_every_pass`、`start_counts_a_lost_previous_run`、
+  `a_running_row_with_a_live_job_is_not_reaped`、`no_recent_success_is_reported_until_a_run_succeeds`、
+  `the_schedule_reaps_a_lost_run_outside_the_window`、`a_push_starting_during_fsck_defers_gc`、
+  `fsck_on_an_unusable_repository_is_maintenance_failed_not_corrupt`、`a_stale_gc_pid_does_not_block_gc`、
+  `doctor_maintenance_lines_name_stale_runs_and_no_recent_success`。

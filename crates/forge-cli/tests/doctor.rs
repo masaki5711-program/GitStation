@@ -78,6 +78,7 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    repositories.maintenance",
         "ok    repositories.integrity",
         "ok    repositories.refs",
+        "ok    repositories.stale_locks",
         "ok    storage",
         "ok    git",
     ] {

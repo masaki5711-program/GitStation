@@ -512,3 +512,208 @@ async fn an_incoming_push_defers_the_run_and_is_recorded() {
     assert_eq!(skipped[0]["fields"]["request_id"], "req-maint-push");
     t.drop_now().await;
 }
+
+/// A fake git that exits 0 for every subcommand except: `fsck` with
+/// `fsck_quarantine` creates an incoming quarantine (a push starting while
+/// fsck runs); `pack-refs` creates `packed-refs.lock` unless one exists and
+/// hangs (a pack-refs that will be killed). It runs in the repository.
+#[cfg(unix)]
+fn scripted_git(dir: &Path, fsck_quarantine: bool) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("scripted-git.sh");
+    let fsck = if fsck_quarantine {
+        "mkdir -p objects/tmp_objdir-incoming-during-fsck; exit 0"
+    } else {
+        "exit 0"
+    };
+    let body = format!(
+        "#!/bin/sh\ncase \"$*\" in\n*fsck*) {fsck};;\n*pack-refs*) [ -e packed-refs.lock ] || : > packed-refs.lock; sleep 60;;\n*) exit 0;;\nesac\n"
+    );
+    std::fs::write(&path, body).expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    path
+}
+
+#[cfg(windows)]
+fn scripted_git(dir: &Path, fsck_quarantine: bool) -> PathBuf {
+    let path = dir.join("scripted-git.cmd");
+    let fsck = if fsck_quarantine {
+        "mkdir objects\\tmp_objdir-incoming-during-fsck\r\n"
+    } else {
+        ""
+    };
+    let body = format!(
+        "@echo off\r\n\
+         echo %* | findstr /c:\"fsck\" >nul\r\n\
+         if not errorlevel 1 (\r\n{fsck}exit /b 0\r\n)\r\n\
+         echo %* | findstr /c:\"pack-refs\" >nul\r\n\
+         if errorlevel 1 exit /b 0\r\n\
+         if not exist packed-refs.lock type nul > packed-refs.lock\r\n\
+         ping -n 60 127.0.0.1 >nul\r\n"
+    );
+    std::fs::write(&path, body).expect("script");
+    path
+}
+
+fn scripted_handler(
+    t: &FreshDb,
+    storage: &Storage,
+    tmp: &Path,
+    fsck_quarantine: bool,
+) -> Arc<Inner> {
+    let git = Git::new(GitConfig::new(
+        scripted_git(tmp, fsck_quarantine),
+        storage.git.config().home.clone(),
+    ));
+    let cfg = MaintenanceConfig {
+        step_timeout: Duration::from_secs(2),
+        ..MaintenanceConfig::default()
+    };
+    MaintainHandler::with_git(&t.db, storage.root.clone(), git, &cfg) // clone: own root handle
+        .expect("handler")
+        .inner()
+}
+
+/// Set a file's modification time.
+fn age_file(path: &Path, age: Duration) {
+    let mut perms = std::fs::metadata(path).expect("file").permissions();
+    #[allow(clippy::permissions_set_readonly_false)] // test setup
+    perms.set_readonly(false);
+    std::fs::set_permissions(path, perms).expect("writable");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now() - age))
+        .expect("age");
+}
+
+/// Review HIGH: a pack-refs killed at its timeout leaves `packed-refs.lock`;
+/// the run removes it (it is ours: made during the step, under the merge
+/// lock). A lock older than the step is someone else's: it is left and
+/// alerted as FG-GIT-0020.
+#[tokio::test]
+async fn a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let repo = ready_repo(&t, &storage, "ivy").await;
+    let path = storage.root.path_for(repo);
+    let lock = path.join("packed-refs.lock");
+    let tmp = tempfile::tempdir().expect("tmp");
+    let inner = scripted_handler(&t, &storage, tmp.path(), false);
+    let logs = Captured::default();
+    let guard = logs.install();
+    inner
+        .maintain_repo(repo, &rid("req-maint-lock-own"), 1, BUDGET)
+        .await
+        .expect("recorded");
+    drop(guard);
+    let row = ledger::row(&t.db, repo)
+        .await
+        .expect("row")
+        .expect("exists");
+    assert_eq!(row.outcome, Some(Outcome::Failed));
+    assert_eq!(row.error_code.as_deref(), Some("FG-GIT-0002"));
+    assert!(!lock.exists(), "our own lock is removed");
+    let events = logs.events();
+    assert_eq!(
+        events_named(&events, "forge.git.maintenance_lock_removed").len(),
+        1,
+        "{events:?}"
+    );
+    // Someone else's lock, an hour old: kept and alerted.
+    std::fs::write(&lock, b"").expect("foreign lock");
+    age_file(&lock, Duration::from_secs(3600));
+    let logs = Captured::default();
+    let guard = logs.install();
+    inner
+        .maintain_repo(repo, &rid("req-maint-lock-foreign"), 1, BUDGET)
+        .await
+        .expect("recorded");
+    drop(guard);
+    assert!(lock.exists(), "someone else's lock is left");
+    let alerts: Vec<_> = logs
+        .events()
+        .into_iter()
+        .filter(|e| e["fields"]["error_code"] == "FG-GIT-0020")
+        .collect();
+    assert_eq!(alerts.len(), 1, "alerted once");
+    assert_eq!(alerts[0]["level"], "ERROR");
+    assert_eq!(
+        alerts[0]["fields"]["event"],
+        "forge.git.maintenance_lock_left"
+    );
+    t.drop_now().await;
+}
+
+/// Review MEDIUM: a push that starts while fsck runs defers gc: the
+/// quarantine is checked again right before gc.
+#[tokio::test]
+async fn a_push_starting_during_fsck_defers_gc() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let repo = ready_repo(&t, &storage, "jon").await;
+    let tmp = tempfile::tempdir().expect("tmp");
+    let inner = scripted_handler(&t, &storage, tmp.path(), true);
+    inner
+        .maintain_repo(repo, &rid("req-maint-mid-push"), 1, BUDGET)
+        .await
+        .expect("deferred");
+    let row = ledger::row(&t.db, repo)
+        .await
+        .expect("row")
+        .expect("exists");
+    assert_eq!(row.outcome, Some(Outcome::Skipped));
+    assert_eq!(row.skipped_reason.as_deref(), Some("incoming_push"));
+    assert_eq!(row.fsck_ok, Some(true), "the fsck that ran is recorded");
+    assert!(
+        !storage
+            .root
+            .path_for(repo)
+            .join("packed-refs.lock")
+            .exists(),
+        "pack-refs never ran"
+    );
+    t.drop_now().await;
+}
+
+/// Review MEDIUM: the schedule records a lost run (crashed, no live job)
+/// every pass, outside the window too.
+#[tokio::test]
+async fn the_schedule_reaps_a_lost_run_outside_the_window() {
+    let t = FreshDb::migrated().await;
+    let (_root, storage) = storage();
+    let repo = ready_repo(&t, &storage, "kim").await;
+    ledger::start(&t.db, repo)
+        .await
+        .expect("start")
+        .expect("ready");
+    t.exec_superuser(&format!(
+        "UPDATE forge.repository_maintenance SET last_started_at = now() - interval '2 hours' \
+         WHERE repo_id = {}",
+        repo.get()
+    ))
+    .await;
+    let now = ledger::local_minute(&t.db, "UTC").await.expect("minute");
+    let shift = |m: u16| (now + m) % (24 * 60);
+    let cfg = MaintenanceConfig {
+        window: forge_core::config::MaintenanceWindow {
+            start_minute: shift(60),
+            end_minute: shift(120),
+        },
+        time_zone: "UTC".to_owned(),
+        ..MaintenanceConfig::default()
+    };
+    run_schedule(&t.db, &cfg).await.expect("pass");
+    let row = ledger::row(&t.db, repo)
+        .await
+        .expect("row")
+        .expect("exists");
+    assert_eq!(row.outcome, Some(Outcome::Failed));
+    assert_eq!(row.error_code.as_deref(), Some("FG-DB-0007"));
+    assert_eq!(row.failures, 1);
+    assert!(
+        job_state(&t, MAINTAIN_JOB).await.is_empty(),
+        "nothing enqueued outside the window"
+    );
+    t.drop_now().await;
+}

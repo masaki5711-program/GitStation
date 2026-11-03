@@ -73,7 +73,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 23] = [
+const DB_CHECKS: [&str; 24] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -110,6 +110,8 @@ const DB_CHECKS: [&str; 23] = [
     "repositories.maintenance",
     "repositories.integrity",
     "repositories.refs",
+    // M3 O3 review: FG-GIT-0020 (a packed-refs.lock nobody holds).
+    "repositories.stale_locks",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -244,6 +246,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     let reporters = checks::reporters_check(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
+    let stale_locks = maintenance::stale_locks_check(db, root).await;
     vec![
         bootstrap,
         connections,
@@ -268,6 +271,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         maintained,
         integrity,
         refs,
+        stale_locks,
     ]
 }
 

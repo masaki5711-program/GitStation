@@ -1,10 +1,12 @@
-# Runbook: repo-maintenance（FG-GIT-0018 / FG-GIT-0019、リポジトリの定期の保守）
+# Runbook: repo-maintenance（FG-GIT-0018 / FG-GIT-0019 / FG-GIT-0020、リポジトリの定期の保守）
 
 M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`forge worker` が各リポジトリを週に 1 回、夜の窓（既定 02:00〜05:00、
 `Asia/Tokyo`）の中で保守する。保守は `repository.maintain` のジョブで、**worker の専用のランナー** が 1 件ずつ走らせる（作成・版・
 マージできるかの判定のジョブを待たせない）。1 回の保守の手順:
 
 1. push の受け入れの途中（`objects/tmp_objdir-incoming-*` が 6 時間より新しい）なら **何もしない**（`skipped incoming_push`、1 時間後にまた）。
+   fsck の後、gc の直前にもう一度確かめる。6 時間より古い quarantine は落ちた push の残りで、保守を止めず、gc の prune が猶予（48 時間）を
+   過ぎたところで中のファイルごと消す（git 2.53 で確かめた）。
 2. `git fsck`（毎回 `--connectivity-only`、`maintenance.fsck_interval_days`（既定 30 日）ごとに全体）。問題があれば FG-GIT-0019 で止まり、
    **gc も prune もしない**。
 3. `git gc --cruft --prune=<猶予>`（`gc.packRefs=false`、bitmap、commit-graph は別の手順）。猶予は `maintenance.prune_grace_hours`（既定 48 時間、
@@ -16,7 +18,16 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
 6. オブジェクトと ref の数を台帳に残す（ref の数は測るだけ。push は拒まない）。
 
 各手順は `maintenance.step_timeout_secs`（既定 1 800 秒）と 1 回の保守の期限（ジョブの時間切れ 1 時間 − 60 秒）の短い方で打ち切られ、
-**git の子プロセス（`repack` / `pack-objects`）ごと** 止まる（FG-GIT-0002 `step=<手順>`）。
+**git の子プロセス（`repack` / `pack-objects`）ごと** 止まる（FG-GIT-0002 `step=<手順>`）。Unix ではまずプロセスグループに `SIGTERM`
+（git がロックのファイルを消して終わる）、5 秒待って `SIGKILL`（`stop=term|kill`）。Windows には穏やかな止め方が無い（`stop=kill`）。
+pack-refs が失敗・時間切れのときは、マージのロックを持ったまま、**その手順の開始より新しい** `packed-refs.lock` だけを消す（自分のもの。
+`forge.git.maintenance_lock_removed`）。それより古いものは他人のものとして残し、FG-GIT-0020 で知らせる（`forge.git.maintenance_lock_left`）。
+
+**pack-refs の長さ（測定、2026-11-03、Windows の開発機、git 2.53）**: loose の ref 10 000 本で 5.8 秒、100 000 本で 56〜70 秒。
+そのうち `packed-refs.lock` を持つのは 100 000 本で約 6.6 秒（残りは loose の ref のファイルを 1 本ずつ消す時間で、その間は各 ref の
+ロックを一瞬ずつ取るだけ）。ref を書く側（`update-ref`、receive-pack、pack-refs 自身）は `core.packedRefsTimeout=10000`（10 秒）まで
+待つので、loose の ref が 100 000 本を超える規模ではこの上限に近い — `repositories.refs` の warn（既定 100 000）がその目安。マージは
+マージのロックで pack-refs と重ならない。push が 10 秒待っても取れなければ、その push は失敗する（利用者がやり直せば通る）。
 
 ## Trigger
 
@@ -25,6 +36,11 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
   - `reason=overdue`: ready のリポジトリが、期日から保守の間隔（既定 7 日）以上たっても保守されていない（worker が動いていない、
     窓が来ない、ジョブが詰まっている）
 - `forge doctor` の `repositories.integrity` が FG-GIT-0019（最後の fsck が失敗したリポジトリがある）
+  - `reason=stale_running`: 台帳が `running` のまま、ジョブのリース（1 時間 + 30 秒）を過ぎた（落ちた実行。スケジューラーが毎回、
+    生きたジョブの無い行を `failed`・FG-DB-0007・失敗の回数 + 1 にする）
+  - `reason=no_recent_success`: 間隔の 2 倍（既定 14 日）成功していない（毎晩 `skipped` になる・失敗し続けるリポジトリ）
+- `forge doctor` の `repositories.stale_locks` が FG-GIT-0020（`packed-refs.lock` が 10 分より古い。`repositories`、`max_age_secs`、`repo_ids`）、
+  またはログ `event=forge.git.maintenance_lock_left`（error）
 - `forge doctor` の `repositories.refs` の warn（ref が `maintenance.refs_warn`（既定 100 000）を超えたリポジトリがある）
 - ログ `event=forge.git.maintenance_completed` の `outcome=failed`（warn、FG-GIT-0018 / 0002 / 0004 など）または `outcome=corrupt`（error、FG-GIT-0019）
 
@@ -36,6 +52,8 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
 - FG-GIT-0019（破損）: ref から届くオブジェクトが無い・読めない。そのリポジトリの clone・取得・マージ・閲覧が失敗しうる。
   **データの消失の可能性** として SEV2（複数のリポジトリなら SEV1 を検討）。
 - ref の数の warn: push のたびの ref の読み取り（`ref_snapshot`）が遅くなる。今は測るだけ（push の拒否は実測の後、計画 11 Q5）。
+- FG-GIT-0020（残った `packed-refs.lock`）: 消えるまで、packed の ref を消す push（ブランチ・タグの削除、版の ref の Purge）と、それを要る
+  `update-ref` がすべて 10 秒待って失敗する。保守の pack-refs も失敗する。SEV3（多くのリポジトリなら SEV2）。
 
 ## Diagnose（読み取りのみ）
 
@@ -71,7 +89,11 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
      `[MUTATING — needs approval]` 別名へ移す（`mv <lock> <lock>.stale-<日付>`。戻し: 元の名前へ戻す）。
    - 直したら `[MUTATING — needs approval]` `forge admin repo maintain <repo_id>`（保守のジョブを 1 件積むだけ。窓の外でもすぐ動く。
      戻し: 不要。保守は何度動かしても同じ結果になる）。
-2. **破損（FG-GIT-0019）**: **gc・prune・`git repack -d` をしない**（取り戻せたかもしれないオブジェクトを消す）。保守のジョブ自身も、
+2. **残ったロック（FG-GIT-0020）**: そのリポジトリで git が動いていない（`pgrep -af '<repo_id>.git'` / タスクマネージャー）ことと、
+   ロックの時刻が最も長い push（`git.http.timeout_ms`、既定 1 時間）より古いことを確かめてから、`[MUTATING — needs approval]`
+   `mv <path>/packed-refs.lock <path>/packed-refs.lock.stale-<日付>`（戻し: 元の名前へ戻す）。その後 `git --git-dir=<path> show-ref | head`
+   と `forge admin repo maintain <repo_id>`。動いている git があるうちは消さない。
+3. **破損（FG-GIT-0019）**: **gc・prune・`git repack -d` をしない**（取り戻せたかもしれないオブジェクトを消す）。保守のジョブ自身も、
    fsck が通るまで gc をしない。
    1. `/incident` で障害として扱い、findings の ID を記録する（中身は記録しない）。
    2. 失われたオブジェクトを持つ写しを探す: 開発者の clone（`git cat-file -t <id>`）、GitLab のミラー（O2）、最後のバックアップ（O1）。
@@ -79,9 +101,19 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
       リポジトリで `git --git-dir=<path> index-pack --stdin --fix-thin` に渡す）。戻し: 追加した pack を別名へ移す（追加しただけで既存は変えない）。
    4. 戻せないとき（写しが無い）は、そのリポジトリの所有者と相談し、失われた範囲を記録する。
    5. `[MUTATING — needs approval]` `forge admin repo maintain <repo_id>` で fsck をやり直す（全体の fsck になる）。
-3. **期日超え**: worker を動かす / 窓の設定を直す（`[MUTATING — needs approval]` 設定の変更と再起動。戻し: 元の設定）。急ぐリポジトリは
+   **古いオブジェクトの形の問題（legacy）**: `--full` の fsck は、昔の git や他の道具が作った形の崩れたオブジェクト（例 `badTimezone`、
+   `zeroPaddedFilemode`、`missingSpaceBeforeDate`）を error として数える。中身は失われていないので取り戻す必要はない。`stderr` の
+   `error in <type> <id>: <msg-id>: …` を確かめ、移行してきたリポジトリの既知の古い履歴なら `[MUTATING — needs approval]`
+   `git --git-dir=<path> config fsck.<msg-id> ignore`（例 `fsck.zeroPaddedFilemode ignore`。戻し: `git config --unset fsck.<msg-id>`）。
+   push の受け入れ（`receive.fsckObjects`）は別の設定で、新しい崩れたオブジェクトは今まで通り断る。その後 `forge admin repo maintain`。
+   fsck が exit 128 で「not a git repository」「dubious ownership」なら破損ではなく FG-GIT-0018 `reason=fsck_unusable`（パス・所有者・
+   権限を直す。Runbook `repo-storage`）。
+4. **期日超え**: worker を動かす / 窓の設定を直す（`[MUTATING — needs approval]` 設定の変更と再起動。戻し: 元の設定）。急ぐリポジトリは
    `forge admin repo maintain <repo_id>`。
-4. **ref の数の warn**: 何もしなくてよい（測るだけ）。急に増えたリポジトリは、版の ref（`refs/merge-requests/<iid>/v<n>`）の増え方（force push
+   **`no_recent_success`**: 台帳の `skipped_reason` を見る。`incoming_push` が続くなら、その時刻に長い push か落ちた push の残り
+   （6 時間より新しい quarantine）がある。`gc_running` が続くなら `gc.pid` の pid とホストを確かめる（12 時間より古いものは git が無視する）。
+   **`stale_running`**: worker のログで同じ `repo_id` の `forge.git.maintenance_run_lost`（FG-DB-0007）を探す（落ちた実行。次の夜に再試行）。
+5. **ref の数の warn**: 何もしなくてよい（測るだけ）。急に増えたリポジトリは、版の ref（`refs/merge-requests/<iid>/v<n>`）の増え方（force push
    の多い MR）か、自動化が tag を作り続けていないかを所有者に確かめる。
 
 ## Verify

@@ -216,7 +216,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::CheckRunLimitReached
         // M3 O3: the maintenance job's own codes never reach a merge.
         | ErrorCode::RepositoryMaintenanceFailed
-        | ErrorCode::RepositoryCorrupt => false,
+        | ErrorCode::RepositoryCorrupt
+        | ErrorCode::RepositoryRefLockStale => false,
     }
 }
 
