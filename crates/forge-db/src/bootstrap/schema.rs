@@ -53,6 +53,9 @@ pub(crate) const GUARD_FUNCTIONS: &[&str] = &[
     "forge.users_kind_immutable()",
     "forge.service_account_profiles_kind_guard()",
     "forge.user_identities_human_guard()",
+    // ── M3 C1: check runs and namespace grants (20261115100000) ──
+    "forge.check_runs_guard()",
+    "forge.check_namespace_grants_kind_guard()",
 ];
 
 /// Guard triggers of state tables (table, trigger, `pg_get_triggerdef`):
@@ -162,6 +165,20 @@ const STATE_GUARD_TRIGGERS: &[(&str, &str, &str)] = &[
         "user_identities_human_guard",
         "CREATE TRIGGER user_identities_human_guard BEFORE INSERT OR UPDATE OF user_id ON \
          forge.user_identities FOR EACH ROW EXECUTE FUNCTION forge.user_identities_human_guard()",
+    ),
+    // ── M3 C1: a check run's identity; grants to service accounts only (20261115100000) ──
+    (
+        "check_runs",
+        "check_runs_identity",
+        "CREATE TRIGGER check_runs_identity BEFORE UPDATE ON forge.check_runs \
+         FOR EACH ROW EXECUTE FUNCTION forge.check_runs_guard()",
+    ),
+    (
+        "check_namespace_grants",
+        "check_namespace_grants_kind_guard",
+        "CREATE TRIGGER check_namespace_grants_kind_guard BEFORE INSERT OR UPDATE OF user_id \
+         ON forge.check_namespace_grants FOR EACH ROW EXECUTE FUNCTION \
+         forge.check_namespace_grants_kind_guard()",
     ),
     // ── D5 MR2: deletes for the purge only (20261102100100) ──
     (
@@ -610,6 +627,11 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 "forge_ro:SELECT",
             ]),
         ),
+        // ── M3 C1: check runs, annotations (removed by the purge) and the
+        // namespace grants (a revoke deletes) (20261115100000) ──
+        ("forge.check_runs", operational()),
+        ("forge.check_annotations", operational()),
+        ("forge.check_namespace_grants", operational()),
     ]
 }
 
@@ -770,6 +792,10 @@ const LATER_TABLES: &[&str] = &[
     "protected_ref_merge_rules",
     // ── M3 S0: service accounts (migration 20261113100000) ──
     "service_account_profiles",
+    // ── M3 C1: the Checks API (migration 20261115100000) ──
+    "check_runs",
+    "check_annotations",
+    "check_namespace_grants",
 ];
 
 /// Every table the first migration creates.

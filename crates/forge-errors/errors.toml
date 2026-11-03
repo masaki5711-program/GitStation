@@ -1312,6 +1312,22 @@ runbook = "namespace-data"
 test = "a_moved_target_path_that_does_not_parse_is_namespace_data_invalid"
 # ── end M1 phase 8 MR3 ─────────────────────────────────────────────────
 
+# ── M3 C1: check run rows this build cannot read ────────────────────────
+[[error]]
+code = "FG-DB-0022"
+name = "CheckRunDataInvalid"
+http_status = 500
+severity = "alert"
+user_message_ja = "チェックの結果を読み取れませんでした。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The check results could not be read. Contact the administrator with the request ID."
+user_message_id = "Hasil pemeriksaan tidak dapat dibaca. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "Reading the check runs of a commit (forge_db::checks: the merge status through `CheckResultsSource`, the merge gate inside the merge request's transaction, `GET /api/v1/projects/{id}/commits/{sha}/checks`, or a report locking its run) found rows the forge-db commands never write: `reason=too_many_stored_runs` — more than 100 runs on one commit of one project (the cap is enforced by the application, FG-REVIEW-0021); `stored_name_invalid` — a name `CheckName::parse` refuses; `stored_status_invalid` — a status / conclusion pair outside the CHECKs (a conclusion without `completed`, or the reverse); `stored_annotation_invalid` — an annotation's level or line range outside its CHECK. The data was changed outside forge-db (a manual change, a restored dump, a dropped constraint). No run is skipped: a merge is refused and a status read fails rather than deciding on a partial set (skipping a run could turn a failure into `required_check_missing`, or the reverse)."
+diagnosis = "The log event carries `reason`, `project_id` and `head_sha` (and `check_run_id` for a row); the name, summary and annotation text are not logged. Read read-only: SELECT id, name, status, conclusion, completed_at, revision FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY id; SELECT count(*) FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>'; check pg_constraint for check_runs_name / check_runs_status / check_runs_conclusion_when_completed / check_annotations_level, and forge_audit.ddl_audit and the forge.audit_log `check_run.reported` / `check.completed` rows for who changed what."
+fix = "Through an approved runbook step, delete the rows that break the rules (the reporter reports again; the audit log keeps every report) or restore them from a backup; restore a dropped constraint from the migration. Never edit the rows by hand without approval."
+runbook = "checks-reporting"
+test = "a_stored_run_this_build_cannot_read_is_check_run_data_invalid"
+# ── end M3 C1 ──────────────────────────────────────────────────────────
+
 # ── M1 gstn core: client-side codes (area CLI; http_status is the nominal class) ──
 [[error]]
 code = "FG-CLI-0001"
@@ -1679,3 +1695,30 @@ cause = "`PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule` carried
 diagnosis = "The log event carries `reason` (`stale_rule`, `rule_exists` or `rule_gone`), `expected` and `actual` (the two `updated_at` values, `none` for no merge rule), `project_id` and `protected_ref_id`, with `action=ProtectedRefManage`. The change in between is the newest audit row: SELECT action, actor_user_id, occurred_at, details FROM forge.audit_log WHERE resource_type = 'project' AND resource_id = <project_id> AND action LIKE 'protected_ref.merge_rule_%' ORDER BY id DESC LIMIT 5."
 fix = "Read the rules again (`gstn protected-ref list --project <id>` or `GET …/protected-refs`, or reload the screen), check the other change, and save again with the merge rule's new `updated_at` (`gstn merge-rule set` reads it by itself; `null` only when the branch has no merge rule)."
 test = "stale_merge_rule_put_is_409"
+
+# ── M3 C1: the Checks API (ADR-0024 §10) ─────────────────────────────────
+[[error]]
+code = "FG-REVIEW-0020"
+name = "CheckPayloadInvalid"
+http_status = 422
+severity = "info"
+user_message_ja = "チェックの報告の内容が正しくありません。名前・状態・結論・注釈を確かめて、もう一度送ってください。"
+user_message_en = "The check report is not valid. Check its name, status, conclusion and annotations, then send it again."
+user_message_id = "Laporan pemeriksaan tidak valid. Periksa nama, status, kesimpulan, dan anotasinya, lalu kirim lagi."
+cause = "`POST /api/v1/projects/{id}/commits/{sha}/checks` (or `gstn checks report`) sent a report that breaks the Checks API's rules (ADR-0024 §10, docs/api/checks.md): `reason=name_invalid` (not `<namespace>/<name>` under CheckName::parse, or an unknown namespace), `status_invalid`, `conclusion_invalid`, `conclusion_without_completed` / `completed_without_conclusion` (a conclusion exists exactly when the status is `completed`), `summary_too_long` (over 64 KiB), `details_url_invalid` (not an http or https URL with a host, over 2 KiB, or with credentials; the server never fetches it), `too_many_annotations` (over 50), `annotation_path_invalid` (empty, absolute, a `..` segment, a backslash or a control character, over 4096 bytes), `annotation_lines_invalid` (a line below 1, or the end before the start), `annotation_level_invalid`, `annotation_message_invalid` (empty or over 4 KiB), `annotation_title_invalid` (over 255 bytes). Decided after the authorization (a caller who may not report gets the denial, never a hint about the body). Nothing was written."
+diagnosis = "The log event carries `reason`, `project_id`, `name` (only when it parsed) and for annotations `index` (its position in the list) and `limit` / `len` where a size broke the rule — never the summary, URL or message text."
+fix = "Fix the report and send it again; the rules are in docs/api/checks.md (`gstn checks report --help` shows the options)."
+test = "an_annotation_over_the_limit_is_check_payload_invalid"
+
+[[error]]
+code = "FG-REVIEW-0021"
+name = "CheckRunLimitReached"
+http_status = 409
+severity = "info"
+user_message_ja = "このコミットにはこれ以上の種類のチェックを登録できません（上限 100）。既にある名前で報告してください。"
+user_message_en = "No more kinds of checks can be reported on this commit (the limit is 100). Report under a name it already has."
+user_message_id = "Tidak ada lagi jenis pemeriksaan yang dapat dilaporkan pada commit ini (batasnya 100). Laporkan dengan nama yang sudah ada."
+cause = "A check report named a new check on a commit that already holds 100 check runs in the project (forge_core::MAX_CHECK_RUNS_PER_COMMIT, M3 C1): the cap bounds every read of a commit's runs, the merge gate's included. Reports under a name the commit already has still update their run. Decided under the commit's report lock, so concurrent reports never exceed it. Nothing was written. Not an alert: usually a reporter that puts a run number or a date into the name."
+diagnosis = "The log event carries `reason=too_many_runs`, `limit`, `project_id` and `head_sha`, with `action=CheckWrite`. The names on the commit: SELECT name, reported_by, updated_at FROM forge.check_runs WHERE project_id = <project_id> AND head_sha = '<head_sha>' ORDER BY name."
+fix = "Report under a stable name per kind of check (for example `ci/gates`, not `ci/gates-<run>`); the details of one run belong in its summary and annotations."
+test = "a_new_name_beyond_the_limit_is_check_run_limit_reached"

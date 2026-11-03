@@ -168,3 +168,82 @@ pub trait CheckResultsSource: Send + Sync {
         head: &'a ObjectId,
     ) -> LookupFuture<'a, CheckRunsOnHead>;
 }
+
+/// An annotation's level (`check_annotations.level`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckAnnotationLevel {
+    Notice,
+    Warning,
+    Failure,
+}
+
+impl CheckAnnotationLevel {
+    pub const ALL: [CheckAnnotationLevel; 3] = [Self::Notice, Self::Warning, Self::Failure];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Notice => "notice",
+            Self::Warning => "warning",
+            Self::Failure => "failure",
+        }
+    }
+
+    /// The level named `raw` (its `as_str`); `None` for anything else.
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.as_str() == raw)
+    }
+}
+
+/// The audit details of one check run report (M3 C1, on the project):
+/// `check_run.reported` (audit only) when the conclusion stayed what it
+/// was, `check.completed` (an event of the integration class,
+/// deduplicated by `check_completed:<check_run_id>:<revision>`) when the
+/// report changed it to a new conclusion (ADR-0024 §10: only then).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRunChange {
+    pub project: ProjectId,
+    pub check_run_id: i64,
+    pub head_sha: ObjectId,
+    pub name: CheckName,
+    pub status: CheckStatus,
+    pub conclusion: Option<CheckConclusion>,
+    /// The conclusion before this report (`None`: none, or a new run).
+    pub previous_conclusion: Option<CheckConclusion>,
+    /// The report created the run.
+    pub created: bool,
+    /// The run's revision after this report.
+    pub revision: i64,
+}
+
+impl CheckRunChange {
+    /// Whether the report changed the run to a new conclusion — the only
+    /// case that publishes `check.completed`.
+    pub fn completed(&self) -> bool {
+        self.conclusion.is_some() && self.conclusion != self.previous_conclusion
+    }
+
+    pub fn action(&self) -> &'static str {
+        if self.completed() {
+            "check.completed"
+        } else {
+            "check_run.reported"
+        }
+    }
+
+    /// `{"project_id","check_run_id","head_sha","name","status","conclusion",
+    /// "previous_conclusion","created","revision"}` (no summary, URL or
+    /// annotation text: they are free text).
+    pub fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "project_id": self.project.get(),
+            "check_run_id": self.check_run_id,
+            "head_sha": self.head_sha.as_str(),
+            "name": self.name.as_str(),
+            "status": self.status.as_str(),
+            "conclusion": self.conclusion.map(CheckConclusion::as_str),
+            "previous_conclusion": self.previous_conclusion.map(CheckConclusion::as_str),
+            "created": self.created,
+            "revision": self.revision,
+        })
+    }
+}

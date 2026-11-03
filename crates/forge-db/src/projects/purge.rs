@@ -436,6 +436,22 @@ async fn finish_steps(
         "projects.purge.finish.members",
     )
     .await?;
+    // M3 C1: the check runs' annotations, then the runs (audited state on
+    // the project; the project.purged row covers their deletion).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.check_annotations WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.check_annotations",
+    )
+    .await?;
+    delete_rows(
+        tx,
+        "DELETE FROM forge.check_runs WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.check_runs",
+    )
+    .await?;
     // M3 R6: the merge rules reference the protection rules.
     delete_rows(
         tx,

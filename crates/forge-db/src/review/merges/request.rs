@@ -34,6 +34,10 @@ pub struct MergeGate {
     /// M3 R6: the merge request's unresolved discussions now (the merge
     /// rule's `require_resolved_discussions`, ADR-0024 §7).
     pub unresolved_discussions: u32,
+    /// M3 C1: every check run on the merge request's head as stored now
+    /// (empty without a head), read in this transaction with the same SQL
+    /// as the merge status (`crate::checks::RUNS_SQL`).
+    pub check_runs: forge_core::CheckRunsOnHead,
 }
 
 /// The merge a request asks for.
@@ -90,8 +94,22 @@ pub(super) async fn gate(
     let unresolved_discussions = tx
         .step(|c| async move { crate::review::discussions::unresolved_on(c, mr).await })
         .await?;
+    let head = facts
+        .merge_request
+        .as_ref()
+        .and_then(|m| m.head_sha.as_deref())
+        .map(ObjectId::parse)
+        .transpose()?;
+    let check_runs = match head {
+        Some(head) => {
+            tx.step(|c| async move { crate::checks::runs_on(c, project, &head).await })
+                .await?
+        }
+        None => forge_core::CheckRunsOnHead::default(),
+    };
     Ok(MergeGate {
         unresolved_discussions,
+        check_runs,
         facts,
         protection,
         mergeability,

@@ -2,6 +2,7 @@
 //! (no email, employee number, external id, display name, IP).
 
 use crate::approval::ApprovalRuleChange;
+use crate::checks::CheckRunChange;
 use crate::event_type::EventType;
 use crate::ids::{GroupId, NamespaceId, ProjectId, ProtectedRefId, RepoId, TombstoneId, UserId};
 use crate::merge_conditions::{MergeRuleChange, MergeSettingsChange};
@@ -345,6 +346,18 @@ pub enum AuditDetails {
     /// ADR-0024 §12): audit-only, on the project. Shapes:
     /// [`MergeRuleChange::to_value`].
     ProtectedRefMergeRule(MergeRuleChange),
+    /// `check_run.reported` / `check.completed` (M3 C1, ADR-0024 §10), on
+    /// the project: one report of a check run; `check.completed` (an event,
+    /// integration class) only when the report changed the conclusion.
+    /// Shapes: [`CheckRunChange::to_value`].
+    CheckRun(CheckRunChange),
+    /// `check_namespace.granted` / `.revoked` (M3 C1), audit only, on the
+    /// service account: `{"user_id","namespace"}`.
+    CheckNamespaceGrant {
+        user: UserId,
+        namespace: crate::merge_conditions::CheckNamespace,
+        granted: bool,
+    },
     // ── M2 MR3: web sessions (ADR-0021 §5), audit-only, on the user ──
     /// `session.created`: a web session was issued (the OIDC login, MR4).
     /// Ids and the public id only; never the secret, its hash or the IdP's
@@ -500,6 +513,9 @@ impl AuditDetails {
             Self::ApprovalRule(change) => change.action(),
             Self::MergeSettings { change, .. } => change.action(),
             Self::ProtectedRefMergeRule(change) => change.action(),
+            Self::CheckRun(change) => change.action(),
+            Self::CheckNamespaceGrant { granted: true, .. } => "check_namespace.granted",
+            Self::CheckNamespaceGrant { granted: false, .. } => "check_namespace.revoked",
         }
     }
 
@@ -550,7 +566,9 @@ impl AuditDetails {
             Self::MergeRequest(change) => Some(change.transition().event_type()),
             Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
-            | Self::ProtectedRefMergeRule(_) => None,
+            | Self::ProtectedRefMergeRule(_)
+            | Self::CheckNamespaceGrant { .. } => None,
+            Self::CheckRun(change) => change.completed().then_some(EventType::CheckCompleted),
             Self::MergeSettings { change, .. } => match change {
                 MergeSettingsChange::Updated { .. } => None,
                 MergeSettingsChange::CodeownersEnforcementChanged { .. } => {
@@ -943,6 +961,13 @@ impl AuditDetails {
             Self::ApprovalRule(change) => change.to_value(),
             Self::MergeSettings { project, change } => change.to_value(*project),
             Self::ProtectedRefMergeRule(change) => change.to_value(),
+            Self::CheckRun(change) => change.to_value(),
+            Self::CheckNamespaceGrant {
+                user, namespace, ..
+            } => serde_json::json!({
+                "user_id": user.get(),
+                "namespace": namespace.as_str(),
+            }),
         }
     }
 
@@ -1016,7 +1041,9 @@ impl AuditDetails {
             | Self::MergeRequestVersion(_)
             | Self::ApprovalRule(_)
             | Self::MergeSettings { .. }
-            | Self::ProtectedRefMergeRule(_) => self.to_value(),
+            | Self::ProtectedRefMergeRule(_)
+            | Self::CheckRun(_)
+            | Self::CheckNamespaceGrant { .. } => self.to_value(),
         }
     }
 }

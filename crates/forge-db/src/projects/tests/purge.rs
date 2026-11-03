@@ -171,6 +171,20 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
                  WHERE d.project_id = {id}",
                 b = bob.user_id.get()
             ),
+            // M3 C1: a check run and its annotation go with the project
+            // (annotations before runs).
+            format!(
+                "INSERT INTO forge.check_runs (project_id, head_sha, name, status, \
+                 reported_by, request_id) VALUES ({id}, repeat('a', 40), 'ci/gates', \
+                 'queued', {b}, 'req-check')",
+                b = bob.user_id.get()
+            ),
+            format!(
+                "INSERT INTO forge.check_annotations (check_run_id, project_id, position, \
+                 path, start_line, end_line, level, message) SELECT id, project_id, 0, \
+                 'src/lib.rs', 1, 1, 'notice', 'synthetic' FROM forge.check_runs \
+                 WHERE project_id = {id}"
+            ),
             // M3 R4: a merge attempt goes with them (it starts queued).
             format!(
                 "INSERT INTO forge.merge_request_merges (merge_request_id, project_id, method, \
@@ -291,6 +305,8 @@ async fn a_purge_deletes_the_rows_keeps_the_path_and_publishes_once() {
         "merge_request_discussions",
         "merge_request_notes",
         "merge_request_merges",
+        "check_runs",
+        "check_annotations",
     ] {
         let rows = count(
             &mut su,

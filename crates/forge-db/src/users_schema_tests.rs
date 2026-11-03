@@ -59,6 +59,28 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // M3 C1: the Checks API.
+            AuditedTable {
+                name: "check_annotations".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "check_namespace_grants".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "check_runs".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "group_members".into(),
                 audit_resource: AuditResource::Literal("group".into()),
