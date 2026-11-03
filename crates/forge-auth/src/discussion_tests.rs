@@ -227,6 +227,54 @@ fn people_only_rows_are_allowed_for_the_human_twin() {
 /// that is a Guest of an internal project reads by its Guest role. (A
 /// non-person's personal namespace is refused by its owner's kind, a
 /// fixture fact: rows in `matrix_rows_service_accounts.rs`.)
+/// The actions a person reads an internal project with as a Reporter
+/// whatever their role (`read_role`): the only ones where a service
+/// account's Guest role decides differently.
+const INTERNAL_READS: &[Action] = &[
+    Action::RepoRead,
+    Action::RepoBrowse,
+    Action::ProjectRead,
+    Action::MemberList,
+    Action::ProtectedRefList,
+    Action::MergeRequestList,
+    Action::MergeRequestRead,
+];
+
+/// The resource is (or belongs to) an internal project.
+fn internal_project(resource: &crate::Resource) -> bool {
+    use crate::{NamespaceView, Resource, Visibility};
+    let project = match resource {
+        Resource::Project(p) | Resource::MergeRequest { project: p, .. } => Some(p),
+        Resource::Resolved {
+            view: NamespaceView::Project(p),
+            ..
+        } => Some(p),
+        Resource::Instance
+        | Resource::Group { .. }
+        | Resource::Namespace { .. }
+        | Resource::Ref { .. }
+        | Resource::Transfer { .. }
+        | Resource::GroupTransfer { .. }
+        | Resource::UserRename { .. }
+        | Resource::Tombstone(_)
+        | Resource::Membership { .. }
+        | Resource::RefProtectionChange { .. }
+        | Resource::VisibilityChange { .. }
+        | Resource::Token { .. }
+        | Resource::Session { .. }
+        | Resource::TokenRequest { .. }
+        | Resource::Admission { .. }
+        | Resource::Unresolved(_)
+        | Resource::Discussion { .. }
+        | Resource::CodeownersEnforcement { .. }
+        | Resource::MergeSettingsChange { .. }
+        | Resource::Resolved { .. }
+        | Resource::ServiceAccount(_)
+        | Resource::ServiceAccountTokenRequest { .. } => None,
+    };
+    project.is_some_and(|p| p.visibility == Visibility::Internal)
+}
+
 #[test]
 fn only_people_only_actions_refuse_by_account_kind() {
     use crate::matrix::{Expect, ROWS};
@@ -249,9 +297,13 @@ fn only_people_only_actions_refuse_by_account_kind() {
                             e.code() == ErrorCode::NotFound
                         }
                         // A Guest member of an internal project reads by
-                        // its own role (a person reads it as a Reporter).
+                        // its own role (a person reads it as a Reporter):
+                        // only the read actions, only on an internal
+                        // project, only for the Guest role (S0 review).
                         (AccountKind::ServiceAccount, "") => {
                             e.code() == ErrorCode::Forbidden
+                                && INTERNAL_READS.contains(&r.action)
+                                && internal_project(&resource)
                                 && e.context()
                                     .iter()
                                     .any(|(k, v)| *k == "actual_role" && v == "guest")

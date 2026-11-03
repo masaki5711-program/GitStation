@@ -114,6 +114,13 @@ pub(crate) enum Actor {
     ServiceAccountNonMemberTokenReadApi,
     /// Developer with a `user_email` token only (M3 S0: it reads no API).
     DevTokenUserEmail,
+    /// A service account that is a Guest member, with a `read_api` +
+    /// `read_repository` token (S0 review: it reads by its Guest role).
+    ServiceAccountGuestTokenRead,
+    /// A bot without a role, with a `read_api` token (S0 review: the
+    /// member-only rule is the service account's; a bot still sees
+    /// internal projects).
+    BotNonMemberTokenReadApi,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -418,6 +425,12 @@ impl Actor {
                 token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi])
             }
             Actor::DevTokenUserEmail => token(false, &[Scope::UserEmail]),
+            Actor::ServiceAccountGuestTokenRead => token_of(
+                AccountKind::ServiceAccount,
+                false,
+                &[Scope::ReadApi, Scope::ReadRepository],
+            ),
+            Actor::BotNonMemberTokenReadApi => token_of(AccountKind::Bot, false, &[Scope::ReadApi]),
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -430,7 +443,9 @@ impl Actor {
     /// The actor's effective role on the row's project or group.
     pub(crate) fn role(self) -> Option<Role> {
         match self {
-            Actor::Guest | Actor::GuestTokenReadApi => Some(Role::Guest),
+            Actor::Guest | Actor::GuestTokenReadApi | Actor::ServiceAccountGuestTokenRead => {
+                Some(Role::Guest)
+            }
             Actor::Reporter => Some(Role::Reporter),
             Actor::Developer
             | Actor::DevTokenReadRepository
@@ -478,7 +493,8 @@ impl Actor {
             | Actor::AdminTokenMergeExecuteAdmin
             | Actor::AdminTokenMergeExecute
             | Actor::AdminTokenMergeApproveAdmin
-            | Actor::ServiceAccountNonMemberTokenReadApi => None,
+            | Actor::ServiceAccountNonMemberTokenReadApi
+            | Actor::BotNonMemberTokenReadApi => None,
         }
     }
 
@@ -540,7 +556,9 @@ impl Actor {
             | Actor::AgentTokenMergeApprove
             | Actor::MaintainerTokenReadApi
             | Actor::AdminTokenMergeApproveAdmin
-            | Actor::DevTokenUserEmail => None,
+            | Actor::DevTokenUserEmail
+            | Actor::ServiceAccountGuestTokenRead
+            | Actor::BotNonMemberTokenReadApi => None,
         }
     }
 

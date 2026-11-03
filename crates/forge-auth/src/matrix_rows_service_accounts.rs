@@ -141,6 +141,20 @@ pub(crate) const SERVICE_ACCOUNT_ROWS: &[Row] = &[
     row(A::PathResolve, W::ServiceAccountNonMemberTokenReadApi, F::ResolvedInternal, deny(E::NotFound)),
     row(A::PathResolve, W::ServiceAccountNonMemberTokenReadApi, F::ResolvedGroup, Allow),
     row(A::MergeRequestList, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
+    // S0 review: clone / fetch / raw / archive (RepoRead) and push of an
+    // internal project it is no member of: not found; a Guest member
+    // reads by its Guest role (internal or private), unlike a person.
+    row(A::RepoRead, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
+    row(A::RepoPush, W::ServiceAccountNonMemberTokenReadApi, F::InternalProject, deny(E::NotFound)),
+    row(A::RepoRead, W::ServiceAccountGuestTokenRead, F::InternalProject, deny(E::Forbidden)),
+    row(A::ProjectRead, W::ServiceAccountGuestTokenRead, F::InternalProject, deny(E::Forbidden)),
+    row(A::ProjectRead, W::ServiceAccountGuestTokenRead, F::PrivateProject, deny(E::Forbidden)),
+    row(A::RepoBrowse, W::ServiceAccountGuestTokenRead, F::PrivateProject, deny(E::Forbidden)),
+    row(A::ProjectRead, W::GuestTokenReadApi, F::InternalProject, Allow),
+    // The member-only rule is the service account's: a bot still reads
+    // internal projects like every signed-in user.
+    row(A::ProjectRead, W::BotNonMemberTokenReadApi, F::InternalProject, Allow),
+    row(A::RepoBrowse, W::BotNonMemberTokenReadApi, F::InternalProject, Allow),
     // `user_email` adds the addresses to what a token reads; alone it
     // reads nothing.
     row(A::ProjectRead, W::DevTokenUserEmail, F::PrivateProject, deny(E::InsufficientScope)),
