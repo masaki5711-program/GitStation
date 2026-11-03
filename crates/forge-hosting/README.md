@@ -60,7 +60,7 @@ integration (`IntegrationManage` / `IntegrationRead`, decided once on the
 instance), and bind / unbind a project (`IntegrationBindingManage`, decided
 twice: forge-db's `bind_decided` / `unbind_decided` call
 `Authorized::reconfirm` inside the transaction). Owned codes: FG-INT-0012,
-FG-INT-0016 (runbook `integrations`).
+FG-INT-0016, FG-INT-0017 (runbook `integrations`).
 
 **Tests**: `tests/commands.rs`, `tests/members_protection.rs` (decisions on the
 locked facts, agents, last owner, stale proofs), `tests/race.rs` (a role removed

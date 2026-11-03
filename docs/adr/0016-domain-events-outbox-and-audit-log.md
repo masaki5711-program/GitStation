@@ -937,3 +937,27 @@ Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding
 `binding_limit_200_is_int_0012`、`binding_refused_for_pending_deletion_project`（forge-db）、`integration_manage_is_admin_session_only`、
 `binding_requires_maintainer`（forge-web）、制約名を確かめる `integration_checks_refuse_raw_rows_by_constraint_name` /
 `binding_checks_refuse_raw_rows_by_constraint_name`、`a_purge_removes_the_projects_integration_binding`。
+
+### I1a の独立レビュー（2026-11-03）で変えた点
+
+1. **無効の連携・無効のサービスアカウントには結べない**（security HIGH / MEDIUM）: 結ぶたびにサービスアカウントへ Reporter を付けるため、
+   止めた連携が新しいプロジェクトを得ないこと、無効のアカウントが「有効に戻すと生き返る」メンバーを集めないことを守る。
+   `bind_decided` は連携の行を `FOR UPDATE`、サービスアカウントの利用者の行を `FOR SHARE` で読み（先に確定した無効化は見え、
+   後の無効化は待つ）、`enabled = false` なら `FG-INT-0017` IntegrationDisabled `reason=integration_disabled`、アカウントが無効なら
+   `reason=service_account_disabled`（409、info）。解除は無効でもできる（権限を減らすだけ）。無効のサービスアカウントには連携も作れない
+   （`FG-WEB-0006 rule=service_account_disabled`）。
+2. **付けたメンバーを人が外したら、付けた印を消す**（security / database MEDIUM）: `projects::remove_member` と `remove_member_decided` が
+   同じ変更の中で、そのアカウントが結びつけの連携のサービスアカウントなら `granted_membership` を false にする
+   （`integrations::clear_grant`。結びつけの監査のトリガーは、その変更の `member.removed` のプロジェクトの行で満たされる）。人がもう一度
+   付けたメンバーを、後の解除が外さない。追記のマイグレーション `20261114100100` で forge_app に UPDATE を許した。
+3. **`event_types` の要素の CHECK**（database MEDIUM）: `integrations_event_types_entries`（`20261114100100`）が NULL・空・空白・大文字・
+   2 次元の配列を断る（要素は `*`、種類の名前、`<家族>.*` の形だけ。どの分類かは forge-core が確かめる）。
+4. **結びつけの答えはトランザクションが書いた値から作る**（rust MEDIUM）: コミットの後に読み直さない（同時の解除で FG-SYS-0001 に
+   ならないように）。`bind_decided` が書いた（`unchanged` なら見つけた）結びつけを返す。
+5. **同時の作成**: 同じサービスアカウントへの 2 つの作成が同時に来て、負けた方が一意の制約（SQLSTATE 23505、
+   `integrations_one_per_service_account`）に当たっても、`FG-WEB-0006 rule=service_account_in_use` にする。
+6. **並行のテスト**: 199 件のときの 2 つの同時の結びつけは 1 つだけ通る（もう一方は `FG-INT-0012`）。解除と、人によるメンバーの削除・
+   ロールの変更は、どちらの順でも同時でも整合する（どちらもプロジェクトの行を先に錠にする）。
+7. **受け入れた残り**: 結びつけの経路の答えで、Maintainer は連携の id の有無を知れる（判定の後、無い連携は
+   `FG-REPO-0005 resource=integration`）。連携の id は秘密ではなく、Maintainer は kanflow の設定で id を知る立場なので、受け入れる。
+   `forge-db/src/integrations` は `admin` / `bind` / `read` に分けた（動きは同じ）。

@@ -1,4 +1,4 @@
-# Runbook: integrations（FG-INT-0012 / FG-INT-0016）
+# Runbook: integrations（FG-INT-0012 / FG-INT-0016 / FG-INT-0017）
 
 連携（kanflow）の登録・有効と無効の切り替え・プロジェクトの結びつけと解除の手順（M3 I1a、計画 11 §5 I1、02 §2、ADR-0016 Amendment I1a）。
 
@@ -11,6 +11,8 @@
   - 結びつけると、連携のサービスアカウントが **そのプロジェクトの Reporter** になる（まだメンバーでないとき。`granted_membership = true`）。
     解除すると、その結びつけが付けたメンバーで、まだ Reporter のままなら外す。手で付けた・手でロールを変えたメンバーは残す。
   - 削除待ちのプロジェクトには結べない（`FG-REPO-0006`）。完全削除（purge）で結びつけも消える。
+  - **無効の連携、またはサービスアカウントが無効の連携には結べない**（`FG-INT-0017`）。解除はできる。
+  - 結びつけが付けたメンバーを人が外すと、付けた印（`granted_membership`）が消える。その後に人が付け直したメンバーは、解除しても残る。
 
 ## Trigger
 
@@ -18,6 +20,8 @@
 - kanflow のプロジェクトとリポジトリを対応させる・やめる（結びつけ・解除）。
 - 結びつけが `FG-INT-0016`（409、BindingConflict）で断られた: そのプロジェクトはもう別の連携、または同じ連携の別の外部プロジェクトに結ばれている。
 - 結びつけが `FG-INT-0012`（409、IntegrationLimitReached）で断られた: その連携の結びつけが 200 に達した。
+- 結びつけが `FG-INT-0017`（409、IntegrationDisabled）で断られた: 連携が無効（`reason=integration_disabled`）、またはその
+  サービスアカウントが無効（`reason=service_account_disabled`）。
 - 連携をすぐ止めたい（トークンの漏えい、kanflow 側の暴走）。
 
 ## Impact
@@ -61,7 +65,11 @@
    SELECT count(*) FROM forge.integration_bindings WHERE integration_id = <integration_id>;
    ```
 
-5. 変更の履歴（監査）: 連携は `resource_type = 'integration'`、結びつけはプロジェクトの行。
+5. `FG-INT-0017` のログ: `reason`、`integration_id`、`service_account_id`、`project_id`。`gstn admin integration view <id>` の
+   `enabled` と、`gstn admin service-account view <service_account_id>` の `state` を見る。止めたのが意図どおりなら何もしない。
+   そうでなければ、止めた理由を確かめてから管理者が有効に戻す（C の逆。`{"enabled": true}`）。
+
+6. 変更の履歴（監査）: 連携は `resource_type = 'integration'`、結びつけはプロジェクトの行。
 
    ```sql
    SELECT id, action, actor_user_id, occurred_at, details FROM forge.audit_log
@@ -107,7 +115,8 @@ gstn integration-binding remove --project <project_id> --integration <integratio
 ### C. 連携をすぐ止める
 
 - 管理者のセッションで無効にする `[MUTATING — needs approval]`: コンソールから
-  `PATCH /api/v1/admin/integrations/<id>` に `{"enabled": false}`（A と同じ形）。
+  `PATCH /api/v1/admin/integrations/<id>` に `{"enabled": false}`（A と同じ形）。無効の間は新しい結びつけができない
+  （`FG-INT-0017`。既にある結びつけとメンバーは残るので、外すなら B で解除する）。
 - トークンしか手元に無いとき（漏えいへの対応）: 連携のサービスアカウントを無効化する。トークンはすべて同じ変更で失効する
   `[MUTATING — needs approval]`:
 
@@ -124,5 +133,5 @@ gstn integration-binding remove --project <project_id> --integration <integratio
 
 ## 後片付け
 
-- 監査の行（`integration.created` / `updated` / `bound` / `unbound`）が残っていることを確かめる（Diagnose 5）。
+- 監査の行（`integration.created` / `updated` / `bound` / `unbound`）が残っていることを確かめる（Diagnose 6）。
 - 連携をやめたときは、サービスアカウントのトークンも失効させる（Runbook service-accounts）。連携の行は消さない（無効にするだけ）。

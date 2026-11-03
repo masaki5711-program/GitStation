@@ -737,13 +737,16 @@ lock: FG-WEB-0006 `not_service_account` / `service_account_in_use`,
 forge-hosting only, with `Authorized::reconfirm`: the project locked, the
 caller's facts re-read, then the integration row `FOR UPDATE`; at most one
 binding per project → FG-INT-0016, 200 per integration → FG-INT-0012, pending
-deletion → FG-REPO-0006; binding makes the service account a Reporter when it
+deletion → FG-REPO-0006, a disabled integration or service account →
+FG-INT-0017; binding makes the service account a Reporter when it
 is no member and unbinding removes that membership while it is still Reporter,
 with the `member.added` / `.removed` audit row and event in the same change),
 `get` / `list` / `bindings` / `project_bindings` (read pool). The purge deletes
-a project's binding. Schema backstops: `integrations_service_account_guard`
+a project's binding; the member removals clear `granted_membership`
+(`integrations::clear_grant`). Schema backstops: `integrations_service_account_guard`
 (`integrations_service_account_kind`, `integrations_service_account_fixed`),
 `integrations_kind_known`, `integrations_event_types_count`,
+`integrations_event_types_entries` (20261114100100),
 `integrations_one_per_service_account`, `integration_bindings_one_per_project`,
 `integration_bindings_external_project_id_format`. Tests
 `src/integrations/tests.rs`.
