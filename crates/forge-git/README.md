@@ -168,10 +168,13 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   `waitid(WNOWAIT)`), then `SIGKILL` (`stop=term|kill` in the FG-GIT-0002 context; Windows has
   no graceful stop: `kill`); a leader that exits non-zero gets its group killed before it is
   reaped; a helper that keeps the pipes open after the leader exited is killed after `LINGER`
-  (2 s); the output cap kills the group at once. `Git::clear_own_packed_refs_lock(storage, id,
-  step_started) -> LockCleanup::{Absent, Removed, Foreign}` removes a `packed-refs.lock` only
-  when it is not older than the step (the caller holds the merge lock); `packed_refs_lock_age`
-  is doctor's probe. fsck exit 128 with "not a git repository" / dubious ownership is FG-GIT-0018
+  (2 s); the output cap kills the group at once. `StepEnd::of(&err)` tells `Exited` / `Terminated`
+  (git removed its own locks) from `Killed { at }` (`stop=kill`, `killed_at_unix_ms`).
+  `Git::clear_own_packed_refs_lock(storage, id, step_started, killed_at) -> LockCleanup::{Absent,
+  Removed, Foreign}` is called only after a kill and removes a `packed-refs.lock` whose time lies
+  between the step's start and the kill (the merge lock does NOT keep receive-pack / update-ref
+  out); `packed_refs_lock_age` is doctor's probe. On Unix a reaped leader's group is never
+  signalled (only while it is an unreaped zombie). fsck exit 128 with "not a git repository" / dubious ownership is FG-GIT-0018
   `reason=fsck_unusable`; the fsck stdout head is redacted. pack-refs also runs with
   `core.packedRefsTimeout=10000`. Ref writers (`update_refs`, receive-pack) set
   `core.packedRefsTimeout=10000` (`refs::PACKED_REFS_TIMEOUT_MS`) so a write that needs

@@ -1817,3 +1817,18 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   `the_schedule_reaps_a_lost_run_outside_the_window`、`a_push_starting_during_fsck_defers_gc`、
   `fsck_on_an_unusable_repository_is_maintenance_failed_not_corrupt`、`a_stale_gc_pid_does_not_block_gc`、
   `doctor_maintenance_lines_name_stale_runs_and_no_recent_success`。
+
+### O3 の再レビューで決めたこと（2026-11-03）
+
+- **HIGH（security / silent-failure）: 生きた書き手のロックを消しうる**: マージのロックは receive-pack と `update-ref` を止めないので、
+  「手順の開始より新しい」だけでは自分のロックと言えない（`SIGTERM` で git が自分のロックを消した後に push が取ったロック、他の書き手が
+  持つロックのために 10 秒待って失敗した場合）。**決定**: pack-refs が自分で終わった（どの終了コードでも）か `SIGTERM` で終わったときは何も
+  消さない（git が自分のロックを消している）。**殺された**ときだけ（`stop=kill`、Windows の Job Object を閉じたとき）、時刻が手順の開始から
+  kill の時刻（`killed_at_unix_ms`、forge-git が kill の直前に記録）の間のロックを消す。それ以外は残して FG-GIT-0020。
+  forge-git `StepEnd::of(&err)`（`Exited` / `Terminated` / `Killed { at }` / `NotRun`）で分ける。残る隙（ロックを待つ間に他の書き手が取り、
+  その後に kill された場合）は Runbook に書いた。
+- **MEDIUM**: Unix で `wait_leader` が使えず `child.wait()` がリーダーを刈り取った後は、グループに signal を送らない（pgid が再利用されうる）。
+  `release()` するだけ。グループを殺すのは、リーダーが刈り取られていないゾンビの間だけ。`waitid` を失敗させる手段が無いのでテストは無い。
+- **LOW**: スケジューラーの `maintenance_run_lost` は回ごとの `request_id` を持ち、`failures ≥ 2` で error（`start` の経路も同じ）。
+  `last_success_at` の埋め戻しを新しいマイグレーション 20261117100200 で（`outcome = 'succeeded'` の行に `last_finished_at`）。doctor の
+  ロックの見回りは最初の stat の失敗を詳細に残す。`fsck_unusable` は `fatal:` も要る。`stale_running` の一時的な誤報を Runbook に書いた。

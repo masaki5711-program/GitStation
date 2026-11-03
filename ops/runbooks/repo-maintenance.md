@@ -20,8 +20,12 @@ M3 O3（計画 11 §5 O3、ADR-0024「実装で決めたこと（O3）」）。`
 各手順は `maintenance.step_timeout_secs`（既定 1 800 秒）と 1 回の保守の期限（ジョブの時間切れ 1 時間 − 60 秒）の短い方で打ち切られ、
 **git の子プロセス（`repack` / `pack-objects`）ごと** 止まる（FG-GIT-0002 `step=<手順>`）。Unix ではまずプロセスグループに `SIGTERM`
 （git がロックのファイルを消して終わる）、5 秒待って `SIGKILL`（`stop=term|kill`）。Windows には穏やかな止め方が無い（`stop=kill`）。
-pack-refs が失敗・時間切れのときは、マージのロックを持ったまま、**その手順の開始より新しい** `packed-refs.lock` だけを消す（自分のもの。
-`forge.git.maintenance_lock_removed`）。それより古いものは他人のものとして残し、FG-GIT-0020 で知らせる（`forge.git.maintenance_lock_left`）。
+pack-refs が **殺された**（`stop=kill`。Windows は常にこれ）ときだけ、マージのロックを持ったまま、時刻が **手順の開始から kill の時刻の間** の
+`packed-refs.lock` を消す（自分のもの。`forge.git.maintenance_lock_removed`）。その外のもの（手順より古い、kill の後にできた）は残し、
+FG-GIT-0020 で知らせる（`forge.git.maintenance_lock_left`）。pack-refs が自分で終わった（どの終了コードでも）か `SIGTERM` で終わったときは
+git が自分のロックを消しているので、**何も消さない**（そのときあるロックは push・`update-ref` のもの。マージのロックは書く側を止めない）。
+残り続ければ doctor の `repositories.stale_locks` が知らせる。残る隙: pack-refs がロックを待っている間（最大 10 秒）に他の書き手が取り、
+その後に kill されたときは、そのロックも窓の中に入る（Unix では kill は `SIGTERM` を 5 秒無視した後だけ、Windows は開発機だけ）。
 
 **pack-refs の長さ（測定、2026-11-03、Windows の開発機、git 2.53）**: loose の ref 10 000 本で 5.8 秒、100 000 本で 56〜70 秒。
 そのうち `packed-refs.lock` を持つのは 100 000 本で約 6.6 秒（残りは loose の ref のファイルを 1 本ずつ消す時間で、その間は各 ref の
@@ -112,7 +116,9 @@ pack-refs が失敗・時間切れのときは、マージのロックを持っ�
    `forge admin repo maintain <repo_id>`。
    **`no_recent_success`**: 台帳の `skipped_reason` を見る。`incoming_push` が続くなら、その時刻に長い push か落ちた push の残り
    （6 時間より新しい quarantine）がある。`gc_running` が続くなら `gc.pid` の pid とホストを確かめる（12 時間より古いものは git が無視する）。
-   **`stale_running`**: worker のログで同じ `repo_id` の `forge.git.maintenance_run_lost`（FG-DB-0007）を探す（落ちた実行。次の夜に再試行）。
+   **`stale_running`**: worker のログで同じ `repo_id` の `forge.git.maintenance_run_lost`（FG-DB-0007。2 回続けば error）を探す（落ちた実行。
+   次の夜に再試行）。**一時的な誤報**: キューの reaper がリースの切れたジョブを戻し、再試行がまだ始まっていない間（最大でバックオフの時間）は、
+   生きたジョブがあっても doctor はこの理由を出す。次の `forge doctor` で消えていれば対処は要らない。
 5. **ref の数の warn**: 何もしなくてよい（測るだけ）。急に増えたリポジトリは、版の ref（`refs/merge-requests/<iid>/v<n>`）の増え方（force push
    の多い MR）か、自動化が tag を作り続けていないかを所有者に確かめる。
 
