@@ -320,6 +320,21 @@ connection, mapping driver errors to registered codes, migrations
   which the push record fills with every commit a push introduced — `record_push_with_commits`;
   `listed_commits` for callers without git; a merge records its own commit),
   `owners` (CODEOWNERS names → users / groups). Tests `review/approval_tests.rs`.
+- **Merge conditions** (M3 R6, ADR-0024 §4.1, §8.2, §9, §12; migration 20261112100000):
+  `merge_settings` (audited; one row per project that changed them — none = the defaults; the
+  CODEOWNERS switch with a CHECK that a suspension ends at most 24 h after it began) via
+  `review::settings` (`merge_settings`, `put_merge_settings_mr_decided` — audit only —,
+  `toggle_codeowners_mr_decided` — event `merge_settings.codeowners_enforcement_changed` —,
+  `restore_expired_codeowners` for the worker — event `…_restored`, dedup on project and expiry;
+  an expired suspension reads as enforced by itself); `protected_ref_merge_rules` (audited; the
+  minimum approvals, required checks `ci/` / `forge/` / `kanflow/`, resolved discussions, the
+  direct-push ban) joined into the push / merge snapshot (`rules_for`, `rules_on`: an unreadable
+  one is FG-DB-0020), `protected_refs::put_merge_rule_decided` / `remove_merge_rule_decided`
+  (audit only, deleted with their rule and in the purge); `merge_request_approvals.carried_from`
+  and `record_mr_version_carrying` (the carry, decided again under the lock: the setting, an
+  unprotected target, the head it was decided for). `MergeGate` and `ApprovalFacts` carry the
+  settings, the protection rules and the unresolved discussion count. Tests
+  `review/settings_tests.rs`, `review/approval_tests.rs`.
 - **Discussions** (`review/discussions/`, M3 R3, ADR-0024 §6, §12; migration
   20261109100000): `merge_request_discussions` (kind general / inline; an inline one's
   version — a composite foreign key to the versions —, path, side old / new and line;

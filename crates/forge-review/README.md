@@ -141,6 +141,24 @@ merge request in place (ADR-0024 §1).
   `evaluate_merge()` takes `MergeFacts::approvals`; the request and every gate of the merge job
   read them (the job under its lock). Tests `tests/approvals_git.rs` (real git).
 
+- M3 R6 (merge conditions, ADR-0024 §7, §8.2, §8.3, §8.6, §9, §10): `evaluate_merge()` adds
+  `required_check_missing` (no run reported is never success), `required_check_not_successful`
+  and `unresolved_discussions` (`MergeFacts::checks` / `discussions` from `merges::conditions`:
+  the target's strictest merge rule; check runs arrive with C1, `NoCheckRuns` until then); the
+  protected branch's minimum is `approvals_missing` with the rule `@protected_branch`; every
+  list is ranked by `BlockReason::rank` (ADR-0024 §7). The approval half honours the project's
+  `committer_approvals_excluded` and a live CODEOWNERS suspension (only the CODEOWNERS
+  requirements drop). The request and every job gate read the project's stored settings
+  (`method_allowed`: FG-REVIEW-0010 again in the job). `Review::merge_status` (the stable
+  `GET …/status` contract), `merge_settings` / `put_merge_settings`, `toggle_codeowners`
+  (`Authorized<CodeownersToggleCtx>`), `highest_protection`. `approvals::carry::
+  may_carry_approvals` (pure) and the version job's carry reads (`versions_carry.rs`; logs
+  `forge.review.approvals_carry_decided`, warn `forge.review.approvals_carry_unread`). Tests:
+  the proptest combination table `merges/evaluate_tests.rs`, `approvals/evaluate_tests.rs`,
+  `tests/approvals_git.rs` (real git: the rule's reasons and the status, the job deciding a new
+  rule and a disallowed method again, the ban not stopping a merge, carry / no carry, a
+  CODEOWNERS suspension).
+
 **Error codes owned**: FG-REVIEW-0004 DiscussionPositionInvalid (422, M3 R3); FG-REVIEW-0005
 DiscussionLimitReached (409, M3 R3 review, from forge-db under the merge request's lock). FG-REVIEW-0001 DuplicateOpenMergeRequest (409, from
 forge-db under the project lock; the partial unique index
@@ -153,7 +171,8 @@ MergeBlocked (`reasons`), 0008 HeadChanged (`stale_view` / `source_moved` / `tar
 0009 MergeExecutionFailed (alert: `update_ref_failed` / `record_failed` / `ref_state_unknown`),
 0010 MergeMethodNotAllowed, 0011 MergeInProgress (from forge-db); M3 R5: FG-REVIEW-0013
 SelfApprovalRefused (from `authorize()`), 0014 CodeownersInvalid (warn, logged once per
-evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db). Reused: FG-GIT-0016 (warn, round 5: a merge
+evaluation; runbook `codeowners`), 0015 ApprovalLimitReached (from forge-db); M3 R6:
+FG-REVIEW-0016 RequiredCheckNamespaceNotAllowed (from forge-hosting / forge-db). Reused: FG-GIT-0016 (warn, round 5: a merge
 commit whose range pushers are unknown gets no `push_commits` row, `merges/attribution.rs`); FG-AUTH-0002 / 0003 (with
 `not_a_branch`, `source_equals_target`, `foreign_author`, `foreign_draft`,
 `merged`, `not_open`), FG-REPO-0005 (an invisible project and a missing iid

@@ -91,6 +91,15 @@ lands (M1 phase 5).
   `merge_approve` (satisfied only by itself). `ApprovalRuleManage` on the project — people
   only, Maintainer, `api`. Rows `matrix_rows_approval.rs` (with the `merge_approve`-only token
   denied on `MergeRequestMerge`) and the service account / bot rows in `matrix_rows_people.rs`.
+- **Merge conditions** (M3 R6, ADR-0024 §4.3, §9, §12): `MergeSettingsManage` on the project
+  (people only, Maintainer, `api`); `CodeownersEnforcementToggle` on
+  `Resource::CodeownersEnforcement { project, highest_protection, change }` (`CodeownersToggleCtx`;
+  people only, Maintainer; a `Suspend` also needs a role at or above the project's highest
+  protection — `above_own_role` — and 1..=1440 minutes — `expiry_missing` /
+  `expiry_out_of_range`; `Enforce` is any Maintainer's). `RefProtection::of(rules, name)` carries
+  the matching merge rules' direct-push ban; `RepoPush` refuses a create / fast-forward of such a
+  branch for everyone with FG-GIT-0017 (`reason=direct_push_forbidden`), `MergeRequestMerge`
+  never reads it. Rows `matrix_rows_conditions.rs` and the service account / bot rows.
 - **Account kind** (M3 R3, ADR-0024 §8.4): `Principal::authenticated(user,
   is_admin, active, credential, kind)` takes `AccountKind` (forge-core's
   `UserKind`: `Human` / `ServiceAccount` / `Bot`, from `users.kind`; no default,

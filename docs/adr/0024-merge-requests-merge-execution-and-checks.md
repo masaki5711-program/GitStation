@@ -589,7 +589,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 （ADR-0017 決定 8 で承認済み、エージェントモデルのエラーの規則には既にある）。**R1 が `REVIEW` を、最初に `INT` のコードを登録する MR（I1 か O2）が `INT` を
 足す**。`LLM` は最初の LLM のコードと一緒に足す。
 
-予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011**、R4 のレビューの MergeIdentityInvalid が **FG-REVIEW-0012**、R5 で登録した SelfApprovalRefused / CodeownersInvalid / ApprovalLimitReached が **FG-REVIEW-0013〜0015** で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
+予約するコード。**番号は登録の順に決める**（計画 11 §11.4）。R1a で登録した DuplicateOpenMergeRequest が **FG-REVIEW-0001**、R1b で登録した PurgePreconditionFailed が **FG-REVIEW-0002**、R2 のレビューで登録した MergeabilityNotChecked が **FG-REVIEW-0003**、R3 で登録した DiscussionPositionInvalid が **FG-REVIEW-0004**、R3 のレビューで登録した DiscussionLimitReached が **FG-REVIEW-0005**、R4 で登録した MergeRequestConflict / MergeBlocked / HeadChanged / MergeExecutionFailed / MergeMethodNotAllowed / MergeInProgress が **FG-REVIEW-0006〜0011**、R4 のレビューの MergeIdentityInvalid が **FG-REVIEW-0012**、R5 で登録した SelfApprovalRefused / CodeownersInvalid / ApprovalLimitReached が **FG-REVIEW-0013〜0015**、R6 で登録した RequiredCheckNamespaceNotAllowed が **FG-REVIEW-0016**（と FG-GIT-0017 ProtectedRefDirectPushForbidden）で、ほかはすべて仮（下の表と本文の「FG-REVIEW-仮」）。番号は各 MR が errors.toml に登録したときに確定し、そのときにこの表を直す（R1a のレビューで改訂）:
 
 | コード | 名前 | HTTP | 重さ | runbook | 入れる MR |
 |---|---|---|---|---|---|
@@ -607,7 +607,8 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | CheckNamespaceDenied | 403 | info | — | C1 |
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
 | FG-REVIEW-0011（R4 で登録） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
-| 仮（登録の順に決める） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| FG-REVIEW-0016（R6 で登録） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| FG-GIT-0017（R6 で登録） | ProtectedRefDirectPushForbidden（保護ブランチのマージの条件の直接の push の禁止。管理者も） | 403 | info | — | R6 |
 | FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
 | FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
 
@@ -630,7 +631,7 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 - ~~CODEOWNERS の大きさの上限の既定値（R5 で決める）~~ → **R5 で決めた**（64 KiB・1 000 行・1 行 4 KiB・1 行の所有者 50。末尾の R5 の節）。マージのジョブの同時実行は R4 で「`forge serve` の 1 つのランナーで 1 件ずつ、
   リポジトリごとのロックで直列」に決めた（末尾の R4 の節）。`merge-tree` の時間切れは R2 で 30 秒に決めた（末尾の R2 の節）。
 - 変更されたパスの件数の上限と時間切れは **R5 で決めた**（10 000 件・git の呼び出しごとに 10 秒）。`codeowners_enforced_off_until` の既定と上限
-  （24 時間以内）は **R6 に送った**（切り替えの Action と `merge_settings` と一緒。末尾の R5 の節）。保守の prune の猶予（24 時間以上）は O3。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
+  は **R6 で決めた**（上限 24 時間・1〜1440 分、既定は置かず期限の指定を必須にした。末尾の R6 の節）。保守の prune の猶予（24 時間以上）は O3。`review.mergeability_fanout_max` は R2 で既定 50・上限 500 に決めた。
 - **リポジトリの ref の数の上限**（R5 の再レビュー 6 回目からの申し送り、O シリーズ）: push のたびに全 ref の先端を読む
   （`ref_snapshot`、上限 1 000 000 ref で失敗 = その push の一覧は不完全）。ref が N 本を超えるリポジトリへの push を拒む上限と、
   N に近づいたら知らせる doctor の warn を O シリーズで入れる（N は運用の実測で決める）。R5 では実装しない。
@@ -1373,3 +1374,90 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   値は psql の変数（`:'var'` / `:var`）で渡し、実行した人を `actor_label`（`merge-blocked 2b by <operator>`）と details の `operator` に残す。
   テストは psql と同じ規則で変数を展開して runbook の SQL を実行する。
 - **マージのコミットの帰属の warn**: `forge.review.merge_commit_unattributed` に `repo_id` と `merge_request_id` を足した。
+
+## 実装で決めたこと（R6 `feat/core-merge-conditions`、2026-11-03）
+
+本文（§4・§7・§8・§9・§10・§12）と違えたところは **逸脱** と書いた。R5 から送られたもの（`codeowners_enforced` と期限つきの切り替え、
+`merge_settings`、`reset_approvals_on_push` と `may_carry_approvals`、コミッターの規則の切り替え）はすべてここで入れた。
+
+- **表**（追記のマイグレーション 20261112100000）:
+  - `merge_settings`（プロジェクトごとに 1 行。**行が無ければ既定**: マージコミットと squash を許可、既定はマージコミット、ソースは残す、
+    新しいコミットで承認を消す、コミッターの承認を数えない、CODEOWNERS を強制）。許可する方式は 1〜3 個、既定は許可の中（CHECK）。
+    CODEOWNERS の一時停止は `codeowners_enforced = false` と `codeowners_suspended_at`・`codeowners_enforced_off_until` の組で、
+    **期限は開始から 24 時間以内**（CHECK。`authorize()` の範囲の後ろ盾）。監査される表（resource `project`）。
+  - `protected_ref_merge_rules`（保護のルール 1 つに高々 1 つ、`protected_refs (id, project_id)` への外部キー）: 最低の承認数 0〜20、
+    必須のチェックの名前（20 個まで、`ci/`・`forge/`・`kanflow/` だけ。CHECK でも `ext/` を拒む）、スレッドの解決、直接の push の禁止。
+    **作業項目のリンクの列は作らない**（§11: I1 で列と条件を一緒に足す。設定の API は `require_work_item_link: true` を FG-WEB-0006
+    `rule=unavailable_until_i1` で拒む）。保護のルールの削除は同じ変更でマージの条件も消す。purge でも消す。
+  - `merge_request_approvals.carried_from` と `revoked_reason = 'carried'`、ガードと監査のトリガーの列に `carried_from` を足した。
+- **マージの条件の合わせ方**: target に一致するすべての保護のルールのマージの条件を **いちばん厳しく** 合わせる（`MergeRule::strictest`:
+  最低の数は最大、必須のチェックは和、スレッドと直接の push の禁止はどれかが on なら on）。`push_min_role` の「いちばん厳しい」と同じで、
+  ルールを足して緩むことはない。push とマージは同じスナップショット（`protected_refs::rules_for` / `rules_on` が結合して読む。
+  読めない行は FG-DB-0020 で、飛ばさない）を使う。
+- **マージの条件の管理**: `PUT|DELETE /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule`（§12 のとおり `ProtectedRefManage` に含めた。
+  ルールの今の水準を `from` と `to` の両方にして判定するので、Maintainer は Owner の水準のルールのマージの条件を変えられない
+  `above_own_role`）。タグのパターンには付けられない（FG-REPO-0013 `merge_rule_on_tag`）。命令は forge-hosting（`put_merge_rule` /
+  `remove_merge_rule`、forge-db の `*_decided` を呼ぶのは forge-hosting だけ。走査の needle に足した）。監査だけ
+  （`protected_ref.merge_rule_put` / `.merge_rule_removed`、イベントなし。復元の当て直し（設計レビュー 41）は監査の写しで行う）。
+  一覧（`GET …/protected-refs`）の各ルールに `merge_rule` を足した。
+- **直接の push の禁止**: `RefProtection::of(rules, name)` がルールの禁止を持ち、`RepoPush` は禁止のあるブランチの作成・早送りを
+  **管理者も含めて** 新しいコード **FG-GIT-0017** ProtectedRefDirectPushForbidden（403、info）で拒む（force と削除はこれまでどおり
+  FG-GIT-0007 / 0009）。`MergeRequestMerge` は読まない（§4.3）。実際の push のテスト（`smart_http_e2e`）で Owner と管理者の拒否、
+  別のブランチの push を確かめた。本文はコードを決めていなかった（FG-GIT-0008 の「ロール不足」と原因が違うので分けた）。
+- **CODEOWNERS の強制の一時停止**（§9）: `PUT …/merge-settings/codeowners-enforcement`（`CodeownersEnforcementToggle`、
+  `Resource::CodeownersEnforcement { project, highest_protection, change }`、ローダーがプロジェクトの保護のルールの最大の水準を読む）。
+  人だけ・Maintainer 以上。**一時停止** は加えて `above_own_role`（管理者は越える）と **期限 1〜1440 分の指定が必須**（未決だった
+  「既定」は **置かない** と決めた: 期限なしは FG-AUTH-0003 `expiry_missing`、範囲外は `expiry_out_of_range`。権限の表の行）。
+  **強制に戻す** のは締める方向なので Maintainer なら誰でも。期限は DB の時計で計算し、判定は `codeowners_enforced OR 期限 <= now()`
+  を強制とみなす（`CodeownersEnforcement::Expired` は強制。worker に頼らない）。変更は監査の行とイベント
+  `merge_settings.codeowners_enforcement_changed`（maintainer の分類）と info のログ `forge.review.codeowners_enforcement_changed`。
+  期限が過ぎたことは worker のタスク `codeowners_restore`（60 秒ごと、1 回 100 件）が監査の行とイベント
+  `merge_settings.codeowners_enforcement_restored`（actor `system`、dedup `codeowners_enforcement_restored:<project_id>:<期限の epoch>`）と
+  ログ `forge.worker.codeowners_enforcement_restored` で 1 回知らせる。
+  一時停止の間に外れるのは **CODEOWNERS の所有者の承認と読めないファイル（`codeowners_invalid`）だけ**。設定のファイルの条件
+  （`config_change_needs_maintainer_approval`。CODEOWNERS を直す MR はこれに当たる）、承認のルール、保護ブランチのマージの条件は残す。
+  順序: 切り替え（`d8ffe5d`）を直接の push の禁止（`b195afa`）より先のコミットに入れた。
+- **マージの設定**（§4.1、§8.2、§8.3）: `GET|PUT /api/v1/projects/{id}/merge-settings`（読むのは `ProjectRead`、書くのは
+  `MergeSettingsManage`: 人だけ・Maintainer）。PUT は値をすべて置き換える（CODEOWNERS の切り替えは触らない。`gstn merge-settings set` は
+  読んでから指定した値だけを変えて送る）。`fast_forward` は許可すれば使える（R4 で実装済み）。コミッターの規則の切り替えは
+  `committer_approvals_excluded`（既定 true。切るとコミッターの承認も数え、`committers_unknown` でも止まらない）。
+  **マージの要求とジョブのすべての判定がプロジェクトの保存された設定を読む**（R4 の固定の既定 `MergeSettings::default` と
+  `with_merge_settings` / `with_settings` をやめた）。要求の後に方式が許されなくなれば、ジョブが FG-REVIEW-0010 で `superseded` にする
+  （§4.2 の 3・5。テスト `the_merge_job_decides_the_allowed_method_again`）。`delete_source_branch` を省いた要求はプロジェクトの既定。
+- **`evaluate_merge()`**（§7）: `required_check_missing{name}`・`required_check_not_successful{name, status, conclusion}`・
+  `unresolved_discussions{count}` を足した。保護ブランチの最低の承認数は承認の要件の 1 つにし、`approvals_missing` のルール名
+  **`@protected_branch`**（`@` は承認のルールの名前に使えないので衝突しない）で出す。数えるのは「数えない理由の無い」承認なら誰のものでも
+  （そのような承認は `not_in_rule` にならない）。**並びは `BlockReason::rank`**（§7 の列挙の順: … `codeowners_invalid` →
+  必須のチェック 2 つ → `unresolved_discussions` → `config_change_needs_maintainer_approval` → `changed_paths_unknown`）で、見つけた順に
+  依らない（R5 の並びの `config_change…` → `changed_paths_unknown` は §7 どおりに直った）。組み合わせの表は proptest
+  （`every_combination_yields_exactly_its_reasons_in_order`、512 件）、ドラフト・「チェックが無いことは成功と区別」（`neutral` と実行中も
+  満たさない）は個別のテスト。スレッドの件数はゲートのトランザクションで MR の行のロックの下で数える（解決・新しいスレッドも同じロックを取る）。
+  保存されたマージ可否の判定は、確かめた組が生きた (head, target の先端) と同じときだけ数える（`stored_mergeable`、R4 のまま。状態の表示も同じ）。
+- **必須のチェックの結果（逸脱）**: 本文 §11 の `forge-core::CheckResultsSource` は C1 で入れる。R6 は forge-review に
+  `merges::conditions::CheckRuns` の口を置き、実装は `NoCheckRuns`（どの名前にも報告が無い）だけ。**C1 までは必須のチェックを
+  設定した保護ブランチにマージできない**（報告が無いことは成功でない）。runbook `merge-blocked` にそう書いた。C1 はこの口を
+  `CheckResultsSource` で満たす。
+- **マージの状態**（`GET …/merge-requests/{iid}/status`、`MergeRequestRead`）: `evaluate_merge()` を今の事実で評価し、止める理由の
+  すべてと入力（承認・必須のチェック・スレッド・CODEOWNERS の強制）を返す。読み取りだけ（確認を積まない、ロックしない）。評価する方式は
+  プロジェクトの既定で、早送りの可否は出さない（ジョブがロックの下で決める）。版が無ければ `mergeability_unknown`。JSON は安定した契約
+  （`schema_version: 1`、欄は足すだけ。`docs/api/merge-status.md`）。`gstn mr status --json` はそれをそのまま出す。
+  **既存の `gstn mr merge-status`（最新の試行）と名前が近いので、こちらは `mr status`** にした。
+- **承認の引き継ぎ**（§8.2）: `may_carry_approvals`（forge-review の純粋な関数。各場合をテストで固定）は、設定が「消す」、target が保護
+  ブランチ、変更（前の head → 新しい head の `diff-tree --no-renames -r`）が設定のファイル・target の先端の CODEOWNERS の行が覆うパスに
+  触れる、変更を読み切れない・CODEOWNERS を読めない、のどれでも写さない。版のジョブは設定が「消さない」ときだけ git を読み、決定を
+  `forge.review.approvals_carry_decided`（`carry`、`reason`）で 1 行、読めなかった入力を warn `forge.review.approvals_carry_unread` で出す
+  （git の失敗は「写さない」）。forge-db の `record_mr_version_carrying` は MR の行のロックの下で、設定・target の保護・「決めたときの
+  head が今の head」をもう一度確かめてから写す。**逸脱**: 写した承認ごとのイベントは **`merge_request.approved` 1 つ**（`carried_from`、
+  `counted: false`、`uncounted_reason: "carried"` — ジョブは評価しない）で、古い行の `merge_request.unapproved` は出さない（古い行は
+  `revoked_reason = carried`）。取り消しと承認の 2 つにすると、生きた承認 50 件で 1 つの変更のイベントが 100 件を超えるため。
+  `UnapproveReason::Carried` と `UncountedReason::Carried` を足した。
+- **権限の表**: `matrix_rows_conditions.rs`（`MergeSettingsManage`、`CodeownersEnforcementToggle` の allow / deny と期限・`above_own_role`、
+  直接の push の禁止の `RepoPush`（Maintainer・Owner・管理者の拒否、force と削除は元のコード）と、同じブランチへの `MergeRequestMerge` の
+  allow）、サービスアカウントとボットの行は `matrix_rows_people.rs`。代理の行は ADR-0025。
+- **新しいコード**（登録の順）: **FG-REVIEW-0016** RequiredCheckNamespaceNotAllowed（422、計画 11 の「REVIEW-0002」は仮の番号）、
+  **FG-GIT-0017** ProtectedRefDirectPushForbidden（403）。再利用: 方式は FG-REVIEW-0010、ほかの入力の誤りは FG-WEB-0006、
+  権限は FG-AUTH-0003（`above_own_role`・`expiry_missing`・`expiry_out_of_range`）。
+- **gstn**: `mr status`、`merge-settings show|set`、`codeowners-enforcement suspend --for <分>|enforce`、`merge-rule set|remove`
+  （C-1 の表、登録簿、help のスナップショット）。
+- **残したこと**: 必須のチェックの報告（C1）、作業項目のリンクの条件（I1）、画面（U2）。保存されたマージ可否の判定は版の記録と
+  target の push で確かめ直されるが、マージの条件の変更そのものは確かめ直しを積まない（判定はいつも評価の時点。表示も要求も読み直す）。

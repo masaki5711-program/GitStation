@@ -1,4 +1,4 @@
-# Runbook: codeowners（FG-REVIEW-0014。関連: FG-REVIEW-0007 `codeowners_invalid` / `codeowner_approval_missing` / `changed_paths_unknown`、FG-GIT-0002 / 0003）
+# Runbook: codeowners（FG-REVIEW-0014。関連: FG-REVIEW-0007 `codeowners_invalid` / `codeowner_approval_missing` / `changed_paths_unknown`、FG-GIT-0002 / 0003、M3 R6 の CODEOWNERS の強制の一時停止）
 
 M3 R5（ADR-0024 §9）の CODEOWNERS。マージの条件は **target のブランチの先端** の `.forge/CODEOWNERS`（無ければ直下の
 `CODEOWNERS`）から読む（MR の中のファイルは自分の MR に効かない）。読めない・解析できないファイルは **黙って無視せず**、その target への
@@ -46,18 +46,33 @@ M3 R5（ADR-0024 §9）の CODEOWNERS。マージの条件は **target のブラ
 ## Mitigate
 
 1. **CODEOWNERS を直すのが正しい手順**: 直したファイルを MR で target に入れる（止まっていなければ通常の MR。本番の設定の変更ではない）。
-2. `[MUTATING — needs approval]` CODEOWNERS が壊れていると、それを直す MR 自体も止まる（行き詰まり）。M3 R5 の時点では、プロジェクトの設定
-   `codeowners_enforced`（期限つきで一時的に切る、専用の Action `CodeownersEnforcementToggle`、ADR-0024 §9）は **まだ無い**（R6 の
-   `merge_settings` と一緒に入る）。それまでの逃げ道は **target に push できる人が直したファイルを直接 push する** こと（承認された手順。
-   保護ブランチなら `push_min_role` 以上の人。R6 で保護ブランチへの直接の push の禁止が入る前に、この切り替えが入る）。
-   誰が・いつ・何を直したかをインシデント記録か MR の説明に残す。戻し方: 直す前のコミットに戻すコミットを同じ手順で push する
-   （force push はしない）。
+2. `[MUTATING — needs approval]` CODEOWNERS が壊れていると、それを直す MR 自体も止まる（行き詰まり）。M3 R6 からの逃げ道は
+   **CODEOWNERS の強制の期限つきの一時停止**（`CodeownersEnforcementToggle`、ADR-0024 §9）。承認された手順としてだけ行う:
+   1. 実行する人: そのプロジェクトの **人間の** Maintainer 以上で、ロールがプロジェクトのすべての保護ブランチの `push_min_role` 以上
+      （Owner の水準で保護されたブランチがあれば Owner。足りなければ FG-AUTH-0003 `reason=above_own_role`）。エージェントのトークン・
+      サービスアカウントは拒まれる（`agent_token` / `service_account`）。トークンなら `api` スコープ。
+   2. 止める（期限は必須、1〜1440 分。直す MR のレビューとマージに足りる最短にする）:
+      `gstn codeowners-enforcement suspend --project <id> --for <分>`
+      （= `PUT /api/v1/projects/<id>/merge-settings/codeowners-enforcement` 本文 `{"enforced": false, "for_minutes": <分>}`）。
+      期限なし・0・1441 以上は FG-AUTH-0003（`expiry_missing` / `expiry_out_of_range`）。
+   3. 一時停止の間は、CODEOWNERS の所有者の承認（`codeowner_approval_missing`）と読めないファイル（`codeowners_invalid`）だけが止める
+      理由から外れる。**設定のファイルの変更は Maintainer の承認が要るまま**（`config_change_needs_maintainer_approval`。CODEOWNERS を直す
+      MR はこれに当たる）。承認のルール・保護ブランチのマージの条件もそのまま効く。
+   4. 直す MR をマージする。
+   5. すぐに戻す: `gstn codeowners-enforcement enforce --project <id>`（戻し忘れても **期限で構造的に戻る**: 判定は「強制中、または期限を
+      過ぎた」を強制とみなす。worker の記録を待たない）。
+   記録: 監査の行とイベント `merge_settings.codeowners_enforcement_changed`（`enforced`、`until`）、ログ
+   `forge.review.codeowners_enforcement_changed`（`request_id`、`project_id`、`user_id`、`until`）が残る。誰が・なぜ・いつまでを
+   インシデント記録か MR の説明に書く。戻し方: 上の 5（または期限を待つ）。
+   保護ブランチに直接の push の禁止（merge rule の `direct_push_forbidden`、FG-GIT-0017）があると、直接の push の逃げ道は無い。
+   R6 より前の「target に push できる人の直接の push」は、禁止の無いブランチでだけ使える（承認された手順。force push はしない）。
 3. 直した後、止まっていた MR はもう一度マージを要求すれば評価し直される（CODEOWNERS はキャッシュしない）。
 
 ## Verify
 
 - `gstn mr approvals --project <id> --iid <n>` の `blocked_by` から `codeowners_invalid` が消え、`codeowners` に必要な所有者の行が出る。
 - 新しい `forge.review.codeowners_invalid` がその target で出ない。
+- 一時停止を使ったなら `gstn merge-settings show --project <id>` が `CODEOWNERS enforced` を示す（戻した、または期限が過ぎた）。
 
 ## Escalate
 

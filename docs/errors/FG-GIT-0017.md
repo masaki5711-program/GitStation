@@ -24,4 +24,4 @@ The log event carries `action=RepoPush`, `reason=direct_push_forbidden` and `pro
 
 ## 対処 (fix)
 
-Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban by setting the merge rule again without `--no-direct-push` (`gstn protected-ref merge-rule set --project <id> --rule-id <n> …`) or removes it (`gstn protected-ref merge-rule remove`).
+Push to a feature branch, open a merge request and merge it. A Maintainer (Owner for an Owner-level protection) lifts the ban by setting the merge rule again without `--no-direct-push` (`gstn merge-rule set --project <id> --rule-id <n> …`) or removes it (`gstn merge-rule remove`). When a broken CODEOWNERS also blocks the fix's merge request, suspend CODEOWNERS enforcement instead (runbook codeowners).

@@ -101,6 +101,13 @@ gstn mr unapprove --project 7 --iid 3                     # 自分の承認の�
 gstn mr approvals --project 7 --iid 3                     # 承認の評価（数えない理由、ルール、CODEOWNERS、止める理由）
 gstn approval-rule set --project 7 --name backend --required 2 [--target-pattern refs/heads/main] [--user U] [--group G]  # 承認のルール（Maintainer）
 gstn approval-rule list --project 7 / gstn approval-rule remove --project 7 --name backend --yes
+gstn mr status --project 7 --iid 3 --json                 # マージできるか・止める理由のすべて（M3 R6。安定した契約 docs/api/merge-status.md）
+gstn merge-settings show --project 7                      # マージの設定（方式・既定・ソースの削除・承認の引き継ぎ・コミッターの承認・CODEOWNERS）
+gstn merge-settings set --project 7 [--allow M]... [--default M] [--reset-approvals-on-push BOOL] …   # 設定の変更（Maintainer。指定しない値はそのまま）
+gstn codeowners-enforcement suspend --project 7 --for 60  # CODEOWNERS の強制を期限つきで止める（承認された手順。runbook codeowners）
+gstn codeowners-enforcement enforce --project 7           # 強制に戻す
+gstn merge-rule set --project 7 --rule-id 2 [--approvals N] [--check ci/gates]... [--resolved-discussions] [--no-direct-push]  # 保護ブランチのマージの条件
+gstn merge-rule remove --project 7 --rule-id 2 --yes
 gstn mr discussions --project 7 --iid 3                   # スレッドとコメントの一覧（M3 R3。古くなった行は [outdated]）
 gstn mr comment --project 7 --iid 3 --body '…'            # 全体へのコメント（新しいスレッド）
 gstn mr comment --project 7 --iid 3 --version 2 --path src/lib.rs --line 10 [--side old|new] --body '…'  # 行へのコメント
