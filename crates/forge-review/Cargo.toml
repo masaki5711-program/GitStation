@@ -31,6 +31,8 @@ tempfile.workspace = true
 uuid.workspace = true
 # M3 R6: the combination table of evaluate_merge() (plan 11 R6).
 proptest.workspace = true
+# R6 review round 2: a test reads the warning a degraded status logs.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

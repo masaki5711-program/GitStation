@@ -14,7 +14,9 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
   断られることはある（その間に head・target・条件が変わったとき）。逆に `merge_request.approved` イベントの `counted` はマージの可否の
   判断に使わない（ADR-0024 §6）。この契約を使う。
 - 評価する方式はプロジェクトの既定の方式（`method`）。`fast_forward` なら target の先端が head の祖先かも確かめて
-  `ff_not_possible` を出す（ジョブはロックの下でもう一度決める）。`nothing_to_merge` はジョブだけが出す。
+  `ff_not_possible` を出す（ジョブはロックの下でもう一度決める）。その確認で git が失敗したときは早送りを「不明」として
+  `ff_not_possible` を出さず（状態の取得は失敗にしない）、warn `forge.review.status_ff_unknown`（`error_code`・`request_id`）を 1 行出す。
+  `nothing_to_merge` はジョブだけが出す。
 
 ## 欄
 

@@ -2129,3 +2129,118 @@ async fn the_carry_limits_count_from_the_approved_head() {
     );
     w.t.drop_now().await;
 }
+
+/// R6 review round 2 (LOW): a git failure of the status's fast-forward
+/// check leaves it unknown (the job decides it under the lock) instead of
+/// failing the whole status read.
+#[tokio::test]
+async fn a_git_failure_of_the_fast_forward_check_leaves_it_unknown() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.settings(forge_core::MergeSettingsValues {
+        allowed_methods: vec![forge_core::MergeMethod::FastForward],
+        default_method: forge_core::MergeMethod::FastForward,
+        ..forge_core::MergeSettingsValues::default()
+    })
+    .await;
+    // The target's tip names a parent that is not in the repository:
+    // `merge-base --is-ancestor` cannot walk it (exit 128).
+    let tree = plumb(
+        &w.path,
+        &["rev-parse", &format!("{}^{{tree}}", w.base)],
+        None,
+    );
+    let body = format!(
+        "tree {tree}\nparent {}\nauthor A <a@example.test> 1700000000 +0000\n\
+         committer A <a@example.test> 1700000000 +0000\n\nbroken\n",
+        "1".repeat(40)
+    );
+    let broken = plumb(
+        &w.path,
+        &["hash-object", "-t", "commit", "-w", "--stdin"],
+        Some(body.as_bytes()),
+    );
+    plumb(&w.path, &["update-ref", "refs/heads/main", &broken], None);
+    w.browser.invalidate(w.repo);
+    let logs = Captured::default();
+    let guard = logs.install();
+    let status = w.status().await;
+    drop(guard);
+    let names: Vec<&str> = status.reasons.iter().map(|r| r.as_str()).collect();
+    assert!(!names.contains(&"ff_not_possible"), "{names:?}");
+    let warned = logs.named("forge.review.status_ff_unknown");
+    assert_eq!(warned.len(), 1, "logged once: {warned:?}");
+    assert_eq!(warned[0]["level"], "WARN");
+    assert_eq!(
+        warned[0]["fields"]["error_code"],
+        ErrorCode::GitProcessFailed.id()
+    );
+    assert_eq!(warned[0]["fields"]["request_id"], "req-status");
+    w.t.drop_now().await;
+}
+
+/// JSON log lines written on the installing thread while its guard lives.
+/// One global subscriber writes to a thread-local sink (a thread-local
+/// subscriber would let a callsite first hit by a parallel test stay
+/// cached as "never": the pattern of forge-db `runner_stop_tests`).
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Captured>> = const { std::cell::RefCell::new(None) };
+}
+
+struct ThreadSink;
+
+impl std::io::Write for ThreadSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        SINK.with(|s| {
+            if let Some(c) = s.borrow().as_ref() {
+                c.0.lock().expect("log buffer").extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        SINK.with(|s| s.borrow_mut().take());
+    }
+}
+
+impl Captured {
+    fn install(&self) -> CaptureGuard {
+        static GLOBAL: std::sync::Once = std::sync::Once::new();
+        GLOBAL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_max_level(tracing::Level::INFO)
+                .with_writer(|| ThreadSink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("the only global subscriber");
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(self.clone()));
+        CaptureGuard
+    }
+
+    /// The captured events named `event`.
+    fn named(&self, event: &str) -> Vec<serde_json::Value> {
+        let bytes = self.0.lock().expect("log buffer").clone();
+        String::from_utf8(bytes)
+            .expect("utf-8 logs")
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("a JSON log line"))
+            .filter(|e| e["fields"]["event"] == event)
+            .collect()
+    }
+}

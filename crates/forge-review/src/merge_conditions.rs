@@ -260,17 +260,36 @@ impl Review {
         let mergeable = stored_mergeable(stored.as_ref(), &head, target_tip.as_ref());
         // R6 review: a fast-forward's ancestry is evaluated here too (the
         // job decides it again under the lock).
+        // R6 review round 2: a git failure leaves it unknown (`None`, no
+        // `ff_not_possible`), logged once here, instead of failing the read.
         let ff_possible = match (method, target_tip.as_ref()) {
-            (MergeMethod::FastForward, Some(tip)) => Some(
-                self.review_git()?
-                    .is_ancestor(
-                        crate::ready(project, repo)?,
-                        tip,
-                        &head,
-                        crate::approvals::READ_TIMEOUT,
-                    )
-                    .await?,
-            ),
+            (MergeMethod::FastForward, Some(tip)) => match self
+                .review_git()?
+                .is_ancestor(
+                    crate::ready(project, repo)?,
+                    tip,
+                    &head,
+                    crate::approvals::READ_TIMEOUT,
+                )
+                .await
+            {
+                Ok(ancestor) => Some(ancestor),
+                Err(e) => {
+                    tracing::warn!(
+                        target: "forge_review",
+                        event = "forge.review.status_ff_unknown",
+                        error_code = e.code().id(),
+                        request_id = %request_id,
+                        merge_request_id = current.id.get(),
+                        project_id = project.get(),
+                        target_tip = tip.as_str(),
+                        head_sha = head.as_str(),
+                        error = %e,
+                        "the status could not check a fast-forward; shown as unknown (the merge job decides it)"
+                    );
+                    None
+                }
+            },
             (MergeMethod::FastForward, None)
             | (MergeMethod::MergeCommit | MergeMethod::Squash, _) => None,
         };

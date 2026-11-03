@@ -1528,3 +1528,7 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   式）。テスト `the_table_refuses_check_names_check_name_refuses` は拒否が CHECK によることを制約の名前で確かめ、正しい名前が CHECK を
   通ることも確かめる。
 - **LOW**: `.lfsconfig`（Git LFS の接続先の設定）も `special_path` として写さない（どの階層でも、大文字小文字を区別しない）。
+- **状態の表示の早送りの確認（LOW、改訂）**: 状態の表示（`GET …/status`）で `merge-base --is-ancestor` が失敗したときは、表示全体を
+  失敗にせず早送りを「不明」（`ff_possible: None`、`ff_not_possible` を出さない）にし、warn `forge.review.status_ff_unknown`
+  （`error_code`、`request_id`）を 1 行出す。マージのジョブはロックの下でもう一度決める。テスト
+  `a_git_failure_of_the_fast_forward_check_leaves_it_unknown`（ログの 1 行と `error_code` も確かめる）。
