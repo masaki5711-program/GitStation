@@ -13,8 +13,17 @@ publish.workspace = true
 # another feature crate: forge-review reads the runs through forge-core's
 # `CheckResultsSource`.
 [dependencies]
+forge-auth.workspace = true
 forge-core.workspace = true
+forge-db.workspace = true
 forge-errors.workspace = true
+forge-git.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+sqlx.workspace = true
 
 [lints]
 workspace = true

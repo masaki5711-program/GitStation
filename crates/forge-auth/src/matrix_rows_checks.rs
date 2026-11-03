@@ -171,7 +171,11 @@ mod tests {
             (W::Admin, CI, "not_service_account"),
             (W::DevTokenApi, KANFLOW, "not_service_account"),
             (W::BotTokenApi, CI, "not_service_account"),
-            (W::ServiceAccountTokenApi, CI_UNGRANTED, "namespace_not_granted"),
+            (
+                W::ServiceAccountTokenApi,
+                CI_UNGRANTED,
+                "namespace_not_granted",
+            ),
             (W::Admin, FORGE, "forge_namespace_internal"),
             (W::ServiceAccountTokenApi, FORGE, "forge_namespace_internal"),
             (W::DevTokenApi, EXT, "ext_namespace_unavailable"),
