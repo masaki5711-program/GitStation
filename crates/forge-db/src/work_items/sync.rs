@@ -295,6 +295,8 @@ impl WorkItemSync {
 
     async fn on_push(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
         let project = project_of(event)?;
+        // The project lock first, as every link writer (on_merge_request).
+        lock_project(tx, project).await?;
         let refs = event
             .payload
             .get("refs")
@@ -350,6 +352,7 @@ impl WorkItemSync {
 
     async fn on_link(event: &SourceEvent, tx: &mut DerivedTx<'_>) -> Result<(), ForgeError> {
         let project = project_of(event)?;
+        lock_project(tx, project).await?;
         let item = positive(event, "work_item_id")?;
         // Recorded only while the work item is the current binding's.
         let Some(bound) = binding_of(tx.conn(), project).await? else {

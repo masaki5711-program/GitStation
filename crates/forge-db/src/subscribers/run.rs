@@ -331,3 +331,26 @@ async fn count_refused_commit(
     commit(tx, t.commit).await?;
     Ok(progress)
 }
+
+#[cfg(test)]
+mod refusal_tests {
+    use forge_errors::{ErrorCode, ForgeError};
+
+    use super::is_derived_refusal;
+
+    /// I1b re-review: a detected work item link written outside the
+    /// subscriber's step is a derived refusal like the C5 checks (counted
+    /// against the event, in a fresh transaction).
+    #[test]
+    fn a_work_item_link_written_outside_the_subscriber_is_a_derived_refusal() {
+        let reason =
+            crate::error_map::audit_missing_reason(Some("merge_request_work_items_derived"));
+        let e = ForgeError::new(ErrorCode::AuditMissing).with_context("reason", reason);
+        assert!(is_derived_refusal(&e), "{reason}");
+        let unaudited = ForgeError::new(ErrorCode::AuditMissing).with_context(
+            "reason",
+            crate::error_map::audit_missing_reason(Some("merge_request_work_items_audited")),
+        );
+        assert!(!is_derived_refusal(&unaudited));
+    }
+}

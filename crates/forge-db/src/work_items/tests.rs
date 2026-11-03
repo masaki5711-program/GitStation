@@ -913,17 +913,36 @@ async fn a_purge_removes_the_merge_requests_work_item_links() {
     w.t.drop_now().await;
 }
 
-/// The constraint a statement in forge_app's own transaction is refused by
-/// (at the statement or, for a deferred trigger, at COMMIT).
+/// The constraint a statement (or `;\n`-separated statements) in
+/// forge_app's own transaction is refused by (at a statement or, for a
+/// deferred trigger, at COMMIT), with the FG-DB-0013 reason forge maps it
+/// to (I1b re-review: never `xf002_unknown`).
 async fn refused_as_app(t: &FreshDb, sql: &str) -> String {
     let mut tx = t.db.write_pool().begin().await.expect("begin");
-    let err = match sqlx::query(sql).execute(&mut *tx).await {
-        Err(e) => e,
-        Ok(_) => tx.commit().await.expect_err("refused at commit"),
-    };
-    err.as_database_error()
+    for statement in sql.split(";\n") {
+        if let Err(e) = sqlx::query(statement).execute(&mut *tx).await {
+            return named(e);
+        }
+    }
+    named(tx.commit().await.expect_err("refused at commit"))
+}
+
+fn named(err: sqlx::Error) -> String {
+    let constraint = err
+        .as_database_error()
         .and_then(|d| d.constraint().map(str::to_owned))
-        .unwrap_or_else(|| err.to_string())
+        .unwrap_or_else(|| err.to_string());
+    let mapped = crate::query_error("test.refused", err);
+    if mapped.code() != ErrorCode::AuditMissing {
+        return constraint;
+    }
+    let reason = mapped
+        .context()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default();
+    format!("{constraint} {reason}")
 }
 
 /// I1b review (database HIGH): a person's link and its end need their
@@ -964,7 +983,25 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             )
         )
         .await,
-        "merge_request_work_items_audited"
+        "merge_request_work_items_audited work_item_link_unaudited"
+    );
+    // An audit row naming another work item does not cover it (I1b
+    // re-review).
+    assert_eq!(
+        refused_as_app(
+            &w.t,
+            &format!(
+                "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, \
+                 resource_id, project_id, request_id, details) VALUES ('system', \
+                 'work_item.linked', 'succeeded', 'project', {p}, {p}, 'r-other', \
+                 '{{\"work_item_id\": 999999}}');\n\
+                 INSERT INTO forge.merge_request_work_items (merge_request_id, project_id, \
+                 work_item_id, source, linked_by, linked_by_kind) VALUES ({m}, {p}, {other}, \
+                 'manual', {a}, 'human')"
+            )
+        )
+        .await,
+        "merge_request_work_items_audited work_item_link_unaudited"
     );
     // A person's link ended without its audit row.
     assert_eq!(
@@ -976,7 +1013,7 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             )
         )
         .await,
-        "merge_request_work_items_audited"
+        "merge_request_work_items_audited work_item_link_unaudited"
     );
     // A detected link outside the subscriber's step.
     assert_eq!(
@@ -988,7 +1025,7 @@ async fn link_rows_are_backed_by_audit_rows_and_the_purge() {
             )
         )
         .await,
-        "merge_request_work_items_derived"
+        "merge_request_work_items_derived derived_work_item_link"
     );
     // A person's link never ends as detection's.
     let ended = violated(

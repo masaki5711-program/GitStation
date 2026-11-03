@@ -236,7 +236,7 @@ fn build(field: &'static str, name: &str, e: sqlx::Error, at_connect: bool, on: 
 /// itself in CONSTRAINT (migration 20261027140000). Any other name is a
 /// check this build does not know (`xf002_unknown`; `constraint` and
 /// `db_message` stay in the context).
-fn audit_missing_reason(constraint: Option<&str>) -> &'static str {
+pub(crate) fn audit_missing_reason(constraint: Option<&str>) -> &'static str {
     match constraint {
         None => "no_audit_row",
         Some("audited_change") => "audited_change",
@@ -245,6 +245,11 @@ fn audit_missing_reason(constraint: Option<&str>) -> &'static str {
         Some("derived_depth") => "derived_depth",
         Some("derived_fanout") => "derived_fanout",
         Some("derived_progress") => "derived_progress",
+        // M3 I1b review: the work item link trigger (20261116100100). A
+        // detected link outside the subscriber is a derived refusal
+        // (`derived_` prefix: subscribers::run counts it against the event).
+        Some("merge_request_work_items_audited") => "work_item_link_unaudited",
+        Some("merge_request_work_items_derived") => "derived_work_item_link",
         Some(_) => "xf002_unknown",
     }
 }

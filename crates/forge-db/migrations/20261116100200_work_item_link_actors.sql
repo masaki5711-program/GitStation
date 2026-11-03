@@ -15,6 +15,9 @@
 --    converted. The audit trigger (replaced) requires the matching audit
 --    row for converted and unbound ends.
 -- 4. forge_app's INSERT and UPDATE grants gain the kind columns.
+--
+-- No backfill: 20261116100000 is unreleased (I1b), so no database holds
+-- link rows written without the kinds; the CHECKs validate an empty table.
 
 ALTER TABLE forge.merge_request_work_items
     ADD COLUMN linked_by_kind text CONSTRAINT merge_request_work_items_linked_by_kind
