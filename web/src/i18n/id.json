@@ -446,5 +446,20 @@
     "restore": "Pulihkan",
     "restoreOf": "Pulihkan {{name}}",
     "title": "Proyek yang dihapus"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "Siap digabung",
+      "generic": "Belum bisa digabung. Periksa perubahannya",
+      "mergeabilityUnknown": "Menunggu pemeriksaan. Push akan memperbaruinya",
+      "conflict": "Bertabrakan dengan perubahan lain",
+      "unresolved": "{{n}} utas belum selesai",
+      "next": {
+        "firstUnresolved": "Buka utas pertama yang belum selesai",
+        "changes": "Lihat perubahan",
+        "push": "Push perbaikan",
+        "wait": "Tunggu"
+      }
+    }
   }
 }

@@ -446,5 +446,34 @@
     "restore": "復元",
     "restoreOf": "{{name}} を復元",
     "title": "削除待ちのプロジェクト"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "マージできます",
+      "generic": "今はマージできません。変更の内容を確認してください",
+      "notOpen": "この変更依頼はもう開いていません",
+      "draft": "下書きの状態です",
+      "mergeInProgress": "マージを実行中です",
+      "sourceBranchMissing": "元のブランチがありません",
+      "mergeabilityUnknown": "確認待ち。push で更新されます",
+      "conflict": "他の変更とぶつかっています",
+      "ffNotPossible": "先頭に追いつけていません。最新の状態を取り込んでください",
+      "nothingToMerge": "取り込む変更がありません",
+      "configChange": "設定ファイルの変更に、管理者の承認が必要です",
+      "changedPathsUnknown": "変更されたファイルを読み取れませんでした",
+      "codeownersInvalid": "コードオーナーの定義が使えません。管理者に知らせてください",
+      "approvalsMissing": "承認が足りません（{{rule}}: 必要 {{required}} 件・承認済み {{counted}} 件）",
+      "approvalsMissingProtected": "承認が足りません（必要 {{required}} 件・承認済み {{counted}} 件）",
+      "codeownerMissing": "{{pattern}} の担当者（{{owners}}）の承認が必要です",
+      "checkMissing": "必須の確認「{{name}}」の結果がまだありません",
+      "checkFailed": "必須の確認「{{name}}」が成功していません（{{status}} / {{conclusion}}）",
+      "unresolved": "解決していないスレッドが {{n}} 件あります",
+      "next": {
+        "firstUnresolved": "最初の未解決スレッドを開く",
+        "changes": "変更を見る",
+        "push": "修正を push する",
+        "wait": "待つ"
+      }
+    }
   }
 }

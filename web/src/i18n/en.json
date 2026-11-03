@@ -446,5 +446,34 @@
     "restore": "Restore",
     "restoreOf": "Restore {{name}}",
     "title": "Deleted projects"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "Ready to merge",
+      "generic": "Cannot be merged right now. Check the changes",
+      "notOpen": "This merge request is no longer open",
+      "draft": "It is still a draft",
+      "mergeInProgress": "A merge is running",
+      "sourceBranchMissing": "The source branch is gone",
+      "mergeabilityUnknown": "Waiting for the check. A push updates it",
+      "conflict": "It conflicts with other changes",
+      "ffNotPossible": "It is behind the target. Bring in the latest changes",
+      "nothingToMerge": "There is nothing to merge",
+      "configChange": "A change to a settings file needs a maintainer approval",
+      "changedPathsUnknown": "The changed files could not be read",
+      "codeownersInvalid": "The code owners definition is unusable. Tell an administrator",
+      "approvalsMissing": "Not enough approvals ({{rule}}: {{required}} needed, {{counted}} given)",
+      "approvalsMissingProtected": "Not enough approvals ({{required}} needed, {{counted}} given)",
+      "codeownerMissing": "An owner of {{pattern}} ({{owners}}) must approve",
+      "checkMissing": "The required check \"{{name}}\" has not reported yet",
+      "checkFailed": "The required check \"{{name}}\" did not succeed ({{status}} / {{conclusion}})",
+      "unresolved": "{{n}} threads are not resolved",
+      "next": {
+        "firstUnresolved": "Open the first unresolved thread",
+        "changes": "See the changes",
+        "push": "Push a fix",
+        "wait": "Wait"
+      }
+    }
   }
 }
