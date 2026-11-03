@@ -30,8 +30,8 @@ use crate::{query_error, read_query_error, Db};
 mod commands;
 mod rules;
 
-pub(crate) use commands::revoke_on;
 pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveOutcome, Classify};
+pub(crate) use commands::{carry_on, revoke_on};
 pub use rules::{
     put_approval_rule_mr_decided, remove_approval_rule_mr_decided, NewApprovalRule, RuleOutcome,
     MAX_RULES, MAX_RULE_APPROVERS,
@@ -85,6 +85,12 @@ pub struct StoredApprovalRule {
 pub struct ApprovalFacts {
     pub approvals: Vec<ApproverFacts>,
     pub rules: Vec<StoredApprovalRule>,
+    /// M3 R6: the project's merge settings (whether committers' approvals
+    /// are excluded, whether CODEOWNERS is enforced now).
+    pub settings: crate::review::settings::StoredMergeSettings,
+    /// M3 R6: the project's protection rules (the target's merge rule
+    /// carries the minimum approvals, ADR-0024 §8.6).
+    pub protection: forge_core::ProtectionRules,
 }
 
 /// The most live approvals one merge request holds (`FG-REVIEW-0015`,
@@ -232,7 +238,14 @@ pub(crate) async fn approval_facts_on(
     let live = live_approvals_on(&mut *conn, mr).await?;
     let approvals = approvers_on(&mut *conn, project, live).await?;
     let rules = rules::rules_on(&mut *conn, project).await?;
-    Ok(ApprovalFacts { approvals, rules })
+    let settings = crate::review::settings::settings_on(&mut *conn, project).await?;
+    let protection = crate::protected_refs::rules_on(&mut *conn, project).await?;
+    Ok(ApprovalFacts {
+        approvals,
+        rules,
+        settings,
+        protection,
+    })
 }
 
 /// [`approval_facts_on`] in one transaction on the read pool (the approval

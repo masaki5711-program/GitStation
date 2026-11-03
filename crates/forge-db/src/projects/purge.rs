@@ -436,6 +436,14 @@ async fn finish_steps(
         "projects.purge.finish.members",
     )
     .await?;
+    // M3 R6: the merge rules reference the protection rules.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.protected_ref_merge_rules WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.protected_ref_merge_rules",
+    )
+    .await?;
     let protected_refs_removed = delete_rows(
         tx,
         "DELETE FROM forge.protected_refs WHERE project_id = $1",
@@ -486,6 +494,14 @@ async fn finish_steps(
         "DELETE FROM forge.approval_rules WHERE project_id = $1",
         project.get(),
         "projects.purge.finish.approval_rules",
+    )
+    .await?;
+    // M3 R6: the project's merge settings.
+    delete_rows(
+        tx,
+        "DELETE FROM forge.merge_settings WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.merge_settings",
     )
     .await?;
     delete_rows(

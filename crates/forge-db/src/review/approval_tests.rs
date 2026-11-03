@@ -425,3 +425,107 @@ async fn approval_rules_are_put_replaced_and_removed() {
         "put, replace and remove are audited; unchanged is not"
     );
 }
+
+/// M3 R6 (ADR-0024 §8.2): with `reset_approvals_on_push = false` and the
+/// change allowed by forge-review (`carry_from` = the recorded head), a new
+/// head carries the live approvals (old row `carried`, new row with
+/// `carried_from`, one `merge_request.approved` each); the default
+/// setting, a protected target or a `carry_from` that is no longer the
+/// head end them with `new_commits`.
+#[tokio::test]
+async fn approvals_are_carried_only_when_every_condition_holds() {
+    let w = world().await;
+    let (first, _) = w.approve(w.bob, "req-approve").await;
+    assert!(matches!(first, ApproveOutcome::Approved { .. }));
+    // The default (reset on push): the carry asked for is not taken.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v2"),
+        w.mr.id,
+        &oid('b'),
+        None,
+        Some(&oid('a')),
+    )
+    .await
+    .expect("v2");
+    assert!(w.live().await.is_empty(), "the default ends them");
+    // The project keeps approvals on push.
+    let keep = forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    };
+    let (changed, _, ()) = put_merge_settings_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-settings"),
+        w.web.project_id,
+        w.alice,
+        &keep,
+        |_| Ok(()),
+    )
+    .await
+    .expect("settings");
+    assert_eq!(changed, SettingsOutcome::Changed);
+    let (second, _) = w.approve(w.bob, "req-approve-b").await;
+    assert!(matches!(second, ApproveOutcome::Approved { .. }));
+    // A carry asked for another head than the recorded one: ended.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v3"),
+        w.mr.id,
+        &oid('c'),
+        None,
+        Some(&oid('a')),
+    )
+    .await
+    .expect("v3");
+    assert!(w.live().await.is_empty(), "a stale carry_from ends them");
+    let approved = w.approve(w.bob, "req-approve-c").await.1;
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v4"),
+        w.mr.id,
+        &oid('d'),
+        None,
+        Some(&oid('c')),
+    )
+    .await
+    .expect("v4");
+    let live = w.live().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].head_sha, oid('d'));
+    assert_eq!(live[0].approver, w.bob);
+    let carried = w.events("merge_request.approved").await;
+    let last = carried.last().expect("event");
+    assert_eq!(last["carried_from"], approved.id.get());
+    assert_eq!(last["uncounted_reason"], "carried");
+    let reason: String = sqlx::query_scalar(
+        "SELECT revoked_reason FROM forge.merge_request_approvals WHERE id = $1",
+    )
+    .bind(approved.id.get())
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("old row");
+    assert_eq!(reason, "carried");
+    // A protected target: never carried.
+    crate::protected_refs::create(
+        &w.t.db,
+        &as_user(w.alice, "req-protect"),
+        w.web.project_id,
+        &RefPattern::parse("refs/heads/main").expect("pattern"),
+        forge_core::Role::Maintainer,
+    )
+    .await
+    .expect("protect");
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v5"),
+        w.mr.id,
+        &oid('e'),
+        None,
+        Some(&oid('d')),
+    )
+    .await
+    .expect("v5");
+    assert!(w.live().await.is_empty(), "a protected target ends them");
+    w.t.drop_now().await;
+}

@@ -321,6 +321,51 @@ pub async fn record_mr_version(
     head: &ObjectId,
     pushed_by: Option<UserId>,
 ) -> Result<VersionOutcome, ForgeError> {
+    record_mr_version_carrying(db, ctx, mr, head, pushed_by, None).await
+}
+
+/// End the live approvals of `current` for a new head `head`, or carry
+/// them (M3 R6, ADR-0024 §8.2) when every condition holds under the merge
+/// request's lock: forge-review's pure `may_carry_approvals` allowed the
+/// change from `carry_from` (the head it was computed for, still the
+/// recorded head), the project keeps approvals on push
+/// (`reset_approvals_on_push = false`, read now), and the target is not a
+/// protected branch (its rules read now). Anything else ends them with
+/// `new_commits` (the default; fail closed).
+async fn end_or_carry(
+    tx: &mut ChangeTx,
+    current: &StoredMergeRequest,
+    head: &ObjectId,
+    carry_from: Option<&ObjectId>,
+) -> Result<(Vec<crate::change::AuditEntry>, Vec<DomainEvent>), ForgeError> {
+    let asked = carry_from.is_some_and(|from| current.head_sha.as_deref() == Some(from.as_str()));
+    if asked {
+        let project = current.project_id;
+        let settings = tx
+            .step(|c| async move { super::settings::settings_on(c, project).await })
+            .await?;
+        let rules = tx
+            .step(|c| async move { crate::protected_refs::rules_on(c, project).await })
+            .await?;
+        if !settings.values.reset_approvals_on_push
+            && rules.levels(&current.target_branch).is_empty()
+        {
+            return super::approvals::carry_on(tx, current, head).await;
+        }
+    }
+    super::approvals::revoke_on(tx, current, forge_core::UnapproveReason::NewCommits).await
+}
+
+/// [`record_mr_version`] for a head whose change forge-review allowed to
+/// carry the approvals from `carry_from` (M3 R6; see `end_or_carry`).
+pub async fn record_mr_version_carrying(
+    db: &Db,
+    ctx: &ChangeContext,
+    mr: MergeRequestId,
+    head: &ObjectId,
+    pushed_by: Option<UserId>,
+    carry_from: Option<&ObjectId>,
+) -> Result<VersionOutcome, ForgeError> {
     const ACTION: &str = "merge_request.pushed";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
@@ -388,13 +433,9 @@ pub async fn record_mr_version(
             // M3 R2: the stored mergeability is about another head now.
             tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
                 .await?;
-            // M3 R5 (ADR-0024 §8.2): approvals of the old head end.
-            let (affected, events) = super::approvals::revoke_on(
-                &mut tx,
-                &current,
-                forge_core::UnapproveReason::NewCommits,
-            )
-            .await?;
+            // M3 R5 (ADR-0024 §8.2): approvals of the old head end (M3 R6:
+            // or are carried).
+            let (affected, events) = end_or_carry(&mut tx, &current, head, carry_from).await?;
             let details =
                 AuditDetails::MergeRequestVersion(MergeRequestVersionChange::HeadRestored {
                     merge_request: mr,
@@ -436,10 +477,10 @@ pub async fn record_mr_version(
         // M3 R2: the stored mergeability is about another head now.
         tx.step(|c| async move { super::mergeability::downgrade_on(c, mr, head).await })
             .await?;
-        // M3 R5 (ADR-0024 §8.2, plan 11 Q4): new commits end the approvals.
-        let (affected, mut revoked) =
-            super::approvals::revoke_on(&mut tx, &current, forge_core::UnapproveReason::NewCommits)
-                .await?;
+        // M3 R5 (ADR-0024 §8.2, plan 11 Q4): new commits end the approvals
+        // (M3 R6: or carry them when the project keeps them and the change
+        // allows it).
+        let (affected, mut revoked) = end_or_carry(&mut tx, &current, head, carry_from).await?;
         let change = MergeRequestChange::Pushed {
             merge_request: mr,
             iid: current.iid,

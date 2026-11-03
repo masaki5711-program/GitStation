@@ -156,6 +156,69 @@ pub(crate) async fn revoke_on(
     ended_records(mr, ended, reason)
 }
 
+/// Carry every live approval of `mr` to `head` inside `tx` (M3 R6,
+/// ADR-0024 §8.2: the project keeps approvals on push and forge-review
+/// found that the change may carry them): each ends with
+/// `revoked_reason = carried` and a new row for `head` and the current
+/// target names it in `carried_from`. One `merge_request.approved` per
+/// carried approval (`carried_from`, `uncounted_reason = carried`: the job
+/// does not evaluate), never an unapprove as well — a change stays within
+/// its 100 events (at most 50 live approvals plus the push's own event).
+pub(crate) async fn carry_on(
+    tx: &mut ChangeTx,
+    mr: &StoredMergeRequest,
+    head: &ObjectId,
+) -> Result<(Vec<AuditEntry>, Vec<DomainEvent>), ForgeError> {
+    let reason = UnapproveReason::Carried;
+    let ended = tx
+        .step(|c| async move { end_on(c, mr, reason, None).await })
+        .await?;
+    let mut rows = Vec::with_capacity(ended.len());
+    let mut events = Vec::with_capacity(ended.len());
+    for old in ended {
+        let from = old.id;
+        let approver = old.approver;
+        let row: ApprovalRow = tx
+            .step(|c| async move {
+                sqlx::query_as(&format!(
+                    "INSERT INTO forge.merge_request_approvals (merge_request_id, project_id, \
+                     approver_id, head_sha, target_branch, carried_from) \
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING {}",
+                    approval_columns()
+                ))
+                .bind(mr.id.get())
+                .bind(mr.project_id.get())
+                .bind(approver.get())
+                .bind(head.as_str())
+                .bind(mr.target_branch.as_str())
+                .bind(from.get())
+                .fetch_one(c)
+                .await
+                .map_err(|e| query_error("review.approval_carry", e))
+            })
+            .await?;
+        let carried = row.parse()?;
+        let (audit, event) = entry(
+            mr.project_id,
+            carried.id,
+            MergeRequestChange::Approved {
+                merge_request: mr.id,
+                iid: mr.iid,
+                approval: carried.id,
+                approver,
+                head_sha: head.clone(), // clone: the change owns its values
+                target_branch: mr.target_branch.clone(),
+                counted: false,
+                uncounted_reason: Some(UncountedReason::Carried),
+                carried_from: Some(from),
+            },
+        )?;
+        rows.push(audit);
+        events.push(event);
+    }
+    Ok((rows, events))
+}
+
 /// `FG-REVIEW-0015` ApprovalLimitReached.
 fn full(mr: &StoredMergeRequest) -> ForgeError {
     ForgeError::new(ErrorCode::ApprovalLimitReached)
@@ -265,6 +328,7 @@ pub async fn approve_mr_decided<P>(
                 target_branch: mr.target_branch.clone(),
                 counted,
                 uncounted_reason,
+                carried_from: None,
             },
         )?;
         events.insert(0, event);

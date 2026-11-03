@@ -17,16 +17,27 @@ pub enum UnapproveReason {
     NewCommits,
     /// The target branch changed (ADR-0024 §8.1).
     TargetChanged,
+    /// M3 R6 (ADR-0024 §8.2): the project keeps approvals on push and the
+    /// new head's change allowed it: the approval was carried to the new
+    /// head (a new row with `carried_from`). The row's `revoked_reason`
+    /// only — the carry's event is the new row's `merge_request.approved`.
+    Carried,
 }
 
 impl UnapproveReason {
-    pub const ALL: [UnapproveReason; 3] = [Self::Unapproved, Self::NewCommits, Self::TargetChanged];
+    pub const ALL: [UnapproveReason; 4] = [
+        Self::Unapproved,
+        Self::NewCommits,
+        Self::TargetChanged,
+        Self::Carried,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unapproved => "unapproved",
             Self::NewCommits => "new_commits",
             Self::TargetChanged => "target_changed",
+            Self::Carried => "carried",
         }
     }
 
@@ -62,6 +73,10 @@ pub enum UncountedReason {
     /// requirement lists the approver (informational: such an approval
     /// counts for nothing).
     NotInRule,
+    /// M3 R6: carried to a new head by the version job, which does not
+    /// evaluate (only on `merge_request.approved` of a carry: whether it
+    /// counts is `evaluate_merge()`'s, as always).
+    Carried,
 }
 
 impl UncountedReason {
@@ -75,6 +90,7 @@ impl UncountedReason {
             Self::Committer => "committer",
             Self::CommittersUnknown => "committers_unknown",
             Self::NotInRule => "not_in_rule",
+            Self::Carried => "carried",
         }
     }
 }

@@ -267,6 +267,10 @@ pub enum MergeRequestChange {
         target_branch: RefName,
         counted: bool,
         uncounted_reason: Option<UncountedReason>,
+        /// M3 R6: the approval this one was carried from (ADR-0024 §8.2:
+        /// the project keeps approvals on push); `None` for a person's
+        /// approval.
+        carried_from: Option<ApprovalId>,
     },
     /// `merge_request.unapproved` (M3 R5): approval `approval` ended for
     /// `reason`. Deduplicated by `merge_request_unapproved:<approval_id>`.
@@ -361,7 +365,7 @@ impl MergeRequestChange {
     /// "target_branch","target_sha","merged_sha","head_sha","merged_by"}`,
     /// SourceBranchDeleted `{"merge_request_id","iid","merge_id","source_branch","old"}`,
     /// Approved `{"merge_request_id","iid","approval_id","approver_id","head_sha",
-    /// "target_branch","counted","uncounted_reason"}`, Unapproved
+    /// "target_branch","counted","uncounted_reason","carried_from"}`, Unapproved
     /// `{"merge_request_id","iid","approval_id","approver_id","head_sha","reason"}`.
     pub fn to_value(&self) -> serde_json::Value {
         match self {
@@ -515,6 +519,7 @@ impl MergeRequestChange {
                 target_branch,
                 counted,
                 uncounted_reason,
+                carried_from,
             } => serde_json::json!({
                 "merge_request_id": merge_request.get(),
                 "iid": iid,
@@ -524,6 +529,7 @@ impl MergeRequestChange {
                 "target_branch": target_branch.as_str(),
                 "counted": counted,
                 "uncounted_reason": uncounted_reason.map(UncountedReason::as_str),
+                "carried_from": carried_from.map(|a| a.get()),
             }),
             Self::Unapproved {
                 merge_request,

@@ -287,3 +287,36 @@ pub async fn discussion(
         .await?;
     row.map(DiscussionRow::parse).transpose()
 }
+
+const UNRESOLVED_SQL: &str = "SELECT count(*) FROM forge.merge_request_discussions \
+     WHERE merge_request_id = $1 AND NOT resolved";
+
+/// How many discussions of merge request `mr` are unresolved, inside a
+/// change (M3 R6: the merge gate, under the merge request's lock — the
+/// resolve and the new-thread commands lock it too).
+pub(crate) async fn unresolved_on(
+    conn: &mut sqlx::postgres::PgConnection,
+    mr: MergeRequestId,
+) -> Result<u32, ForgeError> {
+    let count: i64 = sqlx::query_scalar(UNRESOLVED_SQL)
+        .bind(mr.get())
+        .fetch_one(conn)
+        .await
+        .map_err(|e| crate::query_error("review.unresolved_discussions", e))?;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// [`unresolved_on`] on the read pool (the merge status route).
+pub async fn unresolved_discussions(db: &Db, mr: MergeRequestId) -> Result<u32, ForgeError> {
+    const QUERY: &str = "review.unresolved_discussions_read";
+    let count: i64 = db
+        .within(QUERY, async {
+            sqlx::query_scalar(UNRESOLVED_SQL)
+                .bind(mr.get())
+                .fetch_one(db.pool().executor())
+                .await
+                .map_err(|e| read_query_error(QUERY, e))
+        })
+        .await?;
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
