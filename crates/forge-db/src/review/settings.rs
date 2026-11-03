@@ -577,13 +577,15 @@ pub async fn restore_expired_codeowners(
 }
 
 /// Move `project`'s expired suspension to the back of the worker's scan
-/// (`codeowners_restore_seen_at`, an unaudited bookkeeping column).
+/// (`codeowners_restore_seen_at`, an unaudited bookkeeping column) — only
+/// while it is still expired (R6 review round 2: a switch changed since
+/// the scan keeps no stale mark).
 async fn mark_restore_seen(db: &Db, project: ProjectId) -> Result<(), ForgeError> {
     const QUERY: &str = "review.codeowners_restore_seen";
     db.within(QUERY, async {
         sqlx::query(
             "UPDATE forge.merge_settings SET codeowners_restore_seen_at = now() \
-             WHERE project_id = $1",
+             WHERE project_id = $1 AND codeowners_enforced_off_until <= now()",
         )
         .bind(project.get())
         .execute(db.write_pool())

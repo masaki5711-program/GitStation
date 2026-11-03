@@ -690,11 +690,41 @@ async fn the_table_refuses_check_names_check_name_refuses() {
 }
 
 /// The constraint a failed statement violated.
-fn constraint_of(
-    result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>,
-) -> Option<String> {
+fn constraint_of(result: Result<sqlx::postgres::PgQueryResult, sqlx::Error>) -> Option<String> {
     match result {
         Err(sqlx::Error::Database(e)) => e.constraint().map(str::to_owned),
         _ => None,
     }
+}
+
+/// R6 review round 2 (LOW): the scan-order mark is written only on a
+/// suspension that is still expired — a row whose switch changed after the
+/// scan (enforced again, or a new suspension) keeps no stale mark.
+#[tokio::test]
+async fn the_restore_mark_is_written_only_on_a_row_still_expired() {
+    let w = world().await;
+    w.suspend(30, "req-suspend").await;
+    // A suspension still in force (not expired).
+    mark_restore_seen(&w.t.db, w.web.project_id)
+        .await
+        .expect("mark");
+    assert_eq!(restore_seen(&w).await, None, "not expired: no mark");
+    // Expired: marked.
+    w.expire().await;
+    mark_restore_seen(&w.t.db, w.web.project_id)
+        .await
+        .expect("mark");
+    assert!(restore_seen(&w).await.is_some(), "expired: marked");
+    w.t.drop_now().await;
+}
+
+/// The project's `codeowners_restore_seen_at`.
+async fn restore_seen(w: &World) -> Option<String> {
+    sqlx::query_scalar(
+        "SELECT codeowners_restore_seen_at::text FROM forge.merge_settings WHERE project_id = $1",
+    )
+    .bind(w.web.project_id.get())
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("seen")
 }
