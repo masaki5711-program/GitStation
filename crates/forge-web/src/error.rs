@@ -1,6 +1,8 @@
 //! The single place errors become HTTP responses (CLAUDE.md §3-1..3).
 //!
-//! Body: `{ "error_code", "user_message", "request_id" }` — nothing else.
+//! Body: `{ "error_code", "user_message", "request_id" }` — nothing else,
+//! except the integration feed's 410 (`FG-INT-0007`), which adds its fixed
+//! `reason` word (plan 02 §11.2: the consumer recovers by it).
 //! Context, sources, paths and git stderr stay in the log, written once here.
 //! Every 401 carries the authentication challenges (one place for them:
 //! [`challenges`], applied to the whole application by [`challenge_layer`]).
@@ -108,6 +110,30 @@ struct Body<'a> {
     error_code: &'a str,
     user_message: &'a str,
     request_id: &'a str,
+    /// Only `FG-INT-0007` (the feed's 410, plan 02 §11.2): why the cursor
+    /// cannot continue — one of [`FEED_GONE_REASONS`], never anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
+/// The `reason` values a 410 of the integration feed may show.
+pub(crate) const FEED_GONE_REASONS: [&str; 4] = [
+    "retention",
+    "epoch_mismatch",
+    "ahead_of_head",
+    "visible_set_changed",
+];
+
+/// The public `reason` of a feed 410 (a fixed word from the context;
+/// anything else is not shown).
+fn feed_gone_reason(err: &ForgeError) -> Option<&'static str> {
+    if err.code() != forge_errors::ErrorCode::FeedCursorExpired {
+        return None;
+    }
+    let reason = err.context().iter().find(|(k, _)| *k == "reason")?;
+    FEED_GONE_REASONS
+        .into_iter()
+        .find(|known| *known == reason.1.as_str())
 }
 
 impl ApiError {
@@ -146,6 +172,7 @@ impl IntoResponse for ApiError {
             error_code: code.id(),
             user_message: self.err.user_message(self.lang),
             request_id: self.request_id.as_str(),
+            reason: feed_gone_reason(&self.err),
         };
         let mut res = (status, Json(body)).into_response();
         res.headers_mut().insert(

@@ -28,6 +28,8 @@ forge-oidc.workspace = true
 forge-review.workspace = true
 # M3 C1: the Checks API (web → checks → auth / git / db, ADR-0024 §11).
 forge-checks.workspace = true
+# M3 I1c: the integrations' event feed (web -> integ -> auth / db, plan 11 3.7).
+forge-integ.workspace = true
 url.workspace = true
 axum.workspace = true
 # D3 MR3: decoding `Authorization: Basic` (the password is the token).

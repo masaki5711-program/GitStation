@@ -1731,6 +1731,223 @@
         ],
         "type": "object"
       },
+      "FeedActorBody": {
+        "additionalProperties": false,
+        "description": "The actor of an event.",
+        "properties": {
+          "kind": {
+            "description": "`user`, `service_account`, `user_via_service_account` or `system`.",
+            "type": "string"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FeedUserBody",
+                "description": "The user or service account (`null` for `system`)."
+              }
+            ]
+          },
+          "via": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FeedUserBody",
+                "description": "The service account that acted for `user` (act-as), else `null`."
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "user",
+          "via"
+        ],
+        "type": "object"
+      },
+      "FeedCursorBody": {
+        "additionalProperties": false,
+        "description": "The head position.",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "schema_version": {
+            "description": "`1`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "FeedEventBody": {
+        "additionalProperties": false,
+        "description": "One event.",
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/FeedActorBody"
+          },
+          "cursor": {
+            "description": "The position right after this event (resume here once it is done).",
+            "type": "string"
+          },
+          "data": {
+            "description": "The event's data (its own schema_version).",
+            "type": "object"
+          },
+          "id": {
+            "description": "`evt_<32 hex>`: deduplicate by it (delivery is at least once).",
+            "type": "string"
+          },
+          "occurred_at": {
+            "description": "UTC, RFC 3339 with milliseconds.",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "schema_version": {
+            "description": "The version of `data`.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "type": {
+            "description": "`<aggregate>.<verb>` (unknown types are to be skipped).",
+            "type": "string"
+          },
+          "work_items": {
+            "description": "Possibly empty.",
+            "items": {
+              "$ref": "#/components/schemas/FeedWorkItemBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "cursor",
+          "type",
+          "schema_version",
+          "occurred_at",
+          "project_id",
+          "actor",
+          "work_items",
+          "data"
+        ],
+        "type": "object"
+      },
+      "FeedPageBody": {
+        "additionalProperties": false,
+        "description": "One page of the feed.",
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/FeedEventBody"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "description": "Visible events remain after `next_cursor`.",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "description": "Where the next read starts (the head when nothing visible is left).",
+            "type": "string"
+          },
+          "schema_version": {
+            "description": "`1`.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "events",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "FeedUserBody": {
+        "additionalProperties": false,
+        "description": "Who caused an event (no e-mail or employee number without the token's\n`user_email` / `user_employee_number` scope).",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "description": "Only with the `user_email` scope.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "employee_number": {
+            "description": "Only with the `user_employee_number` scope.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "username": {
+            "description": "The current username (`null`: the account is gone).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "FeedWorkItemBody": {
+        "additionalProperties": false,
+        "description": "One work item an event concerns.",
+        "properties": {
+          "project_id": {
+            "description": "The kanflow project id of the binding.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "`kanflow`.",
+            "type": "string"
+          },
+          "ref": {
+            "description": "`PBI-<n>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "project_id",
+          "ref"
+        ],
+        "type": "object"
+      },
       "GrantBody": {
         "additionalProperties": false,
         "description": "One grant: a namespace a service account reports on one project.",
@@ -6519,6 +6736,108 @@
         "summary": "Move or rename a group and its subtree (Owner on both sides; the top level: administrators)",
         "x-forge-action": "GroupTransfer",
         "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/integrations/{id}/events": {
+      "get": {
+        "operationId": "get_api_v1_integrations_id_events",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The previous answer's next_cursor, an event's cursor, or GET …/events/cursor (opaque; bound to this integration). Without it the feed starts at the oldest retained event",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Events per page, 1..=500 (default 100); a page also ends at about 2 MiB",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedPageBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The integration's event feed after a cursor: every integration-class event of its bound projects in order, each with its work items (the integration's own service account; read_api; 410 FG-INT-0007 with reason when the cursor cannot continue)",
+        "x-forge-action": "IntegrationEventRead"
+      }
+    },
+    "/api/v1/integrations/{id}/events/cursor": {
+      "get": {
+        "operationId": "get_api_v1_integrations_id_events_cursor",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedCursorBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "The feed's head as a cursor (a resync takes it first, then the development status, then reads from it)",
+        "x-forge-action": "IntegrationEventCursorRead"
       }
     },
     "/api/v1/namespaces/resolve": {

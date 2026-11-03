@@ -407,6 +407,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/integrations/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The integration's event feed after a cursor: every integration-class event of its bound projects in order, each with its work items (the integration's own service account; read_api; 410 FG-INT-0007 with reason when the cursor cannot continue) */
+        get: operations["get_api_v1_integrations_id_events"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/{id}/events/cursor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The feed's head as a cursor (a resync takes it first, then the development status, then reads from it) */
+        get: operations["get_api_v1_integrations_id_events_cursor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/namespaces/resolve": {
         parameters: {
             query?: never;
@@ -2027,6 +2061,82 @@ export interface components {
             error_code: string;
             request_id: string;
             user_message: string;
+        };
+        /** @description The actor of an event. */
+        FeedActorBody: {
+            /** @description `user`, `service_account`, `user_via_service_account` or `system`. */
+            kind: string;
+            user: null | components["schemas"]["FeedUserBody"];
+            via: null | components["schemas"]["FeedUserBody"];
+        };
+        /** @description The head position. */
+        FeedCursorBody: {
+            cursor: string;
+            /**
+             * Format: int32
+             * @description `1`.
+             */
+            schema_version: number;
+        };
+        /** @description One event. */
+        FeedEventBody: {
+            actor: components["schemas"]["FeedActorBody"];
+            /** @description The position right after this event (resume here once it is done). */
+            cursor: string;
+            /** @description The event's data (its own schema_version). */
+            data: Record<string, never>;
+            /** @description `evt_<32 hex>`: deduplicate by it (delivery is at least once). */
+            id: string;
+            /** @description UTC, RFC 3339 with milliseconds. */
+            occurred_at: string;
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: int32
+             * @description The version of `data`.
+             */
+            schema_version: number;
+            /** @description `<aggregate>.<verb>` (unknown types are to be skipped). */
+            type: string;
+            /** @description Possibly empty. */
+            work_items: components["schemas"]["FeedWorkItemBody"][];
+        };
+        /** @description One page of the feed. */
+        FeedPageBody: {
+            events: components["schemas"]["FeedEventBody"][];
+            /** @description Visible events remain after `next_cursor`. */
+            has_more: boolean;
+            /** @description Where the next read starts (the head when nothing visible is left). */
+            next_cursor: string;
+            /**
+             * Format: int32
+             * @description `1`.
+             */
+            schema_version: number;
+        };
+        /**
+         * @description Who caused an event (no e-mail or employee number without the token's
+         *     `user_email` / `user_employee_number` scope).
+         */
+        FeedUserBody: {
+            display_name: string | null;
+            /** @description Only with the `user_email` scope. */
+            email?: string | null;
+            /** @description Only with the `user_employee_number` scope. */
+            employee_number?: string | null;
+            /** Format: int64 */
+            id: number;
+            /** @description The current username (`null`: the account is gone). */
+            username: string | null;
+        };
+        /** @description One work item an event concerns. */
+        FeedWorkItemBody: {
+            /** @description The kanflow project id of the binding. */
+            project_id: string;
+            /** @description `kanflow`. */
+            provider: string;
+            /** @description `PBI-<n>`. */
+            ref: string;
         };
         /** @description One grant: a namespace a service account reports on one project. */
         GrantBody: {
@@ -4398,6 +4508,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MoveBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_integrations_id_events: {
+        parameters: {
+            query?: {
+                /** @description The previous answer's next_cursor, an event's cursor, or GET …/events/cursor (opaque; bound to this integration). Without it the feed starts at the oldest retained event */
+                cursor?: string;
+                /** @description Events per page, 1..=500 (default 100); a page also ends at about 2 MiB */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedPageBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_integrations_id_events_cursor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedCursorBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

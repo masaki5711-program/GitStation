@@ -501,6 +501,23 @@ kind = "derived"
 ro_columns = ["*"]
 # ── end M3 I1b ──
 
+# ── M3 I1c: the event feed of an integration (ADR-0016 §2, §7, Amendment
+# I1c) ──
+# The last read of each integration's feed, at most once a minute (the lag
+# check, doctor integrations.feed_lag).
+[tables.integration_feed_reads]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+
+# One row: how long events are kept (forge.events_retention reads it;
+# forge_app cannot write it, a migration changes it).
+[tables.retention_policy]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 I1c ──
+
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
 guarded = true

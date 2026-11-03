@@ -732,7 +732,29 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ),
         (
             "forge.event_work_items",
-            plain(&["forge_app:SELECT", "forge_app:INSERT", "forge_ro:SELECT"]),
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_ro:SELECT",
+                // M3 I1c: deleted with their events by forge.events_retention.
+                "forge_purge:SELECT",
+                "forge_purge:DELETE",
+            ]),
+        ),
+        // ── M3 I1c: the feed's reads (derived, written by the feed) and the
+        // retention policy (read only; 20261117100000) ──
+        (
+            "forge.integration_feed_reads",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
+        (
+            "forge.retention_policy",
+            plain(&["forge_app:SELECT", "forge_ro:SELECT", "forge_purge:SELECT"]),
         ),
     ]
 }
@@ -901,6 +923,9 @@ const LATER_TABLES: &[&str] = &[
     "check_runs",
     "check_annotations",
     "check_namespace_grants",
+    // ── M3 I1c: the event feed (migration 20261117100000) ──
+    "integration_feed_reads",
+    "retention_policy",
 ];
 
 /// Every table the first migration creates.

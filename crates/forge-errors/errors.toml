@@ -1284,6 +1284,19 @@ test = "an_event_without_an_audit_row_cannot_commit"
 # ── C8: the audit seal backlog (ADR-0018 §4) ─────────────────────────────
 
 [[error]]
+code = "FG-DB-0014"
+name = "FeedEpochChanged"
+http_status = 500
+severity = "warn"
+user_message_ja = "イベントの履歴の世代を作り直しました。連携先は履歴を取り直します。"
+user_message_en = "The event feed's epoch was rotated. Integrations resync their feed."
+user_message_id = "Epoch feed perubahan telah diperbarui. Integrasi akan menyinkronkan ulang feed-nya."
+cause = "The event feed's `epoch` (forge.event_feed_state) was rotated, so every integration's cursor answers 410 `epoch_mismatch` and the consumers resync (ADR-0016 §7, ADR-0018 §5). In M3 only by hand: `forge admin events new-epoch` (`reason=manual`) after the database was restored from a backup or rebuilt in the same cluster, an approved step of the restore runbook (forge_maint runs forge.feed_new_epoch, owned by forge_seq, which writes the `feed.epoch_rotated` audit row). The automatic detection of a rollback (system_identifier, timeline, the seal sink) comes with C9. Logged at warn by the command."
+diagnosis = "The log event carries `reason` (`manual`), `old_epoch` and `new_epoch`. SELECT epoch, epoch_rotated_at, high_seq FROM forge.event_feed_state; the audit row: SELECT occurred_at, details FROM forge.audit_log WHERE action = 'feed.epoch_rotated' ORDER BY id DESC LIMIT 5."
+fix = "Expected after a restore: nothing to do, the consumers resync after their 410 (runbook integration-feed-lag). Unexpected: find who ran it from the audit row and the maintenance login's logs."
+runbook = "integration-feed-lag"
+test = "new_epoch_rotates_the_feed_epoch"
+[[error]]
 code = "FG-DB-0015"
 name = "AuditSealBacklog"
 http_status = 500
@@ -1770,6 +1783,19 @@ fix = "The consumer sends next_cursor exactly as received, for the same integrat
 runbook = "integration-feed-lag"
 test = "another_integrations_cursor_is_int_0008_other_integration"
 
+[[error]]
+code = "FG-INT-0009"
+name = "FeedConsumerLag"
+http_status = 500
+severity = "warn"
+user_message_ja = "連携先がイベントの履歴を読みに来ていないか、大きく遅れています。管理者に連絡してください。"
+user_message_en = "An integration has not read its event feed for long, or is far behind. Contact the administrator."
+user_message_id = "Sebuah integrasi sudah lama tidak membaca feed perubahannya, atau sangat tertinggal. Hubungi administrator."
+cause = "An enabled integration with bound projects has not read its feed for 24 hours (`reason=not_reading`; one that never read counts 24 hours after its first binding), or the oldest event it has not read yet is older than half the retention period (`reason=behind`): when retention deletes it, the consumer gets 410 retention and has to resync (ADR-0016 §11, plan 02 §11.3). Raised by forge doctor (`integrations.feed_lag`) from forge.integration_feed_reads, and logged at warn by the feed itself when a read finds the consumer behind (at most once per minute per integration, with the read's request_id). No request fails with it."
+diagnosis = "The doctor line or the log event carries `reason`, `integration_id`, `last_read_at` (RFC 3339, UTC, or `never`), `behind_seconds` (behind) and `retention_days`. SELECT integration_id, last_read_at, cursor_seq, read_bound_seq, oldest_unread_at FROM forge.integration_feed_reads ORDER BY last_read_at; kanflow's own logs show whether its poller runs."
+fix = "Follow runbook integration-feed-lag: check that kanflow's poller runs and authenticates (the service account's token: runbook service-accounts), that the work-item-sync subscriber is not stuck (doctor subscribers.work-item-sync; it bounds what the feed returns), then let the consumer catch up. A consumer that cannot catch up before retention resyncs after its 410."
+runbook = "integration-feed-lag"
+test = "feed_lag_names_not_reading_and_behind_integrations"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"

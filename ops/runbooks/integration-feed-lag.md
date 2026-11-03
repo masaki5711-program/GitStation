@@ -30,7 +30,7 @@
    FG-INT-0009 の `context`: `integration_id`、`reason`、`last_read_at`（UTC、または `never`）、`behind_seconds`、`retention_days`。
 2. 読み取りの記録（`forge.integration_feed_reads`、連携ごとに 1 分に 1 回まで書く派生の表）:
    ```sql
-   SELECT integration_id, last_read_at, cursor_seq, read_bound_seq, cursor_occurred_at
+   SELECT integration_id, last_read_at, cursor_seq, read_bound_seq, oldest_unread_at
      FROM forge.integration_feed_reads ORDER BY last_read_at;
    SELECT epoch, high_seq, retained_from, epoch_rotated_at FROM forge.event_feed_state;
    SELECT name, enabled, last_seq, failures, last_error_code FROM forge.event_subscribers

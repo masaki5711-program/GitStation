@@ -91,6 +91,9 @@ pub mod integrations;
 // ── M3 I1b: work items, their links and the work-item-sync subscriber ──
 pub mod work_items;
 // ── end M3 I1b ──
+// ── M3 I1c: the event feed of an integration, retention and the epoch ──
+pub mod feed;
+// ── end M3 I1c ──
 // ── M2 MR3: web sessions (ADR-0021 §5) ──
 pub mod sessions;
 // ── end M2 MR3 ──

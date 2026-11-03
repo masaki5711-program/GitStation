@@ -312,6 +312,22 @@
     "word": "fixed"
   },
   {
+    "action": "IntegrationEventRead",
+    "method": "GET",
+    "path": "/api/v1/integrations/{id}/events",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "IntegrationEventCursorRead",
+    "method": "GET",
+    "path": "/api/v1/integrations/{id}/events/cursor",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "PathResolve",
     "method": "GET",
     "path": "/api/v1/namespaces/resolve",
