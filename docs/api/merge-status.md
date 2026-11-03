@@ -158,7 +158,9 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   無いとき）。違えば `409 FG-REVIEW-0019`（`reason` は上と同じ 3 つ）。
 - 承認の規則の答えは承認者を名前つきで返す: `users: [{ "id", "username", "display_name" }]`、
   `groups: [{ "id", "full_path", "display_name" }]`（`user_ids` / `group_ids` と同じ順。`user_ids` / `group_ids` も残す）。
-  見える範囲は規則そのものと同じ（`ProjectRead`）。新しい経路は無い。書き込みは利用者を `username`、グループを `full_path` で
+  見える範囲は規則そのものと同じ（`ProjectRead`）。新しい経路は無い。名前を引けない承認者（読み取りの失敗も）は `users` /
+  `groups` から外れ、id は `user_ids` / `group_ids` に残る（warn `forge.web.approver_names_incomplete`）。数が合わない規則は、
+  そのまま保存し直すと外れた承認者が消えるので、画面は保存を出さない。書き込みは利用者を `username`、グループを `full_path` で
   名指しするので、画面は答えの名前のまま保存し直せる。
 - `gstn approval-rule set` と `gstn merge-rule set` は先に読み、読んだ `updated_at`（無ければ `null`）を自分で送る。409 なら
   もう一度実行する。

@@ -290,6 +290,26 @@ impl Review {
         review::approval_rules(&self.db, *proof.id()).await
     }
 
+    /// The names of the approvers of `rules`, for a rule answer only (U2
+    /// follow-up; never read by a merge decision). `proof` is the answer's
+    /// own: `ProjectRead` (the list) or `ApprovalRuleManage` (a put).
+    pub async fn approver_names(
+        &self,
+        proof: &Authorized<ProjectCtx>,
+        rules: &[StoredApprovalRule],
+    ) -> Result<review::ApproverNames, ForgeError> {
+        let action = proof.action();
+        if action != Action::ApprovalRuleManage {
+            require(action, Action::ProjectRead)?;
+        }
+        let users: Vec<UserId> = rules.iter().flat_map(|r| r.users.iter().copied()).collect();
+        let groups: Vec<forge_core::GroupId> = rules
+            .iter()
+            .flat_map(|r| r.groups.iter().copied())
+            .collect();
+        review::approver_names(&self.db, &users, &groups).await
+    }
+
     /// Check a rule's fields and resolve its approvers (`FG-WEB-0006`).
     async fn rule(&self, ask: &RuleAsk) -> Result<NewApprovalRule, ForgeError> {
         if !name_ok(&ask.name) {

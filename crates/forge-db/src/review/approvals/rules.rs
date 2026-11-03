@@ -18,7 +18,7 @@ use forge_core::{ApprovalRuleChange, AuditDetails, RefPattern};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::PgConnection;
 
-use super::{NamedGroup, NamedUser, StoredApprovalRule};
+use super::StoredApprovalRule;
 use crate::change::{AuditEntry, ChangeContext, ChangeRecord, ChangeTx, Outcome, Settle};
 use crate::query_error;
 use crate::review::commands::{facts, MergeRequestFacts};
@@ -58,11 +58,7 @@ struct RuleRow {
     required_approvals: i32,
     updated_at: String,
     user_id: Option<i64>,
-    username: Option<String>,
-    user_display_name: Option<String>,
     group_id: Option<i64>,
-    group_path: Option<String>,
-    group_display_name: Option<String>,
 }
 
 fn invalid_rule(id: i64) -> ForgeError {
@@ -71,7 +67,9 @@ fn invalid_rule(id: i64) -> ForgeError {
         .with_context("approval_rule_id", id)
 }
 
-/// The rules of `project` with their approvers (named), by name: one
+/// The rules of `project` with their approvers (ids only: the merge
+/// evaluation reads this, and a name is never a reason it cannot decide —
+/// review round; names are [`super::approver_names`]'s), by name: one
 /// statement of at most `MAX_RULES × MAX_RULE_APPROVERS` rows.
 pub(super) async fn rules_on(
     conn: &mut PgConnection,
@@ -80,14 +78,9 @@ pub(super) async fn rules_on(
     let rows: Vec<RuleRow> = sqlx::query_as(
         "SELECT r.id, r.name, r.target_pattern, r.required_approvals, \
          to_char(r.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
-         AS updated_at, \
-         a.user_id, u.username, u.display_name AS user_display_name, \
-         a.group_id, n.full_path AS group_path, g.display_name AS group_display_name \
+         AS updated_at, a.user_id, a.group_id \
          FROM forge.approval_rules r \
          LEFT JOIN forge.approval_rule_approvers a ON a.rule_id = r.id \
-         LEFT JOIN forge.users u ON u.id = a.user_id \
-         LEFT JOIN forge.groups g ON g.id = a.group_id \
-         LEFT JOIN forge.namespaces n ON n.kind = 'group' AND n.owner_id = a.group_id \
          WHERE r.project_id = $1 ORDER BY r.name, a.id",
     )
     .bind(project.get())
@@ -115,34 +108,15 @@ pub(super) async fn rules_on(
                         required_approvals: row.required_approvals,
                         users: Vec::new(),
                         groups: Vec::new(),
-                        named_users: Vec::new(),
-                        named_groups: Vec::new(),
                         updated_at: row.updated_at.clone(), // clone: as above
                     })
             }
         };
         if let Some(u) = row.user_id {
-            let (Some(username), Some(display_name)) = (row.username, row.user_display_name) else {
-                return Err(invalid_rule(row.id).with_context("field", "user"));
-            };
             rule.users.push(UserId::new(u));
-            rule.named_users.push(NamedUser {
-                id: UserId::new(u),
-                username,
-                display_name,
-            });
         }
         if let Some(g) = row.group_id {
-            let (Some(full_path), Some(display_name)) = (row.group_path, row.group_display_name)
-            else {
-                return Err(invalid_rule(row.id).with_context("field", "group"));
-            };
             rule.groups.push(GroupId::new(g));
-            rule.named_groups.push(NamedGroup {
-                id: GroupId::new(g),
-                full_path,
-                display_name,
-            });
         }
     }
     Ok(by_name.into_values().collect())

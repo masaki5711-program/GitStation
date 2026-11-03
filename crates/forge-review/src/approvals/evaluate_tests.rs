@@ -51,8 +51,6 @@ fn rule(name: &str, required: i32, users: Vec<UserId>) -> StoredApprovalRule {
         required_approvals: required,
         users,
         groups: Vec::new(),
-        named_users: Vec::new(),
-        named_groups: Vec::new(),
         updated_at: "2026-11-03T00:00:00.000000Z".to_owned(),
     }
 }

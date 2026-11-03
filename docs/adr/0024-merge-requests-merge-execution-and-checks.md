@@ -1597,8 +1597,19 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   足すだけ）。比べた案の `GET /api/v1/users?ids=` は、新しい経路・新しい行列の行・件数の上限・画面での 2 度目の読み取りが要るのに、
   欲しいのは「この規則が名指ししている人」だけで、規則を読める人はその id を既に見ている。名前の見える範囲は規則と同じ
   `ProjectRead`（サインインした人。プロジェクトのメンバーの一覧 `MemberList` と同じ範囲で、利用者の検索 `UserSearch` より広くない。
-  グループは社内向けでサインインした人全員に見える）。規則の読み取り（`rules_on`）の 1 つの問い合わせで users・groups・namespaces を
-  結び、行は最大 20 規則 × 50 承認者。名前が引けない行（あり得ない）は `FG-SYS-0001`（`stored_approval_rule_invalid`）にし、黙って落とさない。
+  グループは社内向けでサインインした人全員に見える）。
+- **名前はマージの判定に入れない（レビューの指摘 MEDIUM）**: 規則の読み取り（`rules_on`）は評価（`approval_facts`）と共有なので
+  id だけを読む。名前は規則の答え（`GET` / `PUT`）を組むときだけ、別の 2 つの有界な問い合わせ（`approver_names`、最大 20 × 50 の id）
+  で引く。名前を引けない承認者（グループの namespace の行が無い。`namespaces.owner_id` に FK は無い）や名前の読み取りの失敗では、
+  答えを失敗にせず、その承認者を `users` / `groups` から外し（`user_ids` / `group_ids` には残す）、warn
+  `forge.web.approver_names_incomplete`（`error_code`、`request_id`、`project_id`、`missing_users`、`missing_groups`）を 1 行出す
+  （runbook merge-blocked）。画面は `users` と `user_ids`（`groups` と `group_ids`）の数が違う規則の保存を出さない（保存すると外れた
+  承認者を消してしまうため）。テスト `a_group_without_its_namespace_row_never_blocks_the_merge_decision`。
+- **名前の見える範囲（レビューの指摘 LOW、決定）**: 承認者の `username` / `display_name` は `ProjectRead` の人すべて（社内向けの
+  プロジェクトではメンバーでない社内の人も）に見える。これは受け入れる: 同じ欄はサインインした人なら誰でも利用者の検索
+  （`UserSearch`、`GET /api/v1/users?search=`）で引け、プロジェクトのメンバーの一覧（`MemberList`、`ProjectRead` と同じ範囲）にも
+  出る。グループの `full_path` / `display_name` もサインインした人全員に見える（グループは社内向け）。新しく見えるようになるのは
+  「この規則がこの人・このグループを名指ししている」ことだけで、それは id として前から同じ範囲に見えていた。
 - **画面**: 規則の書き込みは答えの名前（`username` / `full_path`）のまま送れるので、「最初の 100 人のメンバーに居ない承認者が
   居る規則は保存できない」制限をやめる（メンバー一覧での名前引きを外す。グループの選択肢の一覧は残す）。409 は他の保存と同じ
   「読み直す」行で扱い、作るときは `null` を送る。

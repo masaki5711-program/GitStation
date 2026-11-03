@@ -1789,3 +1789,85 @@ async fn stale_merge_rule_put_is_409() {
     assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
     w.t.drop_now().await;
 }
+
+/// Review round (MEDIUM): an approver's name is cosmetic. A group whose
+/// namespace row is missing (no FK holds it) never blocks the merge
+/// evaluation — it reads ids only — and the rule list still answers: the
+/// unnamed approver stays in `group_ids`, is left out of `groups`, and one
+/// warn carries the error code and the request id.
+#[tokio::test]
+async fn a_group_without_its_namespace_row_never_blocks_the_merge_decision() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let olga_id = olga.principal.user().expect("olga");
+    let qa = forge_db::groups::create(
+        &w.t.db,
+        &ctx("req-group-qa"),
+        &forge_db::groups::NewGroup {
+            segment: "qa".to_owned(),
+            parent: None,
+            display_name: "Quality".to_owned(),
+            description: String::new(),
+            owner: olga_id,
+        },
+    )
+    .await
+    .expect("group");
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.rules_uri("/review"),
+        olga.clone(),
+        Some(json!({
+            "required_approvals": 1,
+            "users": ["olga"],
+            "groups": ["qa"],
+            "expected_updated_at": null
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    w.t.exec_superuser(&format!(
+        "ALTER TABLE forge.namespaces DISABLE TRIGGER USER; \
+         DELETE FROM forge.namespaces WHERE kind = 'group' AND owner_id = {}; \
+         ALTER TABLE forge.namespaces ENABLE TRIGGER USER;",
+        qa.group_id.get()
+    ))
+    .await;
+    // The merge decision reads ids only: it still decides.
+    let (status, approvals) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/approvals"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{approvals}");
+    assert_eq!(approvals["rules"][0]["name"], "review", "{approvals}");
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["mergeable"], false, "the rule still blocks: {s}");
+    // The list answers with what can be named, and says so once in the log.
+    let logs = Captured::default();
+    let guard = logs.install();
+    let list = w.approval_rules(&w.dev).await;
+    drop(guard);
+    let rule = &list["rules"][0];
+    assert_eq!(rule["group_ids"], json!([qa.group_id.get()]), "{list}");
+    assert_eq!(rule["groups"], json!([]), "{list}");
+    assert_eq!(rule["users"][0]["username"], "olga", "{list}");
+    let warned = logs.named("forge.web.approver_names_incomplete");
+    assert_eq!(warned.len(), 1, "{:?}", logs.events());
+    assert_eq!(warned[0]["error_code"], "FG-SYS-0001", "{}", warned[0]);
+    assert!(warned[0]["request_id"].is_string(), "{}", warned[0]);
+    assert_eq!(warned[0]["missing_groups"], 1, "{}", warned[0]);
+    w.t.drop_now().await;
+}

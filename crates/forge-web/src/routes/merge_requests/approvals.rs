@@ -27,7 +27,7 @@ use forge_auth::{MergeRequestCtx, MergeRequestEdit, ProjectCtx};
 use forge_core::{parse_positive_id, ObjectId, ProjectId, UserId};
 use forge_errors::{ErrorCode, ForgeError};
 use forge_review::approvals::{ApprovalAnswer, ApprovalState, RuleAsk};
-use forge_review::{ApproveOutcome, ReviewRequest, RuleOutcome, StoredApprovalRule};
+use forge_review::{ApproveOutcome, ApproverNames, ReviewRequest, RuleOutcome, StoredApprovalRule};
 use serde::{Deserialize, Serialize};
 
 use super::loaders::{found, ids, lookup_ids, project_of};
@@ -253,7 +253,7 @@ pub struct ApprovalRulesBody {
     pub rules: Vec<ApprovalRuleBody>,
 }
 
-fn rule_body(r: &StoredApprovalRule) -> ApprovalRuleBody {
+fn rule_body(r: &StoredApprovalRule, names: &ApproverNames) -> ApprovalRuleBody {
     ApprovalRuleBody {
         approval_rule_id: r.id.get(),
         name: r.name.clone(), // clone: the body owns its values
@@ -262,8 +262,9 @@ fn rule_body(r: &StoredApprovalRule) -> ApprovalRuleBody {
         user_ids: r.users.iter().map(|u| u.get()).collect(),
         group_ids: r.groups.iter().map(|g| g.get()).collect(),
         users: r
-            .named_users
+            .users
             .iter()
+            .filter_map(|id| names.users.get(id))
             .map(|u| ApproverUserBody {
                 id: u.id.get(),
                 username: u.username.clone(), // clone: as above
@@ -271,8 +272,9 @@ fn rule_body(r: &StoredApprovalRule) -> ApprovalRuleBody {
             })
             .collect(),
         groups: r
-            .named_groups
+            .groups
             .iter()
+            .filter_map(|id| names.groups.get(id))
             .map(|g| ApproverGroupBody {
                 id: g.id.get(),
                 full_path: g.full_path.clone(), // clone: as above
@@ -281,6 +283,61 @@ fn rule_body(r: &StoredApprovalRule) -> ApprovalRuleBody {
             .collect(),
         updated_at: r.updated_at.clone(),
     }
+}
+
+/// The approvers' names of a rule answer (review round): a name is never a
+/// reason the answer fails. A failed read, or an approver without a name (a
+/// group whose namespace row is missing), leaves those approvers out of
+/// `users` / `groups` (their ids stay in `user_ids` / `group_ids`, so the
+/// screen sees the gap and offers no save) and logs one warn
+/// `forge.web.approver_names_incomplete` with the error code and the
+/// request (runbook merge-blocked).
+async fn approver_names(
+    state: &AppState,
+    ctx: &crate::Ctx,
+    proof: &forge_auth::Authorized<ProjectCtx>,
+    rules: &[StoredApprovalRule],
+) -> ApproverNames {
+    let read = async {
+        bounded(
+            state,
+            "approver_names",
+            review(state)?.approver_names(proof, rules),
+        )
+        .await
+    }
+    .await;
+    let (names, failure) = match read {
+        Ok(names) => (names, None),
+        Err(e) => (ApproverNames::default(), Some(e)),
+    };
+    let missing_users = rules
+        .iter()
+        .flat_map(|r| r.users.iter())
+        .filter(|id| !names.users.contains_key(id))
+        .count();
+    let missing_groups = rules
+        .iter()
+        .flat_map(|r| r.groups.iter())
+        .filter(|id| !names.groups.contains_key(id))
+        .count();
+    if failure.is_some() || missing_users > 0 || missing_groups > 0 {
+        let e = failure.unwrap_or_else(|| {
+            ForgeError::new(ErrorCode::Internal).with_context("reason", "approver_name_missing")
+        });
+        tracing::warn!(
+            target: "forge_web",
+            event = "forge.web.approver_names_incomplete",
+            error_code = e.code().id(),
+            request_id = %ctx.request_id,
+            project_id = proof.id().get(),
+            missing_users,
+            missing_groups,
+            error = %e,
+            "approvers without a name are left out of users / groups (runbook merge-blocked)"
+        );
+    }
+    names
 }
 
 fn answer_body(iid: i64, a: &ApprovalAnswer) -> ApprovalAnswerBody {
@@ -547,8 +604,9 @@ pub async fn rules(state: AppState, request: Dispatched<ProjectCtx>) -> Response
             review(&state)?.approval_rules(&w.proof),
         )
         .await?;
+        let names = approver_names(&state, &w.ctx, &w.proof, &rules).await;
         json(ApprovalRulesBody {
-            rules: rules.iter().map(rule_body).collect(),
+            rules: rules.iter().map(|r| rule_body(r, &names)).collect(),
         })
     }
     .await;
@@ -587,7 +645,8 @@ pub async fn put_rule(
                 w.input.expected_updated_at.as_deref(),
             )
             .await?;
-        Ok((outcome, json(rule_body(&rule))?))
+        let names = approver_names(&state, &w.ctx, &w.proof, std::slice::from_ref(&rule)).await;
+        Ok((outcome, json(rule_body(&rule, &names))?))
     }
     .await;
     match built {
