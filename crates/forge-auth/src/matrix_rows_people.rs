@@ -55,7 +55,7 @@ const SA_TOKEN: F = F::ServiceAccountTokenRequest {
 };
 
 #[rustfmt::skip]
-const GROUPS: [[Row; 2]; 21] = [
+const GROUPS: [[Row; 2]; 24] = [
     both!(A::ProjectVisibilityChange, OWNER.0, OWNER.1, F::MakeInternal),
     both!(A::ProtectedRefManage, MAINTAINER.0, MAINTAINER.1, F::ProtectionChange { from: None, to: Some(R::Maintainer) }),
     both!(A::ProjectTransfer, OWNER.0, OWNER.1, F::Transfer { target: Some(R::Owner) }),
@@ -90,6 +90,12 @@ const GROUPS: [[Row; 2]; 21] = [
     both!(A::ServiceAccountCreate, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
     both!(A::ServiceAccountTokenIssue, ADMIN_SESSION.0, ADMIN_SESSION.1, SA_TOKEN),
     both!(A::ServiceAccountUpdate, ADMIN_TOKEN.0, ADMIN_TOKEN.1, SA),
+    // M3 I1a: managing an integration is session only (the twin is the
+    // administrator's session); reading them takes an administrator's
+    // token; binding a project a Maintainer's.
+    both!(A::IntegrationManage, ADMIN_SESSION.0, ADMIN_SESSION.1, F::Instance),
+    both!(A::IntegrationRead, ADMIN_TOKEN.0, ADMIN_TOKEN.1, F::Instance),
+    both!(A::IntegrationBindingManage, MAINTAINER.0, MAINTAINER.1, F::PrivateProject),
 ];
 
 /// The rows, flattened (`matrix::ROWS` appends them), and the Owner

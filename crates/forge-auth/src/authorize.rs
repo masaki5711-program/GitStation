@@ -48,7 +48,10 @@
 //!    and a target of another kind is not found (`not_service_account`);
 //!    issuing their tokens is a person's, in a web session, never with
 //!    `admin` and never for a disabled account (`target_disabled`);
-//! 8. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
+//! 8. integrations (M3 I1a): creating and changing one is a person's,
+//!    an administrator's web session; reading them administrators' (people
+//!    only); binding a project a Maintainer's (people only);
+//! 9. pushes: reserved ref namespaces → `FG-GIT-0010`; protected refs →
 //!    `FG-GIT-0007` (force) / `FG-GIT-0009` (delete) for everyone, including
 //!    administrators, `FG-GIT-0017` (a create or fast-forward of a branch
 //!    whose merge rule forbids direct pushes, M3 R6) for everyone too, and
@@ -898,6 +901,26 @@ pub fn authorize(
             Ok(())
         }
 
+        // --- integrations (M3 I1a, plan 11 §5 I1) ---
+        // Creating and changing one: a person's, an administrator's web
+        // session (a token was refused above as session-only).
+        (Action::IntegrationManage, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+        // Reading them: administrators, people only (an `admin`-scoped
+        // token of a person included).
+        (Action::IntegrationRead, Resource::Instance) => {
+            people_only()?;
+            admin_only()
+        }
+        // Binding a project: people only, Maintainer (visibility and
+        // pending deletion were decided above: FG-REPO-0005 / FG-REPO-0006).
+        (Action::IntegrationBindingManage, Resource::Project(p)) => {
+            people_only()?;
+            need(Role::Maintainer, p.role)
+        }
+
         (Action::AuditRead, Resource::Instance) => admin_only(),
         (Action::AuditRead, Resource::Group { role }) => need(Role::Owner, *role),
         (Action::AuditRead, Resource::Project(p)) => need(Role::Owner, p.role),
@@ -969,6 +992,9 @@ pub fn authorize(
             | Action::ServiceAccountTokenIssue
             | Action::ServiceAccountTokenList
             | Action::ServiceAccountTokenRevoke
+            | Action::IntegrationManage
+            | Action::IntegrationRead
+            | Action::IntegrationBindingManage
             | Action::Metrics,
             Resource::Instance
             | Resource::Group { .. }
