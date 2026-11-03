@@ -572,5 +572,16 @@ Amendment M2 の 4 と §10 の実装。
    gstn には作らず、C-1 の表で `BrowserOnly` にした。
 10. **未決（利用者に確認）**: 管理画面（作成・発行）はまだ無い。それまで Runbook は管理者のブラウザのコンソールから API を呼ぶ手順にした。
     画面の MR を S0 の後に足すか、運用の CLI（`forge admin service-account create`、§8 の例外に追加）で代えるかを決める。
-11. **見送り**: サービスアカウントが書いた変更の監査の `actor_kind` は今も `user`（forge-hosting / forge-review / push の `ChangeContext` が
-    `Actor::User` を作る）。`Actor::ServiceAccount` に揃えるのは I1（kanflow の代理と同じ MR）で行う。
+11. **監査の actor**（独立レビューで変更）: forge-hosting と forge-review の API の書き込みは、呼び出し元がサービスアカウントなら
+    `actor_kind = service_account`（`Actor::ServiceAccount`）で記録する。**見送り**: git の push の経路（`forge_core::Pusher` に種類が無く、
+    push の記録から再生される）は今も `user`。I1 で `Pusher` に種類を足すときに揃える。マージは人だけなので対象外。
+12. **独立レビュー（2026-11-03）で足したこと**:
+    - **人でない持ち主の個人の名前空間にはプロジェクトを置かない**（呼び出し元に関係なく、管理者も）。`Resource::Namespace` と
+      `TransferTarget::PersonalNamespace` に持ち主の `users.kind`（`owner_kind`）を載せ、作成と移動を `non_person_namespace` で断る
+      （持ち主がそのプロジェクトの暗黙の Owner になるため）。4 はこの形に置き換えた。
+    - **利用者の `kind` は変わらない**: マイグレーション 20261113100100 のトリガー `users_kind_immutable`（23514）。プロフィールと身元の
+      種類の検査（20261113100000）が、後の `kind` の変更で崩れないようにする。新しいガードは guarded object。20261113100000 の 2 つの
+      トリガーは doctor が定義を比べるが、guarded object にはしない（登録できるのは作ったファイルだけで、そのファイルは追記のみ）。
+    - 秘密を含む応答の型（`CreatedToken`、`IssuedServiceAccountToken`）の `Debug` は手書きで、秘密を `<redacted>` にする。
+    - 種類で判定が変わる例外のテストは、internal のプロジェクトの読み取りの操作と Guest に限った。サービスアカウントの Guest は private
+      でも internal でも Guest のまま、ボットは internal を読める、を行で固定した。

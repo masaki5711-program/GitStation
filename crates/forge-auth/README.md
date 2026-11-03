@@ -205,8 +205,10 @@ included); `ServiceAccountUpdate` is people only. `Resource::ServiceAccount` /
 `ServiceAccountTokenRequest` carry the target's kind and state: another kind is
 `FG-REPO-0005 not_service_account`, issuing refuses `target_disabled` and the
 `admin` scope. As a caller a service account sees member projects only (internal
-too: `service_account_not_member`) and reads by its own role; it and a bot create
-nothing in their own personal namespace (`non_person_namespace`). `Scope::UserEmail`
+too: `service_account_not_member`) and reads by its own role. Nobody, administrators
+included, creates or moves a project into a personal namespace whose owner is not a
+person (`owner_kind` on `Resource::Namespace` / `TransferTarget::PersonalNamespace`,
+`non_person_namespace`). `Scope::UserEmail`
 satisfies nothing else. Rows `src/matrix_rows_service_accounts.rs`, tests
 `src/service_account_tests.rs`.
 

@@ -6,7 +6,7 @@
 
 - 個人の情報（メール・社員番号・外部 ID）を持たず、管理者にならず、IdP でサインインしない（`users_service_account_no_personal_data`、`users_service_account_not_admin`、`user_identities_human_only`）。
 - **メンバーになったプロジェクトだけ** が見える（internal のプロジェクトもメンバーでなければ見えない）。読み書きはそのメンバーのロールで決まる。
-- 自分の個人の名前空間にはプロジェクトを作れない（`non_person_namespace`）。
+- その個人の名前空間には、誰も（管理者も）プロジェクトを作れず、移せない（`non_person_namespace`）。
 - 目的ごとに 1 つ作る（kanflow 用、CI の報告用、…。計画 11 Q4）。
 
 ## Trigger
