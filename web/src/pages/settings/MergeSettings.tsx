@@ -60,7 +60,7 @@ export function MergingSection({ projectId }: { projectId: number }) {
   const settings = useMergeSettings(projectId);
   /** A new form after "read again" (the drafts start from what was read). */
   const [generation, setGeneration] = useState(0);
-  const [saved, setSaved] = useState(false);
+  const [message, setMessage] = useState('');
   const focusHeading = useFocusHeading();
   return (
     <Section id="merging-title" title={t('settings.merging.title')}>
@@ -80,7 +80,12 @@ export function MergingSection({ projectId }: { projectId: number }) {
               key={generation}
               projectId={projectId}
               settings={settings.data}
-              onSaved={setSaved}
+              onSaved={(saved) => {
+                setMessage(saved ? t('settings.merging.saved') : '');
+              }}
+              onChangedElsewhere={() => {
+                setMessage(t('settings.merging.changedElsewhere'));
+              }}
               onReload={async () => {
                 await settings.refetch();
                 setGeneration((g) => g + 1);
@@ -92,7 +97,7 @@ export function MergingSection({ projectId }: { projectId: number }) {
             <MergingView settings={settings.data} />
           )}
           <p role="status" className={styles.muted}>
-            {saved ? t('settings.merging.saved') : ''}
+            {message}
           </p>
           <Codeowners projectId={projectId} settings={settings.data} />
         </>
@@ -173,11 +178,14 @@ function MergingForm({
   projectId,
   settings,
   onSaved,
+  onChangedElsewhere,
   onReload,
 }: {
   projectId: number;
   settings: MergeSettings;
   onSaved: (saved: boolean) => void;
+  /** The untouched form took values someone else saved. */
+  onChangedElsewhere: () => void;
   onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -215,8 +223,9 @@ function MergingForm({
       setDeleteSource(settings.delete_source_default);
       setReset(settings.reset_approvals_on_push);
       setExcluded(settings.committer_approvals_excluded);
+      onChangedElsewhere();
     }
-  }, [settings, basis, dirty]);
+  }, [settings, basis, dirty, onChangedElsewhere]);
   // The default is always one of the allowed methods.
   const defaultMethod = allowed.find((m) => m === preferred) ?? allowed[0] ?? null;
   const problem = allowed.length === 0 ? t('settings.merging.noMethod') : null;
@@ -539,6 +548,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
         <RuleDialog
           projectId={projectId}
           rule={editing === 'new' ? null : editing}
+          taken={list.map((r) => r.name)}
           names={names}
           onClose={(savedName) => {
             setEditing(null);
@@ -574,11 +584,14 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
 function RuleDialog({
   projectId,
   rule,
+  taken,
   names,
   onClose,
 }: {
   projectId: number;
   rule: ApprovalRule | null;
+  /** The names of the rules that exist (a PUT under one would replace it). */
+  taken: string[];
   names: NameState;
   /** The saved rule's name, or null when nothing was saved. */
   onClose: (saved: string | null) => void;
@@ -599,7 +612,7 @@ function RuleDialog({
       busy={save.isPending}
     >
       {names.ready ? (
-        <RuleForm rule={rule} names={names} save={save} onClose={onClose} />
+        <RuleForm rule={rule} taken={taken} names={names} save={save} onClose={onClose} />
       ) : (
         <>
           {names.error !== null ? <QueryError error={names.error} onRetry={names.retry} /> : <Loading />}
@@ -623,11 +636,13 @@ function RuleDialog({
 
 function RuleForm({
   rule,
+  taken,
   names,
   save,
   onClose,
 }: {
   rule: ApprovalRule | null;
+  taken: string[];
   names: NameState;
   save: ReturnType<typeof usePutApprovalRule>;
   onClose: (saved: string | null) => void;
@@ -652,7 +667,15 @@ function RuleForm({
   const [groups, setGroups] = useState<string[]>(known.groups.filter((g): g is string => g !== null));
   const [attempt, setAttempt] = useState(0);
 
-  const nameProblem = rule !== null || RULE_NAME.test(name) ? null : t('settings.rules.nameInvalid');
+  // Names are lower case only (the server's rule), so they compare as they are.
+  const nameProblem =
+    rule !== null
+      ? null
+      : !RULE_NAME.test(name)
+        ? t('settings.rules.nameInvalid')
+        : taken.includes(name)
+          ? t('settings.rules.nameTaken')
+          : null;
   const required = parseCount(count, 1, 20);
   const countProblem = required === null ? t('settings.rules.countInvalid') : null;
   const targetProblem =

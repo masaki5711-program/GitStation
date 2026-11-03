@@ -414,7 +414,8 @@
       "saved": "Pengaturan merge disimpan.",
       "reload": "Muat ulang pengaturan",
       "yes": "Ya",
-      "no": "Tidak"
+      "no": "Tidak",
+      "changedElsewhere": "Pengaturan merge diubah di tempat lain. Formulir sekarang menampilkannya."
     },
     "codeowners": {
       "title": "CODEOWNERS",
@@ -467,7 +468,8 @@
       "save": "Simpan aturan",
       "saved": "Aturan {{name}} disimpan.",
       "unnamed": "Sebagian pemberi persetujuan aturan ini tidak dapat ditampilkan dengan nama: mereka bukan anggota langsung proyek ini atau grup yang dapat Anda lihat. Menyimpan di sini akan menghapus mereka, jadi tidak ditawarkan. Ubah aturan dengan gstn approval-rule, atau hapus dan buat lagi dengan pemberi persetujuan yang Anda inginkan.",
-      "tableLabel": "Daftar aturan persetujuan"
+      "tableLabel": "Daftar aturan persetujuan",
+      "nameTaken": "Aturan dengan nama ini sudah ada. Ubah aturan itu di daftar, atau pilih nama lain."
     },
     "conditions": {
       "title": "Syarat merge branch terlindungi",

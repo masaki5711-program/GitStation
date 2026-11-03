@@ -414,7 +414,8 @@
       "saved": "The merge settings were saved.",
       "reload": "Reload the settings",
       "yes": "Yes",
-      "no": "No"
+      "no": "No",
+      "changedElsewhere": "The merge settings were changed elsewhere. The form now shows them."
     },
     "codeowners": {
       "title": "CODEOWNERS",
@@ -467,7 +468,8 @@
       "save": "Save the rule",
       "saved": "The rule {{name}} was saved.",
       "unnamed": "Some approvers of this rule cannot be shown by name: they are not direct members of this project or groups you can see. Saving here would remove them, so it is not offered. Change the rule with gstn approval-rule, or delete it and create it again with the approvers you want.",
-      "tableLabel": "List of approval rules"
+      "tableLabel": "List of approval rules",
+      "nameTaken": "A rule with this name exists. Change that rule in the list, or choose another name."
     },
     "conditions": {
       "title": "Merge conditions of protected branches",
