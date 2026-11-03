@@ -123,7 +123,7 @@ async fn every_audited_table_has_its_audit_trigger() {
                 name: "merge_settings".into(),
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "project_id".into(),
-                unaudited_columns: vec![],
+                unaudited_columns: s(&["codeowners_restore_seen_at"]),
                 txn_audited_columns: vec![],
             },
             AuditedTable {
