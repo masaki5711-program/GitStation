@@ -864,3 +864,28 @@ async fn unreported_requirements_and_reporters_are_counted() {
     );
     w.t.drop_now().await;
 }
+
+/// Review fix 3: a report takes the project row `FOR SHARE`, so it never
+/// queues behind another holder of a share lock (another report, a merge
+/// request's read of the project) — but a writer of the project row (a
+/// purge, a deletion, a visibility change: `FOR UPDATE`) still waits for
+/// it.
+#[tokio::test]
+async fn a_report_shares_the_project_row_lock() {
+    let w = world().await;
+    let mut holder = w.t.superuser().await;
+    let mut tx = sqlx::Connection::begin(&mut holder).await.expect("begin");
+    sqlx::query("SELECT id FROM forge.projects WHERE id = $1 FOR SHARE")
+        .bind(w.project().get())
+        .execute(&mut *tx)
+        .await
+        .expect("share");
+    let (head, new) = (sha('a'), success("ci/gates"));
+    let report = w.report(&head, &new, "req-shared");
+    let done = tokio::time::timeout(std::time::Duration::from_secs(5), report)
+        .await
+        .expect("a report never waits for another share lock of the project");
+    done.expect("report");
+    tx.rollback().await.expect("rollback");
+    w.t.drop_now().await;
+}

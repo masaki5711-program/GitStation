@@ -38,7 +38,7 @@ use sqlx::postgres::PgConnection;
 
 use crate::access::{lock_account, Account};
 use crate::change::{ChangeContext, ChangeRecord, ChangeTx, Settle};
-use crate::projects::{evented_record, lock_access, locked_access_facts, ProjectAccessFacts};
+use crate::projects::{evented_record, lock_shared, locked_access_facts, ProjectAccessFacts};
 use crate::{query_error, read_query_error, Db};
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'";
@@ -418,9 +418,20 @@ fn limit_reached(project: ProjectId, head: &ObjectId) -> ForgeError {
 
 /// Record a report of `new` on `head` of `project` by `reporter`, after
 /// `decide` (forge-checks: `Authorized::reconfirm` on the locked facts)
-/// allowed it. The project row is locked, then the reporter's roles and
-/// account, then the grant; then all reports of the commit serialize on an
-/// advisory lock and the run's row is locked or created. Annotations are
+/// allowed it.
+///
+/// Lock order (review fix 3): the project row `FOR SHARE` (it blocks a
+/// purge, a deletion or a visibility change until the report commits, but
+/// not other reports — reports of other commits run in parallel), then the
+/// reporter's roles and account (`FOR SHARE`), then the grant (`FOR SHARE`,
+/// a revoke waits), then the commit's transaction-scoped advisory lock
+/// (all reports of one commit serialize on it: the name's row and the
+/// 100-names cap are decided under it), then the run's row `FOR UPDATE`.
+/// The merge gate takes the project row `FOR UPDATE` first: a report in
+/// flight finishes before a gate reads the runs, and a report that starts
+/// during a gate waits for the gate to commit, so the gate always reads
+/// committed runs and the two never deadlock (both take the project row
+/// first). Annotations are
 /// replaced as a whole. Errors (nothing written): `decide`'s, `FG-REPO-0005
 /// resource=project`, `FG-REVIEW-0021` for a new name beyond the cap,
 /// `FG-DB-*`.
@@ -436,7 +447,7 @@ pub async fn report_check_run_decided<P>(
     const ACTION: &str = "check_run.reported";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let locked = lock_access(&mut tx, project).await?;
+        let locked = lock_shared(&mut tx, project).await?;
         let caller = locked_access_facts(&mut tx, project, reporter, &locked).await?;
         let namespace = new.name.namespace();
         let granted = tx
