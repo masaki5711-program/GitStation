@@ -18,7 +18,8 @@
 //! account's tokens with `revoked_reason = 'user_disabled'`). These
 //! commands do not decide who may call them: forge-hosting calls them on
 //! a proof of the matching action (`authorize()`), the database CHECKs and
-//! the `service_account_profiles_kinds` trigger are the backstop.
+//! the guard triggers `service_account_profiles_kind_guard`,
+//! `user_identities_human_guard` and `users_kind_immutable` are the backstop.
 
 use std::time::Duration;
 

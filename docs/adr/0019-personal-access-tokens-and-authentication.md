@@ -536,11 +536,13 @@ Amendment M2 の 4 と §10 の実装。
 
 1. **サービスアカウントは利用者の行**（`forge.users.kind = service_account`）と、プロフィールの行 `forge.service_account_profiles`
    （持ち主 = 人、目的、作った管理者）でできる。個人の名前空間・プロジェクトのメンバー・スコープつきのトークンは人と同じ仕組みを使う。
-   持ち主が人であること、プロフィールがサービスアカウントのものであることはトリガー `service_account_profiles_kinds` が名前つきの制約
-   （`service_account_profiles_owner_human` / `service_account_profiles_kind`）で守る。削除は無い（無効化だけ）。目的ごとに 1 つ作る（Q4）。
+   持ち主が人であること、プロフィールがサービスアカウントのものであることはトリガー `service_account_profiles_kind_guard`
+   （`20261113100200` で `service_account_profiles_kinds` から名前を変えて登録した保護の対象）が名前つきの制約
+   （`service_account_profiles_owner_human` / `service_account_profiles_kind`）で守る。利用者の種類は後から変わらない（トリガー
+   `users_kind_immutable`）。削除は無い（無効化だけ）。目的ごとに 1 つ作る（Q4）。
 2. **個人の情報と管理者の権限を持たない**: メール・社員番号・外部 ID は持てず（`users_service_account_no_personal_data`）、`is_admin` にならない
    （`users_service_account_not_admin`）。したがってトークンに `admin` スコープは付かない（`tokens::issue` の `admin_scope_requires_admin` と
-   `authorize()` の `admin_scope_for_service_account` の二重）。IdP の身元に結ばれない（`user_identities_human_only`、運用のコマンドは
+   `authorize()` の `admin_scope_for_service_account` の二重）。IdP の身元に結ばれない（制約名 `user_identities_human_only`、トリガー `user_identities_human_guard`、運用のコマンドは
    FG-AUTH-0014 `not_human`）。サインインは以前どおり `not_human` で断る。
    **既存のデータへの影響**: この CHECK は既存の行も検証する。メール・外部 ID を持つ、または管理者のサービスアカウントが本番にあるとマイグレーションは
    失敗する（何も適用されない）。M3 までにサービスアカウントを作る経路は無かったので、無いはずである。
