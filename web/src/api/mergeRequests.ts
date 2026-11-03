@@ -398,6 +398,8 @@ export function useMergeAttempt(project: number, iid: number, since: number | nu
   return useQuery<LatestMerge>({
     queryKey: mrKeys.merge(project, iid),
     enabled: valid(iid) && since !== null,
+    // The 202 answer is the first state; the next read is the poll's.
+    staleTime: MERGE_POLL_FIRST_MS,
     refetchInterval: (query) => {
       if (since === null) return false;
       const delay = mergePollDelay(

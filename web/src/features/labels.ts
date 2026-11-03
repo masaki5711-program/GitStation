@@ -69,3 +69,32 @@ export function formatDate(iso: string, language: string): string {
   if (Number.isNaN(d.getTime())) return iso;
   return new Intl.DateTimeFormat(language, { dateStyle: 'medium' }).format(d);
 }
+
+/** A merge method (`merge_commit` / `squash` / `fast_forward`); an unknown
+ * name is shown as it is. */
+export function mergeMethodLabel(t: TFunction, method: string): string {
+  switch (method) {
+    case 'merge_commit':
+      return t('mr.merge.method.mergeCommit');
+    case 'squash':
+      return t('mr.merge.method.squash');
+    case 'fast_forward':
+      return t('mr.merge.method.fastForward');
+    default:
+      return method;
+  }
+}
+
+/** Help for each merge method (the dialog and the settings). */
+export function mergeMethodHelp(t: TFunction, method: string): string {
+  switch (method) {
+    case 'merge_commit':
+      return t('mr.merge.method.mergeCommitHelp');
+    case 'squash':
+      return t('mr.merge.method.squashHelp');
+    case 'fast_forward':
+      return t('mr.merge.method.fastForwardHelp');
+    default:
+      return '';
+  }
+}

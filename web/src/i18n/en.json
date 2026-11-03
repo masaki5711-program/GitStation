@@ -605,6 +605,43 @@
       "withdrawn": "Your approval was withdrawn.",
       "unchanged": "Nothing changed.",
       "reload": "Reload the merge request"
+    },
+    "merge": {
+      "open": "Merge…",
+      "title": "Merge this merge request?",
+      "explain": "The changes of {{source}} go into {{target}}. A merge cannot be undone from this screen.",
+      "methodLegend": "How to merge",
+      "method": {
+        "mergeCommit": "Merge commit",
+        "squash": "Squash",
+        "fastForward": "Fast-forward",
+        "mergeCommitHelp": "Keeps every commit and adds a merge commit.",
+        "squashHelp": "Combines the changes into one new commit.",
+        "fastForwardHelp": "Moves the target to the last commit. Only when the target has not moved on."
+      },
+      "deleteSource": "Delete the source branch {{source}} after the merge",
+      "confirm": "Merge",
+      "starting": "Asking…",
+      "queued": "The merge is queued.",
+      "prepared": "The merge is being prepared.",
+      "executing": "Merging…",
+      "applied": "Merged into {{target}}.",
+      "failed": "The merge failed. Tell an administrator with the request ID.",
+      "stillRunning": "Still processing. It continues even if you leave this page.",
+      "source": {
+        "deleted": "The source branch was deleted.",
+        "keptRefused": "The source branch was kept: you may not delete it.",
+        "keptMoved": "The source branch was kept: it has new commits.",
+        "keptFailed": "The source branch was kept: it could not be deleted."
+      },
+      "superseded": {
+        "targetMoved": "The target branch moved meanwhile. Merge again.",
+        "conflict": "It now conflicts with the target. Push a fix, then merge again.",
+        "jobFailed": "The merge could not be finished. Merge again; if it repeats, tell an administrator with the request ID.",
+        "methodNotAllowed": "That merge method is no longer allowed. Choose another one and merge again.",
+        "sourceMoved": "New commits were pushed meanwhile. Look at them, then merge again.",
+        "other": "The merge was stopped. Look at the merge request and merge again."
+      }
     }
   }
 }

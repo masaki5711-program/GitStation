@@ -605,6 +605,43 @@
       "withdrawn": "Persetujuan Anda ditarik.",
       "unchanged": "Tidak ada yang berubah.",
       "reload": "Muat ulang merge request"
+    },
+    "merge": {
+      "open": "Merge…",
+      "title": "Merge merge request ini?",
+      "explain": "Perubahan {{source}} masuk ke {{target}}. Merge tidak dapat dibatalkan dari layar ini.",
+      "methodLegend": "Cara merge",
+      "method": {
+        "mergeCommit": "Merge commit",
+        "squash": "Squash",
+        "fastForward": "Fast-forward",
+        "mergeCommitHelp": "Menyimpan semua commit dan menambahkan merge commit.",
+        "squashHelp": "Menggabungkan perubahan menjadi satu commit baru.",
+        "fastForwardHelp": "Memajukan target ke commit terakhir. Hanya jika target belum bergerak."
+      },
+      "deleteSource": "Hapus branch sumber {{source}} setelah merge",
+      "confirm": "Merge",
+      "starting": "Meminta…",
+      "queued": "Merge sedang antre.",
+      "prepared": "Merge sedang disiapkan.",
+      "executing": "Sedang merge…",
+      "applied": "Sudah di-merge ke {{target}}.",
+      "failed": "Merge gagal. Hubungi administrator dengan ID permintaan.",
+      "stillRunning": "Masih diproses. Tetap berjalan meskipun Anda meninggalkan halaman ini.",
+      "source": {
+        "deleted": "Branch sumber dihapus.",
+        "keptRefused": "Branch sumber dipertahankan: Anda tidak boleh menghapusnya.",
+        "keptMoved": "Branch sumber dipertahankan: ada commit baru.",
+        "keptFailed": "Branch sumber dipertahankan: tidak dapat dihapus."
+      },
+      "superseded": {
+        "targetMoved": "Branch target bergerak sementara itu. Merge lagi.",
+        "conflict": "Sekarang konflik dengan target. Push perbaikan, lalu merge lagi.",
+        "jobFailed": "Merge tidak dapat diselesaikan. Merge lagi; jika berulang, hubungi administrator dengan ID permintaan.",
+        "methodNotAllowed": "Cara merge itu tidak lagi diizinkan. Pilih cara lain dan merge lagi.",
+        "sourceMoved": "Commit baru di-push sementara itu. Periksa, lalu merge lagi.",
+        "other": "Merge dihentikan. Periksa merge request dan merge lagi."
+      }
     }
   }
 }

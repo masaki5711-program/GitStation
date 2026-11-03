@@ -293,3 +293,8 @@
   outline: var(--gs-focus-ring);
   outline-offset: 2px;
 }
+
+.progressLine {
+  margin: 0 0 var(--gs-space-1);
+  font-weight: bold;
+}

@@ -2,11 +2,11 @@
 // line first, the detail for whoever opens it): every reason of the status
 // contract in the server's order, the approval counts with why an approval
 // does not count, the required checks, and the actions the viewer flags allow
-// (approve / withdraw / merge). A button is shown only when the server said
+// (approve / withdraw / merge) and the progress of a merge. A button is shown only when the server said
 // the request would be allowed (`viewer`), never guessed from a role; the
 // server decides again when it is pressed.
 import type { TFunction } from 'i18next';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useApprove, useMergeStatus, useUnapprove } from '../../api/mergeRequests';
@@ -15,20 +15,28 @@ import controls from '../../components/controls.module.css';
 import { formatDateTime } from '../labels';
 import { ActionError } from './ActionError';
 import { reasonLine, uncountedKey } from './blockedReason';
+import { MergeButton, MergeProgress } from './MergeControl';
 import styles from './Mr.module.css';
 
 export function ConditionsPanel({
   projectId,
   iid,
-  merge,
+  sourceBranch,
 }: {
   projectId: number;
   iid: number;
-  /** The merge control (phase 2); rendered in the actions row. */
-  merge?: (status: MergeStatus) => ReactNode;
+  sourceBranch: string;
 }) {
   const { t } = useTranslation();
   const status = useMergeStatus(projectId, iid);
+  /** When the screen began following a merge attempt (null: not following). */
+  const [since, setSince] = useState<number | null>(null);
+  const [startedHere, setStartedHere] = useState(false);
+  const running = status.data?.reasons[0]?.reason === 'merge_in_progress';
+  // A merge already running when the page opens (or started elsewhere) is followed too.
+  useEffect(() => {
+    if (running && since === null) setSince(Date.now());
+  }, [running, since]);
   return (
     <section aria-labelledby="mr-conditions-title" className={styles.conditions}>
       <h2 id="mr-conditions-title" tabIndex={-1} className={styles.conditionsTitle}>
@@ -40,9 +48,19 @@ export function ConditionsPanel({
           <Reasons status={status.data} />
           <Approvals status={status.data} />
           <Checks status={status.data} />
-          <Actions projectId={projectId} iid={iid} status={status.data} merge={merge} />
+          <Actions
+            projectId={projectId}
+            iid={iid}
+            status={status.data}
+            sourceBranch={sourceBranch}
+            onMergeStarted={() => {
+              setStartedHere(true);
+              setSince(Date.now());
+            }}
+          />
         </>
       )}
+      <MergeProgress projectId={projectId} iid={iid} since={since} focusOnStart={startedHere} />
     </section>
   );
 }
@@ -141,12 +159,14 @@ function Actions({
   projectId,
   iid,
   status,
-  merge,
+  sourceBranch,
+  onMergeStarted,
 }: {
   projectId: number;
   iid: number;
   status: MergeStatus;
-  merge?: ((status: MergeStatus) => ReactNode) | undefined;
+  sourceBranch: string;
+  onMergeStarted: () => void;
 }) {
   const { t } = useTranslation();
   const approve = useApprove(projectId, iid);
@@ -159,7 +179,7 @@ function Actions({
   const mayWithdraw = v.can_unapprove && v.approved_by_me;
   const busy = approve.isPending || unapprove.isPending;
   const failed = approve.isError ? approve.error : unapprove.isError ? unapprove.error : null;
-  const mergeControl = merge?.(status) ?? null;
+  const mayMerge = v.can_merge && status.mergeable && head !== null;
 
   const onApproval = () => {
     if (busy) return;
@@ -175,7 +195,7 @@ function Actions({
 
   return (
     <>
-      {(mayApprove || mayWithdraw || mergeControl !== null) && (
+      {(mayApprove || mayWithdraw || mayMerge) && (
         <div className={styles.actions} role="group" aria-label={t('mr.actions.label')}>
           {(mayApprove || mayWithdraw) && (
             // One button in one place: after approving, the same element
@@ -189,7 +209,13 @@ function Actions({
               {mayWithdraw ? t('mr.actions.withdraw') : t('mr.actions.approve')}
             </button>
           )}
-          {mergeControl}
+          <MergeButton
+            projectId={projectId}
+            iid={iid}
+            status={status}
+            sourceBranch={sourceBranch}
+            onStarted={onMergeStarted}
+          />
         </div>
       )}
       <p role="status" className={styles.nextHint} data-testid="mr-action-result">

@@ -235,7 +235,7 @@ function Overview({
 
   return (
     <>
-      <ConditionsPanel projectId={projectId} iid={mr.iid} />
+      <ConditionsPanel projectId={projectId} iid={mr.iid} sourceBranch={mr.source_branch} />
       <section aria-labelledby="mr-description-title">
         <h2 id="mr-description-title" className={repo.sectionTitle}>
           {t('mr.view.description')}
