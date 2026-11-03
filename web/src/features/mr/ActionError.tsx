@@ -27,7 +27,7 @@ export function ActionError({
   onReload?: () => void;
 }) {
   const { t } = useTranslation();
-  // An explicit reload: the head read now is the one the screen shows.
+  // Reads again only: a newer head brings the "new version" line, not the buttons.
   const { reload } = useViewedHead();
   return (
     <div>

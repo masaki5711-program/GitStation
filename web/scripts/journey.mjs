@@ -610,7 +610,9 @@ async function main() {
     await page.setViewportSize({ width: 1100, height: 800 });
 
     // 6e. Approve and merge (U2): !5 is a draft with three reasons. The first
-    // approve finds a version pushed meanwhile (409, reload, approve again) ->
+    // approve finds a version pushed meanwhile (409; the reload reads again but
+    // the buttons stay hidden behind "a new version was pushed" until its diff
+    // was shown on Changes) -> approve the new head ->
     // one reason -> mark as ready -> merge: the first request is refused 403 in
     // the dialog -> merge again -> queued -> executing -> applied. The fake
     // refuses any unsafe request without the CSRF header.
@@ -632,6 +634,15 @@ async function main() {
     await check('49-approve-stale');
     await conditions.getByRole('button', { name: 'Reload the merge request' }).click();
     await conditions.getByRole('alert').waitFor({ state: 'detached' });
+    await page.getByTestId('mr-new-version').filter({ hasText: 'A new version was pushed.' }).waitFor();
+    if ((await conditions.getByRole('button', { name: 'Approve' }).count()) !== 0) {
+      problems.push('merge: approve is offered for a version that was not shown');
+    }
+    await check('49a-new-version');
+    await conditions.getByRole('button', { name: 'Review the new version' }).click();
+    await expectPath('/acme/forge-web/-/pull/5/changes', 'merge: review the new version');
+    await page.getByText('Version 1 (the latest)').waitFor();
+    await page.getByRole('navigation', { name: 'Merge request views' }).getByRole('link', { name: 'Overview' }).click();
     await conditions.getByRole('button', { name: 'Approve' }).click();
     await conditions.getByText('You approved this version.').waitFor();
     await conditions.getByRole('button', { name: 'Withdraw my approval' }).waitFor();

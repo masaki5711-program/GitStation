@@ -9,7 +9,7 @@
 // Each open comment box has its own mutation (keyed by its line), so one
 // line's sending state never shows on another; when a box closes (cancel or
 // sent) the focus goes back to that line's button.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -56,14 +56,16 @@ export function MrChanges({
   const list = useVersions(projectId, iid);
   const viewed = useViewedHead();
   const shown = useRef(false);
-  const first = list.isSuccess ? latestVersion(list.data.versions) : null;
-  // Opening Changes shows the newest version: that head counts as seen. Only
-  // the first version this tab renders, never one a later refetch brings.
-  useEffect(() => {
-    if (shown.current || !list.isSuccess) return;
-    shown.current = true;
-    if (first !== null && !first.refs_purged) viewed.accept(first.head_sha);
-  }, [list.isSuccess, first, viewed]);
+  /** A version's diff was shown: its head counts as seen. Once per opening of
+   * the tab, so a version a later refetch brings is not taken unseen. */
+  const onShown = useCallback(
+    (head: string) => {
+      if (shown.current) return;
+      shown.current = true;
+      viewed.accept(head);
+    },
+    [viewed],
+  );
   if (list.isPending) return <Loading />;
   if (list.isError) {
     return (
@@ -84,7 +86,9 @@ export function MrChanges({
       project={project}
       iid={iid}
       version={latest.version}
+      head={latest.head_sha}
       targetBranch={targetBranch}
+      onShown={onShown}
     />
   );
 }
@@ -94,16 +98,24 @@ function VersionChanges({
   project,
   iid,
   version,
+  head,
   targetBranch,
+  onShown,
 }: {
   projectId: number;
   project: string;
   iid: number;
   version: number;
+  head: string;
   targetBranch: string;
+  /** The diff of this version was shown (not when it is loading or failed). */
+  onShown: (head: string) => void;
 }) {
   const { t } = useTranslation();
   const diff = useVersionDiff(projectId, iid, version);
+  useEffect(() => {
+    if (diff.isSuccess) onShown(head);
+  }, [diff.isSuccess, head, onShown]);
   const threads = useDiscussions(projectId, iid);
   const toggle = useThreadToggle(projectId, iid);
   /** The line whose comment box is open (its position key). */

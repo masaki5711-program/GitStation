@@ -1,10 +1,11 @@
 // The head the merge request screen has shown (re-review HIGH, 2026-11-03).
 // Approve and merge name this head, never one a query read later: it is
-// state of the always-mounted merge request screen, set when the screen first
-// has the merge request, and moved only by an explicit act of the person —
-// "review the new version", a reload after a refusal, or opening Changes
-// (which shows that version). A background refetch never moves it, so a push
-// between looking and pressing cannot be approved or merged unseen.
+// state of the merge request screen, set when the screen first has the merge
+// request, and moved only when the Changes tab has shown a version's diff
+// (reached by opening Changes or by "review the new version"). Reloads and
+// background refetches only read again and never move it, so a push between
+// looking and pressing cannot be approved or merged unseen: the "a new version
+// was pushed" line takes over instead (re-review round 2).
 //
 // Where it lives: the layout remounts the page on every address change (its
 // error boundary is keyed by the path), so switching Overview / Changes would
@@ -17,7 +18,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, type ReactN
 import { useNavigate } from 'react-router';
 
 import { mrKeys } from '../../api/mergeRequests';
-import type { MergeRequest, MergeStatus } from '../../api/types';
+import type { MergeRequest } from '../../api/types';
 import { pullUrl } from '../repoUrls';
 
 export interface ViewedHead {
@@ -25,11 +26,11 @@ export interface ViewedHead {
   head: string | null;
   /** The screen has read the merge request once (before that nothing counts). */
   known: boolean;
-  /** The person was shown this head (Changes rendered its version). */
+  /** The person was shown this head (Changes rendered its version's diff). */
   accept: (head: string | null) => void;
-  /** Read everything again and take the head that is current now. */
+  /** Read everything again; the head shown stays as it is. */
   reload: () => Promise<void>;
-  /** `reload`, then the Changes tab to look at the new version. */
+  /** `reload`, then the Changes tab, where the new version's diff is shown. */
   reviewNew: () => Promise<void>;
 }
 
@@ -98,10 +99,7 @@ export function ViewedHeadProvider({
   );
   const reload = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: mrKeys.whole(projectId, iid) });
-    const status = queryClient.getQueryData<MergeStatus>(mrKeys.status(projectId, iid));
-    const fresh = queryClient.getQueryData<MergeRequest>(mrKeys.one(projectId, iid));
-    setState({ head: status?.head_sha ?? fresh?.head_sha ?? null });
-  }, [queryClient, projectId, iid, setState]);
+  }, [queryClient, projectId, iid]);
   const reviewNew = useCallback(async () => {
     await reload();
     void navigate(pullUrl(project, iid, 'changes'));

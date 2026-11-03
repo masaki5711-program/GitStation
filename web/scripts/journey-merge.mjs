@@ -115,6 +115,10 @@ export function mergeBackend(csrf, user) {
         versions: [{ version: 1, head_sha: mr.head_sha, base_sha: C1, merge_base_sha: C1, pushed_by: null, refs_purged: false, created_at: '2026-11-03T00:00:00Z' }],
       });
     }
+    if (key === 'GET /versions/1/diff') {
+      const v = { version: 1, head_sha: mr.head_sha, base_sha: C1, merge_base_sha: C1, pushed_by: null, refs_purged: false, created_at: '2026-11-03T00:00:00Z' };
+      return ok({ version: v, from: C1, to: mr.head_sha, commits: [], commits_truncated: false, diff: { truncated: false, files: [] } });
+    }
     if (key === 'PATCH ') {
       if (input.draft === false) mr.draft = false;
       return ok(mr);
