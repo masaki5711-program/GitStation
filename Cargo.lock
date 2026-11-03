@@ -718,6 +718,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-checks"
+version = "0.1.0"
+dependencies = [
+ "forge-core",
+ "forge-errors",
+]
+
+[[package]]
 name = "forge-cli"
 version = "0.1.0"
 dependencies = [
