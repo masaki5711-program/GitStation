@@ -19,6 +19,7 @@ import { MrChanges } from '../../../features/mr/MrChanges';
 import { Announcer } from '../../../features/mr/announce';
 import { StateBadge, mrTone } from '../../../features/mr/StateBadge';
 import { FOCUS_FIRST_UNRESOLVED, StatusLine } from '../../../features/mr/StatusLine';
+import { useThreadToggle } from '../../../features/mr/useThreadToggle';
 import { pullUrl } from '../../../features/repoUrls';
 import { useDocumentTitle } from '../../../hooks/useDocumentTitle';
 import { RepoError } from '../common';
@@ -137,6 +138,17 @@ function Header({ mr }: { mr: MergeRequest }) {
   );
 }
 
+/** Nothing the person chose holds the focus (see Layout.tsx). */
+function focusIsFree(): boolean {
+  const active = document.activeElement;
+  return (
+    active === null ||
+    active === document.body ||
+    active.tagName === 'MAIN' ||
+    active.tagName === 'H1'
+  );
+}
+
 function isFocusRequest(state: unknown): boolean {
   return (
     typeof state === 'object' &&
@@ -165,21 +177,30 @@ function Overview({
   const arrived = useRef<string | null>(null);
   /** After a resolve the thread moves under the summary; after a reopen, back. */
   const [focusAfter, setFocusAfter] = useState<{ id: number; resolved: boolean } | null>(null);
+  const toggle = useThreadToggle(projectId, mr.iid, (id, resolved) => {
+    setFocusAfter({ id, resolved });
+  });
   const all = threads.data?.discussions ?? [];
   const open = all.filter((d) => !d.resolved);
   const done = all.filter((d) => d.resolved);
 
   // Arriving from "next" on another tab: the first unresolved thread, or the
-  // threads' section when they could not be read.
+  // threads' section when they could not be read. The guard is set when the
+  // focus moves (inside the timer): StrictMode runs this effect twice and the
+  // first run's timer is cleared. Only a free focus moves (the body, the main
+  // area or a heading the layout focused, as Layout.tsx), so threads that
+  // load late never take it from a field.
   useEffect(() => {
     if (!isFocusRequest(location.state) || arrived.current === location.key) return;
     if (threads.isPending) return;
-    arrived.current = location.key;
     const first = threads.data?.discussions.find((d) => !d.resolved);
-    const target = first === undefined ? null : document.getElementById(threadElementId(first.id));
     // After the layout's own move to the h1 on a new address (its effect
     // runs after this one).
     const timer = window.setTimeout(() => {
+      arrived.current = location.key;
+      if (!focusIsFree()) return;
+      const target =
+        first === undefined ? null : document.getElementById(threadElementId(first.id));
       (target ?? heading.current)?.focus();
     }, 0);
     return () => {
@@ -206,9 +227,7 @@ function Overview({
       project={project}
       refName={mr.target_branch}
       discussion={d}
-      onToggled={(id, resolved) => {
-        setFocusAfter({ id, resolved });
-      }}
+      toggle={toggle}
     />
   );
 

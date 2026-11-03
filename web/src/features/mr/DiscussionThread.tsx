@@ -9,15 +9,15 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { useReply, useResolve, useUnresolve } from '../../api/mergeRequests';
+import { useReply } from '../../api/mergeRequests';
 import type { Discussion } from '../../api/types';
 import { QueryError } from '../../components/QueryError';
 import controls from '../../components/controls.module.css';
 import { formatDateTime } from '../labels';
 import { MarkdownView } from '../MarkdownView';
-import { useAnnounce } from './announce';
 import { CommentForm } from './CommentForm';
 import { StateBadge } from './StateBadge';
+import type { ThreadToggle } from './useThreadToggle';
 import styles from './Mr.module.css';
 
 /** The DOM id of a thread (the status line's "next" focuses it). */
@@ -30,7 +30,7 @@ export function DiscussionThread({
   refName,
   discussion,
   headingLevel = 3,
-  onToggled,
+  toggle,
 }: {
   projectId: number;
   iid: number;
@@ -40,14 +40,13 @@ export function DiscussionThread({
   discussion: Discussion;
   /** 3 on the Overview (under "Threads"); 4 inside a diff (under the file's h3). */
   headingLevel?: 3 | 4;
-  /** After the server resolved (true) or reopened (false) it. */
-  onToggled?: (id: number, resolved: boolean) => void;
+  /** Resolve / reopen, owned by the list (it outlives this thread's move). */
+  toggle: ThreadToggle;
 }) {
   const { t, i18n } = useTranslation();
   const headingId = useId();
   const stateId = useId();
   const positionId = useId();
-  const announce = useAnnounce();
   const article = useRef<HTMLElement>(null);
   const replyButton = useRef<HTMLButtonElement>(null);
   const [replying, setReplying] = useState(false);
@@ -59,9 +58,8 @@ export function DiscussionThread({
     setFocusAfter(null);
   }, [replying, focusAfter]);
   const reply = useReply(projectId, iid);
-  const resolve = useResolve(projectId, iid);
-  const unresolve = useUnresolve(projectId, iid);
-  const toggle = discussion.resolved ? unresolve : resolve;
+  const togglePending = toggle.pendingId === discussion.id;
+  const toggleFailed = toggle.failed?.id === discussion.id ? toggle.failed.error : null;
   const position = discussion.position;
   const Heading = headingLevel === 3 ? 'h3' : 'h4';
 
@@ -128,24 +126,15 @@ export function DiscussionThread({
         <button
           type="button"
           className={controls.button}
-          aria-disabled={toggle.isPending ? 'true' : undefined}
+          aria-disabled={togglePending ? 'true' : undefined}
           onClick={() => {
-            if (toggle.isPending) return;
-            const resolving = !discussion.resolved;
-            toggle.mutate(discussion.id, {
-              onSuccess: () => {
-                announce(
-                  resolving ? t('mr.thread.resolvedNotice') : t('mr.thread.reopenedNotice'),
-                );
-                onToggled?.(discussion.id, resolving);
-              },
-            });
+            toggle.toggle(discussion);
           }}
         >
           {discussion.resolved ? t('mr.thread.unresolve') : t('mr.thread.resolve')}
         </button>
       </div>
-      {toggle.isError && <QueryError error={toggle.error} />}
+      {toggleFailed !== null && <QueryError error={toggleFailed} />}
       {replying && (
         <CommentForm
           label={t('mr.thread.replyLabel')}

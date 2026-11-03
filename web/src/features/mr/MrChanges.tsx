@@ -25,6 +25,7 @@ import { QueryError } from '../../components/QueryError';
 import { DiffView, type DiffAnnotations, type LineRow } from '../DiffView';
 import { CommentForm } from './CommentForm';
 import { DiscussionThread } from './DiscussionThread';
+import { useThreadToggle } from './useThreadToggle';
 import styles from './Mr.module.css';
 
 /** Where a comment on this line goes (null: the line has no side to name). */
@@ -95,6 +96,7 @@ function VersionChanges({
   const { t } = useTranslation();
   const diff = useVersionDiff(projectId, iid, version);
   const threads = useDiscussions(projectId, iid);
+  const toggle = useThreadToggle(projectId, iid);
   /** The line whose comment box is open (its position key). */
   const [openAt, setOpenAt] = useState<string | null>(null);
   /** The line whose button takes the focus once its box has closed. */
@@ -174,6 +176,7 @@ function VersionChanges({
               refName={targetBranch}
               discussion={d}
               headingLevel={4}
+              toggle={toggle}
             />
           ))}
           {openAt === k && (
