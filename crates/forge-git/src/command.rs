@@ -17,9 +17,12 @@
 //!   and the exit status is checked.
 //!
 //! Captured runs ([`GitCommand::output`]) kill only the direct child on
-//! timeout (they are short and spawn no long-lived helpers). Streaming runs
-//! ([`GitCommand::spawn_stream`], `stream.rs`) kill the whole process group
-//! (Unix) / Job Object (Windows), helpers such as `pack-objects` included.
+//! timeout (they are short and spawn no long-lived helpers), unless the
+//! command asked for its process tree (`supervise_tree`, crate-internal: the
+//! maintenance steps, M3 O3, whose `gc` starts `repack` / `pack-objects`).
+//! Streaming runs ([`GitCommand::spawn_stream`], `stream.rs`) always kill
+//! the whole process group (Unix) / Job Object (Windows), helpers such as
+//! `pack-objects` included.
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -33,6 +36,7 @@ pub use crate::config::GitConfig;
 use forge_errors::{ErrorCode, ForgeError};
 
 use crate::process::{ignore_broken_pipe, read_capped, reap, with_reap};
+use crate::process_tree::ProcessTree;
 use crate::redact::stderr_head;
 pub use crate::revision::Revision;
 use tokio::io::AsyncWriteExt;
@@ -65,6 +69,9 @@ pub(crate) struct Captured {
     pub(crate) truncated: bool,
     /// One of the accepted codes; `None` exactly when `truncated`.
     pub(crate) exit_code: Option<i32>,
+    /// The redacted head of stderr, for the log context only (an accepted
+    /// non-zero exit explains itself there: `fsck`, M3 O3).
+    pub(crate) stderr: String,
 }
 
 impl GitOutput {
@@ -104,6 +111,7 @@ impl Git {
             #[cfg(test)]
             hold_stdin: false,
             option_like_value: false,
+            supervise_tree: false,
             timeout: None,
             idle_timeout: None,
         }
@@ -139,6 +147,9 @@ pub struct GitCommand {
     hold_stdin: bool,
     /// Set when a forge-generated value starts with `-` (refused at run time).
     pub(crate) option_like_value: bool,
+    /// Captured runs: kill the whole process tree (group / Job Object) on a
+    /// timeout, an overflow or a drop, not only the direct child (M3 O3).
+    supervise_tree: bool,
     /// `None`: `GitConfig::timeout_total` (captured) /
     /// `GitConfig::stream_timeout_total` (streaming).
     pub(crate) timeout: Option<Duration>,
@@ -191,6 +202,15 @@ impl GitCommand {
     pub(crate) fn exclude_glob(mut self, glob: &'static str) -> Self {
         self.options
             .push(OsString::from(format!("--exclude={glob}")));
+        self
+    }
+
+    /// `--prune=<seconds>.seconds.ago` (gc, M3 O3): a fixed option whose
+    /// only variable part is a number forge computed.
+    #[must_use]
+    pub(crate) fn prune_seconds_ago(mut self, seconds: u64) -> Self {
+        self.options
+            .push(OsString::from(format!("--prune={seconds}.seconds.ago")));
         self
     }
 
@@ -285,6 +305,16 @@ impl GitCommand {
     #[must_use]
     fn hold_stdin_open(mut self) -> Self {
         self.hold_stdin = true;
+        self
+    }
+
+    /// Captured runs only: put git into its own process group (Unix) / Job
+    /// Object (Windows) so a timeout, an overflow or a dropped run kills its
+    /// helpers too (`gc` → `repack` → `pack-objects`; M3 O3). Streams always
+    /// do this. The tree is released once git exited by itself.
+    #[must_use]
+    pub(crate) fn supervise_tree(mut self) -> Self {
+        self.supervise_tree = true;
         self
     }
 
@@ -473,12 +503,34 @@ impl GitCommand {
         let started = Instant::now();
         // One deadline for the whole run (I/O and the final wait together).
         let deadline = tokio::time::Instant::now() + self.total_timeout();
-        let mut child = self.build(false).spawn().map_err(|e| {
+        let mut cmd = self.build(false);
+        if self.supervise_tree {
+            crate::process_tree::configure(&mut cmd);
+        }
+        let mut child = cmd.spawn().map_err(|e| {
             self.fail(ErrorCode::GitUnavailable)
                 .with_context("reason", "spawn_failed")
                 .with_context("git_bin", config.bin.display())
                 .with_source(e)
         })?;
+        // Dropped with this future (a cancelled job), the tree is killed
+        // (`Drop for ProcessTree`); released once git exited by itself.
+        let mut tree = if self.supervise_tree {
+            match ProcessTree::attach(&child) {
+                Ok(tree) => Some(tree),
+                Err(e) => {
+                    let reaped = reap(&mut child).await;
+                    return Err(with_reap(
+                        self.fail(ErrorCode::GitUnavailable)
+                            .with_context("reason", "process_tree_failed")
+                            .with_source(e),
+                        reaped,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
 
         let stdin_pipe = child.stdin.take();
         let stdout = child.stdout.take();
@@ -519,6 +571,9 @@ impl GitCommand {
         };
 
         let Ok((write_res, out_res, err_res)) = tokio::time::timeout_at(deadline, io).await else {
+            // The group is killed while the leader is still unreaped (its id
+            // cannot have been reused), then the leader is reaped.
+            kill_tree(&mut tree);
             let reaped = reap(&mut child).await;
             return Err(with_reap(self.timed_out(), reaped));
         };
@@ -528,6 +583,7 @@ impl GitCommand {
         let (stdout_bytes, overflow) = match out_res {
             Ok(r) => r,
             Err(e) => {
+                kill_tree(&mut tree);
                 let reaped = reap(&mut child).await;
                 return Err(with_reap(
                     self.fail(ErrorCode::GitProcessFailed).with_source(e),
@@ -535,6 +591,9 @@ impl GitCommand {
                 ));
             }
         };
+        if overflow {
+            kill_tree(&mut tree);
+        }
         if overflow && truncate {
             // Enough read: git was killed at the cap; confirm it is gone.
             return match reap(&mut child).await {
@@ -544,6 +603,7 @@ impl GitCommand {
                     },
                     truncated: true,
                     exit_code: None,
+                    stderr: stderr_head,
                 }),
                 Err(failure) => Err(failure.attach(
                     self.fail(ErrorCode::GitProcessFailed)
@@ -569,10 +629,15 @@ impl GitCommand {
                     .with_source(e))
             }
             Err(_) => {
+                kill_tree(&mut tree);
                 let reaped = reap(&mut child).await;
                 return Err(with_reap(self.timed_out(), reaped));
             }
         };
+        // git exited by itself and has waited for its helpers.
+        if let Some(t) = tree.as_mut() {
+            t.release();
+        }
         let exit_code = status
             .code()
             .map_or_else(|| "signal".to_string(), |c| c.to_string());
@@ -602,7 +667,15 @@ impl GitCommand {
             },
             truncated: false,
             exit_code: Some(code),
+            stderr: stderr_head,
         })
+    }
+}
+
+/// Kill a supervised run's whole tree (no-op for a plain captured run).
+fn kill_tree(tree: &mut Option<ProcessTree>) {
+    if let Some(t) = tree.as_mut() {
+        t.kill();
     }
 }
 

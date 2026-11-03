@@ -1,4 +1,6 @@
-//! Killing a streaming git subprocess together with its helpers.
+//! Killing a streaming git subprocess together with its helpers (also the
+//! captured runs built with `GitCommand::supervise_tree`, M3 O3: `gc` starts
+//! `repack` → `pack-objects`).
 //!
 //! `git upload-pack` / `receive-pack` start helpers (`pack-objects`,
 //! `index-pack`, `rev-list`). Killing only the direct child would leave them

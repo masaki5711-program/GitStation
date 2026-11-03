@@ -188,6 +188,9 @@ async fn receive_pack_argv_is_the_fixed_set() {
             // M3 R1b: hidden from a pusher too (ADR-0024 §2).
             "-c",
             "transfer.hideRefs=refs/merge-requests/",
+            // M3 O3: a deletion waits out the maintenance's pack-refs.
+            "-c",
+            "core.packedRefsTimeout=10000",
             "-c",
             "receive.maxInputSize=2147483648",
             "-c",

@@ -213,7 +213,10 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         // a report's own codes never reach the job.
         | ErrorCode::CheckRunDataInvalid
         | ErrorCode::CheckPayloadInvalid
-        | ErrorCode::CheckRunLimitReached => false,
+        | ErrorCode::CheckRunLimitReached
+        // M3 O3: the maintenance job's own codes never reach a merge.
+        | ErrorCode::RepositoryMaintenanceFailed
+        | ErrorCode::RepositoryCorrupt => false,
     }
 }
 

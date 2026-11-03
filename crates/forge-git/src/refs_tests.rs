@@ -312,3 +312,43 @@ async fn a_version_ref_keeps_a_force_pushed_commit_through_gc() {
         .expect("git");
     assert!(!status.success(), "an unreferenced commit is pruned");
 }
+
+/// M3 O3: a ref transaction that needs `packed-refs.lock` while the
+/// maintenance's pack-refs holds it (here: a test holding the lock for
+/// 1.5 s, longer than git's default 1 s) waits for it
+/// (`core.packedRefsTimeout`, 10 s) instead of failing: the purge of a
+/// packed version ref goes through once pack-refs is done.
+#[tokio::test]
+async fn version_ref_write_during_pack_refs_is_retried() {
+    let f = fixture().await;
+    let c1 = commit(&f.path, "one\n", None);
+    let v1 = merge_request_version_ref(2, 1).expect("ref");
+    f.apply(&[RefChange::Create {
+        name: v1.clone(),
+        new: c1.clone(),
+    }])
+    .await
+    .expect("v1");
+    plumb(&f.path, &["pack-refs", "--all", "--prune"], None);
+    let lock = f.path.join("packed-refs.lock");
+    std::fs::write(&lock, b"").expect("hold packed-refs.lock");
+    let release = {
+        let lock = lock.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            std::fs::remove_file(&lock).expect("release the lock");
+        })
+    };
+    let done = f
+        .apply(&[RefChange::Delete {
+            name: v1.clone(),
+            old: c1,
+        }])
+        .await;
+    release.await.expect("released");
+    assert_eq!(
+        done.expect("waited for the lock"),
+        RefUpdateResult::Applied { changes: 1 }
+    );
+    assert!(f.refs("refs/merge-requests/2").await.is_empty());
+}
