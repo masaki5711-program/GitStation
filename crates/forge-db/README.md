@@ -722,8 +722,8 @@ FG-AUTH-0019; no active human owner → FG-AUTH-0010 `ownerless_service_account`
 `tokens::issue_for_service_account` records `tokens.issued_by_user_id` (and
 `issued_by_user_id` in `token.created`); a person is refused
 (`owner_not_service_account`). The schema backstops: the
-`service_account_profiles_kinds` trigger (`service_account_profiles_kind`,
+`service_account_profiles_kind_guard` trigger (`service_account_profiles_kind`,
 `service_account_profiles_owner_human`), `users_service_account_no_personal_data`,
-`users_service_account_not_admin`, `user_identities_human_only`; `users::create`
+`users_service_account_not_admin`, `user_identities_human_guard` (constraint `user_identities_human_only`), `users_kind_immutable`; `users::create`
 and `identities::link_by_operator` refuse first (FG-AUTH-0006, FG-AUTH-0014
 `not_human`). Tests `src/service_accounts/tests.rs`.

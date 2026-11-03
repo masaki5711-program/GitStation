@@ -581,7 +581,8 @@ Amendment M2 の 4 と §10 の実装。
       （持ち主がそのプロジェクトの暗黙の Owner になるため）。4 はこの形に置き換えた。
     - **利用者の `kind` は変わらない**: マイグレーション 20261113100100 のトリガー `users_kind_immutable`（23514）。プロフィールと身元の
       種類の検査（20261113100000）が、後の `kind` の変更で崩れないようにする。新しいガードは guarded object。20261113100000 の 2 つの
-      トリガーは doctor が定義を比べるが、guarded object にはしない（登録できるのは作ったファイルだけで、そのファイルは追記のみ）。
+      種類の検査は、マイグレーション 20261113100200 が新しい名前（`service_account_profiles_kind_guard`、`user_identities_human_guard`。
+      本体と制約の名前は同じ）で作り直して guarded object にした（ゲートは作ったファイルにしか登録を認めず、元のファイルは追記のみのため）。
     - 秘密を含む応答の型（`CreatedToken`、`IssuedServiceAccountToken`）の `Debug` は手書きで、秘密を `<redacted>` にする。
     - 種類で判定が変わる例外のテストは、internal のプロジェクトの読み取りの操作と Guest に限った。サービスアカウントの Guest は private
       でも internal でも Guest のまま、ボットは internal を読める、を行で固定した。

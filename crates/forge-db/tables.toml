@@ -50,8 +50,12 @@ guarded_functions = [
     "push_unlisted_refs_guard",
     # M3 R5 round 4: the commits a push introduced are never changed.
     "push_commits_guard",
-    # M3 S0 review: a user's kind never changes.
+    # M3 S0 review: a user's kind never changes; a profile belongs to a
+    # service account owned by a person; only a person has an identity
+    # (guarded since 20261113100200).
     "users_kind_immutable",
+    "service_account_profiles_kind_guard",
+    "user_identities_human_guard",
 ]
 
 [tables.events]

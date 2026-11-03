@@ -680,3 +680,54 @@ async fn a_users_kind_never_changes() {
     );
     t.drop_now().await;
 }
+
+/// S0 review: the kind checks are guards (20261113100200): the triggers
+/// under their guard names, ENABLE ALWAYS, registered as guarded objects;
+/// the names of 20261113100000 are gone.
+#[tokio::test]
+async fn the_kind_checks_are_registered_guards() {
+    let t = FreshDb::migrated().await;
+    let mut su = t.superuser().await;
+    let enabled = |table: &str, name: &str| {
+        format!(
+            "SELECT count(*) FROM pg_catalog.pg_trigger \
+             WHERE tgrelid = 'forge.{table}'::regclass AND tgname = '{name}' AND tgenabled = 'A'"
+        )
+    };
+    for (table, name, old) in [
+        (
+            "service_account_profiles",
+            "service_account_profiles_kind_guard",
+            "service_account_profiles_kinds",
+        ),
+        (
+            "user_identities",
+            "user_identities_human_guard",
+            "user_identities_human_only",
+        ),
+        ("users", "users_kind_immutable", "users_kind_immutable"),
+    ] {
+        assert_eq!(scalar(&mut su, &enabled(table, name)).await, 1, "{name}");
+        if old != name {
+            assert_eq!(
+                scalar(&mut su, &enabled(table, old)).await,
+                0,
+                "{old} dropped"
+            );
+        }
+        assert_eq!(
+            scalar(
+                &mut su,
+                &format!(
+                    "SELECT count(*) FROM forge_audit.guarded_objects WHERE \
+                     (object_type = 'trigger' AND object_identity = '{name} on forge.{table}') \
+                     OR (object_type = 'function' AND object_identity = 'forge.{name}()')"
+                )
+            )
+            .await,
+            2,
+            "{name} is a guarded trigger and function"
+        );
+    }
+    t.drop_now().await;
+}
