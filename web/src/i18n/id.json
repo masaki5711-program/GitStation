@@ -148,7 +148,8 @@
     "files": "Berkas",
     "commits": "Commit",
     "compare": "Bandingkan",
-    "switchGo": "Pergi"
+    "switchGo": "Pergi",
+    "pulls": "MR"
   },
   "tree": {
     "title": "Berkas",
@@ -265,9 +266,10 @@
     "change": "Perubahan",
     "lineAdded": "ditambah",
     "lineRemoved": "dihapus",
-    "show": "Tampilkan diff ({{count}} baris)",
     "files": "Berkas yang berubah: {{count}}",
-    "truncated": "Perubahan terlalu banyak; hanya sebagian diff yang ditampilkan."
+    "truncated": "Perubahan terlalu banyak; hanya sebagian diff yang ditampilkan.",
+    "show_one": "Tampilkan diff ({{count}} baris)",
+    "show_other": "Tampilkan diff ({{count}} baris)"
   },
   "markdown": {
     "externalImage": "Gambar eksternal (tidak ditampilkan)",
@@ -446,5 +448,125 @@
     "restore": "Pulihkan",
     "restoreOf": "Pulihkan {{name}}",
     "title": "Proyek yang dihapus"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "Siap digabung",
+      "generic": "Belum bisa digabung. Periksa perubahannya",
+      "mergeabilityUnknown": "Menunggu pemeriksaan. Push akan memperbaruinya",
+      "conflict": "Bertabrakan dengan perubahan lain",
+      "unresolved": "Utas belum selesai: {{n}}",
+      "next": {
+        "firstUnresolved": "Buka utas pertama yang belum selesai",
+        "changes": "Lihat perubahan",
+        "push": "Push perbaikan"
+      },
+      "checking": "Memeriksa apakah bisa digabung…",
+      "notOpen": "Merge request ini sudah tidak terbuka",
+      "draft": "Masih berupa draf",
+      "mergeInProgress": "Penggabungan sedang berjalan",
+      "sourceBranchMissing": "Cabang sumber sudah tidak ada",
+      "ffNotPossible": "Tertinggal dari tujuan. Ambil perubahan terbaru",
+      "nothingToMerge": "Tidak ada yang perlu digabung",
+      "configChange": "Perubahan berkas pengaturan perlu persetujuan maintainer",
+      "changedPathsUnknown": "Berkas yang berubah tidak bisa dibaca",
+      "codeownersInvalid": "Definisi pemilik kode tidak bisa dipakai. Beri tahu administrator",
+      "approvalsMissing": "Persetujuan kurang ({{rule}}: perlu {{required}}, sudah {{counted}})",
+      "approvalsMissingProtected": "Persetujuan kurang (perlu {{required}}, sudah {{counted}})",
+      "codeownerMissing": "Pemilik {{pattern}} ({{owners}}) harus menyetujui",
+      "checkMissing": "Pemeriksaan wajib \"{{name}}\" belum melapor",
+      "checkFailed": "Pemeriksaan wajib \"{{name}}\" belum berhasil ({{status}} / {{conclusion}})",
+      "hint": {
+        "approvals": "Menunggu peninjau menyetujui.",
+        "owners": "Menunggu pemilik berkas itu menyetujui.",
+        "checks": "Menunggu hasil pemeriksaan.",
+        "merging": "Menunggu penggabungan selesai.",
+        "maintainer": "Menunggu persetujuan maintainer.",
+        "retry": "Buka halaman ini lagi nanti. Jika tetap begini, beri tahu administrator.",
+        "draft": "Pembuatnya akan mengeluarkannya dari draf saat siap.",
+        "notOpen": "Untuk mengusulkan perubahan lain, buat merge request baru.",
+        "codeowners": "Tidak bisa digabung sampai berkas CODEOWNERS diperbaiki.",
+        "nothing": "Tujuan sudah berisi perubahan ini."
+      }
+    },
+    "number": "!{{iid}}",
+    "draft": "Draf",
+    "opened": "Dibuat oleh {{author}} pada {{date}}",
+    "branches": "{{source}} ke {{target}}",
+    "state": {
+      "open": "Terbuka",
+      "merged": "Digabung",
+      "closed": "Ditutup",
+      "all": "Semua"
+    },
+    "list": {
+      "title": "Merge request",
+      "new": "Merge request baru",
+      "filterLabel": "Tampilkan merge request",
+      "empty": "Tidak ada merge request di sini.",
+      "older": "Merge request lebih lama",
+      "newest": "Kembali ke yang terbaru",
+      "emptyOpen": "Tidak ada merge request yang terbuka."
+    },
+    "new": {
+      "title": "Merge request baru",
+      "source": "Cabang dengan perubahan",
+      "target": "Cabang tujuan",
+      "choose": "Pilih cabang",
+      "defaultBranch": "{{name}} (bawaan)",
+      "titleLabel": "Judul",
+      "description": "Deskripsi (opsional, Markdown)",
+      "submit": "Buat merge request",
+      "sourceRequired": "Pilih cabang dengan perubahan.",
+      "targetRequired": "Pilih cabang tujuan.",
+      "sameBranch": "Kedua cabang sama. Pilih cabang lain yang berisi perubahan.",
+      "titleRequired": "Masukkan judul.",
+      "titleTooLong": "Judul paling banyak 255 karakter.",
+      "noBranches": "Repositori ini belum punya cabang. Push sebuah cabang dulu."
+    },
+    "view": {
+      "tabsLabel": "Layar merge request",
+      "overview": "Ringkasan",
+      "changes": "Perubahan",
+      "description": "Deskripsi",
+      "noDescription": "Tidak ada deskripsi."
+    },
+    "threads": {
+      "title": "Utas",
+      "empty": "Belum ada komentar.",
+      "truncated": "Utas terlalu banyak; hanya sebagian yang ditampilkan.",
+      "resolvedCount": "Utas selesai: {{n}}"
+    },
+    "thread": {
+      "title": "Utas oleh {{author}}",
+      "resolved": "Selesai",
+      "unresolved": "Belum selesai",
+      "resolve": "Tandai selesai",
+      "unresolve": "Buka lagi",
+      "reply": "Balas",
+      "replyLabel": "Balasan Anda",
+      "replySubmit": "Kirim balasan",
+      "outdated": "Baris ini diubah oleh versi berikutnya.",
+      "outdatedUnknown": "Tidak bisa dipastikan apakah versi berikutnya mengubah baris ini. Periksa lagi.",
+      "resolvedNotice": "Utas ditandai selesai.",
+      "reopenedNotice": "Utas dibuka lagi."
+    },
+    "comment": {
+      "label": "Tulis komentar",
+      "help": "Markdown bisa digunakan.",
+      "submit": "Komentar",
+      "required": "Tulis komentar dulu.",
+      "sending": "Mengirim…"
+    },
+    "diff": {
+      "version": "Versi {{version}} (terbaru)",
+      "noVersion": "Belum ada versi yang tercatat. Perubahan muncul di sini setelah push dibaca.",
+      "purged": "Perubahan versi ini telah dihapus (misalnya untuk menghapus rahasia). Tidak bisa ditampilkan lagi.",
+      "column": "Komentar",
+      "lineNew": "baris {{line}} di {{path}}",
+      "lineOld": "baris {{line}} yang dihapus di {{path}}",
+      "commentOn": "Komentari {{where}}",
+      "yourComment": "Komentar Anda: {{where}}"
+    }
   }
 }

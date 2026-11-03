@@ -1541,3 +1541,30 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   尽きたら、残りの head は読まずに（その承認は消える）、warn `forge.review.approvals_carry_unread` を 1 行だけ `error_code` と
   `unread_heads` 付きで出す（リポジトリ全体の障害で push ごとに最大 50 行の warn を出さない。時間切れも同じ行で記録する）。テスト
   `a_git_failure_of_the_carry_reads_is_logged_once`。
+
+## 実装で決めたこと（U2 の前提 `feat/review-status-viewer`、2026-11-03）
+
+- **viewer の欄は `authorize()` の試しの呼び出し**: `GET …/status` の `viewer`（`can_approve`、`can_unapprove`、`can_merge`、
+  `can_mark_ready`、`approved_by_me`）とマージの設定の答えの `viewer`（`can_manage`、`can_loosen`、`can_suspend_codeowners`）は、
+  その操作の API が組むのと **同じ文脈**（読み込んだ MR、merge のローダーと同じ target の保護、`draft: false`、承認を緩める／緩めない
+  変更、有効な長さの一時停止）で唯一の `authorize()` を呼んだ答え（forge-auth `viewer.rs`）。新しい `Action` も独自の規則も足さない。
+  テスト `viewer_flags_equal_authorize_for_every_matrix_row` が、該当する操作の行列の許可・拒否の行すべてで欄と行の期待が一致する
+  ことを確かめる。
+- **ヒントであって許可ではない**: 画面はボタンを出す／出さないにだけ使う。操作は API がもう一度判定し、コマンドがロックの下で
+  さらに判定する。PUT の答えの `viewer` はロックの前に読んだ事実で決める。`can_unapprove` は `approved_by_me` と組で使い、
+  `can_mark_ready` はドラフトのときだけ意味を持つ。
+- **欄の裏の読み取りの失敗は欄だけを閉じる**: target の保護（版がある MR は承認の事実と一緒に読んだ規則を共有し、2 度目の問い合わせを
+  しない。版が無いときだけ別に読む）や、設定の画面の最も高い保護の読み取りが失敗・時間切れになっても、答え全体は失敗にせず、
+  **欄をすべて `false`** にして、warn `forge.web.viewer_flags_closed`（`error_code`、`request_id`、`read`）を 1 行出す。他の欄は
+  そのまま。テスト `a_failing_viewer_read_closes_the_flags_and_keeps_the_answer`。
+- **`reason` は enum**: `reasons[].reason` は OpenAPI の enum `StatusReasonName`（`BlockReason` に対して網羅的）。`schema_version` は
+  1 のまま（欄は足すだけ。`status_schema_v1_fields_are_only_added`、`status_reason_schema_lists_every_block_reason`）。
+- **マージの設定の楽観的な同時編集の検出**: `PUT …/merge-settings` は `expected_updated_at`（読んだ `updated_at`。既定のまま保存が
+  無ければ `null`）を **必須** にする。任意にすると古いクライアントが他人の変更を黙って上書きし続けるため（欄が無い要求は
+  `FG-WEB-0006 reason=missing_field`）。ロックの下の値と違えば新しい **FG-REVIEW-0017 `MergeSettingsChanged`**（409、info、何も
+  書かない）。既存の衝突のコードは意味が合わない（FG-REVIEW-0008 は MR の head）。値は読んだ文字列をそのまま返す不透明な文字列で、
+  マイクロ秒までの RFC 3339。すべての書き手（PUT、CODEOWNERS の切り替え、期限切れの自動復帰）はプロジェクトの行をロックしてから
+  `clock_timestamp()` で付ける（`now()` はトランザクションの開始時刻なので、ロックを待った書き込みが先に終わった書き込みより前の
+  時刻になりうる）。自動復帰（`restore_one`）も他の書き手と同じ順（プロジェクトの行 → 設定の行）でロックする。テスト
+  `stale_merge_settings_put_is_409`、`updated_at_follows_the_commit_order`、`the_restore_waits_for_the_project_row`。
+  `gstn merge-settings set` は読んだ `updated_at` を送る。

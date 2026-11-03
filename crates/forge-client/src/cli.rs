@@ -517,7 +517,8 @@ pub enum MergeSettingsCommand {
         project: i64,
     },
     /// Change a project's merge settings (Maintainer); options left out keep
-    /// their value.
+    /// their value. Refused (FG-REVIEW-0017) when they changed after gstn
+    /// read them: run it again.
     Set {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,

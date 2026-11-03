@@ -219,6 +219,23 @@ async fn world() -> World {
     );
     plumb(&path, &["update-ref", "refs/heads/main", &base], None);
     plumb(&path, &["update-ref", "refs/heads/feature", &head], None);
+    // U2 review: a branch for a second merge request (never refreshed).
+    let second = commit_on(
+        &path,
+        Some(&base),
+        &[
+            (
+                "README", "base
+",
+            ),
+            (
+                "second.txt",
+                "s
+",
+            ),
+        ],
+    );
+    plumb(&path, &["update-ref", "refs/heads/second", &second], None);
     // One browse cache for the routes and the merge job, as in `forge serve`.
     let browser = Browser::new(git.clone(), storage.clone(), BrowseLimits::default());
     let smart = SmartHttp::new(git.clone(), storage.clone(), GitHttpLimits::default());
@@ -802,7 +819,8 @@ async fn the_merge_settings_routes_read_and_write_the_settings() {
         "default_method": "fast_forward",
         "delete_source_default": false,
         "reset_approvals_on_push": true,
-        "committer_approvals_excluded": true
+        "committer_approvals_excluded": true,
+        "expected_updated_at": null
     });
     let (status, body) = send(
         w.router.clone(),
@@ -987,5 +1005,501 @@ async fn the_merge_rule_routes_and_the_status_contract() {
         (StatusCode::NOT_FOUND, "FG-REPO-0005"),
         "{body}"
     );
+    w.t.drop_now().await;
+}
+
+// ── U2: the viewer flags and the settings' optimistic concurrency ──
+
+impl World {
+    /// A new person with `role` on the project, in a web session.
+    async fn member(&self, username: &str, role: Role) -> Caller {
+        let user = users::create(
+            &self.t.db,
+            &ctx(&format!("req-user-{username}")),
+            &NewUser::human(username, username, &format!("{username}@example.test")),
+        )
+        .await
+        .expect("user");
+        projects::add_member(
+            &self.t.db,
+            &ctx(&format!("req-member-{username}")),
+            forge_core::ProjectId::new(self.project),
+            user.user_id,
+            role,
+        )
+        .await
+        .expect("member");
+        let session = forge_db::sessions::issue(
+            &self.t.db,
+            &ctx(&format!("req-session-{username}")),
+            &forge_db::sessions::NewSession {
+                user: user.user_id,
+                idle: Duration::from_secs(3600),
+                absolute: Duration::from_secs(8 * 3600),
+                oidc: None,
+            },
+        )
+        .await
+        .expect("session")
+        .session_id;
+        Caller {
+            principal: Principal::authenticated(
+                user.user_id,
+                false,
+                true,
+                Credential::Session,
+                forge_auth::AccountKind::Human,
+            ),
+            session: Some(session),
+        }
+    }
+
+    /// olga protects `main` at `role` (the push path's rules).
+    async fn protect_main(&self, olga: &Caller, role: &str) {
+        let (status, body) = send(
+            self.router.clone(),
+            "POST",
+            &self.project_uri("/protected-refs"),
+            olga.clone(),
+            Some(json!({"pattern": "refs/heads/main", "push_min_role": role})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+
+    async fn viewer(&self, who: &Caller, uri: &str) -> Value {
+        let (status, body) = send(self.router.clone(), "GET", uri, who.clone(), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["viewer"].clone()
+    }
+}
+
+fn mr_viewer(approve: bool, merge: bool, ready: bool, approved_by_me: bool) -> Value {
+    json!({
+        "can_approve": approve,
+        "can_unapprove": approve,
+        "can_merge": merge,
+        "can_mark_ready": ready,
+        "approved_by_me": approved_by_me
+    })
+}
+
+fn settings_viewer(manage: bool, loosen: bool, suspend: bool) -> Value {
+    json!({"can_manage": manage, "can_loosen": loosen, "can_suspend_codeowners": suspend})
+}
+
+/// ADR-0024 §8.3: the author never approves (FG-REVIEW-0013) — the status
+/// says so before the button is pressed; another Developer+ may, and once
+/// they did the status says `approved_by_me`.
+#[tokio::test]
+async fn author_sees_can_approve_false() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let status = w.uri("/status");
+    assert_eq!(
+        w.viewer(&w.dev, &status).await,
+        mr_viewer(false, true, true, false),
+        "dave wrote the merge request"
+    );
+    assert_eq!(
+        w.viewer(&olga, &status).await,
+        mr_viewer(true, true, true, false)
+    );
+    // The flag and the route agree.
+    let (answer, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        w.dev.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(
+        (answer, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-REVIEW-0013")
+    );
+    let (answer, body) = send(
+        w.router.clone(),
+        "POST",
+        &w.uri("/approve"),
+        olga.clone(),
+        Some(json!({"sha": w.head})),
+    )
+    .await;
+    assert_eq!(answer, StatusCode::OK, "{body}");
+    assert_eq!(
+        w.viewer(&olga, &status).await,
+        mr_viewer(true, true, true, true)
+    );
+    assert_eq!(
+        w.viewer(&w.dev, &status).await["approved_by_me"],
+        false,
+        "olga's approval is not dave's"
+    );
+    // A token without `merge_approve` / `merge_execute` / `api` reads the
+    // status but may do none of them.
+    let read_only = w
+        .viewer(&token(w.dev_id, &[Scope::ReadApi], false), &status)
+        .await;
+    assert_eq!(read_only, mr_viewer(false, false, false, false), "read_api");
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §4.3: the merge needs the target's minimum push role — the
+/// status reads the protection the merge route's loader reads.
+#[tokio::test]
+async fn developer_on_maintainer_protected_target_sees_can_merge_false() {
+    let w = world().await;
+    let olga = w.owner().await;
+    w.protect_main(&olga, "maintainer").await;
+    let status = w.uri("/status");
+    assert_eq!(w.viewer(&w.dev, &status).await["can_merge"], false);
+    assert_eq!(w.viewer(&olga, &status).await["can_merge"], true);
+    let (answer, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(
+        (answer, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "the route agrees: {body}"
+    );
+    w.t.drop_now().await;
+}
+
+/// R6 review: loosening the approvals and suspending CODEOWNERS need a
+/// role at or above every protection; tightening is any Maintainer's. The
+/// settings screen reads it from `viewer`; a write's answer carries it
+/// too.
+#[tokio::test]
+async fn can_loosen_false_below_highest_protection() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let mia = w.member("mia", Role::Maintainer).await;
+    w.protect_main(&olga, "owner").await;
+    let uri = w.project_uri("/merge-settings");
+    assert_eq!(
+        w.viewer(&mia, &uri).await,
+        settings_viewer(true, false, false)
+    );
+    assert_eq!(
+        w.viewer(&olga, &uri).await,
+        settings_viewer(true, true, true)
+    );
+    assert_eq!(
+        w.viewer(&w.dev, &uri).await,
+        settings_viewer(false, false, false)
+    );
+    // The routes agree: mia's loosening and suspension are refused, her
+    // tightening is not.
+    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let mut values = json!({
+        "allowed_methods": ["merge_commit", "squash"],
+        "default_method": "merge_commit",
+        "delete_source_default": false,
+        "reset_approvals_on_push": true,
+        "committer_approvals_excluded": false,
+        "expected_updated_at": null
+    });
+    let (status, body) = put(mia.clone(), values.clone()).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.project_uri("/merge-settings/codeowners-enforcement"),
+        mia.clone(),
+        Some(json!({"enforced": false, "for_minutes": 60})),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    values["committer_approvals_excluded"] = json!(true);
+    values["delete_source_default"] = json!(true);
+    let (status, body) = put(mia.clone(), values).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["viewer"], settings_viewer(true, false, false));
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.project_uri("/merge-settings/codeowners-enforcement"),
+        olga.clone(),
+        Some(json!({"enforced": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["viewer"], settings_viewer(true, true, true));
+    w.t.drop_now().await;
+}
+
+/// U2: a settings write names the `updated_at` it read (`null`: the
+/// defaults); another one is FG-REVIEW-0017 and nothing is written — two
+/// people editing at once never overwrite each other silently. The field
+/// is required: a client that does not send it is refused, never trusted.
+#[tokio::test]
+async fn stale_merge_settings_put_is_409() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let mia = w.member("mia", Role::Maintainer).await;
+    let uri = w.project_uri("/merge-settings");
+    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let values = |method: &str, expected: Value| {
+        json!({
+            "allowed_methods": ["merge_commit", "squash"],
+            "default_method": method,
+            "delete_source_default": false,
+            "reset_approvals_on_push": true,
+            "committer_approvals_excluded": true,
+            "expected_updated_at": expected
+        })
+    };
+    let (status, read) = send(w.router.clone(), "GET", &uri, mia.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert!(read["updated_at"].is_null(), "the defaults: {read}");
+    // olga saves first …
+    let (status, first) = put(olga.clone(), values("squash", Value::Null)).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let stamp = first["updated_at"].clone();
+    assert!(stamp.is_string(), "{first}");
+    // … mia saves on what she read before: refused, olga's change stays.
+    let (status, body) = put(mia.clone(), values("merge_commit", Value::Null)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0017"),
+        "{body}"
+    );
+    assert!(body["request_id"].is_string(), "{body}");
+    let (_, now) = send(w.router.clone(), "GET", &uri, mia.clone(), None).await;
+    assert_eq!(now["default_method"], "squash");
+    assert_eq!(now["updated_at"], stamp);
+    // Even the same values are refused on a stale view (another change may
+    // have touched what the caller did not look at).
+    let (status, body) = put(
+        mia.clone(),
+        values("squash", json!("2000-01-01T00:00:00.000000Z")),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0017"),
+        "{body}"
+    );
+    // Read again, saved again.
+    let (status, body) = put(mia.clone(), values("merge_commit", stamp.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["default_method"], "merge_commit");
+    assert_ne!(body["updated_at"], stamp);
+    // The CODEOWNERS switch is a change of the settings too.
+    let latest = body["updated_at"].clone();
+    let (status, _) = send(
+        w.router.clone(),
+        "PUT",
+        &w.project_uri("/merge-settings/codeowners-enforcement"),
+        olga.clone(),
+        Some(json!({"enforced": false, "for_minutes": 60})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = put(mia.clone(), values("squash", latest)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0017"),
+        "{body}"
+    );
+    // Without the field: refused before anything is decided.
+    let mut old_client = values("squash", Value::Null);
+    old_client
+        .as_object_mut()
+        .expect("object")
+        .remove("expected_updated_at");
+    let (status, body) = put(olga.clone(), old_client).await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    w.t.drop_now().await;
+}
+
+// ── review round: the viewer flags are a hint — a failed read closes them ──
+
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+thread_local! {
+    static SINK: std::cell::RefCell<Option<Captured>> = const { std::cell::RefCell::new(None) };
+}
+
+struct ThreadSink;
+
+impl std::io::Write for ThreadSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        SINK.with(|s| {
+            if let Some(c) = s.borrow().as_ref() {
+                c.0.lock().expect("log buffer").extend_from_slice(buf);
+            }
+        });
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct CaptureGuard;
+
+impl Drop for CaptureGuard {
+    fn drop(&mut self) {
+        SINK.with(|s| s.borrow_mut().take());
+    }
+}
+
+impl Captured {
+    /// Capture this thread's events (`#[tokio::test]` runs on the current
+    /// thread, so the request's events land here).
+    fn install(&self) -> CaptureGuard {
+        static GLOBAL: std::sync::Once = std::sync::Once::new();
+        GLOBAL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .flatten_event(true)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(|| ThreadSink)
+                .finish();
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("the only global subscriber");
+        });
+        SINK.with(|s| *s.borrow_mut() = Some(self.clone()));
+        CaptureGuard
+    }
+
+    fn events(&self) -> Vec<Value> {
+        let text = String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("utf-8");
+        text.lines()
+            .map(|l| serde_json::from_str(l).expect("json log line"))
+            .collect()
+    }
+
+    fn named(&self, event: &str) -> Vec<Value> {
+        self.events()
+            .into_iter()
+            .filter(|e| e["event"] == event)
+            .collect()
+    }
+}
+
+/// The protection read behind the flags fails (its table is gone for a
+/// moment): the status and the settings still answer 200 with everything
+/// else, every flag is `false`, and one warn per answer carries the
+/// error code, the request id and what was read.
+#[tokio::test]
+async fn a_failing_viewer_read_closes_the_flags_and_keeps_the_answer() {
+    let w = world().await;
+    let olga = w.owner().await;
+    // A second merge request (branch `second`, made with the world) whose
+    // version the worker has not recorded: its status reads the protection
+    // apart from the approval facts.
+    let (status, opened) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/merge-requests"),
+        w.dev.clone(),
+        Some(json!({"title": "Second", "source_branch": "second", "target_branch": "main"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let iid = opened["iid"].as_i64().expect("iid");
+    w.t.exec_superuser("ALTER TABLE forge.protected_refs RENAME TO protected_refs_gone")
+        .await;
+    let logs = Captured::default();
+    let guard = logs.install();
+    let (code_status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri(&format!("/merge-requests/{iid}/status")),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(code_status, StatusCode::OK, "{s}");
+    assert_eq!(s["schema_version"], 1);
+    assert_eq!(s["mergeable"], false);
+    assert!(
+        s["reasons"]
+            .as_array()
+            .expect("reasons")
+            .iter()
+            .any(|r| r["reason"] == "mergeability_unknown"),
+        "{s}"
+    );
+    assert_eq!(s["viewer"], mr_viewer(false, false, false, false), "{s}");
+    let (code_status, settings) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/merge-settings"),
+        olga.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(code_status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["default_method"], "merge_commit");
+    assert_eq!(settings["viewer"], settings_viewer(false, false, false));
+    drop(guard);
+    let warns = logs.named("forge.web.viewer_flags_closed");
+    assert_eq!(warns.len(), 2, "one per answer: {warns:?}");
+    for (warn, read) in warns
+        .iter()
+        .zip(["merge_target_protection", "merge_settings_protection"])
+    {
+        assert_eq!(warn["level"], "WARN", "{warn}");
+        assert!(
+            warn["error_code"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("FG-")),
+            "{warn}"
+        );
+        assert!(warn["request_id"].is_string(), "{warn}");
+        assert_eq!(warn["read"], read, "{warn}");
+    }
+    w.t.exec_superuser("ALTER TABLE forge.protected_refs_gone RENAME TO protected_refs")
+        .await;
+    w.t.drop_now().await;
+}
+
+/// A settings write without `expected_updated_at` is FG-WEB-0006 and the
+/// log says why (`reason=missing_field`, the field).
+#[tokio::test]
+async fn a_settings_write_without_expected_updated_at_is_missing_field() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let logs = Captured::default();
+    let guard = logs.install();
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &w.project_uri("/merge-settings"),
+        olga,
+        Some(json!({
+            "allowed_methods": ["merge_commit"],
+            "default_method": "merge_commit",
+            "delete_source_default": false,
+            "reset_approvals_on_push": true,
+            "committer_approvals_excluded": true
+        })),
+    )
+    .await;
+    drop(guard);
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::BAD_REQUEST, "FG-WEB-0006"),
+        "{body}"
+    );
+    let logged = logs
+        .events()
+        .into_iter()
+        .find(|e| e["error_code"] == "FG-WEB-0006")
+        .unwrap_or_else(|| panic!("the refusal is logged: {:?}", logs.events()));
+    let line = logged.to_string();
+    assert!(line.contains("missing_field"), "{line}");
+    assert!(line.contains("expected_updated_at"), "{line}");
     w.t.drop_now().await;
 }

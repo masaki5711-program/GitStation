@@ -433,7 +433,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "merge-settings set",
-        summary: "Change a project's merge settings (people only; Maintainer). Options left out keep their value; --allow replaces the allowed methods.",
+        summary: "Change a project's merge settings (people only; Maintainer). Options left out keep their value; --allow replaces the allowed methods. It sends the updated_at it read: settings changed in between are refused (FG-REVIEW-0017; run it again), never overwritten.",
         args: &[
             arg("--project", "option", true, "The project id."),
             arg("--allow", "option", false, "An allowed method (repeatable): merge_commit, squash, fast_forward."),

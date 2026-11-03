@@ -34,6 +34,11 @@ impl CodeownersToggleCtx {
     pub fn change(&self) -> CodeownersToggle {
         self.change
     }
+    /// The project and its highest protection as loaded (the viewer
+    /// flags, `viewer.rs`).
+    pub(crate) fn loaded(&self) -> (LoadedProject, Option<Role>) {
+        (self.project, self.highest_protection)
+    }
 }
 
 impl sealed::Sealed for CodeownersToggleCtx {}
@@ -73,6 +78,11 @@ impl MergeSettingsCtx {
             highest_protection,
             loosens,
         }
+    }
+    /// The project and its highest protection as loaded (the viewer
+    /// flags, `viewer.rs`).
+    pub(crate) fn loaded(&self) -> (LoadedProject, Option<Role>) {
+        (self.project, self.highest_protection)
     }
 }
 

@@ -743,3 +743,121 @@ async fn restore_seen(w: &World) -> Option<String> {
     .await
     .expect("seen")
 }
+
+// ── U2 review: `updated_at` is the optimistic-concurrency token ──
+
+fn settings_values(method: MergeMethod) -> MergeSettingsValues {
+    MergeSettingsValues {
+        allowed_methods: vec![MergeMethod::MergeCommit, MergeMethod::Squash],
+        default_method: method,
+        ..MergeSettingsValues::default()
+    }
+}
+
+/// A settings write that waited on the project row while another change
+/// committed stamps a later `updated_at` than that change (`now()` would
+/// stamp the waiting transaction's start, before it): the token never goes
+/// backwards, so a reader of the newer change is never taken for stale and
+/// a reader of the older one never passes.
+#[tokio::test]
+async fn updated_at_follows_the_commit_order() {
+    let w = world().await;
+    let id = w.web.project_id.get();
+    let (_, first, ()) = put_merge_settings_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-put-1"),
+        w.web.project_id,
+        w.alice,
+        &settings_values(MergeMethod::Squash),
+        |_| Ok(()),
+    )
+    .await
+    .expect("first put");
+    let mut held =
+        w.t.hold_audited(
+            ("project", id),
+            &[format!(
+                "SELECT 1 FROM forge.projects WHERE id = {id} FOR UPDATE"
+            )],
+        )
+        .await;
+    let db = w.t.db.clone();
+    let (alice, project) = (w.alice, w.web.project_id);
+    let waiting = tokio::spawn(async move {
+        put_merge_settings_mr_decided(
+            &db,
+            &as_user(alice, "req-put-2"),
+            project,
+            alice,
+            &settings_values(MergeMethod::MergeCommit),
+            |_| Ok(()),
+        )
+        .await
+        .map(|(_, s, ())| s)
+    });
+    w.t.until_waiting("FROM forge.projects").await;
+    // Another change commits while the write waits (its transaction began
+    // before this one).
+    let between = held
+        .fetch_text(&format!(
+            "UPDATE forge.merge_settings SET updated_at = clock_timestamp() \
+             WHERE project_id = {id} \
+             RETURNING to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')"
+        ))
+        .await;
+    held.commit().await;
+    let second = waiting.await.expect("join").expect("second put");
+    let first = first.updated_at.expect("stored");
+    let second = second.updated_at.expect("stored");
+    assert!(between > first, "{between} > {first}");
+    assert!(
+        second > between,
+        "the waiting write is later: {second} > {between}"
+    );
+    w.t.drop_now().await;
+}
+
+/// The expiry worker's restore locks the project row first, as every
+/// settings writer does: it waits for a write holding it, so a write that
+/// checked `updated_at` cannot overwrite the restore's change.
+#[tokio::test]
+async fn the_restore_waits_for_the_project_row() {
+    let w = world().await;
+    let id = w.web.project_id.get();
+    w.suspend(30, "req-suspend").await;
+    w.t.commit_audited(
+        ("project", id),
+        &[format!(
+            "UPDATE forge.merge_settings SET codeowners_suspended_at = now() - interval '2 hours', \
+             codeowners_enforced_off_until = now() - interval '1 hour' WHERE project_id = {id}"
+        )],
+    )
+    .await;
+    let held =
+        w.t.hold_audited(
+            ("project", id),
+            &[format!(
+                "SELECT 1 FROM forge.projects WHERE id = {id} FOR UPDATE"
+            )],
+        )
+        .await;
+    let db = w.t.db.clone();
+    let restore =
+        tokio::spawn(async move { restore_expired_codeowners(&db, &system("req-restore")).await });
+    w.t.until_waiting("FROM forge.projects").await;
+    assert!(
+        !restore.is_finished(),
+        "the restore waits for the project row"
+    );
+    held.commit().await;
+    let report = restore.await.expect("join").expect("restore");
+    assert_eq!(report.restored, 1);
+    assert_eq!(
+        merge_settings(&w.t.db, w.web.project_id)
+            .await
+            .expect("read")
+            .codeowners,
+        CodeownersEnforcement::Enforced
+    );
+    w.t.drop_now().await;
+}

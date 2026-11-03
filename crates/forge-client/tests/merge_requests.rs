@@ -1129,7 +1129,7 @@ fn merge_settings_set_keeps_what_was_not_asked() {
         serde_json::from_str::<Value>(&seen[1].body).expect("json"),
         json!({"allowed_methods": ["merge_commit", "squash"], "default_method": "squash",
                "delete_source_default": false, "reset_approvals_on_push": false,
-               "committer_approvals_excluded": true})
+               "committer_approvals_excluded": true, "expected_updated_at": null})
     );
     let show = gstn(&sb, &srv, &["merge-settings", "show", "--project", "7"]);
     assert_eq!(show.code, 0, "{}", show.stderr);

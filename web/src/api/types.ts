@@ -25,3 +25,19 @@ export type CommitsBody = S['CommitsBody'];
 export type CommitDetail = S['CommitDetailBody'];
 export type CompareBody = S['CompareBody'];
 export type BlameBody = S['BlameBody'];
+
+// Merge requests (U1). `MergeStatus` is the stable status contract
+// (`MergeRequestStatusBody`, docs/api/merge-status.md); the schema has a
+// different `MergeStatusBody` (the latest merge attempt), not aliased here.
+export type MergeRequest = S['MergeRequestBody'];
+export type MergeRequestPage = S['MergeRequestPage'];
+export type MergeStatus = S['MergeRequestStatusBody'];
+export type StatusReason = S['StatusReasonBody'];
+export type Discussion = S['DiscussionBody'];
+export type DiscussionList = S['DiscussionsBody'];
+export type Note = S['NoteBody'];
+export type Position = S['PositionBody'];
+export type Version = S['VersionBody'];
+export type VersionList = S['VersionsBody'];
+export type VersionDiff = S['VersionDiffBody'];
+export type CreateMergeRequestBody = S['CreateMergeRequest'];

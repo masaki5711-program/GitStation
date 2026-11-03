@@ -87,14 +87,14 @@ pub use merges::{
 pub use settings::{
     get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,
     put_settings as put_merge_settings, CodeownersEnforcementBody, CodeownersOf, MergeSettingsBody,
-    PutCodeownersEnforcement, PutMergeSettings, SettingsChangeOf, SettingsProject,
-    CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
+    MergeSettingsViewerBody, PutCodeownersEnforcement, PutMergeSettings, SettingsChangeOf,
+    SettingsProject, CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
     SETTINGS as MERGE_SETTINGS,
 };
 pub use status::{
     status, MergeRequestStatusBody, StatusApprovalBody, StatusApprovalsBody, StatusCheckBody,
     StatusCodeownerBody, StatusCodeownersBody, StatusDiscussionsBody, StatusReasonBody,
-    StatusRuleBody, STATUS, STATUS_OF,
+    StatusReasonName, StatusRuleBody, StatusViewerBody, STATUS, STATUS_OF,
 };
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,
@@ -283,6 +283,31 @@ fn review(state: &AppState) -> Result<&Review, ForgeError> {
     state.review.as_deref().ok_or_else(|| {
         ForgeError::new(ErrorCode::Internal).with_context("reason", "review_unconfigured")
     })
+}
+
+/// A read behind the viewer flags (U2 review): the flags are a hint, so a
+/// failed read closes them (`None`: every flag `false`) instead of failing
+/// the answer — logged once here, at warn, with the code and the request.
+fn viewer_read<T>(
+    ctx: &crate::Ctx,
+    read: &'static str,
+    result: Result<T, ForgeError>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(e) => {
+            tracing::warn!(
+                target: "forge_web",
+                event = "forge.web.viewer_flags_closed",
+                error_code = e.code().id(),
+                request_id = %ctx.request_id,
+                read,
+                error = %e,
+                "a read behind the viewer flags failed; every flag is false (the answer is unchanged)"
+            );
+            None
+        }
+    }
 }
 
 // ── handlers ──

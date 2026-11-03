@@ -22,11 +22,15 @@ import { CompareScreen } from './CompareScreen';
 import { RefsScreen } from './RefsScreen';
 import { RepoError } from './common';
 import { TreeScreen } from './TreeScreen';
+import { parseIid } from '../../api/mergeRequests';
+import { MergeRequestScreen } from './mr/MergeRequestScreen';
+import { MergeRequestsScreen } from './mr/MergeRequestsScreen';
+import { NewMergeRequestScreen } from './mr/NewMergeRequestScreen';
 import { MembersScreen } from '../settings/Members';
 import { ProjectSettings } from '../settings/ProjectSettings';
 import styles from './Repo.module.css';
 
-const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members'];
+const SCREEN_WORDS = ['tree', 'blob', 'blame', 'commits', 'commit', 'compare', 'branches', 'tags', 'settings', 'members', 'pulls', 'pull'];
 
 export function RepoViews({
   projectId,
@@ -56,6 +60,12 @@ export function RepoViews({
   }, [known]);
 
   if (!SCREEN_WORDS.includes(word)) return <NotFound />;
+  // `/-/pull/{iid}[/changes]`: an address that is not one is "not found"
+  // before anything is asked about it.
+  const iid = word === 'pull' ? parseIid(tail[0] ?? '') : null;
+  const mrTab =
+    tail.length === 1 ? 'overview' : tail.length === 2 && tail[1] === 'changes' ? 'changes' : null;
+  if (word === 'pull' && (iid === null || mrTab === null)) return <NotFound />;
   if (info.isPending) return <Loading />;
   if (info.isError) {
     return (
@@ -93,6 +103,24 @@ export function RepoViews({
     case 'compare':
       screen = <CompareScreen projectId={projectId} project={project} spec={spec} />;
       break;
+    case 'pulls':
+      screen =
+        tail.length === 0 ? (
+          <MergeRequestsScreen projectId={projectId} project={project} />
+        ) : tail.length === 1 && tail[0] === 'new' ? (
+          <NewMergeRequestScreen projectId={projectId} project={project} />
+        ) : (
+          <NotFound />
+        );
+      break;
+    case 'pull':
+      screen =
+        iid !== null && mrTab !== null ? (
+          <MergeRequestScreen projectId={projectId} project={project} iid={iid} tab={mrTab} />
+        ) : (
+          <NotFound />
+        );
+      break;
     case 'settings':
       screen = <ProjectSettings projectId={projectId} />;
       break;
@@ -113,6 +141,7 @@ export function RepoViews({
     { words: ['branches'], to: `${base}/-/branches`, label: t('repo.branches') },
     { words: ['tags'], to: `${base}/-/tags`, label: t('repo.tags') },
     { words: ['compare'], to: `${base}/-/compare`, label: t('repo.compare') },
+    { words: ['pulls', 'pull'], to: `${base}/-/pulls`, label: t('repo.pulls') },
     { words: ['members'], to: `${base}/-/members`, label: t('members.title') },
     { words: ['settings'], to: `${base}/-/settings`, label: t('settings.title') },
   ];

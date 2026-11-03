@@ -60,7 +60,8 @@ pub struct StoredMergeSettings {
     pub codeowners: CodeownersEnforcement,
     /// The project has a row (`false`: the defaults).
     pub stored: bool,
-    /// UTC, RFC 3339 (`None` without a row).
+    /// UTC, RFC 3339 to the microsecond (`None` without a row): the
+    /// token a settings write's `expected_updated_at` compares (U2).
     pub updated_at: Option<String>,
 }
 
@@ -99,6 +100,13 @@ pub struct SettingsFacts {
 }
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
+/// `updated_at` to the microsecond (U2): it is the token of the settings
+/// screen's optimistic concurrency (`expected_updated_at`), so two writes
+/// within one second must not read alike. Every writer sets it with
+/// `clock_timestamp()` under the project row lock (U2 review): `now()` is
+/// the transaction's start, so a write that waited on the lock would stamp
+/// a time before the write it waited for.
+const TS_US: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'";
 
 fn columns() -> String {
     format!(
@@ -107,7 +115,7 @@ fn columns() -> String {
          to_char(codeowners_suspended_at AT TIME ZONE 'UTC', {TS}) AS suspended_at, \
          to_char(codeowners_enforced_off_until AT TIME ZONE 'UTC', {TS}) AS off_until, \
          COALESCE(codeowners_enforced_off_until <= now(), false) AS expired, \
-         to_char(updated_at AT TIME ZONE 'UTC', {TS}) AS updated_at"
+         to_char(updated_at AT TIME ZONE 'UTC', {TS_US}) AS updated_at"
     )
 }
 
@@ -354,14 +362,15 @@ pub async fn put_merge_settings_mr_decided<P>(
         tx.step(|c| async move {
             sqlx::query(
                 "INSERT INTO forge.merge_settings (project_id, allowed_methods, default_method, \
-                 delete_source_default, reset_approvals_on_push, committer_approvals_excluded) \
-                 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (project_id) DO UPDATE SET \
+                 delete_source_default, reset_approvals_on_push, committer_approvals_excluded, \
+                 updated_at) VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp()) \
+                 ON CONFLICT (project_id) DO UPDATE SET \
                  allowed_methods = EXCLUDED.allowed_methods, \
                  default_method = EXCLUDED.default_method, \
                  delete_source_default = EXCLUDED.delete_source_default, \
                  reset_approvals_on_push = EXCLUDED.reset_approvals_on_push, \
                  committer_approvals_excluded = EXCLUDED.committer_approvals_excluded, \
-                 updated_at = now()",
+                 updated_at = clock_timestamp()",
             )
             .bind(project.get())
             .bind(&methods)
@@ -419,11 +428,17 @@ pub async fn toggle_codeowners_mr_decided<P>(
         if matches!(change, CodeownersChange::Suspend { .. })
             && matches!(current.codeowners, CodeownersEnforcement::Suspended { .. })
         {
-            return Ok(Settle::Discard((SettingsOutcome::Unchanged, current, decided)));
+            return Ok(Settle::Discard((
+                SettingsOutcome::Unchanged,
+                current,
+                decided,
+            )));
         }
         // R6 review: an expired suspension replaced here is recorded as
         // restored first (the worker would find nothing left to record).
-        let expired = tx.step(|c| async move { expired_on(c, project).await }).await?;
+        let expired = tx
+            .step(|c| async move { expired_on(c, project).await })
+            .await?;
         let defaults = MergeSettingsValues::default();
         let default_methods: Vec<&str> = defaults
             .allowed_methods
@@ -444,7 +459,8 @@ pub async fn toggle_codeowners_mr_decided<P>(
                     sqlx::query(
                         "UPDATE forge.merge_settings SET codeowners_enforced = true, \
                          codeowners_suspended_at = NULL, codeowners_enforced_off_until = NULL, \
-                         codeowners_restore_seen_at = NULL, updated_at = now() WHERE project_id = $1",
+                         codeowners_restore_seen_at = NULL, updated_at = clock_timestamp() \
+                         WHERE project_id = $1",
                     )
                     .bind(project.get())
                     .execute(c)
@@ -464,11 +480,12 @@ pub async fn toggle_codeowners_mr_decided<P>(
                     sqlx::query(
                         "INSERT INTO forge.merge_settings (project_id, allowed_methods, \
                          default_method, codeowners_enforced, codeowners_suspended_at, \
-                         codeowners_enforced_off_until) VALUES ($1, $2, $3, false, now(), \
-                         now() + make_interval(mins => $4)) ON CONFLICT (project_id) DO UPDATE \
+                         codeowners_enforced_off_until, updated_at) VALUES ($1, $2, $3, false, \
+                         now(), now() + make_interval(mins => $4), clock_timestamp()) \
+                         ON CONFLICT (project_id) DO UPDATE \
                          SET codeowners_enforced = false, codeowners_suspended_at = now(), \
                          codeowners_enforced_off_until = now() + make_interval(mins => $4), \
-                         codeowners_restore_seen_at = NULL, updated_at = now()",
+                         codeowners_restore_seen_at = NULL, updated_at = clock_timestamp()",
                     )
                     .bind(project.get())
                     .bind(methods)
@@ -601,6 +618,10 @@ async fn restore_one(db: &Db, ctx: &ChangeContext, project: ProjectId) -> Result
     const ACTION: &str = "merge_settings.codeowners_enforcement_restored";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
+        // U2 review: the project row first, as every settings writer locks
+        // it (`settings_facts`): a write that checked `updated_at` cannot
+        // overwrite this restore, and the lock order is the same.
+        lock_access(&mut tx, project).await?;
         let row = tx
             .step(|c| async move { expired_on(c, project).await })
             .await?;
@@ -611,7 +632,8 @@ async fn restore_one(db: &Db, ctx: &ChangeContext, project: ProjectId) -> Result
             sqlx::query(
                 "UPDATE forge.merge_settings SET codeowners_enforced = true, \
                  codeowners_suspended_at = NULL, codeowners_enforced_off_until = NULL, \
-                 codeowners_restore_seen_at = NULL, updated_at = now() WHERE project_id = $1",
+                 codeowners_restore_seen_at = NULL, updated_at = clock_timestamp() \
+                 WHERE project_id = $1",
             )
             .bind(project.get())
             .execute(c)

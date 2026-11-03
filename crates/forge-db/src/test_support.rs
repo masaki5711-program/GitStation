@@ -612,6 +612,15 @@ impl Drop for FreshDb {
 pub struct HeldChange(sqlx::Transaction<'static, sqlx::Postgres>);
 
 impl HeldChange {
+    /// One more statement in the held transaction, returning one text
+    /// value (U2 review: a write made while another waits on the lock).
+    pub async fn fetch_text(&mut self, sql: &str) -> String {
+        sqlx::query_scalar(sql)
+            .fetch_one(&mut *self.0)
+            .await
+            .unwrap_or_else(|e| panic!("held statement failed: {e}"))
+    }
+
     pub async fn commit(self) {
         self.0.commit().await.expect("commit the held change");
     }

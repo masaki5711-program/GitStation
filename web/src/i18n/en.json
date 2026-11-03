@@ -148,7 +148,8 @@
     "files": "Files",
     "commits": "Commits",
     "compare": "Compare",
-    "switchGo": "Go"
+    "switchGo": "Go",
+    "pulls": "MR"
   },
   "tree": {
     "title": "Files",
@@ -265,9 +266,10 @@
     "change": "Change",
     "lineAdded": "added",
     "lineRemoved": "removed",
-    "show": "Show the diff ({{count}} lines)",
     "files": "Changed files: {{count}}",
-    "truncated": "There are too many changes; only part of the diff is shown."
+    "truncated": "There are too many changes; only part of the diff is shown.",
+    "show_one": "Show the diff ({{count}} line)",
+    "show_other": "Show the diff ({{count}} lines)"
   },
   "markdown": {
     "externalImage": "External image (not shown)",
@@ -446,5 +448,125 @@
     "restore": "Restore",
     "restoreOf": "Restore {{name}}",
     "title": "Deleted projects"
+  },
+  "mr": {
+    "status": {
+      "mergeable": "Ready to merge",
+      "generic": "Cannot be merged right now. Check the changes",
+      "notOpen": "This merge request is no longer open",
+      "draft": "It is still a draft",
+      "mergeInProgress": "A merge is running",
+      "sourceBranchMissing": "The source branch is gone",
+      "mergeabilityUnknown": "Waiting for the check. A push updates it",
+      "conflict": "It conflicts with other changes",
+      "ffNotPossible": "It is behind the target. Bring in the latest changes",
+      "nothingToMerge": "There is nothing to merge",
+      "configChange": "A change to a settings file needs a maintainer approval",
+      "changedPathsUnknown": "The changed files could not be read",
+      "codeownersInvalid": "The code owners definition is unusable. Tell an administrator",
+      "approvalsMissing": "Not enough approvals ({{rule}}: {{required}} needed, {{counted}} given)",
+      "approvalsMissingProtected": "Not enough approvals ({{required}} needed, {{counted}} given)",
+      "codeownerMissing": "An owner of {{pattern}} ({{owners}}) must approve",
+      "checkMissing": "The required check \"{{name}}\" has not reported yet",
+      "checkFailed": "The required check \"{{name}}\" did not succeed ({{status}} / {{conclusion}})",
+      "unresolved": "Unresolved threads: {{n}}",
+      "next": {
+        "firstUnresolved": "Open the first unresolved thread",
+        "changes": "See the changes",
+        "push": "Push a fix"
+      },
+      "checking": "Checking whether it can be merged…",
+      "hint": {
+        "approvals": "Waiting for reviewers to approve.",
+        "owners": "Waiting for an owner of those files to approve.",
+        "checks": "Waiting for the check result.",
+        "merging": "Waiting for the merge to finish.",
+        "maintainer": "Waiting for a maintainer to approve.",
+        "retry": "Open this page again in a while. If it stays, tell an administrator.",
+        "draft": "The author takes it out of draft when it is ready.",
+        "notOpen": "To propose more changes, create a new merge request.",
+        "codeowners": "It cannot be merged until the CODEOWNERS file is fixed.",
+        "nothing": "The target already has these changes."
+      }
+    },
+    "number": "!{{iid}}",
+    "draft": "Draft",
+    "opened": "Opened by {{author}} on {{date}}",
+    "branches": "{{source}} into {{target}}",
+    "state": {
+      "open": "Open",
+      "merged": "Merged",
+      "closed": "Closed",
+      "all": "All"
+    },
+    "list": {
+      "title": "Merge requests",
+      "new": "New merge request",
+      "filterLabel": "Show merge requests",
+      "empty": "There are no merge requests here.",
+      "older": "Older merge requests",
+      "newest": "Back to the newest",
+      "emptyOpen": "There are no open merge requests."
+    },
+    "new": {
+      "title": "New merge request",
+      "source": "Branch with the changes",
+      "target": "Branch to merge into",
+      "choose": "Choose a branch",
+      "defaultBranch": "{{name}} (default)",
+      "titleLabel": "Title",
+      "description": "Description (optional, Markdown)",
+      "submit": "Create merge request",
+      "sourceRequired": "Choose the branch with the changes.",
+      "targetRequired": "Choose the branch to merge into.",
+      "sameBranch": "The two branches are the same. Choose a different branch with the changes.",
+      "titleRequired": "Enter a title.",
+      "titleTooLong": "The title can be at most 255 characters.",
+      "noBranches": "This repository has no branches yet. Push a branch first."
+    },
+    "view": {
+      "tabsLabel": "Merge request views",
+      "overview": "Overview",
+      "changes": "Changes",
+      "description": "Description",
+      "noDescription": "No description."
+    },
+    "threads": {
+      "title": "Threads",
+      "empty": "No comments yet.",
+      "truncated": "There are too many threads; only part of them is shown.",
+      "resolvedCount": "Resolved threads: {{n}}"
+    },
+    "thread": {
+      "title": "Thread by {{author}}",
+      "resolved": "Resolved",
+      "unresolved": "Unresolved",
+      "resolve": "Resolve thread",
+      "unresolve": "Reopen thread",
+      "reply": "Reply",
+      "replyLabel": "Your reply",
+      "replySubmit": "Send reply",
+      "outdated": "This line was changed by a later version.",
+      "outdatedUnknown": "Could not tell whether a later version changed this line. Look at it again.",
+      "resolvedNotice": "Thread resolved.",
+      "reopenedNotice": "Thread reopened."
+    },
+    "comment": {
+      "label": "Add a comment",
+      "help": "Markdown can be used.",
+      "submit": "Comment",
+      "required": "Write a comment first.",
+      "sending": "Sending…"
+    },
+    "diff": {
+      "version": "Version {{version}} (the latest)",
+      "noVersion": "No version is recorded yet. The changes appear here once the push has been read.",
+      "purged": "The changes of this version were removed (for example, to delete a secret). They can no longer be shown.",
+      "column": "Comment",
+      "lineNew": "line {{line}} of {{path}}",
+      "lineOld": "removed line {{line}} of {{path}}",
+      "commentOn": "Comment on {{where}}",
+      "yourComment": "Your comment: {{where}}"
+    }
   }
 }

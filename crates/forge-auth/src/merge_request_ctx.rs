@@ -94,6 +94,12 @@ impl MergeRequestCtx {
     pub fn edit(&self) -> &MergeRequestEdit {
         &self.edit
     }
+
+    /// The project as loaded (the viewer flags build the write routes'
+    /// contexts from it, `viewer.rs`).
+    pub(crate) fn loaded_project(&self) -> LoadedProject {
+        self.project
+    }
 }
 
 impl sealed::Sealed for MergeRequestCtx {}

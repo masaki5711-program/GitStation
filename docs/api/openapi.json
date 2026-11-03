@@ -1999,6 +1999,10 @@
           "target_branch": {
             "description": "Without `refs/heads/`.",
             "type": "string"
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/StatusViewerBody",
+            "description": "What the caller could do now (added within `schema_version` 1, U2)."
           }
         },
         "required": [
@@ -2012,7 +2016,8 @@
           "approvals",
           "checks",
           "discussions",
-          "codeowners"
+          "codeowners",
+          "viewer"
         ],
         "type": "object"
       },
@@ -2085,11 +2090,15 @@
             "type": "boolean"
           },
           "updated_at": {
-            "description": "UTC, RFC 3339 (`null` for the defaults).",
+            "description": "UTC, RFC 3339 to the microsecond (`null` for the defaults): an\nopaque token — send it back verbatim as `expected_updated_at`.",
             "type": [
               "string",
               "null"
             ]
+          },
+          "viewer": {
+            "$ref": "#/components/schemas/MergeSettingsViewerBody",
+            "description": "What the caller could do now (U2): a hint; on a write's answer it\nis decided on the facts read before the lock."
           }
         },
         "required": [
@@ -2101,7 +2110,32 @@
           "committer_approvals_excluded",
           "codeowners",
           "stored",
-          "updated_at"
+          "updated_at",
+          "viewer"
+        ],
+        "type": "object"
+      },
+      "MergeSettingsViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do on the settings now (U2): each flag is\n`authorize()` on the context the write route decides on\n(`forge_auth::MergeSettingsViewer`) — a hint for the screen, never a\npermission (the route decides again).",
+        "properties": {
+          "can_loosen": {
+            "description": "`PUT …/merge-settings` that counts committers' approvals or carries\napprovals on push (a role at or above every protection).",
+            "type": "boolean"
+          },
+          "can_manage": {
+            "description": "`PUT …/merge-settings` that does not loosen the approvals.",
+            "type": "boolean"
+          },
+          "can_suspend_codeowners": {
+            "description": "`PUT …/codeowners-enforcement` suspending CODEOWNERS (a role at or\nabove every protection).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_manage",
+          "can_loosen",
+          "can_suspend_codeowners"
         ],
         "type": "object"
       },
@@ -2642,6 +2676,13 @@
             "description": "Delete the source branch after a merge unless the request says.",
             "type": "boolean"
           },
+          "expected_updated_at": {
+            "description": "The `updated_at` the caller read, echoed verbatim — an opaque string\n(never round-tripped through a date type: it is to the microsecond)\n— or `null` for the defaults, never stored. Required (U2): another\nvalue under the lock is FG-REVIEW-0017 — the settings changed in\nbetween and nothing is overwritten silently.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "reset_approvals_on_push": {
             "description": "New commits end the approvals (the default `true`); `false` carries\nthem when the change allows it (never into a protected branch, never\na configuration or CODEOWNERS path).",
             "type": "boolean"
@@ -2652,7 +2693,8 @@
           "default_method",
           "delete_source_default",
           "reset_approvals_on_push",
-          "committer_approvals_excluded"
+          "committer_approvals_excluded",
+          "expected_updated_at"
         ],
         "type": "object"
       },
@@ -3445,8 +3487,8 @@
             ]
           },
           "reason": {
-            "description": "A name of ADR-0024 §7: `not_open`, `draft`, `merge_in_progress`,\n`source_branch_missing`, `mergeability_unknown`, `conflict`,\n`ff_not_possible`, `nothing_to_merge`, `approvals_missing`,\n`codeowner_approval_missing`, `codeowners_invalid`,\n`required_check_missing`, `required_check_not_successful`,\n`unresolved_discussions`, `config_change_needs_maintainer_approval`,\n`changed_paths_unknown`.",
-            "type": "string"
+            "$ref": "#/components/schemas/StatusReasonName",
+            "description": "A name of ADR-0024 §7 (`docs/api/merge-status.md`)."
           }
         },
         "required": [
@@ -3454,6 +3496,28 @@
           "detail"
         ],
         "type": "object"
+      },
+      "StatusReasonName": {
+        "description": "The name of a blocking reason (ADR-0024 §7): one per\n`forge_review::BlockReason` variant, spelled as `BlockReason::as_str`\n(`status_reason_schema_lists_every_block_reason`). A new reason is a\nnew name here — added, never renamed, within `schema_version` 1.",
+        "enum": [
+          "not_open",
+          "draft",
+          "merge_in_progress",
+          "source_branch_missing",
+          "mergeability_unknown",
+          "conflict",
+          "ff_not_possible",
+          "nothing_to_merge",
+          "approvals_missing",
+          "codeowner_approval_missing",
+          "codeowners_invalid",
+          "required_check_missing",
+          "required_check_not_successful",
+          "unresolved_discussions",
+          "config_change_needs_maintainer_approval",
+          "changed_paths_unknown"
+        ],
+        "type": "string"
       },
       "StatusRuleBody": {
         "additionalProperties": false,
@@ -3481,6 +3545,40 @@
           "applies",
           "required",
           "counted"
+        ],
+        "type": "object"
+      },
+      "StatusViewerBody": {
+        "additionalProperties": false,
+        "description": "What the caller could do now (U2): each flag is `authorize()` on the\ncontext the action's route decides on (`forge_auth::MergeRequestViewer`)\n— a hint for the screen, never a permission (the route decides again).",
+        "properties": {
+          "approved_by_me": {
+            "description": "The caller has a live approval of the merge request.",
+            "type": "boolean"
+          },
+          "can_approve": {
+            "description": "`POST …/approve` would be allowed (never for the author).",
+            "type": "boolean"
+          },
+          "can_mark_ready": {
+            "description": "`PATCH …/{iid}` with `draft: false` would be allowed (meaningful\nonly for a draft).",
+            "type": "boolean"
+          },
+          "can_merge": {
+            "description": "`POST …/merge` would be allowed (the target's minimum push role;\nwhether the merge request may merge now is `mergeable`).",
+            "type": "boolean"
+          },
+          "can_unapprove": {
+            "description": "`POST …/unapprove` would be allowed (pair it with `approved_by_me`:\nthere may be nothing to withdraw).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_approve",
+          "can_unapprove",
+          "can_merge",
+          "can_mark_ready",
+          "approved_by_me"
         ],
         "type": "object"
       },

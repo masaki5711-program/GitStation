@@ -135,6 +135,9 @@ pub fn merge_settings(
                 "delete_source_default": delete_source_branch.map_or_else(|| current["delete_source_default"].clone(), Value::Bool),
                 "reset_approvals_on_push": reset_approvals_on_push.map_or_else(|| current["reset_approvals_on_push"].clone(), Value::Bool),
                 "committer_approvals_excluded": exclude_committer_approvals.map_or_else(|| current["committer_approvals_excluded"].clone(), Value::Bool),
+                // U2: the settings this replaces; changed in between is
+                // FG-REVIEW-0017 (read again and retry), never overwritten.
+                "expected_updated_at": current["updated_at"].clone(),
             });
             let body = call(&c, Method::Put, &settings(*project), &[], Some(&req))?;
             let h = settings_human(&body);

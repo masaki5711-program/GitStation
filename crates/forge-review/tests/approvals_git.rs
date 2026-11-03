@@ -1583,9 +1583,20 @@ impl World {
             forge_auth::MergeSettingsCtx::new(project, None, true),
         )
         .expect("proof");
+        // U2: the write names the settings it replaces.
+        let current = self
+            .review
+            .stored_merge_settings(project.id)
+            .await
+            .expect("current settings");
         let (outcome, _) = self
             .review
-            .put_merge_settings(&request("req-settings"), &proof, &values)
+            .put_merge_settings(
+                &request("req-settings"),
+                &proof,
+                &values,
+                current.updated_at.as_deref(),
+            )
             .await
             .expect("settings");
         assert_eq!(outcome, forge_db::review::SettingsOutcome::Changed);
@@ -1943,7 +1954,7 @@ async fn loosening_the_approvals_needs_a_role_at_or_above_every_protection() {
     };
     let err = w
         .review
-        .put_merge_settings(&request("req-loose"), &stale, &loose)
+        .put_merge_settings(&request("req-loose"), &stale, &loose, None)
         .await
         .expect_err("loosening");
     assert_eq!(err.code(), ErrorCode::Forbidden);
@@ -1958,7 +1969,7 @@ async fn loosening_the_approvals_needs_a_role_at_or_above_every_protection() {
     };
     let (outcome, _) = w
         .review
-        .put_merge_settings(&request("req-tight"), &stale, &tight)
+        .put_merge_settings(&request("req-tight"), &stale, &tight, None)
         .await
         .expect("tightening");
     assert_eq!(outcome, forge_db::review::SettingsOutcome::Changed);
