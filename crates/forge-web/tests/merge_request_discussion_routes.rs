@@ -440,6 +440,81 @@ async fn agents_comment_but_only_people_who_may_resolve_resolve() {
     w.t.drop_now().await;
 }
 
+/// MR B0: a discussion names who started it and every note its author
+/// (`author`: username and display name, read with the rows), on the
+/// start, a reply, a resolve (its `RETURNING` row) and the list. The
+/// users' display names differ from their usernames, so a swapped field
+/// shows.
+#[tokio::test]
+async fn discussion_note_carries_author_name() {
+    let w = world().await;
+    let member = |username: &'static str, display: &'static str, role: Role| {
+        let db = w.t.db.clone();
+        let project = forge_core::ProjectId::new(w.project);
+        async move {
+            let user = users::create(
+                &db,
+                &ctx(&format!("req-b0-{}", username.replace('.', "-"))),
+                &NewUser::human(username, display, &format!("{username}@example.test")),
+            )
+            .await
+            .expect("user")
+            .user_id;
+            projects::add_member(&db, &ctx("req-member-b0"), project, user, role)
+                .await
+                .expect("member");
+            user
+        }
+    };
+    let rina_id = member("rina.k", "Rina Kato", Role::Reporter).await;
+    let ben_id = member("ben.o", "Ben Okafor", Role::Developer).await;
+    let rina = json!({"username": "rina.k", "display_name": "Rina Kato"});
+    let ben = json!({"username": "ben.o", "display_name": "Ben Okafor"});
+    let (status, thread) = w
+        .post(
+            "/discussions",
+            session(rina_id),
+            Some(json!({"body": "first"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{thread}");
+    assert_eq!(thread["author"], rina);
+    assert_eq!(thread["started_by"], json!(rina_id.get()), "the id stays");
+    assert_eq!(thread["notes"][0]["author"], rina);
+    let d = thread["id"].as_i64().expect("id");
+    let (status, replied) = w
+        .post(
+            &format!("/discussions/{d}/notes"),
+            session(ben_id),
+            Some(json!({"body": "second"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{replied}");
+    assert_eq!(replied["author"], rina, "the starter, not the replier");
+    assert_eq!(replied["notes"][1]["author"], ben);
+    assert_eq!(replied["notes"][1]["author_id"], json!(ben_id.get()));
+    let (status, resolved) = w
+        .post(&format!("/discussions/{d}/resolve"), session(rina_id), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert_eq!(resolved["author"], rina, "the resolve's RETURNING row");
+    assert_eq!(resolved["notes"][1]["author"], ben);
+    let (status, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/discussions"),
+        session(w.dave),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let listed = &list["discussions"][0];
+    assert_eq!(listed["author"], rina);
+    assert_eq!(listed["notes"][0]["author"], rina);
+    assert_eq!(listed["notes"][1]["author"], ben);
+    w.t.drop_now().await;
+}
+
 /// An invisible project's thread, a missing merge request and a missing
 /// thread are the same 404 on every discussion route.
 #[tokio::test]

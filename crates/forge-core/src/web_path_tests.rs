@@ -255,6 +255,38 @@ fn kelvin_sign_and_dotted_i_never_fold_to_ascii() {
     assert_eq!(folded.full_path(), "kelvin/istanbul");
 }
 
+/// MR B0: the merge request screens' words, `pulls` (the list) and `pull`
+/// (one, `/{project}/-/pull/{iid}`). No `merge_requests` alias (ADR-0015
+/// amendment B0).
+#[test]
+fn parse_web_path_accepts_pulls_and_pull_words() {
+    let list = parse_web_path("/Acme/Web/-/pulls", None).expect("pulls");
+    assert_eq!(
+        describe(&list),
+        json!({"kind": "scoped", "namespace": "acme/web", "word": "pulls", "rest": []})
+    );
+    let one = parse_web_path("/acme/platform/web/-/pull/12", None).expect("pull");
+    assert_eq!(
+        describe(&one),
+        json!({"kind": "scoped", "namespace": "acme/platform/web", "word": "pull", "rest": ["12"]})
+    );
+    let words: Vec<&str> = RouteWord::ALL.iter().map(|w| w.as_str()).collect();
+    assert!(
+        words.contains(&"pulls") && words.contains(&"pull"),
+        "{words:?}"
+    );
+    // No alias, no case folding, no singular/plural confusion.
+    for path in [
+        "/acme/web/-/merge_requests/12",
+        "/acme/web/-/merge_requests",
+        "/acme/web/-/Pulls",
+        "/acme/web/-/PULL/1",
+        "/acme/web/-/pullrequests",
+    ] {
+        assert_reason(path, None, "unknown_route");
+    }
+}
+
 #[test]
 fn route_word_is_case_sensitive() {
     for word in RouteWord::ALL {

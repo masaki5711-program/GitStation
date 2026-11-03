@@ -1170,6 +1170,10 @@
         "additionalProperties": false,
         "description": "One discussion of a merge request.",
         "properties": {
+          "author": {
+            "$ref": "#/components/schemas/UserNameBody",
+            "description": "The names of who started it (`started_by`, the first note's author)."
+          },
           "created_at": {
             "description": "UTC, RFC 3339.",
             "type": "string"
@@ -1238,6 +1242,7 @@
           "outdated",
           "outdated_unknown",
           "started_by",
+          "author",
           "resolved",
           "resolved_by",
           "resolved_at",
@@ -1688,6 +1693,10 @@
         "additionalProperties": false,
         "description": "One merge request as the API shows it.",
         "properties": {
+          "author": {
+            "$ref": "#/components/schemas/UserNameBody",
+            "description": "The author's names (read with the merge request)."
+          },
           "author_id": {
             "format": "int64",
             "minimum": 1,
@@ -1762,6 +1771,7 @@
           "source_branch",
           "target_branch",
           "author_id",
+          "author",
           "created_at",
           "updated_at"
         ],
@@ -2130,6 +2140,10 @@
         "additionalProperties": false,
         "description": "One note of a discussion.",
         "properties": {
+          "author": {
+            "$ref": "#/components/schemas/UserNameBody",
+            "description": "The author's names (read with the note)."
+          },
           "author_id": {
             "format": "int64",
             "minimum": 1,
@@ -2152,6 +2166,7 @@
         "required": [
           "id",
           "author_id",
+          "author",
           "body",
           "created_at"
         ],
@@ -3407,6 +3422,23 @@
         },
         "required": [
           "id",
+          "username",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "UserNameBody": {
+        "additionalProperties": false,
+        "description": "A user as the merge request screens name them (MR B0).",
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
           "username",
           "display_name"
         ],
