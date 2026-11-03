@@ -615,6 +615,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/merge-requests/{iid}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evaluate whether a merge request may merge now: every blocking reason in a fixed order, the approvals, the required checks, the discussions (a stable contract, schema_version 1; as the repository browse API) */
+        get: operations["get_api_v1_projects_id_merge_requests_iid_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/merge-requests/{iid}/unapprove": {
         parameters: {
             query?: never;
@@ -676,6 +693,41 @@ export interface paths {
         /** One version's diff, merge base to head (as the repository browse API) */
         get: operations["get_api_v1_projects_id_merge_requests_iid_versions_version_diff"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a project's merge settings and CODEOWNERS enforcement (as reading the project) */
+        get: operations["get_api_v1_projects_id_merge_settings"];
+        /** Replace a project's merge settings: methods, default, source deletion, approvals on push, committers' approvals (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_merge_settings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/merge-settings/codeowners-enforcement": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project) */
+        put: operations["put_api_v1_projects_id_merge_settings_codeowners_enforcement"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1311,6 +1363,14 @@ export interface components {
             pattern: string;
             satisfied: boolean;
         };
+        /** @description CODEOWNERS enforcement as the API shows it. */
+        CodeownersEnforcementBody: {
+            /** @description Enforced now (an expired suspension is enforced). */
+            enforced: boolean;
+            /** @description While suspended: since when and until when (UTC, RFC 3339). */
+            suspended_at: string | null;
+            suspended_until: string | null;
+        };
         /** @description One commit's metadata. */
         CommitBody: {
             author_email: string;
@@ -1726,6 +1786,66 @@ export interface components {
              */
             next_before?: number | null;
         };
+        /** @description `GET …/status` (the stable contract, `schema_version` 1). */
+        MergeRequestStatusBody: {
+            approvals: null | components["schemas"]["StatusApprovalsBody"];
+            /** @description The checks the target's merge rule requires (empty: none). */
+            checks: components["schemas"]["StatusCheckBody"][];
+            codeowners: components["schemas"]["StatusCodeownersBody"];
+            discussions: null | components["schemas"]["StatusDiscussionsBody"];
+            /** @description `null` before the first version (nothing can merge yet). */
+            head_sha: string | null;
+            /** Format: int64 */
+            iid: number;
+            /** @description Nothing blocks now (a merge decides again under its locks). */
+            mergeable: boolean;
+            /** @description The method evaluated: the project's default. */
+            method: string;
+            /**
+             * @description Every blocking reason, in the fixed order (the first is the one-line
+             *     "why it is stopped").
+             */
+            reasons: components["schemas"]["StatusReasonBody"][];
+            /** Format: int32 */
+            schema_version: number;
+            /** @description Without `refs/heads/`. */
+            target_branch: string;
+        };
+        /**
+         * @description The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the
+         *     strictest of the rules matching a branch applies.
+         */
+        MergeRuleBody: {
+            /** @description Pushes may not create or move the branch (merges may). */
+            direct_push_forbidden: boolean;
+            /** @description Every discussion of the merge request must be resolved. */
+            require_resolved_discussions: boolean;
+            /**
+             * Format: int32
+             * @description The minimum counted approvals of a merge into the branch.
+             */
+            required_approvals: number;
+            /**
+             * @description Checks that must have succeeded on the merge request's head
+             *     (`ci/`, `kanflow/`, `forge/` only); "no check reported" blocks.
+             */
+            required_checks: string[];
+        };
+        /** @description A project's merge settings. */
+        MergeSettingsBody: {
+            allowed_methods: string[];
+            codeowners: components["schemas"]["CodeownersEnforcementBody"];
+            committer_approvals_excluded: boolean;
+            default_method: string;
+            delete_source_default: boolean;
+            /** Format: int64 */
+            project_id: number;
+            reset_approvals_on_push: boolean;
+            /** @description `false`: the project never changed them (the defaults). */
+            stored: boolean;
+            /** @description UTC, RFC 3339 (`null` for the defaults). */
+            updated_at: string | null;
+        };
         /** @description The latest merge attempt of a merge request (`null`: never asked). */
         MergeStatusBody: {
             /** Format: int64 */
@@ -1871,6 +1991,7 @@ export interface components {
             created_at: string;
             /** Format: int64 */
             id: number;
+            merge_rule: null | components["schemas"]["MergeRuleBody"];
             pattern: string;
             /**
              * @description The minimum role that may push (create / fast-forward) a matching
@@ -1911,6 +2032,37 @@ export interface components {
             target_pattern?: string | null;
             /** @description Usernames who may approve for the rule. */
             users?: string[];
+        };
+        /** @description `PUT …/merge-settings/codeowners-enforcement`. */
+        PutCodeownersEnforcement: {
+            /**
+             * @description `false` suspends CODEOWNERS (with `for_minutes`); `true` enforces it
+             *     again.
+             */
+            enforced: boolean;
+            /**
+             * Format: int32
+             * @description The suspension's length, 1..=1440 minutes (required to suspend; it
+             *     comes back by itself at the expiry).
+             */
+            for_minutes?: number | null;
+        };
+        /** @description `PUT …/merge-settings` (every field: the settings are replaced). */
+        PutMergeSettings: {
+            /** @description One to three of `merge_commit`, `squash`, `fast_forward`. */
+            allowed_methods: string[];
+            /** @description Committers' approvals do not count (the default `true`). */
+            committer_approvals_excluded: boolean;
+            /** @description One of `allowed_methods`. */
+            default_method: string;
+            /** @description Delete the source branch after a merge unless the request says. */
+            delete_source_default: boolean;
+            /**
+             * @description New commits end the approvals (the default `true`); `false` carries
+             *     them when the change allows it (never into a protected branch, never
+             *     a configuration or CODEOWNERS path).
+             */
+            reset_approvals_on_push: boolean;
         };
         /** @description One branch or tag. */
         RefBody: {
@@ -2080,6 +2232,72 @@ export interface components {
             /** @description The first note: plain text / Markdown, 1 character to 60 KiB. */
             body: string;
             position?: null | components["schemas"]["PositionBody"];
+        };
+        /** @description One live approval as counted now. */
+        StatusApprovalBody: {
+            /** Format: int64 */
+            approver_id: number;
+            counted: boolean;
+            uncounted_reason: string | null;
+            username: string;
+        };
+        /** @description The approval side. */
+        StatusApprovalsBody: {
+            approvals: components["schemas"]["StatusApprovalBody"][];
+            /** @description CODEOWNERS rules the changed paths need: `pattern`, satisfied. */
+            codeowners: components["schemas"]["StatusCodeownerBody"][];
+            rules: components["schemas"]["StatusRuleBody"][];
+        };
+        /** @description One required check and its run on the head. */
+        StatusCheckBody: {
+            conclusion: string | null;
+            name: string;
+            /** @description `null`: no run reported (never success). */
+            status: string | null;
+        };
+        /** @description One CODEOWNERS rule the changes need. */
+        StatusCodeownerBody: {
+            owners: string[];
+            pattern: string;
+            satisfied: boolean;
+        };
+        /** @description CODEOWNERS enforcement now. */
+        StatusCodeownersBody: {
+            enforced: boolean;
+            /** @description While suspended: when enforcement comes back by itself (UTC). */
+            suspended_until: string | null;
+        };
+        /** @description The discussions condition. */
+        StatusDiscussionsBody: {
+            /** Format: int32 */
+            unresolved: number;
+        };
+        /** @description One blocking reason. */
+        StatusReasonBody: {
+            /**
+             * @description `key=value` pairs (`rule=… required=… counted=…`, `name=…`,
+             *     `count=…`, …); `null` for the plain reasons.
+             */
+            detail: string | null;
+            /**
+             * @description A name of ADR-0024 §7: `not_open`, `draft`, `merge_in_progress`,
+             *     `source_branch_missing`, `mergeability_unknown`, `conflict`,
+             *     `ff_not_possible`, `nothing_to_merge`, `approvals_missing`,
+             *     `codeowner_approval_missing`, `codeowners_invalid`,
+             *     `required_check_missing`, `required_check_not_successful`,
+             *     `unresolved_discussions`, `config_change_needs_maintainer_approval`,
+             *     `changed_paths_unknown`.
+             */
+            reason: string;
+        };
+        /** @description One approval requirement (an approval rule, or `@protected_branch`). */
+        StatusRuleBody: {
+            applies: boolean;
+            /** Format: int32 */
+            counted: number;
+            name: string;
+            /** Format: int32 */
+            required: number;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {
@@ -3925,6 +4143,38 @@ export interface operations {
             };
         };
     };
+    get_api_v1_projects_id_merge_requests_iid_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                iid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeRequestStatusBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     post_api_v1_projects_id_merge_requests_iid_unapprove: {
         parameters: {
             query?: never;
@@ -4045,6 +4295,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VersionDiffBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_merge_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeSettingsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_merge_settings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutMergeSettings"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeSettingsBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_merge_settings_codeowners_enforcement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutCodeownersEnforcement"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergeSettingsBody"];
                 };
             };
             /** @description Error: registered code, localized message, request id */

@@ -1017,6 +1017,46 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::delete_approval_rule,
         )
         .responds_no_content(Verb::Delete, mr::APPROVAL_RULE)
+        // M3 R6 (ADR-0024 §7, §4.1, §8, §9): the merge status, the
+        // project's merge settings and the time-boxed CODEOWNERS switch.
+        .route_with(
+            Verb::Get,
+            mr::STATUS,
+            Action::MergeRequestRead,
+            "Evaluate whether a merge request may merge now: every blocking reason in a fixed order, the approvals, the required checks, the discussions (a stable contract, schema_version 1; as the repository browse API)",
+            mr::STATUS_OF,
+            mr::status,
+        )
+        .responds::<mr::MergeRequestStatusBody>(Verb::Get, mr::STATUS)
+        .route_with(
+            Verb::Get,
+            mr::MERGE_SETTINGS,
+            Action::ProjectRead,
+            "Read a project's merge settings and CODEOWNERS enforcement (as reading the project)",
+            mr::SettingsProject,
+            mr::merge_settings,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Get, mr::MERGE_SETTINGS)
+        .route_with_body(
+            Verb::Put,
+            mr::MERGE_SETTINGS,
+            Action::MergeSettingsManage,
+            "Replace a project's merge settings: methods, default, source deletion, approvals on push, committers' approvals (people only; Maintainer)",
+            mr::SETTINGS_MAX_BODY,
+            mr::SettingsProject,
+            mr::put_merge_settings,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Put, mr::MERGE_SETTINGS)
+        .route_with_body(
+            Verb::Put,
+            mr::CODEOWNERS_ENFORCEMENT,
+            Action::CodeownersEnforcementToggle,
+            "Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project)",
+            mr::SETTINGS_MAX_BODY,
+            mr::CodeownersOf,
+            mr::put_codeowners_enforcement,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Put, mr::CODEOWNERS_ENFORCEMENT)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

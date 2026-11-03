@@ -440,6 +440,14 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/status",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestUnapprove",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/unapprove",
@@ -467,6 +475,30 @@
     "action": "MergeRequestRead",
     "method": "GET",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/versions/{version}/diff",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-settings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeSettingsManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/merge-settings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CodeownersEnforcementToggle",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

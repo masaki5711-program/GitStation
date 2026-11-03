@@ -61,6 +61,17 @@ pub struct MergeStatus {
 }
 
 impl Review {
+    /// The highest minimum push role of `project`'s protection rules (the
+    /// CODEOWNERS toggle's loader; `None` without rules).
+    pub async fn highest_protection(
+        &self,
+        project: forge_core::ProjectId,
+    ) -> Result<Option<forge_core::Role>, ForgeError> {
+        Ok(forge_db::protected_refs::rules_for(&self.db, project)
+            .await?
+            .highest_push_min_role())
+    }
+
     /// `GET …/merge-settings` (`ProjectRead`): the project's settings
     /// (the defaults without a row).
     pub async fn merge_settings(

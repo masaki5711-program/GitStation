@@ -52,6 +52,8 @@ mod discussions;
 mod loaders;
 mod mergeability;
 mod merges;
+mod settings;
+mod status;
 mod versions;
 
 pub use approvals::{
@@ -79,6 +81,18 @@ pub use mergeability::{mergeability, MergeabilityBody};
 pub use merges::{
     merge, merge_status, MergeAttemptBody, MergeMergeRequest, MergeRequestToMerge, MergeStatusBody,
     MergeStatusOf, MAX_BODY as MERGE_MAX_BODY, MERGE,
+};
+pub use settings::{
+    get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,
+    put_settings as put_merge_settings, CodeownersEnforcementBody, CodeownersOf, MergeSettingsBody,
+    PutCodeownersEnforcement, PutMergeSettings, SettingsProject,
+    CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
+    SETTINGS as MERGE_SETTINGS,
+};
+pub use status::{
+    status, MergeRequestStatusBody, StatusApprovalBody, StatusApprovalsBody, StatusCheckBody,
+    StatusCodeownerBody, StatusCodeownersBody, StatusDiscussionsBody, StatusReasonBody,
+    StatusRuleBody, STATUS, STATUS_OF,
 };
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,

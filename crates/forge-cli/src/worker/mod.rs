@@ -20,7 +20,8 @@
 //! M2 MR6: every `web.session_purge_interval_secs`, at once again after a
 //! full batch), and the mergeability sweep (`mergeability_sweep`, M3 R2:
 //! every 30 s, stale `checking` rows ended and deferred `unchecked` rows
-//! re-requested).
+//! re-requested), and the record of expired CODEOWNERS suspensions
+//! (`codeowners_restore`, M3 R6: every 60 s).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -57,6 +58,9 @@ mod review;
 // ── M3 R2: stale and deferred mergeability checks ──
 mod mergeability_sweep;
 // ── end M3 R2 ──
+// ── M3 R6: expired CODEOWNERS suspensions ──
+mod codeowners_restore;
+// ── end M3 R6 ──
 mod seal;
 // ── M2 MR6: the session purge ──
 mod session_purge;
@@ -131,6 +135,8 @@ enum Task {
     SessionPurge,
     /// Stale and deferred mergeability checks (`mergeability_sweep`, M3 R2).
     MergeabilitySweep,
+    /// Expired CODEOWNERS suspensions recorded (`codeowners_restore`, M3 R6).
+    CodeownersRestore,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -151,6 +157,8 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
         Task::AuditSeal,
         // M3 R2: needs only the database.
         Task::MergeabilitySweep,
+        // M3 R6: needs only the database.
+        Task::CodeownersRestore,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -213,6 +221,7 @@ impl Task {
             Self::Purge => purge::NAME,
             Self::SessionPurge => session_purge::NAME,
             Self::MergeabilitySweep => mergeability_sweep::NAME,
+            Self::CodeownersRestore => codeowners_restore::NAME,
         }
     }
 
@@ -233,6 +242,7 @@ impl Task {
                 .as_ref()
                 .map_or(MAX_BACKOFF, |purge| purge.session_interval),
             Self::MergeabilitySweep => mergeability_sweep::PERIOD,
+            Self::CodeownersRestore => codeowners_restore::PERIOD,
         }
     }
 
@@ -277,6 +287,7 @@ impl Task {
             Self::MergeabilitySweep => {
                 mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
             }
+            Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")

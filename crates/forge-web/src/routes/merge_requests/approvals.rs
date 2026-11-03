@@ -320,7 +320,7 @@ fn state_body(iid: i64, s: &ApprovalState) -> ApprovalStateBody {
 
 /// The merge request of an approval route (`suffix`: the path after
 /// `{iid}`).
-pub struct StoredMr(&'static str);
+pub struct StoredMr(pub(super) &'static str);
 
 /// `POST …/approve`.
 pub const TO_APPROVE: StoredMr = StoredMr(APPROVE_SUFFIX);

@@ -646,6 +646,35 @@
         ],
         "type": "object"
       },
+      "CodeownersEnforcementBody": {
+        "additionalProperties": false,
+        "description": "CODEOWNERS enforcement as the API shows it.",
+        "properties": {
+          "enforced": {
+            "description": "Enforced now (an expired suspension is enforced).",
+            "type": "boolean"
+          },
+          "suspended_at": {
+            "description": "While suspended: since when and until when (UTC, RFC 3339).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suspended_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enforced",
+          "suspended_at",
+          "suspended_until"
+        ],
+        "type": "object"
+      },
       "CommitBody": {
         "additionalProperties": false,
         "description": "One commit's metadata.",
@@ -1762,6 +1791,183 @@
         ],
         "type": "object"
       },
+      "MergeRequestStatusBody": {
+        "additionalProperties": false,
+        "description": "`GET …/status` (the stable contract, `schema_version` 1).",
+        "properties": {
+          "approvals": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StatusApprovalsBody",
+                "description": "`null` before the first version."
+              }
+            ]
+          },
+          "checks": {
+            "description": "The checks the target's merge rule requires (empty: none).",
+            "items": {
+              "$ref": "#/components/schemas/StatusCheckBody"
+            },
+            "type": "array"
+          },
+          "codeowners": {
+            "$ref": "#/components/schemas/StatusCodeownersBody"
+          },
+          "discussions": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StatusDiscussionsBody",
+                "description": "`null` when the merge rule does not require resolved discussions."
+              }
+            ]
+          },
+          "head_sha": {
+            "description": "`null` before the first version (nothing can merge yet).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iid": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mergeable": {
+            "description": "Nothing blocks now (a merge decides again under its locks).",
+            "type": "boolean"
+          },
+          "method": {
+            "description": "The method evaluated: the project's default.",
+            "type": "string"
+          },
+          "reasons": {
+            "description": "Every blocking reason, in the fixed order (the first is the one-line\n\"why it is stopped\").",
+            "items": {
+              "$ref": "#/components/schemas/StatusReasonBody"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "target_branch": {
+            "description": "Without `refs/heads/`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "iid",
+          "head_sha",
+          "target_branch",
+          "method",
+          "mergeable",
+          "reasons",
+          "approvals",
+          "checks",
+          "discussions",
+          "codeowners"
+        ],
+        "type": "object"
+      },
+      "MergeRuleBody": {
+        "additionalProperties": false,
+        "description": "The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the\nstrictest of the rules matching a branch applies.",
+        "properties": {
+          "direct_push_forbidden": {
+            "description": "Pushes may not create or move the branch (merges may).",
+            "type": "boolean"
+          },
+          "require_resolved_discussions": {
+            "description": "Every discussion of the merge request must be resolved.",
+            "type": "boolean"
+          },
+          "required_approvals": {
+            "description": "The minimum counted approvals of a merge into the branch.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "required_checks": {
+            "description": "Checks that must have succeeded on the merge request's head\n(`ci/`, `kanflow/`, `forge/` only); \"no check reported\" blocks.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "required_approvals",
+          "required_checks",
+          "require_resolved_discussions",
+          "direct_push_forbidden"
+        ],
+        "type": "object"
+      },
+      "MergeSettingsBody": {
+        "additionalProperties": false,
+        "description": "A project's merge settings.",
+        "properties": {
+          "allowed_methods": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "codeowners": {
+            "$ref": "#/components/schemas/CodeownersEnforcementBody"
+          },
+          "committer_approvals_excluded": {
+            "type": "boolean"
+          },
+          "default_method": {
+            "type": "string"
+          },
+          "delete_source_default": {
+            "type": "boolean"
+          },
+          "project_id": {
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "reset_approvals_on_push": {
+            "type": "boolean"
+          },
+          "stored": {
+            "description": "`false`: the project never changed them (the defaults).",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "description": "UTC, RFC 3339 (`null` for the defaults).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project_id",
+          "allowed_methods",
+          "default_method",
+          "delete_source_default",
+          "reset_approvals_on_push",
+          "committer_approvals_excluded",
+          "codeowners",
+          "stored",
+          "updated_at"
+        ],
+        "type": "object"
+      },
       "MergeStatusBody": {
         "additionalProperties": false,
         "description": "The latest merge attempt of a merge request (`null`: never asked).",
@@ -2083,6 +2289,17 @@
             "minimum": 1,
             "type": "integer"
           },
+          "merge_rule": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MergeRuleBody",
+                "description": "M3 R6: the rule's merge conditions (`null`: none)."
+              }
+            ]
+          },
           "pattern": {
             "type": "string"
           },
@@ -2099,7 +2316,8 @@
           "pattern",
           "push_min_role",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "merge_rule"
         ],
         "type": "object"
       },
@@ -2170,6 +2388,66 @@
         },
         "required": [
           "required_approvals"
+        ],
+        "type": "object"
+      },
+      "PutCodeownersEnforcement": {
+        "additionalProperties": false,
+        "description": "`PUT …/merge-settings/codeowners-enforcement`.",
+        "properties": {
+          "enforced": {
+            "description": "`false` suspends CODEOWNERS (with `for_minutes`); `true` enforces it\nagain.",
+            "type": "boolean"
+          },
+          "for_minutes": {
+            "description": "The suspension's length, 1..=1440 minutes (required to suspend; it\ncomes back by itself at the expiry).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enforced"
+        ],
+        "type": "object"
+      },
+      "PutMergeSettings": {
+        "additionalProperties": false,
+        "description": "`PUT …/merge-settings` (every field: the settings are replaced).",
+        "properties": {
+          "allowed_methods": {
+            "description": "One to three of `merge_commit`, `squash`, `fast_forward`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "committer_approvals_excluded": {
+            "description": "Committers' approvals do not count (the default `true`).",
+            "type": "boolean"
+          },
+          "default_method": {
+            "description": "One of `allowed_methods`.",
+            "type": "string"
+          },
+          "delete_source_default": {
+            "description": "Delete the source branch after a merge unless the request says.",
+            "type": "boolean"
+          },
+          "reset_approvals_on_push": {
+            "description": "New commits end the approvals (the default `true`); `false` carries\nthem when the change allows it (never into a protected branch, never\na configuration or CODEOWNERS path).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allowed_methods",
+          "default_method",
+          "delete_source_default",
+          "reset_approvals_on_push",
+          "committer_approvals_excluded"
         ],
         "type": "object"
       },
@@ -2625,6 +2903,205 @@
         },
         "required": [
           "body"
+        ],
+        "type": "object"
+      },
+      "StatusApprovalBody": {
+        "additionalProperties": false,
+        "description": "One live approval as counted now.",
+        "properties": {
+          "approver_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "counted": {
+            "type": "boolean"
+          },
+          "uncounted_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "approver_id",
+          "username",
+          "counted",
+          "uncounted_reason"
+        ],
+        "type": "object"
+      },
+      "StatusApprovalsBody": {
+        "additionalProperties": false,
+        "description": "The approval side.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/StatusApprovalBody"
+            },
+            "type": "array"
+          },
+          "codeowners": {
+            "description": "CODEOWNERS rules the changed paths need: `pattern`, satisfied.",
+            "items": {
+              "$ref": "#/components/schemas/StatusCodeownerBody"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/StatusRuleBody"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules",
+          "approvals",
+          "codeowners"
+        ],
+        "type": "object"
+      },
+      "StatusCheckBody": {
+        "additionalProperties": false,
+        "description": "One required check and its run on the head.",
+        "properties": {
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "description": "`null`: no run reported (never success).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "conclusion"
+        ],
+        "type": "object"
+      },
+      "StatusCodeownerBody": {
+        "additionalProperties": false,
+        "description": "One CODEOWNERS rule the changes need.",
+        "properties": {
+          "owners": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "satisfied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "owners",
+          "satisfied"
+        ],
+        "type": "object"
+      },
+      "StatusCodeownersBody": {
+        "additionalProperties": false,
+        "description": "CODEOWNERS enforcement now.",
+        "properties": {
+          "enforced": {
+            "type": "boolean"
+          },
+          "suspended_until": {
+            "description": "While suspended: when enforcement comes back by itself (UTC).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "enforced",
+          "suspended_until"
+        ],
+        "type": "object"
+      },
+      "StatusDiscussionsBody": {
+        "additionalProperties": false,
+        "description": "The discussions condition.",
+        "properties": {
+          "unresolved": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unresolved"
+        ],
+        "type": "object"
+      },
+      "StatusReasonBody": {
+        "additionalProperties": false,
+        "description": "One blocking reason.",
+        "properties": {
+          "detail": {
+            "description": "`key=value` pairs (`rule=… required=… counted=…`, `name=…`,\n`count=…`, …); `null` for the plain reasons.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "A name of ADR-0024 §7: `not_open`, `draft`, `merge_in_progress`,\n`source_branch_missing`, `mergeability_unknown`, `conflict`,\n`ff_not_possible`, `nothing_to_merge`, `approvals_missing`,\n`codeowner_approval_missing`, `codeowners_invalid`,\n`required_check_missing`, `required_check_not_successful`,\n`unresolved_discussions`, `config_change_needs_maintainer_approval`,\n`changed_paths_unknown`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "detail"
+        ],
+        "type": "object"
+      },
+      "StatusRuleBody": {
+        "additionalProperties": false,
+        "description": "One approval requirement (an approval rule, or `@protected_branch`).",
+        "properties": {
+          "applies": {
+            "type": "boolean"
+          },
+          "counted": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "applies",
+          "required",
+          "counted"
         ],
         "type": "object"
       },
@@ -5623,6 +6100,55 @@
         "x-forge-action": "MergeRequestReopen"
       }
     },
+    "/api/v1/projects/{id}/merge-requests/{iid}/status": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_requests_iid_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "iid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeRequestStatusBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Evaluate whether a merge request may merge now: every blocking reason in a fixed order, the approvals, the required checks, the discussions (a stable contract, schema_version 1; as the repository browse API)",
+        "x-forge-action": "MergeRequestRead"
+      }
+    },
     "/api/v1/projects/{id}/merge-requests/{iid}/unapprove": {
       "post": {
         "operationId": "post_api_v1_projects_id_merge_requests_iid_unapprove",
@@ -5836,6 +6362,149 @@
         },
         "summary": "One version's diff, merge base to head (as the repository browse API)",
         "x-forge-action": "MergeRequestRead"
+      }
+    },
+    "/api/v1/projects/{id}/merge-settings": {
+      "get": {
+        "operationId": "get_api_v1_projects_id_merge_settings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeSettingsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Read a project's merge settings and CODEOWNERS enforcement (as reading the project)",
+        "x-forge-action": "ProjectRead"
+      },
+      "put": {
+        "operationId": "put_api_v1_projects_id_merge_settings",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutMergeSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeSettingsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Replace a project's merge settings: methods, default, source deletion, approvals on push, committers' approvals (people only; Maintainer)",
+        "x-forge-action": "MergeSettingsManage",
+        "x-forge-max-body-bytes": 4096
+      }
+    },
+    "/api/v1/projects/{id}/merge-settings/codeowners-enforcement": {
+      "put": {
+        "operationId": "put_api_v1_projects_id_merge_settings_codeowners_enforcement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutCodeownersEnforcement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeSettingsBody"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "Error: registered code, localized message, request id"
+          }
+        },
+        "summary": "Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project)",
+        "x-forge-action": "CodeownersEnforcementToggle",
+        "x-forge-max-body-bytes": 4096
       }
     },
     "/api/v1/projects/{id}/protected-refs": {
