@@ -295,6 +295,20 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
         MrCommand::Approvals { project, iid } => {
             crate::mr_approvals::approvals(cli, (*project, *iid), env, io)
         }
+        // M3 I1b: work item links (`mr_work_items.rs`).
+        MrCommand::WorkItems { project, iid } => {
+            crate::mr_work_items::list(cli, (*project, *iid), env, io)
+        }
+        MrCommand::LinkWorkItem {
+            project,
+            iid,
+            reference,
+        } => crate::mr_work_items::link(cli, (*project, *iid), reference, env, io),
+        MrCommand::UnlinkWorkItem {
+            project,
+            iid,
+            reference,
+        } => crate::mr_work_items::unlink(cli, (*project, *iid), reference, env, io),
         MrCommand::Resolve {
             project,
             iid,

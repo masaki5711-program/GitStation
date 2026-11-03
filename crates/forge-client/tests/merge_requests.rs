@@ -1349,3 +1349,102 @@ fn merge_rule_commands_call_their_routes() {
         ("DELETE", "/api/v1/projects/7/protected-refs/2/merge-rule")
     );
 }
+
+const LINKS: &str = r#"{"iid":3,"truncated":false,"links":[{"link_id":5,"work_item_id":9,"work_item":{"provider":"kanflow","project_id":"kf-1","ref":"PBI-43"},"source":"auto","linked_by":null,"linked_at":"2026-11-03T00:00:00Z","unlinked_at":"2026-11-03T01:00:00Z","unlink_source":"manual","unlinked_by":12}]}"#;
+const LINKED: &str = r#"{"iid":3,"outcome":"linked","link_id":6,"work_item_id":9,"work_item":{"provider":"kanflow","project_id":"kf-1","ref":"PBI-43"},"source":"manual"}"#;
+
+/// M3 I1b: `mr work-items`, `mr link-work-item` and `mr unlink-work-item`
+/// call their routes; a reference that is not `PBI-<n>` never leaves the
+/// client.
+#[test]
+fn mr_work_item_commands_call_their_routes() {
+    let srv = Mock::start(|r| match r.method.as_str() {
+        "GET" => ok(LINKS),
+        "PUT" => ok(LINKED),
+        _ => Resp::json(204, ""),
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "work-items", "--project", "7", "--iid", "3"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stdout.contains("PBI-43 auto unlinked (manual)"),
+        "{}",
+        o.stdout
+    );
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("GET", "/api/v1/projects/7/merge-requests/3/work-items")
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "link-work-item",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--ref",
+            "PBI-43",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.json()["outcome"], "linked");
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        (
+            "PUT",
+            "/api/v1/projects/7/merge-requests/3/work-items/PBI-43"
+        )
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "mr",
+            "unlink-work-item",
+            "--project",
+            "7",
+            "--iid",
+            "3",
+            "--ref",
+            "PBI-43",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        (
+            "DELETE",
+            "/api/v1/projects/7/merge-requests/3/work-items/PBI-43"
+        )
+    );
+    let before = srv.seen().len();
+    for bad in ["pbi-43", "PBI-043", "PBI-43/../x", "ICE-1"] {
+        let o = gstn(
+            &sb,
+            &srv,
+            &[
+                "mr",
+                "link-work-item",
+                "--project",
+                "7",
+                "--iid",
+                "3",
+                "--ref",
+                bad,
+            ],
+        );
+        assert_ne!(o.code, 0, "{bad}");
+    }
+    assert_eq!(srv.seen().len(), before, "nothing was sent");
+}

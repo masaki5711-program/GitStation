@@ -3452,6 +3452,163 @@
         }
       ],
       "examples": [
+        "gstn mr work-items --project 7 --iid 3 --json"
+      ],
+      "name": "mr work-items",
+      "output": {
+        "properties": {
+          "links": {
+            "items": {
+              "required": [
+                "link_id",
+                "work_item_id",
+                "work_item",
+                "source",
+                "linked_by",
+                "linked_at",
+                "unlinked_at",
+                "unlink_source",
+                "unlinked_by"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "iid",
+          "links",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/work-items"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "A merge request's work item links (kanflow PBI-<n> of the project's binding), open and ended, oldest first: detected in the title or the source branch (source auto) or linked by a person (manual). An ended link stays (unlinked_at, unlink_source)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The work item, PBI-<n>.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr link-work-item --project 7 --iid 3 --ref PBI-43"
+      ],
+      "name": "mr link-work-item",
+      "output": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "linked",
+              "unchanged"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "iid",
+          "outcome",
+          "link_id",
+          "work_item_id",
+          "work_item",
+          "source"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Link a work item (--ref PBI-<n> of the project's kanflow binding) to a merge request by hand. Developer and above; FG-INT-0018 when the project is not bound. unchanged when it is linked already (by detection or a person)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The work item, PBI-<n>.",
+          "kind": "option",
+          "name": "--ref",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr unlink-work-item --project 7 --iid 3 --ref PBI-43"
+      ],
+      "name": "mr unlink-work-item",
+      "output": {
+        "required": [
+          "unlinked",
+          "project_id",
+          "iid",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Unlink a work item (--ref PBI-<n>) from a merge request. Developer and above. The link stays in the history and detection does not link it again (link it by hand to bring it back). Not linked now: FG-REPO-0005."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
         "gstn mr status --project 7 --iid 3 --json"
       ],
       "name": "mr status",

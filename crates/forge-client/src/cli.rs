@@ -867,6 +867,37 @@ pub enum MrCommand {
         #[arg(long, value_parser = parse_id, value_name = "IID")]
         iid: i64,
     },
+    /// The work item links of a merge request, open and ended (M3 I1b).
+    #[command(name = "work-items")]
+    WorkItems {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Link a work item (PBI-<n> of the project's kanflow binding) by hand.
+    #[command(name = "link-work-item")]
+    LinkWorkItem {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The work item, `PBI-<n>`.
+        #[arg(long = "ref", value_parser = crate::mr_work_items::parse_work_item_ref, value_name = "REF")]
+        reference: String,
+    },
+    /// Unlink a work item; the link stays in the history and detection
+    /// does not link it again.
+    #[command(name = "unlink-work-item")]
+    UnlinkWorkItem {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+        /// The work item, `PBI-<n>`.
+        #[arg(long = "ref", value_parser = crate::mr_work_items::parse_work_item_ref, value_name = "REF")]
+        reference: String,
+    },
     /// Whether a merge request may merge now, and every reason it may not
     /// (a stable JSON contract with --json).
     Status {

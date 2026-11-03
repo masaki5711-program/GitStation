@@ -413,6 +413,22 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/merge-requests/{iid}/approvals",
         Coverage::Command("mr approvals"),
     ),
+    // M3 I1b (plan 02 §2): a merge request's work item links.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/work-items",
+        Coverage::Command("mr work-items"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+        Coverage::Command("mr link-work-item"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/merge-requests/{iid}/work-items/{ref}",
+        Coverage::Command("mr unlink-work-item"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/approval-rules",
