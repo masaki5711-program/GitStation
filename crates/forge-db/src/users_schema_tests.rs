@@ -189,6 +189,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
+            // M3 S0 (20261113100000).
+            AuditedTable {
+                name: "service_account_profiles".into(),
+                audit_resource: AuditResource::Literal("user".into()),
+                audit_id_column: "user_id".into(),
+                unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "tokens".into(),
                 audit_resource: AuditResource::Literal("user".into()),

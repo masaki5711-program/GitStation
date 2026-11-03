@@ -90,7 +90,9 @@ async fn disabling_the_last_active_human_admin_is_administration_conflict() {
     let alice = account(&t, "alice", UserKind::Human, true).await;
     // None of these count as "another administrator".
     let _bot = account(&t, "ci-bot", UserKind::Bot, true).await;
-    let _service = account(&t, "backup", UserKind::ServiceAccount, true).await;
+    // A service account is never an administrator (M3 S0,
+    // users_service_account_not_admin), so it cannot count either.
+    let _service = account(&t, "backup", UserKind::ServiceAccount, false).await;
     let carol = account(&t, "carol", UserKind::Human, true).await;
     let _ = disable(&t.db, &ctx("req-disable-carol"), carol)
         .await

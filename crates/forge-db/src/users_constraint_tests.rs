@@ -94,7 +94,10 @@ async fn each_d1_constraint_refuses_its_rows() {
         (
             "INSERT INTO forge.users (kind, username, display_name, auth_source, external_id) \
              VALUES ('bot', 'b1', 'B', 'ldap', 'uid-1')",
-            user(", auth_source, external_id", ", 'ldap', 'uid-1'"),
+            // A bot again: a service account holds no external id (M3 S0,
+            // users_service_account_no_personal_data).
+            user(", auth_source, external_id", ", 'ldap', 'uid-1'")
+                .replace("'service_account'", "'bot'"),
             "23505".into(),
             "users_external_id",
             "external id per source",

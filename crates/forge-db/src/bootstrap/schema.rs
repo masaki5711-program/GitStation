@@ -575,6 +575,16 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         // ── M3 R6: merge conditions, removed by the purge (20261112100000) ──
         ("forge.merge_settings", operational()),
         ("forge.protected_ref_merge_rules", operational()),
+        // ── M3 S0: service account profiles, no DELETE (20261113100000) ──
+        (
+            "forge.service_account_profiles",
+            plain(&[
+                "forge_app:SELECT",
+                "forge_app:INSERT",
+                "forge_app:UPDATE",
+                "forge_ro:SELECT",
+            ]),
+        ),
     ]
 }
 
@@ -641,6 +651,8 @@ const TOKENS_RO: &[&str] = &[
     "revoked_reason",
     "last_used_at",
     "is_agent",
+    // M3 S0 (20261113100000).
+    "issued_by_user_id",
 ];
 
 /// The read pool's columns of users (tables.toml `ro_columns`): not email,
@@ -731,6 +743,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 R6: merge conditions (migration 20261112100000) ──
     "merge_settings",
     "protected_ref_merge_rules",
+    // ── M3 S0: service accounts (migration 20261113100000) ──
+    "service_account_profiles",
 ];
 
 /// Every table the first migration creates.

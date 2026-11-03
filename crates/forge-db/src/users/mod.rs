@@ -177,6 +177,17 @@ pub(crate) fn validate(new: &NewUser) -> Result<(), ForgeError> {
     if new.kind == UserKind::Human && new.email.is_none() {
         return Err(request_invalid("email_missing", 0));
     }
+    // M3 S0: a service account holds no personal data and is never an
+    // administrator (the CHECKs users_service_account_no_personal_data and
+    // users_service_account_not_admin are the backstop).
+    if new.kind == UserKind::ServiceAccount {
+        if new.email.is_some() || new.employee_number.is_some() || new.external_id.is_some() {
+            return Err(request_invalid("service_account_personal_data", 0));
+        }
+        if new.is_admin {
+            return Err(request_invalid("service_account_admin", 0));
+        }
+    }
     let fields = [
         (Some(new.display_name.as_str()), 255, "display_name_length"),
         (new.email.as_deref(), 320, "email_length"),

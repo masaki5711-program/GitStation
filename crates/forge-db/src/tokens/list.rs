@@ -16,6 +16,7 @@ type ListRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<i64>,
 );
 
 /// The owner's tokens, newest first (revoked and expired ones included).
@@ -33,7 +34,7 @@ pub async fn list(db: &Db, user: UserId) -> Result<Vec<TokenInfo>, ForgeError> {
                 utc!("revoked_at"),
                 ", ",
                 utc!("last_used_at"),
-                " FROM forge.tokens WHERE user_id = $1 ORDER BY created_at DESC, id DESC"
+                ", issued_by_user_id FROM forge.tokens WHERE user_id = $1 ORDER BY created_at DESC, id DESC"
             ))
             .bind(user.get())
             .fetch_all(&mut *conn)
@@ -52,6 +53,7 @@ pub async fn list(db: &Db, user: UserId) -> Result<Vec<TokenInfo>, ForgeError> {
                 expires_at,
                 revoked_at,
                 last_used_at,
+                issued_by,
             )| {
                 let scopes = parse_scopes(token_id, &public_id, &scopes)?;
                 Ok(TokenInfo {
@@ -63,6 +65,7 @@ pub async fn list(db: &Db, user: UserId) -> Result<Vec<TokenInfo>, ForgeError> {
                     expires_at,
                     revoked_at,
                     last_used_at,
+                    issued_by: issued_by.map(UserId::new),
                 })
             },
         )

@@ -1,6 +1,6 @@
 use crate::Scope;
 
-const ALL: [(Scope, &str); 7] = [
+const ALL: [(Scope, &str); 8] = [
     (Scope::ReadRepository, "read_repository"),
     (Scope::WriteRepository, "write_repository"),
     (Scope::ReadApi, "read_api"),
@@ -8,6 +8,7 @@ const ALL: [(Scope, &str); 7] = [
     (Scope::Admin, "admin"),
     (Scope::MergeExecute, "merge_execute"),
     (Scope::MergeApprove, "merge_approve"),
+    (Scope::UserEmail, "user_email"),
 ];
 
 #[test]
@@ -78,4 +79,27 @@ fn merge_scopes_are_satisfied_only_by_themselves() {
     assert!(!Scope::MergeExecute.satisfies(Scope::MergeApprove));
     assert!(!Scope::MergeApprove.satisfies(Scope::MergeExecute));
     assert!(!Scope::MergeApprove.satisfies(Scope::Api));
+}
+
+/// M3 S0 (plan 11 §5 S0): `user_email` only adds the addresses to what a
+/// token may already read. It satisfies nothing else — a `user_email`-only
+/// token reads no API — and nothing else satisfies it, `api` and `admin`
+/// included.
+#[test]
+fn user_email_scope_does_not_imply_read_api() {
+    for other in Scope::ALL {
+        if other == Scope::UserEmail {
+            continue;
+        }
+        assert!(
+            !Scope::UserEmail.satisfies(other),
+            "user_email vs {other:?}"
+        );
+        assert!(
+            !other.satisfies(Scope::UserEmail),
+            "{other:?} vs user_email"
+        );
+    }
+    assert!(Scope::UserEmail.satisfies(Scope::UserEmail));
+    assert!(!Scope::UserEmail.satisfies(Scope::ReadApi));
 }
