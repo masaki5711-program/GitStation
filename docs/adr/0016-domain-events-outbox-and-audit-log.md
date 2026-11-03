@@ -884,3 +884,56 @@ MR2 で監査のみにした移動に、**移動したリソースごとに 1 �
   `user_renamed:<user_id>:<µs epoch>`。epoch はリソースの行をロックした後に同じ変更の中で読む `clock_timestamp()` の
   マイクロ秒（MR3 と同じ精度）。同じリソースの移動は行のロックで直列になるので 2 つの移動が同じ鍵になることはなく、同じ変更の
   繰り返しだけが `Deduped` になる。
+
+## Amendment（2026-11-03、M3 I1a `feat/cross-integrations-bindings`: 連携とプロジェクトの結びつけ）
+
+計画 11 §5 I1 を 4 つに分けた最初の MR（I1a 結びつけ、I1b 作業項目のリンク、I1c イベントの履歴、I1d 開発状況）。§1 の DDL の概略から変えた点と、
+実装で決めたこと。
+
+1. **表**（追記のマイグレーション `20261114100000_integrations.sql`、台帳 `tables.toml` はどちらも `audited`）:
+   - `forge.integrations`: `kind`（CHECK `integrations_kind_known`、今は `kanflow` だけ）、`service_account_id`（**連携ごとに 1 つ**、
+     `integrations_one_per_service_account`）、`enabled`、`event_types`（1〜64 個、`integrations_event_types_count`）、`created_by`。
+     §1 の受信の秘密の列（`inbound_secret_*`）は **まだ足さない**（受信の MR で追記のマイグレーションとして足す。使わない列を先に置かない）。
+     ガード `integrations_service_account_guard`（保護の対象。`tables.toml` の `guarded_functions`）が、アカウントがサービスアカウントであること
+     （制約名 `integrations_service_account_kind`）と、連携の一生のあいだ変わらないこと（`integrations_service_account_fixed`。結びつけが付けた
+     メンバーはそのアカウントのもの）を守る。監査は (`integration`, id): `integration.created` / `integration.updated`。DELETE は無い（無効にするだけ）。
+   - `forge.integration_bindings`: §1 の主キー `(integration_id, project_id)` に加えて **`project_id` の一意**
+     （`integration_bindings_one_per_project`。02 §2: 1 つのリポジトリを 2 つの kanflow のプロジェクトに結ぶと `PBI-123` があいまいになる。
+     §1 の概略では同じプロジェクトを別の連携にも結べたが、連携の種類が kanflow だけの今は、どの連携とでも 1 つに絞る。種類が増えたら
+     一意の範囲を追記のマイグレーションで広げる）。`external_project_id`（CHECK `integration_bindings_external_project_id_format`:
+     `A-Z a-z 0-9 . _ : -` の 1〜100 文字）、`granted_membership`、`created_by`。監査はプロジェクトの行:
+     `integration.bound` / `integration.unbound`。結びつけはプロジェクトの完全削除（purge）で消える。
+2. **結びつけはメンバーの変更でもある**（計画 11 Q6）: 結ぶとき、連携のサービスアカウントがまだメンバーでなければ **Reporter** にする
+   （`granted_membership = true`。サービスアカウントはメンバーのプロジェクトしか見えない、ADR-0019 Addendum S0 §3）。解除のとき、
+   結びつけが付けたメンバーで、**まだ直接の Reporter なら** 外す（手で付けた・手でロールを変えたメンバーは残す）。どちらも同じ変更に
+   プロジェクトの `member.added` / `member.removed` の監査の行とイベント（maintainer の分類）を足す（`ChangeRecord::affected`）。
+   `integration.*` 自体は監査のみで、イベントにしない（履歴 API の見える集合の変化は I1c の `VisibleSet` のハッシュで 410 にする、§7）。
+3. **上限と衝突**: 1 つの連携に 200（`FG-INT-0012` IntegrationLimitReached、409、info）。数えるのは連携の行の `FOR UPDATE` の下なので、
+   別のプロジェクトの同時の結びつけでも越えない。すでに結ばれたプロジェクトは `FG-INT-0016` BindingConflict（409、info。`reason` =
+   `bound_to_other_integration` / `bound_to_other_external_project`）。同じ外部プロジェクトへの再度の結びつけは `unchanged`（何も書かない）。
+   INT の 0013〜0015 は計画 11 §4.4 の O2 / N1 の予定の番号として空けた。forge-errors の AREAS に `INT` を足した。
+4. **認可**（`authorize()` と権限の表の allow / deny の行、`matrix_rows_integrations.rs`）:
+   - `IntegrationManage`（登録、有効・無効、`event_types`）: **管理者の Web セッションだけ**、人だけ（`is_session_only`、`is_people_only`）。
+     管理者の `admin` スコープのトークンでも `FG-AUTH-0002 reason=session_required`（連携が何を読めるかは人が決める。S0 のサービスアカウントの
+     作成と同じ形）。トークンで連携を止めたいとき（漏えい）は、サービスアカウントを無効化する（`UserDisable`、トークンはすべて失効）。
+   - `IntegrationRead`（一覧・1 件・結びつけの一覧）: 管理者、人だけ（エージェント・サービスアカウント・ボットは不可）。トークンは `admin` と `read_api`。
+   - `IntegrationBindingManage`（結ぶ・解除）: プロジェクトの **Maintainer 以上**、人だけ、`api`。見えないプロジェクトは `FG-REPO-0005`、
+     削除待ちは `FG-REPO-0006`（`authorize()` の共通の判定。forge-db のコマンドも削除待ちを断る）。代理（kanflow の画面から人として結ぶ）は
+     S2 の主張つきの代理で足す（計画 11 §4.3 の「可（主張が必須）」）。
+   - プロジェクトの結びつけを読む `GET /api/v1/projects/{id}/integration-bindings` は `ProjectRead`（Reporter。結びつけたサービスアカウントも読める）。
+5. **経路**: `/api/v1/admin/integrations`（GET・POST）、`/{id}`（GET・PATCH）、`/{id}/bindings`（GET）、
+   `/api/v1/projects/{id}/integration-bindings`（GET）、`…/{integration_id}`（PUT `{external_project_id}` → 200 `outcome` = `bound` / `unchanged`、DELETE → 204）。
+   結びつけの経路のローダーはプロジェクトだけを読み、連携の有無は判定の後にコマンドが行のロックの下で見る（判定の前に連携の id の有無を漏らさない）。
+   gstn: `admin integration list|view|bindings`、`integration-binding list|set|remove`（登録と変更はブラウザだけ、C-1 の表で `BrowserOnly`）。
+6. **層**: 計画 11 §5 は I1 で `forge-integ` のクレートを作るとしたが、I1a の結びつけはプロジェクトのメンバーの変更と同じ「判定を
+   2 回（登録簿と、書き込みのトランザクションの中の `Authorized::reconfirm`）」の形なので、サービス層は **forge-hosting** に置いた
+   （`integrations::bind_decided` / `unbind_decided` を呼ぶのは forge-hosting だけ、テスト `only_forge_hosting_calls_the_decided_commands`）。
+   SQL は forge-db の `integrations`。`forge-integ` はイベントの履歴（I1c: カーソル、`prove_visible`）で作る。
+7. **錠の順**: プロジェクトの行 `FOR UPDATE` → 呼び出し元のメンバーの行と利用者の行 `FOR SHARE` → `decide` → 連携の行 `FOR UPDATE` →
+   プロジェクトの結びつけ → サービスアカウントのメンバーの行 `FOR UPDATE`・利用者の行 `FOR SHARE`（`projects::member_writes` と同じ向き）。
+   連携の更新は連携の行だけを錠にする。
+
+Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding_removes_reporter_membership`、`binding_second_kanflow_project_is_refused`、
+`binding_limit_200_is_int_0012`、`binding_refused_for_pending_deletion_project`（forge-db）、`integration_manage_is_admin_session_only`、
+`binding_requires_maintainer`（forge-web）、制約名を確かめる `integration_checks_refuse_raw_rows_by_constraint_name` /
+`binding_checks_refuse_raw_rows_by_constraint_name`、`a_purge_removes_the_projects_integration_binding`。

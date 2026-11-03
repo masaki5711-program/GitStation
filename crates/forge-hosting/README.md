@@ -55,6 +55,13 @@ issue a token (the caller is recorded as the issuer), list and revoke its tokens
 each on the proof of its own action; the forge-db commands re-check the owner and
 the account's state under their row locks.
 
+**Integrations (M3 I1a)**: `integrations.rs` — create, list, read, update an
+integration (`IntegrationManage` / `IntegrationRead`, decided once on the
+instance), and bind / unbind a project (`IntegrationBindingManage`, decided
+twice: forge-db's `bind_decided` / `unbind_decided` call
+`Authorized::reconfirm` inside the transaction). Owned codes: FG-INT-0012,
+FG-INT-0016 (runbook `integrations`).
+
 **Tests**: `tests/commands.rs`, `tests/members_protection.rs` (decisions on the
 locked facts, agents, last owner, stale proofs), `tests/race.rs` (a role removed
 or a member promoted while a command waits on the lock it takes; a protection

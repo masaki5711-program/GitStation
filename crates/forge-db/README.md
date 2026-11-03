@@ -727,3 +727,23 @@ FG-AUTH-0019; no active human owner → FG-AUTH-0010 `ownerless_service_account`
 `users_service_account_not_admin`, `user_identities_human_guard` (constraint `user_identities_human_only`), `users_kind_immutable`; `users::create`
 and `identities::link_by_operator` refuse first (FG-AUTH-0006, FG-AUTH-0014
 `not_human`). Tests `src/service_accounts/tests.rs`.
+
+
+**Integrations (M3 I1a, migration `20261114100000`, ADR-0016 Amendment I1a)**:
+`integrations::create` / `update` (one `integration.created` / `.updated`
+audit row on (`integration`, id); the service account is checked under its row
+lock: FG-WEB-0006 `not_service_account` / `service_account_in_use`,
+`unknown_event_type`), `bind_decided` / `unbind_decided` (called by
+forge-hosting only, with `Authorized::reconfirm`: the project locked, the
+caller's facts re-read, then the integration row `FOR UPDATE`; at most one
+binding per project → FG-INT-0016, 200 per integration → FG-INT-0012, pending
+deletion → FG-REPO-0006; binding makes the service account a Reporter when it
+is no member and unbinding removes that membership while it is still Reporter,
+with the `member.added` / `.removed` audit row and event in the same change),
+`get` / `list` / `bindings` / `project_bindings` (read pool). The purge deletes
+a project's binding. Schema backstops: `integrations_service_account_guard`
+(`integrations_service_account_kind`, `integrations_service_account_fixed`),
+`integrations_kind_known`, `integrations_event_types_count`,
+`integrations_one_per_service_account`, `integration_bindings_one_per_project`,
+`integration_bindings_external_project_id_format`. Tests
+`src/integrations/tests.rs`.
