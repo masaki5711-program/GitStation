@@ -1832,6 +1832,8 @@ export interface components {
             schema_version: number;
             /** @description Without `refs/heads/`. */
             target_branch: string;
+            /** @description What the caller could do now (added within `schema_version` 1, U2). */
+            viewer: components["schemas"]["StatusViewerBody"];
         };
         /**
          * @description The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the
@@ -1865,8 +1867,33 @@ export interface components {
             reset_approvals_on_push: boolean;
             /** @description `false`: the project never changed them (the defaults). */
             stored: boolean;
-            /** @description UTC, RFC 3339 (`null` for the defaults). */
+            /**
+             * @description UTC, RFC 3339 to the microsecond (`null` for the defaults): send it
+             *     back as `expected_updated_at`.
+             */
             updated_at: string | null;
+            /** @description What the caller could do now (U2). */
+            viewer: components["schemas"]["MergeSettingsViewerBody"];
+        };
+        /**
+         * @description What the caller could do on the settings now (U2): each flag is
+         *     `authorize()` on the context the write route decides on
+         *     (`forge_auth::MergeSettingsViewer`) — a hint for the screen, never a
+         *     permission (the route decides again).
+         */
+        MergeSettingsViewerBody: {
+            /**
+             * @description `PUT …/merge-settings` that counts committers' approvals or carries
+             *     approvals on push (a role at or above every protection).
+             */
+            can_loosen: boolean;
+            /** @description `PUT …/merge-settings` that does not loosen the approvals. */
+            can_manage: boolean;
+            /**
+             * @description `PUT …/codeowners-enforcement` suspending CODEOWNERS (a role at or
+             *     above every protection).
+             */
+            can_suspend_codeowners: boolean;
         };
         /** @description The latest merge attempt of a merge request (`null`: never asked). */
         MergeStatusBody: {
@@ -2115,6 +2142,13 @@ export interface components {
             /** @description Delete the source branch after a merge unless the request says. */
             delete_source_default: boolean;
             /**
+             * @description The `updated_at` the caller read (`null`: the defaults, never
+             *     stored). Required (U2): another value under the lock is
+             *     FG-REVIEW-0017 — the settings changed in between and nothing is
+             *     overwritten silently.
+             */
+            expected_updated_at: string | null;
+            /**
              * @description New commits end the approvals (the default `true`); `false` carries
              *     them when the change allows it (never into a protected branch, never
              *     a configuration or CODEOWNERS path).
@@ -2336,17 +2370,17 @@ export interface components {
              *     `count=…`, …); `null` for the plain reasons.
              */
             detail: string | null;
-            /**
-             * @description A name of ADR-0024 §7: `not_open`, `draft`, `merge_in_progress`,
-             *     `source_branch_missing`, `mergeability_unknown`, `conflict`,
-             *     `ff_not_possible`, `nothing_to_merge`, `approvals_missing`,
-             *     `codeowner_approval_missing`, `codeowners_invalid`,
-             *     `required_check_missing`, `required_check_not_successful`,
-             *     `unresolved_discussions`, `config_change_needs_maintainer_approval`,
-             *     `changed_paths_unknown`.
-             */
-            reason: string;
+            /** @description A name of ADR-0024 §7 (`docs/api/merge-status.md`). */
+            reason: components["schemas"]["StatusReasonName"];
         };
+        /**
+         * @description The name of a blocking reason (ADR-0024 §7): one per
+         *     `forge_review::BlockReason` variant, spelled as `BlockReason::as_str`
+         *     (`status_reason_schema_lists_every_block_reason`). A new reason is a
+         *     new name here — added, never renamed, within `schema_version` 1.
+         * @enum {string}
+         */
+        StatusReasonName: "not_open" | "draft" | "merge_in_progress" | "source_branch_missing" | "mergeability_unknown" | "conflict" | "ff_not_possible" | "nothing_to_merge" | "approvals_missing" | "codeowner_approval_missing" | "codeowners_invalid" | "required_check_missing" | "required_check_not_successful" | "unresolved_discussions" | "config_change_needs_maintainer_approval" | "changed_paths_unknown";
         /** @description One approval requirement (an approval rule, or `@protected_branch`). */
         StatusRuleBody: {
             applies: boolean;
@@ -2355,6 +2389,26 @@ export interface components {
             name: string;
             /** Format: int32 */
             required: number;
+        };
+        /**
+         * @description What the caller could do now (U2): each flag is `authorize()` on the
+         *     context the action's route decides on (`forge_auth::MergeRequestViewer`)
+         *     — a hint for the screen, never a permission (the route decides again).
+         */
+        StatusViewerBody: {
+            /** @description The caller has a live approval of the merge request. */
+            approved_by_me: boolean;
+            /** @description `POST …/approve` would be allowed (never for the author). */
+            can_approve: boolean;
+            /** @description `PATCH …/{iid}` with `draft: false` would be allowed. */
+            can_mark_ready: boolean;
+            /**
+             * @description `POST …/merge` would be allowed (the target's minimum push role;
+             *     whether the merge request may merge now is `mergeable`).
+             */
+            can_merge: boolean;
+            /** @description `POST …/unapprove` would be allowed. */
+            can_unapprove: boolean;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {
