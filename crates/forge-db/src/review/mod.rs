@@ -312,4 +312,6 @@ mod race_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod user_name_tests;
+#[cfg(test)]
 mod version_tests;

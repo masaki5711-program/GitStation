@@ -350,3 +350,6 @@ pub async fn unresolved_discussions(db: &Db, mr: MergeRequestId) -> Result<u32, 
         .await?;
     Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }
+
+#[cfg(test)]
+mod name_tests;
