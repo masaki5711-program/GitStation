@@ -351,6 +351,38 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/projects/{id}/approval-rules/{name}",
         Coverage::Command("approval-rule remove"),
     ),
+    // M3 R6 (ADR-0024 §7, §4.1, §9, §12): the merge status, settings, the
+    // CODEOWNERS switch and the protected branch merge rules.
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-requests/{iid}/status",
+        Coverage::Command("mr status"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/merge-settings",
+        Coverage::Command("merge-settings show"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/merge-settings",
+        Coverage::Command("merge-settings set"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
+        Coverage::Command("codeowners-enforcement suspend"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+        Coverage::Command("merge-rule set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+        Coverage::Command("merge-rule remove"),
+    ),
     // M3 R1b (ADR-0024 §2): `SessionOnly` — every token, `admin` scope
     // included, is refused; gstn holds a token.
     (

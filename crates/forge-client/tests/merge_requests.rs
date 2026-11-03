@@ -1061,3 +1061,227 @@ fn approval_rule_commands_call_their_routes() {
     }
     assert_eq!(srv.seen().len(), before);
 }
+
+// ── M3 R6: the merge status, merge settings, the CODEOWNERS switch, merge rules ──
+
+const STATUS: &str = r#"{"schema_version":1,"iid":3,"head_sha":"2222222222222222222222222222222222222222","target_branch":"main","method":"merge_commit","mergeable":false,"reasons":[{"reason":"approvals_missing","detail":"rule=@protected_branch required=1 counted=0"},{"reason":"required_check_missing","detail":"name=ci/gates"}],"approvals":{"rules":[{"name":"@protected_branch","applies":true,"required":1,"counted":0}],"approvals":[],"codeowners":[]},"checks":[{"name":"ci/gates","status":null,"conclusion":null}],"discussions":{"unresolved":0},"codeowners":{"enforced":true,"suspended_until":null}}"#;
+
+const SETTINGS: &str = r#"{"project_id":7,"allowed_methods":["merge_commit","squash"],"default_method":"merge_commit","delete_source_default":false,"reset_approvals_on_push":true,"committer_approvals_excluded":true,"codeowners":{"enforced":true,"suspended_at":null,"suspended_until":null},"stored":false,"updated_at":null}"#;
+
+/// `gstn mr status` reads the stable contract; `--json` passes it through
+/// unchanged and the human output lists every reason.
+#[test]
+fn mr_status_reads_the_contract_and_lists_every_reason() {
+    let srv = Mock::start(|_| ok(STATUS));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &["mr", "status", "--project", "7", "--iid", "3", "--json"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("GET", "/api/v1/projects/7/merge-requests/3/status")
+    );
+    assert_eq!(o.json()["schema_version"], 1);
+    assert_eq!(o.json()["reasons"][1]["reason"], "required_check_missing");
+    let h = gstn(&sb, &srv, &["mr", "status", "--project", "7", "--iid", "3"]);
+    assert_eq!(h.code, 0, "{}", h.stderr);
+    assert!(h.stdout.contains("!3: blocked"), "{}", h.stdout);
+    assert!(
+        h.stdout.contains("required_check_missing (name=ci/gates)"),
+        "{}",
+        h.stdout
+    );
+}
+
+/// `merge-settings set` reads the settings and replaces only what was
+/// asked; `show` reads them.
+#[test]
+fn merge_settings_set_keeps_what_was_not_asked() {
+    let srv = Mock::start(|_| ok(SETTINGS));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "merge-settings",
+            "set",
+            "--project",
+            "7",
+            "--default",
+            "squash",
+            "--reset-approvals-on-push",
+            "false",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let seen = srv.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].method, "GET");
+    assert_eq!(
+        (seen[1].method.as_str(), seen[1].target.as_str()),
+        ("PUT", "/api/v1/projects/7/merge-settings")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&seen[1].body).expect("json"),
+        json!({"allowed_methods": ["merge_commit", "squash"], "default_method": "squash",
+               "delete_source_default": false, "reset_approvals_on_push": false,
+               "committer_approvals_excluded": true})
+    );
+    let show = gstn(&sb, &srv, &["merge-settings", "show", "--project", "7"]);
+    assert_eq!(show.code, 0, "{}", show.stderr);
+    assert!(
+        show.stdout.contains("CODEOWNERS enforced"),
+        "{}",
+        show.stdout
+    );
+    let bad = gstn(
+        &sb,
+        &srv,
+        &[
+            "merge-settings",
+            "set",
+            "--project",
+            "7",
+            "--allow",
+            "rebase",
+        ],
+    );
+    assert_eq!(
+        bad.code, 2,
+        "a method gstn does not know is refused locally"
+    );
+}
+
+/// `codeowners-enforcement suspend` needs `--for` within 1..=1440 (clap)
+/// and sends the expiry; `enforce` sends `enforced: true`.
+#[test]
+fn codeowners_enforcement_suspends_for_a_bounded_time() {
+    let srv = Mock::start(|_| ok(SETTINGS));
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "codeowners-enforcement",
+            "suspend",
+            "--project",
+            "7",
+            "--for",
+            "60",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        (
+            "PUT",
+            "/api/v1/projects/7/merge-settings/codeowners-enforcement"
+        )
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"enforced": false, "for_minutes": 60})
+    );
+    let o = gstn(
+        &sb,
+        &srv,
+        &["codeowners-enforcement", "enforce", "--project", "7"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"enforced": true})
+    );
+    let before = srv.seen().len();
+    for minutes in ["0", "1441", "x"] {
+        let bad = gstn(
+            &sb,
+            &srv,
+            &[
+                "codeowners-enforcement",
+                "suspend",
+                "--project",
+                "7",
+                "--for",
+                minutes,
+            ],
+        );
+        assert_eq!(bad.code, 2, "{minutes}");
+    }
+    assert_eq!(srv.seen().len(), before);
+}
+
+/// `merge-rule set` PUTs the whole merge rule; `remove` needs `--yes`.
+#[test]
+fn merge_rule_commands_call_their_routes() {
+    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":1,"required_checks":["ci/gates"],"require_resolved_discussions":true,"direct_push_forbidden":true}}"#;
+    let srv = Mock::start(move |r| {
+        if r.method == "DELETE" {
+            Resp::json(204, "")
+        } else {
+            ok(rule)
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "merge-rule",
+            "set",
+            "--project",
+            "7",
+            "--rule-id",
+            "2",
+            "--approvals",
+            "1",
+            "--check",
+            "ci/gates",
+            "--resolved-discussions",
+            "--no-direct-push",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("direct pushes forbidden"), "{}", o.stdout);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("PUT", "/api/v1/projects/7/protected-refs/2/merge-rule")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&r.body).expect("json"),
+        json!({"required_approvals": 1, "required_checks": ["ci/gates"],
+               "require_resolved_discussions": true, "direct_push_forbidden": true})
+    );
+    let refused = gstn(
+        &sb,
+        &srv,
+        &["merge-rule", "remove", "--project", "7", "--rule-id", "2"],
+    );
+    assert_ne!(refused.code, 0, "--yes is required");
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "merge-rule",
+            "remove",
+            "--project",
+            "7",
+            "--rule-id",
+            "2",
+            "--yes",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let r = srv.seen().pop().expect("a request");
+    assert_eq!(
+        (r.method.as_str(), r.target.as_str()),
+        ("DELETE", "/api/v1/projects/7/protected-refs/2/merge-rule")
+    );
+}

@@ -63,6 +63,24 @@ pub enum Command {
         #[command(subcommand)]
         command: ApprovalRuleCommand,
     },
+    /// A project's merge settings (M3 R6): show, set.
+    #[command(name = "merge-settings", disable_help_subcommand = true)]
+    MergeSettings {
+        #[command(subcommand)]
+        command: MergeSettingsCommand,
+    },
+    /// Suspend CODEOWNERS enforcement for a while, or enforce it again (M3 R6).
+    #[command(name = "codeowners-enforcement", disable_help_subcommand = true)]
+    CodeownersEnforcement {
+        #[command(subcommand)]
+        command: CodeownersCommand,
+    },
+    /// A protected branch rule's merge conditions (M3 R6): set, remove.
+    #[command(name = "merge-rule", disable_help_subcommand = true)]
+    MergeRule {
+        #[command(subcommand)]
+        command: MergeRuleCommand,
+    },
     /// Merge requests of a project: create, list, view, edit, close, reopen.
     #[command(disable_help_subcommand = true)]
     Mr {
@@ -486,6 +504,89 @@ pub enum ApprovalRuleCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum MergeSettingsCommand {
+    /// Show a project's merge settings and CODEOWNERS enforcement.
+    Show {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Change a project's merge settings (Maintainer); options left out keep
+    /// their value.
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// An allowed method (repeatable): merge_commit, squash, fast_forward.
+        #[arg(long, value_parser = crate::mr_conditions::parse_method)]
+        allow: Vec<String>,
+        /// The default method (one of the allowed).
+        #[arg(long, value_parser = crate::mr_conditions::parse_method)]
+        default: Option<String>,
+        /// Delete the source branch after a merge unless asked otherwise.
+        #[arg(long, value_name = "BOOL")]
+        delete_source_branch: Option<bool>,
+        /// New commits end the approvals (false: carry them when allowed).
+        #[arg(long, value_name = "BOOL")]
+        reset_approvals_on_push: Option<bool>,
+        /// Committers' approvals do not count.
+        #[arg(long, value_name = "BOOL")]
+        exclude_committer_approvals: Option<bool>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CodeownersCommand {
+    /// Suspend CODEOWNERS enforcement for 1..=1440 minutes (it comes back by
+    /// itself); an approved runbook step (runbook codeowners).
+    Suspend {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// How long, in minutes (1..=1440).
+        #[arg(long = "for", value_parser = clap::value_parser!(u32).range(1..=1440), value_name = "MINUTES")]
+        for_minutes: u32,
+    },
+    /// Enforce CODEOWNERS again now.
+    Enforce {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MergeRuleCommand {
+    /// Set a protected branch rule's merge conditions (Maintainer; replaces
+    /// the merge rule: options left out are off).
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The protection rule's id (from protected-ref list).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        rule_id: i64,
+        /// Minimum counted approvals (0..=20).
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=20))]
+        approvals: u32,
+        /// A required check (repeatable): ci/…, kanflow/… or forge/….
+        #[arg(long, value_parser = parse_text)]
+        check: Vec<String>,
+        /// Every discussion must be resolved.
+        #[arg(long)]
+        resolved_discussions: bool,
+        /// Forbid direct pushes (the branch changes through merges only).
+        #[arg(long)]
+        no_direct_push: bool,
+    },
+    /// Remove a protected branch rule's merge conditions.
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        rule_id: i64,
+        /// Confirm the removal (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum ProtectedRefCommand {
     /// List a project's protected ref rules.
     List {
@@ -739,6 +840,14 @@ pub enum MrCommand {
     /// How each approval counts now, the rules, CODEOWNERS and what blocks
     /// the merge on approvals.
     Approvals {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "IID")]
+        iid: i64,
+    },
+    /// Whether a merge request may merge now, and every reason it may not
+    /// (a stable JSON contract with --json).
+    Status {
         #[arg(long, value_parser = parse_id, value_name = "ID")]
         project: i64,
         #[arg(long, value_parser = parse_id, value_name = "IID")]
