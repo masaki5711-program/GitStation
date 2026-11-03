@@ -8,7 +8,10 @@
 //! expired suspension as enforced by itself, so a stopped worker never
 //! leaves CODEOWNERS off. A full batch runs again at once.
 //!
-//! A failed run (the database: `FG-DB-0001` / `FG-DB-0002`) is returned
+//! A project whose record fails is logged once with its `error_code`
+//! (`forge.worker.codeowners_restore_failed`) and moved to the back of the
+//! next scan; the batch goes on (R6 review). A failed scan (the database:
+//! `FG-DB-0001` / `FG-DB-0002`) is returned
 //! and logged once per failure streak by the supervisor with `error_code`
 //! and `task=codeowners_restore`, then retried after the backoff.
 
@@ -35,6 +38,20 @@ pub(crate) async fn run_codeowners_restore(db: &Db) -> Result<Next, ForgeError> 
     let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: logged below
     ctx.actor_label = Some(ACTOR_LABEL.to_owned());
     let report = restore_expired_codeowners(db, &ctx).await?;
+    // R6 review: one row that cannot be recorded is logged once here and
+    // moved to the back of the next run; the others are recorded.
+    for (project, e) in &report.failed {
+        tracing::warn!(
+            target: "forge_cli",
+            task = NAME,
+            event = "forge.worker.codeowners_restore_failed",
+            error_code = e.code().id(),
+            request_id = %request_id,
+            project_id = project.get(),
+            error = %e,
+            "an expired CODEOWNERS suspension could not be recorded; enforcement is back anyway (runbook codeowners)"
+        );
+    }
     if report.restored > 0 {
         tracing::info!(
             target: "forge_cli",

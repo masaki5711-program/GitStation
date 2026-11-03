@@ -348,7 +348,8 @@ kind = "audited"
 ro_columns = ["*"]
 audit_resource = "project"
 audit_id_column = "project_id"
-unaudited_columns = []
+# M3 R6 review: the worker's scan order (20261112100100), bookkeeping only.
+unaudited_columns = ["codeowners_restore_seen_at"]
 txn_audited_columns = []
 
 [tables.protected_ref_merge_rules]

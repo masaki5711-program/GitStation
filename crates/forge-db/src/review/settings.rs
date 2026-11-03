@@ -86,13 +86,16 @@ pub enum CodeownersChange {
 }
 
 /// What a settings command's `decide` sees, re-read under the locks: the
-/// caller's account and role, and the highest minimum push role of the
-/// project's protection rules (the toggle's `above_own_role`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// caller's account and role, the highest minimum push role of the
+/// project's protection rules (`above_own_role` of the toggle and of a
+/// loosening settings change), and the settings as stored (R6 review:
+/// whether a change loosens the approvals is decided against them).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsFacts {
     pub account: Account,
     pub project: ProjectAccessFacts,
     pub highest_protection: Option<Role>,
+    pub current: StoredMergeSettings,
 }
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
@@ -211,11 +214,83 @@ async fn settings_facts(
     let rules = tx
         .step(|c| async move { crate::protected_refs::rules_on(c, project).await })
         .await?;
+    let current = tx
+        .step(|c| async move { settings_on(c, project).await })
+        .await?;
     Ok(SettingsFacts {
         account: caller.account,
         project: caller.project,
         highest_protection: rules.highest_push_min_role(),
+        current,
     })
+}
+
+/// Whether `a` and `b` are the same settings (the allowed methods as a
+/// set: their order is not a setting, R6 review).
+fn same_values(a: &MergeSettingsValues, b: &MergeSettingsValues) -> bool {
+    let sorted = |v: &MergeSettingsValues| {
+        let mut m: Vec<&str> = v.allowed_methods.iter().map(|m| m.as_str()).collect();
+        m.sort_unstable();
+        m
+    };
+    sorted(a) == sorted(b)
+        && a.default_method == b.default_method
+        && a.delete_source_default == b.delete_source_default
+        && a.reset_approvals_on_push == b.reset_approvals_on_push
+        && a.committer_approvals_excluded == b.committer_approvals_excluded
+}
+
+/// Whether `new` loosens the approvals of `current` (R6 review): it counts
+/// committers' approvals or carries approvals on push where `current` did
+/// not.
+pub fn loosens(current: &MergeSettingsValues, new: &MergeSettingsValues) -> bool {
+    (current.committer_approvals_excluded && !new.committer_approvals_excluded)
+        || (current.reset_approvals_on_push && !new.reset_approvals_on_push)
+}
+
+/// The expiry (UTC text and epoch) of `project`'s suspension when it has
+/// passed, the row locked.
+async fn expired_on(
+    conn: &mut PgConnection,
+    project: ProjectId,
+) -> Result<Option<(String, i64)>, ForgeError> {
+    sqlx::query_as(&format!(
+        "SELECT to_char(codeowners_enforced_off_until AT TIME ZONE 'UTC', {TS}), \
+         extract(epoch FROM codeowners_enforced_off_until)::bigint \
+         FROM forge.merge_settings WHERE project_id = $1 \
+         AND codeowners_enforced_off_until <= now() FOR UPDATE"
+    ))
+    .bind(project.get())
+    .fetch_optional(conn)
+    .await
+    .map_err(|e| query_error("review.codeowners_restore_lock", e))
+}
+
+/// The audit row and the deduplicated event of an expired suspension's
+/// restore (the worker's, or recorded first by the toggle that replaces it).
+fn restored_record(
+    project: ProjectId,
+    expired_at: String,
+    epoch: i64,
+) -> Result<ChangeRecord, ForgeError> {
+    let details = AuditDetails::MergeSettings {
+        project,
+        change: MergeSettingsChange::CodeownersEnforcementRestored { expired_at },
+    };
+    let mut record = evented_record(&details, project)?;
+    let dedup = DedupKey::new(
+        "codeowners_enforcement_restored",
+        &[DedupPart::Id(project.get()), DedupPart::Id(epoch)],
+    )?;
+    record.events = record
+        .events
+        .into_iter()
+        .map(|e| DomainEvent {
+            dedup_key: Some(dedup.clone()), // clone: one key for the one event
+            ..e
+        })
+        .collect();
+    Ok(record)
 }
 
 fn audit_only(project: ProjectId, details: &AuditDetails) -> ChangeRecord {
@@ -266,10 +341,8 @@ pub async fn put_merge_settings_mr_decided<P>(
     let outcome = async {
         let facts = settings_facts(&mut tx, project, viewer).await?;
         let decided = decide(&facts)?;
-        let current = tx
-            .step(|c| async move { settings_on(c, project).await })
-            .await?;
-        if current.values == values {
+        let current = facts.current;
+        if same_values(&current.values, &values) {
             return Ok(Settle::Discard((
                 SettingsOutcome::Unchanged,
                 current,
@@ -340,9 +413,17 @@ pub async fn toggle_codeowners_mr_decided<P>(
     let outcome = async {
         let facts = settings_facts(&mut tx, project, viewer).await?;
         let decided = decide(&facts)?;
-        let current = tx
-            .step(|c| async move { settings_on(c, project).await })
-            .await?;
+        let current = facts.current;
+        // R6 review: a suspension is never extended — suspending while
+        // suspended changes nothing (the answer shows the expiry in force).
+        if matches!(change, CodeownersChange::Suspend { .. })
+            && matches!(current.codeowners, CodeownersEnforcement::Suspended { .. })
+        {
+            return Ok(Settle::Discard((SettingsOutcome::Unchanged, current, decided)));
+        }
+        // R6 review: an expired suspension replaced here is recorded as
+        // restored first (the worker would find nothing left to record).
+        let expired = tx.step(|c| async move { expired_on(c, project).await }).await?;
         let defaults = MergeSettingsValues::default();
         let default_methods: Vec<&str> = defaults
             .allowed_methods
@@ -363,7 +444,7 @@ pub async fn toggle_codeowners_mr_decided<P>(
                     sqlx::query(
                         "UPDATE forge.merge_settings SET codeowners_enforced = true, \
                          codeowners_suspended_at = NULL, codeowners_enforced_off_until = NULL, \
-                         updated_at = now() WHERE project_id = $1",
+                         codeowners_restore_seen_at = NULL, updated_at = now() WHERE project_id = $1",
                     )
                     .bind(project.get())
                     .execute(c)
@@ -387,7 +468,7 @@ pub async fn toggle_codeowners_mr_decided<P>(
                          now() + make_interval(mins => $4)) ON CONFLICT (project_id) DO UPDATE \
                          SET codeowners_enforced = false, codeowners_suspended_at = now(), \
                          codeowners_enforced_off_until = now() + make_interval(mins => $4), \
-                         updated_at = now()",
+                         codeowners_restore_seen_at = NULL, updated_at = now()",
                     )
                     .bind(project.get())
                     .bind(methods)
@@ -415,8 +496,14 @@ pub async fn toggle_codeowners_mr_decided<P>(
                 until,
             },
         };
+        let mut record = evented_record(&details, project)?;
+        if let Some((expired_at, epoch)) = expired {
+            let restored = restored_record(project, expired_at, epoch)?;
+            record.affected.push(restored.audit);
+            record.events.extend(restored.events);
+        }
         Ok(Settle::Commit(
-            evented_record(&details, project)?,
+            record,
             (SettingsOutcome::Changed, stored, decided),
         ))
     }
@@ -428,12 +515,16 @@ pub async fn toggle_codeowners_mr_decided<P>(
 pub const RESTORE_MAX_BATCH: i64 = 100;
 
 /// What one run of [`restore_expired_codeowners`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 pub struct RestoreReport {
     /// Suspensions recorded as restored.
     pub restored: u32,
     /// Expired suspensions found (at most [`RESTORE_MAX_BATCH`]).
     pub found: u32,
+    /// The projects whose record failed, with the failure (R6 review: one
+    /// failing row never stops the batch; the caller logs each once, and the
+    /// row moves to the back of the next run).
+    pub failed: Vec<(ProjectId, ForgeError)>,
 }
 
 /// Record every suspension of CODEOWNERS enforcement past its expiry (at
@@ -453,7 +544,8 @@ pub async fn restore_expired_codeowners(
             sqlx::query_scalar(
                 "SELECT project_id FROM forge.merge_settings \
                  WHERE codeowners_enforced_off_until <= now() \
-                 ORDER BY codeowners_enforced_off_until, project_id LIMIT $1",
+                 ORDER BY codeowners_restore_seen_at NULLS FIRST, \
+                 codeowners_enforced_off_until, project_id LIMIT $1",
             )
             .bind(RESTORE_MAX_BATCH)
             .fetch_all(db.pool().executor())
@@ -466,11 +558,40 @@ pub async fn restore_expired_codeowners(
         ..RestoreReport::default()
     };
     for id in expired {
-        if restore_one(db, ctx, ProjectId::new(id)).await? {
-            report.restored += 1;
+        let project = ProjectId::new(id);
+        match restore_one(db, ctx, project).await {
+            Ok(true) => report.restored += 1,
+            Ok(false) => {}
+            Err(e) => {
+                // To the back of the next run; a failure to mark it is
+                // reported with the record's own failure.
+                let e = match mark_restore_seen(db, project).await {
+                    Ok(()) => e,
+                    Err(mark) => e.with_context("mark_error_code", mark.code().id()),
+                };
+                report.failed.push((project, e));
+            }
         }
     }
     Ok(report)
+}
+
+/// Move `project`'s expired suspension to the back of the worker's scan
+/// (`codeowners_restore_seen_at`, an unaudited bookkeeping column).
+async fn mark_restore_seen(db: &Db, project: ProjectId) -> Result<(), ForgeError> {
+    const QUERY: &str = "review.codeowners_restore_seen";
+    db.within(QUERY, async {
+        sqlx::query(
+            "UPDATE forge.merge_settings SET codeowners_restore_seen_at = now() \
+             WHERE project_id = $1",
+        )
+        .bind(project.get())
+        .execute(db.write_pool())
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        Ok(())
+    })
+    .await
 }
 
 /// One project's expired suspension (`false`: no longer expired).
@@ -478,19 +599,8 @@ async fn restore_one(db: &Db, ctx: &ChangeContext, project: ProjectId) -> Result
     const ACTION: &str = "merge_settings.codeowners_enforcement_restored";
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        let row: Option<(String, i64)> = tx
-            .step(|c| async move {
-                sqlx::query_as(&format!(
-                    "SELECT to_char(codeowners_enforced_off_until AT TIME ZONE 'UTC', {TS}), \
-                     extract(epoch FROM codeowners_enforced_off_until)::bigint \
-                     FROM forge.merge_settings WHERE project_id = $1 \
-                     AND codeowners_enforced_off_until <= now() FOR UPDATE"
-                ))
-                .bind(project.get())
-                .fetch_optional(c)
-                .await
-                .map_err(|e| query_error("review.codeowners_restore_lock", e))
-            })
+        let row = tx
+            .step(|c| async move { expired_on(c, project).await })
             .await?;
         let Some((expired_at, epoch)) = row else {
             return Ok(Settle::Discard(false));
@@ -499,7 +609,7 @@ async fn restore_one(db: &Db, ctx: &ChangeContext, project: ProjectId) -> Result
             sqlx::query(
                 "UPDATE forge.merge_settings SET codeowners_enforced = true, \
                  codeowners_suspended_at = NULL, codeowners_enforced_off_until = NULL, \
-                 updated_at = now() WHERE project_id = $1",
+                 codeowners_restore_seen_at = NULL, updated_at = now() WHERE project_id = $1",
             )
             .bind(project.get())
             .execute(c)
@@ -508,24 +618,10 @@ async fn restore_one(db: &Db, ctx: &ChangeContext, project: ProjectId) -> Result
             .map_err(|e| query_error("review.codeowners_restore", e))
         })
         .await?;
-        let details = AuditDetails::MergeSettings {
-            project,
-            change: MergeSettingsChange::CodeownersEnforcementRestored { expired_at },
-        };
-        let mut record = evented_record(&details, project)?;
-        let dedup = DedupKey::new(
-            "codeowners_enforcement_restored",
-            &[DedupPart::Id(project.get()), DedupPart::Id(epoch)],
-        )?;
-        record.events = record
-            .events
-            .into_iter()
-            .map(|e| DomainEvent {
-                dedup_key: Some(dedup.clone()), // clone: one key for the one event
-                ..e
-            })
-            .collect();
-        Ok(Settle::Commit(record, true))
+        Ok(Settle::Commit(
+            restored_record(project, expired_at, epoch)?,
+            true,
+        ))
     }
     .await;
     tx.settle(ACTION, outcome).await

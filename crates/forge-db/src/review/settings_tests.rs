@@ -440,3 +440,232 @@ async fn a_merge_rule_is_removed_once() {
         .any(|(k, v)| *k == "resource" && v == "merge_rule"));
     w.t.drop_now().await;
 }
+
+// ── R6 review ──
+
+impl World {
+    /// Move the project's suspension into the past (expired an hour ago).
+    async fn expire(&self) {
+        self.t
+            .commit_audited(
+                ("project", self.web.project_id.get()),
+                &[format!(
+                    "UPDATE forge.merge_settings SET codeowners_suspended_at = now() - interval '2 hours', \
+                     codeowners_enforced_off_until = now() - interval '1 hour' WHERE project_id = {}",
+                    self.web.project_id.get()
+                )],
+            )
+            .await;
+    }
+}
+
+/// R6 review (MEDIUM): a suspension is never extended — suspending while
+/// suspended is `Unchanged` and keeps the expiry in force.
+#[tokio::test]
+async fn a_suspension_cannot_be_extended() {
+    let w = world().await;
+    let first = w.suspend(30, "req-suspend").await;
+    let (outcome, again, ()) = toggle_codeowners_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-suspend-again"),
+        w.web.project_id,
+        w.alice,
+        CodeownersChange::Suspend { minutes: 1440 },
+        |_| Ok(()),
+    )
+    .await
+    .expect("again");
+    assert_eq!(outcome, SettingsOutcome::Unchanged);
+    assert_eq!(again.codeowners, first.codeowners, "the expiry in force");
+    assert_eq!(
+        w.audit_actions("merge_settings.codeowners").await,
+        ["merge_settings.codeowners_enforcement_changed"]
+    );
+    w.t.drop_now().await;
+}
+
+/// R6 review (MEDIUM): a new suspension after an expired one first records
+/// the expiry (audit row and deduplicated event), so the restore is never
+/// lost; the worker then finds nothing left.
+#[tokio::test]
+async fn a_new_suspension_after_an_expired_one_records_the_restore_first() {
+    let w = world().await;
+    w.suspend(30, "req-suspend").await;
+    w.expire().await;
+    let renewed = w.suspend(60, "req-suspend-2").await;
+    assert!(matches!(
+        renewed.codeowners,
+        CodeownersEnforcement::Suspended { .. }
+    ));
+    assert_eq!(
+        w.audit_actions("merge_settings.codeowners").await,
+        [
+            "merge_settings.codeowners_enforcement_changed",
+            "merge_settings.codeowners_enforcement_changed",
+            "merge_settings.codeowners_enforcement_restored",
+        ]
+    );
+    assert_eq!(
+        w.count(
+            "SELECT count(*) FROM forge.events WHERE project_id = $1 \
+             AND event_type = 'merge_settings.codeowners_enforcement_restored'"
+        )
+        .await,
+        1
+    );
+    let report = restore_expired_codeowners(&w.t.db, &system("req-restore"))
+        .await
+        .expect("restore");
+    assert_eq!(report.found, 0);
+    w.t.drop_now().await;
+}
+
+/// R6 review (MEDIUM): one row the worker cannot record does not stop the
+/// batch; it is reported with its code and moves to the back.
+#[tokio::test]
+async fn a_failing_restore_does_not_stop_the_batch() {
+    let w = world().await;
+    let bob = users::create(
+        &w.t.db,
+        &system("req-user-bob"),
+        &NewUser::human("bob", "bob", "bob@example.test"),
+    )
+    .await
+    .expect("bob");
+    let api = projects::create(
+        &w.t.db,
+        &system("req-project-api"),
+        &NewProject::new("api", bob.namespace_id, "Api", bob.user_id),
+    )
+    .await
+    .expect("api");
+    for (project, user, request) in [
+        (w.web.project_id, w.alice, "req-s-web"),
+        (api.project_id, bob.user_id, "req-s-api"),
+    ] {
+        let (outcome, _, ()) = toggle_codeowners_mr_decided(
+            &w.t.db,
+            &as_user(user, request),
+            project,
+            user,
+            CodeownersChange::Suspend { minutes: 30 },
+            |_| Ok(()),
+        )
+        .await
+        .expect("suspend");
+        assert_eq!(outcome, SettingsOutcome::Changed);
+    }
+    for project in [w.web.project_id, api.project_id] {
+        w.t.commit_audited(
+            ("project", project.get()),
+            &[format!(
+                "UPDATE forge.merge_settings SET codeowners_suspended_at = now() - interval '2 hours',                  codeowners_enforced_off_until = now() - interval '1 hour' WHERE project_id = {}",
+                project.get()
+            )],
+        )
+        .await;
+    }
+    // The web project's restore fails (a synthetic trigger refuses it).
+    let mut su = w.t.superuser().await;
+    for sql in [
+        "CREATE FUNCTION forge.test_refuse_restore() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN RAISE EXCEPTION 'synthetic refusal'; END $$"
+            .to_owned(),
+        format!(
+            "CREATE TRIGGER test_refuse_restore BEFORE UPDATE OF codeowners_enforced \
+             ON forge.merge_settings FOR EACH ROW WHEN (NEW.project_id = {}) \
+             EXECUTE FUNCTION forge.test_refuse_restore()",
+            w.web.project_id.get()
+        ),
+    ] {
+        sqlx::query(&sql).execute(&mut su).await.expect("trigger");
+    }
+    let report = restore_expired_codeowners(&w.t.db, &system("req-restore"))
+        .await
+        .expect("restore");
+    assert_eq!(report.found, 2);
+    assert_eq!(report.restored, 1, "the other project is recorded");
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(report.failed[0].0, w.web.project_id);
+    let seen: Option<String> = sqlx::query_scalar(
+        "SELECT codeowners_restore_seen_at::text FROM forge.merge_settings WHERE project_id = $1",
+    )
+    .bind(w.web.project_id.get())
+    .fetch_one(&mut su)
+    .await
+    .expect("seen");
+    assert!(seen.is_some(), "moved to the back of the next run");
+    w.t.drop_now().await;
+}
+
+/// R6 review (LOW): the allowed methods are a set; loosening is decided
+/// against the stored values.
+#[tokio::test]
+async fn the_method_order_is_no_change_and_loosening_is_known() {
+    let w = world().await;
+    let put = |values: MergeSettingsValues, request: &'static str| {
+        let ctx = as_user(w.alice, request);
+        let db = w.t.db.clone();
+        let (project, alice) = (w.web.project_id, w.alice);
+        async move {
+            put_merge_settings_mr_decided(&db, &ctx, project, alice, &values, |facts| {
+                Ok(loosens(&facts.current.values, &values))
+            })
+            .await
+            .map(|(o, _, l)| (o, l))
+            .expect("put")
+        }
+    };
+    let swapped = MergeSettingsValues {
+        allowed_methods: vec![MergeMethod::Squash, MergeMethod::MergeCommit],
+        ..MergeSettingsValues::default()
+    };
+    assert_eq!(
+        put(swapped, "req-swap").await,
+        (SettingsOutcome::Unchanged, false)
+    );
+    let loose = MergeSettingsValues {
+        committer_approvals_excluded: false,
+        ..MergeSettingsValues::default()
+    };
+    assert_eq!(
+        put(loose, "req-loose").await,
+        (SettingsOutcome::Changed, true)
+    );
+    let tight = MergeSettingsValues::default();
+    assert_eq!(
+        put(tight, "req-tight").await,
+        (SettingsOutcome::Changed, false)
+    );
+    w.t.drop_now().await;
+}
+
+/// R6 review (LOW): the table's check names follow `CheckName::parse`.
+#[tokio::test]
+async fn the_table_refuses_check_names_check_name_refuses() {
+    let w = world().await;
+    let main = w.rule("refs/heads/main").await;
+    let insert = |checks: &str| {
+        format!(
+            "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, project_id, \
+             required_checks) VALUES ({}, {}, ARRAY[{checks}]::text[])",
+            main.get(),
+            w.web.project_id.get()
+        )
+    };
+    let mut su = w.t.superuser().await;
+    for bad in [
+        "'ci/a/'",
+        "'ci/a//b'",
+        "'ci/a b'",
+        "'ext/x'",
+        "'ci/-x'",
+        "'ci/'",
+    ] {
+        let err = sqlx::query(&insert(bad)).execute(&mut su).await;
+        assert!(err.is_err(), "{bad} must be refused");
+    }
+    let long = format!("'ci/{}'", "a".repeat(101));
+    assert!(sqlx::query(&insert(&long)).execute(&mut su).await.is_err());
+    w.t.drop_now().await;
+}
