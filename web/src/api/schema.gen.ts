@@ -90,6 +90,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every integration with its service account and binding count (administrators, people only) */
+        get: operations["get_api_v1_admin_integrations"];
+        put?: never;
+        /** Create a kanflow integration acting as a service account (an administrator's web session only) */
+        post: operations["post_api_v1_admin_integrations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/integrations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One integration (administrators, people only) */
+        get: operations["get_api_v1_admin_integrations_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Enable or disable an integration or replace its event type allowlist (an administrator's web session only) */
+        patch: operations["patch_api_v1_admin_integrations_id"];
+        trace?: never;
+    };
+    "/api/v1/admin/integrations/{id}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The projects bound to an integration (administrators, people only) */
+        get: operations["get_api_v1_admin_integrations_id_bindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/service-accounts": {
         parameters: {
             query?: never;
@@ -420,6 +473,41 @@ export interface paths {
         post?: never;
         /** Delete an approval rule (people only; Maintainer) */
         delete: operations["delete_api_v1_projects_id_approval_rules_name"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/integration-bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A project's integration binding, none or one (as reading the project) */
+        get: operations["get_api_v1_projects_id_integration_bindings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/integration-bindings/{integration_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Bind a project to an external (kanflow) project of an integration; its service account becomes a Reporter (people only; Maintainer) */
+        put: operations["put_api_v1_projects_id_integration_bindings_integration_id"];
+        post?: never;
+        /** Unbind a project from an integration; the membership the binding granted is removed (people only; Maintainer) */
+        delete: operations["delete_api_v1_projects_id_integration_bindings_integration_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1351,6 +1439,14 @@ export interface components {
              */
             sha: string;
         };
+        /** @description `PUT /api/v1/projects/{id}/integration-bindings/{integration_id}`. */
+        BindProject: {
+            /**
+             * @description The external (kanflow) project's id: 1..=100 characters of
+             *     `A-Z a-z 0-9 . _ : -`.
+             */
+            external_project_id: string;
+        };
         /** @description A blamed file. */
         BlameBody: {
             /** @description NUL bytes or not UTF-8: no hunks (download it through the raw route). */
@@ -1431,6 +1527,12 @@ export interface components {
              *     `changed_paths_unknown`.
              */
             reason: string;
+        };
+        /** @description What a bind did, and the binding as stored. */
+        BoundProject: {
+            binding: components["schemas"]["IntegrationBindingBody"];
+            /** @description `bound`, or `unchanged` (it was bound so already; nothing written). */
+            outcome: string;
         };
         /** @description `PATCH …/members/{user_id}`: the member's new direct role. */
         ChangeMember: {
@@ -1517,6 +1619,22 @@ export interface components {
              *     reserved).
              */
             path: string;
+        };
+        /** @description `POST /api/v1/admin/integrations`. */
+        CreateIntegration: {
+            /**
+             * @description The event type allowlist of its feed: `*` (every integration-class
+             *     event, the default), a type (`merge_request.opened`) or a family
+             *     (`merge_request.*`) of the integration class; 1..=64 entries.
+             */
+            event_types?: string[] | null;
+            /** @description `kanflow` (the only kind). */
+            kind: string;
+            /**
+             * Format: int64
+             * @description The service account it acts as (one integration per account).
+             */
+            service_account_id: number;
         };
         /** @description `POST …/merge-requests`. */
         CreateMergeRequest: {
@@ -1753,6 +1871,62 @@ export interface components {
             items: components["schemas"]["ListedGroup"][];
             /** @description Pass as `cursor` for the next page; `null` on the last one. */
             next_cursor: string | null;
+        };
+        /** @description The service account an integration acts as. */
+        IntegrationAccountBody: {
+            /** Format: int64 */
+            id: number;
+            username: string;
+        };
+        /** @description One binding of a project to an external project. */
+        IntegrationBindingBody: {
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            created_by: number | null;
+            external_project_id: string;
+            /**
+             * @description The binding made the integration's service account a Reporter of
+             *     the project (unbinding removes that membership).
+             */
+            granted_membership: boolean;
+            /** Format: int64 */
+            integration_id: number;
+            /** @description `kanflow`. */
+            kind: string;
+            /** Format: int64 */
+            project_id: number;
+        };
+        /** @description Bindings (an integration's, or a project's: none or one). */
+        IntegrationBindingList: {
+            items: components["schemas"]["IntegrationBindingBody"][];
+        };
+        /** @description One integration (no secrets: it has none yet). */
+        IntegrationBody: {
+            /**
+             * Format: int64
+             * @description How many projects are bound to it (at most 200).
+             */
+            bindings: number;
+            /** @description UTC, RFC 3339. */
+            created_at: string;
+            /** Format: int64 */
+            created_by: number | null;
+            enabled: boolean;
+            /** @description Sorted. */
+            event_types: string[];
+            /** Format: int64 */
+            id: number;
+            /** @description `kanflow`. */
+            kind: string;
+            service_account: components["schemas"]["IntegrationAccountBody"];
+            updated_at: string;
+        };
+        /** @description The integrations. */
+        IntegrationList: {
+            items: components["schemas"]["IntegrationBody"][];
+            /** @description More than 500 exist (only the first 500 by id are listed). */
+            truncated: boolean;
         };
         /** @description `POST /api/v1/admin/service-accounts/{id}/tokens`. */
         IssueServiceAccountToken: {
@@ -2670,6 +2844,12 @@ export interface components {
             description?: string | null;
             display_name?: string | null;
         };
+        /** @description `PATCH /api/v1/admin/integrations/{id}`: the fields to change. */
+        UpdateIntegration: {
+            enabled?: boolean | null;
+            /** @description Replaces the allowlist (the rules of `CreateIntegration`). */
+            event_types?: string[] | null;
+        };
         /**
          * @description `PATCH …/merge-requests/{iid}`: every field optional (absent =
          *     unchanged).
@@ -2699,6 +2879,14 @@ export interface components {
              */
             owner_id?: number | null;
             purpose?: string | null;
+        };
+        /** @description What an update changed. */
+        UpdatedIntegration: {
+            /** @description The fields that changed: `enabled`, `event_types`. */
+            fields: string[];
+            integration: components["schemas"]["IntegrationBody"];
+            /** @description `updated`, or `unchanged` (nothing was written). */
+            outcome: string;
         };
         /** @description What an update changed. */
         UpdatedServiceAccount: {
@@ -2934,6 +3122,165 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_integrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    post_api_v1_admin_integrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIntegration"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_integrations_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBody"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    patch_api_v1_admin_integrations_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateIntegration"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatedIntegration"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_admin_integrations_id_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBindingList"];
+                };
+            };
             /** @description Error: registered code, localized message, request id */
             default: {
                 headers: {
@@ -3949,6 +4296,103 @@ export interface operations {
             path: {
                 id: number;
                 name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    get_api_v1_projects_id_integration_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationBindingList"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    put_api_v1_projects_id_integration_bindings_integration_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                integration_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BindProject"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundProject"];
+                };
+            };
+            /** @description Error: registered code, localized message, request id */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    delete_api_v1_projects_id_integration_bindings_integration_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+                integration_id: number;
             };
             cookie?: never;
         };

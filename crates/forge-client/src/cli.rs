@@ -81,6 +81,12 @@ pub enum Command {
         #[command(subcommand)]
         command: MergeRuleCommand,
     },
+    /// A project's integration binding (M3 I1a): list, set, remove.
+    #[command(name = "integration-binding", disable_help_subcommand = true)]
+    IntegrationBinding {
+        #[command(subcommand)]
+        command: IntegrationBindingCommand,
+    },
     /// Merge requests of a project: create, list, view, edit, close, reopen.
     #[command(disable_help_subcommand = true)]
     Mr {
@@ -111,7 +117,7 @@ pub enum Command {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// Administration: service accounts (M3 S0).
+    /// Administration: service accounts (M3 S0), integrations (M3 I1a).
     #[command(disable_help_subcommand = true)]
     Admin {
         #[command(subcommand)]
@@ -1154,6 +1160,60 @@ pub enum AdminCommand {
     ServiceAccount {
         #[command(subcommand)]
         command: ServiceAccountCommand,
+    },
+    /// Integrations (M3 I1a): list, view, bindings (create and change in
+    /// the browser).
+    #[command(name = "integration", disable_help_subcommand = true)]
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IntegrationCommand {
+    /// Every integration with its service account and binding count.
+    List,
+    /// One integration.
+    View {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// The projects bound to an integration.
+    Bindings {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IntegrationBindingCommand {
+    /// Show a project's integration binding (none or one).
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+    },
+    /// Bind a project to an external (kanflow) project of an integration
+    /// (Maintainer); its service account becomes a Reporter.
+    Set {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The integration id (admin integration list).
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        integration: i64,
+        /// The external project's id (A-Z a-z 0-9 . _ : -, at most 100).
+        #[arg(long = "external-project", value_parser = parse_text)]
+        external_project: String,
+    },
+    /// Unbind a project; the membership the binding granted is removed.
+    Remove {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        integration: i64,
+        /// Confirm (gstn never prompts).
+        #[arg(long)]
+        yes: bool,
     },
 }
 

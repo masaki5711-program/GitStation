@@ -940,6 +940,12 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "admin service-account update",
             "admin service-account tokens",
             "admin service-account revoke-token",
+            "admin integration list",
+            "admin integration view",
+            "admin integration bindings",
+            "integration-binding list",
+            "integration-binding set",
+            "integration-binding remove",
             "api",
             "help",
             "schema"

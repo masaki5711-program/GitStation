@@ -83,6 +83,47 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/admin/service-accounts/{id}/tokens/{token_id}",
         Coverage::Command("admin service-account revoke-token"),
     ),
+    // M3 I1a: integrations and project bindings.
+    (
+        "GET",
+        "/api/v1/admin/integrations",
+        Coverage::Command("admin integration list"),
+    ),
+    (
+        "POST",
+        "/api/v1/admin/integrations",
+        Coverage::BrowserOnly("an administrator's web session only: a token never creates an integration (FG-AUTH-0002 session_required)"),
+    ),
+    (
+        "GET",
+        "/api/v1/admin/integrations/{id}",
+        Coverage::Command("admin integration view"),
+    ),
+    (
+        "PATCH",
+        "/api/v1/admin/integrations/{id}",
+        Coverage::BrowserOnly("an administrator's web session only: a token never changes an integration (FG-AUTH-0002 session_required); to stop one with a token, disable its service account (user disable)"),
+    ),
+    (
+        "GET",
+        "/api/v1/admin/integrations/{id}/bindings",
+        Coverage::Command("admin integration bindings"),
+    ),
+    (
+        "GET",
+        "/api/v1/projects/{id}/integration-bindings",
+        Coverage::Command("integration-binding list"),
+    ),
+    (
+        "PUT",
+        "/api/v1/projects/{id}/integration-bindings/{integration_id}",
+        Coverage::Command("integration-binding set"),
+    ),
+    (
+        "DELETE",
+        "/api/v1/projects/{id}/integration-bindings/{integration_id}",
+        Coverage::Command("integration-binding remove"),
+    ),
     ("GET", "/api/v1/admin/users", Coverage::Command("user list")),
     (
         "POST",
