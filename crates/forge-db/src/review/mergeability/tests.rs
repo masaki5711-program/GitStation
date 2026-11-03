@@ -383,6 +383,7 @@ async fn push(t: &FreshDb, user: UserId, request: &str, push: &PushRecord) {
     let who = Pusher {
         request_id: RequestId::parse(request).expect("request id"),
         user,
+        kind: forge_core::UserKind::Human,
         credential_id: None,
         source_ip: None,
         user_agent: None,

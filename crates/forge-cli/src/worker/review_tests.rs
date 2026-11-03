@@ -274,6 +274,7 @@ async fn the_worker_records_merge_request_versions_from_opens_and_pushes() {
     let pusher = Pusher {
         request_id: RequestId::parse("req-push").expect("id"),
         user: alice,
+        kind: forge_core::UserKind::Human,
         credential_id: None,
         source_ip: None,
         user_agent: None,

@@ -83,6 +83,7 @@ fn receiver(dir: &std::path::Path, recorder: Arc<dyn PushRecorder>) -> Receiver 
         pusher: Pusher {
             request_id: RequestId::parse("req-push-unit").expect("id"),
             user: UserId::new(4),
+            kind: forge_core::UserKind::Human,
             credential_id: Some(2),
             source_ip: None,
             user_agent: None,

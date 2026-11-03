@@ -92,6 +92,7 @@ fn pusher(user: UserId, request: &str) -> Pusher {
     Pusher {
         request_id: rid(request),
         user,
+        kind: forge_core::UserKind::Human,
         credential_id: None,
         source_ip: Some("192.0.2.10".parse().expect("ip")),
         user_agent: Some("git/2.47.0".to_owned()),
@@ -642,5 +643,72 @@ async fn the_runbook_backfill_of_push_commits_writes_rows_with_their_audit_row()
         .await
         .expect_err("an unaudited backfill must be refused");
     assert!(refused.to_string().contains("no audit row"), "{refused}");
+    t.drop_now().await;
+}
+
+/// S0 review, carried into M3 I1b: a service account's push is audited as
+/// what wrote it (`actor_kind = 'service_account'`), on the audit row and
+/// the `repository.pushed` event, and its commits name it as the pusher.
+#[tokio::test]
+async fn a_service_accounts_push_is_audited_as_service_account() {
+    let t = FreshDb::migrated().await;
+    let (p, alice) = project(&t, "alice").await;
+    let bot = crate::service_accounts::create(
+        &t.db,
+        &system("req-sa-ci"),
+        &crate::service_accounts::NewServiceAccount {
+            username: "ci-bot".to_owned(),
+            display_name: "CI".to_owned(),
+            owner: alice,
+            purpose: "Pushes release tags".to_owned(),
+        },
+        alice,
+    )
+    .await
+    .expect("service account")
+    .user_id;
+    let mut push = PushRecord {
+        repository_id: p.repository_id,
+        updates: vec![update(
+            "refs/heads/main",
+            'a',
+            'b',
+            PushUpdateKind::FastForward,
+        )],
+    };
+    push.updates[0].commits = vec![oid('b')];
+    push.updates[0].total_commits = 1;
+    let who = Pusher {
+        kind: forge_core::UserKind::ServiceAccount,
+        ..pusher(bot, "req-push-sa")
+    };
+    let recorder: &dyn PushRecorder = &t.db;
+    let done = recorder.record_push(&who, &push).await.expect("recorded");
+    assert_eq!(done, PushRecorded::Recorded);
+    let mut su = t.superuser().await;
+    let audit: (String, Option<i64>) = sqlx::query_as(
+        "SELECT actor_kind, actor_user_id FROM forge.audit_log \
+         WHERE action = 'repository.pushed' AND request_id = 'req-push-sa'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("audit row");
+    assert_eq!(audit, ("service_account".to_owned(), Some(bot.get())));
+    let event: (String, Option<i64>) = sqlx::query_as(
+        "SELECT actor_kind, actor_user_id FROM forge.events \
+         WHERE event_type = 'repository.pushed' AND request_id = 'req-push-sa'",
+    )
+    .fetch_one(&mut su)
+    .await
+    .expect("event");
+    assert_eq!(event, ("service_account".to_owned(), Some(bot.get())));
+    let pushers: Vec<i64> = sqlx::query_scalar(
+        "SELECT pusher_id FROM forge.push_commits WHERE request_id = 'req-push-sa'",
+    )
+    .fetch_all(&mut su)
+    .await
+    .expect("push commits");
+    assert_eq!(pushers, [bot.get()]);
+    drop(su);
     t.drop_now().await;
 }

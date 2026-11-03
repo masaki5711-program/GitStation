@@ -1074,10 +1074,17 @@ pub(crate) async fn insert_push_commits(
     Ok(())
 }
 
-/// The change context of a push by `pusher`: actor `user`, the push
-/// request's id, its credential, source IP and user agent.
+/// The change context of a push by `pusher`: actor `service_account` for
+/// a service account, `user` otherwise; the push request's id, its
+/// credential, source IP and user agent.
 pub fn push_context(pusher: &Pusher) -> ChangeContext {
-    let mut ctx = ChangeContext::new(Actor::User(pusher.user), pusher.request_id.clone()); // clone: the context owns its request id
+    // S0 review (M3 I1b): the audit row names what pushed — a service
+    // account is `service_account`, a person or a bot `user`.
+    let actor = match pusher.kind {
+        forge_core::UserKind::ServiceAccount => Actor::ServiceAccount(pusher.user),
+        forge_core::UserKind::Human | forge_core::UserKind::Bot => Actor::User(pusher.user),
+    };
+    let mut ctx = ChangeContext::new(actor, pusher.request_id.clone()); // clone: the context owns its request id
     ctx.credential_id = pusher.credential_id;
     ctx.source_ip = pusher.source_ip;
     ctx.user_agent = pusher.user_agent.clone(); // clone: the context owns its fields
