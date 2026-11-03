@@ -393,6 +393,77 @@ async fn a_purge_ends_the_redirects_of_the_projects_old_paths() {
     t.drop_now().await;
 }
 
+/// M3 I1a: a bound project's binding and the service account's granted
+/// membership go with the purge (the binding references the project).
+#[tokio::test]
+async fn a_purge_removes_the_projects_integration_binding() {
+    use crate::integrations::{self, NewIntegration};
+    use crate::service_accounts::{self, NewServiceAccount};
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let sa = service_accounts::create(
+        &t.db,
+        &ctx("req-sa"),
+        &NewServiceAccount {
+            username: "kanflow-sync".to_owned(),
+            display_name: "kanflow-sync".to_owned(),
+            owner: alice.user_id,
+            purpose: "Kanflow reads the event feed".to_owned(),
+        },
+        alice.user_id,
+    )
+    .await
+    .expect("service account")
+    .user_id;
+    let integration = integrations::create(
+        &t.db,
+        &ctx("req-int"),
+        &NewIntegration {
+            kind: forge_core::IntegrationKind::Kanflow,
+            service_account: sa,
+            event_types: None,
+        },
+        alice.user_id,
+    )
+    .await
+    .expect("integration");
+    let web = create_ok(&t, &project("web", alice.namespace_id, alice.user_id)).await;
+    let (outcome, ()) = integrations::bind_decided(
+        &t.db,
+        &ctx("req-bind"),
+        web.project_id,
+        alice.user_id,
+        integration,
+        "P1",
+        |_| Ok(()),
+    )
+    .await
+    .expect("bind");
+    assert!(matches!(outcome, integrations::BindOutcome::Bound { .. }));
+    delete(&t, web.project_id, alice.user_id).await;
+    expire(&t, web.project_id).await;
+    let started = purge::start(&t.db, &ctx("req-start"), web.project_id)
+        .await
+        .expect("start");
+    assert!(matches!(started, Started::Started { .. }), "{started:?}");
+    let finished = purge::finish(&t.db, &ctx("req-finish"), web.project_id, true)
+        .await
+        .expect("finish");
+    assert!(matches!(finished, Finished::Purged(_)), "{finished:?}");
+    let mut su = t.superuser().await;
+    let id = web.project_id.get();
+    assert_eq!(
+        count(
+            &mut su,
+            &format!("SELECT count(*) FROM forge.integration_bindings WHERE project_id = {id}")
+        )
+        .await,
+        0
+    );
+    assert_eq!(left(&mut su, web.project_id).await, [0; 5]);
+    t.drop_now().await;
+}
+
 /// Phase 3 without phase 1 is a bug of the caller: refused, nothing deleted.
 #[tokio::test]
 async fn finishing_a_repository_that_is_not_purging_is_refused() {

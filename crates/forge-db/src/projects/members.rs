@@ -69,7 +69,7 @@ pub(crate) async fn lock_project(
 
 /// The user who may become a member: present (`FG-REPO-0005`), not a bot
 /// (`FG-REPO-0010` `bot_member`). Read `FOR SHARE`, after the project lock.
-pub(super) async fn member_candidate(
+pub(crate) async fn member_candidate(
     conn: &mut PgConnection,
     user: UserId,
 ) -> Result<(), ForgeError> {
@@ -105,7 +105,7 @@ pub(super) async fn direct_role(
 /// [`direct_role`] with the membership row locked `FOR UPDATE` (M1 phase
 /// 8b MR8): the decided member commands act on the role they read, so a
 /// write to that row from anywhere waits for them or is seen by them.
-pub(super) async fn direct_role_for_update(
+pub(crate) async fn direct_role_for_update(
     conn: &mut PgConnection,
     project: ProjectId,
     user: UserId,

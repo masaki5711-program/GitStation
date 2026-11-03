@@ -429,6 +429,15 @@ async fn finish_steps(
             .map_err(|e| query_error("projects.purge.finish.redirects", e))
         })
         .await?;
+    // M3 I1a: the project's integration binding goes with it (the service
+    // account's membership goes with the members below).
+    delete_rows(
+        tx,
+        "DELETE FROM forge.integration_bindings WHERE project_id = $1",
+        project.get(),
+        "projects.purge.finish.integration_bindings",
+    )
+    .await?;
     let members_removed = delete_rows(
         tx,
         "DELETE FROM forge.project_members WHERE project_id = $1",

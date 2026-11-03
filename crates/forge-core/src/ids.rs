@@ -80,6 +80,11 @@ id_type!(
     /// project.
     ApprovalRuleId
 );
+id_type!(
+    /// A row of forge.integrations (M3 I1a): one connected system (kanflow)
+    /// and the service account it acts as.
+    IntegrationId
+);
 
 #[cfg(test)]
 mod tests {

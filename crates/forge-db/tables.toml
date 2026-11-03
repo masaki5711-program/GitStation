@@ -56,6 +56,8 @@ guarded_functions = [
     "users_kind_immutable",
     "service_account_profiles_kind_guard",
     "user_identities_human_guard",
+    # M3 I1a: an integration acts as one service account, for its life.
+    "integrations_service_account_guard",
 ]
 
 [tables.events]
@@ -400,6 +402,31 @@ audit_id_column = "user_id"
 unaudited_columns = ["updated_at"]
 txn_audited_columns = []
 # ── end M3 S0 ──
+
+# ── M3 I1a: integrations and their project bindings (plan 11 §5 I1,
+# ADR-0016 §1, §7) ──
+# One connected system and the service account it acts as; no secrets yet.
+# integration.created / .updated are audited on the integration.
+[tables.integrations]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "integration"
+audit_id_column = "id"
+unaudited_columns = ["updated_at"]
+txn_audited_columns = []
+
+# One forge project bound to one external project (at most one per project,
+# 200 per integration); integration.bound / .unbound on the project.
+[tables.integration_bindings]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 I1a ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]
