@@ -461,7 +461,21 @@
         "push": "Push perbaikan",
         "wait": "Tunggu"
       },
-      "checking": "Memeriksa apakah bisa digabung…"
+      "checking": "Memeriksa apakah bisa digabung…",
+      "notOpen": "Merge request ini sudah tidak terbuka",
+      "draft": "Masih berupa draf",
+      "mergeInProgress": "Penggabungan sedang berjalan",
+      "sourceBranchMissing": "Cabang sumber sudah tidak ada",
+      "ffNotPossible": "Tertinggal dari tujuan. Ambil perubahan terbaru",
+      "nothingToMerge": "Tidak ada yang perlu digabung",
+      "configChange": "Perubahan berkas pengaturan perlu persetujuan maintainer",
+      "changedPathsUnknown": "Berkas yang berubah tidak bisa dibaca",
+      "codeownersInvalid": "Definisi pemilik kode tidak bisa dipakai. Beri tahu administrator",
+      "approvalsMissing": "Persetujuan kurang ({{rule}}: perlu {{required}}, sudah {{counted}})",
+      "approvalsMissingProtected": "Persetujuan kurang (perlu {{required}}, sudah {{counted}})",
+      "codeownerMissing": "Pemilik {{pattern}} ({{owners}}) harus menyetujui",
+      "checkMissing": "Pemeriksaan wajib \"{{name}}\" belum melapor",
+      "checkFailed": "Pemeriksaan wajib \"{{name}}\" belum berhasil ({{status}} / {{conclusion}})"
     },
     "number": "!{{iid}}",
     "draft": "Draf",
