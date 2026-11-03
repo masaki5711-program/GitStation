@@ -12,7 +12,7 @@ use sqlx::postgres::PgConnection;
 use sqlx::Connection as _;
 
 use super::*;
-use crate::change::Actor;
+use crate::change::{Actor, ChangeContext};
 use crate::projects::{self, NewProject};
 use crate::service_accounts::{self, NewServiceAccount};
 use crate::test_support::*;
