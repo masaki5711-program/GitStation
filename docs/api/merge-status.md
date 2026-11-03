@@ -50,6 +50,12 @@ target の保護、頼む変更）で `authorize()` を試しに呼んだ答え�
 | `can_mark_ready` | 真偽 | `PATCH …/{iid}` で `draft: false` が許される（作成者、または他人のドラフトなら Maintainer 以上） |
 | `approved_by_me` | 真偽 | 呼び出した人の生きている承認がある（版が無ければ `false`） |
 
+- `can_unapprove` は「取り消す権限がある」だけで、取り消す承認があるとは限らない。画面は **`approved_by_me` と組で** 使う
+  （`can_unapprove && approved_by_me` のときだけ「承認を取り消す」を出す）。同じく `can_approve && !approved_by_me` で「承認する」。
+- `can_mark_ready` は **ドラフトのときだけ** 意味がある（ドラフトでない MR でも `true` になりうる。ボタンはドラフトの間だけ出す）。
+- 欄の裏の読み取り（target の保護）が失敗・時間切れのときは、状態の答えは変えずに **欄をすべて `false`** にし、warn
+  `forge.web.viewer_flags_closed`（`error_code`、`request_id`、`read`）を 1 行出す（ヒントは閉じる側に倒す）。
+
 ## `reasons[].reason` の名前（この順に並ぶ）
 
 | 名前 | `detail` | 意味 |
@@ -115,12 +121,14 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
 
 この契約の外（`schema_version` を持たない）だが、同じ U2 で次を足した。
 
-- 答え（`GET`、`PUT …/merge-settings`、`PUT …/codeowners-enforcement`）に `viewer`:
+- 答え（`GET`、`PUT …/merge-settings`、`PUT …/codeowners-enforcement`）に `viewer`（PUT の答えの `viewer` はロックの前に読んだ
+  事実での答えで、ヒント。読み取りが失敗したときはすべて `false` で warn を 1 行）:
   `{ "can_manage", "can_loosen", "can_suspend_codeowners" }`。上と同じく `authorize()` の試しの答え。
   `can_manage` は承認を緩めない変更、`can_loosen` はコミッターの承認を数える・プッシュで承認を持ち越す変更（プロジェクトの
   **すべての保護以上の役割**が要る）、`can_suspend_codeowners` は CODEOWNERS の一時停止（同じく保護以上の役割）。
   Developer には読み取りだけの画面を出す（止まっている理由は見せる）。
-- `updated_at` はマイクロ秒まで（RFC 3339、UTC）。`PUT …/merge-settings` は **`expected_updated_at` が必須**: 読んだときの
+- `updated_at` はマイクロ秒まで（RFC 3339、UTC）だが、クライアントにとっては **不透明な文字列**: 読んだ文字列を **そのまま**
+  返す（`Date` に変換して戻さない。ミリ秒に丸まって必ず 409 になる）。`PUT …/merge-settings` は **`expected_updated_at` が必須**: 読んだときの
   `updated_at`（既定のまま一度も保存されていなければ `null`）を送る。ロックの下の値と違えば `409 FG-REVIEW-0017`（何も書かない）。
   CODEOWNERS の切り替えや期限切れの自動復帰も `updated_at` を進めるので、その後の保存は読み直しが要る。欄が無い要求は
   `FG-WEB-0006`（古いクライアントが他人の変更を黙って上書きしないため）。`gstn merge-settings set` は読んだ値を自分で送る。
