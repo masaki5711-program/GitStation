@@ -180,6 +180,9 @@ async fn run<T, P>(
                     .map_err(|e| query_error("projects.remove_member", e))
                 })
                 .await?;
+                // M3 I1a review: as in `members::remove_member`.
+                tx.step(|c| crate::integrations::clear_grant(c, project, member))
+                    .await?;
                 (
                     AuditDetails::ProjectMemberRemoved { user: member, role },
                     changed(role),

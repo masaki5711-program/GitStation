@@ -428,7 +428,7 @@ async fn a_purge_removes_the_projects_integration_binding() {
     .await
     .expect("integration");
     let web = create_ok(&t, &project("web", alice.namespace_id, alice.user_id)).await;
-    let (outcome, ()) = integrations::bind_decided(
+    let (outcome, _, ()) = integrations::bind_decided(
         &t.db,
         &ctx("req-bind"),
         web.project_id,

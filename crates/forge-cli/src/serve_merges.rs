@@ -205,7 +205,8 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::RequiredCheckNamespaceNotAllowed
         | ErrorCode::MergeSettingsChanged
         | ErrorCode::IntegrationLimitReached
-        | ErrorCode::BindingConflict => false,
+        | ErrorCode::BindingConflict
+        | ErrorCode::IntegrationDisabled => false,
     }
 }
 

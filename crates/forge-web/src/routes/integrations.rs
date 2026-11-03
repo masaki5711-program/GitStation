@@ -575,20 +575,9 @@ pub async fn bind(
 ) -> Response {
     let w = request.into_write();
     let built = async {
-        let hosting = hosting(&state)?;
-        let outcome = hosting
+        let (outcome, stored) = hosting(&state)?
             .bind_integration(&w.proof, &write_request(&w), &w.input.external_project_id)
             .await?;
-        let (project, integration) = *w.proof.id();
-        let stored = bounded(
-            &state,
-            "project_integration_bindings",
-            hosting.bound_integration(&w.proof),
-        )
-        .await?
-        .into_iter()
-        .find(|b| b.integration == integration)
-        .ok_or_else(|| vanished("binding_vanished", project.get()))?;
         let word = match outcome {
             BindOutcome::Bound { .. } => "bound",
             BindOutcome::Unchanged => "unchanged",

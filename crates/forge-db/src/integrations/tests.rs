@@ -118,7 +118,7 @@ async fn bind_as(
         |_| Ok(()),
     )
     .await
-    .map(|(outcome, ())| outcome)
+    .map(|(outcome, _, ())| outcome)
 }
 
 async fn unbind_as(
@@ -712,4 +712,364 @@ async fn create_and_update_integrations_with_one_audit_row_each() {
     assert_eq!(listed.items.len(), 1);
     assert!(!listed.truncated);
     t.drop_now().await;
+}
+
+// ── I1a review ──────────────────────────────────────────────────────────
+
+async fn disable_user(t: &FreshDb, user: UserId) {
+    let outcome = users::disable(&t.db, &ctx("req-disable"), user)
+        .await
+        .expect("disable");
+    assert!(
+        matches!(outcome, users::DisableOutcome::Disabled),
+        "{outcome:?}"
+    );
+}
+
+async fn set_enabled(t: &FreshDb, integration: IntegrationId, enabled: bool) {
+    let outcome = update(
+        &t.db,
+        &ctx("req-enable"),
+        integration,
+        &Changes {
+            enabled: Some(enabled),
+            event_types: None,
+        },
+    )
+    .await
+    .expect("update");
+    assert!(matches!(outcome, UpdateOutcome::Updated(_)), "{outcome:?}");
+}
+
+/// Security review HIGH: disabling an integration stops new bindings (each
+/// would grant its service account a Reporter membership).
+#[tokio::test]
+async fn binding_a_disabled_integration_is_refused() {
+    let w = world().await;
+    set_enabled(&w.t, w.integration, false).await;
+    let refused = bind_as(&w, w.web, w.integration, "P1")
+        .await
+        .expect_err("disabled");
+    assert_eq!(refused.code(), ErrorCode::IntegrationDisabled);
+    assert_eq!(
+        ctx_of(&refused, "reason").as_deref(),
+        Some("integration_disabled")
+    );
+    assert_eq!(role_of(&w.t, w.web, w.sa).await, None);
+    assert!(project_bindings(&w.t.db, w.web)
+        .await
+        .expect("b")
+        .is_empty());
+    // Enabled again, it binds; unbinding a disabled one still works (it
+    // only takes access away).
+    set_enabled(&w.t, w.integration, true).await;
+    bound(&w, w.web, w.integration, "P1").await;
+    set_enabled(&w.t, w.integration, false).await;
+    let unbound = unbind_as(&w, w.web, w.integration).await.expect("unbind");
+    assert!(unbound.membership_removed);
+    w.t.drop_now().await;
+}
+
+/// Security review MEDIUM: no grant to a disabled service account (it would
+/// silently come alive when the account is enabled again), and no new
+/// integration for one.
+#[tokio::test]
+async fn binding_for_a_disabled_service_account_is_refused() {
+    let w = world().await;
+    disable_user(&w.t, w.sa).await;
+    let refused = bind_as(&w, w.web, w.integration, "P1")
+        .await
+        .expect_err("disabled account");
+    assert_eq!(refused.code(), ErrorCode::IntegrationDisabled);
+    assert_eq!(
+        ctx_of(&refused, "reason").as_deref(),
+        Some("service_account_disabled")
+    );
+    assert_eq!(role_of(&w.t, w.web, w.sa).await, None);
+    let other = service_account(&w.t, "kanflow-two", w.alice.user_id).await;
+    disable_user(&w.t, other).await;
+    let created = create(
+        &w.t.db,
+        &ctx("req-int-disabled"),
+        &NewIntegration {
+            kind: IntegrationKind::Kanflow,
+            service_account: other,
+            event_types: None,
+        },
+        w.alice.user_id,
+    )
+    .await
+    .expect_err("disabled account");
+    assert_eq!(created.code(), ErrorCode::RequestInvalid);
+    assert_eq!(
+        ctx_of(&created, "rule").as_deref(),
+        Some("service_account_disabled")
+    );
+    w.t.drop_now().await;
+}
+
+async fn granted(t: &FreshDb, project: ProjectId) -> bool {
+    let b = project_bindings(&t.db, project).await.expect("bindings");
+    b.first().expect("bound").granted_membership
+}
+
+/// Security / database review MEDIUM: a person removes the granted
+/// membership and gives it again by hand; unbinding then keeps the human
+/// grant (the removal cleared `granted_membership`), on both removal paths.
+#[tokio::test]
+async fn removing_the_granted_membership_clears_the_grant() {
+    let w = world().await;
+    bound(&w, w.web, w.integration, "P1").await;
+    assert!(granted(&w.t, w.web).await);
+    projects::remove_member(&w.t.db, &ctx("req-rm"), w.web, w.sa, Role::Reporter)
+        .await
+        .expect("remove");
+    assert!(!granted(&w.t, w.web).await);
+    projects::add_member(&w.t.db, &ctx("req-readd"), w.web, w.sa, Role::Reporter)
+        .await
+        .expect("re-add");
+    let unbound = unbind_as(&w, w.web, w.integration).await.expect("unbind");
+    assert!(!unbound.membership_removed);
+    assert_eq!(
+        role_of(&w.t, w.web, w.sa).await.as_deref(),
+        Some("reporter")
+    );
+    // The decided removal path too.
+    let api = project(&w.t, &w.alice, "api").await;
+    bound(&w, api, w.integration, "P1").await;
+    projects::remove_member_decided(
+        &w.t.db,
+        &ctx("req-rm-decided"),
+        api,
+        w.alice.user_id,
+        w.sa,
+        |_| Ok(()),
+    )
+    .await
+    .expect("remove decided");
+    assert!(!granted(&w.t, api).await);
+    // The binding change is audited by the removal's own project row.
+    let actions = audit_actions(&w.t, api).await;
+    assert_eq!(actions.last().map(String::as_str), Some("member.removed"));
+    w.t.drop_now().await;
+}
+
+#[tokio::test]
+async fn event_type_entries_are_checked_by_the_schema() {
+    let t = FreshDb::migrated().await;
+    let mut su = t.superuser().await;
+    for bad in [
+        "ARRAY[NULL]::text[]",
+        "ARRAY['']",
+        "ARRAY[' a']",
+        "ARRAY['merge_request.opened', ' ']",
+        "ARRAY['Merge']",
+        "ARRAY[['*'], ['*']]",
+    ] {
+        assert_eq!(
+            refusal(&mut su, PEOPLE, &integration_row(1, 902, "kanflow", bad)).await,
+            Some(("23514".into(), "integrations_event_types_entries".into())),
+            "{bad}"
+        );
+    }
+    for ok in [
+        "ARRAY['*']",
+        "ARRAY['merge_request.*', 'repository.pushed']",
+    ] {
+        assert_eq!(
+            refusal(&mut su, PEOPLE, &integration_row(1, 902, "kanflow", ok)).await,
+            None,
+            "{ok}"
+        );
+    }
+    t.drop_now().await;
+}
+
+/// Database / rust review MEDIUM: two binds at 199 bindings, at once:
+/// exactly one wins, the other is FG-INT-0012 (the count is taken under
+/// the integration's row lock).
+#[tokio::test]
+async fn two_binds_at_199_bindings_let_exactly_one_through() {
+    let w = world().await;
+    bound(&w, w.web, w.integration, "P1").await;
+    for i in 1..MAX_BINDINGS - 1 {
+        let p = project(&w.t, &w.alice, &format!("p{i}")).await;
+        bound(&w, p, w.integration, "P1").await;
+    }
+    let a = project(&w.t, &w.alice, "race-a").await;
+    let b = project(&w.t, &w.alice, "race-b").await;
+    let (ra, rb) = tokio::join!(
+        bind_as(&w, a, w.integration, "P1"),
+        bind_as(&w, b, w.integration, "P1")
+    );
+    let wins = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+    assert_eq!(wins, 1, "{ra:?} {rb:?}");
+    let lost = [ra, rb]
+        .into_iter()
+        .find_map(Result::err)
+        .expect("one refused");
+    assert_eq!(lost.code(), ErrorCode::IntegrationLimitReached);
+    let got = get(&w.t.db, w.integration)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(got.bindings, MAX_BINDINGS);
+    w.t.drop_now().await;
+}
+
+/// Database / rust review MEDIUM: an unbind racing a removal of the granted
+/// membership ends consistent in either order and at once (both lock the
+/// project row first).
+#[tokio::test]
+async fn unbind_racing_a_membership_removal_ends_consistent() {
+    let w = world().await;
+    for round in 0..3 {
+        let p = project(&w.t, &w.alice, &format!("rm{round}")).await;
+        bound(&w, p, w.integration, "P1").await;
+        let rm_ctx = ctx("req-rm");
+        let remove = projects::remove_member(&w.t.db, &rm_ctx, p, w.sa, Role::Reporter);
+        let (unbound, removed) = match round {
+            0 => {
+                let u = unbind_as(&w, p, w.integration).await;
+                (u, remove.await)
+            }
+            1 => {
+                let r = remove.await;
+                (unbind_as(&w, p, w.integration).await, r)
+            }
+            _ => tokio::join!(unbind_as(&w, p, w.integration), remove),
+        };
+        let unbound = unbound.expect("unbind always succeeds");
+        match removed {
+            // The removal came first: nothing left for the unbind.
+            Ok(()) => assert!(!unbound.membership_removed, "round {round}"),
+            // The unbind removed it first: the removal finds no member.
+            Err(e) => {
+                assert_eq!(e.code(), ErrorCode::MembershipConflict, "round {round}");
+                assert!(unbound.membership_removed, "round {round}");
+            }
+        }
+        assert_eq!(role_of(&w.t, p, w.sa).await, None, "round {round}");
+        assert!(project_bindings(&w.t.db, p).await.expect("b").is_empty());
+    }
+    w.t.drop_now().await;
+}
+
+/// The same with a role change of the granted membership (Reporter to
+/// Developer): the unbind keeps a changed role, or the change finds no
+/// member.
+#[tokio::test]
+async fn unbind_racing_a_role_change_ends_consistent() {
+    let w = world().await;
+    for round in 0..3 {
+        let p = project(&w.t, &w.alice, &format!("ch{round}")).await;
+        bound(&w, p, w.integration, "P1").await;
+        let ch_ctx = ctx("req-ch");
+        let change =
+            projects::change_member(&w.t.db, &ch_ctx, p, w.sa, Role::Reporter, Role::Developer);
+        let (unbound, changed) = match round {
+            0 => {
+                let u = unbind_as(&w, p, w.integration).await;
+                (u, change.await)
+            }
+            1 => {
+                let c = change.await;
+                (unbind_as(&w, p, w.integration).await, c)
+            }
+            _ => tokio::join!(unbind_as(&w, p, w.integration), change),
+        };
+        let unbound = unbound.expect("unbind always succeeds");
+        match changed {
+            Ok(_) => {
+                assert!(!unbound.membership_removed, "round {round}");
+                assert_eq!(
+                    role_of(&w.t, p, w.sa).await.as_deref(),
+                    Some("developer"),
+                    "round {round}"
+                );
+            }
+            Err(e) => {
+                assert_eq!(e.code(), ErrorCode::MembershipConflict, "round {round}");
+                assert!(unbound.membership_removed, "round {round}");
+                assert_eq!(role_of(&w.t, p, w.sa).await, None, "round {round}");
+            }
+        }
+    }
+    w.t.drop_now().await;
+}
+
+/// Rust review LOW: two creates for one service account at once — the
+/// loser is FG-WEB-0006 `service_account_in_use` whether it lost on the
+/// check or on the unique index (SQLSTATE 23505).
+#[tokio::test]
+async fn concurrent_creates_for_one_account_refuse_the_second_as_in_use() {
+    let t = FreshDb::migrated().await;
+    let alice = human(&t, "alice").await;
+    let sa = service_account(&t, "kanflow-sync", alice.user_id).await;
+    let new = NewIntegration {
+        kind: IntegrationKind::Kanflow,
+        service_account: sa,
+        event_types: None,
+    };
+    let (ctx_a, ctx_b) = (ctx("req-int-a"), ctx("req-int-b"));
+    let (a, b) = tokio::join!(
+        create(&t.db, &ctx_a, &new, alice.user_id),
+        create(&t.db, &ctx_b, &new, alice.user_id)
+    );
+    assert_eq!(
+        [&a, &b].iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{a:?} {b:?}"
+    );
+    let lost = [a, b]
+        .into_iter()
+        .find_map(Result::err)
+        .expect("one refused");
+    assert_eq!(lost.code(), ErrorCode::RequestInvalid, "{lost:?}");
+    assert_eq!(
+        ctx_of(&lost, "rule").as_deref(),
+        Some("service_account_in_use")
+    );
+    t.drop_now().await;
+}
+
+/// Rust review MEDIUM: the bind answers with the binding it wrote (or the
+/// one it found), never a re-read after the commit.
+#[tokio::test]
+async fn bind_returns_the_binding_it_wrote() {
+    let w = world().await;
+    let (outcome, binding, ()) = bind_decided(
+        &w.t.db,
+        &ctx("req-bind"),
+        w.web,
+        w.alice.user_id,
+        w.integration,
+        "P1",
+        |_| Ok(()),
+    )
+    .await
+    .expect("bind");
+    assert!(matches!(outcome, BindOutcome::Bound { .. }));
+    assert_eq!(binding.integration, w.integration);
+    assert_eq!(binding.project, w.web);
+    assert_eq!(binding.kind, IntegrationKind::Kanflow);
+    assert_eq!(binding.external_project_id, "P1");
+    assert!(binding.granted_membership);
+    assert_eq!(binding.created_by, Some(w.alice.user_id));
+    let stored = project_bindings(&w.t.db, w.web).await.expect("b");
+    assert_eq!(stored, vec![binding.clone()]);
+    let (again, same, ()) = bind_decided(
+        &w.t.db,
+        &ctx("req-bind-2"),
+        w.web,
+        w.alice.user_id,
+        w.integration,
+        "P1",
+        |_| Ok(()),
+    )
+    .await
+    .expect("again");
+    assert_eq!(again, BindOutcome::Unchanged);
+    assert_eq!(same, binding);
+    w.t.drop_now().await;
 }

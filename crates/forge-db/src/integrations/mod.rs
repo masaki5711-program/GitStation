@@ -45,6 +45,7 @@ mod read;
 mod tests;
 
 pub use admin::{create, update};
+pub(crate) use bind::clear_grant;
 pub use bind::{bind_decided, unbind_decided};
 pub use read::{bindings, get, list, project_bindings};
 

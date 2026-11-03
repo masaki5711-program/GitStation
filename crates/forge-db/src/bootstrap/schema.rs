@@ -620,8 +620,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
                 "forge_ro:SELECT",
             ]),
         ),
-        // ── M3 I1a: integrations (no DELETE) and their bindings (no
-        // UPDATE; deleted by unbinding and the purge) (20261114100000) ──
+        // ── M3 I1a: integrations (no DELETE) and their bindings (deleted
+        // by unbinding and the purge; UPDATE since 20261114100100: a
+        // removed grant clears granted_membership) (20261114100000) ──
         (
             "forge.integrations",
             plain(&[
@@ -636,6 +637,7 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
             plain(&[
                 "forge_app:SELECT",
                 "forge_app:INSERT",
+                "forge_app:UPDATE",
                 "forge_app:DELETE",
                 "forge_ro:SELECT",
             ]),

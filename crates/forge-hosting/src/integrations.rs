@@ -135,17 +135,19 @@ impl Hosting {
 
     /// Bind the proof's project to `external_project_id` of the proof's
     /// integration (`IntegrationBindingManage`), decided again inside the
-    /// transaction.
+    /// transaction. The binding as the transaction wrote (or found) it is
+    /// the answer: no read after the commit, which a concurrent unbind
+    /// could empty.
     pub async fn bind_integration(
         &self,
         proof: &Authorized<IntegrationBindingCtx>,
         request: &WriteRequest,
         external_project_id: &str,
-    ) -> Result<BindOutcome, ForgeError> {
+    ) -> Result<(BindOutcome, IntegrationBinding), ForgeError> {
         require(proof.action(), Action::IntegrationBindingManage)?;
         let user = caller(proof)?;
         let (project, integration): (ProjectId, IntegrationId) = *proof.id();
-        let (outcome, ()) = integrations::bind_decided(
+        let (outcome, binding, ()) = integrations::bind_decided(
             &self.db,
             &change_context(request, proof.principal(), user),
             project,
@@ -159,18 +161,7 @@ impl Hosting {
             },
         )
         .await?;
-        Ok(outcome)
-    }
-
-    /// The proof's project's binding as stored, for the answer of
-    /// [`Hosting::bind_integration`] (the proof is the bind's).
-    pub async fn bound_integration(
-        &self,
-        proof: &Authorized<IntegrationBindingCtx>,
-    ) -> Result<Vec<IntegrationBinding>, ForgeError> {
-        require(proof.action(), Action::IntegrationBindingManage)?;
-        let (project, _) = *proof.id();
-        integrations::project_bindings(&self.db, project).await
+        Ok((outcome, binding))
     }
 
     /// Unbind the proof's project from the proof's integration

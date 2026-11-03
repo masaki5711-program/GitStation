@@ -352,6 +352,10 @@ pub async fn remove_member(
             .map_err(|e| query_error("projects.remove_member", e))
     })
     .await?;
+    // M3 I1a review: a membership an integration binding granted is gone;
+    // one given again later is a person's, never removed by the unbind.
+    tx.step(|c| crate::integrations::clear_grant(c, project, user))
+        .await?;
     commit(
         tx,
         project,

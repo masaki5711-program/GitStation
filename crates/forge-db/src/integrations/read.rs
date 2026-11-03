@@ -32,7 +32,7 @@ type Row = (
 
 /// A stored kind this build does not know: `FG-SYS-0001` (the CHECK
 /// `integrations_kind_known` lists the same names).
-fn kind_of(id: i64, raw: &str) -> Result<IntegrationKind, ForgeError> {
+pub(super) fn kind_of(id: i64, raw: &str) -> Result<IntegrationKind, ForgeError> {
     IntegrationKind::parse(raw).ok_or_else(|| {
         let raw: String = raw.chars().take(32).collect();
         ForgeError::new(ErrorCode::Internal)

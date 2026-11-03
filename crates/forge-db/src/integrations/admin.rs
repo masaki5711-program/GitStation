@@ -14,8 +14,9 @@ use crate::{query_error, Db};
 /// `integration.created` audit row; `created_by` is the administrator.
 ///
 /// Errors (nothing written): `FG-WEB-0006 field=service_account_id`
-/// `rule=not_service_account` (absent, a person or a bot) or
-/// `service_account_in_use` (it has an integration already);
+/// `rule=not_service_account` (absent, a person or a bot),
+/// `service_account_disabled` or `service_account_in_use` (it has an
+/// integration already, also when a concurrent create won);
 /// `field=event_types` (`count`, `unknown_event_type`).
 pub async fn create(
     db: &Db,
@@ -27,20 +28,27 @@ pub async fn create(
     let account = new.service_account;
     let mut tx = ChangeTx::begin(db, ctx).await?;
     let outcome = async {
-        // The account row FOR SHARE: its kind never changes, and a
-        // disabled account may still get an integration (it reads nothing
-        // until enabled again).
-        let kind: Option<String> = tx
+        // The account row FOR SHARE (a concurrent disable waits): its kind
+        // never changes; a disabled account gets no integration (I1a
+        // review: nothing waits to come alive when it is enabled again).
+        let row: Option<(String, String)> = tx
             .step(|c| async move {
-                sqlx::query_scalar("SELECT kind FROM forge.users WHERE id = $1 FOR SHARE")
+                sqlx::query_as("SELECT kind, state FROM forge.users WHERE id = $1 FOR SHARE")
                     .bind(account.get())
                     .fetch_optional(c)
                     .await
                     .map_err(|e| query_error("integrations.create.account", e))
             })
             .await?;
-        if kind.as_deref() != Some("service_account") {
-            return Err(field_invalid("service_account_id", "not_service_account"));
+        match row {
+            Some((kind, _)) if kind != "service_account" => {
+                return Err(field_invalid("service_account_id", "not_service_account"));
+            }
+            None => return Err(field_invalid("service_account_id", "not_service_account")),
+            Some((_, state)) if state != "active" => {
+                return Err(field_invalid("service_account_id", "service_account_disabled"));
+            }
+            Some(_) => {}
         }
         let taken: bool = tx
             .step(|c| async move {
@@ -70,7 +78,15 @@ pub async fn create(
                 .bind(created_by.get())
                 .fetch_one(c)
                 .await
-                .map_err(|e| query_error("integrations.create", e))
+                .map_err(|e| {
+                    // Two creates at once: the loser passed the check above
+                    // before the winner committed and meets the index.
+                    if is_unique_violation(&e, IN_USE_INDEX) {
+                        field_invalid("service_account_id", "service_account_in_use")
+                    } else {
+                        query_error("integrations.create", e)
+                    }
+                })
             })
             .await?;
         let integration = IntegrationId::new(id);
@@ -85,6 +101,15 @@ pub async fn create(
     }
     .await;
     tx.settle("integration.created", outcome).await
+}
+
+/// The unique constraint of one integration per service account.
+const IN_USE_INDEX: &str = "integrations_one_per_service_account";
+
+/// Whether `e` is SQLSTATE 23505 on `constraint`.
+fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.code().as_deref() == Some("23505") && d.constraint() == Some(constraint))
 }
 
 /// Enable or disable an integration, or replace its event type allowlist.
