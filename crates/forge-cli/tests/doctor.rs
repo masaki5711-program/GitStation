@@ -71,6 +71,9 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "ok    repositories.storage 0 ready repositories have their directory",
         // M3 R2: no merge request, nothing stuck.
         "ok    review.mergeability",
+        // M3 S0: no service account yet.
+        "ok    service_accounts.tokens_expiring",
+        "ok    service_accounts.ownerless",
         "ok    storage",
         "ok    git",
     ] {
@@ -412,6 +415,104 @@ fn doctor_reports_an_ownerless_project() {
         assert!(line.contains(&part), "missing {part:?} in {line:?}");
     }
     assert!(!text.contains("carol"), "names stay out:\n{text}");
+    rt.block_on(t.drop_now());
+}
+
+// ── M3 S0: service accounts (FG-AUTH-0019, FG-AUTH-0010) ────────────────
+#[test]
+fn doctor_warns_of_a_service_account_token_expiring_and_an_ownerless_account() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    let (soon, orphan) = rt.block_on(async {
+        let ctx = forge_db::change::ChangeContext::new(
+            forge_db::change::Actor::System,
+            forge_core::RequestId::parse("req-doctor-sa").expect("request id"),
+        );
+        let mut ada = forge_db::users::NewUser::human("ada", "Ada", "ada@example.test");
+        ada.is_admin = true;
+        let ada = forge_db::users::create(&t.db, &ctx, &ada)
+            .await
+            .expect("ada")
+            .user_id;
+        let carol = forge_db::users::create(
+            &t.db,
+            &ctx,
+            &forge_db::users::NewUser::human("carol", "Carol", "carol@example.test"),
+        )
+        .await
+        .expect("carol")
+        .user_id;
+        let account = |name: &str, owner| forge_db::service_accounts::NewServiceAccount {
+            username: name.to_owned(),
+            display_name: name.to_owned(),
+            owner,
+            purpose: "Synthetic integration".to_owned(),
+        };
+        let soon = forge_db::service_accounts::create(&t.db, &ctx, &account("svc-soon", ada), ada)
+            .await
+            .expect("svc-soon")
+            .user_id;
+        let orphan =
+            forge_db::service_accounts::create(&t.db, &ctx, &account("svc-orphan", carol), ada)
+                .await
+                .expect("svc-orphan")
+                .user_id;
+        let _ = forge_db::tokens::issue_for_service_account(
+            &t.db,
+            &ctx,
+            &forge_db::tokens::NewToken {
+                user: soon,
+                name: "feed".to_owned(),
+                scopes: vec![forge_core::Scope::ReadApi],
+                expires_in: Some(std::time::Duration::from_secs(3 * 24 * 3600)),
+                is_agent: false,
+            },
+            ada,
+        )
+        .await
+        .expect("token");
+        let _ = forge_db::users::disable(&t.db, &ctx, carol)
+            .await
+            .expect("carol leaves");
+        (soon, orphan)
+    });
+    let (vars, _pw) = t.env();
+    let storage = tempfile::tempdir().expect("storage root");
+    let root = storage.path().to_string_lossy().into_owned();
+    let out = forge_in(&["doctor"], &vars, &[("FORGE_STORAGE_ROOT", root.as_str())]);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{HINT}\n{text}");
+    let line = |prefix: &str| {
+        text.lines()
+            .find(|l| l.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no {prefix:?} in:\n{text}"))
+            .to_owned()
+    };
+    let expiring = line("FAIL  service_accounts.tokens_expiring");
+    for part in [
+        "FG-AUTH-0019".to_owned(),
+        "expiring_service_accounts=1".to_owned(),
+        format!("user_ids={}", soon.get()),
+        "within_days=14".to_owned(),
+    ] {
+        assert!(expiring.contains(&part), "missing {part:?} in {expiring:?}");
+    }
+    let ownerless = line("FAIL  service_accounts.ownerless");
+    for part in [
+        "FG-AUTH-0010".to_owned(),
+        "reason=ownerless_service_account".to_owned(),
+        format!("user_ids={}", orphan.get()),
+    ] {
+        assert!(
+            ownerless.contains(&part),
+            "missing {part:?} in {ownerless:?}"
+        );
+    }
+    assert!(
+        !text.contains("svc-soon") && !text.contains("carol"),
+        "names stay out:\n{text}"
+    );
     rt.block_on(t.drop_now());
 }
 

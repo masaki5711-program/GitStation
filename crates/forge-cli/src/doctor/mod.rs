@@ -8,7 +8,9 @@
 //! subscribers (`subscribers.lag`, `subscribers.dead_letters`), who
 //! administers forge (`users.administration`), repository provisioning and
 //! storage (`repositories.provisioning`, `repositories.storage`), merge
-//! request mergeability (`review.mergeability`, M3 R2), storage
+//! request mergeability (`review.mergeability`, M3 R2), service accounts
+//! (`service_accounts.tokens_expiring`, `service_accounts.ownerless`, M3
+//! S0), storage
 //! root, the git binary, the embedded web UI (`web.ui`) and the OIDC
 //! provider (`auth.oidc`, M2 MR4). One line
 //! per check (`--json` for scripts and the later diag bundle). Nothing is
@@ -38,6 +40,8 @@ mod repositories;
 mod review;
 // ── end D4 MR3b ──
 mod seal;
+// M3 S0: FG-AUTH-0019, FG-AUTH-0010 ownerless_service_account.
+mod service_accounts;
 // ── C5 ──
 mod subscribers;
 // ── end C5 ──
@@ -65,7 +69,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 17] = [
+const DB_CHECKS: [&str; 19] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -93,6 +97,9 @@ const DB_CHECKS: [&str; 17] = [
     "review.mergeability",
     // M3 R4: FG-REVIEW-0009 (the reconciliation keeps up).
     "review.merges",
+    // M3 S0: FG-AUTH-0019 (rotate before expiry), FG-AUTH-0010 (an owner).
+    "service_accounts.tokens_expiring",
+    "service_accounts.ownerless",
 ];
 
 /// Every failed check is logged once here (with `request_id`); the caller
@@ -224,6 +231,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     // ── end D4 MR3b ──
     let mergeability = review::mergeability_check(db).await;
     let merges = review::merges_check(db).await;
+    let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     vec![
         bootstrap,
         connections,
@@ -242,6 +250,8 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         storage,
         mergeability,
         merges,
+        sa_expiring,
+        sa_ownerless,
     ]
 }
 
