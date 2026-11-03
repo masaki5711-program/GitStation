@@ -2216,3 +2216,65 @@ async fn a_service_account_reports_a_required_check_and_the_status_shows_it() {
     assert_eq!(s["reasons"], json!([]));
     w.t.drop_now().await;
 }
+
+/// Review fix 7: the body cap of a report is the JSON routes' 64 KiB
+/// (`MAX_JSON_BODY_BYTES`). A report of exactly 64 KiB with 50 annotations
+/// is accepted (the field limits — 64 KiB summary, 50 × 4 KiB messages —
+/// are upper bounds; the body cap binds first, docs/api/checks.md); one
+/// byte more is 413 FG-WEB-0009 and nothing is written. The stored
+/// `check.completed` carries its dedup key.
+#[tokio::test]
+async fn the_largest_report_fits_the_body_cap_and_one_byte_more_is_413() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let ada = w.admin().await;
+    let (sa, ci) = w.reporter(olga.principal.user().expect("olga")).await;
+    let grant = format!(
+        "/api/v1/admin/service-accounts/{}/check-grants/{}/ci",
+        sa.get(),
+        w.project
+    );
+    let (status, body) = send(w.router.clone(), "PUT", &grant, ada.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let annotations: Vec<Value> = (0..50)
+        .map(|i| {
+            json!({"path": format!("src/file{i}.rs"), "start_line": 1, "end_line": 2,
+                   "level": "warning", "message": "m".repeat(500), "title": "lint"})
+        })
+        .collect();
+    let report = |summary_len: usize| {
+        json!({"name": "ci/gates", "status": "completed", "conclusion": "success",
+               "summary": "s".repeat(summary_len),
+               "details_url": "https://ci.example.test/runs/1",
+               "annotations": annotations.clone()})
+    };
+    let cap = forge_web::body::MAX_JSON_BODY_BYTES;
+    let base = report(0).to_string().len();
+    let exact = report(cap - base);
+    assert_eq!(exact.to_string().len(), cap);
+    let uri = w.checks_uri(&w.head);
+    let over = report(cap - base + 1);
+    let (status, body) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(over)).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::PAYLOAD_TOO_LARGE, "FG-WEB-0009"),
+        "{body}"
+    );
+    assert!(w
+        .t
+        .json_rows("SELECT id FROM forge.check_runs")
+        .await
+        .is_empty());
+    let (status, run) = send(w.router.clone(), "POST", &uri, ci.clone(), Some(exact)).await;
+    assert_eq!(status, StatusCode::CREATED, "{run}");
+    assert_eq!(run["annotations"].as_array().map(Vec::len), Some(50));
+    let id = run["id"].as_i64().expect("id");
+    let events =
+        w.t.json_rows("SELECT dedup_key FROM forge.events WHERE event_type = 'check.completed'")
+            .await;
+    assert_eq!(
+        events,
+        [json!({"dedup_key": format!("check_completed:{id}:1")})]
+    );
+    w.t.drop_now().await;
+}

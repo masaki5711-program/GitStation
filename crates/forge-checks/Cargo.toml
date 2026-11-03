@@ -24,6 +24,9 @@ url.workspace = true
 forge-db = { workspace = true, features = ["test-support"] }
 tokio.workspace = true
 sqlx.workspace = true
+# tests/real_browser.rs: a real bare repository under a temporary storage root.
+tempfile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

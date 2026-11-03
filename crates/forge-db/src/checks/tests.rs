@@ -944,3 +944,87 @@ async fn an_annotation_belongs_to_its_runs_project() {
     tx.rollback().await.expect("rollback");
     w.t.drop_now().await;
 }
+
+/// Review fix 7: the cap holds under concurrency — 99 runs, then 8 new
+/// names at once: exactly one fits (the commit's advisory lock serializes
+/// the count and the insert), the other 7 are FG-REVIEW-0021.
+#[tokio::test]
+async fn the_cap_holds_when_new_names_race() {
+    let w = Arc::new(world().await);
+    let head = sha('f');
+    w.t.commit_audited(
+        ("project", w.project().get()),
+        &[format!(
+            "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by, \
+             request_id) SELECT {}, '{}', 'ci/n' || g, 'queued', {}, 'req-fill' \
+             FROM generate_series(1, 99) g",
+            w.project().get(),
+            head.as_str(),
+            w.alice.get()
+        )],
+    )
+    .await;
+    let mut tasks = Vec::new();
+    for i in 0..8 {
+        let w = Arc::clone(&w);
+        let head = head.clone(); // clone: each task owns its commit
+        tasks.push(tokio::spawn(async move {
+            w.report(
+                &head,
+                &success(&format!("ci/new{i}")),
+                &format!("req-new-{i}"),
+            )
+            .await
+        }));
+    }
+    let (mut ok, mut capped) = (0, 0);
+    for task in tasks {
+        match task.await.expect("join") {
+            Ok(_) => ok += 1,
+            Err(e) if e.code() == ErrorCode::CheckRunLimitReached => capped += 1,
+            Err(e) => panic!("unexpected: {e}"),
+        }
+    }
+    assert_eq!((ok, capped), (1, 7));
+    assert_eq!(
+        w.count("SELECT count(*) FROM forge.check_runs WHERE project_id = $1")
+            .await,
+        100
+    );
+    match Arc::try_unwrap(w) {
+        Ok(w) => w.t.drop_now().await,
+        Err(_) => panic!("tasks finished"),
+    }
+}
+
+/// Review fix 7: more stored runs than the cap (written around forge-db)
+/// is FG-DB-0022 `too_many_stored_runs` for every read — never a cut list.
+#[tokio::test]
+async fn more_runs_than_the_cap_is_check_run_data_invalid() {
+    let w = world().await;
+    let head = sha('9');
+    w.t.commit_audited(
+        ("project", w.project().get()),
+        &[format!(
+            "INSERT INTO forge.check_runs (project_id, head_sha, name, status, reported_by, \
+             request_id) SELECT {}, '{}', 'ci/n' || g, 'queued', {}, 'req-fill' \
+             FROM generate_series(1, 101) g",
+            w.project().get(),
+            head.as_str(),
+            w.alice.get()
+        )],
+    )
+    .await;
+    for err in [
+        w.t.db
+            .runs_on(w.project(), &head)
+            .await
+            .expect_err("source"),
+        check_runs(&w.t.db, w.project(), &head)
+            .await
+            .expect_err("list"),
+    ] {
+        assert_reason(&err, ErrorCode::CheckRunDataInvalid, "too_many_stored_runs");
+    }
+    w.t.drop_now().await;
+}
