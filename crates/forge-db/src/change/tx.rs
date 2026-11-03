@@ -386,3 +386,32 @@ async fn insert_event(
     .map_err(|e| query_error("change.event", e))?;
     Ok(inserted.map(|_| id))
 }
+
+// ── M3 I1c: the integration feed's read snapshot ──
+/// A `REPEATABLE READ READ ONLY` transaction on the read pool (M3 I1c,
+/// ADR-0016 §7 `ReadSnapshot`): the integration feed reads its state, the
+/// decision's material and the page in one snapshot. Read only, so it can
+/// never defeat the deferred audit checks a change relies on; it lives here
+/// because this file owns every transaction boundary of forge-db
+/// (`validate-db-write-boundary` rule 7). The caller ends it with
+/// `rollback()`.
+pub(crate) async fn begin_read_snapshot(
+    db: &Db,
+    operation: &'static str,
+) -> Result<Transaction<'static, Postgres>, ForgeError> {
+    db.within(operation, async {
+        let mut tx = db
+            .pool()
+            .executor()
+            .begin()
+            .await
+            .map_err(|e| crate::read_query_error(operation, e))?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| crate::read_query_error(operation, e))?;
+        Ok(tx)
+    })
+    .await
+}
+// ── end M3 I1c ──

@@ -163,22 +163,7 @@ pub struct FeedPage {
 
 /// Open the feed's snapshot on the read pool (`FG-DB-0001` / `FG-DB-0002`).
 pub async fn open(db: &Db) -> Result<FeedSnapshot, ForgeError> {
-    const QUERY: &str = "feed.open";
-    let tx = db
-        .within(QUERY, async {
-            let mut tx = db
-                .pool()
-                .executor()
-                .begin()
-                .await
-                .map_err(|e| read_query_error(QUERY, e))?;
-            sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| read_query_error(QUERY, e))?;
-            Ok(tx)
-        })
-        .await?;
+    let tx = crate::change::begin_read_snapshot(db, "feed.open").await?;
     Ok(FeedSnapshot { tx, db: db.clone() })
 }
 
