@@ -509,6 +509,15 @@ async fn maintenance_timeout_kills_the_process_tree() {
     assert_eq!(err.code(), ErrorCode::GitTimeout, "{err}");
     assert!(err.to_string().contains("step=gc"), "{err}");
     assert!(started.elapsed() >= timeout, "ran until its timeout");
+    // Windows has no graceful stop: the Job Object is closed (a kill, with
+    // its time); the Unix fake dies of SIGTERM.
+    #[cfg(windows)]
+    assert!(
+        matches!(StepEnd::of(&err), StepEnd::Killed { at } if at <= SystemTime::now()),
+        "{err}"
+    );
+    #[cfg(unix)]
+    assert_eq!(StepEnd::of(&err), StepEnd::Terminated, "{err}");
     assert!(marker_len(&marker) > 0, "the helper ran before the timeout");
     // Let a kill settle, then the helper must have stopped writing.
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -809,30 +818,48 @@ fn set_mtime(path: &Path, when: SystemTime) {
     file.set_modified(when).expect("set mtime");
 }
 
-/// After a killed or failed pack-refs (still under the merge lock), the
-/// lock is removed only when it is ours (made at or after the step's
-/// start); an older one is left and named. The doctor's probe measures it.
+/// After a **killed** pack-refs (still under the merge lock) the lock is
+/// removed only when its time lies between the step's start and the kill;
+/// an older one, and one made after the kill (a live writer: the merge lock
+/// does not keep receive-pack or update-ref out), is left and named. The
+/// doctor's probe measures it.
 #[tokio::test]
 async fn a_killed_pack_refs_lock_of_our_own_is_removed_and_a_foreign_one_kept() {
     let f = fixture().await;
     let lock = f.path.join("packed-refs.lock");
-    let started = SystemTime::now() - Duration::from_secs(5);
+    let started = SystemTime::now() - Duration::from_secs(60);
+    let killed = SystemTime::now() - Duration::from_secs(30);
     let cleanup = |git: &Git| {
         let (git, root, id) = (git.clone(), f.root.clone(), f.id); // clone: owned by the future
-        async move { git.clear_own_packed_refs_lock(&root, id, started).await }
+        async move {
+            git.clear_own_packed_refs_lock(&root, id, started, killed)
+                .await
+        }
     };
     assert_eq!(cleanup(&f.git).await.expect("cleanup"), LockCleanup::Absent);
     assert_eq!(
         packed_refs_lock_age(&f.root, f.id, SystemTime::now()).expect("age"),
         None
     );
+    // Made between the start and the kill: ours.
     std::fs::write(&lock, b"").expect("our lock");
+    set_mtime(&lock, SystemTime::now() - Duration::from_secs(45));
     assert_eq!(
         cleanup(&f.git).await.expect("cleanup"),
         LockCleanup::Removed
     );
     assert!(!lock.exists(), "ours is removed");
-    std::fs::write(&lock, b"").expect("foreign lock");
+    // Made after the kill: a live writer's.
+    std::fs::write(&lock, b"").expect("a writer's lock");
+    assert!(
+        matches!(
+            cleanup(&f.git).await.expect("cleanup"),
+            LockCleanup::Foreign { .. }
+        ),
+        "a lock newer than the kill is kept"
+    );
+    assert!(lock.exists(), "the writer's lock stays");
+    // Older than the step: someone else's.
     set_mtime(&lock, SystemTime::now() - Duration::from_secs(3600));
     let kept = cleanup(&f.git).await.expect("cleanup");
     assert!(
@@ -844,6 +871,29 @@ async fn a_killed_pack_refs_lock_of_our_own_is_removed_and_a_foreign_one_kept() 
         .expect("age")
         .expect("present");
     assert!(age >= Duration::from_secs(3590), "{age:?}");
+}
+
+/// The step's end is read from its error: an exit of git (any code) and a
+/// SIGTERM stop are never `Killed` (git removed its own locks); a kill
+/// carries its time.
+#[test]
+fn step_end_tells_an_exit_a_term_and_a_kill() {
+    let exited =
+        ForgeError::new(ErrorCode::RepositoryMaintenanceFailed).with_context("exit_code", 1);
+    assert_eq!(StepEnd::of(&exited), StepEnd::Exited);
+    let term = ForgeError::new(ErrorCode::GitTimeout).with_context("stop", "term");
+    assert_eq!(StepEnd::of(&term), StepEnd::Terminated);
+    let kill = ForgeError::new(ErrorCode::GitTimeout)
+        .with_context("stop", "kill")
+        .with_context("killed_at_unix_ms", 1_700_000_000_000u64);
+    assert_eq!(
+        StepEnd::of(&kill),
+        StepEnd::Killed {
+            at: SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_000)
+        }
+    );
+    let busy = ForgeError::new(ErrorCode::GitBusy);
+    assert_eq!(StepEnd::of(&busy), StepEnd::NotRun);
 }
 
 /// A crashed push's quarantine with files in it does not defer the run
@@ -917,6 +967,17 @@ async fn fsck_on_an_unusable_repository_is_maintenance_failed_not_corrupt() {
         .expect_err("failed");
     assert_eq!(err.code(), ErrorCode::RepositoryMaintenanceFailed, "{err}");
     assert!(err.to_string().contains("reason=fsck_unusable"), "{err}");
+    // Without git's `fatal:` the words alone are not enough.
+    let fake = f.with_bin(exit_fake(
+        tmp.path(),
+        128,
+        "error: not a git repository object",
+    ));
+    let err = fake
+        .fsck(&f.root, f.id, FsckMode::Connectivity, T)
+        .await
+        .expect_err("corrupt");
+    assert_eq!(err.code(), ErrorCode::RepositoryCorrupt, "{err}");
     let fake = f.with_bin(exit_fake(tmp.path(), 1, "error: synthetic broken link"));
     let err = fake
         .fsck(&f.root, f.id, FsckMode::Connectivity, T)

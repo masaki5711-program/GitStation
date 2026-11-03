@@ -365,11 +365,14 @@ pub async fn start(db: &Db, repo: RepoId) -> Result<Option<Started>, ForgeError>
 /// `retry_after`. Without it such a row keeps its due time and the
 /// scheduler enqueues it again every pass (review MEDIUM). At most 100 per
 /// call; the scheduler runs it every pass, inside the window or not.
-pub async fn reap_stale_running(db: &Db, retry_after: Duration) -> Result<Vec<RepoId>, ForgeError> {
+pub async fn reap_stale_running(
+    db: &Db,
+    retry_after: Duration,
+) -> Result<Vec<(RepoId, i32)>, ForgeError> {
     const QUERY: &str = "maintenance.reap_stale_running";
-    let ids: Vec<i64> = db
+    let ids: Vec<(i64, i32)> = db
         .within(QUERY, async {
-            sqlx::query_scalar(
+            sqlx::query_as(
                 "UPDATE forge.repository_maintenance m SET outcome = 'failed', \
                      error_code = 'FG-DB-0007', skipped_reason = NULL, \
                      failures = m.failures + 1, last_finished_at = now(), \
@@ -382,7 +385,7 @@ pub async fn reap_stale_running(db: &Db, retry_after: Duration) -> Result<Vec<Re
                            AND j.state IN ('queued', 'running') \
                            AND j.payload->>'repo_id' = s.repo_id::text) \
                      ORDER BY s.repo_id LIMIT 100 FOR UPDATE SKIP LOCKED) \
-                 RETURNING m.repo_id",
+                 RETURNING m.repo_id, m.failures",
             )
             .bind(MAINTAIN_JOB)
             .bind(secs(STALE_RUNNING_AFTER))
@@ -392,7 +395,10 @@ pub async fn reap_stale_running(db: &Db, retry_after: Duration) -> Result<Vec<Re
             .map_err(|e| query_error(QUERY, e))
         })
         .await?;
-    Ok(ids.into_iter().map(RepoId::new).collect())
+    Ok(ids
+        .into_iter()
+        .map(|(id, failures)| (RepoId::new(id), failures))
+        .collect())
 }
 
 /// The end of a run, as [`finish`] records it.

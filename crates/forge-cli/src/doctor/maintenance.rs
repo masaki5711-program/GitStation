@@ -178,6 +178,8 @@ pub(super) async fn maintenance_checks(db: &Db, cfg: &MaintenanceConfig) -> [Che
 #[derive(Default)]
 struct LockWalk {
     checked: i64,
+    /// The first error looking at a lock (kept for the detail).
+    first_error: Option<String>,
     stale: Vec<(RepoId, u64)>,
     /// Repositories whose lock could not be looked at (their own code is
     /// `repositories.storage`'s).
@@ -238,8 +240,9 @@ pub(super) async fn stale_locks_within(
         walk.checked,
         if walk.unchecked > 0 {
             format!(
-                " ({} could not be looked at: see repositories.storage)",
-                walk.unchecked
+                " ({} could not be looked at, first: {}; see repositories.storage)",
+                walk.unchecked,
+                walk.first_error.as_deref().unwrap_or("")
             )
         } else {
             String::new()
@@ -314,7 +317,12 @@ async fn lock_walk(
             match age {
                 Ok(Some(age)) if age >= stale_after => walk.stale.push((id, age.as_secs())),
                 Ok(_) => {}
-                Err(_) => walk.unchecked += 1,
+                Err(e) => {
+                    walk.unchecked += 1;
+                    walk.first_error.get_or_insert_with(|| {
+                        format!("repository {}: {} {}", id.get(), e.code().id(), e)
+                    });
+                }
             }
         }
         after = Some(last);

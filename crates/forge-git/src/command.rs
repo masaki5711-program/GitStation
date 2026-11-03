@@ -598,10 +598,7 @@ impl GitCommand {
             // reused), then the leader is reaped.
             let stop = stop_tree(&mut tree).await;
             let reaped = reap(&mut child).await;
-            return Err(with_reap(
-                self.timed_out().with_context("stop", stop),
-                reaped,
-            ));
+            return Err(with_reap(stop.attach(self.timed_out()), reaped));
         };
         let (stderr_bytes, _) = err_res.unwrap_or_default();
         let stderr_head = stderr_head(&stderr_bytes);
@@ -656,10 +653,7 @@ impl GitCommand {
                 None => {
                     let stop = stop_tree(&mut tree).await;
                     let reaped = reap(&mut child).await;
-                    return Err(with_reap(
-                        self.timed_out().with_context("stop", stop),
-                        reaped,
-                    ));
+                    return Err(with_reap(stop.attach(self.timed_out()), reaped));
                 }
             }
         }
@@ -674,19 +668,20 @@ impl GitCommand {
             Err(_) => {
                 let stop = stop_tree(&mut tree).await;
                 let reaped = reap(&mut child).await;
-                return Err(with_reap(
-                    self.timed_out().with_context("stop", stop),
-                    reaped,
-                ));
+                return Err(with_reap(stop.attach(self.timed_out()), reaped));
             }
         };
         if let Some(t) = tree.as_mut() {
-            if status.success() {
-                // git exited by itself and has waited for its helpers.
+            if status.success() || cfg!(unix) {
+                // git exited by itself and has waited for its helpers; or
+                // (Unix) the leader is reaped now: its group id may be
+                // reused, so it is never signalled after this point — a
+                // failed leader's group was killed above while it was
+                // still a zombie (re-review MEDIUM).
                 t.release();
             } else {
                 // Windows: closing the job ends any helper left behind
-                // (Unix: killed above while the leader was a zombie).
+                // (the job does not depend on the pid).
                 t.kill();
             }
         }
@@ -778,25 +773,62 @@ async fn watch_leader(
 /// How long a supervised run gets after `SIGTERM` before `SIGKILL`.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(5);
 
+/// How a timed-out run was stopped ([`stop_tree`]).
+#[derive(Debug, Clone, Copy)]
+struct Stopped {
+    /// `term` (the leader exited within the grace after SIGTERM), `kill`
+    /// (SIGKILL / the Job Object closed: git could not clean up) or `none`
+    /// (a plain captured run: only the leader was killed).
+    how: &'static str,
+    /// When the kill was sent (`how = kill` only).
+    killed_at: Option<std::time::SystemTime>,
+}
+
+impl Stopped {
+    /// `stop` and, after a kill, `killed_at_unix_ms` in the error context
+    /// (`maintenance::StepEnd::of` reads them).
+    fn attach(self, err: ForgeError) -> ForgeError {
+        let err = err.with_context("stop", self.how);
+        match self
+            .killed_at
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        {
+            Some(at) => err.with_context("killed_at_unix_ms", at.as_millis()),
+            None => err,
+        }
+    }
+}
+
 /// Stop a supervised run's tree at a timeout: `SIGTERM` to the group (git
 /// removes its lock files on it), up to [`TERM_GRACE`] for the leader to
 /// exit (watched without reaping it), then `SIGKILL` to the group either
 /// way (helpers that ignored the signal). Windows and plain runs: killed at
-/// once. Returns the `stop` context value: `term` (the leader exited within
-/// the grace), `kill` (it did not, or no graceful stop exists) or `none`.
-async fn stop_tree(tree: &mut Option<ProcessTree>) -> &'static str {
+/// once. The leader that exited within the grace is `term` (git cleaned
+/// up); otherwise `kill`, with the time the kill was sent.
+async fn stop_tree(tree: &mut Option<ProcessTree>) -> Stopped {
     let Some(t) = tree.as_mut() else {
-        return "none";
+        return Stopped {
+            how: "none",
+            killed_at: None,
+        };
     };
-    let mut how = "kill";
     if t.terminate() {
         let until = tokio::time::Instant::now() + TERM_GRACE;
         if matches!(t.wait_leader(until).await, Some(Ok(_))) {
-            how = "term";
+            // Helpers that ignored the signal still go.
+            t.kill();
+            return Stopped {
+                how: "term",
+                killed_at: None,
+            };
         }
     }
+    let killed_at = std::time::SystemTime::now();
     t.kill();
-    how
+    Stopped {
+        how: "kill",
+        killed_at: Some(killed_at),
+    }
 }
 
 #[cfg(test)]

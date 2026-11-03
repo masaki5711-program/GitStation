@@ -375,7 +375,7 @@ async fn a_lost_run_is_counted_as_a_failure_and_not_requeued_every_pass() {
     let reaped = reap_stale_running(&t.db, Duration::from_secs(12 * 3600))
         .await
         .expect("reap");
-    assert_eq!(reaped, [r]);
+    assert_eq!(reaped, [(r, 1)], "the failure count comes back");
     let row = super::row(&t.db, r).await.expect("row").expect("exists");
     assert_eq!(row.outcome, Some(Outcome::Failed));
     assert_eq!(row.error_code.as_deref(), Some("FG-DB-0007"));
@@ -472,5 +472,48 @@ async fn no_recent_success_is_reported_until_a_run_succeeds() {
         .expect("report")
         .expect("migrated");
     assert_eq!(rep.no_recent_success, 0, "a success clears it");
+    t.drop_now().await;
+}
+
+/// Re-review LOW: the backfill (20261117100200) gives a row that succeeded
+/// before `last_success_at` existed its last finish; others stay empty.
+#[tokio::test]
+async fn the_success_backfill_fills_rows_that_succeeded_before_the_column() {
+    let t = FreshDb::migrated().await;
+    let repos = ready_repos(&t, 2).await;
+    let (ok, failed) = (repos[0].repository_id, repos[1].repository_id);
+    for (r, outcome) in [(ok, "succeeded"), (failed, "skipped")] {
+        t.exec_superuser(&format!(
+            "INSERT INTO forge.repository_maintenance \
+             (repo_id, project_id, outcome, last_finished_at, next_due_at) \
+             SELECT id, project_id, '{outcome}', now() - interval '3 days', now() \
+             FROM forge.repositories WHERE id = {}",
+            r.get()
+        ))
+        .await;
+    }
+    let migration =
+        include_str!("../../migrations/20261117100200_repository_maintenance_success_backfill.sql");
+    let update = migration
+        .split(';')
+        .find(|s| s.contains("UPDATE forge.repository_maintenance"))
+        .expect("the backfill statement");
+    t.exec_superuser(update).await;
+    let rows = t
+        .json_rows(
+            "SELECT repo_id, last_success_at IS NOT NULL AS has FROM forge.repository_maintenance \
+             ORDER BY repo_id",
+        )
+        .await;
+    let has: Vec<(i64, bool)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r["repo_id"].as_i64().expect("id"),
+                r["has"].as_bool().expect("has"),
+            )
+        })
+        .collect();
+    assert_eq!(has, [(ok.get(), true), (failed.get(), false)]);
     t.drop_now().await;
 }

@@ -50,7 +50,7 @@ use forge_db::maintenance::{
 use forge_db::review::merges::{try_lock_merges, MERGE_JOB_TIMEOUT};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_git::maintenance::{Blocked, FsckMode, GcRun, LockCleanup, RepositoryCounts};
+use forge_git::maintenance::{Blocked, FsckMode, GcRun, LockCleanup, RepositoryCounts, StepEnd};
 use forge_git::{Git, StorageRoot};
 
 use super::provision::Storage;
@@ -305,15 +305,7 @@ impl Inner {
         if started.lost_previous {
             // The run before this one ended without a ledger write (a crash,
             // a lease that expired): counted as a failure by `start`.
-            tracing::warn!(
-                target: "forge_cli",
-                event = "forge.git.maintenance_run_lost",
-                error_code = ErrorCode::JobLeaseExpired.id(),
-                request_id = %request_id,
-                repo_id = repo.get(),
-                failures = started.failures,
-                "the previous maintenance run of the repository ended without a record"
-            );
+            log_run_lost(request_id, repo, started.failures);
         }
         let mode = self.fsck_mode(&started);
         tracing::info!(
@@ -479,12 +471,15 @@ impl Inner {
             }
             Err(e) => Err(e),
         };
-        if packed.is_err() {
-            // Still under the merge lock: a killed pack-refs may have left
-            // its `packed-refs.lock`, which would fail every later ref
-            // write that needs it (review HIGH).
-            self.clean_pack_refs_lock(repo, step_started, request_id)
-                .await;
+        // Only a pack-refs that was killed can have left its lock (git
+        // removes its own on any exit and on SIGTERM); whatever lock exists
+        // after those is a live writer's and is never touched — doctor's
+        // `repositories.stale_locks` reports it if it stays (re-review HIGH).
+        if let Err(e) = &packed {
+            if let StepEnd::Killed { at } = StepEnd::of(e) {
+                self.clean_pack_refs_lock(repo, step_started, at, request_id)
+                    .await;
+            }
         }
         lock.release().await;
         packed.map(|()| None)
@@ -500,11 +495,12 @@ impl Inner {
         &self,
         repo: RepoId,
         step_started: std::time::SystemTime,
+        killed_at: std::time::SystemTime,
         request_id: &RequestId,
     ) {
         match self
             .git
-            .clear_own_packed_refs_lock(&self.root, repo, step_started)
+            .clear_own_packed_refs_lock(&self.root, repo, step_started, killed_at)
             .await
         {
             Ok(LockCleanup::Absent) => {}
@@ -544,14 +540,9 @@ pub(crate) async fn run_schedule(db: &Db, cfg: &MaintenanceConfig) -> Result<Nex
     // Every pass, inside the window or not: runs that are gone (crashed,
     // then dead-lettered) are recorded as failures and leave the queue
     // alone until their retry (review MEDIUM).
-    for repo in ledger::reap_stale_running(db, FAILURE_RETRY).await? {
-        tracing::warn!(
-            target: "forge_cli",
-            event = "forge.git.maintenance_run_lost",
-            error_code = ErrorCode::JobLeaseExpired.id(),
-            repo_id = repo.get(),
-            "a maintenance run ended without a record; counted as a failure"
-        );
+    let pass = RequestId::generate();
+    for (repo, failures) in ledger::reap_stale_running(db, FAILURE_RETRY).await? {
+        log_run_lost(&pass, repo, failures);
     }
     let minute = ledger::local_minute(db, &cfg.time_zone).await?;
     if !cfg.window.contains(minute) {
@@ -574,6 +565,33 @@ pub(crate) async fn run_schedule(db: &Db, cfg: &MaintenanceConfig) -> Result<Nex
         );
     }
     Ok(Next::AfterPeriod)
+}
+
+/// A run that ended without a record (counted as a failure): warn, an
+/// error (alert) from the second failure in a row, like any failure.
+fn log_run_lost(request_id: &RequestId, repo: RepoId, failures: i32) {
+    let code = ErrorCode::JobLeaseExpired;
+    if failures >= ALERT_AFTER_FAILURES {
+        tracing::error!(
+            target: "forge_cli",
+            event = "forge.git.maintenance_run_lost",
+            error_code = code.id(),
+            request_id = %request_id,
+            repo_id = repo.get(),
+            failures,
+            "a maintenance run ended without a record; counted as a failure"
+        );
+    } else {
+        tracing::warn!(
+            target: "forge_cli",
+            event = "forge.git.maintenance_run_lost",
+            error_code = code.id(),
+            request_id = %request_id,
+            repo_id = repo.get(),
+            failures,
+            "a maintenance run ended without a record; counted as a failure"
+        );
+    }
 }
 
 /// The one outcome event of a recorded run (module docs).

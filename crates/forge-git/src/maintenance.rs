@@ -510,13 +510,59 @@ impl Git {
 
 /// git's words for "this is not a repository I may read" (LC_ALL=C).
 fn fsck_unusable(stderr: &str) -> bool {
-    [
-        "not a git repository",
-        "dubious ownership",
-        "safe.directory",
-    ]
-    .iter()
-    .any(|m| stderr.contains(m))
+    stderr.contains("fatal:")
+        && [
+            "not a git repository",
+            "dubious ownership",
+            "safe.directory",
+        ]
+        .iter()
+        .any(|m| stderr.contains(m))
+}
+
+/// How a maintenance step's git ended, from its error (`stop`,
+/// `killed_at_unix_ms` of a timed-out supervised run).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepEnd {
+    /// git exited by itself (any exit code): it removed its own locks.
+    Exited,
+    /// Stopped by SIGTERM within the grace: git removed its own locks.
+    Terminated,
+    /// SIGKILL / the Job Object closed at `at`: its locks may be left.
+    Killed { at: SystemTime },
+    /// No git ran to its end or was stopped (storage, slot, deadline before
+    /// the start): nothing of ours to clean.
+    NotRun,
+}
+
+impl StepEnd {
+    /// Classify a step's error.
+    pub fn of(err: &ForgeError) -> Self {
+        let ctx = |key: &str| {
+            err.context()
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        match (err.code(), ctx("stop")) {
+            (ErrorCode::GitTimeout, Some("term")) => Self::Terminated,
+            (ErrorCode::GitTimeout, Some("kill")) => {
+                let at = ctx("killed_at_unix_ms")
+                    .and_then(|ms| ms.parse::<u64>().ok())
+                    .map_or_else(SystemTime::now, |ms| {
+                        SystemTime::UNIX_EPOCH + Duration::from_millis(ms)
+                    });
+                Self::Killed { at }
+            }
+            (ErrorCode::GitTimeout, _) => Self::NotRun,
+            (ErrorCode::RepositoryMaintenanceFailed | ErrorCode::GitProcessFailed, _)
+                if ctx("exit_code").is_some() =>
+            {
+                Self::Exited
+            }
+            _ => Self::NotRun,
+        }
+    }
 }
 
 /// What [`Git::clear_own_packed_refs_lock`] found.
@@ -559,19 +605,26 @@ pub fn packed_refs_lock_age(
 }
 
 impl Git {
-    /// After a pack-refs that failed or was killed, still under the merge
-    /// lock: remove `packed-refs.lock` only when it is ours — its time is at
-    /// or after `step_started` (the step created it; every other writer of
-    /// this repository is kept out by the merge lock or holds it for a
-    /// moment only). An older lock is someone else's and is left
-    /// ([`LockCleanup::Foreign`]: the caller alerts, FG-GIT-0020). A killed
-    /// pack-refs that kept its lock would make every push deleting a packed
-    /// ref and every `update-ref` that needs it fail until cleaned.
+    /// After a pack-refs that was **killed** ([`StepEnd::Killed`]: git
+    /// could not remove its own lock), still under the merge lock: remove
+    /// `packed-refs.lock` only when its time lies between `step_started` and
+    /// `killed_at` — it can then only be the one our pack-refs made.
+    /// Anything else is left ([`LockCleanup::Foreign`]: the caller alerts,
+    /// FG-GIT-0020): the merge lock does **not** keep writers out —
+    /// receive-pack and `update-ref` of the version job take
+    /// `packed-refs.lock` without it — so a lock made after the kill belongs
+    /// to a live writer. Never call it after a pack-refs that exited on its
+    /// own or after SIGTERM (git removed its own lock then; whatever lock
+    /// exists is someone else's). Residual: a writer that took the lock
+    /// while our pack-refs waited for it (≤ 10 s) and before the kill has a
+    /// time inside the window; on Unix the kill comes only after pack-refs
+    /// ignored SIGTERM for 5 s, on Windows (development only) at once.
     pub async fn clear_own_packed_refs_lock(
         &self,
         storage: &StorageRoot,
         id: RepoId,
         step_started: SystemTime,
+        killed_at: SystemTime,
     ) -> Result<LockCleanup, ForgeError> {
         let repo = storage.existing(id)?;
         let lock = repo.join("packed-refs.lock");
@@ -587,7 +640,7 @@ impl Git {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LockCleanup::Absent),
                 Err(e) => return Err(e),
             };
-            if modified >= step_started {
+            if modified >= step_started && modified <= killed_at {
                 match std::fs::remove_file(&lock) {
                     Ok(()) => Ok(LockCleanup::Removed),
                     Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(LockCleanup::Absent),
