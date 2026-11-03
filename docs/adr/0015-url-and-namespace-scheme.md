@@ -1176,3 +1176,21 @@ MR7 の閲覧の API（`RepoBrowse`）に `commits`・`commits/{oid}`・`compare
 - `project_view` の `kind`（リポジトリの種類）、`POST /api/v1/projects` の `kind`、`GET /api/v1/projects?kind=` は、後続のコードの MR で取り除く。
   カーソルの purpose の `kind=…` も同様。名前空間の `kind`（`user` / `group` / `project`）と墓標の `kind` は別のもので、変わらない。
 - 「文書ポータル（§3.7、M7）は別の画面の系統である」は取り下げた。画面の系統は 1 つ。`/docs/…`（M7）の予約は、ポータルのためのものなので使わない（予約語は残してよい）。
+
+## Amendment（2026-11-03、MR B0: マージリクエストの画面の語 `pulls` / `pull`）
+
+- **語を 2 つ足す**: `/{project}/-/pulls`（一覧）と `/{project}/-/pull/{iid}`（1 件）。`RouteWord::Pulls` / `RouteWord::Pull`、
+  共有の URL ベクタ（`tests/fixtures/url-vectors.json`）の accept に入れた（これまでの「まだルートがない」の reject から移した）。
+- **画面の殻（`WebShell`、公開）だけを返す**。他の画面の語と同じく、資格情報を読まず、名前空間も引かない。データは API の
+  `MergeRequestList`（`GET /api/v1/projects/{id}/merge-requests`）と `MergeRequestRead`（`…/{iid}` ほか）が返し、可視性はそこで
+  `authorize()` が決める（非公開のプロジェクト: Reporter は許可、メンバーでない人は FG-REPO-0005 の 404。内部のプロジェクト:
+  サインインした人は許可。matrix の行は R1a からある）。forge の可視性は `private` / `internal` の 2 つで、匿名に見えるプロジェクトはない。
+- **プロジェクトの語だけ**。グループの殻の語（`GROUP_SHELL_WORDS`）には入れない。グループのマージリクエストの一覧は作らない
+  （グループに `RouteScope::Group` のルートを登録しない。テスト `group_shell_rejects_pull_word`）。
+- **`merge_requests` の別名は作らない**（上の「ルートの系統」の表の `/-/merge_requests/{iid}`（別名）と、Consequences の
+  「別名は M3 で `pull` と一緒に決める」を、作らないと決めた）。URL は 1 つにする: 別名は同じ画面に 2 つの URL を作り、リンクと
+  キャッシュと監査の読み方を割る。計画 02 §5.2 の `…/-/merge_requests/87` は、画面では `…/-/pull/87` と読む。API のリソース名
+  （`/api/v1/projects/{id}/merge-requests`）は変えない。`/-/merge_requests/…` は今までどおり FG-WEB-0001（`unknown_route`）。
+- **作成者の名前**（同じ MR、ADR-0024 への追加）: マージリクエスト、ノート、ディスカッションの本文に `author: {username, display_name}`
+  を足した（ディスカッションは始めた人 = `started_by`）。読むときに `forge.users` を引いて返す（行ごとの副問い合わせ。`RETURNING` でも
+  使える）。`author_id` / `started_by` はそのまま残す（追加だけ。マイグレーションなし）。画面が利用者を 1 人ずつ引かなくてよい。
