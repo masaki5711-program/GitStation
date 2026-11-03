@@ -121,6 +121,20 @@ actions! {
     /// R5, ADR-0024 §8.6, §12): manage a project's approval rules. People
     /// only (a rule is a merge condition); Maintainer and above; `api`.
     ApprovalRuleManage,
+    /// `PUT /api/v1/projects/{id}/merge-settings` (M3 R6, ADR-0024 §4.1,
+    /// §8.2, §8.3, §12): the methods a project allows and their default,
+    /// the source deletion default, whether new commits clear approvals,
+    /// whether committers' approvals are excluded. People only (they are
+    /// merge conditions); Maintainer and above; `api`.
+    MergeSettingsManage,
+    /// `PUT /api/v1/projects/{id}/merge-settings/codeowners-enforcement`
+    /// (M3 R6, ADR-0024 §9, `Resource::CodeownersEnforcement`): suspend
+    /// CODEOWNERS enforcement for at most 24 hours (an expiry is required)
+    /// or enforce it again. Its own action (not part of
+    /// `MergeSettingsManage`): people only, Maintainer and above, and a
+    /// suspension also needs a role at or above every protection rule of
+    /// the project (`above_own_role`); `api`.
+    CodeownersEnforcementToggle,
     // --- REST API: groups ---
     GroupRead,
     /// `GET /api/v1/groups`: as `ProjectList`; every row is then decided
@@ -275,6 +289,8 @@ impl Action {
                 | Action::MergeRequestApprove
                 | Action::MergeRequestUnapprove
                 | Action::ApprovalRuleManage
+                | Action::MergeSettingsManage
+                | Action::CodeownersEnforcementToggle
         )
     }
 
@@ -346,7 +362,9 @@ impl Action {
             | Action::MergeRequestReopen
             | Action::MergeRequestComment
             | Action::DiscussionResolve
-            | Action::ApprovalRuleManage => Some(Scope::Api),
+            | Action::ApprovalRuleManage
+            | Action::MergeSettingsManage
+            | Action::CodeownersEnforcementToggle => Some(Scope::Api),
             // M3 R4 (ADR-0024 §8.5): satisfied by `merge_execute` alone.
             Action::MergeRequestMerge => Some(Scope::MergeExecute),
             // M3 R5: satisfied by `merge_approve` alone.

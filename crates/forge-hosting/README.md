@@ -39,6 +39,11 @@ one decided for another kind of change (an add's proof driving a change) is
 - MR8 writes (`ProtectedRefManage`): `create_protected_ref` (the pattern is
   not an authorization input), `change_protected_ref` (`RuleChange`),
   `delete_protected_ref`; `from` is the level read under the rule's row lock.
+- M3 R6 (`merge_rules.rs`, ADR-0024 §12): `put_merge_rule` / `remove_merge_rule` on
+  `Authorized<RefProtectionCtx>` with the rule's level as `from` and `to` (`MergeRuleAsk::to_rule`:
+  at most 20 approvals and checks, `<namespace>/<name>` checks, `ext/` FG-REVIEW-0016, the work
+  item link FG-WEB-0006 until I1); decided again on the locked rule. A rule's deletion deletes
+  its merge rule.
 
 **Errors raised**: whatever forge-db and `authorize()` return (FG-AUTH-0003
 with `agent_token`, `above_own_role`, `last_owner`; FG-REPO-0005 / 0010 / 0013 /

@@ -59,10 +59,17 @@ fn inputs(approvals: Vec<ApproverFacts>, rules: Vec<StoredApprovalRule>) -> Appr
         author: AUTHOR,
         head: oid('a'),
         target: main(),
-        facts: ApprovalFacts { approvals, rules },
+        facts: ApprovalFacts {
+            approvals,
+            rules,
+            ..ApprovalFacts::default()
+        },
         committers: Committers::Known(BTreeMap::new()),
         changed: ChangedPathsFact::Known(vec!["src/lib.rs".to_owned()]),
         codeowners: CodeownersFact::Absent,
+        committer_approvals_excluded: true,
+        codeowners_enforced: true,
+        minimum: 0,
     }
 }
 
@@ -338,4 +345,87 @@ fn a_conflicting_merge_adds_no_changed_paths_reason() {
     let mut i = inputs(vec![approver(BOB, Role::Developer)], Vec::new());
     i.changed = ChangedPathsFact::Conflict;
     assert!(evaluate(&i).blocks.is_empty());
+}
+
+/// M3 R6 (ADR-0024 §8.3): a project that turns the committer rule off
+/// counts its committers' approvals — and then unknown committers do not
+/// fail the approvals either (the rule is not consulted).
+#[test]
+fn a_project_may_count_its_committers_approvals() {
+    let mut i = inputs(
+        vec![
+            approver(BOB, Role::Developer),
+            approver(CAROL, Role::Developer),
+        ],
+        vec![rule("r", 2, Vec::new())],
+    );
+    i.committers = Committers::Known(BTreeMap::from([(BOB, 42)]));
+    i.committer_approvals_excluded = false;
+    let report = evaluate(&i);
+    assert_eq!(reason_of(&report, BOB), None);
+    assert!(report.blocks.is_empty());
+    i.committers = Committers::Unknown("push_record_missing");
+    assert!(evaluate(&i).blocks.is_empty());
+}
+
+/// M3 R6 (ADR-0024 §9): while CODEOWNERS enforcement is suspended, neither
+/// a missing owner nor an unusable file blocks — the configuration rule
+/// still does (it is not CODEOWNERS'); enforcing again brings both back.
+#[test]
+fn a_suspended_codeowners_enforcement_drops_only_the_codeowners_requirements() {
+    let mut i = inputs(vec![approver(BOB, Role::Developer)], Vec::new());
+    i.changed = ChangedPathsFact::Known(vec!["docs/a.md".to_owned()]);
+    i.codeowners = owned(
+        "docs/ @org/writers\n",
+        &[("org/writers", OwnerRef::Group(GroupId::new(9)))],
+        &i.changed,
+    );
+    assert_eq!(evaluate(&i).blocks.len(), 1);
+    i.codeowners_enforced = false;
+    let report = evaluate(&i);
+    assert!(report.blocks.is_empty(), "{:?}", report.blocks);
+    assert!(report.codeowners.is_empty());
+    assert!(!report.codeowners_enforced);
+    i.codeowners = CodeownersFact::Invalid(CodeownersError {
+        line: 1,
+        reason: "unknown_owner",
+    });
+    assert!(evaluate(&i).blocks.is_empty());
+    i.changed = ChangedPathsFact::Known(vec!["CODEOWNERS".to_owned()]);
+    assert_eq!(
+        evaluate(&i).blocks,
+        vec![BlockReason::ConfigChangeNeedsMaintainerApproval],
+        "the fix of CODEOWNERS still needs a Maintainer"
+    );
+}
+
+/// M3 R6 (ADR-0024 §8.6): the protected branch's minimum counts every
+/// valid approval (any eligible person), on top of the rules, and makes
+/// such an approval "needed" (never `not_in_rule`).
+#[test]
+fn the_protected_minimum_counts_any_valid_approval() {
+    let mut i = inputs(vec![approver(BOB, Role::Developer)], Vec::new());
+    i.minimum = 2;
+    let report = evaluate(&i);
+    assert_eq!(
+        report.blocks,
+        vec![BlockReason::ApprovalsMissing {
+            rule: PROTECTED_BRANCH_RULE.to_owned(),
+            required: 2,
+            counted: 1
+        }]
+    );
+    assert_eq!(reason_of(&report, BOB), None);
+    assert!(report
+        .rules
+        .iter()
+        .any(|r| r.name == PROTECTED_BRANCH_RULE && r.applies));
+    i.facts.approvals.push(approver(CAROL, Role::Developer));
+    assert!(evaluate(&i).blocks.is_empty());
+    // An invalid approval (the author's) does not count toward it.
+    i.facts.approvals = vec![
+        approver(AUTHOR, Role::Maintainer),
+        approver(BOB, Role::Developer),
+    ];
+    assert_eq!(evaluate(&i).blocks.len(), 1);
 }

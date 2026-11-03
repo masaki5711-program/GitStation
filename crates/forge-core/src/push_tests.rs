@@ -592,6 +592,7 @@ fn protection_levels_are_every_matching_rule_in_order() {
     let rule = |p: &str, role| ProtectionRule {
         pattern: RefPattern::parse(p).expect("pattern"),
         push_min_role: role,
+        merge: Default::default(),
     };
     let rules = ProtectionRules::new(vec![
         rule("refs/heads/*", Role::Maintainer),

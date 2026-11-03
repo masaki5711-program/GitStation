@@ -67,14 +67,6 @@ fn wants_check(stored: Option<&StoredMergeability>) -> bool {
 }
 
 impl Review {
-    /// The merge settings (M3 R4: the defaults of ADR-0024 for every
-    /// project; tests set others).
-    #[must_use]
-    pub fn with_merge_settings(mut self, settings: super::MergeSettings) -> Self {
-        self.merge_settings = settings;
-        self
-    }
-
     /// The protection in effect on `target` of `project` (the push path's
     /// rules, strictest first; `None`: unprotected) — what the merge route's
     /// loader decides with (ADR-0024 §4.3).
@@ -84,7 +76,7 @@ impl Review {
         target: &forge_core::RefName,
     ) -> Result<Option<RefProtection>, ForgeError> {
         let rules = forge_db::protected_refs::rules_for(&self.db, project).await?;
-        Ok(RefProtection::effective(rules.levels(target)))
+        Ok(RefProtection::of(&rules, target))
     }
 
     /// The latest merge attempt of merge request `mr` (`None`: never asked).
@@ -117,10 +109,12 @@ impl Review {
         let (project, Some(iid)) = *proof.id() else {
             return Err(shape_mismatch("merge_request_merge"));
         };
-        let method = ask
-            .method
-            .unwrap_or_else(|| self.merge_settings.default_method());
-        self.merge_settings.check(method)?;
+        // M3 R6: the project's settings (read again in the gate below).
+        let settings = super::conditions::settings_of(
+            &forge_db::review::merge_settings(&self.db, project).await?,
+        );
+        let method = ask.method.unwrap_or_else(|| settings.default_method());
+        settings.check(method)?;
         if let Some(message) = &ask.message {
             check_message(message)?;
         }
@@ -177,7 +171,7 @@ impl Review {
             message: ask.message.clone(), // clone: as above
             delete_source_branch: ask
                 .delete_source_branch
-                .unwrap_or_else(|| self.merge_settings.delete_source_default()),
+                .unwrap_or_else(|| settings.delete_source_default()),
             credential,
         };
         let sha = &ask.sha;
@@ -190,8 +184,7 @@ impl Review {
             &new,
             |gate| {
                 let mr = locked(&gate.facts)?;
-                let protection =
-                    RefProtection::effective(gate.protection.levels(&mr.target_branch));
+                let protection = RefProtection::of(&gate.protection, &mr.target_branch);
                 let fresh = MergeRequestCtx::merging(loaded(&gate.facts.project), mr, protection);
                 proof
                     .reconfirm(account(gate.facts.account), fresh)
@@ -212,6 +205,15 @@ impl Review {
                     // forge-db answers FG-REVIEW-0011 for it.
                     return Ok(());
                 }
+                // M3 R6: the settings as locked allow the method still.
+                super::conditions::method_allowed(&gate.approvals.settings, method)?;
+                let conditions = super::conditions::conditions(
+                    &gate.protection,
+                    &stored.target_branch,
+                    sha,
+                    gate.unresolved_discussions,
+                    &super::conditions::NoCheckRuns,
+                );
                 let facts = MergeFacts {
                     state: stored.state,
                     draft: stored.draft,
@@ -228,6 +230,8 @@ impl Review {
                     approvals: approval_git
                         .clone()
                         .inputs(stored, sha, gate.approvals.clone()), // clone: the evaluation owns its inputs
+                    checks: conditions.checks,
+                    discussions: conditions.discussions,
                 };
                 evaluate_merge(&facts).map(drop).map_err(|reasons| {
                     if reasons.contains(&BlockReason::MergeabilityUnknown)

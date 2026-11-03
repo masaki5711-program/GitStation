@@ -882,10 +882,12 @@ dependencies = [
  "forge-db",
  "forge-errors",
  "forge-git",
+ "proptest",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "unicode-properties",
  "uuid",
 ]

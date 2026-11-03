@@ -11,8 +11,9 @@
 //! another caller, against another project, or skip the project check.
 //! Each [`RefUpdateCtx`] derives its protection from the push's one rule
 //! snapshot (`ProtectionRules`, loaded once per push) through
-//! `RefProtection::effective` (strictest rule wins), and the snapshot must
-//! have been loaded for the proof's project.
+//! `RefProtection::of` (strictest rule wins; M3 R6: with the direct-push
+//! ban of the matching merge rules), and the snapshot must have been
+//! loaded for the proof's project.
 
 use forge_core::{ProjectId, ProtectionRules, RefName};
 use forge_errors::{ErrorCode, ForgeError};
@@ -37,7 +38,7 @@ impl RefUpdateCtx {
     /// check; a tag that exists already moves as `Force`); the protection
     /// is every rule of `rules` matching `name`, strictest first.
     pub fn new(name: RefName, update: RefUpdate, rules: &ProtectionRules) -> Self {
-        let protection = RefProtection::effective(rules.levels(&name));
+        let protection = RefProtection::of(rules, &name);
         Self {
             name,
             update,

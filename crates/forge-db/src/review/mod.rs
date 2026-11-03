@@ -10,7 +10,10 @@
 //! mergeability status and its job's SQL (`mergeability.rs`), the bases of
 //! a version ([`record_version_bases`]); M3 R3: the discussions and their
 //! notes (`discussions.rs`: [`start_discussion_mr_decided`],
-//! [`add_note_mr_decided`], [`resolve_discussion_mr_decided`]).
+//! [`add_note_mr_decided`], [`resolve_discussion_mr_decided`]); M3 R5: the
+//! approvals and approval rules (`approvals/`); M3 R6: the merge settings
+//! and the CODEOWNERS switch (`settings.rs`: [`put_merge_settings_mr_decided`],
+//! [`toggle_codeowners_mr_decided`], [`restore_expired_codeowners`]).
 //!
 //! The command names carry `_mr_` so they never match the needles of
 //! forge-hosting's `decided_callers.rs` (ADR-0024 §11, review #33); a test
@@ -40,21 +43,23 @@ pub mod discussions;
 pub mod mergeability;
 pub mod merges;
 mod refresh;
+pub mod settings;
 mod version_bases;
 mod version_refs;
 pub mod versions;
 
 pub use approvals::{
-    approval_facts, approval_rules, approve_mr_decided, owners, put_approval_rule_mr_decided,
-    range_pushers, remove_approval_rule_mr_decided, unapprove_mr_decided, ApprovalFacts,
-    ApproveOutcome, ApproverFacts, CommitPusher, NewApprovalRule, Owners, RuleOutcome,
-    StoredApproval, StoredApprovalRule, MAX_APPROVALS, MAX_RULES, MAX_RULE_APPROVERS,
+    approval_facts, approval_rules, approve_mr_decided, approved_heads, owners,
+    put_approval_rule_mr_decided, range_pushers, remove_approval_rule_mr_decided,
+    unapprove_mr_decided, ApprovalFacts, ApproveOutcome, ApprovedHead, ApproverFacts, CommitPusher,
+    NewApprovalRule, Owners, RuleOutcome, StoredApproval, StoredApprovalRule, MAX_APPROVALS,
+    MAX_RULES, MAX_RULE_APPROVERS,
 };
 pub use discussions::{
     add_note_mr_decided, discussion, discussions, resolve_discussion_mr_decided,
-    start_discussion_mr_decided, DiscussionFacts, DiscussionPage, DiscussionPosition,
-    NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote, MAX_DISCUSSIONS, MAX_NOTES,
-    MAX_NOTES_PER_DISCUSSION,
+    start_discussion_mr_decided, unresolved_discussions, DiscussionFacts, DiscussionPage,
+    DiscussionPosition, NewDiscussion, ResolveOutcome, StoredDiscussion, StoredNote,
+    MAX_DISCUSSIONS, MAX_NOTES, MAX_NOTES_PER_DISCUSSION,
 };
 pub use mergeability::{
     begin_check, confirm_live, decided_candidates, fail_check, health as mergeability_health,
@@ -64,15 +69,20 @@ pub use mergeability::{
     StoredMergeability, MERGEABILITY_JOB, MERGEABILITY_TIMEOUT, STALE_AFTER, SWEEP_BATCH,
 };
 pub use refresh::{MergeRequestRefresh, REFRESH_SUBSCRIBER};
+pub use settings::{
+    merge_settings, put_merge_settings_mr_decided, restore_expired_codeowners,
+    toggle_codeowners_mr_decided, CodeownersChange, CodeownersEnforcement, RestoreReport,
+    SettingsFacts, SettingsOutcome, StoredMergeSettings, RESTORE_MAX_BATCH,
+};
 pub use version_bases::record_version_bases;
 pub use version_refs::{
     lock_version_refs, purge_mr_version_refs_decided, versions_snapshot, PurgeOutcome, RefsLock,
     VersionsSnapshot, REFS_LOCK_HOLD, REFS_LOCK_WAIT,
 };
 pub use versions::{
-    list_versions, read_versions, record_mr_version, refresh_job, refresh_payload, refresh_target,
-    RefreshRequest, RefreshTarget, RefreshTrigger, StoredVersion, VersionOutcome, REFRESH_JOB,
-    REFRESH_TIMEOUT,
+    list_versions, read_versions, record_mr_version, record_mr_version_carrying, refresh_job,
+    refresh_payload, refresh_target, CarryPlan, RefreshRequest, RefreshTarget, RefreshTrigger,
+    StoredVersion, VersionOutcome, REFRESH_JOB, REFRESH_TIMEOUT,
 };
 
 pub use commands::{

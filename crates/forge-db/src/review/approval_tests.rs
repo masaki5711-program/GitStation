@@ -425,3 +425,312 @@ async fn approval_rules_are_put_replaced_and_removed() {
         "put, replace and remove are audited; unchanged is not"
     );
 }
+
+/// M3 R6 (ADR-0024 §8.2): with `reset_approvals_on_push = false` and the
+/// change allowed by forge-review (a [`CarryPlan`] for the recorded head),
+/// a new head carries the live approvals whose approved head the plan
+/// allows (old row `carried`, new row with `carried_from`, one
+/// `merge_request.approved` each); the default setting, a protected
+/// target, a plan for another head than the recorded one, or (R6 review
+/// round 2) an approved head the plan does not name end them with
+/// `new_commits`.
+#[tokio::test]
+async fn approvals_are_carried_only_when_every_condition_holds() {
+    let w = world().await;
+    let (first, _) = w.approve(w.bob, "req-approve").await;
+    assert!(matches!(first, ApproveOutcome::Approved { .. }));
+    // The default (reset on push): the carry asked for is not taken.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v2"),
+        w.mr.id,
+        &oid('b'),
+        None,
+        Some(&CarryPlan {
+            from: oid('a'),
+            approved_heads: vec![oid('a')],
+        }),
+    )
+    .await
+    .expect("v2");
+    assert!(w.live().await.is_empty(), "the default ends them");
+    // The project keeps approvals on push.
+    let keep = forge_core::MergeSettingsValues {
+        reset_approvals_on_push: false,
+        ..forge_core::MergeSettingsValues::default()
+    };
+    let (changed, _, ()) = put_merge_settings_mr_decided(
+        &w.t.db,
+        &as_user(w.alice, "req-settings"),
+        w.web.project_id,
+        w.alice,
+        &keep,
+        |_| Ok(()),
+    )
+    .await
+    .expect("settings");
+    assert_eq!(changed, SettingsOutcome::Changed);
+    let (second, _) = w.approve(w.bob, "req-approve-b").await;
+    assert!(matches!(second, ApproveOutcome::Approved { .. }));
+    // A carry asked for another head than the recorded one: ended.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v3"),
+        w.mr.id,
+        &oid('c'),
+        None,
+        Some(&CarryPlan {
+            from: oid('a'),
+            approved_heads: vec![oid('a')],
+        }),
+    )
+    .await
+    .expect("v3");
+    assert!(w.live().await.is_empty(), "a stale carry_from ends them");
+    let approved = w.approve(w.bob, "req-approve-c").await.1;
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v4"),
+        w.mr.id,
+        &oid('d'),
+        None,
+        Some(&CarryPlan {
+            from: oid('c'),
+            approved_heads: vec![oid('c')],
+        }),
+    )
+    .await
+    .expect("v4");
+    let live = w.live().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].head_sha, oid('d'));
+    assert_eq!(live[0].approver, w.bob);
+    let carried = w.events("merge_request.approved").await;
+    let last = carried.last().expect("event");
+    assert_eq!(last["carried_from"], approved.id.get());
+    assert_eq!(last["uncounted_reason"], "carried");
+    let reason: String = sqlx::query_scalar(
+        "SELECT revoked_reason FROM forge.merge_request_approvals WHERE id = $1",
+    )
+    .bind(approved.id.get())
+    .fetch_one(&mut w.t.superuser().await)
+    .await
+    .expect("old row");
+    assert_eq!(reason, "carried");
+    let heads = approved_heads(&w.t.db, w.mr.id)
+        .await
+        .expect("approved heads");
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].approval, live[0].id);
+    assert_eq!(
+        heads[0].approved_head,
+        Some(oid('c')),
+        "followed back to the approval"
+    );
+    // R6 review round 2: the carried approval's approved head is still
+    // `c`, not the recorded head `d` — a plan allowing only `d` (the
+    // change from the previous head) ends it.
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v5"),
+        w.mr.id,
+        &oid('e'),
+        None,
+        Some(&CarryPlan {
+            from: oid('d'),
+            approved_heads: vec![oid('d')],
+        }),
+    )
+    .await
+    .expect("v5");
+    assert!(
+        w.live().await.is_empty(),
+        "an approval is measured from the head it was given on"
+    );
+    let (again, _) = w.approve(w.bob, "req-approve-e").await;
+    assert!(matches!(again, ApproveOutcome::Approved { .. }));
+    // A protected target: never carried.
+    crate::protected_refs::create(
+        &w.t.db,
+        &as_user(w.alice, "req-protect"),
+        w.web.project_id,
+        &RefPattern::parse("refs/heads/main").expect("pattern"),
+        forge_core::Role::Maintainer,
+    )
+    .await
+    .expect("protect");
+    record_mr_version_carrying(
+        &w.t.db,
+        &system("req-v6"),
+        w.mr.id,
+        &oid('f'),
+        None,
+        Some(&CarryPlan {
+            from: oid('e'),
+            approved_heads: vec![oid('e')],
+        }),
+    )
+    .await
+    .expect("v6");
+    assert!(w.live().await.is_empty(), "a protected target ends them");
+    w.t.drop_now().await;
+}
+
+impl World {
+    /// The project keeps approvals on push (`reset_approvals_on_push = false`).
+    async fn keep_approvals(&self) {
+        let keep = forge_core::MergeSettingsValues {
+            reset_approvals_on_push: false,
+            ..forge_core::MergeSettingsValues::default()
+        };
+        let (changed, _, ()) = put_merge_settings_mr_decided(
+            &self.t.db,
+            &as_user(self.alice, "req-keep"),
+            self.web.project_id,
+            self.alice,
+            &keep,
+            |_| Ok(()),
+        )
+        .await
+        .expect("settings");
+        assert_eq!(changed, SettingsOutcome::Changed);
+    }
+
+    /// Record `to` as the head, carrying the approvals given on `approved`
+    /// (the plan made for the recorded head `from`).
+    async fn carry(&self, request: &str, (from, to): (char, char), approved: &[char]) {
+        record_mr_version_carrying(
+            &self.t.db,
+            &system(request),
+            self.mr.id,
+            &oid(to),
+            None,
+            Some(&CarryPlan {
+                from: oid(from),
+                approved_heads: approved.iter().map(|c| oid(*c)).collect(),
+            }),
+        )
+        .await
+        .expect("version");
+    }
+}
+
+/// R6 re-review (MEDIUM): the `carried_from` walk is bounded — a chain
+/// longer than the cap has no approved head (`None`: never carried); one
+/// within it is followed back through every ended, carried row.
+#[tokio::test]
+async fn the_approved_head_walk_is_bounded() {
+    let w = world().await;
+    w.keep_approvals().await;
+    assert!(matches!(
+        w.approve(w.bob, "req-approve").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    // Three carried pushes: a -> b -> c -> d.
+    w.carry("req-v2", ('a', 'b'), &['a']).await;
+    w.carry("req-v3", ('b', 'c'), &['a']).await;
+    w.carry("req-v4", ('c', 'd'), &['a']).await;
+    let mut su = w.t.superuser().await;
+    let within = super::approvals::approved_heads_capped_on(&mut su, w.mr.id, 3)
+        .await
+        .expect("within the cap");
+    assert_eq!(within.len(), 1);
+    assert_eq!(within[0].approved_head, Some(oid('a')), "three hops back");
+    let over = super::approvals::approved_heads_capped_on(&mut su, w.mr.id, 2)
+        .await
+        .expect("over the cap");
+    assert_eq!(over.len(), 1, "the approval is still listed");
+    assert_eq!(over[0].approved_head, None, "past the cap: never carried");
+    w.t.drop_now().await;
+}
+
+impl World {
+    /// `(action, approver_id)` of the audit rows of `request`, by id.
+    async fn audit_of(&self, request: &str) -> Vec<(String, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT action, (details ->> 'approver_id')::bigint FROM forge.audit_log \
+             WHERE request_id = $1 ORDER BY id",
+        )
+        .bind(request)
+        .fetch_all(&mut self.t.superuser().await)
+        .await
+        .expect("audit")
+    }
+
+    /// `(event_type, approver_id)` of the events of `request`, by id.
+    async fn events_of(&self, request: &str) -> Vec<(String, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT event_type, (payload ->> 'approver_id')::bigint FROM forge.events \
+             WHERE request_id = $1 ORDER BY id",
+        )
+        .bind(request)
+        .fetch_all(&mut self.t.superuser().await)
+        .await
+        .expect("events")
+    }
+}
+
+/// R6 re-review (MEDIUM): one carry keeps the approval whose approved head
+/// the plan allows — found through a multi-hop chain of ended, carried
+/// rows — and ends the other (`new_commits`); every live approval yields
+/// exactly one audit row and one event in that change (plus the push's
+/// own).
+#[tokio::test]
+async fn a_carry_keeps_or_ends_each_approval_by_its_approved_head() {
+    let w = world().await;
+    w.keep_approvals().await;
+    assert!(matches!(
+        w.approve(w.bob, "req-approve-bob").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    w.carry("req-v2", ('a', 'b'), &['a']).await;
+    w.carry("req-v3", ('b', 'c'), &['a']).await;
+    assert!(matches!(
+        w.approve(w.alice, "req-approve-alice").await.0,
+        ApproveOutcome::Approved { .. }
+    ));
+    let heads = approved_heads(&w.t.db, w.mr.id).await.expect("heads");
+    assert_eq!(
+        heads
+            .iter()
+            .map(|h| h.approved_head.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(oid('a')), Some(oid('c'))],
+        "bob's through two ended rows, alice's on c"
+    );
+    // The plan allows only the change from `a` (bob's approved head).
+    w.carry("req-v4", ('c', 'd'), &['a']).await;
+    let bob = Some(w.bob.get());
+    let alice = Some(w.alice.get());
+    let mut audit = w.audit_of("req-v4").await;
+    audit.sort();
+    assert_eq!(
+        audit,
+        vec![
+            ("merge_request.approved".to_owned(), bob),
+            ("merge_request.pushed".to_owned(), None),
+            ("merge_request.unapproved".to_owned(), alice),
+        ]
+    );
+    let mut events = w.events_of("req-v4").await;
+    events.sort();
+    assert_eq!(
+        events,
+        vec![
+            ("merge_request.approved".to_owned(), bob),
+            ("merge_request.pushed".to_owned(), None),
+            ("merge_request.unapproved".to_owned(), alice),
+        ]
+    );
+    let live = w.live().await;
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].approver, w.bob);
+    assert_eq!(live[0].head_sha, oid('d'));
+    let after = approved_heads(&w.t.db, w.mr.id).await.expect("heads");
+    assert_eq!(
+        after[0].approved_head,
+        Some(oid('a')),
+        "still bob's first head"
+    );
+    w.t.drop_now().await;
+}

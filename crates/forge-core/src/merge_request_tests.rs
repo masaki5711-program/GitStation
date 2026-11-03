@@ -162,6 +162,7 @@ fn approved_and_unapproved_are_transitions_keyed_by_the_approval() {
         target_branch: RefName::parse("refs/heads/main").expect("ref"),
         counted: false,
         uncounted_reason: Some(UncountedReason::Committer),
+        carried_from: None,
     };
     assert_eq!(approved.transition(), MergeRequestTransition::Approve);
     assert_eq!(approved.dedup_prefix(), "merge_request_approved");
@@ -169,6 +170,7 @@ fn approved_and_unapproved_are_transitions_keyed_by_the_approval() {
     assert_eq!(value["counted"], false);
     assert_eq!(value["uncounted_reason"], "committer");
     assert_eq!(value["approval_id"], 11);
+    assert!(value["carried_from"].is_null());
     let unapproved = MergeRequestChange::Unapproved {
         merge_request: mr,
         iid: 3,

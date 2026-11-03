@@ -10,11 +10,18 @@
 //! (`approvals_missing`, `codeowner_approval_missing`,
 //! `codeowners_invalid`, `config_change_needs_maintainer_approval`,
 //! `changed_paths_unknown`; decided by [`crate::approvals::evaluate`] on
-//! [`MergeFacts::approvals`]). Required checks and unresolved discussions
-//! (R6) join with their inputs (each a new variant: the matches below are
-//! exhaustive).
+//! [`MergeFacts::approvals`]). M3 R6 adds the merge rule of the target's
+//! protection: `required_check_missing` (no run reported is never
+//! success), `required_check_not_successful` and `unresolved_discussions`
+//! ([`MergeFacts::checks`], [`MergeFacts::discussions`]); the protected
+//! branch's minimum approvals is an approval requirement
+//! (`approvals_missing` with the rule `@protected_branch`). The matches
+//! below are exhaustive; the order is [`BlockReason::rank`] — ADR-0024 §7's
+//! list — whatever the order the reasons were found in.
 
-use forge_core::{CheckReason, MergeMethod, MergeRequestState, MergeabilityStatus, ObjectId};
+use forge_core::{
+    CheckName, CheckReason, MergeMethod, MergeRequestState, MergeabilityStatus, ObjectId,
+};
 use forge_db::review::StoredMergeability;
 use forge_errors::{ErrorCode, ForgeError};
 
@@ -58,6 +65,96 @@ pub enum BlockReason {
     ChangedPathsUnknown {
         reason: &'static str,
     },
+    /// A required check has no run on the head (M3 R6, ADR-0024 §10:
+    /// "no check reported" is never success).
+    RequiredCheckMissing {
+        name: CheckName,
+    },
+    /// A required check's run on the head is not `completed` / `success`
+    /// (`neutral` included).
+    RequiredCheckNotSuccessful {
+        name: CheckName,
+        status: CheckStatus,
+        conclusion: Option<CheckConclusion>,
+    },
+    /// The merge rule asks for resolved discussions and `count` are not
+    /// (M3 R6).
+    UnresolvedDiscussions {
+        count: u32,
+    },
+}
+
+/// A check run's status (ADR-0024 §10; C1 reports it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckStatus {
+    Queued,
+    InProgress,
+    Completed,
+}
+
+impl CheckStatus {
+    pub const ALL: [CheckStatus; 3] = [Self::Queued, Self::InProgress, Self::Completed];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+/// A completed check run's conclusion (ADR-0024 §10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CheckConclusion {
+    Success,
+    Neutral,
+    Failure,
+    Error,
+    ActionRequired,
+}
+
+impl CheckConclusion {
+    pub const ALL: [CheckConclusion; 5] = [
+        Self::Success,
+        Self::Neutral,
+        Self::Failure,
+        Self::Error,
+        Self::ActionRequired,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Neutral => "neutral",
+            Self::Failure => "failure",
+            Self::Error => "error",
+            Self::ActionRequired => "action_required",
+        }
+    }
+}
+
+/// The run of a check on the head (the latest one per name, C1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckRun {
+    pub status: CheckStatus,
+    /// `Some` only when `completed`.
+    pub conclusion: Option<CheckConclusion>,
+}
+
+impl CheckRun {
+    /// Whether it satisfies a required check: `completed` and `success`
+    /// only (ADR-0024 §10: `neutral` does not).
+    pub fn succeeded(&self) -> bool {
+        self.status == CheckStatus::Completed && self.conclusion == Some(CheckConclusion::Success)
+    }
+}
+
+/// A required check and its run on the head (`None`: no run reported).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredCheck {
+    pub name: CheckName,
+    pub run: Option<CheckRun>,
 }
 
 impl BlockReason {
@@ -76,6 +173,32 @@ impl BlockReason {
             Self::CodeownersInvalid { .. } => "codeowners_invalid",
             Self::ConfigChangeNeedsMaintainerApproval => "config_change_needs_maintainer_approval",
             Self::ChangedPathsUnknown { .. } => "changed_paths_unknown",
+            Self::RequiredCheckMissing { .. } => "required_check_missing",
+            Self::RequiredCheckNotSuccessful { .. } => "required_check_not_successful",
+            Self::UnresolvedDiscussions { .. } => "unresolved_discussions",
+        }
+    }
+
+    /// The fixed position of the reason in every list (ADR-0024 §7): the
+    /// screen's "why it is stopped" line is the first one (plan 08).
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::NotOpen => 0,
+            Self::Draft => 1,
+            Self::MergeInProgress => 2,
+            Self::SourceBranchMissing => 3,
+            Self::MergeabilityUnknown => 4,
+            Self::Conflict => 5,
+            Self::FfNotPossible => 6,
+            Self::NothingToMerge => 7,
+            Self::ApprovalsMissing { .. } => 8,
+            Self::CodeownerApprovalMissing { .. } => 9,
+            Self::CodeownersInvalid { .. } => 10,
+            Self::RequiredCheckMissing { .. } => 11,
+            Self::RequiredCheckNotSuccessful { .. } => 12,
+            Self::UnresolvedDiscussions { .. } => 13,
+            Self::ConfigChangeNeedsMaintainerApproval => 14,
+            Self::ChangedPathsUnknown { .. } => 15,
         }
     }
 
@@ -96,6 +219,17 @@ impl BlockReason {
                 Some(format!("line={line} reason={reason}"))
             }
             Self::ChangedPathsUnknown { reason } => Some(format!("reason={reason}")),
+            Self::RequiredCheckMissing { name } => Some(format!("name={name}")),
+            Self::RequiredCheckNotSuccessful {
+                name,
+                status,
+                conclusion,
+            } => Some(format!(
+                "name={name} status={} conclusion={}",
+                status.as_str(),
+                conclusion.map_or("none", CheckConclusion::as_str)
+            )),
+            Self::UnresolvedDiscussions { count } => Some(format!("count={count}")),
             Self::NotOpen
             | Self::Draft
             | Self::MergeInProgress
@@ -135,8 +269,15 @@ pub struct MergeFacts {
     /// head (`None`: not computed yet; the job computes it).
     pub ff_possible: Option<bool>,
     /// M3 R5: the approvals, the rules, CODEOWNERS, the changed paths and
-    /// the committers, as read for this decision.
+    /// the committers, as read for this decision (M3 R6: with the project's
+    /// settings and the protected branch's minimum).
     pub approvals: crate::approvals::ApprovalInputs,
+    /// M3 R6: every check the target's merge rule requires, with its run
+    /// on the head (none required: empty).
+    pub checks: Vec<RequiredCheck>,
+    /// M3 R6: the unresolved discussions when the target's merge rule asks
+    /// for them resolved (`None`: not required).
+    pub discussions: Option<u32>,
 }
 
 /// The proof that `evaluate_merge()` found nothing blocking. No public
@@ -183,6 +324,27 @@ pub fn evaluate_merge(facts: &MergeFacts) -> Result<MergeClearance, Vec<BlockRea
         reasons.push(BlockReason::FfNotPossible);
     }
     reasons.extend(crate::approvals::evaluate(&facts.approvals).blocks);
+    for check in &facts.checks {
+        match check.run {
+            None => reasons.push(BlockReason::RequiredCheckMissing {
+                name: check.name.clone(), // clone: the reason owns its name
+            }),
+            Some(run) if !run.succeeded() => {
+                reasons.push(BlockReason::RequiredCheckNotSuccessful {
+                    name: check.name.clone(), // clone: as above
+                    status: run.status,
+                    conclusion: run.conclusion,
+                })
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(count) = facts.discussions.filter(|n| *n > 0) {
+        reasons.push(BlockReason::UnresolvedDiscussions { count });
+    }
+    // The fixed order of ADR-0024 §7 (stable: within one reason, the
+    // order found — rule names, CODEOWNERS lines, check names).
+    reasons.sort_by_key(BlockReason::rank);
     if reasons.is_empty() {
         Ok(MergeClearance {
             method: facts.method,
@@ -239,6 +401,10 @@ pub fn stored_mergeable(
 }
 
 #[cfg(test)]
+#[path = "evaluate_tests.rs"]
+mod conditions_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -252,6 +418,8 @@ mod tests {
             method: MergeMethod::MergeCommit,
             ff_possible: None,
             approvals: crate::approvals::ApprovalInputs::nothing_required(),
+            checks: Vec::new(),
+            discussions: None,
         }
     }
 
@@ -280,6 +448,8 @@ mod tests {
             method: MergeMethod::FastForward,
             ff_possible: Some(false),
             approvals: crate::approvals::ApprovalInputs::nothing_required(),
+            checks: Vec::new(),
+            discussions: None,
         };
         let reasons = evaluate_merge(&facts).expect_err("blocked");
         let names: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();

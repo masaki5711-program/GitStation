@@ -147,13 +147,16 @@ pub(super) fn decide(
             .with_context("reason", "merge_target_changed")
             .with_context("merge_id", attempt.id));
     }
-    let protection = RefProtection::effective(gate.protection.levels(&stored.target_branch));
+    let protection = RefProtection::of(&gate.protection, &stored.target_branch);
     let ctx = MergeRequestCtx::merging(
         loaded(&gate.facts.project),
         loaded_merge_request(stored),
         protection,
     );
     let proof = prove(&principal, Action::MergeRequestMerge, ctx)?;
+    // M3 R6 (ADR-0024 §4.2 steps 3, 5): a setting changed while the merge
+    // waited is decided again — the method must still be allowed.
+    super::conditions::method_allowed(&gate.approvals.settings, attempt.method)?;
     let head = attempt.head_sha.as_str();
     let recorded = stored.head_sha.as_deref().unwrap_or("");
     if recorded != head {
@@ -168,6 +171,13 @@ pub(super) fn decide(
         .approvals
         .clone() // clone: each gate evaluates its own inputs
         .inputs(stored, &attempt.head_sha, gate.approvals.clone()); // clone: as above
+    let conditions = super::conditions::conditions(
+        &gate.protection,
+        &stored.target_branch,
+        &attempt.head_sha,
+        gate.unresolved_discussions,
+        &super::conditions::NoCheckRuns,
+    );
     let facts = MergeFacts {
         state: stored.state,
         draft: stored.draft,
@@ -177,6 +187,8 @@ pub(super) fn decide(
         method: attempt.method,
         ff_possible,
         approvals,
+        checks: conditions.checks,
+        discussions: conditions.discussions,
     };
     let clearance = evaluate_merge(&facts).map_err(|reasons| blocked(&reasons))?;
     let scopes = match &gate.credential.credential {

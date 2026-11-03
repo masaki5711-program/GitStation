@@ -281,6 +281,10 @@ pub fn mr(cli: &Cli, cmd: &MrCommand, env: EnvFn<'_>, io: &mut Io<'_>) -> Result
             env,
             io,
         ),
+        // M3 R6: the merge status (`mr_conditions.rs`).
+        MrCommand::Status { project, iid } => {
+            crate::mr_conditions::status(cli, (*project, *iid), env, io)
+        }
         // M3 R5: approvals (`mr_approvals.rs`).
         MrCommand::Approve { project, iid, sha } => {
             crate::mr_approvals::approve(cli, (*project, *iid), sha, env, io)

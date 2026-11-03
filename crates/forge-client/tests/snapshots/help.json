@@ -1931,6 +1931,329 @@
           "name": "--project",
           "repeatable": false,
           "required": true
+        }
+      ],
+      "examples": [
+        "gstn merge-settings show --project 7 --json"
+      ],
+      "name": "merge-settings show",
+      "output": {
+        "required": [
+          "project_id",
+          "allowed_methods",
+          "default_method",
+          "delete_source_default",
+          "reset_approvals_on_push",
+          "committer_approvals_excluded",
+          "codeowners",
+          "stored",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-settings"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Show a project's merge settings: the methods allowed and the default, whether the source branch is deleted by default, whether new commits clear approvals, whether committers' approvals are excluded, and CODEOWNERS enforcement (suspended until when)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "An allowed method (repeatable): merge_commit, squash, fast_forward.",
+          "kind": "option",
+          "name": "--allow",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "The default method (one of the allowed).",
+          "kind": "option",
+          "name": "--default",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: delete the source branch after a merge by default.",
+          "kind": "option",
+          "name": "--delete-source-branch",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: new commits end the approvals (false: carry them when the change allows it).",
+          "kind": "option",
+          "name": "--reset-approvals-on-push",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: committers' approvals do not count.",
+          "kind": "option",
+          "name": "--exclude-committer-approvals",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn merge-settings set --project 7 --allow merge_commit --allow squash --default squash"
+      ],
+      "name": "merge-settings set",
+      "output": {
+        "required": [
+          "project_id",
+          "allowed_methods",
+          "default_method",
+          "delete_source_default",
+          "reset_approvals_on_push",
+          "committer_approvals_excluded",
+          "codeowners",
+          "stored",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-settings",
+        "PUT /api/v1/projects/{id}/merge-settings"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Change a project's merge settings (people only; Maintainer). Options left out keep their value; --allow replaces the allowed methods."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "How long, in minutes (1..=1440).",
+          "kind": "option",
+          "name": "--for",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn codeowners-enforcement suspend --project 7 --for 60"
+      ],
+      "name": "codeowners-enforcement suspend",
+      "output": {
+        "properties": {
+          "codeowners": {
+            "required": [
+              "enforced",
+              "suspended_at",
+              "suspended_until"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "project_id",
+          "codeowners"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/merge-settings/codeowners-enforcement"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Suspend CODEOWNERS enforcement for 1..=1440 minutes (people only; Maintainer at or above every protection of the project). It comes back by itself at the expiry. An approved runbook step (runbook codeowners)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn codeowners-enforcement enforce --project 7"
+      ],
+      "name": "codeowners-enforcement enforce",
+      "output": {
+        "properties": {
+          "codeowners": {
+            "required": [
+              "enforced",
+              "suspended_at",
+              "suspended_until"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "project_id",
+          "codeowners"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "PUT /api/v1/projects/{id}/merge-settings/codeowners-enforcement"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Enforce CODEOWNERS again now (people only; Maintainer)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The protection rule's id (from protected-ref list).",
+          "kind": "option",
+          "name": "--rule-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Minimum counted approvals (0..=20).",
+          "kind": "option",
+          "name": "--approvals",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "A required check name (repeatable; replaces the list).",
+          "kind": "option",
+          "name": "--check",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Require no check.",
+          "kind": "flag",
+          "name": "--clear-checks",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: every discussion must be resolved.",
+          "kind": "option",
+          "name": "--resolved-discussions",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "true / false: forbid direct pushes to the branch (FG-GIT-0017).",
+          "kind": "option",
+          "name": "--direct-push-forbidden",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn merge-rule set --project 7 --rule-id 2 --approvals 1 --resolved-discussions true --direct-push-forbidden true"
+      ],
+      "name": "merge-rule set",
+      "output": {
+        "properties": {
+          "merge_rule": {
+            "required": [
+              "required_approvals",
+              "required_checks",
+              "require_resolved_discussions",
+              "direct_push_forbidden"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "pattern",
+          "push_min_role",
+          "merge_rule",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/protected-refs",
+        "PUT /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Set a protected branch rule's merge conditions (people only; Maintainer; never above one's own role): minimum approvals, required checks (ci/, kanflow/, forge/ only; no run reported blocks), resolved discussions, and the direct-push ban (merges still land). Until the Checks API no check can be reported, so a required check blocks every merge (the answer warns `required_checks_unreportable`). Reads the merge rule first: options left out keep their value."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The protection rule's id.",
+          "kind": "option",
+          "name": "--rule-id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "Confirm the removal.",
+          "kind": "flag",
+          "name": "--yes",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn merge-rule remove --project 7 --rule-id 2 --yes"
+      ],
+      "name": "merge-rule remove",
+      "output": {
+        "required": [
+          "removed",
+          "project_id",
+          "rule_id"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "DELETE /api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule"
+      ],
+      "scopes": [
+        "api"
+      ],
+      "summary": "Remove a protected branch rule's merge conditions (people only; Maintainer). --yes confirms."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
         },
         {
           "description": "The source branch (feature/x or refs/heads/feature/x).",
@@ -3102,6 +3425,80 @@
         "read_api"
       ],
       "summary": "Evaluate a merge request's approvals now: how each approval counts (and why not), the approval rules, the CODEOWNERS rules the changes need, and blocked_by (approvals_missing, codeowner_approval_missing, codeowners_invalid, config_change_needs_maintainer_approval, changed_paths_unknown)."
+    },
+    {
+      "args": [
+        {
+          "description": "The project id.",
+          "kind": "option",
+          "name": "--project",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The merge request's number in the project.",
+          "kind": "option",
+          "name": "--iid",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn mr status --project 7 --iid 3 --json"
+      ],
+      "name": "mr status",
+      "output": {
+        "properties": {
+          "checks": {
+            "items": {
+              "required": [
+                "name",
+                "status",
+                "conclusion"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "mergeable": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "required": [
+                "reason",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version",
+          "iid",
+          "head_sha",
+          "target_branch",
+          "method",
+          "mergeable",
+          "reasons",
+          "approvals",
+          "checks",
+          "discussions",
+          "codeowners"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/projects/{id}/merge-requests/{iid}/status"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "Whether a merge request may merge now and every reason it may not, in ADR-0024's fixed order (the first is the one-line reason), with the approvals, the required checks, the discussions and CODEOWNERS enforcement. With --json: the stable merge status contract (schema_version 1, docs/api/merge-status.md) for agents."
     },
     {
       "args": [

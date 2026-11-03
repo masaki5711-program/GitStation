@@ -31,6 +31,9 @@ pub struct MergeGate {
     /// M3 R5: the live approvals with their approvers as they are now, and
     /// the project's approval rules (ADR-0024 §8.6).
     pub approvals: crate::review::approvals::ApprovalFacts,
+    /// M3 R6: the merge request's unresolved discussions now (the merge
+    /// rule's `require_resolved_discussions`, ADR-0024 §7).
+    pub unresolved_discussions: u32,
 }
 
 /// The merge a request asks for.
@@ -84,7 +87,11 @@ pub(super) async fn gate(
     let approvals = tx
         .step(|c| async move { crate::review::approvals::approval_facts_on(c, project, mr).await })
         .await?;
+    let unresolved_discussions = tx
+        .step(|c| async move { crate::review::discussions::unresolved_on(c, mr).await })
+        .await?;
     Ok(MergeGate {
+        unresolved_discussions,
         facts,
         protection,
         mergeability,

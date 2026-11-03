@@ -200,6 +200,15 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
         Command::ApprovalRule { command } => {
             crate::mr_approvals::approval_rule(cli, command, env, io)
         }
+        Command::MergeSettings { command } => {
+            crate::mr_conditions::merge_settings(cli, command, env, io)
+        }
+        Command::CodeownersEnforcement { command } => {
+            crate::mr_conditions::codeowners(cli, command, env, io)
+        }
+        Command::MergeRule { command } => {
+            crate::mr_conditions::merge_rule_cmd(cli, command, env, io)
+        }
         Command::Mr { command } => crate::review::mr(cli, command, env, io),
         Command::Namespace { command } => hosting::namespace(cli, command, env, io),
         Command::User { command } => hosting::user(cli, command, env, io),

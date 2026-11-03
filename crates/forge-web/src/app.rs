@@ -653,7 +653,7 @@ fn content_routes(mut registry: Registry<AppState>) -> Registry<AppState> {
 /// the rule's level as loaded, and decided again inside its transaction
 /// (forge-hosting) on what it locks.
 fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
-    use routes::{members as m, protected_refs as pr};
+    use routes::{members as m, protected_ref_merge_rules as pmr, protected_refs as pr};
     registry
         .route_with(
             Verb::Get,
@@ -771,6 +771,26 @@ fn member_routes(registry: Registry<AppState>) -> Registry<AppState> {
             pr::delete,
         )
         .responds_no_content(Verb::Delete, pr::ONE)
+        // M3 R6 (ADR-0024 §12): a rule's merge conditions.
+        .route_with_body(
+            Verb::Put,
+            pmr::MERGE_RULE,
+            Action::ProtectedRefManage,
+            "Set a protected branch rule's merge conditions: minimum approvals, required checks, resolved discussions, the direct-push ban (people only; Maintainer; never above the caller's role)",
+            pmr::MAX_BODY,
+            pmr::MergeRuleOf,
+            pmr::put,
+        )
+        .responds::<pr::ProtectedRefBody>(Verb::Put, pmr::MERGE_RULE)
+        .route_with(
+            Verb::Delete,
+            pmr::MERGE_RULE,
+            Action::ProtectedRefManage,
+            "Remove a protected branch rule's merge conditions (people only; Maintainer; never above the caller's role)",
+            pmr::MergeRuleOf,
+            pmr::delete,
+        )
+        .responds_no_content(Verb::Delete, pmr::MERGE_RULE)
 }
 
 /// Merge requests (M3 R1a, ADR-0024): the list decided on the project,
@@ -1017,6 +1037,46 @@ fn merge_request_routes(registry: Registry<AppState>) -> Registry<AppState> {
             mr::delete_approval_rule,
         )
         .responds_no_content(Verb::Delete, mr::APPROVAL_RULE)
+        // M3 R6 (ADR-0024 §7, §4.1, §8, §9): the merge status, the
+        // project's merge settings and the time-boxed CODEOWNERS switch.
+        .route_with(
+            Verb::Get,
+            mr::STATUS,
+            Action::MergeRequestRead,
+            "Evaluate whether a merge request may merge now: every blocking reason in a fixed order, the approvals, the required checks, the discussions (a stable contract, schema_version 1; as the repository browse API)",
+            mr::STATUS_OF,
+            mr::status,
+        )
+        .responds::<mr::MergeRequestStatusBody>(Verb::Get, mr::STATUS)
+        .route_with(
+            Verb::Get,
+            mr::MERGE_SETTINGS,
+            Action::ProjectRead,
+            "Read a project's merge settings and CODEOWNERS enforcement (as reading the project)",
+            mr::SettingsProject,
+            mr::merge_settings,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Get, mr::MERGE_SETTINGS)
+        .route_with_body(
+            Verb::Put,
+            mr::MERGE_SETTINGS,
+            Action::MergeSettingsManage,
+            "Replace a project's merge settings: methods, default, source deletion, approvals on push, committers' approvals (people only; Maintainer)",
+            mr::SETTINGS_MAX_BODY,
+            mr::SettingsChangeOf,
+            mr::put_merge_settings,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Put, mr::MERGE_SETTINGS)
+        .route_with_body(
+            Verb::Put,
+            mr::CODEOWNERS_ENFORCEMENT,
+            Action::CodeownersEnforcementToggle,
+            "Suspend CODEOWNERS enforcement for 1 to 1440 minutes or enforce it again (people only; Maintainer at or above every protection of the project)",
+            mr::SETTINGS_MAX_BODY,
+            mr::CodeownersOf,
+            mr::put_codeowners_enforcement,
+        )
+        .responds::<mr::MergeSettingsBody>(Verb::Put, mr::CODEOWNERS_ENFORCEMENT)
 }
 
 /// Group and project writes and the group read (M1 phase 8b MR7a): every

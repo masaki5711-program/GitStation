@@ -47,6 +47,7 @@ mod after_version;
 pub mod approvals;
 pub mod discussions;
 mod fields;
+mod merge_conditions;
 pub mod mergeability;
 pub mod merges;
 pub mod outdated;
@@ -54,8 +55,14 @@ pub mod position;
 mod purge;
 mod version_refs;
 pub mod versions;
+mod versions_carry;
 
-pub use forge_db::review::{PurgeOutcome, RefreshRequest, StoredMergeability, StoredVersion};
+pub use forge_db::review::settings::loosens as settings_loosen_approvals;
+pub use forge_db::review::{
+    CodeownersEnforcement, PurgeOutcome, RefreshRequest, SettingsOutcome, StoredMergeSettings,
+    StoredMergeability, StoredVersion,
+};
+pub use merge_conditions::MergeStatus;
 pub use mergeability::{check, CheckReport, Mergeability};
 pub use merges::{
     evaluate_merge, BlockReason, CredentialRef, MergeAsk, MergeClearance, MergeReport,
@@ -146,9 +153,6 @@ pub struct Review {
     /// M3 R3 re-review: the time one read (or a write's answer) may spend
     /// on `outdated` diffs (`outdated::OUTDATED_BUDGET` unless set).
     outdated_budget: std::time::Duration,
-    /// M3 R4: the merge methods allowed and the defaults (ADR-0024 §4.1;
-    /// the defaults for every project until R6 adds the setting).
-    merge_settings: merges::MergeSettings,
     /// M3 R5: where the approval evaluation reads git (`None`: approving
     /// and merging are `FG-SYS-0001 reason=review_git_unconfigured`).
     review_git: Option<approvals::ReviewGit>,
@@ -258,7 +262,6 @@ impl Review {
             refs: None,
             diffs: None,
             outdated_budget: outdated::OUTDATED_BUDGET,
-            merge_settings: merges::MergeSettings::default(),
             review_git: None,
         }
     }

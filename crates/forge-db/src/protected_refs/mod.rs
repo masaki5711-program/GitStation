@@ -37,6 +37,9 @@ use crate::projects::{
 };
 use crate::{query_error, read_query_error, Db};
 
+mod merge_rules;
+pub use merge_rules::{put_merge_rule_decided, remove_merge_rule_decided, MergeRuleOutcome};
+
 /// The most rules one project may have (ADR-0008 Amendment D4 MR1).
 pub const MAX_RULES: usize = 100;
 
@@ -56,6 +59,54 @@ pub enum RuleChange {
 struct Rule {
     pattern: RefPattern,
     push_min_role: Role,
+}
+
+/// The rows of a project's rules with their merge rules (M3 R6), at most
+/// `MAX_RULES + 1`: the snapshot a push and a merge decide with.
+const SNAPSHOT_SQL: &str = "SELECT p.id, p.pattern, p.push_min_role, m.required_approvals, \
+     m.required_checks, m.require_resolved_discussions, m.direct_push_forbidden \
+     FROM forge.protected_refs p \
+     LEFT JOIN forge.protected_ref_merge_rules m ON m.protected_ref_id = p.id \
+     WHERE p.project_id = $1 ORDER BY p.id LIMIT $2";
+
+/// One snapshot row: the rule and its merge rule's columns (all `None`
+/// without one).
+type SnapshotRow = (
+    i64,
+    String,
+    String,
+    Option<i32>,
+    Option<Vec<String>>,
+    Option<bool>,
+    Option<bool>,
+);
+
+/// The rules of `rows` (`FG-DB-0020` for more than `MAX_RULES` or a row
+/// this build cannot read — a stored merge rule included: never skipped).
+fn snapshot_rules(
+    project: ProjectId,
+    rows: Vec<SnapshotRow>,
+) -> Result<ProtectionRules, ForgeError> {
+    if rows.len() > MAX_RULES {
+        return Err(ForgeError::new(ErrorCode::ProtectedRefDataInvalid)
+            .with_context("reason", "too_many_stored_rules")
+            .with_context("project_id", project.get()));
+    }
+    let rules = rows
+        .into_iter()
+        .map(
+            |(id, pattern, role, approvals, checks, discussions, no_push)| {
+                let rule = parse_row((id, pattern, role))?;
+                let merge = merge_rules::parse_merge(id, approvals, checks, discussions, no_push)?;
+                Ok(ProtectionRule {
+                    pattern: rule.pattern,
+                    push_min_role: rule.push_min_role,
+                    merge: merge.unwrap_or_default(),
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, ForgeError>>()?;
+    Ok(ProtectionRules::for_project(project, rules))
 }
 
 /// `FG-REPO-0013` with its `reason`.
@@ -126,17 +177,13 @@ pub(crate) async fn rules_on(
     conn: &mut PgConnection,
     project: ProjectId,
 ) -> Result<ProtectionRules, ForgeError> {
-    Ok(ProtectionRules::for_project(
-        project,
-        rules_locked(conn, project)
-            .await?
-            .into_iter()
-            .map(|rule| ProtectionRule {
-                pattern: rule.pattern,
-                push_min_role: rule.push_min_role,
-            })
-            .collect(),
-    ))
+    let rows: Vec<SnapshotRow> = sqlx::query_as(SNAPSHOT_SQL)
+        .bind(project.get())
+        .bind(row_limit())
+        .fetch_all(conn)
+        .await
+        .map_err(|e| query_error("protected_refs.rules", e))?;
+    snapshot_rules(project, rows)
 }
 
 /// The project's rules, read inside a change after the project lock.
@@ -346,6 +393,8 @@ pub async fn delete(
     tx.step(|c| lock_project(c, project)).await?;
     let (id, pattern, role) = tx.step(|c| lock_rule_row(c, project, rule)).await?;
     let stored_invalid = parse_row((id, pattern.clone(), role.clone())).is_err(); // clone: the raw text goes into the details
+                                                                                  // M3 R6: its merge rule goes with it (audited by this change).
+    tx.step(|c| merge_rules::delete_with_rule(c, rule)).await?;
     tx.step(|c| async move {
         sqlx::query("DELETE FROM forge.protected_refs WHERE id = $1")
             .bind(rule.get())
@@ -551,6 +600,8 @@ pub async fn delete_decided<P>(
         let Some((_, pattern, role)) = row else {
             return Err(absent_rule());
         };
+        // M3 R6: its merge rule goes with it (audited by this change).
+        tx.step(|c| merge_rules::delete_with_rule(c, rule)).await?;
         tx.step(|c| async move {
             sqlx::query("DELETE FROM forge.protected_refs WHERE id = $1")
                 .bind(rule.get())
@@ -577,6 +628,8 @@ pub struct StoredRule {
     pub id: ProtectedRefId,
     pub pattern: RefPattern,
     pub push_min_role: Role,
+    /// M3 R6: its merge rule (`None`: none).
+    pub merge: Option<forge_core::MergeRule>,
     /// UTC, RFC 3339.
     pub created_at: String,
     pub updated_at: String,
@@ -589,14 +642,28 @@ pub struct StoredRule {
 /// the runbook removes it with `DELETE …/protected-refs/{rule_id}`.
 pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeError> {
     const QUERY: &str = "protected_refs.list";
-    type Row = (i64, String, String, String, String);
+    type Row = (
+        i64,
+        String,
+        String,
+        String,
+        String,
+        Option<i32>,
+        Option<Vec<String>>,
+        Option<bool>,
+        Option<bool>,
+    );
     let rows: Vec<Row> = db
         .within(QUERY, async {
             sqlx::query_as(
-                "SELECT id, pattern, push_min_role, \
-                 to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
-                 to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') \
-                 FROM forge.protected_refs WHERE project_id = $1 ORDER BY id LIMIT $2",
+                "SELECT p.id, p.pattern, p.push_min_role, \
+                 to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+                 to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
+                 m.required_approvals, m.required_checks, m.require_resolved_discussions, \
+                 m.direct_push_forbidden \
+                 FROM forge.protected_refs p \
+                 LEFT JOIN forge.protected_ref_merge_rules m ON m.protected_ref_id = p.id \
+                 WHERE p.project_id = $1 ORDER BY p.id LIMIT $2",
             )
             .bind(project.get())
             .bind(row_limit())
@@ -611,16 +678,20 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
             .with_context("project_id", project.get()));
     }
     rows.into_iter()
-        .map(|(id, pattern, role, created_at, updated_at)| {
-            let rule = parse_row((id, pattern, role))?;
-            Ok(StoredRule {
-                id: ProtectedRefId::new(id),
-                pattern: rule.pattern,
-                push_min_role: rule.push_min_role,
-                created_at,
-                updated_at,
-            })
-        })
+        .map(
+            |(id, pattern, role, created_at, updated_at, approvals, checks, talks, no_push)| {
+                let rule = parse_row((id, pattern, role))?;
+                let merge = merge_rules::parse_merge(id, approvals, checks, talks, no_push)?;
+                Ok(StoredRule {
+                    id: ProtectedRefId::new(id),
+                    pattern: rule.pattern,
+                    push_min_role: rule.push_min_role,
+                    merge,
+                    created_at,
+                    updated_at,
+                })
+            },
+        )
         .collect()
 }
 
@@ -665,9 +736,9 @@ pub async fn rule_state(
 /// no rules (the caller has already loaded it).
 pub async fn rules_for(db: &Db, project: ProjectId) -> Result<ProtectionRules, ForgeError> {
     const QUERY: &str = "protected_refs.rules_for";
-    let rows: Vec<(i64, String, String)> = db
+    let rows: Vec<SnapshotRow> = db
         .within(QUERY, async {
-            sqlx::query_as(RULES_SQL)
+            sqlx::query_as(SNAPSHOT_SQL)
                 .bind(project.get())
                 .bind(row_limit())
                 .fetch_all(db.pool().executor())
@@ -675,16 +746,7 @@ pub async fn rules_for(db: &Db, project: ProjectId) -> Result<ProtectionRules, F
                 .map_err(|e| read_query_error(QUERY, e))
         })
         .await?;
-    Ok(ProtectionRules::for_project(
-        project,
-        parse_rows(project, rows)?
-            .into_iter()
-            .map(|rule| ProtectionRule {
-                pattern: rule.pattern,
-                push_min_role: rule.push_min_role,
-            })
-            .collect(),
-    ))
+    snapshot_rules(project, rows)
 }
 
 /// The minimum push roles of **every** rule of `project` whose pattern

@@ -78,6 +78,50 @@ pub struct ProtectedRefBody {
     /// UTC, RFC 3339.
     pub created_at: String,
     pub updated_at: String,
+    /// M3 R6: the rule's merge conditions (`null`: none).
+    #[schema(required = true)]
+    pub merge_rule: Option<MergeRuleBody>,
+    /// Things to know about the answer (M3 R6 review). Today only
+    /// `required_checks_unreportable`: the merge rule requires checks but no
+    /// check can be reported before the Checks API (C1), so every merge
+    /// into the branch is blocked (`required_check_missing`); with the
+    /// direct-push ban the branch cannot change at all. Remove the check
+    /// names or the merge rule to unblock (runbook merge-blocked). Empty
+    /// otherwise.
+    pub warnings: Vec<String>,
+}
+
+/// The warning of a merge rule requiring checks before the Checks API.
+pub const REQUIRED_CHECKS_UNREPORTABLE: &str = "required_checks_unreportable";
+
+// Built only by `merge_rule_body`; its doc comment is the schema description.
+/// The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the
+/// strictest of the rules matching a branch applies.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MergeRuleBody {
+    /// The minimum counted approvals of a merge into the branch.
+    pub required_approvals: u32,
+    /// Checks that must have succeeded on the merge request's head
+    /// (`ci/`, `kanflow/`, `forge/` only); "no check reported" blocks.
+    pub required_checks: Vec<String>,
+    /// Every discussion of the merge request must be resolved.
+    pub require_resolved_discussions: bool,
+    /// Pushes may not create or move the branch (merges may).
+    pub direct_push_forbidden: bool,
+}
+
+pub(crate) fn merge_rule_body(rule: &forge_core::MergeRule) -> MergeRuleBody {
+    MergeRuleBody {
+        required_approvals: rule.required_approvals,
+        required_checks: rule
+            .required_checks
+            .iter()
+            .map(|c| c.as_str().to_owned())
+            .collect(),
+        require_resolved_discussions: rule.require_resolved_discussions,
+        direct_push_forbidden: rule.direct_push_forbidden,
+    }
 }
 
 /// Every rule of a project, in id order.
@@ -94,6 +138,8 @@ fn rule_body(rule: &StoredRule) -> ProtectedRefBody {
         push_min_role: rule.push_min_role.as_str().to_owned(),
         created_at: rule.created_at.clone(), // clone: the rule is borrowed
         updated_at: rule.updated_at.clone(),
+        merge_rule: rule.merge.as_ref().map(merge_rule_body),
+        warnings: Vec::new(),
     }
 }
 
@@ -118,7 +164,7 @@ fn collection_id(raw_path: &str) -> Result<ProjectId, ForgeError> {
         .ok_or_else(|| param_invalid("id", "not_positive_decimal"))
 }
 
-async fn project_of(
+pub(crate) async fn project_of(
     state: &AppState,
     id: ProjectId,
     viewer: Option<UserId>,
@@ -135,7 +181,7 @@ async fn project_of(
     Ok(Some(projects::loaded(&record)))
 }
 
-fn found<R>(ctx: R) -> Lookup<R> {
+pub(crate) fn found<R>(ctx: R) -> Lookup<R> {
     Lookup::Found {
         ctx,
         canonical: None,
@@ -262,7 +308,11 @@ impl Loader<AppState> for RuleToDelete {
     }
 }
 
-fn respond(ctx: &crate::Ctx, status: StatusCode, body: Result<Value, ForgeError>) -> Response {
+pub(crate) fn respond(
+    ctx: &crate::Ctx,
+    status: StatusCode,
+    body: Result<Value, ForgeError>,
+) -> Response {
     match body {
         Ok(body) => no_store(status, body),
         Err(e) => ctx.fail(e).into_response(),
@@ -270,11 +320,20 @@ fn respond(ctx: &crate::Ctx, status: StatusCode, body: Result<Value, ForgeError>
 }
 
 /// The rule re-read after a committed write.
-async fn written(
+pub(crate) async fn written(
     state: &AppState,
     project: ProjectId,
     rule: ProtectedRefId,
 ) -> Result<Value, ForgeError> {
+    json(written_body(state, project, rule).await?)
+}
+
+/// The rule re-read after a committed write, as a body.
+pub(crate) async fn written_body(
+    state: &AppState,
+    project: ProjectId,
+    rule: ProtectedRefId,
+) -> Result<ProtectedRefBody, ForgeError> {
     let rules = bounded(
         state,
         "protected_ref_list",
@@ -286,7 +345,7 @@ async fn written(
             .with_context("reason", "written_protected_ref_missing")
             .with_context("protected_ref_id", rule.get())
     })?;
-    json(rule_body(rule))
+    Ok(rule_body(rule))
 }
 
 /// `GET /api/v1/projects/{id}/protected-refs` → `200` every rule.

@@ -126,7 +126,9 @@ fn all_lists_every_event_type_once() {
             "merge_request.merged",
             "merge_request.source_branch_deleted",
             "merge_request.approved",
-            "merge_request.unapproved"
+            "merge_request.unapproved",
+            "merge_settings.codeowners_enforcement_changed",
+            "merge_settings.codeowners_enforcement_restored"
         ]
     );
 }

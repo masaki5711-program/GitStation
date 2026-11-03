@@ -1,4 +1,4 @@
-# Runbook: merge-blocked（FG-REVIEW-0007 の承認の理由。関連: FG-REVIEW-0013 / 0014 / 0015）
+# Runbook: merge-blocked（FG-REVIEW-0007 の承認とマージの条件の理由。関連: FG-REVIEW-0010 / 0013 / 0014 / 0015 / 0016、FG-GIT-0017）
 
 M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まるときの読み方。とくに **コミッターの規則** で承認が数えられない理由
 `committer` / `committers_unknown`（ADR-0024 §8 の 3。再レビュー #40 で「副作用は理由の値で見せる」と決めた）。
@@ -8,10 +8,60 @@ M3 R5（ADR-0024 §7・§8）で、承認があるのにマージが止まると
 - マージの要求が FG-REVIEW-0007 MergeBlocked で、`reasons` に `approvals_missing`・`codeowner_approval_missing`・
   `config_change_needs_maintainer_approval`・`changed_paths_unknown` を含む（`details` に内訳）。
 - 利用者から「承認したのに数えられていない」「承認が消えた」と問い合わせがあった。
+- M3 R6: `reasons` に `required_check_missing`・`required_check_not_successful`・`unresolved_discussions` を含む、または
+  `approvals_missing` の内訳が `rule=@protected_branch`（保護ブランチのマージの条件の最低の承認数）。
+- M3 R6: キューにあったマージが `superseded`（`gstn mr merge-status` の `error_code`）で FG-REVIEW-0007 / FG-REVIEW-0010 — 要求の後に
+  マージの条件・設定が変わり、ジョブが判定し直した（ADR-0024 §4.2 の 3・5）。
+
+**まず全部の理由を見る**: `gstn mr status --project <id> --iid <n> --json`（安定した契約、`docs/api/merge-status.md`）。`reasons` は
+ADR-0024 §7 の固定の順で、最初の 1 つが「止まっている理由の 1 行」。
 
 ## Impact
 
 - その MR がマージできない（ほかは影響を受けない）。条件を満たせば自動では動かない: 利用者がもう一度マージを要求する。SEV4 相当。
+
+## マージの条件の理由（M3 R6、保護ブランチのマージの条件 `protected_ref_merge_rules`）
+
+target に一致する保護のルールのマージの条件は **いちばん厳しいものを合わせて** 効く（最低の承認数は最大、必須のチェックは和、
+スレッドと直接の push の禁止はどれかが on なら on）。条件は `GET /api/v1/projects/<id>/protected-refs` の `merge_rule` で見る。
+
+| reason（detail） | 意味 | 対処 |
+|---|---|---|
+| `approvals_missing`（`rule=@protected_branch required=<n> counted=<m>`） | 保護ブランチの最低の承認数。数えられる承認（下の表の理由が無い承認）なら誰のものでも数える（承認のルールとは別に効く） | 承認を集める。数えられない理由は下の表 |
+| `required_check_missing`（`name=<check>`） | 必須のチェックの実行が今の head に **報告されていない**。報告が無いことは成功ではない（ADR-0024 §10）。C1（Checks API）が入るまでは報告の経路が無いので、必須のチェックを設定した保護ブランチには **マージできない**（設定の答えに `warnings: ["required_checks_unreportable"]`、gstn は警告の 1 行） | 下の「必須のチェックで動かなくなったブランチ」 |
+| `required_check_not_successful`（`name=… status=… conclusion=…`） | 実行はあるが `completed` かつ `success` でない（`neutral` も満たさない、実行中も満たさない） | チェックを直して再実行する |
+| `unresolved_discussions`（`count=<n>`） | マージの条件がスレッドの解決を求め、未解決のスレッドが n 件ある | スレッドを解決する（MR の作成者は他人のスレッドを解決できない。ADR-0024 §12） |
+
+関連する拒否:
+- 必須のチェックに `ext/` の名前を設定しようとした → FG-REVIEW-0016（必須にできるのは `ci/`・`kanflow/`・`forge/` だけ）。
+- 作業項目のリンクの条件（`require_work_item_link`）は I1 まで設定できない（FG-WEB-0006 `rule=unavailable_until_i1`）。
+- 保護ブランチへの直接の push が FG-GIT-0017 で拒まれた → マージの条件の `direct_push_forbidden`。MR を作ってマージする（マージは禁止の
+  影響を受けない）。CODEOWNERS が壊れて MR も通らないときは runbook codeowners の一時停止。
+- キューにあったマージが FG-REVIEW-0010 で `superseded` → 要求の後にプロジェクトの設定（`gstn merge-settings show`）がその方式を
+  許さなくなった。許された方式でもう一度要求する。
+
+### 必須のチェックで動かなくなったブランチ（C1 の前）
+
+必須のチェックと直接の push の禁止の両方があると、マージも push もできずブランチが動かない。`[MUTATING — needs approval]`
+そのブランチの保護のルールの水準以上の Maintainer が、次のどちらかを行う（どちらも監査の行 `protected_ref.merge_rule_put` /
+`.merge_rule_removed` が残る）:
+
+1. チェックの名前だけを外す: `gstn merge-rule set --project <id> --rule-id <n> --clear-checks`（ほかの条件はそのまま）。
+2. マージの条件ごと消す: `gstn merge-rule remove --project <id> --rule-id <n> --yes`。
+
+ルールの番号は `gstn protected-ref list --project <id> --json` の `merge_rule` が付いた行。戻し方: 同じコマンドでチェックの名前を
+付け直す（C1 で提供者が報告できるようになってから）。
+
+### 承認の引き継ぎ（`reset_approvals_on_push = false`、ADR-0024 §8.2）
+
+プロジェクトの設定で「新しいコミットで承認を消す」を切ると、版の記録が承認を新しい head へ写すことがある（新しい行の `carried_from`、
+イベント `merge_request.approved` の `carried_from` と `uncounted_reason=carried`。古い行は `revoked_reason=carried`）。
+**写さない**（従来どおり `new_commits` で消す）のは: target が保護ブランチ、**その承認が与えられた head**（写された承認は
+`carried_from` をたどった最初の承認の head。ログの `approved_head`）からの変更が設定のファイル（`.forge/**` など）か
+target の CODEOWNERS の行が覆うパスに触れる、変更を読み切れない（ログ `forge.review.approvals_carry_decided` の `reason` =
+`target_protected` / `config_path` / `owned_path` / `changes_unknown` / `codeowners_unknown`、R6 のレビューで足した `special_path`（`.gitmodules`・`.gitattributes`・`.lfsconfig`）/ `submodule` / `symlink` / `mode_change`（実行ビットを含む）/ `binary_file` / `too_many_files`（51 以上）/ `too_many_lines`（追加と削除の合計 1 001 以上）、読めなかった入力は
+`forge.review.approvals_carry_unread` の warn。最初の git の失敗・時間切れで残りの承認した head は読まずに消し、warn は
+1 回だけ `unread_heads`（読めなかった head の数）付きで出る）。写した承認も数えるかは評価の時点で決まる。
 
 ## 承認が数えられない理由（`gstn mr approvals --json` の `approvals[].uncounted_reason`）
 
@@ -54,7 +104,11 @@ R5 の 4 回目から、コミッターは push を受けた時点で記録す�
 
 ## Mitigate
 
-1. `committer`: そのコミットを push していない別のレビュアーに承認を頼む（規則は既定で有効。プロジェクトの設定で切る口は R6）。
+1. `committer`: そのコミットを push していない別のレビュアーに承認を頼む（規則は既定で有効。M3 R6 からプロジェクトの設定
+   `committer_approvals_excluded` で切れる: `gstn merge-settings set --project <id> --exclude-committer-approvals false`、Maintainer。
+   切るとコミッターの承認も数え、`committers_unknown` でも止まらない — レビューの独立性を落とす判断なので、プロジェクトの決定として残す。
+   承認の規則を緩める変更（これと `reset_approvals_on_push` を off）は、プロジェクトの保護ブランチの最大の水準以上のロールが要る
+   （足りなければ FG-AUTH-0003 `above_own_role`））。
 2. `committers_unknown`: 行の無いコミットに **新しい id を与えて** push し直す（作成者が `git commit --amend` または
    `git rebase --force-rebase <target>` のあと `git push --force-with-lease`。新しい id のコミットはその push の行を持つ）。
    同じコミットの push し直し・別名のブランチへの push は行を書かない（もう届くコミット）。記録に失敗した push は

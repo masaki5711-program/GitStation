@@ -138,7 +138,26 @@ async fn refresh_locked(
             Some(tip) => {
                 let mut ctx = ChangeContext::new(Actor::System, request_id.clone()); // clone: the context owns it
                 ctx.actor_label = Some(ACTOR_LABEL.to_owned());
-                let done = review::record_mr_version(db, &ctx, mr, &tip, request.pushed_by).await?;
+                // M3 R6 (ADR-0024 §8.2): may the new head carry the approvals?
+                let carry = crate::versions_carry::carry_plan(
+                    db,
+                    refs,
+                    lock.deadline(),
+                    repo,
+                    stored,
+                    &tip,
+                    request_id,
+                )
+                .await?;
+                let done = review::record_mr_version_carrying(
+                    db,
+                    &ctx,
+                    mr,
+                    &tip,
+                    request.pushed_by,
+                    carry.as_ref(),
+                )
+                .await?;
                 if let VersionOutcome::PurgedHead { version } = done {
                     tracing::warn!(
                         target: "forge_review",

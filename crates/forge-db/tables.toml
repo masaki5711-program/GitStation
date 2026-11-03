@@ -340,6 +340,27 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 
+# ── M3 R6: merge settings and protected-ref merge rules (ADR-0024 §4.1, §8, §9,
+# §12), audited on their project ──
+[tables.merge_settings]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+# M3 R6 review: the worker's scan order (20261112100100), bookkeeping only.
+unaudited_columns = ["codeowners_restore_seen_at"]
+txn_audited_columns = []
+
+[tables.protected_ref_merge_rules]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
 # M3 R5 round 4: the commits each push introduced (the committer rule's source).
 [tables.push_commits]
 guarded = false

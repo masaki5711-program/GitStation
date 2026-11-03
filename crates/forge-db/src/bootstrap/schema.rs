@@ -572,6 +572,9 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.approval_rule_approvers", operational()),
         ("forge.push_unlisted_refs", operational()),
         ("forge.push_commits", operational()),
+        // ── M3 R6: merge conditions, removed by the purge (20261112100000) ──
+        ("forge.merge_settings", operational()),
+        ("forge.protected_ref_merge_rules", operational()),
     ]
 }
 
@@ -725,6 +728,9 @@ const LATER_TABLES: &[&str] = &[
     "push_unlisted_refs",
     // ── M3 R5 round 4 (migration 20261111100300) ──
     "push_commits",
+    // ── M3 R6: merge conditions (migration 20261112100000) ──
+    "merge_settings",
+    "protected_ref_merge_rules",
 ];
 
 /// Every table the first migration creates.

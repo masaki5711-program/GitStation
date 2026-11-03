@@ -29,6 +29,9 @@ fn review_commands() -> Vec<String> {
         "unapprove_mr",
         "put_approval_rule_mr",
         "remove_approval_rule_mr",
+        // M3 R6: the merge settings and the CODEOWNERS switch.
+        "put_merge_settings_mr",
+        "toggle_codeowners_mr",
     ]
     .iter()
     .map(|c| format!("{c}{}{}", "_decided", "("))

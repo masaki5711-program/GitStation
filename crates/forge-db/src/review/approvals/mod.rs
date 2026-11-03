@@ -30,8 +30,8 @@ use crate::{query_error, read_query_error, Db};
 mod commands;
 mod rules;
 
-pub(crate) use commands::revoke_on;
 pub use commands::{approve_mr_decided, unapprove_mr_decided, ApproveOutcome, Classify};
+pub(crate) use commands::{carry_some_on, revoke_on};
 pub use rules::{
     put_approval_rule_mr_decided, remove_approval_rule_mr_decided, NewApprovalRule, RuleOutcome,
     MAX_RULES, MAX_RULE_APPROVERS,
@@ -85,6 +85,12 @@ pub struct StoredApprovalRule {
 pub struct ApprovalFacts {
     pub approvals: Vec<ApproverFacts>,
     pub rules: Vec<StoredApprovalRule>,
+    /// M3 R6: the project's merge settings (whether committers' approvals
+    /// are excluded, whether CODEOWNERS is enforced now).
+    pub settings: crate::review::settings::StoredMergeSettings,
+    /// M3 R6: the project's protection rules (the target's merge rule
+    /// carries the minimum approvals, ADR-0024 §8.6).
+    pub protection: forge_core::ProtectionRules,
 }
 
 /// The most live approvals one merge request holds (`FG-REVIEW-0015`,
@@ -144,6 +150,102 @@ impl ApprovalRow {
                 .transpose()?,
         })
     }
+}
+
+/// A live approval and the head a person gave it on (M3 R6 review round
+/// 2): a carried approval's `carried_from` chain followed back to the
+/// approval without one. The carry limits of ADR-0024 §8.2 are measured
+/// from this head — cumulative over every carried push, never per push.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedHead {
+    pub approval: ApprovalId,
+    /// `None`: the chain is longer than [`MAX_CARRY_HOPS`] (or leaves the
+    /// merge request) — never carried (fail closed: the approval ends).
+    pub approved_head: Option<ObjectId>,
+}
+
+/// The most `carried_from` hops followed back to the approval a person
+/// gave (one per carried push; the recursion's bound). A longer chain is
+/// never carried again.
+pub const MAX_CARRY_HOPS: i32 = 1_000;
+
+/// The [`ApprovedHead`] of every live approval of `mr`, oldest first.
+/// More than [`MAX_APPROVALS`] is `FG-SYS-0001 reason=approvals_over_cap`.
+pub(crate) async fn approved_heads_on(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+) -> Result<Vec<ApprovedHead>, ForgeError> {
+    approved_heads_capped_on(conn, mr, MAX_CARRY_HOPS).await
+}
+
+/// [`approved_heads_on`] following at most `max_hops` hops.
+pub(crate) async fn approved_heads_capped_on(
+    conn: &mut PgConnection,
+    mr: MergeRequestId,
+    max_hops: i32,
+) -> Result<Vec<ApprovedHead>, ForgeError> {
+    // What holds a chain together: carried_from is a foreign key to an
+    // approval, fixed at insert (the approvals guard refuses any change to
+    // it), and forge-db sets it only in `carry_on`, to the id of a live
+    // approval of the same merge request it just ended (no caller supplies
+    // it). The database does not enforce "older" or "same merge request",
+    // so the walk stays on this merge request's rows and stops after
+    // `max_hops` hops: a chain that does not reach an approval without
+    // carried_from by then has no approved head (never carried).
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+        "WITH RECURSIVE chain (live_id, carried_from, head_sha, hops) AS ( \
+             SELECT id, carried_from, head_sha, 0 FROM forge.merge_request_approvals \
+             WHERE merge_request_id = $1 AND revoked_at IS NULL \
+           UNION ALL \
+             SELECT c.live_id, a.carried_from, a.head_sha, c.hops + 1 \
+             FROM chain c JOIN forge.merge_request_approvals a \
+               ON a.id = c.carried_from AND a.merge_request_id = $1 \
+             WHERE c.hops < $3 \
+         ) \
+         SELECT live_id, min(head_sha) FILTER (WHERE carried_from IS NULL) \
+         FROM chain GROUP BY live_id ORDER BY live_id LIMIT $2",
+    )
+    .bind(mr.get())
+    .bind(MAX_APPROVALS + 1)
+    .bind(max_hops)
+    .fetch_all(conn)
+    .await
+    .map_err(|e| query_error("review.approved_heads", e))?;
+    if rows.len() as i64 > MAX_APPROVALS {
+        return Err(ForgeError::new(ErrorCode::Internal)
+            .with_context("reason", "approvals_over_cap")
+            .with_context("merge_request_id", mr.get()));
+    }
+    rows.into_iter()
+        .map(|(id, head)| {
+            Ok(ApprovedHead {
+                approval: ApprovalId::new(id),
+                approved_head: head
+                    .map(|h| ObjectId::parse(&h))
+                    .transpose()
+                    .map_err(|_| stored_invalid("stored_approval_sha_invalid", id))?,
+            })
+        })
+        .collect()
+}
+
+/// [`approved_heads_on`] on the read pool (the version job's carry
+/// decision, before the merge request is locked; forge-db reads them again
+/// under the lock).
+pub async fn approved_heads(db: &Db, mr: MergeRequestId) -> Result<Vec<ApprovedHead>, ForgeError> {
+    const QUERY: &str = "review.approved_heads";
+    db.within(QUERY, async {
+        let mut tx = db
+            .pool()
+            .executor()
+            .begin()
+            .await
+            .map_err(|e| read_query_error(QUERY, e))?;
+        let heads = approved_heads_on(&mut tx, mr).await?;
+        tx.commit().await.map_err(|e| read_query_error(QUERY, e))?;
+        Ok(heads)
+    })
+    .await
 }
 
 /// The live approvals of `mr`, oldest first.
@@ -232,7 +334,14 @@ pub(crate) async fn approval_facts_on(
     let live = live_approvals_on(&mut *conn, mr).await?;
     let approvals = approvers_on(&mut *conn, project, live).await?;
     let rules = rules::rules_on(&mut *conn, project).await?;
-    Ok(ApprovalFacts { approvals, rules })
+    let settings = crate::review::settings::settings_on(&mut *conn, project).await?;
+    let protection = crate::protected_refs::rules_on(&mut *conn, project).await?;
+    Ok(ApprovalFacts {
+        approvals,
+        rules,
+        settings,
+        protection,
+    })
 }
 
 /// [`approval_facts_on`] in one transaction on the read pool (the approval
@@ -361,14 +470,14 @@ pub async fn owners(
 ) -> Result<Owners, ForgeError> {
     const QUERY: &str = "review.codeowners_owners";
     db.within(QUERY, async {
-        let users: Vec<(String, i64)> =
-            sqlx::query_as(
-                "SELECT username, id FROM forge.users WHERE username = ANY($1)                  AND state = 'active'",
-            )
-                .bind(usernames)
-                .fetch_all(db.pool().executor())
-                .await
-                .map_err(|e| read_query_error(QUERY, e))?;
+        let users: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT username, id FROM forge.users WHERE username = ANY($1) \
+             AND state = 'active'",
+        )
+        .bind(usernames)
+        .fetch_all(db.pool().executor())
+        .await
+        .map_err(|e| read_query_error(QUERY, e))?;
         let groups: Vec<(String, i64)> = sqlx::query_as(
             "SELECT full_path, owner_id FROM forge.namespaces \
              WHERE kind = 'group' AND full_path = ANY($1)",

@@ -233,6 +233,8 @@ async fn world() -> World {
         },
     )
     .with_smart_http(smart)
+    // M3 R6: the protected-ref routes (merge rules).
+    .with_hosting(forge_hosting::Hosting::new(t.db.clone()))
     .with_review(
         Review::new(t.db.clone(), Arc::new(browser.clone()))
             .with_version_refs(refs.clone())
@@ -770,5 +772,220 @@ async fn the_approval_rule_routes_manage_rules_that_block_the_merge() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    w.t.drop_now().await;
+}
+
+// ── M3 R6: merge settings, the CODEOWNERS switch, merge rules, the status ──
+
+impl World {
+    fn project_uri(&self, tail: &str) -> String {
+        format!("/api/v1/projects/{}{tail}", self.project)
+    }
+}
+
+/// ADR-0024 §4.1, §12: anyone who reads the project reads the settings
+/// (the defaults first); only a Maintainer (people only) replaces them;
+/// a default the methods do not allow is FG-WEB-0006; the merge route then
+/// uses the project's default method.
+#[tokio::test]
+async fn the_merge_settings_routes_read_and_write_the_settings() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let uri = w.project_uri("/merge-settings");
+    let (status, body) = send(w.router.clone(), "GET", &uri, w.dev.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["allowed_methods"], json!(["merge_commit", "squash"]));
+    assert_eq!(body["codeowners"]["enforced"], true);
+    assert_eq!(body["stored"], false);
+    let ff_only = json!({
+        "allowed_methods": ["fast_forward"],
+        "default_method": "fast_forward",
+        "delete_source_default": false,
+        "reset_approvals_on_push": true,
+        "committer_approvals_excluded": true
+    });
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &uri,
+        w.dev.clone(),
+        Some(ff_only.clone()),
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let mut bad = ff_only.clone();
+    bad["default_method"] = json!("squash");
+    let (status, body) = send(w.router.clone(), "PUT", &uri, olga.clone(), Some(bad)).await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    let (status, body) = send(w.router.clone(), "PUT", &uri, olga.clone(), Some(ff_only)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["default_method"], "fast_forward");
+    assert_eq!(body["stored"], true);
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["method"], "fast_forward");
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §9: the CODEOWNERS switch needs a Maintainer and an expiry of
+/// 1..=1440 minutes (FG-AUTH-0003 otherwise); a suspension shows its end
+/// and is an event; enforcing again restores it.
+#[tokio::test]
+async fn the_codeowners_route_suspends_for_a_bounded_time_only() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let uri = w.project_uri("/merge-settings/codeowners-enforcement");
+    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let (status, body) = put(w.dev.clone(), json!({"enforced": false, "for_minutes": 60})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    for refused in [
+        json!({"enforced": false}),
+        json!({"enforced": false, "for_minutes": 1441}),
+        json!({"enforced": false, "for_minutes": 0}),
+    ] {
+        let (status, body) = put(olga.clone(), refused.clone()).await;
+        assert_eq!(
+            (status, code(&body)),
+            (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+            "{refused} {body}"
+        );
+    }
+    let (status, body) = put(olga.clone(), json!({"enforced": false, "for_minutes": 60})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["codeowners"]["enforced"], false);
+    assert!(body["codeowners"]["suspended_until"].is_string(), "{body}");
+    let events =
+        w.t.json_rows(
+            "SELECT payload FROM forge.events \
+             WHERE event_type = 'merge_settings.codeowners_enforcement_changed'",
+        )
+        .await;
+    assert_eq!(events.len(), 1);
+    let (status, body) = put(olga.clone(), json!({"enforced": true})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["codeowners"]["enforced"], true);
+    w.t.drop_now().await;
+}
+
+/// ADR-0024 §7, §10, §11, §12: a merge rule refuses `ext/` checks
+/// (FG-REVIEW-0016) and the work item link (FG-WEB-0006); set, it is
+/// listed with its rule and the status (the stable contract) shows every
+/// reason; the merge is refused with them; removed, nothing blocks.
+#[tokio::test]
+async fn the_merge_rule_routes_and_the_status_contract() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "developer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert!(created["merge_rule"].is_null());
+    let rule = created["id"].as_i64().expect("rule id");
+    let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let put = |who: Caller, body: Value| send(w.router.clone(), "PUT", &uri, who, Some(body));
+    let (status, body) = put(olga.clone(), json!({"required_checks": ["ext/sonar"]})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0016"),
+        "{body}"
+    );
+    let (status, body) = put(olga.clone(), json!({"require_work_item_link": true})).await;
+    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
+    let (status, body) = put(w.dev.clone(), json!({"required_approvals": 1})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::FORBIDDEN, "FG-AUTH-0003"),
+        "{body}"
+    );
+    let wanted = json!({
+        "required_approvals": 1,
+        "required_checks": ["ci/gates"],
+        "require_resolved_discussions": true
+    });
+    let (status, body) = put(olga.clone(), wanted).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["merge_rule"]["required_checks"], json!(["ci/gates"]));
+    // R6 review: no check can be reported before the Checks API.
+    assert_eq!(body["warnings"], json!(["required_checks_unreportable"]));
+    let (_, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/protected-refs"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(list["rules"][0]["merge_rule"]["required_approvals"], 1);
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["schema_version"], 1);
+    assert_eq!(s["mergeable"], false);
+    let reasons: Vec<&str> = s["reasons"]
+        .as_array()
+        .expect("reasons")
+        .iter()
+        .filter_map(|r| r["reason"].as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        ["approvals_missing", "required_check_missing"],
+        "{s}"
+    );
+    assert_eq!(s["checks"][0]["name"], "ci/gates");
+    assert!(s["checks"][0]["status"].is_null(), "no run reported");
+    assert_eq!(s["discussions"]["unresolved"], 0);
+    assert_eq!(s["method"], "merge_commit");
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0007"),
+        "{body}"
+    );
+    let (status, _) = send(w.router.clone(), "DELETE", &uri, olga.clone(), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(s["mergeable"], true, "{s}");
+    assert_eq!(s["reasons"], json!([]));
+    // An outsider gets the not-found answer, as for the merge request.
+    let (status, body) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.outsider.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::NOT_FOUND, "FG-REPO-0005"),
+        "{body}"
+    );
     w.t.drop_now().await;
 }

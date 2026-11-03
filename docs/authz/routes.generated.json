@@ -440,6 +440,14 @@
     "word": "fixed"
   },
   {
+    "action": "MergeRequestRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-requests/{iid}/status",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "MergeRequestUnapprove",
     "method": "POST",
     "path": "/api/v1/projects/{id}/merge-requests/{iid}/unapprove",
@@ -472,6 +480,30 @@
     "word": "fixed"
   },
   {
+    "action": "ProjectRead",
+    "method": "GET",
+    "path": "/api/v1/projects/{id}/merge-settings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "MergeSettingsManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/merge-settings",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "CodeownersEnforcementToggle",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/merge-settings/codeowners-enforcement",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
     "action": "ProtectedRefList",
     "method": "GET",
     "path": "/api/v1/projects/{id}/protected-refs",
@@ -499,6 +531,22 @@
     "action": "ProtectedRefManage",
     "method": "DELETE",
     "path": "/api/v1/projects/{id}/protected-refs/{rule_id}",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "PUT",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
+    "public": false,
+    "scope": "fixed",
+    "word": "fixed"
+  },
+  {
+    "action": "ProtectedRefManage",
+    "method": "DELETE",
+    "path": "/api/v1/projects/{id}/protected-refs/{rule_id}/merge-rule",
     "public": false,
     "scope": "fixed",
     "word": "fixed"

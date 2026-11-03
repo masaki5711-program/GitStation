@@ -178,28 +178,71 @@ impl RefKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RefProtection {
     /// Minimum role allowed to push (create / fast-forward). Private: the
-    /// only constructor is `effective`, so "strictest rule wins" cannot be
-    /// bypassed by building a protection from the first matching rule.
+    /// constructors are `effective` and `of`, so "strictest rule wins"
+    /// cannot be bypassed by building a protection from the first matching
+    /// rule.
     push_min_role: Role,
+    /// M3 R6: a matching rule's merge rule forbids direct pushes (the branch
+    /// changes through merge requests only; ADR-0024 §4.3, §12).
+    direct_push_forbidden: bool,
 }
 
 impl RefProtection {
     /// The protection in effect when several rules match one ref: the
     /// **strictest** (highest minimum role). Adding a rule can therefore never
     /// loosen an existing protection (ADR-0010 amendment). The lookup layer
-    /// must build the push resource only through this function, matching rule
-    /// patterns case-insensitively (`MAIN` and `main` collide on
-    /// case-insensitive file systems).
+    /// must build the push resource only through this function (or [`of`],
+    /// which adds the merge rules), matching rule patterns case-insensitively
+    /// (`MAIN` and `main` collide on case-insensitive file systems).
+    ///
+    /// [`of`]: RefProtection::of
     pub fn effective(levels: impl IntoIterator<Item = Role>) -> Option<RefProtection> {
-        levels
-            .into_iter()
-            .max()
-            .map(|push_min_role| RefProtection { push_min_role })
+        levels.into_iter().max().map(|push_min_role| RefProtection {
+            push_min_role,
+            direct_push_forbidden: false,
+        })
+    }
+
+    /// The protection `rules` put on `name`: the strictest minimum role of
+    /// every matching rule and, since M3 R6, the direct-push ban when any
+    /// matching rule's merge rule has it (`ProtectionRules::merge_rule`).
+    /// What a push and a merge decide with.
+    pub fn of(rules: &forge_core::ProtectionRules, name: &forge_core::RefName) -> Option<Self> {
+        Self::effective(rules.levels(name)).map(|p| RefProtection {
+            direct_push_forbidden: rules.merge_rule(name).direct_push_forbidden,
+            ..p
+        })
+    }
+
+    /// The same protection with direct pushes forbidden (it only ever
+    /// tightens; the matrix fixtures and tests).
+    #[must_use]
+    pub fn forbidding_direct_push(self) -> Self {
+        RefProtection {
+            direct_push_forbidden: true,
+            ..self
+        }
     }
 
     pub fn push_min_role(&self) -> Role {
         self.push_min_role
     }
+
+    /// A push may not create or move the ref (M3 R6).
+    pub fn direct_push_forbidden(&self) -> bool {
+        self.direct_push_forbidden
+    }
+}
+
+/// A change of a project's CODEOWNERS enforcement
+/// (`CodeownersEnforcementToggle`, M3 R6, ADR-0024 §9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeownersToggle {
+    /// Enforce CODEOWNERS again.
+    Enforce,
+    /// Suspend it for `minutes` (`None`: no expiry asked — refused; more
+    /// than 24 hours or 0 — refused).
+    Suspend { minutes: Option<u32> },
 }
 
 /// Where a membership is changed.
@@ -354,6 +397,26 @@ pub enum Resource {
         project: ProjectView,
         mr_author: UserId,
         started_by: UserId,
+    },
+    /// A change of a project's CODEOWNERS enforcement
+    /// (`CodeownersEnforcementToggle`, M3 R6, ADR-0024 §9):
+    /// `highest_protection` is the highest minimum push role of the
+    /// project's protection rules (the `above_own_role` check), read with
+    /// the project.
+    CodeownersEnforcement {
+        project: ProjectView,
+        highest_protection: Option<Role>,
+        change: CodeownersToggle,
+    },
+    /// A change of a project's merge settings (`MergeSettingsManage`, M3
+    /// R6 review): `loosens` when it turns off a rule of the approvals
+    /// (`committer_approvals_excluded` or `reset_approvals_on_push` from
+    /// on to off, compared with the settings as stored);
+    /// `highest_protection` as for the CODEOWNERS switch.
+    MergeSettingsChange {
+        project: ProjectView,
+        highest_protection: Option<Role>,
+        loosens: bool,
     },
     /// A path that resolved to a namespace (`PathResolve`), decided by
     /// whether the caller can see it — not by a read role (ADR-0015).

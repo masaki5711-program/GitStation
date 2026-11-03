@@ -118,6 +118,14 @@ async fn every_audited_table_has_its_audit_trigger() {
                 unaudited_columns: s(&["updated_at"]),
                 txn_audited_columns: vec![],
             },
+            // M3 R6: merge settings and merge rules, on the project.
+            AuditedTable {
+                name: "merge_settings".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: s(&["codeowners_restore_seen_at"]),
+                txn_audited_columns: vec![],
+            },
             AuditedTable {
                 name: "namespace_tombstones".into(),
                 audit_resource: AuditResource::Column("cause_type".into()),
@@ -144,6 +152,13 @@ async fn every_audited_table_has_its_audit_trigger() {
                 audit_resource: AuditResource::Literal("project".into()),
                 audit_id_column: "id".into(),
                 unaudited_columns: s(&["updated_at"]),
+                txn_audited_columns: vec![],
+            },
+            AuditedTable {
+                name: "protected_ref_merge_rules".into(),
+                audit_resource: AuditResource::Literal("project".into()),
+                audit_id_column: "project_id".into(),
+                unaudited_columns: vec![],
                 txn_audited_columns: vec![],
             },
             AuditedTable {
