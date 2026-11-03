@@ -146,7 +146,7 @@ actions! {
     /// `GET /api/v1/projects/{id}/commits/{sha}/checks`: as `RepoBrowse`
     /// (`read_api`).
     CheckRead,
-    /// `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-namespaces/{ns}`
+    /// `PUT|DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{ns}`
     /// (`Resource::ServiceAccount`): grant or revoke a check namespace
     /// (`ci`, `kanflow`) to a service account. Administrators, people only
     /// (who may report a merge condition is a person's decision); `api` +

@@ -1642,7 +1642,7 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   `ext/` は誰にも `ext_namespace_unavailable`（人の外部の道具の経路は後の MR で決める）。拒否は新しいコードを作らず
   `FG-AUTH-0003` と `reason`（§10 の「CheckNamespaceDenied」は作らない）。見えないプロジェクトは 404、削除待ちは FG-REPO-0006、
   `read_api` だけは FG-AUTH-0002。`CheckRead`（`read_api`）は `RepoBrowse` と同じ。割り当ての管理 `CheckNamespaceGrantManage`
-  （`PUT|DELETE /api/v1/admin/service-accounts/{id}/check-namespaces/{ns}`、管理者・人だけ）は S0 に無かったのでここに入れた。
+  （`PUT|DELETE /api/v1/admin/service-accounts/{id}/check-grants/{project_id}/{ns}`（レビューでプロジェクトごとに改訂）、管理者・人だけ）は S0 に無かったのでここに入れた。
   読み取りは `ServiceAccountRead`。権限の表は `matrix_rows_checks.rs`。
 - **二度の判定**: ルートが `CheckRunCtx`（プロジェクト・コミット・名前が証明の id）で証明し、forge-checks がトランザクションの中で
   プロジェクト・ロール・アカウント・割り当てを読み直して `reconfirm` する（割り当ての取り消し・メンバーからの削除が間に入れば拒否）。
@@ -1661,7 +1661,7 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
   そのまま）。判定は名前空間の単位（プロジェクトのメンバーかまでは見ない）。`forge/` は X2 まで常に入る。`forge doctor` の
   `checks.reporters` は、必須のチェックに使われている名前空間に報告する主体が無いと WARN（FG コードなし）。
 - **本文の上限**: JSON のルートの上限（64 KiB）を超えない。要約 64 KiB は DB の上限で、本文全体はそれより小さい（超えると FG-WEB-0009）。
-- **gstn**: `checks report|list`、`admin service-account check-namespaces|grant-checks|revoke-checks`（C-1 の表、登録簿、help の
+- **gstn**: `checks report|list`、`admin service-account check-grants|grant-checks|revoke-checks（`--project` 付き。レビューで改訂）`（C-1 の表、登録簿、help の
   スナップショット）。`merge-rule set` の警告は報告できない名前を出す。
 - **残したこと**: `ext/` の書き込みの経路（人の外部の道具。`sha_stakeholders` の規則とともに）、`forge/` の内部の書き込み（X2）、
   target が進んだときの「古い」チェック（M4、計画 04 M-2）、決定的な危険の層（`forge/risk`、M-6）、画面での表示（U-series）。

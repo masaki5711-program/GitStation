@@ -252,7 +252,7 @@ impl Checks {
         checks::check_runs(&self.db, project, &commit).await
     }
 
-    /// `PUT` (`grant = true`) / `DELETE …/check-namespaces/{namespace}`
+    /// `PUT` (`grant = true`) / `DELETE …/check-grants/{project_id}/{namespace}`
     /// (`CheckNamespaceGrantManage`): decided again on the account and the
     /// target as locked in the write.
     pub async fn change_grant(
