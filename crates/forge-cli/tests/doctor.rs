@@ -74,6 +74,12 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         // M3 S0: no service account yet.
         "ok    service_accounts.tokens_expiring",
         "ok    service_accounts.ownerless",
+        // M3 I1c: no integration yet; the sequencer never ran (no feed
+        // state); the seal sink comparison is off in M3 (always warns).
+        "ok    integrations.feed_lag 0 integration(s)",
+        "skip  subscribers.work-item-sync no feed state yet",
+        "skip  events.retention no feed state yet",
+        "warn  feed.sink_compare feed.require_sink_compare=false",
         "ok    storage",
         "ok    git",
     ] {
@@ -752,4 +758,68 @@ fn doctor_reports_an_unreachable_database_and_a_missing_storage_root() {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
     assert!(err.matches("FG-DB-0001").count() >= 1, "{err}");
     assert!(err.contains("FG-REPO-") || err.contains("FG-SYS-"), "{err}");
+}
+
+// ── M3 I1c: the event feed's epoch (FG-DB-0014) ─────────────────────────
+/// `forge admin events new-epoch` rotates the feed's epoch through the
+/// maintenance login, logs FG-DB-0014 and prints both epochs; without
+/// `database.maint_url` it is a configuration error and changes nothing.
+#[test]
+fn admin_events_new_epoch_rotates_through_forge_maint() {
+    let rt = runtime();
+    let _lock = rt.block_on(ClusterLock::shared());
+    let t = rt.block_on(FreshDb::migrated());
+    // The sequencer creates the feed state (its first call).
+    rt.block_on(async {
+        forge_db::sequencer::run_once(
+            &t.db,
+            forge_db::sequencer::BatchSize::MAX,
+            forge_db::sequencer::AuditSequencing::Skip,
+        )
+        .await
+        .expect("sequencer");
+    });
+    let epoch = |t: &FreshDb| {
+        rt.block_on(t.json_rows("SELECT epoch::text AS e FROM forge.event_feed_state"))[0]["e"]
+            .as_str()
+            .expect("epoch")
+            .to_owned()
+    };
+    let before = epoch(&t);
+    let (vars, _pw) = t.env();
+    let unconfigured = forge_in(&["admin", "events", "new-epoch"], &vars, &[]);
+    assert!(!unconfigured.status.success(), "{}", stdout(&unconfigured));
+    assert!(
+        String::from_utf8_lossy(&unconfigured.stderr).contains("FG-SYS-0002"),
+        "{}",
+        String::from_utf8_lossy(&unconfigured.stderr)
+    );
+    assert_eq!(epoch(&t), before);
+    let maint = PasswordFile::new(forge_db::test_support::MAINT_PASSWORD);
+    let maint_url = url_as("forge_maint", &t.name);
+    let maint_path = maint.path();
+    let out = forge_in(
+        &["admin", "events", "new-epoch"],
+        &vars,
+        &[
+            ("FORGE_DATABASE_MAINT_URL", maint_url.as_str()),
+            ("FORGE_DATABASE_MAINT_PASSWORD_FILE", maint_path.as_str()),
+        ],
+    );
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(out.status.success(), "{}\n{err}", stdout(&out));
+    assert!(
+        stdout(&out).contains("event feed epoch rotated"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(err.contains("FG-DB-0014"), "{err}");
+    let after = epoch(&t);
+    assert_ne!(after, before);
+    assert!(
+        stdout(&out).contains(&after.replace('-', "")),
+        "{}",
+        stdout(&out)
+    );
+    rt.block_on(t.drop_now());
 }

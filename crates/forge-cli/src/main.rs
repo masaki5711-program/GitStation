@@ -10,6 +10,8 @@ use forge_core::RequestId;
 use forge_errors::{ErrorCode, ForgeError, Lang, Severity};
 
 mod admin;
+// M3 I1c: `forge admin events new-epoch`.
+mod admin_events;
 // ── D5 MR5 ──
 mod admin_namespace;
 // ── end D5 MR5 ──
@@ -146,7 +148,25 @@ enum AdminCommand {
         command: GroupCommand,
     },
     // ── end D5 MR5 ──
+    // ── M3 I1c ──
+    /// The event feed (ADR-0016 §7).
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
+    // ── end M3 I1c ──
 }
+
+// ── M3 I1c ──
+#[derive(Subcommand)]
+enum EventsCommand {
+    /// Give the event feed a new epoch after a database restore or rebuild
+    /// (an approved runbook step; needs database.maint_url): every
+    /// integration's cursor answers 410 epoch_mismatch and the consumers
+    /// resync.
+    NewEpoch,
+}
+// ── end M3 I1c ──
 
 // ── D5 MR5 ──
 #[derive(Subcommand)]
@@ -365,6 +385,11 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::Project {
                     command: ProjectCommand::Purge { now: true, .. } | ProjectCommand::Move { .. },
+                }
+                // M3 I1c: a mutating runbook step (its FG-DB-0014 line is
+                // the trail besides the audit row).
+                | AdminCommand::Events {
+                    command: EventsCommand::NewEpoch,
                 },
         } => telemetry::init(LogFormat::Json, "info"),
         Command::Explain { .. }
@@ -482,6 +507,12 @@ fn main() -> ExitCode {
                 },
             )
         }),
+        Command::Admin {
+            command:
+                AdminCommand::Events {
+                    command: EventsCommand::NewEpoch,
+                },
+        } => config().and_then(|cfg| admin_events::new_epoch(&cfg.database, &request_id)),
         Command::Admin {
             command:
                 AdminCommand::Repo {
@@ -703,6 +734,21 @@ mod tests {
             parse(&["admin", "user", "link-identity", "--user", "alice"]).is_err(),
             "issuer and subject are required"
         );
+    }
+
+    #[test]
+    fn events_new_epoch_takes_no_arguments() {
+        assert!(matches!(
+            parse(&["admin", "events", "new-epoch"])
+                .expect("parses")
+                .command,
+            Command::Admin {
+                command: AdminCommand::Events {
+                    command: EventsCommand::NewEpoch
+                }
+            }
+        ));
+        assert!(parse(&["admin", "events", "new-epoch", "--force"]).is_err());
     }
 
     #[test]

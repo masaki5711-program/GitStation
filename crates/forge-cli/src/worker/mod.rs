@@ -62,6 +62,9 @@ mod mergeability_sweep;
 mod codeowners_restore;
 // ── end M3 R6 ──
 mod seal;
+// ── M3 I1c: events retention ──
+mod events_retention;
+// ── end M3 I1c ──
 // ── M2 MR6: the session purge ──
 mod session_purge;
 // ── end M2 MR6 ──
@@ -137,6 +140,8 @@ enum Task {
     MergeabilitySweep,
     /// Expired CODEOWNERS suspensions recorded (`codeowners_restore`, M3 R6).
     CodeownersRestore,
+    /// Events past the retention period (`events_retention`, M3 I1c).
+    EventsRetention,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -159,6 +164,8 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
         Task::MergeabilitySweep,
         // M3 R6: needs only the database.
         Task::CodeownersRestore,
+        // M3 I1c: needs only the database.
+        Task::EventsRetention,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -226,6 +233,7 @@ impl Task {
             Self::SessionPurge => session_purge::NAME,
             Self::MergeabilitySweep => mergeability_sweep::NAME,
             Self::CodeownersRestore => codeowners_restore::NAME,
+            Self::EventsRetention => events_retention::NAME,
         }
     }
 
@@ -247,6 +255,7 @@ impl Task {
                 .map_or(MAX_BACKOFF, |purge| purge.session_interval),
             Self::MergeabilitySweep => mergeability_sweep::PERIOD,
             Self::CodeownersRestore => codeowners_restore::PERIOD,
+            Self::EventsRetention => events_retention::PERIOD,
         }
     }
 
@@ -292,6 +301,7 @@ impl Task {
                 mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
+            Self::EventsRetention => events_retention::run_events_retention(db).await,
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")

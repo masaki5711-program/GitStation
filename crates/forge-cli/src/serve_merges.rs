@@ -209,6 +209,11 @@ pub(crate) fn retryable(e: &ForgeError) -> bool {
         | ErrorCode::IntegrationDisabled
         | ErrorCode::WorkItemProjectNotBound
         | ErrorCode::WorkItemLinkLimitReached
+        // M3 I1c: the feed's codes never reach the merge job.
+        | ErrorCode::FeedCursorExpired
+        | ErrorCode::FeedCursorInvalid
+        | ErrorCode::FeedConsumerLag
+        | ErrorCode::FeedEpochChanged
         | ErrorCode::ApprovalRuleChanged
         | ErrorCode::MergeRuleChanged
         // M3 C1: a stored run this build cannot read stays unreadable;

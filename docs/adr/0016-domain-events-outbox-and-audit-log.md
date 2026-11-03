@@ -1095,3 +1095,89 @@ Runbook `integrations`（日本語）。テスト: `binding_grants_and_unbinding
 4. **I1c への依存**: 結びつけの解除では `work_item.unlinked` を出さない（上の 5）。これが正しいのは、I1c の履歴のカーソルが
    結びつけの世代に結びつき、解除・付け替えのあとは必ず 410（`visible_set_changed`）になって kanflow が開発状況 API から取り直すこと
    が前提である。I1c はこれを満たすこと（満たせないなら、解除で終わらせたリンクのイベントを別の方法で届ける）。
+
+## Amendment（2026-11-03、M3 I1c `feat/cross-integration-event-feed`: 連携のイベントの履歴）
+
+計画 11 §5 I1 の 3 つ目の MR。§7 の「イベントの履歴 API」と §2 の保持を実装した。§1・§7 の概略から変えた点と、実装で決めたこと。
+API の契約は `docs/api/integration-feed.md`（schema_version 1、欄は足すだけ）、例は `docs/api/integration-feed.example.json`（kanflow の偽の GitStation の golden）。
+
+1. **層**: 新しい機能のクレート **`forge-integ`**（forge-web / forge-cli → forge-integ → forge-auth / forge-db → forge-core。forge-git にも
+   他の機能のクレートにも依存しない。テスト `forge_integ_has_no_edge_to_other_feature_crates`）。SQL は forge-db の `feed`。
+2. **`Action` と `Resource`**: `IntegrationEventRead`（`GET /api/v1/integrations/{id}/events`）と `IntegrationEventCursorRead`（`…/events/cursor`）。
+   どちらも `read_api`。経路の判定は `Resource::IntegrationFeed { own, enabled, act_as }`（`IntegrationFeedCtx`）: その連携のサービスアカウント
+   **だけ**。人（管理者のセッション・`admin` のトークンも）・ボット・別の連携・存在しない連携は同じ `FG-REPO-0005`（`reason` =
+   `not_integration_account` / `foreign_integration`）。エージェントのトークン・`Forge-Act-As` の付いた要求・無効の連携は `FG-AUTH-0003`
+   （`agent_token` / `act_as_refused` / `integration_disabled`）。プロジェクトごとの判定は `Resource::ProjectEvents { project, class }`:
+   連携の分類だけを、サービスアカウントの **メンバーのロール** が Reporter 以上のときに許す（管理者の権限は通さない）。maintainer・
+   deployment・admin の分類は常に拒否（`class_not_in_feed`）。権限の表の行は `matrix_rows_feed.rs`。
+3. **`prove_visible`**（forge-auth `feed_ctx.rs`）: §7 のとおり、スナップショットで読んだ材料（`forge_core::FeedMaterial`）で、まず連携を
+   新しい事実で判定し直し（その間に無効にされたら 403）、結びつけたプロジェクト × 4 つの分類を `authorize()` で判定し、連携の分類で
+   許されたものだけで `VisibleSet` を作る。連携の分類以外が許されたら（`authorize()` の不具合）`FG-SYS-0001 reason=feed_class_allowed`
+   で止める。`VisibleSet::from_authorized_decisions` を呼ぶのは forge-auth だけ、forge-db の `read_feed_page` を呼ぶのは forge-integ だけ、
+   `Feed::read_events` / `head_cursor` を呼ぶのは forge-web の `routes/integration_feed.rs` だけ（forge-integ `tests/decided_callers.rs`。
+   §7 の「同じゲート」はこのテスト。エージェントモデルのゲートは必要なら別に足す）。`VisibleSet` は §7 の `Projects` / `Instance` の
+   列挙ではなく、連携の分類だけの構造体にした（管理者の履歴は後の MR）。
+4. **結びつけの世代**（§7 と「第 3 回の案」の扱いを変えた点。I1b Amendment の「I1c への依存」を満たす）: `integration_bindings.generation`
+   （`GENERATED ALWAYS AS IDENTITY`、追記のマイグレーション `20261117100000`。forge_app は選べず、更新もできない）を `VisibleSet` の
+   ハッシュに入れた。§7 は「ハッシュなら判定の結果そのものを比べるので世代は要らない」としたが、**同じプロジェクトを解除して結び直すと
+   判定の結果は同じ**になり、I1b が解除で `work_item.unlinked` なしに終わらせたリンクを kanflow が知らないまま続けてしまう。世代を足した
+   ハッシュなら、解除と結び直し（同じ kanflow のプロジェクトでも）の後は必ず 410 `visible_set_changed`（テスト
+   `rebind_to_same_project_returns_410`、`a_rebind_changes_the_visible_set_digest`）。ロール・可視性・削除待ち・`event_types` の変化は
+   §7 のとおり判定の結果のハッシュで捕まえる。ハッシュの正規形は `forge-feed-visible-set/1` の文字列（連携、許す種類の名前、
+   `<project>:<generation>` の並び）の SHA-256 の先頭 128 ビット。
+5. **カーソル**: §7 の `(版, kid, integration_id, epoch, VisibleSet のハッシュ, seq)` を `forge_core::cursor` の AES-256-GCM で封じる
+   （purpose `integration.events`、鍵は `api.cursor_keys_file`、一覧と共用）。payload は `1 | integration:u64 | epoch:16 | digest:16 | seq:u64`。
+   別の連携のカーソルは `FG-INT-0008 rule=other_integration`、改ざん・書式は `rule` 付きの `FG-INT-0008`（値はログに出ない。
+   テスト `tampered_cursor_value_never_logged`）。**カーソルの寿命は保持期間の 1.5 倍**（既定 135 日。`api.cursor_max_age_s` の 24 時間は
+   一覧だけのもの）で、それより古い本物のカーソルは `FG-INT-0007 reason=retention`。410 の判定の順は epoch → `ahead_of_head`
+   （`seq > high_seq`）→ `retention`（`seq + 1 < retained_from`）→ `visible_set_changed`。410 の本文は標準の 3 つの欄と `reason` だけ
+   （forge-web の `error.rs`。`FG-INT-0007` のときだけ、決まった 4 語から）。
+6. **読み取り**: 1 つの `REPEATABLE READ READ ONLY` のスナップショット（読み取りのプール）で、状態・材料・イベントを読む。上限は
+   **`min(high_seq, work-item-sync の last_seq)`**（作業項目を決める前のイベントを返さない。購読者が無ければ 0、テスト
+   `events_beyond_work_item_sync_watermark_withheld`）。§7 の「`after + 5000` の窓」は使わず、`seq > after AND seq <= 上限 AND project_id =
+   ANY(見えるプロジェクト) AND event_type = ANY(許す種類)` を 100 行ずつ読む（`has_more` を正確にするため）。最大 500 件・約 2 MiB
+   （1 件 = payload + 1 KiB + 作業項目ごとに 160 バイトで数える）。カーソルが無ければ保持されている最も古いイベントから。
+   `next_cursor` は、残っていれば最後に返したイベント、残っていなければ上限（先頭まで進む）。各イベントに自分の直後のカーソルを付けた。
+   作業項目は `event_work_items` のうち **この連携の** 作業項目（`{provider, project_id, ref}`）。`actor` は `kind`・`user`・`via`
+   （`id`・`username`・`display_name` は読み取りの時点のもの）。`user_email` スコープで `email`、**新しいスコープ `user_employee_number`**
+   （計画 11 Q7、`user_email` と同じ形: 何も満たさず、何にも満たされない。追記のマイグレーションで `tokens_scopes_known` を広げた）で
+   `employee_number` を足す。読み取りのプールはこの 2 列を読めないので、スコープがあるときだけ書き込みのプールで読む。
+7. **`integration_feed_reads`**（`derived`）: 読み取りごとに、前の記録から 1 分以上たっていれば 1 行を上書きする（`ON CONFLICT … WHERE
+   last_read_at <= now() - 1 分`）。列は `last_read_at`、`cursor_seq`（答えた `next_cursor` の位置）、`read_bound_seq`、`oldest_unread_at`
+   （その後の最初の見えるイベントの時刻）。§6 の `ChangeRecord::housekeeping` はまだ無いので、forge-db の中の 1 文で書く。書けなかったら
+   そのエラーを 1 回ログに出し、答えは返す。記録を書いたときに `oldest_unread_at` が保持期間の半分より古ければ **FG-INT-0009**
+   （warn、`reason=behind`）をその要求の `request_id` でログに出す（テスト `lagging_integration_logs_int_0009`）。`forge doctor`
+   `integrations.feed_lag` は、有効で結びつけのある連携が 24 時間読みに来ない（一度も読んでいなければ最初の結びつけから 24 時間）か
+   遅れが保持期間の半分を超えたら FG-INT-0009。
+8. **保持**（§2 の C7 のうちイベントの分）: `forge.retention_policy`（1 行、`events_days` 既定 90・7〜3650。forge_app は書けない。
+   変えるのは追記のマイグレーション）と `forge.events_retention(max_rows, request_id)`（forge_purge の SECURITY DEFINER、EXECUTE は
+   forge_app）。`retained_from` から最大 1 万の `seq` の窓で、保持期間より古い続きの行を、`retention_blocking` の有効な購読者の
+   `min(last_seq) + 1` で抑えて（保持期間の 1.5 倍を過ぎた行は抑えない）、`event_work_items` ごと消し、`retained_from` を進め、
+   `events.retention` の監査の行を書く。`forge worker` のタスク `events_retention`（1 時間ごと、窓いっぱいならすぐ次）。doctor
+   `events.retention`（1.5 倍 + 1 日より古い行が残っていれば警告）。購読者の `retention_overrun`（FG-DB-0008）の検出と
+   `subscriber_dead_letters` の 30 日の削除は後の手順に残した。
+9. **epoch**: `forge.feed_new_epoch(reason, request_id)`（forge_seq の SECURITY DEFINER、EXECUTE は **forge_maint だけ**。`reason` は今は
+   `manual` だけ）が、シーケンサーの advisory lock の下で `epoch` と `epoch_rotated_at` を書き換え、`feed.epoch_rotated`（`old_epoch`・
+   `new_epoch`、`actor_label` = ログインの名前）の監査の行を書く。`forge admin events new-epoch`（forge-db `Db::connect_maint`、
+   `database.maint_url`）が呼び、**FG-DB-0014** FeedEpochChanged（warn）を出す。`rotate_epoch()` による巻き戻しの自動検出
+   （`system_identifier`・タイムライン・送出先）は C9。doctor の定義者の関数の検査（`bootstrap::definer`）は 3 つの関数を見る。
+10. **送出先との比較**（計画 11 Q1）: `feed.require_sink_compare` は M3 では `false` だけ（`true` は `FG-SYS-0002 reason=unsupported`。
+    効かない設定を効いたように見せない）。doctor `feed.sink_compare` が常に警告する。FG-DB-0012 は送出先ができるまで使わない。
+11. **doctor**: `integrations.feed_lag`、`subscribers.work-item-sync`（登録されていない・無効なら警告。履歴の上限）、`events.retention`、
+    `feed.sink_compare`。
+12. **エラーコード**: FG-INT-0007 FeedCursorExpired（410、info）、FG-INT-0008 FeedCursorInvalid（400、info）、FG-INT-0009
+    FeedConsumerLag（warn）、FG-DB-0014 FeedEpochChanged（warn）。Runbook `integration-feed-lag`（日本語）。
+
+テスト（02 §8.2 の回帰）: `closed_without_merge_is_returned_and_dev_status_closed`（履歴の部分。開発状況は I1d）、
+`close_reopen_merge_in_order`、`events_survive_branch_deleting_merge`、`open_then_close_between_polls_returns_both`、
+`expired_cursor_is_410_retention`。ほかに `epoch_mismatch_is_410`、`ahead_of_head_is_410`、`visible_set_change_returns_410`、
+`rebind_to_same_project_returns_410`、`other_integrations_cursor_is_400_int_0008`、`tampered_cursor_value_never_logged`、
+`same_cursor_same_events`、`next_cursor_advances_to_head_when_nothing_visible`、`unbound_project_old_and_new_events_hidden`、
+`project_null_and_maintainer_class_never_in_feed`、`act_as_header_on_feed_is_refused`、`events_beyond_work_item_sync_watermark_withheld`、
+`response_capped_2mib_limit_500`、`feed_reads_written_once_per_minute`、`lagging_integration_logs_int_0009`、
+`feed_principal_must_be_the_integrations_service_account`、`the_feed_answers_the_golden_example_shape`。
+
+**受け入れた残り**: (1) 1 回の判定は結びつけごとにプロジェクトの access の 1 文（最大 200 文）。結びつけの多い連携で重くなれば
+1 文にまとめる。(2) 連携ごとの流量制限（429）はまだ無い。(3) `username` / `display_name` は読み取りの時点のもの（§5 の「その時点の
+スナップショット」は、payload に入っている欄だけ）。(4) `event_types` を許可リストに無い名前から作ることはない（`forge-core` の
+`allowed_event_types` はこのビルドの `EventType` から選ぶ）ので、古いビルドが知らない種類は新しいビルドになるまで出ない。

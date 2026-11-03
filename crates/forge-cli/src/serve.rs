@@ -137,6 +137,13 @@ pub fn serve(bind: &str, cfg: &Config) -> Result<String, ForgeError> {
                 db.clone(),                          // clone: the pool handle is shared
                 Arc::new(smart_http.browse.clone()), // clone: shares the ref cache
             ))
+            // M3 I1c: the integrations' event feed seals its cursors with
+            // the same keys as the lists (another purpose, so neither opens
+            // the other's).
+            .with_feed(forge_integ::Feed::new(
+                db.clone(),               // clone: the pool handle is shared
+                Arc::clone(&cursor_keys), // clone: the keys are shared with the lists
+            ))
             .with_smart_http(smart_http)
             .with_lists(
                 Lists::new(
