@@ -444,6 +444,7 @@
       "who": "Who may approve",
       "anyone": "Anyone who may approve",
       "anyoneHelp": "With no user and no group, anyone who may approve counts.",
+      "namesMissing": "Some approvers of this rule could not be shown by name, so saving here would remove them and is not offered. Reload the page later, or change the rule with gstn approval-rule.",
       "users": "Users",
       "groups": "Groups",
       "group": "Group",

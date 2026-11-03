@@ -538,7 +538,9 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
       {editing !== null && (
         <RuleDialog
           projectId={projectId}
-          rule={editing === 'new' ? null : editing}
+          // The rule as last read (a reload after a 409 gives the dialog the
+          // new updated_at; the typed values stay).
+          rule={editing === 'new' ? null : (list.find((r) => r.approval_rule_id === editing.approval_rule_id) ?? editing)}
           taken={list.map((r) => r.name)}
           choices={choices}
           onClose={(savedName) => {
@@ -547,9 +549,7 @@ export function ApprovalRulesSection({ projectId, canManage }: { projectId: numb
             focusWhenNoDialog(opener);
           }}
           onReload={async () => {
-            setEditing(null);
             await rules.refetch();
-            focusHeading('rules-title');
           }}
         />
       )}
@@ -592,7 +592,7 @@ function RuleDialog({
   choices: GroupChoices;
   /** The saved rule's name, or null when nothing was saved. */
   onClose: (saved: string | null) => void;
-  /** After a 409: close, read the rules again. */
+  /** After a 409: read the rules again (the dialog stays open). */
   onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -657,8 +657,12 @@ function RuleForm({
   const [name, setName] = useState(rule?.name ?? '');
   const [target, setTarget] = useState(rule?.target_pattern ?? '');
   const [count, setCount] = useState(String(rule?.required_approvals ?? 1));
-  // Saving replaces the approvers: they start as the rule names them.
+  // Saving replaces the approvers: they start as the rule names them. An
+  // approver the answer could not name (its ids are longer than its names)
+  // would be dropped by a save, so none is offered then.
   const known = rule === null ? { users: [], groups: [] } : approverNames(rule);
+  const unnamed =
+    rule !== null && (rule.users.length !== rule.user_ids.length || rule.groups.length !== rule.group_ids.length);
   const [users, setUsers] = useState<string[]>(known.users);
   const [groups, setGroups] = useState<string[]>(known.groups);
   const [attempt, setAttempt] = useState(0);
@@ -679,7 +683,7 @@ function RuleForm({
 
   const submit = (e: SyntheticEvent) => {
     e.preventDefault();
-    if (save.isPending) return;
+    if (save.isPending || unnamed) return;
     setAttempt((n) => n + 1);
     if (nameProblem !== null || countProblem !== null || targetProblem !== null || required === null) return;
     const ruleName = rule?.name ?? name;
@@ -750,7 +754,21 @@ function RuleForm({
           }}
         />
         <p className={styles.hint}>{t('settings.rules.anyoneHelp')}</p>
-        {save.isError && <SaveError error={save.error} onReload={onReload} />}
+        {unnamed && (
+          <p role="note" className={styles.warning}>
+            {t('settings.rules.namesMissing')}
+          </p>
+        )}
+        {save.isError && (
+          <SaveError
+            error={save.error}
+            onReload={async () => {
+              await onReload();
+              save.reset();
+              form.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+            }}
+          />
+        )}
         <div className={styles.row}>
           <button
             type="button"
@@ -762,9 +780,11 @@ function RuleForm({
           >
             {t('common.cancel')}
           </button>
-          <button type="submit" className={controls.primary} aria-disabled={save.isPending ? 'true' : undefined}>
-            {t('settings.rules.save')}
-          </button>
+          {!unnamed && (
+            <button type="submit" className={controls.primary} aria-disabled={save.isPending ? 'true' : undefined}>
+              {t('settings.rules.save')}
+            </button>
+          )}
         </div>
       </form>
   );
@@ -1062,16 +1082,16 @@ export function MergeConditionsSection({ projectId, canManage }: { projectId: nu
       {editing !== null && (
         <ConditionsDialog
           projectId={projectId}
-          rule={editing}
+          // The branch as last read (a reload after a 409 gives the dialog the
+          // new updated_at; the typed values stay).
+          rule={branches.find((r) => r.id === editing.id) ?? editing}
           onClose={(saved) => {
             setEditing(null);
             if (saved) setDone(t('settings.conditions.saved', { pattern: editing.pattern }));
             focusWhenNoDialog(opener);
           }}
           onReload={async () => {
-            setEditing(null);
             await refs.refetch();
-            focusHeading('conditions-title');
           }}
         />
       )}
@@ -1127,11 +1147,12 @@ function ConditionsDialog({
   projectId: number;
   rule: ProtectedRef;
   onClose: (saved: boolean) => void;
-  /** After a 409: close, read the branches again. */
+  /** After a 409: read the branches again (the dialog stays open). */
   onReload: () => Promise<void>;
 }) {
   const { t } = useTranslation();
   const save = usePutMergeRule(projectId);
+  const form = useRef<HTMLFormElement>(null);
   const m = rule.merge_rule;
   const [count, setCount] = useState(String(m?.required_approvals ?? 0));
   const [checks, setChecks] = useState((m?.required_checks ?? []).join('\n'));
@@ -1179,7 +1200,7 @@ function ConditionsDialog({
       title={t('settings.conditions.dialogTitle', { pattern: rule.pattern })}
       busy={save.isPending}
     >
-      <form onSubmit={submit} noValidate>
+      <form ref={form} onSubmit={submit} noValidate>
         <TextField
           label={t('settings.rules.required')}
           value={count}
@@ -1203,7 +1224,16 @@ function ConditionsDialog({
           {blocking && <p>{t('settings.conditions.unreportable')}</p>}
           {blocking && noPush && <p>{t('settings.conditions.frozen')}</p>}
         </div>
-        {save.isError && <SaveError error={save.error} onReload={onReload} />}
+        {save.isError && (
+          <SaveError
+            error={save.error}
+            onReload={async () => {
+              await onReload();
+              save.reset();
+              form.current?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+            }}
+          />
+        )}
         <div className={styles.row}>
           <button
             type="button"

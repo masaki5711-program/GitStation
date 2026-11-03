@@ -354,9 +354,64 @@ describe('approval rules', () => {
     await waitFor(() => {
       expect(server.to('GET', `${API}/approval-rules`).length).toBeGreaterThan(reads);
     });
+    // The dialog stays with what was typed; the refusal goes away.
+    await waitFor(() => {
+      expect(within(dialog).queryByRole('alert')).toBeNull();
+    });
+    expect(screen.getByRole('dialog')).toBe(dialog);
+    expect(within(dialog).getByLabelText<HTMLInputElement>('Name').value).toBe('leads');
+  });
+
+  it('after a 409 and a reload the dialog keeps the input and the next save sends the new stamp', async () => {
+    const NEW_STAMP = '2026-11-03T05:00:00.000009Z';
+    let current = RULE;
+    let puts = 0;
+    const { server } = await open({
+      [`GET ${API}/approval-rules`]: () => json(200, { rules: [current] }),
+      [`PUT ${API}/approval-rules/leads`]: () => {
+        puts += 1;
+        if (puts === 1) {
+          current = { ...RULE, updated_at: NEW_STAMP };
+          return apiError(409, 'This approval rule changed after you opened it.', 'req-rule-409b', 'FG-REVIEW-0018');
+        }
+        return json(200, { ...current, required_approvals: 3 });
+      },
+    });
+    const rules = await section('Approval rules');
+    fireEvent.click(await within(rules).findByRole('button', { name: 'Change leads' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(await within(dialog).findByLabelText('Approvals needed'), { target: { value: '3' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the rule' }));
+    await within(dialog).findByRole('alert');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reload the settings' }));
+    await waitFor(() => {
+      expect(within(dialog).queryByRole('alert')).toBeNull();
+    });
+    expect(within(dialog).getByLabelText<HTMLInputElement>('Approvals needed').value).toBe('3');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the rule' }));
+    await waitFor(() => {
+      expect(server.to('PUT', `${API}/approval-rules/leads`)).toHaveLength(2);
+    });
+    expect(server.to('PUT', `${API}/approval-rules/leads`)[0]?.body).toMatchObject({ expected_updated_at: RULE_STAMP });
+    expect(server.to('PUT', `${API}/approval-rules/leads`)[1]?.body).toMatchObject({
+      required_approvals: 3,
+      expected_updated_at: NEW_STAMP,
+    });
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).toBeNull();
     });
+  });
+
+  it('a rule with an approver the answer could not name offers no save (it would drop them)', async () => {
+    const { server } = await open({
+      [`GET ${API}/approval-rules`]: () => json(200, { rules: [{ ...RULE, group_ids: [3, 77] }] }),
+    });
+    const rules = await section('Approval rules');
+    fireEvent.click(await within(rules).findByRole('button', { name: 'Change leads' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/could not be shown by name/)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Save the rule' })).toBeNull();
+    expect(server.calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
   });
 
   it('deletes a rule after asking', async () => {
@@ -376,14 +431,15 @@ describe('approval rules', () => {
 });
 
 describe('merge conditions of protected branches', () => {
+  const BLOCKED_RULE = {
+    required_approvals: 1,
+    required_checks: ['ci/gates'],
+    require_resolved_discussions: false,
+    direct_push_forbidden: true,
+    updated_at: STAMP,
+  };
   const BLOCKED = protectedRef(1, 'refs/heads/main', {
-    merge_rule: {
-      required_approvals: 1,
-      required_checks: ['ci/gates'],
-      require_resolved_discussions: false,
-      direct_push_forbidden: true,
-      updated_at: STAMP,
-    },
+    merge_rule: BLOCKED_RULE,
     warnings: ['required_checks_unreportable'],
   });
 
@@ -451,8 +507,45 @@ describe('merge conditions of protected branches', () => {
     await waitFor(() => {
       expect(server.to('GET', `${API}/protected-refs`).length).toBeGreaterThan(reads);
     });
+    // The dialog stays with what was typed; the refusal goes away.
     await waitFor(() => {
-      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(within(dialog).queryByRole('alert')).toBeNull();
+    });
+    expect(within(dialog).getByLabelText<HTMLInputElement>('Approvals needed').value).toBe('2');
+  });
+
+  it('after a 409 on the conditions and a reload, the next save sends the new stamp', async () => {
+    const NEW_STAMP = '2026-11-03T06:00:00.000007Z';
+    let current: unknown = BLOCKED;
+    let puts = 0;
+    const { server } = await open({
+      [`GET ${API}/protected-refs`]: () => json(200, { rules: [current] }),
+      [`PUT ${API}/protected-refs/1/merge-rule`]: () => {
+        puts += 1;
+        if (puts === 1) {
+          current = { ...BLOCKED, merge_rule: { ...BLOCKED_RULE, updated_at: NEW_STAMP } };
+          return apiError(409, 'The merge conditions changed.', 'req-mr-409b', 'FG-REVIEW-0019');
+        }
+        return json(200, current);
+      },
+    });
+    const conditions = await section('Merge conditions of protected branches');
+    fireEvent.click(await within(conditions).findByRole('button', { name: 'Change the conditions of refs/heads/main' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '4' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
+    await within(dialog).findByRole('alert');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reload the settings' }));
+    await waitFor(() => {
+      expect(within(dialog).queryByRole('alert')).toBeNull();
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save the conditions' }));
+    await waitFor(() => {
+      expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)).toHaveLength(2);
+    });
+    expect(server.to('PUT', `${API}/protected-refs/1/merge-rule`)[1]?.body).toMatchObject({
+      required_approvals: 4,
+      expected_updated_at: NEW_STAMP,
     });
   });
 

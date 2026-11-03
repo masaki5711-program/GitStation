@@ -444,6 +444,7 @@
       "who": "Siapa yang boleh menyetujui",
       "anyone": "Siapa pun yang boleh menyetujui",
       "anyoneHelp": "Tanpa pengguna dan grup, siapa pun yang boleh menyetujui akan dihitung.",
+      "namesMissing": "Sebagian pemberi persetujuan aturan ini tidak dapat ditampilkan dengan nama, jadi menyimpan di sini akan menghapus mereka dan tidak ditawarkan. Muat ulang halaman nanti, atau ubah aturan dengan gstn approval-rule.",
       "users": "Pengguna",
       "groups": "Grup",
       "group": "Grup",
