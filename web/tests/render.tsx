@@ -1,4 +1,5 @@
 import { render } from '@testing-library/react';
+import { StrictMode, type ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 import { createApiClient } from '../src/api/client';
@@ -41,6 +42,10 @@ export async function renderApp(options: {
   path?: string;
   lang?: Language;
   assign?: (url: string) => void;
+  /** Router state of the first entry (a link's `state`). */
+  state?: unknown;
+  /** Render under StrictMode, as main.tsx does (effects run twice). */
+  strict?: boolean;
 }) {
   const i18n = await createI18n(options.lang ?? 'ja');
   const api = createApiClient({
@@ -50,15 +55,18 @@ export async function renderApp(options: {
   });
   const queryClient = createQueryClient();
   queryClient.setDefaultOptions({ queries: { retry: false } });
-  return {
-    api,
-    ...render(
-      <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
-        <MemoryRouter initialEntries={[options.path ?? '/']}>
-          <AppRoutes />
-          <LocationProbe />
-        </MemoryRouter>
-      </AppProviders>,
-    ),
-  };
+  const entry =
+    options.state === undefined
+      ? (options.path ?? '/')
+      : { pathname: (options.path ?? '/').split('?')[0] ?? '/', state: options.state };
+  const tree = (
+    <AppProviders i18n={i18n} api={api} queryClient={queryClient}>
+      <MemoryRouter initialEntries={[entry]}>
+        <AppRoutes />
+        <LocationProbe />
+      </MemoryRouter>
+    </AppProviders>
+  );
+  const wrap = (node: ReactNode) => (options.strict === true ? <StrictMode>{node}</StrictMode> : node);
+  return { api, ...render(wrap(tree)) };
 }

@@ -7,8 +7,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: on Windows the pathname is `/D:/…`.
+const root = fileURLToPath(new URL('..', import.meta.url));
 export const dist = join(root, 'dist');
 
 export function shellCsp() {

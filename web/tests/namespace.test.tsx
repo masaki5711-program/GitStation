@@ -105,12 +105,32 @@ describe('URL rescue (ADR-0015, plan 10 §4.3)', () => {
   it('a remainder that is not a screen word is not found (no guessing)', async () => {
     const server = mockServer({
       ...signedIn(),
-      'GET /api/v1/namespaces/resolve': () => json(200, { ...RESOLVE_PROJECT, remainder: 'pull/3' }),
+      'GET /api/v1/namespaces/resolve': () => json(200, { ...RESOLVE_PROJECT, remainder: 'issues/3' }),
     });
-    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/pull/3' });
+    await renderApp({ fetch: server.fetch, path: '/acme/forge-web/issues/3' });
     expect(await screen.findByText('ページが見つかりません')).toBeTruthy();
-    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/pull/3');
+    expect(screen.getByTestId('location').textContent).toBe('/acme/forge-web/issues/3');
   });
+
+  it.each(['pull/3', 'pulls'])(
+    'the merge request words (ADR-0015 B0) are moved behind /-/: %s',
+    async (remainder) => {
+      const server = mockServer({
+        ...signedIn(),
+        'GET /api/v1/namespaces/resolve': (c) =>
+          json(
+            200,
+            c.query.get('path') === 'acme/forge-web'
+              ? RESOLVE_PROJECT
+              : { ...RESOLVE_PROJECT, remainder },
+          ),
+      });
+      await renderApp({ fetch: server.fetch, path: `/acme/forge-web/${remainder}` });
+      await waitFor(() => {
+        expect(screen.getByTestId('location').textContent).toBe(`/acme/forge-web/-/${remainder}`);
+      });
+    },
+  );
 
   it('a moved path is replaced by the canonical one and says so', async () => {
     const server = mockServer({

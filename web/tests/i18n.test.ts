@@ -66,13 +66,17 @@ describe('i18n dictionaries', () => {
   });
 
   it('every key the source uses exists in ja and en', () => {
-    const missing = [...usedKeys()].filter((k) => !jaKeys.has(k) || !enKeys.has(k));
+    // A plural key is in the dictionaries as `key_one` / `key_other` (i18next).
+    const has = (keys: Map<string, string>, k: string) => keys.has(k) || keys.has(`${k}_other`);
+    const missing = [...usedKeys()].filter((k) => !has(jaKeys, k) || !has(enKeys, k));
     expect(missing).toEqual([]);
   });
 
   it('every dictionary key is used by the source', () => {
     const used = usedKeys();
-    const unused = [...jaKeys.keys()].filter((k) => !used.has(k));
+    const unused = [...jaKeys.keys()].filter(
+      (k) => !used.has(k) && !used.has(k.replace(/_(zero|one|two|few|many|other)$/, '')),
+    );
     expect(unused).toEqual([]);
   });
 
@@ -106,5 +110,28 @@ describe('language selection', () => {
     const i18n = await createI18n('id');
     i18n.addResourceBundle('en', 'translation', { probe: { onlyEn: 'english' } }, true);
     expect(i18n.t('probe.onlyEn')).toBe('english');
+  });
+});
+
+describe('plurals (U1 review)', () => {
+  it('every _one has an _other and every _other an _one, in every language', () => {
+    const unpaired: string[] = [];
+    for (const [name, keys] of [['ja', jaKeys], ['en', enKeys], ['id', idKeys]] as const) {
+      for (const k of keys.keys()) {
+        if (k.endsWith('_one') && !keys.has(`${k.slice(0, -4)}_other`)) unpaired.push(`${name}:${k}`);
+        if (k.endsWith('_other') && !keys.has(`${k.slice(0, -6)}_one`)) unpaired.push(`${name}:${k}`);
+      }
+    }
+    expect(unpaired).toEqual([]);
+  });
+
+  it('diff.show has _one and _other in ja, en and id, and en picks by count', async () => {
+    for (const [name, keys] of [['ja', jaKeys], ['en', enKeys], ['id', idKeys]] as const) {
+      expect([name, keys.has('diff.show_one') && keys.has('diff.show_other')]).toEqual([name, true]);
+      expect([name, keys.has('diff.show')]).toEqual([name, false]);
+    }
+    const i18n = await createI18n('en');
+    expect(i18n.t('diff.show', { count: 1 })).toBe('Show the diff (1 line)');
+    expect(i18n.t('diff.show', { count: 7 })).toBe('Show the diff (7 lines)');
   });
 });
