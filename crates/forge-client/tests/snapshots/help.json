@@ -2029,7 +2029,7 @@
       "scopes": [
         "api"
       ],
-      "summary": "Change a project's merge settings (people only; Maintainer). Options left out keep their value; --allow replaces the allowed methods."
+      "summary": "Change a project's merge settings (people only; Maintainer). Options left out keep their value; --allow replaces the allowed methods. It sends the updated_at it read: settings changed in between are refused (FG-REVIEW-0017; run it again), never overwritten."
     },
     {
       "args": [

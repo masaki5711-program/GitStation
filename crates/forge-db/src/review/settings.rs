@@ -60,7 +60,8 @@ pub struct StoredMergeSettings {
     pub codeowners: CodeownersEnforcement,
     /// The project has a row (`false`: the defaults).
     pub stored: bool,
-    /// UTC, RFC 3339 (`None` without a row).
+    /// UTC, RFC 3339 to the microsecond (`None` without a row): the
+    /// token a settings write's `expected_updated_at` compares (U2).
     pub updated_at: Option<String>,
 }
 
@@ -99,6 +100,10 @@ pub struct SettingsFacts {
 }
 
 const TS: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
+/// `updated_at` to the microsecond (U2): it is the token of the settings
+/// screen's optimistic concurrency (`expected_updated_at`), so two writes
+/// within one second must not read alike.
+const TS_US: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'";
 
 fn columns() -> String {
     format!(
@@ -107,7 +112,7 @@ fn columns() -> String {
          to_char(codeowners_suspended_at AT TIME ZONE 'UTC', {TS}) AS suspended_at, \
          to_char(codeowners_enforced_off_until AT TIME ZONE 'UTC', {TS}) AS off_until, \
          COALESCE(codeowners_enforced_off_until <= now(), false) AS expired, \
-         to_char(updated_at AT TIME ZONE 'UTC', {TS}) AS updated_at"
+         to_char(updated_at AT TIME ZONE 'UTC', {TS_US}) AS updated_at"
     )
 }
 

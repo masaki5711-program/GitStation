@@ -61,6 +61,25 @@ pub struct MergeStatus {
     pub settings: StoredMergeSettings,
 }
 
+/// The settings as locked are the ones the caller read (U2): the same
+/// `updated_at`, or both the defaults. `FG-REVIEW-0017` otherwise.
+fn unchanged_since(
+    project: forge_core::ProjectId,
+    expected: Option<&str>,
+    current: &StoredMergeSettings,
+) -> Result<(), ForgeError> {
+    let actual = current.updated_at.as_deref();
+    if actual == expected {
+        return Ok(());
+    }
+    Err(ForgeError::new(ErrorCode::MergeSettingsChanged)
+        .with_context("action", Action::MergeSettingsManage.name())
+        .with_context("reason", "stale_settings")
+        .with_context("project_id", project.get())
+        .with_context("expected", expected.unwrap_or("none"))
+        .with_context("actual", actual.unwrap_or("none")))
+}
+
 impl Review {
     /// The project's merge settings, for a route loader (the decision that
     /// binds a write reads them again under the lock).
@@ -96,12 +115,17 @@ impl Review {
     /// the default among them (`FG-WEB-0006`); the CODEOWNERS switch is
     /// not touched (it has its own action). R6 review: decided again on the
     /// settings as locked — a change that loosens the approvals needs a role
-    /// at or above every protection of the project.
+    /// at or above every protection of the project. U2: `expected_updated_at`
+    /// is the `updated_at` the caller read (`None`: the defaults, never
+    /// stored); another one under the lock is `FG-REVIEW-0017
+    /// reason=stale_settings` — someone changed the settings in between and
+    /// nothing is overwritten silently.
     pub async fn put_merge_settings(
         &self,
         request: &ReviewRequest,
         proof: &Authorized<MergeSettingsCtx>,
         values: &MergeSettingsValues,
+        expected_updated_at: Option<&str>,
     ) -> Result<(SettingsOutcome, StoredMergeSettings), ForgeError> {
         require(proof.action(), Action::MergeSettingsManage)?;
         if values.allowed_methods.is_empty() {
@@ -120,7 +144,8 @@ impl Review {
                     facts.highest_protection,
                     review::settings::loosens(&facts.current.values, values),
                 );
-                proof.reconfirm(account(facts.account), fresh).map(drop)
+                proof.reconfirm(account(facts.account), fresh).map(drop)?;
+                unchanged_since(project, expected_updated_at, &facts.current)
             })
             .await?;
         Ok((outcome, stored))

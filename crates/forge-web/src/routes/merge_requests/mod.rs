@@ -87,14 +87,14 @@ pub use merges::{
 pub use settings::{
     get_settings as merge_settings, put_codeowners as put_codeowners_enforcement,
     put_settings as put_merge_settings, CodeownersEnforcementBody, CodeownersOf, MergeSettingsBody,
-    PutCodeownersEnforcement, PutMergeSettings, SettingsChangeOf, SettingsProject,
-    CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
+    MergeSettingsViewerBody, PutCodeownersEnforcement, PutMergeSettings, SettingsChangeOf,
+    SettingsProject, CODEOWNERS as CODEOWNERS_ENFORCEMENT, MAX_BODY as SETTINGS_MAX_BODY,
     SETTINGS as MERGE_SETTINGS,
 };
 pub use status::{
     status, MergeRequestStatusBody, StatusApprovalBody, StatusApprovalsBody, StatusCheckBody,
     StatusCodeownerBody, StatusCodeownersBody, StatusDiscussionsBody, StatusReasonBody,
-    StatusRuleBody, STATUS, STATUS_OF,
+    StatusReasonName, StatusRuleBody, StatusViewerBody, STATUS, STATUS_OF,
 };
 pub use versions::{
     compare, version_diff, versions, VersionBody, VersionCompareBody, VersionDiffBody,

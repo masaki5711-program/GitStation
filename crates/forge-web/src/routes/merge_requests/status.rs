@@ -6,20 +6,23 @@
 //! discussions, CODEOWNERS enforcement). Reads only; a merge decides again
 //! under its own locks. This JSON is a stable contract
 //! (`schema_version`, `docs/api/merge-status.md`, `gstn mr status --json`):
-//! fields are added, never renamed or removed, within a version.
+//! fields are added, never renamed or removed, within a version. U2 added
+//! `viewer` (what the caller could do now: trial `authorize()` calls, no
+//! rule of its own) and made `reasons[].reason` an enum of the names.
 
 use axum::http::StatusCode;
 use axum::response::Response;
-use forge_auth::MergeRequestCtx;
+use forge_auth::{MergeRequestCtx, MergeRequestViewer};
+use forge_core::UserId;
 use forge_errors::{ErrorCode, ForgeError};
-use forge_review::MergeStatus;
+use forge_review::{BlockReason, MergeStatus};
 use serde::Serialize;
 
 use super::approvals::StoredMr;
 use super::{repository, respond, review};
 use crate::app::AppState;
 use crate::registry::Dispatched;
-use crate::routes::write::json;
+use crate::routes::write::{bounded, json};
 
 /// The path after `{iid}` of [`STATUS`].
 pub const STATUS_SUFFIX: &str = "/status";
@@ -30,18 +33,84 @@ pub const STATUS_OF: StoredMr = StoredMr(STATUS_SUFFIX);
 /// The version of the contract.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// The name of a blocking reason (ADR-0024 §7): one per
+/// `forge_review::BlockReason` variant, spelled as `BlockReason::as_str`
+/// (`status_reason_schema_lists_every_block_reason`). A new reason is a
+/// new name here — added, never renamed, within `schema_version` 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusReasonName {
+    NotOpen,
+    Draft,
+    MergeInProgress,
+    SourceBranchMissing,
+    MergeabilityUnknown,
+    Conflict,
+    FfNotPossible,
+    NothingToMerge,
+    ApprovalsMissing,
+    CodeownerApprovalMissing,
+    CodeownersInvalid,
+    RequiredCheckMissing,
+    RequiredCheckNotSuccessful,
+    UnresolvedDiscussions,
+    ConfigChangeNeedsMaintainerApproval,
+    ChangedPathsUnknown,
+}
+
+impl StatusReasonName {
+    /// Every name, in ADR-0024 §7's order.
+    pub const ALL: [Self; 16] = [
+        Self::NotOpen,
+        Self::Draft,
+        Self::MergeInProgress,
+        Self::SourceBranchMissing,
+        Self::MergeabilityUnknown,
+        Self::Conflict,
+        Self::FfNotPossible,
+        Self::NothingToMerge,
+        Self::ApprovalsMissing,
+        Self::CodeownerApprovalMissing,
+        Self::CodeownersInvalid,
+        Self::RequiredCheckMissing,
+        Self::RequiredCheckNotSuccessful,
+        Self::UnresolvedDiscussions,
+        Self::ConfigChangeNeedsMaintainerApproval,
+        Self::ChangedPathsUnknown,
+    ];
+
+    /// The name of `reason` (exhaustive: a new `BlockReason` does not
+    /// build until it is named here).
+    pub fn of(reason: &BlockReason) -> Self {
+        match reason {
+            BlockReason::NotOpen => Self::NotOpen,
+            BlockReason::Draft => Self::Draft,
+            BlockReason::MergeInProgress => Self::MergeInProgress,
+            BlockReason::SourceBranchMissing => Self::SourceBranchMissing,
+            BlockReason::MergeabilityUnknown => Self::MergeabilityUnknown,
+            BlockReason::Conflict => Self::Conflict,
+            BlockReason::FfNotPossible => Self::FfNotPossible,
+            BlockReason::NothingToMerge => Self::NothingToMerge,
+            BlockReason::ApprovalsMissing { .. } => Self::ApprovalsMissing,
+            BlockReason::CodeownerApprovalMissing { .. } => Self::CodeownerApprovalMissing,
+            BlockReason::CodeownersInvalid { .. } => Self::CodeownersInvalid,
+            BlockReason::RequiredCheckMissing { .. } => Self::RequiredCheckMissing,
+            BlockReason::RequiredCheckNotSuccessful { .. } => Self::RequiredCheckNotSuccessful,
+            BlockReason::UnresolvedDiscussions { .. } => Self::UnresolvedDiscussions,
+            BlockReason::ConfigChangeNeedsMaintainerApproval => {
+                Self::ConfigChangeNeedsMaintainerApproval
+            }
+            BlockReason::ChangedPathsUnknown { .. } => Self::ChangedPathsUnknown,
+        }
+    }
+}
+
 /// One blocking reason.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatusReasonBody {
-    /// A name of ADR-0024 §7: `not_open`, `draft`, `merge_in_progress`,
-    /// `source_branch_missing`, `mergeability_unknown`, `conflict`,
-    /// `ff_not_possible`, `nothing_to_merge`, `approvals_missing`,
-    /// `codeowner_approval_missing`, `codeowners_invalid`,
-    /// `required_check_missing`, `required_check_not_successful`,
-    /// `unresolved_discussions`, `config_change_needs_maintainer_approval`,
-    /// `changed_paths_unknown`.
-    pub reason: String,
+    /// A name of ADR-0024 §7 (`docs/api/merge-status.md`).
+    pub reason: StatusReasonName,
     /// `key=value` pairs (`rule=… required=… counted=…`, `name=…`,
     /// `count=…`, …); `null` for the plain reasons.
     #[schema(required = true)]
@@ -117,6 +186,25 @@ pub struct StatusCodeownersBody {
     pub suspended_until: Option<String>,
 }
 
+/// What the caller could do now (U2): each flag is `authorize()` on the
+/// context the action's route decides on (`forge_auth::MergeRequestViewer`)
+/// — a hint for the screen, never a permission (the route decides again).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatusViewerBody {
+    /// `POST …/approve` would be allowed (never for the author).
+    pub can_approve: bool,
+    /// `POST …/unapprove` would be allowed.
+    pub can_unapprove: bool,
+    /// `POST …/merge` would be allowed (the target's minimum push role;
+    /// whether the merge request may merge now is `mergeable`).
+    pub can_merge: bool,
+    /// `PATCH …/{iid}` with `draft: false` would be allowed.
+    pub can_mark_ready: bool,
+    /// The caller has a live approval of the merge request.
+    pub approved_by_me: bool,
+}
+
 /// `GET …/status` (the stable contract, `schema_version` 1).
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -145,9 +233,20 @@ pub struct MergeRequestStatusBody {
     #[schema(required = true)]
     pub discussions: Option<StatusDiscussionsBody>,
     pub codeowners: StatusCodeownersBody,
+    /// What the caller could do now (added within `schema_version` 1, U2).
+    pub viewer: StatusViewerBody,
 }
 
-pub(super) fn status_body(iid: i64, s: &MergeStatus) -> MergeRequestStatusBody {
+pub(super) fn status_body(
+    iid: i64,
+    s: &MergeStatus,
+    viewer: MergeRequestViewer,
+    caller: Option<UserId>,
+) -> MergeRequestStatusBody {
+    let approved_by_me = match (&s.approvals, caller) {
+        (Some(report), Some(me)) => report.approvals.iter().any(|a| a.approver == me),
+        (None, _) | (_, None) => false,
+    };
     let suspended_until = match &s.settings.codeowners {
         forge_review::CodeownersEnforcement::Suspended { until, .. } => Some(until.clone()), // clone: the body owns it
         forge_review::CodeownersEnforcement::Enforced
@@ -168,7 +267,7 @@ pub(super) fn status_body(iid: i64, s: &MergeStatus) -> MergeRequestStatusBody {
             .reasons
             .iter()
             .map(|r| StatusReasonBody {
-                reason: r.as_str().to_owned(),
+                reason: StatusReasonName::of(r),
                 detail: r.detail(),
             })
             .collect(),
@@ -222,6 +321,13 @@ pub(super) fn status_body(iid: i64, s: &MergeStatus) -> MergeRequestStatusBody {
             enforced: s.settings.codeowners.enforced(),
             suspended_until,
         },
+        viewer: StatusViewerBody {
+            can_approve: viewer.can_approve,
+            can_unapprove: viewer.can_unapprove,
+            can_merge: viewer.can_merge,
+            can_mark_ready: viewer.can_mark_ready,
+            approved_by_me,
+        },
     }
 }
 
@@ -231,13 +337,25 @@ pub async fn status(state: AppState, request: Dispatched<MergeRequestCtx>) -> Re
     let repo = repository(&request);
     let w = request.into_write();
     let built = async {
-        let iid = w.proof.id().1.ok_or_else(|| {
+        let (project, iid) = *w.proof.id();
+        let iid = iid.ok_or_else(|| {
             ForgeError::new(ErrorCode::Internal).with_context("reason", "proof_without_iid")
         })?;
-        let answer = review(&state)?
+        let review = review(&state)?;
+        let answer = review
             .merge_status(&w.ctx.request_id, &w.proof, repo?, None)
             .await?;
-        json(status_body(iid, &answer))
+        // The protection the merge route's loader reads (U2 viewer flags).
+        let target = &w.proof.ctx().merge_request().target_branch;
+        let protection = bounded(
+            &state,
+            "merge_target_protection",
+            review.target_protection(project, target),
+        )
+        .await?;
+        let principal = w.proof.principal();
+        let viewer = w.proof.ctx().viewer(principal, protection);
+        json(status_body(iid, &answer, viewer, principal.user()))
     }
     .await;
     respond(&w.ctx, StatusCode::OK, built)

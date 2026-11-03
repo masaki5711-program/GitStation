@@ -4,6 +4,8 @@
 //! - [`authorize`] — pure decision over [`Principal`], [`Action`], [`Resource`]
 //! - [`prove`] — calls `authorize()` and returns the unforgeable proof
 //!   [`Authorized`] a handler takes (ADR-0015); it adds no rule of its own
+//! - the viewer flags ([`MergeRequestViewer`], [`MergeSettingsViewer`]) —
+//!   trial `authorize()` calls on the write routes' contexts (U2)
 //! - [`authorize_ref_updates`] — every ref of a push through `authorize()`,
 //!   on the project-level `RepoPush` proof (M1 phase 9 MR4)
 //! - [`matrix`] — the permission matrix (specification as data; every row is
@@ -27,6 +29,7 @@ mod merge_request_ctx;
 mod model;
 mod prove;
 mod ref_updates;
+mod viewer;
 
 pub use action::Action;
 pub use authorize::authorize;
@@ -47,6 +50,7 @@ pub use prove::{
     UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
+pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};
 
 #[cfg(test)]
 #[path = "authorize_tests.rs"]
@@ -65,3 +69,7 @@ mod merge_request_tests;
 #[cfg(test)]
 #[path = "ref_updates_tests.rs"]
 mod ref_updates_tests;
+
+#[cfg(test)]
+#[path = "viewer_tests.rs"]
+mod viewer_tests;
