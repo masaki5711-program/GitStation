@@ -132,17 +132,27 @@ fn caller<R: ResourceCtx>(proof: &Authorized<R>) -> Result<UserId, ForgeError> {
     })
 }
 
-/// The change context of a write by `principal`: actor `user`, the
-/// request id, the token and its scopes. (Service accounts and act-as
-/// arrive with kanflow, M2: until then every API caller is `user`.)
+/// The change context of a write by `principal`: actor `user`, or
+/// `service_account` when the caller's account is one (S0 review: the audit
+/// row names what wrote it), the request id, the token and its scopes.
+/// (Act-as arrives with kanflow, I1.)
 fn change_context(request: &WriteRequest, principal: &Principal, user: UserId) -> ChangeContext {
-    let mut ctx = ChangeContext::new(Actor::User(user), request.request_id.clone());
+    let mut ctx = ChangeContext::new(actor_of(principal, user), request.request_id.clone());
     ctx.credential_id = request.credential_id;
     ctx.effective_scope = match principal.credential() {
         Credential::Session => Vec::new(),
         Credential::Token(scopes) => scopes.iter().map(|s| s.as_str().to_owned()).collect(),
     };
     ctx
+}
+
+/// The audit actor of `principal` (`user`): `service_account` for a
+/// service account, `user` for a person or a bot (ADR-0019 Addendum S0).
+fn actor_of(principal: &Principal, user: UserId) -> Actor {
+    match principal.account_kind() {
+        forge_auth::AccountKind::ServiceAccount => Actor::ServiceAccount(user),
+        forge_auth::AccountKind::Human | forge_auth::AccountKind::Bot => Actor::User(user),
+    }
 }
 
 fn account(a: Account) -> AccountFacts {

@@ -622,3 +622,55 @@ async fn service_account_cannot_create_project_in_own_namespace() {
     );
     w.t.drop_now().await;
 }
+
+/// S0 review: a write by a service account is audited as
+/// `actor_kind = service_account` (the schema's own kind), a person's as
+/// `user`.
+#[tokio::test]
+async fn a_service_accounts_write_is_audited_as_a_service_account() {
+    let w = world().await;
+    let db = &w.t.db;
+    let tool = projects::create(
+        db,
+        &ctx("req-tool"),
+        &NewProject::new("tool", w.alice.namespace_id, "Tool", w.alice.user_id),
+    )
+    .await
+    .expect("project");
+    projects::add_member(db, &ctx("req-m"), tool.project_id, w.sa, Role::Maintainer)
+        .await
+        .expect("member");
+    let path = format!("/api/v1/projects/{}", tool.project_id.get());
+    let by_sa = call(
+        db,
+        "PATCH",
+        &path,
+        sa_token(w.sa, &[Scope::Api]),
+        Some(json!({"display_name": "Tool (sync)"})),
+    )
+    .await;
+    assert_eq!(by_sa.status, StatusCode::OK, "{}", by_sa.json);
+    let by_alice = call(
+        db,
+        "PATCH",
+        &path,
+        token(w.alice.user_id, false, &[Scope::Api]),
+        Some(json!({"display_name": "Tool"})),
+    )
+    .await;
+    assert_eq!(by_alice.status, StatusCode::OK, "{}", by_alice.json);
+    let rows =
+        w.t.json_rows(
+            "SELECT actor_kind, actor_user_id FROM forge.audit_log \
+             WHERE action = 'project.updated' ORDER BY id",
+        )
+        .await;
+    assert_eq!(
+        rows,
+        vec![
+            json!({"actor_kind": "service_account", "actor_user_id": w.sa.get()}),
+            json!({"actor_kind": "user", "actor_user_id": w.alice.user_id.get()}),
+        ]
+    );
+    w.t.drop_now().await;
+}
