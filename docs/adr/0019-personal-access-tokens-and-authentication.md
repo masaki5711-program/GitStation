@@ -529,3 +529,48 @@ Amendment M2 の 4 と §10 の実装。
 - エラー: FG-SYS-0008 BackupFailed、FG-SYS-0009 RestoreVerificationFailed（どちらも alert、runbook `backup-restore`。番号は登録時に確かめる。計画 11 §4.4）。
 - CLAUDE.md の契約 4 の例外の一覧にも追記した（利用者が計画 11 を承認、2026-11-02）。
 - **最終の再レビュー（2026-11-02）で足した**: 当て直しは、監査の写しにある権限や条件を狭める設定の変更をすべて対象にする（`protected_ref_merge_rules`・`approval_rules`・`merge_settings`・`codeowners_enforced`・必須チェックを含む）。管理者の印をすべて外した後に付け直す `system` の `forge admin` のコマンドを runbook `backup-restore` に名指しで書く（無ければ O1 で足す）。ADR-0024 末尾の表 #41・#44。
+
+## Addendum S0（2026-11-03、M3 S0 `feat/auth-service-accounts`: サービスアカウント）
+
+計画 11 §5 S0（案 A、利用者が承認）を実装して決めたこと。
+
+1. **サービスアカウントは利用者の行**（`forge.users.kind = service_account`）と、プロフィールの行 `forge.service_account_profiles`
+   （持ち主 = 人、目的、作った管理者）でできる。個人の名前空間・プロジェクトのメンバー・スコープつきのトークンは人と同じ仕組みを使う。
+   持ち主が人であること、プロフィールがサービスアカウントのものであることはトリガー `service_account_profiles_kinds` が名前つきの制約
+   （`service_account_profiles_owner_human` / `service_account_profiles_kind`）で守る。削除は無い（無効化だけ）。目的ごとに 1 つ作る（Q4）。
+2. **個人の情報と管理者の権限を持たない**: メール・社員番号・外部 ID は持てず（`users_service_account_no_personal_data`）、`is_admin` にならない
+   （`users_service_account_not_admin`）。したがってトークンに `admin` スコープは付かない（`tokens::issue` の `admin_scope_requires_admin` と
+   `authorize()` の `admin_scope_for_service_account` の二重）。IdP の身元に結ばれない（`user_identities_human_only`、運用のコマンドは
+   FG-AUTH-0014 `not_human`）。サインインは以前どおり `not_human` で断る。
+   **既存のデータへの影響**: この CHECK は既存の行も検証する。メール・外部 ID を持つ、または管理者のサービスアカウントが本番にあるとマイグレーションは
+   失敗する（何も適用されない）。M3 までにサービスアカウントを作る経路は無かったので、無いはずである。
+3. **見えるのはメンバーのプロジェクトだけ**: `authorize()` の `can_see` / `read_role` が呼び出し元の種類を見る。internal のプロジェクトでも、
+   メンバーでなければ FG-REPO-0005（ログの `reason=service_account_not_member`。存在は漏らさない）。メンバーなら、そのロールで読む
+   （人は internal を Reporter として読むが、サービスアカウントの Guest は Guest のまま）。ボットはこの規則の外（メンバーにならないため）。
+4. **自分の個人の名前空間にプロジェクトを作れない**（`non_person_namespace`、ボットも）。グループには、人と同じロールの規則で作れる。
+5. **管理の操作と判定**（どれも `authorize()` と権限の表の allow / deny の行）:
+   - `ServiceAccountCreate` と `ServiceAccountTokenIssue` は **管理者の Web セッションだけ**（`is_session_only` と `is_people_only`）。
+     トークンは管理者の `admin` スコープのものでも FG-AUTH-0002 `session_required`（トークンがトークンを作らない、Amendment M2 4 と同じ理由）。
+     発行は有効なサービスアカウントだけ（`target_disabled`）。
+   - `ServiceAccountList` / `Read` / `TokenList` / `TokenRevoke` は管理者の権限（トークンなら `admin` スコープ）。**失効は `admin` スコープのトークン
+     でもできる**（漏えいにすぐ対応できるように。エージェントのトークンでも可: 権限を減らす操作なので）。
+   - `ServiceAccountUpdate`（表示名・目的・持ち主）は管理者で、人だけ（持ち主を決めるのは人の判断）。
+   - 経路の対象がサービスアカウントでない（人・ボットの id）ときは FG-REPO-0005 `not_service_account`。別の利用者のトークンを
+     `…/tokens/{token_id}` で指定したときも FG-REPO-0005（ローダーが持ち主を照らす）。
+   - 無効化は既存の `POST /api/v1/admin/users/{id}/disable`（`UserDisable`）で、サービスアカウントのトークンは同じ変更で
+     `revoked_reason = 'user_disabled'` になる。
+6. **トークンの発行者**: `tokens.issued_by_user_id`（追記のマイグレーション `20261113100000`、監査のトリガーを列つきで作り直した）。
+   管理者が発行したサービスアカウントのトークンにだけ入り、本人のトークンと運用の CLI（`forge admin token issue`）のものは NULL。
+   `token.created` の監査の行とイベントにも `issued_by_user_id`（あるときだけ）。
+7. **`user_email` スコープ**: 応答に人のメールアドレスを含めてよいことを示す追加のスコープ。ほかのどのスコープも満たさず、どのスコープにも
+   満たされない（`api` / `admin` でも）。S0 ではまだ使う経路が無い（I1c のイベントの actor で使う。Q7 の `actor.employee_number` も同じ形）。
+8. **doctor**: `service_accounts.tokens_expiring`（有効なトークンが **すべて** 14 日以内に切れる有効なサービスアカウント。差し替え済みで
+   古い方だけが切れるものは数えない）を新しいコード **FG-AUTH-0019** ServiceAccountTokenExpiring（warn）で、
+   `service_accounts.ownerless`（持ち主が無効、またはプロフィールが無い）を FG-AUTH-0010 `reason=ownerless_service_account` で出す。
+   Runbook `service-accounts`、`user-offboarding` に引き継ぎの手順 0 を足した。
+9. **gstn**: トークンで使える半分（`gstn admin service-account list|view|update|tokens|revoke-token`）だけ。作成と発行は Web セッションだけなので
+   gstn には作らず、C-1 の表で `BrowserOnly` にした。
+10. **未決（利用者に確認）**: 管理画面（作成・発行）はまだ無い。それまで Runbook は管理者のブラウザのコンソールから API を呼ぶ手順にした。
+    画面の MR を S0 の後に足すか、運用の CLI（`forge admin service-account create`、§8 の例外に追加）で代えるかを決める。
+11. **見送り**: サービスアカウントが書いた変更の監査の `actor_kind` は今も `user`（forge-hosting / forge-review / push の `ChangeContext` が
+    `Actor::User` を作る）。`Actor::ServiceAccount` に揃えるのは I1（kanflow の代理と同じ MR）で行う。

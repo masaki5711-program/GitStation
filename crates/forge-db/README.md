@@ -712,3 +712,18 @@ after `ROUND_BUDGET` = 30 s, then `more`) and waits on the crate-private
 statement / idle timeout, server-side TCP keepalive, a bounded `SELECT 1` at
 every 5 s poll). `states` / `check_lag` / `dead_letters` feed `forge doctor`
 (`subscribers.lag`, `subscribers.dead_letters`).
+
+**Service accounts (M3 S0, migration `20261113100000`, ADR-0019 Addendum S0)**:
+`service_accounts::create` / `update` (one `service_account.created` /
+`.updated` audit row on the account; the owner, an active person, is locked
+`FOR SHARE`; FG-AUTH-0006 `purpose_*` / `owner_*`), `target` / `get` / `list`
+(read pool) and `health` (doctor: active tokens all expiring within 14 days →
+FG-AUTH-0019; no active human owner → FG-AUTH-0010 `ownerless_service_account`).
+`tokens::issue_for_service_account` records `tokens.issued_by_user_id` (and
+`issued_by_user_id` in `token.created`); a person is refused
+(`owner_not_service_account`). The schema backstops: the
+`service_account_profiles_kinds` trigger (`service_account_profiles_kind`,
+`service_account_profiles_owner_human`), `users_service_account_no_personal_data`,
+`users_service_account_not_admin`, `user_identities_human_only`; `users::create`
+and `identities::link_by_operator` refuse first (FG-AUTH-0006, FG-AUTH-0014
+`not_human`). Tests `src/service_accounts/tests.rs`.

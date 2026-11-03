@@ -50,6 +50,11 @@ with `agent_token`, `above_own_role`, `last_owner`; FG-REPO-0005 / 0010 / 0013 /
 0017; FG-DB-0020), plus FG-SYS-0001 (`proof_action_mismatch`,
 `proof_shape_mismatch`, `proof_without_user`, `reconfirm_target_mismatch`).
 
+**Service accounts (M3 S0)**: `service_accounts.rs` — create, list, read, update,
+issue a token (the caller is recorded as the issuer), list and revoke its tokens,
+each on the proof of its own action; the forge-db commands re-check the owner and
+the account's state under their row locks.
+
 **Tests**: `tests/commands.rs`, `tests/members_protection.rs` (decisions on the
 locked facts, agents, last owner, stale proofs), `tests/race.rs` (a role removed
 or a member promoted while a command waits on the lock it takes; a protection

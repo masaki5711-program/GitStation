@@ -22,6 +22,8 @@ entry point from M1.
 
 M3 R4 (ADR-0024 §4.2, `src/serve_merges.rs`): `forge serve` also runs the merge job `merge_request.merge` (one at a time, `forge_review::Merger` sharing the browse cache it invalidates; a failure that can pass later is retried, the last one ends a never-fenced attempt `superseded reason=job_failed`) and reconciles stuck attempts every 60 s (`Merger::reconcile`); `forge worker` does not register the kind. Shutdown gives a running merge 10 s. Review round 1: the runner and the reconciliation are separate tasks under supervisors (an unexpected exit or panic is FG-SYS-0005 `merge_task_exited`, restarted with a 1–30 s backoff); a reconciliation pass is bounded (50 s) and logs an info heartbeat `forge.serve.merge_reconcile_pass` once a minute (each attempt at most 20 s); `forge doctor` gains `review.merges` (FG-REVIEW-0009 `reconcile_overdue` / `ref_state_unknown` for `failed` attempts of the last 24 h). Runbook `merge-execution`.
 
+M3 S0 (runbook `service-accounts`): `forge doctor` gains `service_accounts.tokens_expiring` (FG-AUTH-0019 warn: an active service account whose active tokens all expire within 14 days; `expiring_service_accounts`, `user_ids`, `soonest_expiry`, `within_days`) and `service_accounts.ownerless` (FG-AUTH-0010 warn `reason=ownerless_service_account`: no active human owner; `ownerless_service_accounts`, `user_ids`). Ids and counts only.
+
 **`forge admin`** (step D3): `token issue` / `token revoke` are the first
 mutating admin commands. The host operator is the trust root, so they run
 outside `authorize()` (documented exception, ADR-0019 §8); `forge_db::tokens`
