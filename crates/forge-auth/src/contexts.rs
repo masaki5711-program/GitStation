@@ -769,3 +769,88 @@ impl ResourceCtx for ServiceAccountTokenRequestCtx {
         self.account
     }
 }
+
+/// A check run report as loaded for the caller (`CheckWrite`, M3 C1,
+/// ADR-0024 §10): the project row, the commit and name the report is for,
+/// and whether the caller holds a grant of the name's namespace. The id is
+/// the project, the commit and the name together, so the proof names
+/// exactly the run the handler writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckRunCtx {
+    project: LoadedProject,
+    head: forge_core::ObjectId,
+    name: forge_core::CheckName,
+    granted: bool,
+}
+
+impl CheckRunCtx {
+    pub fn new(
+        project: LoadedProject,
+        head: forge_core::ObjectId,
+        name: forge_core::CheckName,
+        granted: bool,
+    ) -> Self {
+        Self {
+            project,
+            head,
+            name,
+            granted,
+        }
+    }
+}
+
+impl sealed::Sealed for CheckRunCtx {}
+
+impl ResourceCtx for CheckRunCtx {
+    type Id = (ProjectId, forge_core::ObjectId, forge_core::CheckName);
+    fn resource(&self) -> Resource {
+        Resource::CheckRun {
+            project: ProjectView {
+                visibility: self.project.visibility,
+                role: self.project.role,
+                pending_deletion: self.project.pending_deletion,
+            },
+            namespace: self.name.namespace(),
+            granted: self.granted,
+        }
+    }
+    fn id(&self) -> (ProjectId, forge_core::ObjectId, forge_core::CheckName) {
+        (self.project.id, self.head.clone(), self.name.clone()) // clone: the proof owns its id
+    }
+}
+
+/// A check namespace grant change of a service account
+/// (`CheckNamespaceGrantManage`, M3 C1): the account row and the namespace
+/// of the path. The id is both, so the proof names the grant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckNamespaceGrantCtx {
+    account: UserId,
+    view: ServiceAccountView,
+    namespace: forge_core::CheckNamespace,
+}
+
+impl CheckNamespaceGrantCtx {
+    pub fn new(
+        account: UserId,
+        view: ServiceAccountView,
+        namespace: forge_core::CheckNamespace,
+    ) -> Self {
+        Self {
+            account,
+            view,
+            namespace,
+        }
+    }
+}
+
+impl sealed::Sealed for CheckNamespaceGrantCtx {}
+
+impl ResourceCtx for CheckNamespaceGrantCtx {
+    type Id = (UserId, forge_core::CheckNamespace);
+    fn resource(&self) -> Resource {
+        Resource::ServiceAccount(self.view)
+    }
+    fn id(&self) -> (UserId, forge_core::CheckNamespace) {
+        (self.account, self.namespace)
+    }
+}

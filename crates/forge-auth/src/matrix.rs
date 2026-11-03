@@ -121,6 +121,12 @@ pub(crate) enum Actor {
     /// member-only rule is the service account's; a bot still sees
     /// internal projects).
     BotNonMemberTokenReadApi,
+    /// A service account that is a Developer member, with a `read_api`
+    /// token (M3 C1: it reads check runs, never reports them).
+    ServiceAccountTokenReadApi,
+    /// A service account that is a Reporter member, with an `api` token
+    /// (M3 C1: below the reporters' Developer role).
+    ServiceAccountReporterTokenApi,
 }
 
 /// The resource in a row; the caller's role on it comes from the actor.
@@ -316,6 +322,13 @@ pub(crate) enum Fixture {
         active: bool,
         admin_scope: bool,
     },
+    /// A check run report (M3 C1): the name's namespace, whether the caller
+    /// holds a grant of it, on a project of `project`'s kind.
+    CheckRun {
+        namespace: forge_core::CheckNamespace,
+        granted: bool,
+        project: crate::matrix_review::MrProject,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,6 +444,12 @@ impl Actor {
                 &[Scope::ReadApi, Scope::ReadRepository],
             ),
             Actor::BotNonMemberTokenReadApi => token_of(AccountKind::Bot, false, &[Scope::ReadApi]),
+            Actor::ServiceAccountTokenReadApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::ReadApi])
+            }
+            Actor::ServiceAccountReporterTokenApi => {
+                token_of(AccountKind::ServiceAccount, false, &[Scope::Api])
+            }
             Actor::NonMember
             | Actor::Guest
             | Actor::Reporter
@@ -446,7 +465,7 @@ impl Actor {
             Actor::Guest | Actor::GuestTokenReadApi | Actor::ServiceAccountGuestTokenRead => {
                 Some(Role::Guest)
             }
-            Actor::Reporter => Some(Role::Reporter),
+            Actor::Reporter | Actor::ServiceAccountReporterTokenApi => Some(Role::Reporter),
             Actor::Developer
             | Actor::DevTokenReadRepository
             | Actor::DevTokenWriteRepository
@@ -464,7 +483,8 @@ impl Actor {
             | Actor::AgentTokenMergeApprove
             | Actor::ServiceAccountTokenMergeApprove
             | Actor::BotTokenMergeApprove
-            | Actor::DevTokenUserEmail => Some(Role::Developer),
+            | Actor::DevTokenUserEmail
+            | Actor::ServiceAccountTokenReadApi => Some(Role::Developer),
             Actor::Maintainer
             | Actor::AgentMaintainerTokenApi
             | Actor::MaintainerTokenApi
@@ -558,7 +578,9 @@ impl Actor {
             | Actor::AdminTokenMergeApproveAdmin
             | Actor::DevTokenUserEmail
             | Actor::ServiceAccountGuestTokenRead
-            | Actor::BotNonMemberTokenReadApi => None,
+            | Actor::BotNonMemberTokenReadApi
+            | Actor::ServiceAccountTokenReadApi
+            | Actor::ServiceAccountReporterTokenApi => None,
         }
     }
 
@@ -868,6 +890,19 @@ impl Fixture {
                 access_role,
                 account,
             },
+            Fixture::CheckRun {
+                namespace,
+                granted,
+                project,
+            } => Resource::CheckRun {
+                project: match project {
+                    crate::matrix_review::MrProject::Private => private,
+                    crate::matrix_review::MrProject::Internal => internal,
+                    crate::matrix_review::MrProject::Deleted => deleted,
+                },
+                namespace,
+                granted,
+            },
             Fixture::Mr(mr) => mr.resource(role),
             Fixture::Discussion(d) => d.resource(role),
             Fixture::ServiceAccountTarget { human, active } => {
@@ -927,6 +962,7 @@ pub(crate) static ROWS: std::sync::LazyLock<Vec<Row>> = std::sync::LazyLock::new
         crate::matrix_rows_people::PEOPLE_ONLY_ROWS,
         crate::matrix_rows_people::OWNER_TOKEN_ROWS,
         crate::matrix_rows_service_accounts::SERVICE_ACCOUNT_ROWS,
+        crate::matrix_rows_checks::CHECK_ROWS,
     ]
     .concat()
 });
