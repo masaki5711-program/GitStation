@@ -2440,26 +2440,59 @@ async fn neutral_and_in_progress_block() {
     w.t.drop_now().await;
 }
 
-/// The job decides on the runs as stored at its gate (inside the merge
-/// request's transaction), not on what the request saw: a run that failed
-/// after the request supersedes the attempt and no ref moves.
+/// A spy source: every call is counted and answered "no run reported".
+#[derive(Default)]
+struct SpySource {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl forge_core::CheckResultsSource for SpySource {
+    fn runs_on<'a>(
+        &'a self,
+        _project: ProjectId,
+        _head: &'a forge_core::ObjectId,
+    ) -> forge_core::namespace_resolver::LookupFuture<'a, forge_core::CheckRunsOnHead> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Ok(forge_core::CheckRunsOnHead::default()) })
+    }
+}
+
+/// Review fix 2 (HIGH): the merge request and the merge job read the runs
+/// inside the gate's transaction (`MergeGate::check_runs`, under the merge
+/// request's locks), never through the status's `CheckResultsSource`. The
+/// spy answers "no run" for every call: a request that read through it
+/// would be refused (`required_check_missing`) although the stored run
+/// succeeded; the spy must not be called by the request or the job, only
+/// by the status. The job then decides on the runs as stored at its own
+/// gate: a run that failed after the request supersedes the attempt.
 #[tokio::test]
-async fn the_merge_job_reads_the_runs_under_the_gate_lock() {
-    let w = world(
+async fn the_request_and_the_job_read_the_runs_inside_the_gate_transaction() {
+    let mut w = world(
         &[("README.md", "base\n")],
         &[("README.md", "base\n"), ("f.txt", "f\n")],
     )
     .await;
+    let spy = Arc::new(SpySource::default());
+    w.review = w.review.clone().with_check_results(spy.clone());
     w.protect("developer", 0, &["ci/gates"], false, false).await;
     w.run(&w.head, "ci/gates", "completed", Some("success"))
         .await;
-    let attempt = w.ask().await.expect("queued on a success");
+    let attempt = w
+        .ask()
+        .await
+        .expect("queued: the request read the stored success in its gate");
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     w.run(&w.head, "ci/gates", "completed", Some("failure"))
         .await;
     let report = w.merger.execute(attempt.id).await.expect("job");
     assert_eq!(report.outcome, "superseded");
     assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
     assert_eq!(w.tip("main"), w.base);
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // The status reads through the source (the spy says "no run").
+    let status = w.status().await;
+    assert_eq!(spy.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(World::reason_names(&status), ["required_check_missing"]);
     w.t.drop_now().await;
 }
 
