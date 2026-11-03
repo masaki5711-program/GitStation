@@ -6,7 +6,8 @@
 //! per run that restored any (`forge.worker.codeowners_enforcement_restored`,
 //! runbook codeowners). For the record only: the evaluation reads an
 //! expired suspension as enforced by itself, so a stopped worker never
-//! leaves CODEOWNERS off. A full batch runs again at once.
+//! leaves CODEOWNERS off. A full batch that recorded any runs again at
+//! once; one where every row failed waits for the period.
 //!
 //! A project whose record fails is logged once with its `error_code`
 //! (`forge.worker.codeowners_restore_failed`) and moved to the back of the
@@ -19,7 +20,7 @@ use std::time::Duration;
 
 use forge_core::RequestId;
 use forge_db::change::{Actor, ChangeContext};
-use forge_db::review::{restore_expired_codeowners, RESTORE_MAX_BATCH};
+use forge_db::review::{restore_expired_codeowners, RestoreReport, RESTORE_MAX_BATCH};
 use forge_db::Db;
 use forge_errors::ForgeError;
 
@@ -63,11 +64,19 @@ pub(crate) async fn run_codeowners_restore(db: &Db) -> Result<Next, ForgeError> 
             "CODEOWNERS enforcement came back after its suspension expired (runbook codeowners)"
         );
     }
-    Ok(if i64::from(report.found) >= RESTORE_MAX_BATCH {
+    Ok(next_after(&report))
+}
+
+/// When to run again after `report`: at once after a full batch that
+/// recorded something (more may be waiting), otherwise after the period —
+/// a full batch of failures waits (R6 review round 2: no hot loop; the
+/// failed rows are at the back of the next scan).
+fn next_after(report: &RestoreReport) -> Next {
+    if i64::from(report.found) >= RESTORE_MAX_BATCH && report.restored > 0 {
         Next::Immediately
     } else {
         Next::AfterPeriod
-    })
+    }
 }
 
 #[cfg(test)]
@@ -84,5 +93,41 @@ mod tests {
         let next = run_codeowners_restore(&t.db).await.expect("run");
         assert!(matches!(next, Next::AfterPeriod));
         t.drop_now().await;
+    }
+
+    /// R6 review round 2 (MEDIUM): a full batch runs again at once only
+    /// when it made progress — a batch where every row failed waits for
+    /// the period (no hot loop logging a warning per row each pass).
+    #[test]
+    fn a_full_batch_runs_again_at_once_only_after_progress() {
+        let full = u32::try_from(RESTORE_MAX_BATCH).expect("batch fits u32");
+        let failing = |n: u32| {
+            (0..n)
+                .map(|i| {
+                    (
+                        forge_core::ProjectId::new(i64::from(i) + 1),
+                        ForgeError::new(forge_errors::ErrorCode::DbQueryFailed),
+                    )
+                })
+                .collect()
+        };
+        let all_failed = RestoreReport {
+            restored: 0,
+            found: full,
+            failed: failing(full),
+        };
+        assert!(matches!(next_after(&all_failed), Next::AfterPeriod));
+        let some_restored = RestoreReport {
+            restored: 1,
+            found: full,
+            failed: failing(full - 1),
+        };
+        assert!(matches!(next_after(&some_restored), Next::Immediately));
+        let partial = RestoreReport {
+            restored: 1,
+            found: 1,
+            failed: Vec::new(),
+        };
+        assert!(matches!(next_after(&partial), Next::AfterPeriod));
     }
 }

@@ -1519,3 +1519,6 @@ security の HIGH 2 件（どれも安い操作で 1 つのリポジトリのす
   許された head の承認だけを写し、他は `new_commits` で消す（承認ごとにイベントは 1 つのまま）。途中の head で新しく承認した人は
   その head から数える。テスト `the_carry_limits_count_from_the_approved_head`（30 ファイルの push 2 回: 1 回目は写り、2 回目で最初の
   承認は消え、途中の承認は写る）、`approvals_are_carried_only_when_every_condition_holds`。
+- **期限の記録の再走査（MEDIUM）**: worker の `codeowners_restore` は、満杯の走査（`RESTORE_MAX_BATCH` 件）で **1 件以上を記録した
+  ときだけ** すぐにもう一度走る。全件が失敗した満杯の走査は通常の周期（60 秒）を待つ（失敗の warn を毎回全件出し続ける空回りをしない）。
+  テスト `a_full_batch_runs_again_at_once_only_after_progress`。
