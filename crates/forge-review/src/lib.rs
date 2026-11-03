@@ -158,6 +158,11 @@ pub struct Review {
     /// M3 R5: where the approval evaluation reads git (`None`: approving
     /// and merging are `FG-SYS-0001 reason=review_git_unconfigured`).
     review_git: Option<approvals::ReviewGit>,
+    /// M3 C1: where the merge status reads the head's check runs
+    /// (only `forge serve` injects the `Db`; the database the
+    /// commands use unless set). The request and the job read them in the
+    /// gate's transaction instead.
+    checks: Arc<dyn forge_core::CheckResultsSource>,
 }
 
 impl std::fmt::Debug for Review {
@@ -265,13 +270,23 @@ fn ready(project: ProjectId, repo: ProjectRepository) -> Result<RepoId, ForgeErr
 impl Review {
     pub fn new(db: Db, branches: Arc<dyn BranchProbe>) -> Self {
         Self {
-            db,
             branches,
             refs: None,
             diffs: None,
             outdated_budget: outdated::OUTDATED_BUDGET,
             review_git: None,
+            checks: Arc::new(db.clone()), // clone: the source shares the pool
+            db,
         }
+    }
+
+    /// Where the merge status reads check runs (M3 C1; only `forge serve`
+    /// passes the `Db` — `forge worker` builds no `Review` —; tests pass a
+    /// spy or a failing source).
+    #[must_use]
+    pub fn with_check_results(mut self, checks: Arc<dyn forge_core::CheckResultsSource>) -> Self {
+        self.checks = checks;
+        self
     }
 
     /// Where the hidden version refs live (M3 R1b; `forge serve` sets it).

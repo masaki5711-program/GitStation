@@ -320,7 +320,8 @@ impl Subscriber for MergeRequestRefresh {
                 | EventType::MergeRequestApproved
                 | EventType::MergeRequestUnapproved
                 | EventType::CodeownersEnforcementChanged
-                | EventType::CodeownersEnforcementRestored => Ok(()),
+                | EventType::CodeownersEnforcementRestored
+                | EventType::CheckCompleted => Ok(()),
             }
         })
     }

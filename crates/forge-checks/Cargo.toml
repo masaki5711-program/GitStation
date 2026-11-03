@@ -1,0 +1,32 @@
+[package]
+name = "forge-checks"
+description = "forge check runs: validation of a report, the namespace grants, and the commit a run is reported on"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# A feature crate (ADR-0024 §11): forge-web / forge-cli → forge-checks →
+# forge-auth / forge-git / forge-db → forge-core → forge-errors. It runs no
+# SQL of its own (the SQL is `forge_db::checks`) and never depends on
+# another feature crate: forge-review reads the runs through forge-core's
+# `CheckResultsSource`.
+[dependencies]
+forge-auth.workspace = true
+forge-core.workspace = true
+forge-db.workspace = true
+forge-errors.workspace = true
+forge-git.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+forge-db = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+sqlx.workspace = true
+# tests/real_browser.rs: a real bare repository under a temporary storage root.
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

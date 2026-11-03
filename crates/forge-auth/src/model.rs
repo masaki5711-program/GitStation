@@ -438,6 +438,15 @@ pub enum Resource {
         account: ServiceAccountView,
         scopes: Vec<Scope>,
     },
+    /// A check run report (`CheckWrite`, M3 C1, ADR-0024 §10): the project
+    /// as seen by the caller, the report name's namespace, and whether the
+    /// caller holds a grant of that namespace (read by the loader, and
+    /// again under the lock in the write transaction).
+    CheckRun {
+        project: ProjectView,
+        namespace: forge_core::CheckNamespace,
+        granted: bool,
+    },
 }
 
 /// A user as a service account route sees it (M3 S0): its kind

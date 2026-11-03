@@ -81,6 +81,12 @@ pub enum Command {
         #[command(subcommand)]
         command: MergeRuleCommand,
     },
+    /// Check runs of a commit (M3 C1): report (a service account), list.
+    #[command(disable_help_subcommand = true)]
+    Checks {
+        #[command(subcommand)]
+        command: ChecksCommand,
+    },
     /// A project's integration binding (M3 I1a): list, set, remove.
     #[command(name = "integration-binding", disable_help_subcommand = true)]
     IntegrationBinding {
@@ -1157,9 +1163,60 @@ pub enum UserCommand {
 }
 
 #[derive(Subcommand, Debug)]
+pub enum ChecksCommand {
+    /// Report a check run on a commit (a service account holding the
+    /// namespace; the same name again updates it).
+    Report {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The full commit id (40 or 64 hex digits).
+        #[arg(long, value_parser = parse_oid)]
+        sha: String,
+        /// `<namespace>/<name>`, e.g. ci/gates.
+        #[arg(long, value_parser = parse_text)]
+        name: String,
+        /// queued, in_progress or completed.
+        #[arg(long, value_parser = crate::checks::parse_status)]
+        status: String,
+        /// With completed: success, neutral, failure, error, action_required.
+        #[arg(long, value_parser = crate::checks::parse_conclusion)]
+        conclusion: Option<String>,
+        /// The summary (plain text / Markdown).
+        #[arg(long, value_parser = parse_description, conflicts_with = "summary_file")]
+        summary: Option<String>,
+        /// The summary from a file (UTF-8, at most 64 KiB).
+        #[arg(long = "summary-file", value_name = "FILE")]
+        summary_file: Option<PathBuf>,
+        /// An http(s) link for people (never fetched by the server).
+        #[arg(long = "details-url", value_parser = parse_text)]
+        details_url: Option<String>,
+        /// The annotations: a JSON array of {path, start_line, end_line?,
+        /// level, message, title?} (at most 50).
+        #[arg(long = "annotations-file", value_name = "FILE")]
+        annotations_file: Option<PathBuf>,
+    },
+    /// Every check run of a commit, by name.
+    List {
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        /// The full commit id (40 or 64 hex digits).
+        #[arg(long, value_parser = parse_oid)]
+        sha: String,
+    },
+}
+
+/// A check namespace a service account may be granted.
+pub fn parse_grant_namespace(raw: &str) -> Result<String, String> {
+    match raw {
+        "ci" | "kanflow" => Ok(raw.to_owned()),
+        _ => Err("a check namespace to grant is ci or kanflow".to_owned()),
+    }
+}
+
+#[derive(Subcommand, Debug)]
 pub enum AdminCommand {
-    /// Service accounts: list, view, update, tokens, revoke-token (create and
-    /// issue in the browser).
+    /// Service accounts: list, view, update, tokens, revoke-token, the check
+    /// namespaces they report (create and issue in the browser).
     #[command(name = "service-account", disable_help_subcommand = true)]
     ServiceAccount {
         #[command(subcommand)]
@@ -1246,6 +1303,35 @@ pub enum ServiceAccountCommand {
     Tokens {
         #[arg(value_parser = parse_id)]
         id: i64,
+    },
+    /// The check namespace grants of a service account, by project (M3 C1).
+    #[command(name = "check-grants")]
+    CheckGrants {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+    /// Let a service account report a check namespace (ci, kanflow) on one
+    /// project.
+    #[command(name = "grant-checks")]
+    GrantChecks {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The project the grant is for.
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_parser = parse_grant_namespace)]
+        namespace: String,
+    },
+    /// Stop a service account reporting a check namespace on one project.
+    #[command(name = "revoke-checks")]
+    RevokeChecks {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// The project the grant is for.
+        #[arg(long, value_parser = parse_id, value_name = "ID")]
+        project: i64,
+        #[arg(value_parser = parse_grant_namespace)]
+        namespace: String,
     },
     /// Revoke one of a service account's tokens (a leak). Needs --yes.
     #[command(name = "revoke-token")]

@@ -22,6 +22,7 @@ pub mod matrix;
 mod matrix_review;
 mod matrix_rows;
 mod matrix_rows_approval;
+mod matrix_rows_checks;
 mod matrix_rows_conditions;
 mod matrix_rows_discussion;
 mod matrix_rows_integrations;
@@ -46,13 +47,13 @@ pub use model::{
     TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 pub use prove::{
-    prove, AccountFacts, Authorized, GroupCtx, GroupMemberCtx, GroupTransferCtx, InstanceCtx,
-    LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent, LoadedProject, LoadedProtection,
-    LoadedTarget, LoadedTombstone, LoadedTransferTarget, LoadedUserNamespace, ParentCtx,
-    ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx, ResourceCtx, ServiceAccountCtx,
-    ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx, SessionCtx, TokenCtx, TokenOwnerCtx,
-    TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx, UserNamespaceCtx, UserRenameCtx,
-    UserTargetCtx, VisibilityChangeCtx,
+    prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
+    GroupTransferCtx, InstanceCtx, LoadedGroup, LoadedMembership, LoadedNamespace, LoadedParent,
+    LoadedProject, LoadedProtection, LoadedTarget, LoadedTombstone, LoadedTransferTarget,
+    LoadedUserNamespace, ParentCtx, ProjectCtx, ProjectMemberCtx, RefProtectionCtx, ResolvedCtx,
+    ResourceCtx, ServiceAccountCtx, ServiceAccountTokenCtx, ServiceAccountTokenRequestCtx,
+    SessionCtx, TokenCtx, TokenOwnerCtx, TokenRequestCtx, TombstoneCtx, TransferCtx, UnresolvedCtx,
+    UserNamespaceCtx, UserRenameCtx, UserTargetCtx, VisibilityChangeCtx,
 };
 pub use ref_updates::{authorize_ref_updates, RefUpdateCtx};
 pub use viewer::{MergeRequestViewer, MergeSettingsViewer, TRIAL_SUSPENSION_MINUTES};

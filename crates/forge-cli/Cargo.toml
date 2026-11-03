@@ -22,6 +22,7 @@ forge-web.workspace = true
 forge-hosting.workspace = true
 # M3 R1a: merge requests (ADR-0024 §11).
 forge-review.workspace = true
+forge-checks.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

@@ -1254,7 +1254,7 @@ fn codeowners_enforcement_suspends_for_a_bounded_time() {
 /// read (U2 follow-up); `remove` needs `--yes`.
 #[test]
 fn merge_rule_commands_call_their_routes() {
-    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":1,"required_checks":["ci/gates"],"require_resolved_discussions":true,"direct_push_forbidden":true,"updated_at":"2026-11-03T00:00:01.654321Z"},"warnings":["required_checks_unreportable"]}"#;
+    let rule = r#"{"id":2,"pattern":"refs/heads/main","push_min_role":"maintainer","created_at":"2026-11-03T00:00:00Z","updated_at":"2026-11-03T00:00:00Z","merge_rule":{"required_approvals":1,"required_checks":["ci/gates"],"require_resolved_discussions":true,"direct_push_forbidden":true,"updated_at":"2026-11-03T00:00:01.654321Z"},"warnings":["required_checks_unreportable"],"unreportable_checks":["ci/gates"]}"#;
     let srv = Mock::start(move |r| {
         if r.method == "DELETE" {
             Resp::json(204, "")
@@ -1284,7 +1284,8 @@ fn merge_rule_commands_call_their_routes() {
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(
-        o.stdout.contains("warning: no check can be reported"),
+        o.stdout
+            .contains("warning: no service account may report [ci/gates]"),
         "{}",
         o.stdout
     );

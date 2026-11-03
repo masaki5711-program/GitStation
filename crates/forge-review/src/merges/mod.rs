@@ -51,7 +51,7 @@ mod reconcile;
 mod request;
 mod source;
 
-pub use conditions::{conditions, method_allowed, CheckRuns, Conditions, NoCheckRuns};
+pub use conditions::{conditions, method_allowed, CheckRuns, Conditions};
 pub use evaluate::{
     blocked, evaluate_merge, stored_mergeable, BlockReason, CheckConclusion, CheckRun, CheckStatus,
     MergeClearance, MergeFacts, Mergeable, RequiredCheck,

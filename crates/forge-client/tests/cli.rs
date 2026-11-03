@@ -946,6 +946,11 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "integration-binding list",
             "integration-binding set",
             "integration-binding remove",
+            "admin service-account check-grants",
+            "admin service-account grant-checks",
+            "admin service-account revoke-checks",
+            "checks report",
+            "checks list",
             "api",
             "help",
             "schema"

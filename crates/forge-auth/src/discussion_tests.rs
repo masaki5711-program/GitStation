@@ -270,7 +270,8 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::MergeSettingsChange { .. }
         | Resource::Resolved { .. }
         | Resource::ServiceAccount(_)
-        | Resource::ServiceAccountTokenRequest { .. } => None,
+        | Resource::ServiceAccountTokenRequest { .. }
+        | Resource::CheckRun { .. } => None,
     };
     project.is_some_and(|p| p.visibility == Visibility::Internal)
 }
@@ -295,6 +296,12 @@ fn only_people_only_actions_refuse_by_account_kind() {
                     let designed = match (kind, why.as_str()) {
                         (AccountKind::ServiceAccount, "service_account_not_member") => {
                             e.code() == ErrorCode::NotFound
+                        }
+                        // M3 C1 (ADR-0024 §10): a check run is reported by
+                        // a service account only — the allowed rows are
+                        // service accounts', a bot twin is refused.
+                        (AccountKind::Bot, "not_service_account") => {
+                            e.code() == ErrorCode::Forbidden && r.action == Action::CheckWrite
                         }
                         // A Guest member of an internal project reads by
                         // its own role (a person reads it as a Reporter):

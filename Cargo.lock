@@ -718,12 +718,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "forge-checks"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "forge-git",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "forge-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "flate2",
  "forge-auth",
+ "forge-checks",
  "forge-core",
  "forge-db",
  "forge-errors",
@@ -900,6 +917,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "forge-auth",
+ "forge-checks",
  "forge-core",
  "forge-db",
  "forge-errors",

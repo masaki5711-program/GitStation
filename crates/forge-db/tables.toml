@@ -58,6 +58,10 @@ guarded_functions = [
     "user_identities_human_guard",
     # M3 I1a: an integration acts as one service account, for its life.
     "integrations_service_account_guard",
+    # M3 C1: a check run's identity never changes; grants go to service
+    # accounts only.
+    "check_runs_guard",
+    "check_namespace_grants_kind_guard",
 ]
 
 [tables.events]
@@ -427,6 +431,41 @@ audit_id_column = "project_id"
 unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 I1a ──
+
+# ── M3 C1: the Checks API (ADR-0024 §10) ──
+# One row per (project, commit, name); a report updates it. check_run.reported /
+# check.completed are audited on the project.
+[tables.check_runs]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# At most 50 per run, replaced with the run.
+[tables.check_annotations]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+
+# Which service account reports which namespace (ci / kanflow) on which
+# project (20261115100100); check_namespace.granted / .revoked are audited
+# on the project.
+[tables.check_namespace_grants]
+guarded = false
+kind = "audited"
+ro_columns = ["*"]
+audit_resource = "project"
+audit_id_column = "project_id"
+unaudited_columns = []
+txn_audited_columns = []
+# ── end M3 C1 ──
 
 # The migration bookkeeping, created by the bootstrap (step 3).
 [tables._sqlx_migrations]

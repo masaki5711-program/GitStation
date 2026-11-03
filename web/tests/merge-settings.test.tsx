@@ -450,7 +450,7 @@ describe('merge conditions of protected branches', () => {
     const conditions = await section('Merge conditions of protected branches');
     const notes = await within(conditions).findAllByRole('note');
     const text = notes.map((n) => n.textContent).join(' ');
-    expect(text).toContain('No check can report a result yet, so every merge into this branch is blocked.');
+    expect(text).toContain('No reporter can send some of the required checks, so every merge into this branch is blocked.');
     expect(text).toContain('Direct pushes are forbidden too, so this branch cannot change at all.');
     // Tags have no merge conditions.
     expect(within(conditions).queryByText('refs/tags/v*')).toBeNull();
@@ -469,7 +469,7 @@ describe('merge conditions of protected branches', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Approvals needed'), { target: { value: '2' } });
     fireEvent.change(within(dialog).getByLabelText('Required checks (one per line)'), { target: { value: 'ci/gates\n' } });
-    expect(within(dialog).getByText(/No check can report a result yet/)).toBeTruthy();
+    expect(within(dialog).getByText(/No reporter can send some of the required checks/)).toBeTruthy();
     fireEvent.click(within(dialog).getByLabelText('Forbid direct pushes (merges only)'));
     expect(within(dialog).getByText(/this branch cannot change at all/)).toBeTruthy();
     fireEvent.click(within(dialog).getByLabelText('Threads must be resolved'));

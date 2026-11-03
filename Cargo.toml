@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
+members = ["crates/forge-errors", "crates/forge-core", "crates/forge-git", "crates/forge-auth", "crates/forge-db", "crates/forge-hosting", "crates/forge-review", "crates/forge-checks", "crates/forge-oidc", "crates/forge-web", "crates/forge-cli", "crates/forge-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,6 +17,7 @@ forge-auth = { path = "crates/forge-auth" }
 forge-db = { path = "crates/forge-db" }
 forge-hosting = { path = "crates/forge-hosting" }
 forge-review = { path = "crates/forge-review" }
+forge-checks = { path = "crates/forge-checks" }
 forge-oidc = { path = "crates/forge-oidc" }
 forge-web = { path = "crates/forge-web" }
 serde = { version = "1", features = ["derive"] }

@@ -118,6 +118,9 @@ pub mod tombstones;
 // ── M3 R1a: merge requests (ADR-0024; the SQL of forge-review) ──
 pub mod review;
 // ── end M3 R1a ──
+// ── M3 C1: check runs and namespace grants (ADR-0024 §10) ──
+pub mod checks;
+// ── end M3 C1 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

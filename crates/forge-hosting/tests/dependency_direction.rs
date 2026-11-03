@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
 //! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
-//! forge-review, forge-oidc) →
+//! forge-review, forge-checks, forge-oidc) →
 //! forge-auth / forge-git / forge-db → forge-core → forge-errors`. Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
@@ -40,6 +40,19 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // M3 C1 (ADR-0024 §11): check runs, beside forge-review (and never
+    // depending on it: the merge conditions read the runs through
+    // forge-core's `CheckResultsSource`).
+    (
+        "forge-checks",
+        &[
+            "forge-auth",
+            "forge-git",
+            "forge-db",
+            "forge-core",
+            "forge-errors",
+        ],
+    ),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",
@@ -51,6 +64,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-oidc",
             "forge-hosting",
             "forge-review",
+            "forge-checks",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -64,6 +78,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-oidc",
             "forge-hosting",
             "forge-review",
+            "forge-checks",
             "forge-auth",
             "forge-git",
             "forge-db",
@@ -134,5 +149,20 @@ fn every_crate_depends_only_downwards() {
     );
     for (name, _) in ALLOWED {
         assert!(seen.iter().any(|s| s == name), "{name} not found");
+    }
+}
+
+/// ADR-0024 §11: forge-review decides merges with the check runs and
+/// forge-checks records them; neither may name the other (the runs travel
+/// through forge-core's `CheckResultsSource`).
+#[test]
+fn forge_review_and_forge_checks_have_no_edge() {
+    let allowed: BTreeMap<&str, &[&str]> = ALLOWED.iter().copied().collect();
+    for (a, b) in [
+        ("forge-review", "forge-checks"),
+        ("forge-checks", "forge-review"),
+    ] {
+        let deps = allowed.get(a).expect("crate in the table");
+        assert!(!deps.contains(&b), "{a} may not depend on {b}");
     }
 }

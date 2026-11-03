@@ -144,7 +144,9 @@ merge request in place (ADR-0024 §1).
 - M3 R6 (merge conditions, ADR-0024 §7, §8.2, §8.3, §8.6, §9, §10): `evaluate_merge()` adds
   `required_check_missing` (no run reported is never success), `required_check_not_successful`
   and `unresolved_discussions` (`MergeFacts::checks` / `discussions` from `merges::conditions`:
-  the target's strictest merge rule; check runs arrive with C1, `NoCheckRuns` until then); the
+  the target's strictest merge rule; M3 C1: the head's stored check runs — the request and the
+  job read them in the gate's transaction, the status through `CheckResultsSource`,
+  `Review::with_check_results`); the
   protected branch's minimum is `approvals_missing` with the rule `@protected_branch`; every
   list is ranked by `BlockReason::rank` (ADR-0024 §7). The approval half honours the project's
   `committer_approvals_excluded` and a live CODEOWNERS suspension (only the CODEOWNERS
