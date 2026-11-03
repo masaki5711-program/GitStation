@@ -78,6 +78,31 @@ pub struct StoredApprovalRule {
     /// Who may approve for it (both empty: any eligible person).
     pub users: Vec<UserId>,
     pub groups: Vec<GroupId>,
+    /// U2 follow-up: the same approvers with their names as they are now
+    /// (in the order of `users` / `groups`), so a screen names every
+    /// approver without a member list.
+    pub named_users: Vec<NamedUser>,
+    pub named_groups: Vec<NamedGroup>,
+    /// UTC, RFC 3339 to the microsecond: the token a rule write's
+    /// `expected_updated_at` compares (U2 follow-up, FG-REVIEW-0018).
+    pub updated_at: String,
+}
+
+/// An approver user of a rule, named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedUser {
+    pub id: UserId,
+    pub username: String,
+    pub display_name: String,
+}
+
+/// An approver group of a rule, named (its full path is what a rule write
+/// names it by).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedGroup {
+    pub id: GroupId,
+    pub full_path: String,
+    pub display_name: String,
 }
 
 /// The approval facts of one merge request.

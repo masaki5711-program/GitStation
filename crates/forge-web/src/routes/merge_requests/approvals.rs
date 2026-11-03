@@ -13,6 +13,12 @@
 //!
 //! The registry proves the action on what the loader read; forge-review
 //! decides again inside the transaction.
+//!
+//! U2 follow-up: a rule names its approvers (`users`, `groups`: id and
+//! name, at the rule's own visibility — no lookup route) and its
+//! `updated_at`; a rule write names the `updated_at` it read
+//! (`expected_updated_at`, `null` to create only; another one is
+//! FG-REVIEW-0018).
 
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -187,6 +193,36 @@ pub struct PutApprovalRule {
     /// (no users and no groups: any eligible person).
     #[serde(default)]
     pub groups: Vec<String>,
+    /// The rule's `updated_at` the caller read, echoed verbatim (an opaque
+    /// string), or `null` to create a rule no rule has the name of.
+    /// Required (U2 follow-up): another rule under the lock — changed,
+    /// removed, or created by someone else — is FG-REVIEW-0018 and nothing
+    /// is written.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schema(required = true)]
+    pub expected_updated_at: Option<String>,
+}
+
+/// An approver user of a rule, named.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproverUserBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    /// What a rule write names the user by.
+    pub username: String,
+    pub display_name: String,
+}
+
+/// An approver group of a rule, named.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApproverGroupBody {
+    #[schema(minimum = 1)]
+    pub id: i64,
+    /// What a rule write names the group by.
+    pub full_path: String,
+    pub display_name: String,
 }
 
 /// One approval rule.
@@ -201,6 +237,13 @@ pub struct ApprovalRuleBody {
     pub required_approvals: i32,
     pub user_ids: Vec<i64>,
     pub group_ids: Vec<i64>,
+    /// The same approvers with their names (U2 follow-up), in the order of
+    /// `user_ids` / `group_ids`.
+    pub users: Vec<ApproverUserBody>,
+    pub groups: Vec<ApproverGroupBody>,
+    /// UTC, RFC 3339 to the microsecond: an opaque token — send it back
+    /// verbatim as `expected_updated_at`.
+    pub updated_at: String,
 }
 
 /// `GET …/approval-rules`.
@@ -218,6 +261,25 @@ fn rule_body(r: &StoredApprovalRule) -> ApprovalRuleBody {
         required_approvals: r.required_approvals,
         user_ids: r.users.iter().map(|u| u.get()).collect(),
         group_ids: r.groups.iter().map(|g| g.get()).collect(),
+        users: r
+            .named_users
+            .iter()
+            .map(|u| ApproverUserBody {
+                id: u.id.get(),
+                username: u.username.clone(), // clone: as above
+                display_name: u.display_name.clone(),
+            })
+            .collect(),
+        groups: r
+            .named_groups
+            .iter()
+            .map(|g| ApproverGroupBody {
+                id: g.id.get(),
+                full_path: g.full_path.clone(), // clone: as above
+                display_name: g.display_name.clone(),
+            })
+            .collect(),
+        updated_at: r.updated_at.clone(),
     }
 }
 
@@ -518,7 +580,12 @@ pub async fn put_rule(
             groups: w.input.groups.clone(), // clone: as above
         };
         let (outcome, rule) = review(&state)?
-            .put_approval_rule(&rule_request(&w), &w.proof, &ask)
+            .put_approval_rule(
+                &rule_request(&w),
+                &w.proof,
+                &ask,
+                w.input.expected_updated_at.as_deref(),
+            )
             .await?;
         Ok((outcome, json(rule_body(&rule))?))
     }

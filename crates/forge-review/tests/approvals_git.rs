@@ -403,6 +403,13 @@ impl World {
             ProjectCtx::new(project),
         )
         .expect("proof");
+        // U2 follow-up: the put names the rule as read now (create: none).
+        let expected = forge_db::review::approval_rules(&self.t.db, self.project)
+            .await
+            .expect("rules")
+            .into_iter()
+            .find(|r| r.name == "review")
+            .map(|r| r.updated_at);
         let (_, stored) = self
             .review
             .put_approval_rule(
@@ -415,6 +422,7 @@ impl World {
                     users: users.iter().map(|u| (*u).to_owned()).collect(),
                     groups: Vec::new(),
                 },
+                expected.as_deref(),
             )
             .await
             .expect("rule");
@@ -908,7 +916,7 @@ async fn missing_and_disabled_accounts_answer_alike() {
     };
     let missing = w
         .review
-        .put_approval_rule(&request("req-rule-ghost"), &proof, &ask("ghost"))
+        .put_approval_rule(&request("req-rule-ghost"), &proof, &ask("ghost"), None)
         .await
         .expect_err("missing");
     let _disabled = forge_db::users::disable(&w.t.db, &system("req-disable"), w.mara)
@@ -916,7 +924,7 @@ async fn missing_and_disabled_accounts_answer_alike() {
         .expect("disable");
     let disabled = w
         .review
-        .put_approval_rule(&request("req-rule-mara"), &proof, &ask("mara"))
+        .put_approval_rule(&request("req-rule-mara"), &proof, &ask("mara"), None)
         .await
         .expect_err("disabled");
     assert_eq!(missing.code(), ErrorCode::RequestInvalid);

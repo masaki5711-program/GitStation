@@ -337,28 +337,39 @@ impl Review {
     }
 
     /// `PUT …/approval-rules/{name}` (`ApprovalRuleManage`): create or
-    /// replace a rule; never touches approvals (ADR-0024 §8.6).
+    /// replace a rule; never touches approvals (ADR-0024 §8.6). U2
+    /// follow-up: `expected_updated_at` is the rule's `updated_at` the
+    /// caller read (`None`: create only); another rule under the lock, after
+    /// the re-authorization, is `FG-REVIEW-0018`.
     pub async fn put_approval_rule(
         &self,
         request: &ReviewRequest,
         proof: &Authorized<ProjectCtx>,
         ask: &RuleAsk,
+        expected_updated_at: Option<&str>,
     ) -> Result<(RuleOutcome, StoredApprovalRule), ForgeError> {
         require(proof.action(), Action::ApprovalRuleManage)?;
         let project = *proof.id();
         let user = caller_of(proof)?;
         let new = self.rule(ask).await?;
         let ctx = change_context(request, proof.principal(), user);
-        let (outcome, rule, ()) =
-            review::put_approval_rule_mr_decided(&self.db, &ctx, project, user, &new, |facts| {
+        let (outcome, rule, ()) = review::put_approval_rule_mr_decided(
+            &self.db,
+            &ctx,
+            project,
+            user,
+            &new,
+            expected_updated_at,
+            |facts| {
                 proof
                     .reconfirm(
                         account(facts.account),
                         ProjectCtx::new(loaded(&facts.project)),
                     )
                     .map(drop)
-            })
-            .await?;
+            },
+        )
+        .await?;
         Ok((outcome, rule))
     }
 
