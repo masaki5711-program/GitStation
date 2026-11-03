@@ -251,6 +251,6 @@ pub(super) async fn whole(
 ) -> Result<StoredDiscussion, ForgeError> {
     let id = d.id;
     let notes = tx.step(|c| async move { notes_of(c, id).await }).await?;
-    attach(std::slice::from_mut(&mut d), notes);
+    attach(std::slice::from_mut(&mut d), notes)?;
     Ok(d)
 }

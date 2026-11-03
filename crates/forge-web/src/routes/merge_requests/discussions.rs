@@ -96,6 +96,8 @@ pub struct NoteBody {
     pub id: i64,
     #[schema(minimum = 1)]
     pub author_id: i64,
+    /// The author's names (read with the note).
+    pub author: super::UserNameBody,
     /// As written (never rendered by the server).
     pub body: String,
     /// UTC, RFC 3339.
@@ -122,6 +124,8 @@ pub struct DiscussionBody {
     pub outdated_unknown: bool,
     #[schema(minimum = 1)]
     pub started_by: i64,
+    /// The names of who started it (`started_by`, the first note's author).
+    pub author: super::UserNameBody,
     pub resolved: bool,
     #[schema(required = true)]
     pub resolved_by: Option<i64>,
@@ -158,6 +162,7 @@ fn body_of(view: DiscussionView) -> DiscussionBody {
         outdated: view.outdated.shown(),
         outdated_unknown: view.outdated.is_unknown(),
         started_by: d.started_by.get(),
+        author: d.started_by_name.into(),
         resolved: d.resolved,
         resolved_by: d.resolved_by.map(UserId::get),
         resolved_at: d.resolved_at,
@@ -168,6 +173,7 @@ fn body_of(view: DiscussionView) -> DiscussionBody {
             .map(|n| NoteBody {
                 id: n.id.get(),
                 author_id: n.author.get(),
+                author: n.author_name.into(),
                 body: n.body,
                 created_at: n.created_at,
             })

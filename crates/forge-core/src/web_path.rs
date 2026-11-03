@@ -40,8 +40,9 @@ const SEPARATOR: &str = "-";
 const DOT_GIT: &str = ".git";
 
 /// The words after `/-/` (ADR-0015 "ルートの系統"). Compared exactly: `Blob`
-/// is not `blob`. Words of later milestones (`pulls`, `pipelines`, `wiki`,
-/// …) are added with the ADR that gives them an Action.
+/// is not `blob`. Words of later milestones (`pipelines`, `wiki`, …) are
+/// added with the ADR that gives them an Action; `pulls` / `pull` (the
+/// merge request screens, MR B0) have no `merge_requests` alias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RouteWord {
     Tree,
@@ -56,6 +57,10 @@ pub enum RouteWord {
     Archive,
     Settings,
     Members,
+    /// A project's merge requests (`/-/pulls`).
+    Pulls,
+    /// One merge request (`/-/pull/{iid}`).
+    Pull,
 }
 
 impl RouteWord {
@@ -73,6 +78,8 @@ impl RouteWord {
         Self::Archive,
         Self::Settings,
         Self::Members,
+        Self::Pulls,
+        Self::Pull,
     ];
 
     /// The URL word (also the log / manifest form).
@@ -90,6 +97,8 @@ impl RouteWord {
             Self::Archive => "archive",
             Self::Settings => "settings",
             Self::Members => "members",
+            Self::Pulls => "pulls",
+            Self::Pull => "pull",
         }
     }
 

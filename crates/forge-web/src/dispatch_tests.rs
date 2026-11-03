@@ -460,7 +460,8 @@ async fn api_paths_and_unknown_words_never_get_the_shell() {
     for path in [
         "/api/v1/nope",
         "/api",
-        "/acme/x/-/pulls",
+        "/acme/x/-/merge_requests/1",
+        "/acme/x/-/pipelines",
         "/acme/x/-/Blob/main",
         "/-/unknown",
         "/-",
@@ -635,6 +636,75 @@ async fn head_answers_the_shell_headers_without_a_body() {
         head.headers.get("content-type"),
         get.headers.get("content-type")
     );
+}
+
+/// MR B0: the merge request screens are the shell on a project, `GET`
+/// and `HEAD`, for any caller and without a lookup (their data comes from
+/// the `MergeRequestList` / `MergeRequestRead` API, decided there); a
+/// verb with no route is `FG-WEB-0001`, never the shell.
+#[tokio::test]
+async fn project_shell_serves_pull_screen() {
+    let script = Arc::new(script());
+    let pulls = RouteWord::parse("pulls").expect("pulls is a route word");
+    let pull = RouteWord::parse("pull").expect("pull is a route word");
+    let registry = crate::app::registry();
+    for word in [pulls, pull] {
+        for verb in [Verb::Get, Verb::Head] {
+            assert!(
+                registry
+                    .defs()
+                    .iter()
+                    .any(|d| d.scope == RouteScope::Project
+                        && d.verb == verb
+                        && d.route == Some(ScopedRoute::Word(word))
+                        && d.action == Action::WebShell),
+                "{verb:?} {}",
+                word.as_str()
+            );
+        }
+    }
+    for path in [
+        "/acme/hidden/-/pulls",
+        "/acme/platform/web/-/pulls",
+        "/acme/hidden/-/pull/1",
+        "/acme/x/-/pull/987654321",
+    ] {
+        for who in [None, Some(reporter())] {
+            let answer = send(product(&script), request("GET", path, who)).await;
+            assert_eq!(answer.status, StatusCode::OK, "{path}");
+            assert_eq!(answer.bytes, shell_html(), "{path}");
+        }
+        let head = send(product(&script), request("HEAD", path, None)).await;
+        assert_eq!(head.status, StatusCode::OK, "HEAD {path}");
+        assert!(head.bytes.is_empty(), "HEAD {path}");
+        let post = send(product(&script), request("POST", path, None)).await;
+        assert_eq!(post.code(), ErrorCode::RouteNotFound.id(), "POST {path}");
+    }
+    assert_eq!(script.calls(), 0, "the shell looks nothing up");
+}
+
+/// MR B0: a group has no merge request screens — `pulls` / `pull` are
+/// project words only (no group route is registered for them).
+#[test]
+fn group_shell_rejects_pull_word() {
+    for raw in ["pulls", "pull"] {
+        let word = RouteWord::parse(raw).expect("a route word");
+        assert!(
+            !crate::app::GROUP_SHELL_WORDS.contains(&word),
+            "{raw} is not a group page"
+        );
+        assert!(crate::app::PROJECT_SHELL_WORDS.contains(&word), "{raw}");
+        let on_group: Vec<_> = crate::app::registry()
+            .defs()
+            .iter()
+            .filter(|d| {
+                d.route == Some(ScopedRoute::Word(word))
+                    && matches!(d.scope, RouteScope::Group | RouteScope::Namespace)
+            })
+            .map(|d| d.verb)
+            .collect();
+        assert!(on_group.is_empty(), "{raw} on a group: {on_group:?}");
+    }
 }
 
 // ── non-public words: authentication, one lookup, identical denials ─────

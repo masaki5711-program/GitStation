@@ -238,6 +238,8 @@ impl ScopedRoute {
                 RouteWord::Archive => "/{namespace}/-/archive/{*rest}",
                 RouteWord::Settings => "/{namespace}/-/settings/{*rest}",
                 RouteWord::Members => "/{namespace}/-/members/{*rest}",
+                RouteWord::Pulls => "/{namespace}/-/pulls/{*rest}",
+                RouteWord::Pull => "/{namespace}/-/pull/{*rest}",
             },
             ScopedRoute::Git(g) => match g {
                 GitRoute::InfoRefsUploadPack | GitRoute::InfoRefsReceivePack => {

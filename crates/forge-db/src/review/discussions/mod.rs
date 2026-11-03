@@ -24,6 +24,7 @@ use forge_core::ids::{DiscussionId, MergeRequestId, NoteId, UserId};
 use forge_core::{DiscussionKind, DiscussionSide};
 use forge_errors::{ErrorCode, ForgeError};
 
+use super::{user_name, user_name_columns, UserName};
 use crate::{read_query_error, Db};
 
 mod commands;
@@ -59,6 +60,8 @@ pub struct DiscussionPosition {
 pub struct StoredNote {
     pub id: NoteId,
     pub author: UserId,
+    /// The author's names (MR B0).
+    pub author_name: UserName,
     /// Plain text / Markdown as written (never rendered by the server).
     pub body: String,
     /// UTC, RFC 3339.
@@ -74,6 +77,8 @@ pub struct StoredDiscussion {
     /// `Some` exactly for an inline discussion.
     pub position: Option<DiscussionPosition>,
     pub started_by: UserId,
+    /// The names of who started it (MR B0).
+    pub started_by_name: UserName,
     pub resolved: bool,
     pub resolved_by: Option<UserId>,
     pub resolved_at: Option<String>,
@@ -98,17 +103,19 @@ const UTC: &str = "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'";
 /// The columns of a discussion row, in the order of [`DiscussionRow`].
 pub(crate) fn discussion_columns() -> String {
     format!(
-        "id, merge_request_id, kind, version_no, path, side, line, started_by, resolved, \
+        "id, merge_request_id, kind, version_no, path, side, line, started_by, {}, resolved, \
          resolved_by, to_char(resolved_at AT TIME ZONE 'UTC', {UTC}) AS resolved_at, revision, \
-         to_char(created_at AT TIME ZONE 'UTC', {UTC}) AS created_at"
+         to_char(created_at AT TIME ZONE 'UTC', {UTC}) AS created_at",
+        user_name_columns("merge_request_discussions", "started_by", "started_by")
     )
 }
 
 /// The columns of a note row, in the order of [`NoteRow`].
 pub(crate) fn note_columns() -> String {
     format!(
-        "id, discussion_id, author_id, body, \
-         to_char(created_at AT TIME ZONE 'UTC', {UTC}) AS created_at"
+        "id, discussion_id, author_id, {}, body, \
+         to_char(created_at AT TIME ZONE 'UTC', {UTC}) AS created_at",
+        user_name_columns("merge_request_notes", "author_id", "author")
     )
 }
 
@@ -122,6 +129,8 @@ pub(crate) struct DiscussionRow {
     side: Option<String>,
     line: Option<i64>,
     started_by: i64,
+    started_by_username: Option<String>,
+    started_by_display_name: Option<String>,
     resolved: bool,
     resolved_by: Option<i64>,
     resolved_at: Option<String>,
@@ -134,6 +143,8 @@ pub(crate) struct NoteRow {
     id: i64,
     discussion_id: i64,
     author_id: i64,
+    author_username: Option<String>,
+    author_display_name: Option<String>,
     body: String,
     created_at: String,
 }
@@ -170,6 +181,13 @@ impl DiscussionRow {
             kind,
             position,
             started_by: UserId::new(self.started_by),
+            started_by_name: user_name(
+                self.started_by_username,
+                self.started_by_display_name,
+                "stored_started_by_missing",
+                "discussion_id",
+                id,
+            )?,
             resolved: self.resolved,
             resolved_by: self.resolved_by.map(UserId::new),
             resolved_at: self.resolved_at,
@@ -185,18 +203,29 @@ impl NoteRow {
         self.discussion_id
     }
 
-    pub(crate) fn parse(self) -> StoredNote {
-        StoredNote {
+    pub(crate) fn parse(self) -> Result<StoredNote, ForgeError> {
+        Ok(StoredNote {
             id: NoteId::new(self.id),
             author: UserId::new(self.author_id),
+            author_name: user_name(
+                self.author_username,
+                self.author_display_name,
+                "stored_note_author_missing",
+                "note_id",
+                self.id,
+            )?,
             body: self.body,
             created_at: self.created_at,
-        }
+        })
     }
 }
 
-/// Attach `notes` (ordered by discussion, then id) to `discussions`.
-pub(crate) fn attach(discussions: &mut [StoredDiscussion], notes: Vec<NoteRow>) {
+/// Attach `notes` (ordered by discussion, then id) to `discussions`; a
+/// note that cannot be read fails the whole read (never dropped).
+pub(crate) fn attach(
+    discussions: &mut [StoredDiscussion],
+    notes: Vec<NoteRow>,
+) -> Result<(), ForgeError> {
     let at: std::collections::HashMap<i64, usize> = discussions
         .iter()
         .enumerate()
@@ -208,9 +237,10 @@ pub(crate) fn attach(discussions: &mut [StoredDiscussion], notes: Vec<NoteRow>) 
             .get(&note.discussion())
             .and_then(|&i| discussions.get_mut(i))
         {
-            d.notes.push(note.parse());
+            d.notes.push(note.parse()?);
         }
     }
+    Ok(())
 }
 
 /// The discussions of merge request `mr` with their notes, oldest first,
@@ -254,7 +284,7 @@ pub async fn discussions(db: &Db, mr: MergeRequestId) -> Result<DiscussionPage, 
     attach(
         &mut discussions,
         notes.into_iter().take(MAX_NOTES).collect(),
-    );
+    )?;
     Ok(DiscussionPage {
         discussions,
         truncated,
@@ -320,3 +350,6 @@ pub async fn unresolved_discussions(db: &Db, mr: MergeRequestId) -> Result<u32, 
         .await?;
     Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }
+
+#[cfg(test)]
+mod name_tests;

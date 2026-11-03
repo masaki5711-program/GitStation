@@ -952,6 +952,38 @@
     "word": "members"
   },
   {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/pull/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "pull"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/pull/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "pull"
+  },
+  {
+    "action": "WebShell",
+    "method": "GET",
+    "path": "/{namespace}/-/pulls/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "pulls"
+  },
+  {
+    "action": "WebShell",
+    "method": "HEAD",
+    "path": "/{namespace}/-/pulls/{*rest}",
+    "public": true,
+    "scope": "project",
+    "word": "pulls"
+  },
+  {
     "action": "RepoRead",
     "method": "GET",
     "path": "/{namespace}/-/raw/{*rest}",
