@@ -946,6 +946,8 @@ fn help_json_lists_every_command_with_args_examples_and_scopes() {
             "admin integration list",
             "admin integration view",
             "admin integration bindings",
+            "integration events",
+            "integration cursor",
             "integration-binding list",
             "integration-binding set",
             "integration-binding remove",

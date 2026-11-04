@@ -87,6 +87,13 @@ pub enum Command {
         #[command(subcommand)]
         command: ChecksCommand,
     },
+    /// An integration's event feed (M3 I1c): events, cursor — with the
+    /// integration's own service account token.
+    #[command(disable_help_subcommand = true)]
+    Integration {
+        #[command(subcommand)]
+        command: IntegrationFeedCommand,
+    },
     /// A project's integration binding (M3 I1a): list, set, remove.
     #[command(name = "integration-binding", disable_help_subcommand = true)]
     IntegrationBinding {
@@ -1276,6 +1283,49 @@ pub enum IntegrationCommand {
         #[arg(value_parser = parse_id)]
         id: i64,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum IntegrationFeedCommand {
+    /// One page of the integration's event feed after a cursor.
+    Events {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+        /// A cursor the feed gave (next_cursor, an event's cursor, or
+        /// `integration cursor`); without it the oldest retained event.
+        #[arg(long, value_parser = parse_feed_cursor)]
+        cursor: Option<String>,
+        /// Events per page, 1..=500 (default 100).
+        #[arg(long, value_parser = parse_feed_limit, value_name = "N")]
+        limit: Option<u32>,
+    },
+    /// The feed's head as a cursor (a resync takes it first).
+    Cursor {
+        #[arg(value_parser = parse_id)]
+        id: i64,
+    },
+}
+
+/// A feed cursor: base64url text, at most 1024 characters (opaque to gstn).
+fn parse_feed_cursor(raw: &str) -> Result<String, String> {
+    let ok = !raw.is_empty()
+        && raw.len() <= 1024
+        && raw
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    if ok {
+        Ok(raw.to_string())
+    } else {
+        Err("--cursor is the opaque text the feed gave (A-Z a-z 0-9 - _)".to_string())
+    }
+}
+
+/// The feed's page size, 1..=500.
+fn parse_feed_limit(raw: &str) -> Result<u32, String> {
+    match raw.parse::<u32>() {
+        Ok(n) if (1..=500).contains(&n) && !raw.starts_with('0') => Ok(n),
+        _ => Err("--limit is a whole number from 1 to 500".to_string()),
+    }
 }
 
 #[derive(Subcommand, Debug)]

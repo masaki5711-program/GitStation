@@ -1247,3 +1247,11 @@ API の契約は `docs/api/integration-feed.md`（schema_version 1、欄は足�
    Guest・メンバーでなくなった・削除待ちの 4 つを 1 文で読み分けるテスト（`the_batched_access_read_gives_each_binding_its_own_facts`）。
    `prove_visible` の呼び出し元のテストは名前だけで探す（コメントの行は除く）。経路で 429 に `Retry-After: 1` が付くテスト
    （`a_concurrent_feed_read_answers_429_with_retry_after`）。
+
+### I1c: gstn の対応（C-1、2026-11-04）
+
+履歴の 2 つの経路はブラウザだけの経路ではない（その連携のサービスアカウントのトークンだけが読める）ので、`BrowserOnly` にはせず、
+gstn に読み取りのコマンドを足した: `gstn integration events <id> [--cursor C] [--limit N] [--json]`（`GET /api/v1/integrations/{id}/events`）と
+`gstn integration cursor <id> [--json]`（`…/events/cursor`）。どちらも `read_api`。サービスアカウントのトークン（`GSTN_TOKEN`）で、
+運用者が連携の読み取りを確かめるのに使う。カーソルは gstn も読まない（`A-Z a-z 0-9 - _` の 1024 文字までだけを確かめて送る）。
+forge-client の `coverage.rs` に `Command` の行、ヘルプのスナップショットを更新した（テスト `integration_feed_commands_read_the_feed_routes`）。
