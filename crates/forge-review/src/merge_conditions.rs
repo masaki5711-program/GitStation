@@ -56,6 +56,9 @@ pub struct MergeStatus {
     pub checks: Vec<RequiredCheck>,
     /// The unresolved discussions when the merge rule asks for them.
     pub discussions: Option<u32>,
+    /// M3 I1d: whether a work item of the project's binding is linked, when
+    /// the merge rule requires a link (`None`: not required).
+    pub work_item_link: Option<bool>,
     /// The project's settings as read.
     pub settings: StoredMergeSettings,
     /// The protection in effect on the target branch, from the rules read
@@ -258,6 +261,7 @@ impl Review {
                 approvals: None,
                 checks: Vec::new(),
                 discussions: None,
+                work_item_link: None,
                 settings,
                 target_protection: None,
             });
@@ -292,11 +296,18 @@ impl Review {
         } else {
             self.checks.runs_on(project, &head).await?
         };
+        // M3 I1d: the link, only when the merge rule requires one.
+        let linked = facts
+            .protection
+            .merge_rule(&current.target_branch)
+            .require_work_item_link
+            && forge_db::work_items::work_item_linked(&self.db, current.id).await?;
         let conditions = conditions(
             &facts.protection,
             &current.target_branch,
             &head,
             unresolved,
+            linked,
             &runs,
         );
         let inputs = git.inputs(&current, &head, facts);
@@ -348,6 +359,7 @@ impl Review {
             approvals: inputs,
             checks: conditions.checks.clone(), // clone: the status shows them too
             discussions: conditions.discussions,
+            work_item_link: conditions.work_item_link,
         });
         let (ok, reasons) = match decision {
             Ok(_) => (true, Vec::new()),
@@ -362,6 +374,7 @@ impl Review {
             approvals: Some(report),
             checks: conditions.checks,
             discussions: conditions.discussions,
+            work_item_link: conditions.work_item_link,
             settings,
             target_protection: Some(target_protection),
         })

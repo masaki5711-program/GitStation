@@ -2760,6 +2760,17 @@
           "viewer": {
             "$ref": "#/components/schemas/StatusViewerBody",
             "description": "What the caller could do now (added within `schema_version` 1, U2)."
+          },
+          "work_item_link": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StatusWorkItemLinkBody",
+                "description": "M3 I1d (added within `schema_version` 1): `null` when the merge rule\ndoes not require a work item link."
+              }
+            ]
           }
         },
         "required": [
@@ -2773,6 +2784,7 @@
           "approvals",
           "checks",
           "discussions",
+          "work_item_link",
           "codeowners",
           "viewer"
         ],
@@ -2788,6 +2800,10 @@
           },
           "require_resolved_discussions": {
             "description": "Every discussion of the merge request must be resolved.",
+            "type": "boolean"
+          },
+          "require_work_item_link": {
+            "description": "M3 I1d: the merge request must have an open link to a work item of\nthe project's integration binding (`work_item_link_missing`).",
             "type": "boolean"
           },
           "required_approvals": {
@@ -2813,6 +2829,7 @@
           "required_checks",
           "require_resolved_discussions",
           "direct_push_forbidden",
+          "require_work_item_link",
           "updated_at"
         ],
         "type": "object"
@@ -3279,7 +3296,7 @@
             "type": "string"
           },
           "warnings": {
-            "description": "Things to know about the answer (M3 R6 review). Today only\n`required_checks_unreportable` (M3 C1: narrowed): the merge rule\nrequires a check no active service account may report (its\nnamespace is granted to none, or it is `forge/`, whose own checks\narrive later), so every merge into the branch is blocked\n(`required_check_missing`); with the direct-push ban the branch\ncannot change at all. The names are in `unreportable_checks`. Grant\nthe namespace to a service account, or remove the check names\n(runbooks checks-reporting, merge-blocked). Empty otherwise.",
+            "description": "Things to know about the answer (M3 R6 review). M3 I1d:\n`work_item_link_unbound` — the merge rule requires a work item link\nand the project has no integration binding, so no merge request can\nsatisfy it (bind the project, or turn the condition off; runbook\nmerge-blocked). `required_checks_unreportable` (M3 C1: narrowed): the merge rule\nrequires a check no active service account may report (its\nnamespace is granted to none, or it is `forge/`, whose own checks\narrive later), so every merge into the branch is blocked\n(`required_check_missing`); with the direct-push ban the branch\ncannot change at all. The names are in `unreportable_checks`. Grant\nthe namespace to a service account, or remove the check names\n(runbooks checks-reporting, merge-blocked). Empty otherwise.",
             "items": {
               "type": "string"
             },
@@ -3419,7 +3436,7 @@
             "type": "boolean"
           },
           "require_work_item_link": {
-            "description": "Not available until work items exist (M3 I1): `true` is refused\n(FG-WEB-0006 `rule=unavailable_until_i1`).",
+            "description": "M3 I1d: a merge request merges only with an open link to a work item\nof the project's integration binding (`work_item_link_missing`). On\na project without a binding the answer warns\n`work_item_link_unbound`.",
             "type": "boolean"
           },
           "required_approvals": {
@@ -4371,6 +4388,7 @@
           "required_check_missing",
           "required_check_not_successful",
           "unresolved_discussions",
+          "work_item_link_missing",
           "config_change_needs_maintainer_approval",
           "changed_paths_unknown"
         ],
@@ -4436,6 +4454,20 @@
           "can_merge",
           "can_mark_ready",
           "approved_by_me"
+        ],
+        "type": "object"
+      },
+      "StatusWorkItemLinkBody": {
+        "additionalProperties": false,
+        "description": "The work item link condition (M3 I1d).",
+        "properties": {
+          "linked": {
+            "description": "An open link to a work item of the project's integration binding\nexists (`false`: `work_item_link_missing`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "linked"
         ],
         "type": "object"
       },

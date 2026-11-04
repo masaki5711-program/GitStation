@@ -49,6 +49,7 @@ export function status(
     approvals: null,
     checks: [],
     discussions: null,
+    work_item_link: null,
     codeowners: { enforced: true, suspended_until: null },
     viewer: {
       can_approve: false,

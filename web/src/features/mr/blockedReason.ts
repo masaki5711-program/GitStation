@@ -106,6 +106,10 @@ export function reasonLine(first: StatusReason): BlockedReason {
       return plain(t('mr.status.changedPathsUnknown'), 'wait');
     case 'codeowners_invalid':
       return plain(t('mr.status.codeownersInvalid'), 'none');
+    // M3 I1d: linking happens through the title, the branch name or gstn;
+    // the hint (statusHint) says how.
+    case 'work_item_link_missing':
+      return plain(t('mr.status.workItemLinkMissing'), 'none');
     case 'approvals_missing': {
       const rule = text(d.rule);
       const required = count(d.required);
@@ -181,6 +185,8 @@ export function statusHint(status: MergeStatus): string | null {
       return t('mr.status.hint.codeowners');
     case 'nothing_to_merge':
       return t('mr.status.hint.nothing');
+    case 'work_item_link_missing':
+      return t('mr.status.hint.workItem');
     default:
       return null;
   }

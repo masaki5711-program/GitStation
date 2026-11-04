@@ -20,7 +20,7 @@ use crate::body::param_invalid;
 use crate::registry::{BodyLoader, Dispatched, LoadFuture, Loader, Lookup};
 use crate::routes::projects::PREFIX;
 use crate::routes::protected_refs::{
-    found, project_of, respond, written_body, REQUIRED_CHECKS_UNREPORTABLE,
+    found, project_of, respond, written_body, REQUIRED_CHECKS_UNREPORTABLE, WORK_ITEM_LINK_UNBOUND,
 };
 use crate::routes::write::{absent, bounded, hosting, json, read_if_manager, write_request};
 
@@ -47,8 +47,10 @@ pub struct PutMergeRule {
     /// Pushes may not create or move the branch; merges still may.
     #[serde(default)]
     pub direct_push_forbidden: bool,
-    /// Not available until work items exist (M3 I1): `true` is refused
-    /// (FG-WEB-0006 `rule=unavailable_until_i1`).
+    /// M3 I1d: a merge request merges only with an open link to a work item
+    /// of the project's integration binding (`work_item_link_missing`). On
+    /// a project without a binding the answer warns
+    /// `work_item_link_unbound`.
     #[serde(default)]
     pub require_work_item_link: bool,
     /// The merge rule's `updated_at` the caller read, echoed verbatim (an
@@ -181,6 +183,24 @@ pub async fn put(state: AppState, request: Dispatched<RefProtectionCtx, PutMerge
         if !unreportable.is_empty() {
             body.warnings.push(REQUIRED_CHECKS_UNREPORTABLE.to_owned());
             body.unreportable_checks = unreportable.iter().map(|n| n.as_str().to_owned()).collect();
+        }
+        // M3 I1d: a link condition no merge request of an unbound project
+        // can satisfy blocks every merge into the branch.
+        if body
+            .merge_rule
+            .as_ref()
+            .is_some_and(|m| m.require_work_item_link)
+        {
+            let project = w.proof.id().0;
+            let bound = bounded(
+                &state,
+                "integration_bindings_load",
+                hosting(&state)?.project_is_bound(project),
+            )
+            .await?;
+            if !bound {
+                body.warnings.push(WORK_ITEM_LINK_UNBOUND.to_owned());
+            }
         }
         Ok((outcome, json(body)?))
     }

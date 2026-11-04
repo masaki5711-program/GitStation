@@ -31,10 +31,13 @@ target に一致する保護のルールのマージの条件は **いちばん�
 | `required_check_missing`（`name=<check>`） | 必須のチェックの実行が今の head に **報告されていない**。報告が無いことは成功ではない（ADR-0024 §10）。報告は Checks API（M3 C1、`gstn checks report`）で、その名前空間を割り当てられたサービスアカウントが MR の **今の head** に送る（古い head への報告は数えない）。報告できる有効なサービスアカウントが無い名前は、設定の答えの `unreportable_checks` に出る（`warnings: ["required_checks_unreportable"]`、gstn は警告の 1 行）。`forge/` の名前は forge 自身のチェック（X2）まで報告されない | `gstn checks list --project <id> --sha <head>` で報告を確かめる（runbook checks-reporting）。報告の経路が無いなら下の「必須のチェックで動かなくなったブランチ」 |
 | `required_check_not_successful`（`name=… status=… conclusion=…`） | 実行はあるが `completed` かつ `success` でない（`neutral` も満たさない、実行中も満たさない） | チェックを直して再実行する |
 | `unresolved_discussions`（`count=<n>`） | マージの条件がスレッドの解決を求め、未解決のスレッドが n 件ある | スレッドを解決する（MR の作成者は他人のスレッドを解決できない。ADR-0024 §12） |
+| `work_item_link_missing` | マージの条件が作業項目のリンクを求め（`require_work_item_link`、M3 I1d）、MR にプロジェクトの **今の** 連携の結びつけの作業項目（`PBI-<n>`）への開いたリンクが無い。結びつけの無いプロジェクトでは誰も満たせない（設定の答えの `warnings: ["work_item_link_unbound"]`、gstn は警告の 1 行）。結びつけを解除・付け替えるとリンクは終わる（I1b）ので、また止まる | MR のタイトルかソースブランチの名前に `PBI-<n>` を入れる（購読者 `work-item-sync` が自動でリンクする）か、`gstn mr link-work-item --project <id> --iid <n> --ref PBI-<n>`（Developer 以上）。今のリンクは `gstn mr work-items` で確かめる。結びつけが無いなら Maintainer が `gstn integration-binding set` で結ぶか、`gstn merge-rule set --work-item-link false` で条件を外す（runbook integrations） |
 
 関連する拒否:
 - 必須のチェックに `ext/` の名前を設定しようとした → FG-REVIEW-0016（必須にできるのは `ci/`・`kanflow/`・`forge/` だけ）。
-- 作業項目のリンクの条件（`require_work_item_link`）は I1 まで設定できない（FG-WEB-0006 `rule=unavailable_until_i1`）。
+- 作業項目のリンクの条件（`require_work_item_link`）は M3 I1d から設定できる（`gstn merge-rule set --work-item-link true`、画面の
+  「マージの条件」）。それまでの FG-WEB-0006 `rule=unavailable_until_i1` はもう出ない。マージのジョブはロックの下でリンクを読み直すので、
+  要求の後にリンクを外すと `superseded`（FG-REVIEW-0007 `work_item_link_missing`）になる。
 - 保護ブランチへの直接の push が FG-GIT-0017 で拒まれた → マージの条件の `direct_push_forbidden`。MR を作ってマージする（マージは禁止の
   影響を受けない）。CODEOWNERS が壊れて MR も通らないときは runbook codeowners の一時停止。
 - キューにあったマージが FG-REVIEW-0010 で `superseded` → 要求の後にプロジェクトの設定（`gstn merge-settings show`）がその方式を

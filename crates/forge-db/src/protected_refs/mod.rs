@@ -64,7 +64,8 @@ struct Rule {
 /// The rows of a project's rules with their merge rules (M3 R6), at most
 /// `MAX_RULES + 1`: the snapshot a push and a merge decide with.
 const SNAPSHOT_SQL: &str = "SELECT p.id, p.pattern, p.push_min_role, m.required_approvals, \
-     m.required_checks, m.require_resolved_discussions, m.direct_push_forbidden \
+     m.required_checks, m.require_resolved_discussions, m.direct_push_forbidden, \
+     m.require_work_item_link \
      FROM forge.protected_refs p \
      LEFT JOIN forge.protected_ref_merge_rules m ON m.protected_ref_id = p.id \
      WHERE p.project_id = $1 ORDER BY p.id LIMIT $2";
@@ -77,6 +78,7 @@ type SnapshotRow = (
     String,
     Option<i32>,
     Option<Vec<String>>,
+    Option<bool>,
     Option<bool>,
     Option<bool>,
 );
@@ -95,9 +97,10 @@ fn snapshot_rules(
     let rules = rows
         .into_iter()
         .map(
-            |(id, pattern, role, approvals, checks, discussions, no_push)| {
+            |(id, pattern, role, approvals, checks, discussions, no_push, link)| {
                 let rule = parse_row((id, pattern, role))?;
-                let merge = merge_rules::parse_merge(id, approvals, checks, discussions, no_push)?;
+                let merge =
+                    merge_rules::parse_merge(id, approvals, checks, discussions, no_push, link)?;
                 Ok(ProtectionRule {
                     pattern: rule.pattern,
                     push_min_role: rule.push_min_role,
@@ -656,6 +659,7 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
         Option<Vec<String>>,
         Option<bool>,
         Option<bool>,
+        Option<bool>,
         Option<String>,
     );
     let rows: Vec<Row> = db
@@ -665,7 +669,7 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
                  to_char(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                  to_char(p.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), \
                  m.required_approvals, m.required_checks, m.require_resolved_discussions, \
-                 m.direct_push_forbidden, {} \
+                 m.direct_push_forbidden, m.require_work_item_link, {} \
                  FROM forge.protected_refs p \
                  LEFT JOIN forge.protected_ref_merge_rules m ON m.protected_ref_id = p.id \
                  WHERE p.project_id = $1 ORDER BY p.id LIMIT $2",
@@ -695,10 +699,11 @@ pub async fn list(db: &Db, project: ProjectId) -> Result<Vec<StoredRule>, ForgeE
                 checks,
                 talks,
                 no_push,
+                link,
                 merge_updated_at,
             )| {
                 let rule = parse_row((id, pattern, role))?;
-                let merge = merge_rules::parse_merge(id, approvals, checks, talks, no_push)?;
+                let merge = merge_rules::parse_merge(id, approvals, checks, talks, no_push, link)?;
                 Ok(StoredRule {
                     id: ProtectedRefId::new(id),
                     pattern: rule.pattern,

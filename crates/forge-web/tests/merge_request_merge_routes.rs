@@ -902,8 +902,80 @@ async fn the_codeowners_route_suspends_for_a_bounded_time_only() {
     w.t.drop_now().await;
 }
 
+/// M3 I1d (ADR-0024 §11): the work item link condition is set like the
+/// others (it was refused until I1); on a project without an integration
+/// binding the answer warns `work_item_link_unbound` (every merge is
+/// blocked), the list shows it, and the status names
+/// `work_item_link_missing` with `work_item_link: {linked: false}`.
+#[tokio::test]
+async fn a_work_item_link_merge_rule_is_set_and_shown_in_the_status() {
+    let w = world().await;
+    let olga = w.owner().await;
+    let (status, created) = send(
+        w.router.clone(),
+        "POST",
+        &w.project_uri("/protected-refs"),
+        olga.clone(),
+        Some(json!({"pattern": "refs/heads/main", "push_min_role": "developer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let rule = created["id"].as_i64().expect("rule id");
+    let uri = w.project_uri(&format!("/protected-refs/{rule}/merge-rule"));
+    let (status, body) = send(
+        w.router.clone(),
+        "PUT",
+        &uri,
+        olga.clone(),
+        Some(json!({"require_work_item_link": true, "expected_updated_at": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["merge_rule"]["require_work_item_link"], true, "{body}");
+    assert_eq!(
+        body["warnings"],
+        json!(["work_item_link_unbound"]),
+        "{body}"
+    );
+    let (_, list) = send(
+        w.router.clone(),
+        "GET",
+        &w.project_uri("/protected-refs"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(
+        list["rules"][0]["merge_rule"]["require_work_item_link"],
+        true
+    );
+    let (status, s) = send(
+        w.router.clone(),
+        "GET",
+        &w.uri("/status"),
+        w.dev.clone(),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{s}");
+    assert_eq!(s["mergeable"], false);
+    assert_eq!(
+        s["reasons"],
+        json!([{"reason": "work_item_link_missing", "detail": null}]),
+        "{s}"
+    );
+    assert_eq!(s["work_item_link"], json!({"linked": false}), "{s}");
+    let (status, body) = w.post_merge(w.dev.clone(), json!({"sha": w.head})).await;
+    assert_eq!(
+        (status, code(&body)),
+        (StatusCode::CONFLICT, "FG-REVIEW-0007"),
+        "{body}"
+    );
+    w.t.drop_now().await;
+}
+
 /// ADR-0024 §7, §10, §11, §12: a merge rule refuses `ext/` checks
-/// (FG-REVIEW-0016) and the work item link (FG-WEB-0006); set, it is
+/// (FG-REVIEW-0016); set, it is
 /// listed with its rule and the status (the stable contract) shows every
 /// reason; the merge is refused with them; removed, nothing blocks.
 #[tokio::test]
@@ -933,8 +1005,6 @@ async fn the_merge_rule_routes_and_the_status_contract() {
         (StatusCode::UNPROCESSABLE_ENTITY, "FG-REVIEW-0016"),
         "{body}"
     );
-    let (status, body) = put(olga.clone(), json!({"require_work_item_link": true})).await;
-    assert_eq!(code(&body), "FG-WEB-0006", "{status} {body}");
     let (status, body) = put(w.dev.clone(), json!({"required_approvals": 1})).await;
     assert_eq!(
         (status, code(&body)),

@@ -608,6 +608,10 @@ pub enum MergeRuleCommand {
         /// merges only).
         #[arg(long, value_name = "BOOL")]
         direct_push_forbidden: Option<bool>,
+        /// true / false: require an open link to a work item (PBI-<n>) of
+        /// the project's integration binding (M3 I1d).
+        #[arg(long, value_name = "BOOL")]
+        work_item_link: Option<bool>,
     },
     /// Remove a protected branch rule's merge conditions.
     Remove {

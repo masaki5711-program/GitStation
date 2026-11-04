@@ -32,6 +32,7 @@ M3 R6（ADR-0024 §7）。エージェント・画面・kanflow が「この MR 
 | `approvals` | オブジェクト / null | 承認の側（版が無いと null）: `rules[]`（`name`、`applies`、`required`、`counted`。保護ブランチの最低の承認数は `name = "@protected_branch"`）、`approvals[]`（`approver_id`、`username`、`counted`、`uncounted_reason`）、`codeowners[]`（`pattern`、`owners`、`satisfied`。CODEOWNERS の強制が一時停止中は空） |
 | `checks[]` | 配列 | target のマージの条件が求める必須のチェック: `{ "name", "status", "conclusion" }`。**`status: null` は報告が無い**（成功ではない）。値は Checks API（`docs/api/checks.md`、M3 C1）で **今の head** に報告された結果（古い head への報告は数えない） |
 | `discussions` | オブジェクト / null | マージの条件がスレッドの解決を求めるとき `{ "unresolved": 件数 }`、求めないとき null |
+| `work_item_link` | オブジェクト / null | M3 I1d で追加。マージの条件が作業項目のリンクを求めるとき `{ "linked": 真偽 }`（プロジェクトの **今の** 連携の結びつけの作業項目への開いたリンクがあるか）、求めないとき null |
 | `codeowners` | オブジェクト | `{ "enforced": 真偽, "suspended_until": 文字列 / null }`（一時停止中だけ期限。期限を過ぎれば `enforced: true`） |
 | `viewer` | オブジェクト | 呼び出した人が **今** できること（U2 で追加。下の表） |
 
@@ -74,10 +75,13 @@ target の保護、頼む変更）で `authorize()` を試しに呼んだ答え�
 | `required_check_missing` | `name=<check>` | 必須のチェックの報告が今の head に無い |
 | `required_check_not_successful` | `name=<check> status=<s> conclusion=<c\|none>` | 必須のチェックが `completed` / `success` でない（`neutral` を含む） |
 | `unresolved_discussions` | `count=<n>` | 未解決のスレッドがある（マージの条件が求めるときだけ） |
+| `work_item_link_missing` | null | マージの条件が作業項目のリンクを求め、MR にプロジェクトの今の結びつけの作業項目（`PBI-<n>`）への開いたリンクが無い（M3 I1d。結びつけの無いプロジェクトは満たせない） |
 | `config_change_needs_maintainer_approval` | null | 設定のファイルの変更に Maintainer の承認が無い |
 | `changed_paths_unknown` | `reason=<r>` | 変更されたパスを読み切れない（閉じる側） |
 
-`work_item_link_missing` は作業項目（I1）が入るまで出ない（設定できない）。
+`work_item_link_missing`（M3 I1d）: タイトルかソースブランチの名前に `PBI-<n>` を入れる（検出は `work-item-sync`）か、
+`gstn mr link-work-item --ref PBI-<n>`（`PUT …/merge-requests/{iid}/work-items/{ref}`、Developer 以上）でリンクすると外れる。
+結びつけを解除するとリンクは終わる（I1b）ので、解除・付け替えの後はまたこの理由で止まる。runbook `merge-blocked`。
 
 OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`StatusReasonName`）。名前は足すことはあっても変えない
 （`status_reason_schema_lists_every_block_reason` が `BlockReason` の全種類・この表・enum の一致を確かめる）。読む側は知らない名前を
@@ -115,6 +119,7 @@ OpenAPI（`docs/api/openapi.json`）では `reason` は上の名前の enum（`S
   },
   "checks": [{"name": "ci/gates", "status": null, "conclusion": null}],
   "discussions": {"unresolved": 0},
+  "work_item_link": null,
   "codeowners": {"enforced": true, "suspended_until": null},
   "viewer": {
     "can_approve": true,

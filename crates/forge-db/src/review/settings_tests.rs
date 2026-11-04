@@ -351,6 +351,7 @@ async fn a_merge_rule_joins_the_snapshot_and_goes_with_its_rule() {
         required_checks: vec![gates.clone()],
         require_resolved_discussions: true,
         direct_push_forbidden: true,
+        require_work_item_link: false,
     };
     assert_eq!(
         w.put_rule(main, &merge, "req-mr-put").await.expect("put"),
@@ -403,6 +404,53 @@ async fn a_merge_rule_joins_the_snapshot_and_goes_with_its_rule() {
     assert_eq!(
         w.audit_actions("protected_ref.merge_rule").await,
         ["protected_ref.merge_rule_put"]
+    );
+    w.t.drop_now().await;
+}
+
+/// M3 I1d: the work item link condition is stored, read back by the push /
+/// merge snapshot and the list, and a change of it alone is a change
+/// (audited), never `Unchanged`.
+#[tokio::test]
+async fn a_work_item_link_condition_round_trips_and_is_audited() {
+    let w = world().await;
+    let main = w.rule("refs/heads/main").await;
+    let linked = MergeRule {
+        require_work_item_link: true,
+        ..MergeRule::default()
+    };
+    assert_eq!(
+        w.put_rule(main, &linked, "req-link-put")
+            .await
+            .expect("put"),
+        MergeRuleOutcome::Created
+    );
+    let target = RefName::parse("refs/heads/main").expect("ref");
+    let snapshot = protected_refs::rules_for(&w.t.db, w.web.project_id)
+        .await
+        .expect("snapshot");
+    assert!(snapshot.merge_rule(&target).require_work_item_link);
+    let listed = protected_refs::list(&w.t.db, w.web.project_id)
+        .await
+        .expect("list");
+    assert_eq!(listed[0].merge.as_ref(), Some(&linked));
+    // Turning only the link condition off is a change.
+    assert_eq!(
+        w.put_rule(main, &MergeRule::default(), "req-link-off")
+            .await
+            .expect("put"),
+        MergeRuleOutcome::Replaced
+    );
+    let snapshot = protected_refs::rules_for(&w.t.db, w.web.project_id)
+        .await
+        .expect("snapshot");
+    assert!(!snapshot.merge_rule(&target).require_work_item_link);
+    assert_eq!(
+        w.audit_actions("protected_ref.merge_rule").await,
+        [
+            "protected_ref.merge_rule_put",
+            "protected_ref.merge_rule_put"
+        ]
     );
     w.t.drop_now().await;
 }

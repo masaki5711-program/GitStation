@@ -2436,6 +2436,7 @@ export interface components {
             target_branch: string;
             /** @description What the caller could do now (added within `schema_version` 1, U2). */
             viewer: components["schemas"]["StatusViewerBody"];
+            work_item_link: null | components["schemas"]["StatusWorkItemLinkBody"];
         };
         /**
          * @description The merge conditions of a protected branch (M3 R6, ADR-0024 §12): the
@@ -2446,6 +2447,11 @@ export interface components {
             direct_push_forbidden: boolean;
             /** @description Every discussion of the merge request must be resolved. */
             require_resolved_discussions: boolean;
+            /**
+             * @description M3 I1d: the merge request must have an open link to a work item of
+             *     the project's integration binding (`work_item_link_missing`).
+             */
+            require_work_item_link: boolean;
             /**
              * Format: int32
              * @description The minimum counted approvals of a merge into the branch.
@@ -2674,8 +2680,11 @@ export interface components {
             unreportable_checks: string[];
             updated_at: string;
             /**
-             * @description Things to know about the answer (M3 R6 review). Today only
-             *     `required_checks_unreportable` (M3 C1: narrowed): the merge rule
+             * @description Things to know about the answer (M3 R6 review). M3 I1d:
+             *     `work_item_link_unbound` — the merge rule requires a work item link
+             *     and the project has no integration binding, so no merge request can
+             *     satisfy it (bind the project, or turn the condition off; runbook
+             *     merge-blocked). `required_checks_unreportable` (M3 C1: narrowed): the merge rule
              *     requires a check no active service account may report (its
              *     namespace is granted to none, or it is `forge/`, whose own checks
              *     arrive later), so every merge into the branch is blocked
@@ -2756,8 +2765,10 @@ export interface components {
             /** @description Every discussion of the merge request must be resolved. */
             require_resolved_discussions?: boolean;
             /**
-             * @description Not available until work items exist (M3 I1): `true` is refused
-             *     (FG-WEB-0006 `rule=unavailable_until_i1`).
+             * @description M3 I1d: a merge request merges only with an open link to a work item
+             *     of the project's integration binding (`work_item_link_missing`). On
+             *     a project without a binding the answer warns
+             *     `work_item_link_unbound`.
              */
             require_work_item_link?: boolean;
             /**
@@ -3103,7 +3114,7 @@ export interface components {
          *     new name here — added, never renamed, within `schema_version` 1.
          * @enum {string}
          */
-        StatusReasonName: "not_open" | "draft" | "merge_in_progress" | "source_branch_missing" | "mergeability_unknown" | "conflict" | "ff_not_possible" | "nothing_to_merge" | "approvals_missing" | "codeowner_approval_missing" | "codeowners_invalid" | "required_check_missing" | "required_check_not_successful" | "unresolved_discussions" | "config_change_needs_maintainer_approval" | "changed_paths_unknown";
+        StatusReasonName: "not_open" | "draft" | "merge_in_progress" | "source_branch_missing" | "mergeability_unknown" | "conflict" | "ff_not_possible" | "nothing_to_merge" | "approvals_missing" | "codeowner_approval_missing" | "codeowners_invalid" | "required_check_missing" | "required_check_not_successful" | "unresolved_discussions" | "work_item_link_missing" | "config_change_needs_maintainer_approval" | "changed_paths_unknown";
         /** @description One approval requirement (an approval rule, or `@protected_branch`). */
         StatusRuleBody: {
             applies: boolean;
@@ -3138,6 +3149,14 @@ export interface components {
              *     there may be nothing to withdraw).
              */
             can_unapprove: boolean;
+        };
+        /** @description The work item link condition (M3 I1d). */
+        StatusWorkItemLinkBody: {
+            /**
+             * @description An open link to a work item of the project's integration binding
+             *     exists (`false`: `work_item_link_missing`).
+             */
+            linked: boolean;
         };
         /** @description One token as the API shows it (never the secret or its hash). */
         TokenBody: {

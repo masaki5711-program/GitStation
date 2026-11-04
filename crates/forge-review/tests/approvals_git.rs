@@ -2542,3 +2542,235 @@ async fn a_store_failure_in_status_is_an_error_not_missing() {
     assert_eq!(err.code(), ErrorCode::DbQueryFailed);
     w.t.drop_now().await;
 }
+
+// ── M3 I1d: the work item link merge condition ─────────────────────────
+
+impl World {
+    /// `main` protected (Developer) with a merge rule requiring only a work
+    /// item link (as `PUT …/merge-rule` writes it).
+    async fn protect_with_link(&self) {
+        self.t
+            .commit_audited(
+                ("project", self.project.get()),
+                &[
+                    format!(
+                        "INSERT INTO forge.protected_refs (project_id, pattern, push_min_role) \
+                         VALUES ({}, 'refs/heads/main', 'developer')",
+                        self.project.get()
+                    ),
+                    format!(
+                        "INSERT INTO forge.protected_ref_merge_rules (protected_ref_id, \
+                         project_id, require_work_item_link) \
+                         SELECT id, project_id, true FROM forge.protected_refs \
+                         WHERE project_id = {}",
+                        self.project.get()
+                    ),
+                ],
+            )
+            .await;
+    }
+
+    /// A kanflow integration (its own service account) bound to the
+    /// project as `external`.
+    async fn bind_kanflow(&self, external: &str) -> forge_core::IntegrationId {
+        let sa = forge_db::service_accounts::create(
+            &self.t.db,
+            &system(&format!("req-sa-{external}")),
+            &forge_db::service_accounts::NewServiceAccount {
+                username: format!("kanflow-{external}"),
+                display_name: "kanflow".to_owned(),
+                owner: self.owner,
+                purpose: "Kanflow links work items".to_owned(),
+            },
+            self.owner,
+        )
+        .await
+        .expect("service account")
+        .user_id;
+        let integration = forge_db::integrations::create(
+            &self.t.db,
+            &system(&format!("req-int-{external}")),
+            &forge_db::integrations::NewIntegration {
+                kind: forge_core::IntegrationKind::Kanflow,
+                service_account: sa,
+                event_types: None,
+            },
+            self.owner,
+        )
+        .await
+        .expect("integration");
+        self.rebind(integration, external).await;
+        integration
+    }
+
+    /// A binding as the bind command writes it (forge-hosting's command is
+    /// not this crate's to call: `only_forge_hosting_calls_the_decided_commands`):
+    /// the row and the service account's Reporter membership, with the
+    /// project's audit row.
+    async fn rebind(&self, integration: forge_core::IntegrationId, external: &str) {
+        self.t
+            .commit_audited(
+                ("project", self.project.get()),
+                &[
+                    format!(
+                        "INSERT INTO forge.integration_bindings (integration_id, project_id, \
+                         external_project_id, granted_membership, created_by) \
+                         VALUES ({}, {}, '{external}', true, {})",
+                        integration.get(),
+                        self.project.get(),
+                        self.owner.get()
+                    ),
+                    format!(
+                        "INSERT INTO forge.project_members (project_id, user_id, role) \
+                         SELECT {}, service_account_id, 'reporter' FROM forge.integrations \
+                         WHERE id = {} ON CONFLICT DO NOTHING",
+                        self.project.get(),
+                        integration.get()
+                    ),
+                ],
+            )
+            .await;
+    }
+
+    /// An unbind as the command writes it: the `integration.unbound` audit
+    /// row ends the project's open links (`unlink_source = unbound`, I1b),
+    /// then the binding and the membership it granted go.
+    async fn unbind_kanflow(&self, integration: forge_core::IntegrationId) {
+        let p = self.project.get();
+        let i = integration.get();
+        let o = self.owner.get();
+        let sql = format!(
+            "BEGIN; \
+             INSERT INTO forge.audit_log (actor_kind, actor_user_id, action, outcome, \
+               resource_type, resource_id, project_id, request_id) \
+             VALUES ('user', {o}, 'integration.unbound', 'succeeded', 'project', {p}, {p}, \
+               'req-unbind'); \
+             UPDATE forge.merge_request_work_items SET unlinked_at = now(), \
+               unlink_source = 'unbound', unlinked_by = {o}, unlinked_by_kind = 'human' \
+             WHERE project_id = {p} AND unlinked_at IS NULL; \
+             DELETE FROM forge.integration_bindings WHERE project_id = {p}; \
+             DELETE FROM forge.project_members WHERE project_id = {p} AND user_id = \
+               (SELECT service_account_id FROM forge.integrations WHERE id = {i}); \
+             COMMIT;"
+        );
+        self.t.exec_superuser(&sql).await;
+    }
+
+    /// dave (a Developer) links `raw` by hand.
+    async fn link_work_item(&self, raw: &str) {
+        let who = session(self.dave);
+        let proof = self
+            .mr_proof(&who, Action::WorkItemLink)
+            .await
+            .expect("proof");
+        let _outcome = self
+            .review
+            .link_work_item(
+                &request(&format!("req-link-{raw}")),
+                &proof,
+                &forge_core::WorkItemRef::parse(raw).expect("ref"),
+            )
+            .await
+            .expect("link");
+    }
+
+    async fn unlink_work_item(&self, raw: &str) {
+        let who = session(self.dave);
+        let proof = self
+            .mr_proof(&who, Action::WorkItemLink)
+            .await
+            .expect("proof");
+        self.review
+            .unlink_work_item(
+                &request(&format!("req-unlink-{raw}")),
+                &proof,
+                &forge_core::LinkTarget::Ref(forge_core::WorkItemRef::parse(raw).expect("ref")),
+            )
+            .await
+            .expect("unlink");
+    }
+}
+
+fn status_names(status: &forge_review::MergeStatus) -> Vec<&'static str> {
+    status.reasons.iter().map(|r| r.as_str()).collect()
+}
+
+/// M3 I1d (ADR-0024 §7 / §11): a merge rule requiring a work item link
+/// blocks a merge request without an open link (`work_item_link_missing`,
+/// in the status, the request and the job alike) and lets it merge once a
+/// work item of the project's binding is linked.
+#[tokio::test]
+async fn a_work_item_link_rule_blocks_until_a_work_item_is_linked() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect_with_link().await;
+    let status = w.status().await;
+    assert_eq!(status_names(&status), ["work_item_link_missing"]);
+    assert_eq!(status.work_item_link, Some(false));
+    let blocked = w.ask().await.expect_err("blocked");
+    assert_eq!(blocked.code(), ErrorCode::MergeBlocked);
+    assert_eq!(reasons(&blocked), "work_item_link_missing");
+    // Bound, but nothing linked yet.
+    w.bind_kanflow("kf-1").await;
+    assert_eq!(status_names(&w.status().await), ["work_item_link_missing"]);
+    w.link_work_item("PBI-5").await;
+    let status = w.status().await;
+    assert!(status.mergeable, "{:?}", status.reasons);
+    assert_eq!(status.work_item_link, Some(true));
+    let attempt = w.ask().await.expect("queued");
+    let done = w.merger.execute(attempt.id).await.expect("merge");
+    assert_eq!(done.outcome, "applied");
+    w.t.drop_now().await;
+}
+
+/// M3 I1d: a link to a work item of a binding the project no longer has
+/// fails the condition — the unbind ends the links (I1b), and the new
+/// binding's kanflow project has its own work items.
+#[tokio::test]
+async fn a_link_to_a_work_item_of_an_unbound_project_fails_the_condition() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect_with_link().await;
+    let integration = w.bind_kanflow("kf-1").await;
+    w.link_work_item("PBI-5").await;
+    assert!(w.status().await.mergeable);
+    w.unbind_kanflow(integration).await;
+    let status = w.status().await;
+    assert_eq!(status_names(&status), ["work_item_link_missing"]);
+    let blocked = w.ask().await.expect_err("blocked");
+    assert_eq!(reasons(&blocked), "work_item_link_missing");
+    w.rebind(integration, "kf-2").await;
+    assert_eq!(
+        status_names(&w.status().await),
+        ["work_item_link_missing"],
+        "the old kanflow project's work item does not satisfy the new binding"
+    );
+    w.t.drop_now().await;
+}
+
+/// M3 I1d (ADR-0024 §4.2 steps 3 and 5): the job decides the link again —
+/// unlinked after the request, the attempt is superseded and no ref moves.
+#[tokio::test]
+async fn the_merge_job_decides_the_work_item_link_again() {
+    let w = world(
+        &[("README.md", "base\n")],
+        &[("README.md", "base\n"), ("f.txt", "f\n")],
+    )
+    .await;
+    w.protect_with_link().await;
+    w.bind_kanflow("kf-1").await;
+    w.link_work_item("PBI-5").await;
+    let attempt = w.ask().await.expect("queued");
+    w.unlink_work_item("PBI-5").await;
+    let report = w.merger.execute(attempt.id).await.expect("job");
+    assert_eq!(report.outcome, "superseded");
+    assert_eq!(report.error_code, Some(ErrorCode::MergeBlocked));
+    assert_eq!(w.tip("main"), w.base);
+    w.t.drop_now().await;
+}

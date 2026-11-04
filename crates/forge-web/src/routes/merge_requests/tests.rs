@@ -165,6 +165,7 @@ fn every_block_reason() -> Vec<forge_review::BlockReason> {
             conclusion: None,
         },
         B::UnresolvedDiscussions { count: 1 },
+        B::WorkItemLinkMissing,
         B::ConfigChangeNeedsMaintainerApproval,
         B::ChangedPathsUnknown { reason: "budget" },
     ]
@@ -277,6 +278,11 @@ fn status_schema_v1_fields_are_only_added() {
     }
     let top = required("MergeRequestStatusBody");
     assert!(top.contains("viewer"), "U2 adds viewer");
+    assert!(top.contains("work_item_link"), "I1d adds work_item_link");
+    assert_eq!(
+        required("StatusWorkItemLinkBody"),
+        ["linked"].into_iter().map(str::to_owned).collect()
+    );
     assert_eq!(
         required("StatusViewerBody"),
         [
