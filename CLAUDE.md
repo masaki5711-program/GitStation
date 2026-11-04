@@ -45,9 +45,10 @@ optimises for diagnosing failures from artifacts alone (logs with
    HTTP route and git operation is a row (allow AND deny) in the permission
    matrix. (Documented exceptions, ADR-0019 §8: the operator CLI's token
    commands, its move / rename commands — `forge admin project|group move`,
-   `forge admin user rename` — `forge admin user link-identity`, and the
-   backup / restore commands `forge backup` / `forge restore`, which run as
-   `system` and cannot be reached from HTTP.)
+   `forge admin user rename` — `forge admin user link-identity`, the
+   backup / restore commands `forge backup` / `forge restore`, and
+   `forge admin repo maintain` (M3 O3: enqueues one maintenance job), which
+   run as `system` and cannot be reached from HTTP.)
 5. **Git is executed, not reimplemented** (argument vector, validated path,
    `--` before user input, timeout).
 6. **Migrations are append-only.** Never edit an applied migration.

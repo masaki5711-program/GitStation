@@ -699,6 +699,8 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         ("forge.check_runs", operational()),
         ("forge.check_annotations", operational()),
         ("forge.check_namespace_grants", operational()),
+        // ── M3 O3: the maintenance ledger, DELETE for the purge (20261117100000) ──
+        ("forge.repository_maintenance", operational()),
         // ── M3 I1b: work items (never updated or deleted), their links
         // (UPDATE of the unlink columns only, DELETE for the purge) and the
         // events' work items (20261116100000) ──
@@ -934,6 +936,8 @@ const LATER_TABLES: &[&str] = &[
     // ── M3 I1c: the event feed (migration 20261118100000) ──
     "integration_feed_reads",
     "retention_policy",
+    // ── M3 O3: the maintenance ledger (migration 20261117100000) ──
+    "repository_maintenance",
 ];
 
 /// Every table the first migration creates.

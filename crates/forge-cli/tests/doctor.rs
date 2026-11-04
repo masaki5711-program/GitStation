@@ -80,6 +80,11 @@ fn doctor_passes_against_a_bootstrapped_database_and_changes_nothing() {
         "skip  subscribers.work-item-sync no feed state yet",
         "skip  events.retention no feed state yet",
         "warn  feed.sink_compare feed.require_sink_compare=false",
+        // M3 O3: no repository yet, nothing maintained or overdue.
+        "ok    repositories.maintenance",
+        "ok    repositories.integrity",
+        "ok    repositories.refs",
+        "ok    repositories.stale_locks",
         "ok    storage",
         "ok    git",
     ] {

@@ -357,6 +357,21 @@ connection, mapping driver errors to registered codes, migrations
   session authenticators now read `users.kind` (`TokenIdentity.kind`,
   `SessionIdentity.kind`; `users::parse_kind`, never a default). Tests
   `review/discussion_tests.rs`.
+- **Repository maintenance** (`maintenance/`, M3 O3; migration 20261117100000, tables.toml
+  `derived`): the ledger `forge.repository_maintenance` (outcome, code, skip reason, consecutive
+  `failures`, counts, fsck, `next_due_at`). `schedule_due(db, limit, rid)` enqueues the due ready
+  repositories oldest first (never maintained: by `ready_at`), keyed `repository_maintain:<repo>:<due
+  epoch>`, at most `limit` live (queued / running) maintenance jobs; `enqueue_now` (the admin
+  command, key `…:admin:<request_id>`, NotFound with `state` unless ready); `start` (`None` unless
+  ready; the repository row `FOR SHARE`; a first row's `next_due_at` is `ready_at`, so the
+  scheduler's key stays stable; a previous run still `running` past `STALE_RUNNING_AFTER` is counted:
+  `lost_previous`) / `finish` (failures count up, a success resets and sets `last_success_at`,
+  migration 20261117100100); `reap_stale_running(db, retry_after)` (rows `running` past the lease
+  with no live job → `failed` FG-DB-0007); `local_minute(db, tz)` (the window's
+  clock; an unknown zone is FG-SYS-0002); `report` (doctor: overdue, failing ≥ 2, corrupt, refs over
+  the warn, stale running, no success within twice the interval; `None` before the migration). The project purge deletes the rows. `review::merges::
+  try_lock_merges` takes the merge lock without waiting (`None` while a merge holds it: the
+  maintenance's pack-refs); `REPO_MAINT_LOCK_PREFIX` (`repo_maint:`) is reserved for O1.
 - **Mergeability** (`review/mergeability.rs`, M3 R2, ADR-0024 §3): the derived table
   `merge_request_mergeability` (one row per merge request: `status` unchecked / checking /
   can_be_merged / cannot_be_merged / check_failed, `reason`, `check_seq`, the checked

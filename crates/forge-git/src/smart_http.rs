@@ -132,6 +132,12 @@ pub const RECEIVE_PACK_CONFIG: &[(&str, &str)] = &[
     // M3 R1b (ADR-0024 §2): not advertised to a pusher either, and git
     // refuses updates of them (forge refuses first: FG-GIT-0010).
     ("transfer.hideRefs", HIDDEN_REF_PREFIX),
+    // M3 O3: a push deleting a packed ref waits out the maintenance's
+    // pack-refs instead of failing after git's 1 s (`refs::PACKED_REFS_TIMEOUT_MS`).
+    (
+        "core.packedRefsTimeout",
+        crate::refs::PACKED_REFS_TIMEOUT_MS,
+    ),
 ];
 
 impl Git {

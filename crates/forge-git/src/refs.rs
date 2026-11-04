@@ -28,6 +28,12 @@ use forge_errors::{ErrorCode, ForgeError};
 use crate::command::Git;
 use crate::storage::StorageRoot;
 
+/// `core.packedRefsTimeout` (ms) of every ref-writing git forge runs
+/// (`update-ref`, receive-pack; M3 O3): `packed-refs.lock` is held by the
+/// maintenance's `pack-refs` and by any transaction deleting a packed ref,
+/// and git's default (1 s) would fail the writer instead of waiting.
+pub const PACKED_REFS_TIMEOUT_MS: &str = "10000";
+
 /// One change of an [`Git::update_refs`] transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefChange {
@@ -162,6 +168,9 @@ impl Git {
         let cmd = self.command("update-ref");
         let cmd = self
             .with_empty_hooks(cmd)?
+            // M3 O3: wait out the maintenance's pack-refs (and a push's
+            // deletion) holding `packed-refs.lock`, instead of git's 1 s.
+            .config_override("core.packedRefsTimeout", PACKED_REFS_TIMEOUT_MS)
             .arg("-z")
             .arg("--stdin")
             .repo(&repo)

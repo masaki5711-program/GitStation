@@ -588,3 +588,16 @@ Amendment M2 の 4 と §10 の実装。
     - 秘密を含む応答の型（`CreatedToken`、`IssuedServiceAccountToken`）の `Debug` は手書きで、秘密を `<redacted>` にする。
     - 種類で判定が変わる例外のテストは、internal のプロジェクトの読み取りの操作と Guest に限った。サービスアカウントの Guest は private
       でも internal でも Guest のまま、ボットは internal を読める、を行で固定した。
+
+## Amendment（2026-11-03、M3 O3: §8 の例外に `forge admin repo maintain` を足す）
+
+計画 11 §5 O3 の決定 Q4（保守の手での起動は運用の CLI だけ）。
+
+- 対象: `forge admin repo maintain <repo_id>`（`forge-cli/src/admin_repo.rs` の `maintain`）。ready のリポジトリに保守のジョブ
+  `repository.maintain` を 1 件積む（`forge_db::maintenance::enqueue_now`、鍵 `repository_maintain:<repo_id>:admin:<request_id>`）だけで、
+  git も監査の行も書かない。保守のすべての規則（猶予、push の途中、マージのロック）はジョブの側にある。
+- **`authorize()` を通らない理由**: 先例の `repo reprovision` と同じ。呼び出し元はホストの操作者で `Principal` がなく、判定する
+  ロールを持つ利用者がいない。本番では承認済みの Runbook `repo-maintenance` の手順としてだけ実行する（CLAUDE.md §3.7）。
+- **HTTP から到達できない理由**: 入口は forge-cli のサブコマンドだけ。forge-web には保守の操作のルートが無い（権限の表の行も無い）。
+  HTTP に保守の操作を作るときは、Action と権限の表の行を足して `authorize()` で判定する。
+- ログ `event=forge.admin.repo.maintain_enqueued`（`request_id`、`repo_id`、`job_id`、`outcome`）。

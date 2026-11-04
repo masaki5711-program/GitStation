@@ -21,7 +21,10 @@
 //! full batch), and the mergeability sweep (`mergeability_sweep`, M3 R2:
 //! every 30 s, stale `checking` rows ended and deferred `unchecked` rows
 //! re-requested), and the record of expired CODEOWNERS suspensions
-//! (`codeowners_restore`, M3 R6: every 60 s).
+//! (`codeowners_restore`, M3 R6: every 60 s), and the repository
+//! maintenance (`maintenance`, M3 O3: its OWN job runner for
+//! `repository.maintain` — the main runner never claims it, so a long gc
+//! never delays another job — and the nightly schedule, every 60 s).
 //!
 //! Before the first run the seal keys are read (`audit.seal_keys_file` is
 //! required: without it the worker does not start, `FG-SYS-0002
@@ -34,7 +37,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use forge_core::config::{Config, ReviewConfig, SealKeys};
+use forge_core::config::{Config, MaintenanceConfig, ReviewConfig, SealKeys};
 use forge_db::jobs::{JobRunner, WorkerId};
 use forge_db::sequencer::{self, Assigned, AuditSequencing, BatchSize, SeqRange};
 use forge_db::subscribers::Registry;
@@ -61,6 +64,9 @@ mod mergeability_sweep;
 // ── M3 R6: expired CODEOWNERS suspensions ──
 mod codeowners_restore;
 // ── end M3 R6 ──
+// ── M3 O3: the repository maintenance (own runner + schedule) ──
+pub(crate) mod maintenance;
+// ── end M3 O3 ──
 mod seal;
 // ── M3 I1c: events retention ──
 mod events_retention;
@@ -90,9 +96,13 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
     let keys = Arc::new(cfg.audit.require_seal_keys()?);
     // No storage, no start: provisioning would only fail (D4 MR3b).
     let storage = Storage::open(cfg.storage_root()?)?;
+    // M3 O3: the prune grace against the merge window, before anything runs.
+    maintenance::check_settings(&cfg.maintenance)?;
     block_on(async {
         let db = Db::connect(database).await?;
         forge_db::check_schema(&db, &MIGRATOR).await?;
+        // M3 O3: the database must know the window's time zone.
+        forge_db::maintenance::local_minute(&db, &cfg.maintenance.time_zone).await?;
         let (stop, stopped) = watch::channel(false);
         let signal = tokio::spawn(async move {
             forge_web::server::shutdown_signal().await;
@@ -106,7 +116,15 @@ pub fn worker(cfg: &Config) -> Result<String, ForgeError> {
             interval: cfg.hosting.purge_interval,
             session_interval: cfg.web.session_purge_interval,
         });
-        let result = run(&db, keys, &storage, purge, &cfg.review, stopped).await;
+        let result = run_full(
+            &db,
+            keys,
+            &storage,
+            purge,
+            (&cfg.review, Some(&cfg.maintenance)),
+            stopped,
+        )
+        .await;
         signal.abort();
         db.close().await;
         tracing::info!("forge.worker.stopped");
@@ -142,6 +160,19 @@ enum Task {
     CodeownersRestore,
     /// Events past the retention period (`events_retention`, M3 I1c).
     EventsRetention,
+    // ── M3 O3 ──
+    /// The maintenance's own job runner (`maintenance`).
+    MaintenanceRunner,
+    /// The nightly maintenance schedule (`maintenance::run_schedule`).
+    MaintenanceSchedule,
+    // ── end M3 O3 ──
+}
+
+/// The maintenance lane (M3 O3): its own job runner and its settings.
+#[derive(Clone)]
+pub(crate) struct MaintenanceTask {
+    pub(crate) runner: Arc<JobRunner>,
+    pub(crate) cfg: MaintenanceConfig,
 }
 
 /// The purge tasks' handles and periods (`hosting.purge_interval_secs`;
@@ -154,7 +185,11 @@ pub(crate) struct PurgeTask {
 }
 
 /// Every task of this worker.
-fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
+fn tasks(
+    registry: &Registry,
+    purge: Option<&PurgeTask>,
+    maintenance: Option<&MaintenanceTask>,
+) -> Vec<Task> {
     let mut tasks = vec![
         Task::Sequencer,
         Task::JobRunner,
@@ -176,6 +211,11 @@ fn tasks(registry: &Registry, purge: Option<&PurgeTask>) -> Vec<Task> {
     if purge.is_some() {
         tasks.push(Task::Purge);
         tasks.push(Task::SessionPurge);
+    }
+    // ── M3 O3: only with the storage (not in the loop tests) ──
+    if maintenance.is_some() {
+        tasks.push(Task::MaintenanceRunner);
+        tasks.push(Task::MaintenanceSchedule);
     }
     tasks
 }
@@ -219,6 +259,8 @@ struct Shared {
     /// The repositories (M3 R2: the mergeability sweep reads target tips;
     /// `None` in the loop tests, which then skip that part).
     storage: Option<Storage>,
+    /// The maintenance lane (M3 O3); `None` in the loop tests.
+    maintenance: Option<MaintenanceTask>,
 }
 
 impl Task {
@@ -234,6 +276,8 @@ impl Task {
             Self::MergeabilitySweep => mergeability_sweep::NAME,
             Self::CodeownersRestore => codeowners_restore::NAME,
             Self::EventsRetention => events_retention::NAME,
+            Self::MaintenanceRunner => maintenance::RUNNER_NAME,
+            Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
         }
     }
 
@@ -256,6 +300,8 @@ impl Task {
             Self::MergeabilitySweep => mergeability_sweep::PERIOD,
             Self::CodeownersRestore => codeowners_restore::PERIOD,
             Self::EventsRetention => events_retention::PERIOD,
+            Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
+            Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
         }
     }
 
@@ -302,6 +348,17 @@ impl Task {
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
             Self::EventsRetention => events_retention::run_events_retention(db).await,
+            Self::MaintenanceRunner => match shared.maintenance.as_ref() {
+                Some(m) => {
+                    let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver
+                    jobs::run_job(&m.runner, shared.grace, stop).await
+                }
+                None => Err(self.unconfigured()),
+            },
+            Self::MaintenanceSchedule => match shared.maintenance.as_ref() {
+                Some(m) => maintenance::run_schedule(db, &m.cfg).await,
+                None => Err(self.unconfigured()),
+            },
             // `runner` hands this task its own runner: reaching this is a bug.
             Self::Subscribers => Err(ForgeError::new(ErrorCode::Internal)
                 .with_context("operation", "worker_task")
@@ -327,6 +384,17 @@ impl Task {
     }
 }
 
+impl Task {
+    /// `tasks` starts the maintenance tasks only with their lane: reaching
+    /// this is a bug.
+    fn unconfigured(self) -> ForgeError {
+        ForgeError::new(ErrorCode::Internal)
+            .with_context("operation", "worker_task")
+            .with_context("task", self.name())
+            .with_context("reason", "maintenance_unconfigured")
+    }
+}
+
 /// A full batch (of events or audit rows) means more rows may wait: run
 /// again at once instead of after the period.
 fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
@@ -341,6 +409,7 @@ fn after_sequencing(assigned: Assigned, batch: BatchSize) -> Next {
 /// Run every task until `shutdown` turns true (see `supervise`), with the
 /// job handlers (creating repositories under `storage`), the subscribers of
 /// this build and, when given, the purge (D5 MR4).
+#[cfg(test)]
 pub(crate) async fn run(
     db: &Db,
     keys: Arc<SealKeys>,
@@ -349,17 +418,38 @@ pub(crate) async fn run(
     review: &ReviewConfig,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
+    run_full(db, keys, storage, purge, (review, None), shutdown).await
+}
+
+/// [`run`] with the maintenance lane when `maintenance` is given (M3 O3:
+/// `forge worker` always gives it; the loop tests do not).
+pub(crate) async fn run_full(
+    db: &Db,
+    keys: Arc<SealKeys>,
+    storage: &Storage,
+    purge: Option<PurgeTask>,
+    (review, maintenance): (&ReviewConfig, Option<&MaintenanceConfig>),
+    shutdown: watch::Receiver<bool>,
+) -> Result<(), ForgeError> {
     let mut runner = JobRunner::new(db.clone(), WorkerId::generate()); // clone: pool handles
     for handler in jobs::handlers(db, storage)? {
         runner.register(handler)?;
     }
+    let maintenance = maintenance
+        .map(|cfg| {
+            Ok::<_, ForgeError>(MaintenanceTask {
+                runner: Arc::new(maintenance::runner(db, storage, cfg)?),
+                cfg: cfg.clone(), // clone: the lane owns its settings
+            })
+        })
+        .transpose()?;
     run_all(
         db,
         runner,
         registry(review)?,
         jobs::SHUTDOWN_GRACE,
         keys,
-        (purge, Some(storage.clone())), // clone: the sweep's own handles
+        (purge, Some(storage.clone()), maintenance), // clone: the sweep's own handles
         shutdown,
     )
     .await
@@ -376,7 +466,16 @@ pub(crate) async fn run_with(
     keys: Arc<SealKeys>,
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
-    run_all(db, runner, registry, grace, keys, (None, None), shutdown).await
+    run_all(
+        db,
+        runner,
+        registry,
+        grace,
+        keys,
+        (None, None, None),
+        shutdown,
+    )
+    .await
 }
 
 async fn run_all(
@@ -385,8 +484,9 @@ async fn run_all(
     registry: Registry,
     grace: Duration,
     keys: Arc<SealKeys>,
-    // The purge (D5 MR4) and the repositories (M3 R2 sweep), when given.
-    (purge, storage): (Option<PurgeTask>, Option<Storage>),
+    // The purge (D5 MR4), the repositories (M3 R2 sweep) and the
+    // maintenance lane (M3 O3), when given.
+    (purge, storage, maintenance): (Option<PurgeTask>, Option<Storage>, Option<MaintenanceTask>),
     shutdown: watch::Receiver<bool>,
 ) -> Result<(), ForgeError> {
     tracing::info!(
@@ -394,6 +494,13 @@ async fn run_all(
         job_kinds = runner.kinds().len(),
         "forge.worker.jobs"
     );
+    if let Some(m) = &maintenance {
+        tracing::info!(
+            worker_id = m.runner.worker_id().as_str(),
+            job_kinds = m.runner.kinds().len(),
+            "forge.worker.maintenance_jobs"
+        );
+    }
     let shared = Shared {
         db: db.clone(), // clone: pool handles
         jobs: Arc::new(runner),
@@ -404,11 +511,16 @@ async fn run_all(
         registry,
         purge,
         storage,
+        maintenance,
     };
-    let runners = tasks(&shared.registry, shared.purge.as_ref())
-        .into_iter()
-        .map(|task| task.runner(&shared))
-        .collect();
+    let runners = tasks(
+        &shared.registry,
+        shared.purge.as_ref(),
+        shared.maintenance.as_ref(),
+    )
+    .into_iter()
+    .map(|task| task.runner(&shared))
+    .collect();
     supervise(runners, MAX_BACKOFF, shutdown).await
 }
 

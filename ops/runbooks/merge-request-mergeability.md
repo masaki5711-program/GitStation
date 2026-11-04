@@ -35,17 +35,19 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 ## 参照されないオブジェクト（ディスクの増加、秘密の残り）
 
 - 判定のたびに `git merge-tree --write-tree` が **どの ref からも参照されない木と blob** をリポジトリに書く。forge のリポジトリは
-  `gc.auto=0` で、到達できないオブジェクトを猶予つきで消す定期の保守は **計画 11 の O3 で入れる予定で、まだ無い**。それまで、
-  判定の回数に比例してオブジェクトが増える。
-- 確かめ方（読み取りのみ）: `git --git-dir=<repo> count-objects -v`（`count` と `size` の増え方）。
-- `[MUTATING — needs approval]` 手での削除: `git --git-dir=<repo> prune --expire=<猶予>`（猶予は 24 時間以上。照合中のジョブの
-  オブジェクトを消さないため。例 `--expire=2.days.ago`）。戻し: できない（消したオブジェクトは戻らない。判定は次のジョブが作り直す）。
-  本番では利用者の承認のうえで、push の少ない時間に 1 リポジトリずつ行う。
-  **承認のコミッターの規則への影響（R5 の 3 回目、O3 でも同じ）**: push の記録の先端（一覧の切れた push の `new`）のコミットが消えると、
-  そのコミットにどの ref も向いていなければ「範囲に届かない」とみなす（`cat-file --batch-check` で確かめる）。消えた先端に ref が向いて
-  いればリポジトリの破損として `committers_unknown`（`push_tip_missing`）。そのため prune の後は、消えた先端の push をした人が、残った
-  範囲のコミットを別の記録で名指されたまま運んでいても数えられないことがある（記録が残す先端そのものが消えるため）。秘密の除去などで
-  prune する MR では、承認をやり直すことを勧める。
+  `gc.auto=0` で、これを消すのは **定期の保守（M3 O3、Runbook `repo-maintenance`）** の `git gc --cruft --prune=<猶予>` だけ。猶予
+  （`maintenance.prune_grace_hours`、既定 48 時間）は 24 時間以上で、マージの照合の窓とマージのジョブの再試行の全体（今の既定で約
+  51 分）より長いことを worker が起動時に確かめる（照合の途中の `new_sha` を消さない）。保守は各リポジトリに週 1 回、夜の窓の中。
+- 確かめ方（読み取りのみ）: `git --git-dir=<repo> count-objects -v`（`count` と `size` の増え方）と、台帳
+  `SELECT objects, size_pack_kib, last_finished_at, outcome FROM forge.repository_maintenance WHERE repo_id = <id>`。
+- 急いで消したいとき（ディスクの逼迫）: `[MUTATING — needs approval]` `forge admin repo maintain <repo_id>`（保守のジョブを 1 件積む。
+  窓の外でもすぐ動き、猶予より新しいオブジェクトは残す。戻し: 不要）。手での `git prune` は使わない（猶予と push の途中の確かめを
+  通らない）。
+- **承認のコミッターの規則への影響**: push の記録の先端（一覧の切れた push の `new`）のコミットが保守の prune で消えると、そのコミットに
+  どの ref も向いていなければ「範囲に届かない」とみなす（`cat-file --batch-check` で確かめる）。どの ref も向いていない先端は、猶予より
+  古いときだけ消える。
+- 保守の pack-refs と push・`update-ref` は `packed-refs.lock` を取り合う（書く側は 10 秒まで待つ）。残ったロック（FG-GIT-0020）は
+  Runbook `repo-maintenance`。
 - **秘密の除去（`secret-removal`）との関係**: 版の ref を Purge しても、その前に判定が書いた木・blob（秘密の中身を含みうる）は
   参照されないまま残る。秘密の除去の手順の prune（Runbook `secret-removal`）は、この判定の残りも同じく消す。閲覧の API は
   参照されないオブジェクトを ID で読ませない（ADR-0024 §2 の到達可能性）。
@@ -67,4 +69,5 @@ M3 R2（ADR-0024 §3）の「マージできるか」の判定（ジョブ `merg
 ## Escalate
 
 - worker が動いていない、または同じ MR で `job_failed` が繰り返す → 開発者（Claude）に `request_id` と行の内容を渡す。
-- ディスクの空きが 20% を切った → インフラの担当に連絡し、上の prune を承認つきで行う。
+- ディスクの空きが 20% を切った → インフラの担当に連絡し、上の `forge admin repo maintain` を承認つきで行う（保守の失敗・期日超えは
+  Runbook `repo-maintenance`）。

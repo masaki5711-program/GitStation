@@ -608,6 +608,9 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 | 仮（登録の順に決める） | CheckPayloadInvalid | 422 | info | — | C1 |
 | FG-REVIEW-0011（R4 で登録） | MergeInProgress（この ADR で追加） | 409 | info | — | R4 |
 | FG-REVIEW-0016（R6 で登録） | RequiredCheckNamespaceNotAllowed（設計レビューで追加。`ext/` などを必須のチェックにする設定） | 422 | info | — | R6 |
+| FG-GIT-0018（O3 で登録） | RepositoryMaintenanceFailed（保守の手順の git の失敗、`step`。doctor `failing` / `overdue`） | 500 | warn（2 回続けて警報） | `repo-maintenance` | O3 |
+| FG-GIT-0020（O3 のレビューで登録） | RepositoryRefLockStale（誰も持たない `packed-refs.lock`。doctor `repositories.stale_locks`） | 500 | **alert** | `repo-maintenance` | O3 |
+| FG-GIT-0019（O3 で登録） | RepositoryCorrupt（保守の fsck の失敗、`mode`・`findings`） | 500 | **alert** | `repo-maintenance` | O3 |
 | FG-GIT-0017（R6 で登録） | ProtectedRefDirectPushForbidden（保護ブランチのマージの条件の直接の push の禁止。管理者も） | 403 | info | — | R6 |
 | FG-REVIEW-0003（R2 のレビューで登録） | MergeabilityNotChecked（`job_failed` / `job_stale` / `fanout_deferred` / doctor の `undecided`。HTTP では返さない） | 500 | warn | `merge-request-mergeability`（新規） | R2 |
 | FG-REVIEW-0002（R1b で登録済み） | PurgePreconditionFailed（再レビューで追加。開いている MR の今の head の版の ref の削除、Purge 済みの head での再オープン） | 409 | info | `secret-removal` | R1b |
@@ -635,6 +638,8 @@ Resource::CheckRun { project: ProjectView, namespace: CheckNamespace, sha_stakeh
 - **リポジトリの ref の数の上限**（R5 の再レビュー 6 回目からの申し送り、O シリーズ）: push のたびに全 ref の先端を読む
   （`ref_snapshot`、上限 1 000 000 ref で失敗 = その push の一覧は不完全）。ref が N 本を超えるリポジトリへの push を拒む上限と、
   N に近づいたら知らせる doctor の warn を O シリーズで入れる（N は運用の実測で決める）。R5 では実装しない。
+  → **O3 で測る半分を入れた**（末尾の「実装で決めたこと（O3）」）: 保守が毎回 ref の数（隠れた ref も）を台帳に残し、doctor
+  `repositories.refs` が `maintenance.refs_warn`（既定 100 000）を超えたら warn。push を拒む上限は実測の後（計画 11 Q5）。
 - **エージェントモデルへの申し送り**（再レビュー、ここでは記録だけ。製品の MR ではない）: ゲート `authz-coverage` が、運用の例外の一覧（CLAUDE.md の
   契約 4 と ADR-0019 §8 の `forge admin …` / `forge backup` / `forge restore`）と実際の運用のコマンドの一致も確かめるようにする（[root] の MR）。
 
@@ -1707,3 +1712,123 @@ U2 のレビューで見つかった、規則の書き込みの「後から保�
 - **テスト**: 上限の同時実行（99 + 8 → 1 件だけ成功、7 件 FG-REVIEW-0021）、実際の `Browser` の到達可能性（届かない・時間切れは
   `ref_not_found` で何も書かない）、本文の上限（ちょうど 64 KiB は 201、1 バイト多いと 413 FG-WEB-0009 で行なし）、FG-DB-0022
   `too_many_stored_runs`、保存されたイベントの重複の鍵。
+
+## 実装で決めたこと（O3 `feat/git-repo-maintenance`、2026-11-03）
+
+計画 11 §5 O3 の案 B（段に分けた保守）と、決定 Q1〜Q5 の実装。git の手順は forge-git `maintenance`、台帳と予定は forge-db
+`maintenance`、ジョブと専用のランナーは forge-cli `worker/maintenance.rs`。Runbook `repo-maintenance`。
+
+- **手順と順序**（1 回の保守 = ジョブ `repository.maintain` 1 件）: (1) push の quarantine（`objects/tmp_objdir-incoming-*`）が
+  6 時間より新しければ何もしない（`skipped incoming_push`。古いものは落ちた push の残りで、gc の prune が猶予の後に消す）。
+  (2) `git fsck --connectivity-only`（毎回）/ `--full`（`maintenance.fsck_interval_days` ごと、既定 30 日。最後の fsck が失敗していても
+  全体）。**問題があれば止まる**（FG-GIT-0019、gc も prune もしない。破損したリポジトリは fsck が通るまで二度と prune しない）。
+  (3) `git -c gc.packRefs=false -c gc.writeCommitGraph=false -c repack.writeBitmaps=true -c pack.writeBitmapHashCache=true -c
+  core.hooksPath=<空> gc --cruft --prune=<秒>.seconds.ago --quiet`。別の gc が動いていれば（git 自身の `gc.pid` の確かめ、exit 128 と
+  `gc is already running`）`skipped gc_running`。(4) `git pack-refs --all --prune` を **マージのロック `merge:<repo_id>` の try-lock**
+  （`pg_try_advisory_xact_lock`、待たない）の下で。マージ中なら今回は飛ばす（`skipped_reason = pack_refs_merge_lock_held`、成功のまま）。
+  (5) `git commit-graph write --reachable --no-progress`。(6) `count-objects -v` と `for-each-ref --format=.`（ref の数、隠れた ref も）。
+  fsck を gc より前にしたのは、破損したリポジトリを prune しないため（計画は順を決めていなかった）。
+- **プロセスの木**: 取り込みの実行（`output()`）は直接の子だけを殺していた（README の既知の穴）。保守の手順は crate 内の
+  `GitCommand::supervise_tree()` でプロセスグループ（Unix）/ Job Object（Windows）に入れ、時間切れ・出力のあふれ・future の破棄
+  （ジョブの中止・停止）で木ごと殺す（`maintenance_timeout_kills_the_process_tree`: リーダーより長生きする助手が止まることを、
+  木を殺さない実装では落ちる形で確かめた）。git が自分で終われば木を手放す。他の取り込みの実行は今まで通り。
+- **猶予（Q2）**: `maintenance.prune_grace_hours` 既定 48、範囲 24〜720（設定の読み込みで FG-SYS-0002）。worker の起動時に
+  「猶予 > マージの照合の窓 + マージのジョブの再試行の全体」を確かめる（`check_settings`。今の既定で 5 × (300 + 30) + (10 + 20 + 40
+  + 80) + (600 + 30) + 600 = 3 030 秒。`prune_grace_must_exceed_reconcile_window_and_retry_budget` がこの式を固定する）。forge-git の
+  `gc_objects` も 24 時間未満を断る（二重の守り）。
+- **ref の書き込みの待ち**: `update-ref`（`Git::update_refs`）と receive-pack に `-c core.packedRefsTimeout=10000`。pack-refs と、
+  packed の ref を消す取引が `packed-refs.lock` を取り合うとき、git の既定（1 秒）で失敗せず待つ
+  （`version_ref_write_during_pack_refs_is_retried`: 1.5 秒ロックを持たれても版の ref の削除が通る）。マージの `update-ref` は
+  さらにマージのロックで pack-refs と分かれる。
+- **専用のランナー（Q1、R4 の head-of-line の申し送り）**: `forge worker` はメインのランナー（作成・版・判定）と別に、保守だけを登録した
+  `JobRunner` を持つ（タスク `maintenance_runner`）。メインのランナーは `repository.maintain` を登録しないので取らない
+  （`maintenance_has_its_own_runner_and_never_blocks_provisioning`: 保守の git が止まっている間も作成のジョブが通る）。保守の git は
+  自分の `Git`（自分のスロット）を使う。期限切れのリースは共通の reaper が戻す。
+- **リースと手順の時間切れ**: ジョブの時間切れはキューの上限 1 時間、リースはその + 30 秒。1 回の保守の期限は 1 時間 − 60 秒
+  （`RUN_RESERVE`、台帳の書き込みの分）で、各手順は `maintenance.step_timeout_secs`（既定 1 800、上限 3 000）と残りの短い方
+  （`lease_outlives_step_timeouts`）。どの git もリースより長く生きない。
+- **予定（Q1）**: タスク `maintenance_schedule` が 60 秒ごとに、DB の時計で `maintenance.window_time_zone`（既定 `Asia/Tokyo`。
+  未知の名前は worker の起動で FG-SYS-0002）の時刻を求め、窓（`window_start` / `window_end`、既定 02:00〜05:00、0 時をまたいでよい）の
+  中だけ、期日（台帳の `next_due_at`、保守したことの無いリポジトリは `ready_at`）の古い順にジョブを積む。重複の鍵は
+  `repository_maintain:<repo_id>:<期日の epoch>`。**生きている保守のジョブは `maintenance.batch_max`（既定 10）件まで**（遅い夜に
+  キューへ溜めない。doctor の queue depth の警報を意味のあるままにする）。間隔は `maintenance.interval_days`（既定 7）。
+- **台帳** `forge.repository_maintenance`（20261117100000、tables.toml `derived`: 監査の行なし。完全削除が行を消す、
+  `project_purge_removes_maintenance_rows`）: `outcome`（running / succeeded / skipped / failed / corrupt）、`error_code`、
+  `skipped_reason`、`failures`（続けて失敗した回数、成功で 0）、`objects` / `size_pack_kib` / `refs`、fsck の時刻・種類・結果、
+  最後の全体の fsck、`next_due_at`（成功: 間隔の後、飛ばし: 1 時間後、失敗: 12 時間後）。
+- **失敗の扱い**: 手順の失敗はジョブの失敗にしない（台帳に残し、ジョブは完了。次の保守が再試行）。キューの再試行は、落ちた実行と
+  台帳の書き込みの失敗だけ（最大 3 回）。git の失敗は FG-GIT-0018（warn、`step`）、時間切れは FG-GIT-0002、スロットなしは
+  FG-GIT-0004（いずれも `step`）。**同じリポジトリで 2 回続けたら error のレベル**（警報）で出し、doctor
+  `repositories.maintenance` も FG-GIT-0018 `reason=failing`。期日から間隔以上過ぎたら `reason=overdue`。fsck の失敗は
+  FG-GIT-0019（alert）、doctor `repositories.integrity`。ログ `forge.git.maintenance_started` / `_completed` / `_skipped`（ジョブの
+  `request_id`、`repo_id`、`error_code`）。
+- **手での起動（Q4）**: `forge admin repo maintain <repo_id>`（積むだけ。窓の外でもすぐ動く）。ADR-0019 §8 の例外に足した
+  （Amendment 2026-11-03）。HTTP の操作は作らない。
+- **ref の数（Q5）**: 測るだけ。doctor `repositories.refs` が `maintenance.refs_warn`（既定 100 000）を超えたら warn（コードなし）。
+- **O1 へのロックの予約**: `repo_maint:<repo_id>`（`hashtextextended('repo_maint:' || <repo_id>, 0)`、forge-db
+  `REPO_MAINT_LOCK_PREFIX`）をバックアップと保守を分けるために予約した。O3 は取らない。
+- **チェックの実行の保持（C1 の申し送り）は別の MR にした**: `check_runs` / `check_annotations` は `audited` の表で、行を消す取引ごとに
+  プロジェクトの監査の行が要る（遅延トリガー `audited_change_present`）。保持の削除には、監査の action（例 `check_runs.expired`）、
+  報告（プロジェクトの行を `FOR SHARE`）とマージのゲート（`FOR UPDATE`）とのロックの順、「開いている MR の今の head」の判定、
+  runbook `checks-reporting` の「保持」の書き換えが要り、git の保守とは別の設計とレビュー（`database-reviewer`）になる。量は 1 コミット
+  100 名・注釈 50 個で抑えられているので急がない。O3 の後の小さな MR（`feat/db-check-run-retention`）として計画 11 §5 に残す。
+- **既知の残り**: Windows で、git の `PATH` の `cmd\git.exe` の起動の器を殺しても本物の git が残りうる（README の既知の穴。Job
+  Object は子孫ごと殺すので、保守の手順では起きない）。完全削除とリポジトリの保守が重なると、Windows では開いているファイルのため
+  ディレクトリの削除が失敗しうる（完全削除は次の回で再試行する）。
+
+### O3 の独立レビューで決めたこと（2026-11-03）
+
+`database-reviewer`・`git-protocol-reviewer`・`silent-failure-hunter`・`security-reviewer`（いずれも WARN、HIGH 1 件）への対処。
+
+- **HIGH: 殺された pack-refs が `packed-refs.lock` を残す**（その後の push と `update-ref` がすべて失敗する）。(a) 監督つきの手順の時間切れは
+  まずプロセスグループへ `SIGTERM`（git のシグナルハンドラがロックのファイルを消す）、リーダーの終わりを `waitid(WNOWAIT)` で最大 5 秒
+  待ってから `SIGKILL`（`stop=term|kill`）。Windows には穏やかな止め方が無い（Job Object を閉じるのは `TerminateProcess`）。
+  (b) pack-refs が失敗・時間切れなら、マージのロックを持ったまま、`packed-refs.lock` の時刻が **手順の開始以後** のときだけ消す（自分の
+  もの）。それより古いものは残し FG-GIT-0020 RepositoryRefLockStale（alert、新規）。doctor `repositories.stale_locks`（10 分より古い
+  `packed-refs.lock`、最大 10 000 リポジトリ、60 秒）。pack-refs 自身にも `core.packedRefsTimeout=10000`。
+- **pack-refs の長さ（測定）**: Windows の開発機・git 2.53 で loose の ref 100 000 本は 56〜70 秒、うち `packed-refs.lock` を持つのは約 6.6 秒。
+  書く側の 10 秒の上限に近いので、`maintenance.refs_warn`（100 000）がその目安（Runbook `repo-maintenance`）。上限は変えない。
+- **MEDIUM（database）: 最初の実行で重複のジョブ**: `start` が新しい行の `next_due_at` を `now()` にしていたため、重複の鍵（期日の秒）が
+  ずれ、実行中の次の回に 2 件目が積まれた。新しい行は `coalesce(ready_at, now())`（鍵を作った期日）。LOW: `start` はリポジトリの行を
+  `FOR SHARE` で読む（完全削除の `FOR UPDATE` と交互にならない）。
+- **MEDIUM（silent-failure）**: (1) 毎晩 skip されるリポジトリは failed にも overdue にもならなかった → 列 `last_success_at`
+  （マイグレーション 20261117100100。20261117100000 は編集しない）と doctor の `reason=no_recent_success`（間隔の 2 倍成功が無い）。
+  (2) 落ちた・dead になった実行は台帳を `running` のまま残し、期日が動かないので毎分積み直された → スケジューラーが毎回（窓の外でも）
+  リース（1 時間 + 30 秒）を過ぎ生きたジョブの無い `running` の行を `failed`・FG-DB-0007・`failures + 1`・12 時間後にする
+  （`reap_stale_running`）。`start` も前の実行がリースを過ぎて `running` なら失敗に数える（`lost_previous`、ログ
+  `forge.git.maintenance_run_lost`）。doctor `reason=stale_running`。理由の優先: failing → stale_running → no_recent_success → overdue。
+- **MEDIUM（git-protocol）**: quarantine の確かめを gc の直前にもう一度（fsck が長いことがある）。中身のある古い
+  `objects/tmp_objdir-incoming-*` は git の prune が猶予を過ぎたところでディレクトリごと消す（実際のディレクトリとファイルで確かめた:
+  `a_stale_quarantine_with_files_is_pruned_after_the_grace`）。forge 自身では消さない。
+- **MEDIUM（security）: Unix で失敗したリーダーの助手が残る**: 監督つきの取り込みは、リーダーの終わりを刈り取らずに見て、0 以外なら
+  グループを殺してから刈り取る。リーダーが終わった後もパイプを持ち続ける助手は 2 秒（`LINGER`）の後に木ごと殺す（そうしないと取り込みが
+  期限まで待った）。出力の上限に達したらグループをすぐ殺す。
+- **LOW**: `maintenance_completed` は台帳の書き込みの後に出す（書き込みの失敗は `forge.git.maintenance_ledger_failed` を `error_code` つきで
+  出し、キューが再試行）。fsck の exit 128 で「not a git repository」「dubious ownership」は FG-GIT-0018 `reason=fsck_unusable`（破損では
+  ない）。fsck の stdout の先頭は stderr と同じく redact する。Windows の Job Object の割り当ての隙は、停止状態での起動が `unsafe` 無しで
+  できないため残し、コメントを正した。`enqueue_now` の文書のコードを FG-REPO-0005 に直した。使われない索引
+  `repository_maintenance_due` を 20261117100100 で消した。古い形のオブジェクト（legacy）の fsck の扱いを Runbook に書いた。
+- **テスト**: `a_killed_pack_refs_lock_of_our_own_is_removed_and_a_foreign_one_kept`、
+  `a_killed_pack_refs_removes_its_own_lock_and_keeps_a_foreign_one`、`a_stale_packed_refs_lock_is_reported`、
+  `a_timed_out_step_gets_sigterm_before_sigkill`（Unix のみ。Windows の開発機ではコンパイルだけ）、`a_dropped_maintenance_step_kills_its_tree`、
+  `helpers_die_when_a_maintenance_step_fails`、`a_first_run_keeps_its_due_key_so_the_scheduler_dedups`、
+  `a_lost_run_is_counted_as_a_failure_and_not_requeued_every_pass`、`start_counts_a_lost_previous_run`、
+  `a_running_row_with_a_live_job_is_not_reaped`、`no_recent_success_is_reported_until_a_run_succeeds`、
+  `the_schedule_reaps_a_lost_run_outside_the_window`、`a_push_starting_during_fsck_defers_gc`、
+  `fsck_on_an_unusable_repository_is_maintenance_failed_not_corrupt`、`a_stale_gc_pid_does_not_block_gc`、
+  `doctor_maintenance_lines_name_stale_runs_and_no_recent_success`。
+
+### O3 の再レビューで決めたこと（2026-11-03）
+
+- **HIGH（security / silent-failure）: 生きた書き手のロックを消しうる**: マージのロックは receive-pack と `update-ref` を止めないので、
+  「手順の開始より新しい」だけでは自分のロックと言えない（`SIGTERM` で git が自分のロックを消した後に push が取ったロック、他の書き手が
+  持つロックのために 10 秒待って失敗した場合）。**決定**: pack-refs が自分で終わった（どの終了コードでも）か `SIGTERM` で終わったときは何も
+  消さない（git が自分のロックを消している）。**殺された**ときだけ（`stop=kill`、Windows の Job Object を閉じたとき）、時刻が手順の開始から
+  kill の時刻（`killed_at_unix_ms`、forge-git が kill の直前に記録）の間のロックを消す。それ以外は残して FG-GIT-0020。
+  forge-git `StepEnd::of(&err)`（`Exited` / `Terminated` / `Killed { at }` / `NotRun`）で分ける。残る隙（ロックを待つ間に他の書き手が取り、
+  その後に kill された場合）は Runbook に書いた。
+- **MEDIUM**: Unix で `wait_leader` が使えず `child.wait()` がリーダーを刈り取った後は、グループに signal を送らない（pgid が再利用されうる）。
+  `release()` するだけ。グループを殺すのは、リーダーが刈り取られていないゾンビの間だけ。`waitid` を失敗させる手段が無いのでテストは無い。
+- **LOW**: スケジューラーの `maintenance_run_lost` は回ごとの `request_id` を持ち、`failures ≥ 2` で error（`start` の経路も同じ）。
+  `last_success_at` の埋め戻しを新しいマイグレーション 20261117100200 で（`outcome = 'succeeded'` の行に `last_finished_at`）。doctor の
+  ロックの見回りは最初の stat の失敗を詳細に残す。`fsck_unusable` は `fatal:` も要る。`stale_running` の一時的な誤報を Runbook に書いた。

@@ -334,7 +334,7 @@ fn the_production_registry_starts_the_subscribers_task() {
         names,
         [REFRESH_SUBSCRIBER, forge_db::work_items::WORK_ITEM_SYNC]
     );
-    let tasks = crate::worker::tasks(&registry, None);
+    let tasks = crate::worker::tasks(&registry, None, None);
     assert!(
         tasks.contains(&crate::worker::Task::Subscribers),
         "{tasks:?}"

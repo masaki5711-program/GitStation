@@ -127,6 +127,9 @@ pub mod review;
 // ── M3 C1: check runs and namespace grants (ADR-0024 §10) ──
 pub mod checks;
 // ── end M3 C1 ──
+// ── M3 O3: the repository maintenance ledger and schedule ──
+pub mod maintenance;
+// ── end M3 O3 ──
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]

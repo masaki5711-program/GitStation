@@ -1,4 +1,6 @@
-//! Killing a streaming git subprocess together with its helpers.
+//! Killing a streaming git subprocess together with its helpers (also the
+//! captured runs built with `GitCommand::supervise_tree`, M3 O3: `gc` starts
+//! `repack` → `pack-objects`).
 //!
 //! `git upload-pack` / `receive-pack` start helpers (`pack-objects`,
 //! `index-pack`, `rev-list`). Killing only the direct child would leave them
@@ -14,8 +16,17 @@
 //!   running and holding repository locks. Only then is the leader reaped.
 //! - Windows (development machines only): the child is put into a Job Object
 //!   with kill-on-close right after spawn; closing the job kills every
-//!   process in it. git starts helpers only after reading the request, so
-//!   the window between spawn and assignment does not matter in practice.
+//!   process in it. **Residual gap**: a helper the child starts before the
+//!   assignment is not in the job and survives. Spawning suspended, assigning
+//!   and resuming would close it, but `tokio::process` has no suspended
+//!   spawn and the Win32 calls need `unsafe` (forbidden in the workspace).
+//!   In practice the assignment comes microseconds after `CreateProcess`
+//!   returns, while git starts its first helper only after startup and
+//!   real work (upload-pack / receive-pack after reading the request; gc
+//!   after taking `gc.pid` and expiring reflogs), so the gap is not hit;
+//!   it is not proven impossible. There is no graceful stop either
+//!   ([`ProcessTree::terminate`] is `false`): closing the job is
+//!   `TerminateProcess`, so a killed git leaves its lock files.
 //! - Other platforms are refused at compile time.
 //! - Dropping a `ProcessTree` that was neither killed nor released (the
 //!   supervisor task was dropped, e.g. at runtime shutdown) kills the tree.
@@ -130,6 +141,57 @@ impl ProcessTree {
         #[cfg(windows)]
         {
             drop(self.job.take());
+        }
+    }
+}
+
+impl ProcessTree {
+    /// Ask the whole tree to stop (`SIGTERM` to the group, Unix): git's
+    /// signal handlers remove the lock files it holds (`packed-refs.lock`,
+    /// `gc.pid`, `<ref>.lock`) before it exits, which `SIGKILL` never lets
+    /// it do. `false` when there is no graceful stop: Windows (closing the
+    /// Job Object is `TerminateProcess`; console programs get no signal a
+    /// non-console parent can send), or the group is already gone.
+    pub(crate) fn terminate(&self) -> bool {
+        #[cfg(unix)]
+        {
+            let Some(pgid) = self.pgid else {
+                return false;
+            };
+            rustix::process::kill_process_group(pgid, rustix::process::Signal::TERM).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
+    }
+
+    /// Wait until the leader has exited, without reaping it (Unix
+    /// `waitid(WNOWAIT)`, a 100 ms tick), at most until `until`.
+    /// `Some(Ok(success))` once it exited, `None` at `until`, `Some(Err)`
+    /// when its exit cannot be watched (then the caller waits normally).
+    /// Windows: `Some(Err)` at once (the Job Object needs no zombie).
+    pub(crate) async fn wait_leader(
+        &self,
+        until: tokio::time::Instant,
+    ) -> Option<io::Result<bool>> {
+        #[cfg(unix)]
+        loop {
+            match self.peek_leader() {
+                Ok(Some(success)) => return Some(Ok(success)),
+                Ok(None) => {}
+                Err(e) => return Some(Err(e)),
+            }
+            if tokio::time::Instant::now() >= until {
+                return None;
+            }
+            let tick = tokio::time::Instant::now() + std::time::Duration::from_millis(100);
+            tokio::time::sleep_until(tick.min(until)).await;
+        }
+        #[cfg(windows)]
+        {
+            let _ = until;
+            Some(Err(io::Error::other("no zombie watch on Windows")))
         }
     }
 }

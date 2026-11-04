@@ -473,6 +473,13 @@ unaudited_columns = []
 txn_audited_columns = []
 # ── end M3 C1 ──
 
+# ── M3 O3: the repository maintenance ledger (ADR-0024 "実装で決めたこと（O3）"),
+# operational state the maintenance job writes every run ──
+[tables.repository_maintenance]
+guarded = false
+kind = "derived"
+ro_columns = ["*"]
+# ── end M3 O3 ──
 # ── M3 I1b: work items and their links (plan 02 §2, §5.7, §5.8, ADR-0016
 # Amendment I1b). Derived: the ordered subscriber work-item-sync writes them
 # (DerivedTx, no audit row); a person's manual link / unlink carries its own

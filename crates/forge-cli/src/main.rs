@@ -252,6 +252,15 @@ enum RepoCommand {
         from_log: std::path::PathBuf,
     },
     // ── end M1 phase 9 MR2 ──
+    // ── M3 O3 ──
+    /// Enqueue one maintenance of a ready repository (gc with the prune
+    /// grace, pack-refs, commit-graph, fsck, counts; runbook
+    /// repo-maintenance). A running `forge worker` runs it at once.
+    Maintain {
+        /// The repository id.
+        repo_id: i64,
+    },
+    // ── end M3 O3 ──
 }
 // ── end D4 MR3b ──
 
@@ -381,7 +390,10 @@ fn main() -> ExitCode {
                 }
                 | AdminCommand::BootstrapAdmin { .. }
                 | AdminCommand::Repo {
-                    command: RepoCommand::Reprovision { .. } | RepoCommand::RecordPush { .. },
+                    command:
+                        RepoCommand::Reprovision { .. }
+                        | RepoCommand::RecordPush { .. }
+                        | RepoCommand::Maintain { .. },
                 }
                 | AdminCommand::Project {
                     command: ProjectCommand::Purge { now: true, .. } | ProjectCommand::Move { .. },
@@ -527,6 +539,12 @@ fn main() -> ExitCode {
         } => {
             config().and_then(|cfg| admin_repo::record_push(&cfg.database, &request_id, &from_log))
         }
+        Command::Admin {
+            command:
+                AdminCommand::Repo {
+                    command: RepoCommand::Maintain { repo_id },
+                },
+        } => config().and_then(|cfg| admin_repo::maintain(&cfg.database, &request_id, repo_id)),
         Command::Admin {
             command:
                 AdminCommand::Project {
@@ -775,6 +793,17 @@ mod tests {
             } if from_log == std::path::Path::new("push.log")
         ));
         assert!(parse(&["admin", "repo", "record-push"]).is_err());
+        // M3 O3: enqueue one maintenance.
+        let cli = parse(&["admin", "repo", "maintain", "7"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Admin {
+                command: AdminCommand::Repo {
+                    command: RepoCommand::Maintain { repo_id: 7 }
+                }
+            }
+        ));
+        assert!(parse(&["admin", "repo", "maintain"]).is_err());
         // The read-only repo-path command is unchanged.
         assert!(parse(&["admin", "repo-path", "42"]).is_ok());
     }

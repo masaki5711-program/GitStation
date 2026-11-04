@@ -127,6 +127,56 @@ pub async fn lock_merges(db: &Db, repo: RepoId, wait: Duration) -> Result<MergeL
     }
 }
 
+/// Take the merge lock of `repo` only if it is free right now
+/// (`pg_try_advisory_xact_lock`, never waiting): `None` while a merge holds
+/// it. M3 O3: the maintenance's `pack-refs` runs under it, so it never
+/// competes with a merge's `update-ref` for the ref locks — a merge in
+/// progress makes the maintenance skip pack-refs for that run. The lock
+/// key `repo_maint:<repo_id>` is reserved for O1 (backup ↔ maintenance).
+pub async fn try_lock_merges(db: &Db, repo: RepoId) -> Result<Option<MergeLock>, ForgeError> {
+    const QUERY: &str = "review.merge_try_lock";
+    let taking = async {
+        let mut tx = db
+            .write_pool()
+            .begin()
+            .await
+            .map_err(|e| query_error(QUERY, e))?;
+        sqlx::query(&format!(
+            "SET LOCAL idle_in_transaction_session_timeout = '{}ms'",
+            IDLE_LIMIT.as_millis()
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e))?;
+        let taken: bool = sqlx::query_scalar(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('merge:' || $1::text, 0))",
+        )
+        .bind(repo.get())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| query_error(QUERY, e).with_context("repo_id", repo.get()))?;
+        if !taken {
+            // Nothing to keep: end the empty transaction now.
+            tx.rollback().await.map_err(|e| query_error(QUERY, e))?;
+            return Ok(None);
+        }
+        Ok(Some(MergeLock {
+            tx,
+            repo,
+            taken: tokio::time::Instant::now(),
+        }))
+    };
+    match tokio::time::timeout(SLACK.saturating_mul(2), taking).await {
+        Ok(taken) => taken,
+        Err(_) => Err(busy(repo, Duration::ZERO).with_context("detail", "client_bound")),
+    }
+}
+
+/// The advisory lock key reserved for the repository backup (M3 O1) to
+/// keep a backup and the maintenance of one repository apart:
+/// `hashtextextended('repo_maint:' || <repo_id>, 0)`. Not taken by O3.
+pub const REPO_MAINT_LOCK_PREFIX: &str = "repo_maint:";
+
 impl MergeLock {
     pub fn repo(&self) -> RepoId {
         self.repo
