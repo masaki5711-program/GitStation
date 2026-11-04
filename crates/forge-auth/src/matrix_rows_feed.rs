@@ -92,6 +92,14 @@ pub(crate) const FEED_ROWS: &[Row] = &[
     row(A::IntegrationEventCursorRead, W::Admin, OWN, deny(E::NotFound)),
     row(A::IntegrationEventCursorRead, W::AdminTokenAdmin, OWN, deny(E::NotFound)),
     row(A::IntegrationEventCursorRead, W::BotTokenApi, OWN, deny(E::NotFound)),
+    // Review (I1c): the cursor route mirrors every deny of the feed route.
+    row(A::IntegrationEventCursorRead, W::ServiceAccountTokenMergeApprove, OWN, deny(E::InsufficientScope)),
+    row(A::IntegrationEventCursorRead, W::Admin, FOREIGN, deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::DevTokenApi, OWN, deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::AgentTokenReadApi, OWN, deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountAdminTokenAdmin, FOREIGN, deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::AdminTokenAdmin, FOREIGN, deny(E::NotFound)),
+    row(A::IntegrationEventRead, W::AdminTokenAdmin, FOREIGN, deny(E::NotFound)),
     row(A::IntegrationEventCursorRead, W::Anonymous, OWN, deny(E::Unauthenticated)),
     // A bound project's events: the integration class by membership.
     row(A::IntegrationEventRead, W::ServiceAccountReporterTokenApi, events(C::Integration, P::Private), Allow),
@@ -101,6 +109,12 @@ pub(crate) const FEED_ROWS: &[Row] = &[
     row(A::IntegrationEventRead, W::ServiceAccountNonMemberTokenReadApi, events(C::Integration, P::Private), deny(E::NotFound)),
     row(A::IntegrationEventRead, W::ServiceAccountNonMemberTokenReadApi, events(C::Integration, P::Internal), deny(E::NotFound)),
     row(A::IntegrationEventRead, W::ServiceAccountTokenReadApi, events(C::Integration, P::Deleted), deny(E::PendingDeletion)),
+    // Review (I1c): administrator rights never stand in for a membership;
+    // a Guest of an internal project reads nothing.
+    row(A::IntegrationEventRead, W::ServiceAccountAdminTokenAdmin, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventRead, W::ServiceAccountGuestTokenRead, events(C::Integration, P::Internal), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountAdminTokenAdmin, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountGuestTokenRead, events(C::Integration, P::Internal), deny(E::Forbidden)),
     // Never the maintainer, deployment or admin class, whatever the role.
     row(A::IntegrationEventRead, W::ServiceAccountOwnerTokenApi, events(C::Maintainer, P::Private), deny(E::Forbidden)),
     row(A::IntegrationEventRead, W::ServiceAccountMaintainerTokenApi, events(C::Maintainer, P::Private), deny(E::Forbidden)),
