@@ -130,4 +130,22 @@ pub(crate) const FEED_ROWS: &[Row] = &[
     row(A::IntegrationEventRead, W::Anonymous, events(C::Integration, P::Private), deny(E::Unauthenticated)),
     row(A::IntegrationEventCursorRead, W::ServiceAccountReporterTokenApi, events(C::Integration, P::Private), Allow),
     row(A::IntegrationEventCursorRead, W::ServiceAccountOwnerTokenApi, events(C::Maintainer, P::Private), deny(E::Forbidden)),
+    // Re-review (I1c): every project-level row of the feed, mirrored for
+    // the head cursor (it decides the same set).
+    row(A::IntegrationEventCursorRead, W::ServiceAccountTokenReadApi, events(C::Integration, P::Private), Allow),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountTokenReadApi, events(C::Integration, P::Internal), Allow),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountGuestTokenRead, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountNonMemberTokenReadApi, events(C::Integration, P::Private), deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountNonMemberTokenReadApi, events(C::Integration, P::Internal), deny(E::NotFound)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountTokenReadApi, events(C::Integration, P::Deleted), deny(E::PendingDeletion)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountMaintainerTokenApi, events(C::Maintainer, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountOwnerTokenApi, events(C::Deployment, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountOwnerTokenApi, events(C::Admin, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountAdminTokenAdmin, events(C::Admin, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::Reporter, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::Admin, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::ServiceAccountAgentTokenReadApi, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::BotTokenApi, events(C::Integration, P::Private), deny(E::Forbidden)),
+    row(A::IntegrationEventCursorRead, W::DevTokenUserEmail, events(C::Integration, P::Private), deny(E::InsufficientScope)),
+    row(A::IntegrationEventCursorRead, W::Anonymous, events(C::Integration, P::Private), deny(E::Unauthenticated)),
 ];

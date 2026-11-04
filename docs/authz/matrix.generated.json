@@ -59,7 +59,7 @@
   { "action": "IntegrationRead", "allow": 2, "deny": 9, "public": false, "git_operation": false },
   { "action": "IntegrationBindingManage", "allow": 6, "deny": 15, "public": false, "git_operation": false },
   { "action": "IntegrationEventRead", "allow": 5, "deny": 32, "public": false, "git_operation": false },
-  { "action": "IntegrationEventCursorRead", "allow": 3, "deny": 18, "public": false, "git_operation": false },
+  { "action": "IntegrationEventCursorRead", "allow": 5, "deny": 32, "public": false, "git_operation": false },
   { "action": "AuditRead", "allow": 3, "deny": 4, "public": false, "git_operation": false },
   { "action": "UserSelfRead", "allow": 5, "deny": 6, "public": false, "git_operation": false },
   { "action": "SessionRead", "allow": 3, "deny": 8, "public": false, "git_operation": false },

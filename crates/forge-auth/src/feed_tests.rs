@@ -161,3 +161,29 @@ fn the_route_refuses_everyone_but_the_own_service_account() {
     .expect_err("act-as");
     assert_eq!(err.code(), ErrorCode::Forbidden);
 }
+
+/// Re-review (I1c): the head cursor decides exactly what the feed decides,
+/// so every feed row (route and project level) has its cursor twin with the
+/// same actor, fixture and outcome — the two actions cannot drift apart.
+#[test]
+fn the_cursor_route_mirrors_every_feed_row() {
+    use crate::matrix::ROWS;
+    let missing: Vec<String> = ROWS
+        .iter()
+        .filter(|r| r.action == Action::IntegrationEventRead)
+        .filter(|r| {
+            !ROWS.iter().any(|c| {
+                c.action == Action::IntegrationEventCursorRead
+                    && c.actor == r.actor
+                    && c.fixture == r.fixture
+                    && c.expect == r.expect
+            })
+        })
+        .map(|r| format!("{:?} {:?} {:?}", r.actor, r.fixture, r.expect))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "rows without a cursor twin:\n{}",
+        missing.join("\n")
+    );
+}
