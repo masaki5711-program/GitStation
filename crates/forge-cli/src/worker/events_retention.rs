@@ -5,7 +5,7 @@
 //! items, held back by the retention-blocking subscribers until 1.5 × the
 //! period, and `retained_from` moves past them (one `events.retention`
 //! audit row per batch that deleted something). A batch that reached its
-//! window's end runs again at once, so a backlog drains without waiting a
+//! window's end runs again after a 500 ms pause, so a backlog drains without waiting a
 //! period per batch. Consumers whose cursor was older answer 410
 //! `retention` (FG-INT-0007) and resync.
 //!
@@ -27,6 +27,8 @@ use super::supervise::Next;
 pub(crate) const NAME: &str = "events_retention";
 /// How often a batch runs when nothing is left.
 pub(crate) const PERIOD: Duration = Duration::from_secs(3600);
+/// The pause after a full batch before the next one.
+pub(crate) const BATCH_PAUSE: Duration = Duration::from_millis(500);
 
 /// One run: one batch; a full window asks to run again at once.
 pub(crate) async fn run_events_retention(db: &Db) -> Result<Next, ForgeError> {
@@ -44,11 +46,13 @@ pub(crate) async fn run_events_retention(db: &Db) -> Result<Next, ForgeError> {
         deleted = batch.deleted,
         "forge.worker.events_retained"
     );
-    Ok(if to - from + 1 >= i64::from(RETENTION_BATCH) {
-        Next::Immediately
-    } else {
-        Next::AfterPeriod
-    })
+    if to - from + 1 >= i64::from(RETENTION_BATCH) {
+        // A short pause between full batches (review I1c): the sequencer
+        // and the feed get the database between them.
+        tokio::time::sleep(BATCH_PAUSE).await;
+        return Ok(Next::Immediately);
+    }
+    Ok(Next::AfterPeriod)
 }
 
 #[cfg(test)]

@@ -122,3 +122,27 @@ fn only_the_feed_routes_read_the_feed() {
         "the feed routes call it: {found:?}"
     );
 }
+
+/// Review I1c: `forge_core::FeedMaterial` cannot be sealed across crates,
+/// so the decision on it is: only forge-integ (with material read from the
+/// forge-db snapshot) calls `prove_visible`; forge-auth defines and tests
+/// it, forge-db's feed tests decide with it (a dev-dependency).
+#[test]
+fn only_forge_integ_proves_what_the_feed_sees() {
+    let found = mentions(&[needle(&["prove", "_visible("])]);
+    let offenders: Vec<_> = found
+        .iter()
+        .filter(|(krate, file)| {
+            !(krate == "forge-integ"
+                || krate == "forge-auth"
+                || (krate == "forge-db" && file == "src/feed/tests.rs"))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "prove_visible called outside forge-integ: {offenders:?}"
+    );
+    assert!(found
+        .iter()
+        .any(|(k, f)| k == "forge-integ" && f == "src/lib.rs"));
+}

@@ -28,6 +28,10 @@
 //!    (warn) in the log — a failure to record is logged and the page still
 //!    goes out.
 //!
+//! One read (or head cursor) per integration is in flight at a time: a
+//! concurrent one is `FG-WEB-0010` 429 `reason=feed_read_in_flight` with
+//! `Retry-After: 1` (per process; review I1c).
+//!
 //! Only forge-web's feed routes call [`Feed::read_events`] and
 //! [`Feed::head_cursor`] (`tests/decided_callers.rs`).
 
@@ -51,6 +55,50 @@ pub use forge_db::feed::{DEFAULT_LIMIT, MAX_LIMIT, MAX_PAGE_BYTES};
 pub struct Feed {
     db: Db,
     keys: Arc<CursorKeys>,
+    in_flight: InFlight,
+}
+
+/// The integrations with a read in progress (review I1c, security MEDIUM:
+/// one snapshot, up to 200 access checks and a 2 MiB page per integration
+/// at a time; a second concurrent read is refused at once, never queued).
+#[derive(Default)]
+struct InFlight(std::sync::Mutex<std::collections::HashSet<IntegrationId>>);
+
+/// A held slot; released on drop (also when a timeout drops the read).
+struct Slot<'a> {
+    set: &'a InFlight,
+    integration: IntegrationId,
+}
+
+impl InFlight {
+    fn guard(&self) -> std::sync::MutexGuard<'_, std::collections::HashSet<IntegrationId>> {
+        // A panic while held cannot leave the set inconsistent (insert and
+        // remove only): keep using it.
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The slot of `integration`, or `FG-WEB-0010 reason=feed_read_in_flight`
+    /// (429, `Retry-After: 1`).
+    fn enter(&self, integration: IntegrationId) -> Result<Slot<'_>, ForgeError> {
+        if !self.guard().insert(integration) {
+            return Err(ForgeError::new(ErrorCode::RateLimited)
+                .with_context("reason", "feed_read_in_flight")
+                .with_context("integration_id", integration.get())
+                .with_context("retry_after_s", 1));
+        }
+        Ok(Slot {
+            set: self,
+            integration,
+        })
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.set.guard().remove(&self.integration);
+    }
 }
 
 impl std::fmt::Debug for Feed {
@@ -139,7 +187,11 @@ struct Decided {
 
 impl Feed {
     pub fn new(db: Db, keys: Arc<CursorKeys>) -> Self {
-        Self { db, keys }
+        Self {
+            db,
+            keys,
+            in_flight: InFlight::default(),
+        }
     }
 
     /// The route loader's facts: the integration of the path (`None`:
@@ -213,6 +265,7 @@ impl Feed {
         if proof.action() != Action::IntegrationEventCursorRead {
             return Err(internal("proof_action_mismatch"));
         }
+        let _slot = self.in_flight.enter(*proof.id())?;
         let d = self.decide(proof).await?;
         let cursor = self
             .position(&d, *proof.id(), d.state.bound())
@@ -236,6 +289,7 @@ impl Feed {
             return Err(internal("feed_limit_out_of_range"));
         }
         let integration = *proof.id();
+        let _slot = self.in_flight.enter(integration)?;
         let mut d = self.decide(proof).await?;
         let read = self.page(&mut d, integration, query).await;
         let (page, record) = match read {

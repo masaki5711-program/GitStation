@@ -15,7 +15,8 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 - **同じカーソルからは同じイベント**が返る（その間に見える範囲が変われば 410）。
 - **作業項目より先には返さない**: 読む上限は `min(high_seq, work-item-sync の last_seq)`。イベントは、その `work_items` が決まってから返る。
 - **黙って途中から返さない**: 続けられないカーソルは 410（下の表）。
-- 流量制限（連携ごとの 429）はまだない（I1c）。1 回は最大 500 件・約 2 MiB。
+- **同時に 1 つ**: 同じ連携の読み取り（`…/events`・`…/events/cursor`）が処理中なら、2 つ目はすぐに 429 `FG-WEB-0010`（`Retry-After: 1`）。並べて待たせない。kanflow は 1 つずつ読む。
+  時間あたりの回数の制限はまだない。1 回は最大 500 件・約 2 MiB・30 秒。
 
 ## 誰が読めるか（`IntegrationEventRead` / `IntegrationEventCursorRead`、トークンは `read_api`）
 
@@ -33,7 +34,7 @@ golden）は `docs/api/integration-feed.example.json`。forge-web のテスト `
 
 | パラメーター | 内容 |
 |---|---|
-| `cursor` | 前の答えの `next_cursor`、イベントの `cursor`、または `…/events/cursor` の答え。無ければ保持されている最も古いイベントから |
+| `cursor` | 前の答えの `next_cursor`、イベントの `cursor`、または `…/events/cursor` の答え。無ければ保持されている最も古いイベント（`retained_from`）から。保持期間の中なら **結びつけより前の履歴も**返る（見えるかは読む時点で判定する）。最初の同期は `…/events/cursor` → 開発状況 API（I1d）→ その位置から、の順にする |
 | `limit` | 1〜500（既定 100）。答えは約 2 MiB でも切れる（`has_more: true`） |
 
 それ以外のパラメーター・同じパラメーターの繰り返し・`limit` の範囲外・空のカーソルは `FG-WEB-0006`（400、`reason=param_invalid`）。

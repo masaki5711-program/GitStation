@@ -85,4 +85,6 @@
   （`integration_bindings.generation`）をカーソルの `VisibleSet` に含めるので、解除と結び直し（同じ kanflow のプロジェクトでも）の後は必ず 410
   `visible_set_changed` になり、kanflow は取り直す。
 - 保持（`events.retention`、`forge worker` のタスク）は購読者（`retention_blocking`）の位置より先を消さないが、保持期間の 1.5 倍を過ぎた行は消す。
-- 流量制限（連携ごとの 429）は I1c ではまだない（1 回の要求は最大 500 件・2 MiB、カーソルの範囲の索引で読む）。
+- 連携ごとに読み取りは同時に 1 つ（2 つ目は 429 `FG-WEB-0010 reason=feed_read_in_flight`、`Retry-After: 1`。プロセスごと）。時間あたりの回数の制限はまだない。
+  1 回の要求は最大 500 件・2 MiB・30 秒で、プロジェクトごとの索引の範囲を `limit + 1` で切って読む（backlog の長さによらない）。
+- 保持の 1 回は 2 000 件で、状態の行は最後の UPDATE でだけ錠にする。1.5 倍の上限で遅れた購読者を越えたときは `events.retention` の監査の行の `overridden` に残る。

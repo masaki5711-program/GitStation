@@ -2247,7 +2247,8 @@ export interface components {
             name: string;
             /**
              * @description `read_repository`, `write_repository`, `read_api`, `api`,
-             *     `merge_execute`, `merge_approve`, `user_email`; never `admin`.
+             *     `merge_execute`, `merge_approve`, `user_email`, `user_employee_number`
+             *     (M3 I1c: the event feed's actor); never `admin`.
              */
             scopes: string[];
         };

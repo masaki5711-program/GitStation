@@ -702,3 +702,40 @@ async fn personal_facts_need_their_scopes() {
     assert_eq!(number.employee_number.as_deref(), Some("E-1001"));
     w.t.drop_now().await;
 }
+
+// ── review of I1c: one read in flight per integration ──────────────────
+
+/// Review I1c (security MEDIUM): a second read of the same integration
+/// while one is in flight is refused at once with 429 FG-WEB-0010
+/// (`reason=feed_read_in_flight`, `Retry-After` 1 s); the first completes,
+/// and the slot is free again afterwards.
+#[tokio::test]
+async fn a_second_concurrent_read_of_the_same_integration_is_429() {
+    let w = world().await;
+    let before = head(&w).await;
+    let who = token(w.sa, &[Scope::ReadApi]);
+    let one = proof_as(&w, w.integration, &who, Action::IntegrationEventRead).await;
+    let two = proof_as(&w, w.integration, &who, Action::IntegrationEventRead).await;
+    let query = FeedQuery {
+        cursor: Some(before.clone()),
+        limit: 10,
+    };
+    let request = RequestId::parse("req-concurrent").expect("id");
+    // The first enters its slot before its first database round trip; the
+    // second is polled while the first waits on it.
+    let (first, second) = tokio::join!(
+        w.feed.read_events(&one, &request, &query),
+        w.feed.read_events(&two, &request, &query)
+    );
+    first.expect("the first read completes");
+    let err = second.expect_err("one in flight per integration");
+    assert_eq!(err.code(), ErrorCode::RateLimited);
+    assert_eq!(err.code().http_status(), 429);
+    assert_eq!(reason_of(&err), "feed_read_in_flight");
+    assert!(err
+        .context()
+        .iter()
+        .any(|(k, v)| *k == "retry_after_s" && v == "1"));
+    read(&w, Some(&before)).await.expect("free again");
+    w.t.drop_now().await;
+}

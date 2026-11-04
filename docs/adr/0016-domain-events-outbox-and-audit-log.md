@@ -1181,3 +1181,44 @@ API の契約は `docs/api/integration-feed.md`（schema_version 1、欄は足�
 1 文にまとめる。(2) 連携ごとの流量制限（429）はまだ無い。(3) `username` / `display_name` は読み取りの時点のもの（§5 の「その時点の
 スナップショット」は、payload に入っている欄だけ）。(4) `event_types` を許可リストに無い名前から作ることはない（`forge-core` の
 `allowed_event_types` はこのビルドの `EventType` から選ぶ）ので、古いビルドが知らない種類は新しいビルドになるまで出ない。
+
+### I1c の独立レビュー（2026-11-04）で変えた点
+
+最初のマイグレーション `20261118100000`（O3 との番号の衝突でユーザーの承認を得て `20261117100000` から改名。中身は同じ）は変えず、
+追記のマイグレーション `20261118100100` で直した。
+
+1. **世代を forge_app が選べない**（database MEDIUM）: 表の INSERT の権限では `OVERRIDING SYSTEM VALUE` で古い `generation` を書けた
+   （結び直しの 410 を外せる）。INSERT を列ごと（`integration_id`・`project_id`・`external_project_id`・`granted_membership`・`created_by`）にした。
+   テスト `forge_app_cannot_choose_a_binding_generation`（42501）。
+2. **ページの読み取りが backlog の長さによらない**（database MEDIUM）: 2 段にした。(1) プロジェクトごとに `events_project_seq`
+   の範囲を `limit + 1` で切って LATERAL で合わせ、`seq` の順に `limit + 1` を取る（触れる行は「見えるプロジェクト数 × (limit + 1)」と
+   途中の他の分類のイベントだけ）。(2) その `seq` の行を 100 件ずつ、バイトの予算の中で読む。未読の最も古いイベントもプロジェクトごとに
+   1 件の索引の探索。テスト `the_page_reads_a_bounded_number_of_rows_over_a_large_backlog`（見える 6 000 件 + 見えない 5 000 件で、ページが読む
+   表と索引の行が 1 100 以下、古いほうの探索が 10 以下。以前の文は 6 000 行を読んでいた）。
+3. **結びつけごとの access の判定を 1 文に**（security MEDIUM）: 解決の文（`PROJECT_ACCESS_SQL`）を `unnest` の LATERAL で全ての結びつけに
+   まとめた（最大 200 文 → 1 文）。判定は変わらず `prove_visible`。
+4. **連携ごとに読み取りは 1 つだけ**（security MEDIUM）: forge-integ の `Feed` が連携ごとの「処理中」の印を持ち、同じ連携の 2 つ目の同時の
+   読み取り（`…/events` と `…/events/cursor`）はすぐに `FG-WEB-0010` RateLimited（429、`reason=feed_read_in_flight`、`Retry-After: 1`）。
+   待たせない（並べない）。印はプロセスごと（`forge serve` が複数なら、その数まで同時に読める）。テスト
+   `a_second_concurrent_read_of_the_same_integration_is_429`。**残る上限**: 1 回は最大 500 件・約 2 MiB・30 秒（forge-web）、1 つの
+   スナップショット。時間あたりの回数の制限（トークン・連携ごとの 429 の窓）はまだ無い。
+5. **権限の表**（authz / security MEDIUM）: `IntegrationEventCursorRead` に `IntegrationEventRead` と同じ deny の行を足し、管理者の権限を持つ
+   サービスアカウント（メンバーでない private のプロジェクト）と internal のプロジェクトの Guest の行を足した。`matrix_rows_feed.rs` は
+   allow 8、deny 50。
+6. **保持が番号付けを止めない**（database WARN）: `forge.events_retention` は状態の行を最初に錠にせず、行を消した後、最後の UPDATE
+   （`retained_from = GREATEST(…)`）でだけ錠にする。1 回の量は 2 000（`RETENTION_BATCH`、関数は 1 万まで受ける）、窓いっぱいのときは
+   worker が 500 ms 待ってから次を走らせる。1.5 倍の上限で遅れた購読者を越えて消したときは、監査の行の `overridden` に購読者と
+   `last_seq` を残す。テスト `retention_does_not_starve_the_sequencer`、`retention_records_the_subscribers_it_overrode`。
+7. **制約と関数の拒否のテスト**（database WARN）: `retention_policy_events_days`・`retention_policy_singleton`・
+   `integration_feed_reads_cursor_seq`・`integration_feed_reads_bound` を制約名で、両方の関数の引数の検査（22023）、
+   `feed_new_epoch` を forge_app・forge_ro・forge_purge が実行できない（42501）、`events_guard` の 7 日の下限（forge_purge でも XF001）、
+   `tokens_scopes_known` の `user_employee_number`。
+8. **スナップショットを落としたとき**（LOW）: 30 秒の打ち切りなどで `FeedSnapshot` が `close` されずに落ちても、sqlx は ROLLBACK を
+   予約し、その接続の次の利用の前に実行する（加えて `database.idle_in_transaction_timeout_ms` がサーバー側で切る）。テスト
+   `a_dropped_snapshot_leaves_no_open_transaction`。
+9. **カーソルなしの読み取り**: 保持されている最も古いイベント（`retained_from`）から読む。保持期間の中なら **結びつけより前の履歴も**
+   含む（判定は読む時点で行い、サービスアカウントは今 Reporter だから）。kanflow の最初の同期は、まず `…/events/cursor` を取り、
+   開発状況 API（I1d）で全体を取り、その位置から読む（`docs/api/integration-feed.md`）。
+10. **受け入れた残り**: `FeedMaterial` は forge-core の型なので、Rust ではクレートをまたいで作り手を forge-db に限れない。代わりに
+    `prove_visible` を呼ぶのは forge-integ（と forge-auth 自身・forge-db のテスト）だけ、とテスト
+    `only_forge_integ_proves_what_the_feed_sees` で縛り、forge-integ は材料を必ず forge-db のスナップショットから読む。

@@ -2248,7 +2248,7 @@
             "type": "string"
           },
           "scopes": {
-            "description": "`read_repository`, `write_repository`, `read_api`, `api`,\n`merge_execute`, `merge_approve`, `user_email`; never `admin`.",
+            "description": "`read_repository`, `write_repository`, `read_api`, `api`,\n`merge_execute`, `merge_approve`, `user_email`, `user_employee_number`\n(M3 I1c: the event feed's actor); never `admin`.",
             "items": {
               "type": "string"
             },
