@@ -906,3 +906,413 @@ fn maint_config(t: &FreshDb) -> (TestConfig, PasswordFile) {
     ];
     (t.app_config(&pairs), pw)
 }
+
+// ── review of I1c (2026-11-04) ─────────────────────────────────────────
+
+/// A SQLSTATE of a failed statement.
+fn sqlstate(e: &sqlx::Error) -> String {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .map(|c| c.into_owned())
+        .unwrap_or_default()
+}
+
+/// The constraint name of a failed statement.
+fn constraint(e: &sqlx::Error) -> String {
+    e.as_database_error()
+        .and_then(|d| d.constraint())
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// forge_app cannot write a binding's generation, `OVERRIDING SYSTEM VALUE`
+/// included (it could reuse an old one and continue a cursor across a
+/// rebind): 42501, nothing written.
+#[tokio::test]
+async fn forge_app_cannot_choose_a_binding_generation() {
+    let w = world().await;
+    let api = second_project(&w, "api").await;
+    let mut tx = w.t.db.write_pool().begin().await.expect("begin");
+    sqlx::query(
+        "INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+         request_id) VALUES ('system', 'probe.changed', 'succeeded', 'project', $1, 'r-probe')",
+    )
+    .bind(api.project_id.get())
+    .execute(&mut *tx)
+    .await
+    .expect("audit");
+    let err = sqlx::query(
+        "INSERT INTO forge.integration_bindings (integration_id, project_id, external_project_id, \
+         granted_membership, generation) OVERRIDING SYSTEM VALUE VALUES ($1, $2, 'kf-9', false, 1)",
+    )
+    .bind(w.integration.get())
+    .bind(api.project_id.get())
+    .execute(&mut *tx)
+    .await
+    .expect_err("generation is not forge_app's");
+    assert_eq!(sqlstate(&err), "42501", "{err}");
+    drop(tx);
+    w.t.drop_now().await;
+}
+
+/// `count` numbered `project.created` events of `project` written in one
+/// superuser transaction (with its audit row), then numbered.
+async fn bulk_events(w: &World, project: ProjectId, count: i64) {
+    w.t.exec_superuser(&format!(
+        "BEGIN; \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+           request_id) VALUES ('system', 'probe.bulk', 'succeeded', 'project', {p}, 'r-bulk'); \
+         INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+           aggregate_id, project_id, actor_kind, request_id, payload) \
+         SELECT gen_random_uuid(), 'project.created', 1, 'project', {p}, {p}, 'system', 'r-bulk', \
+           '{{}}'::jsonb FROM generate_series(1, {count}); \
+         COMMIT",
+        p = project.get()
+    ))
+    .await;
+    for _ in 0..=(count / 1000) {
+        sequence(&w.t).await;
+    }
+}
+
+/// The table and index rows a plan read: what its scan nodes produced plus
+/// what their filters removed, over every loop (EXPLAIN ANALYZE). Joins,
+/// sorts and limits above them are not counted again.
+fn touched(plan: &serde_json::Value) -> f64 {
+    let loops = plan["Actual Loops"].as_f64().unwrap_or(1.0);
+    let scan = plan["Node Type"]
+        .as_str()
+        .is_some_and(|t| t.contains("Scan") && t != "Function Scan");
+    let own = if scan {
+        (plan["Actual Rows"].as_f64().unwrap_or(0.0)
+            + plan["Rows Removed by Filter"].as_f64().unwrap_or(0.0))
+            * loops
+    } else {
+        0.0
+    };
+    own + plan["Plans"]
+        .as_array()
+        .map(|c| c.iter().map(touched).sum())
+        .unwrap_or(0.0)
+}
+
+/// The rows a plan of `sql` touched, with `$1`..`$5` written in as
+/// literals (EXPLAIN ANALYZE through a temporary function: no json decoding
+/// is needed on this side).
+async fn explain(
+    w: &World,
+    sql: &str,
+    after: i64,
+    bound: i64,
+    visible: &VisibleSet,
+    limit: Option<i64>,
+) -> f64 {
+    let projects = format!(
+        "ARRAY[{}]::bigint[]",
+        visible
+            .project_ids()
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let types = format!(
+        "ARRAY[{}]::text[]",
+        visible
+            .event_type_names()
+            .iter()
+            .map(|t| format!("'{t}'"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let literal = sql
+        .replace("$5", &limit.unwrap_or(1).to_string())
+        .replace("$4", &types)
+        .replace("$3", &projects)
+        .replace("$2", &bound.to_string())
+        .replace("$1", &after.to_string());
+    let mut su = w.t.superuser().await;
+    sqlx::raw_sql(
+        "CREATE FUNCTION pg_temp.plan_of(q text) RETURNS text LANGUAGE plpgsql AS $$ \
+         DECLARE r json; BEGIN EXECUTE 'EXPLAIN (ANALYZE, FORMAT JSON) ' || q INTO r; \
+         RETURN r::text; END $$",
+    )
+    .execute(&mut su)
+    .await
+    .expect("plan function");
+    let text: String = sqlx::query_scalar("SELECT pg_temp.plan_of($1)")
+        .bind(&literal)
+        .fetch_one(&mut su)
+        .await
+        .expect("explain");
+    let plan: serde_json::Value = serde_json::from_str(&text).expect("plan json");
+    touched(&plan[0]["Plan"])
+}
+
+/// Review I1c (database MEDIUM): a page and the oldest-unread probe touch a
+/// bounded number of rows however long the backlog is — 3 000 visible
+/// events in each of two bound projects (the page must not sort the whole
+/// visible backlog per chunk) and 5 000 of an unbound project in between.
+#[tokio::test]
+async fn the_page_reads_a_bounded_number_of_rows_over_a_large_backlog() {
+    let w = world().await;
+    let api = second_project(&w, "api").await;
+    bind(&w, api.project_id, "kf-2").await;
+    let hidden = second_project(&w, "hidden").await;
+    drain(&w.t).await;
+    let start = head(&w).await;
+    bulk_events(&w, w.web.project_id, 3_000).await;
+    bulk_events(&w, hidden.project_id, 5_000).await;
+    bulk_events(&w, api.project_id, 3_000).await;
+    let (mut snap, state, visible) = decided(&w).await;
+    let page = snap
+        .read_feed_page(&visible, start, state.high_seq, MAX_LIMIT, MAX_PAGE_BYTES)
+        .await
+        .expect("page");
+    snap.close().await;
+    assert_eq!(page.events.len(), MAX_LIMIT);
+    assert!(page.has_more);
+    let seqs: Vec<i64> = page.events.iter().map(|e| e.seq).collect();
+    assert!(seqs.windows(2).all(|p| p[0] < p[1]));
+    let read = explain(
+        &w,
+        PAGE_SEQS_SQL,
+        start,
+        state.high_seq,
+        &visible,
+        Some(501),
+    )
+    .await;
+    // Two projects × (limit + 1), whatever the backlog (6 000 visible).
+    assert!(read <= 1_100.0, "the page touched {read} rows");
+    let oldest = explain(&w, OLDEST_SQL, start, state.high_seq, &visible, None).await;
+    assert!(
+        oldest <= 10.0,
+        "the oldest-unread probe touched {oldest} rows"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review I1c: the new tables' CHECKs refuse raw rows by constraint name.
+#[tokio::test]
+async fn feed_schema_checks_refuse_raw_rows_by_constraint_name() {
+    let w = world().await;
+    let mut su = w.t.superuser().await;
+    for (sql, name) in [
+        (
+            "UPDATE forge.retention_policy SET events_days = 6".to_owned(),
+            "retention_policy_events_days",
+        ),
+        (
+            "INSERT INTO forge.retention_policy (singleton, events_days) VALUES (false, 90)"
+                .to_owned(),
+            "retention_policy_singleton",
+        ),
+        (
+            format!(
+                "INSERT INTO forge.integration_feed_reads (integration_id, last_read_at, \
+                 cursor_seq, read_bound_seq) VALUES ({}, now(), -1, 0)",
+                w.integration.get()
+            ),
+            "integration_feed_reads_cursor_seq",
+        ),
+        (
+            format!(
+                "INSERT INTO forge.integration_feed_reads (integration_id, last_read_at, \
+                 cursor_seq, read_bound_seq) VALUES ({}, now(), 5, 4)",
+                w.integration.get()
+            ),
+            "integration_feed_reads_bound",
+        ),
+    ] {
+        let err = sqlx::query(&sql).execute(&mut su).await.expect_err(name);
+        assert_eq!(constraint(&err), name, "{err}");
+    }
+    w.t.drop_now().await;
+}
+
+/// Review I1c: the definer functions check their arguments (22023), only
+/// forge_maint executes `feed_new_epoch` (42501 for forge_app, the read
+/// pool and forge_purge), the 7-day floor of `events_guard` holds for
+/// forge_purge itself, and the token scope list knows
+/// `user_employee_number`.
+#[tokio::test]
+async fn feed_functions_and_guards_refuse_what_they_must() {
+    let w = world().await;
+    let mut app = w.t.db.write_pool().acquire().await.expect("app");
+    for sql in [
+        "SELECT * FROM forge.events_retention(0, 'req-x')",
+        "SELECT * FROM forge.events_retention(10001, 'req-x')",
+        "SELECT * FROM forge.events_retention(10, '')",
+    ] {
+        let err = sqlx::query(sql).execute(&mut *app).await.expect_err(sql);
+        assert_eq!(sqlstate(&err), "22023", "{sql}: {err}");
+    }
+    let mut su = w.t.superuser().await;
+    for sql in [
+        "SELECT * FROM forge.feed_new_epoch('restore', 'req-x')",
+        "SELECT * FROM forge.feed_new_epoch('manual', '')",
+    ] {
+        let err = sqlx::query(sql).execute(&mut su).await.expect_err(sql);
+        assert_eq!(sqlstate(&err), "22023", "{sql}: {err}");
+    }
+    for role in ["forge_app", "forge_ro", "forge_purge"] {
+        let err = sqlx::raw_sql(&format!(
+            "BEGIN; SET LOCAL ROLE {role}; \
+             SELECT * FROM forge.feed_new_epoch('manual', 'req-x'); COMMIT"
+        ))
+        .execute(&mut su)
+        .await
+        .expect_err(role);
+        assert_eq!(sqlstate(&err), "42501", "{role}: {err}");
+        sqlx::raw_sql("ROLLBACK")
+            .execute(&mut su)
+            .await
+            .expect("rollback");
+    }
+    // A 3-day-old published event is not forge_purge's to remove.
+    w.t.exec_superuser(
+        "SET CONSTRAINTS ALL IMMEDIATE; \
+         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+         UPDATE forge.events SET occurred_at = now() - interval '3 days' WHERE seq = 1; \
+         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
+    )
+    .await;
+    let err = sqlx::raw_sql(&format!(
+        "BEGIN; SET LOCAL ROLE forge_purge; {} FROM forge.events WHERE seq = 1; COMMIT",
+        "DELETE"
+    ))
+    .execute(&mut su)
+    .await
+    .expect_err("the 7-day floor");
+    assert_eq!(sqlstate(&err), "XF001", "{err}");
+    sqlx::raw_sql("ROLLBACK")
+        .execute(&mut su)
+        .await
+        .expect("rollback");
+    // The scope list: the new scope is stored, an unknown one refused.
+    let token = |scope: &str| {
+        format!(
+            "INSERT INTO forge.tokens (user_id, public_id, name, secret_sha256, scopes, \
+             expires_at) VALUES ({}, left(md5('{scope}'), 16), 'probe-{scope}', \
+             decode(md5('{scope}'), 'hex') || decode(md5('{scope}x'), 'hex'), \
+             ARRAY['read_api', '{scope}'], now() + interval '1 day')",
+            w.sa.get()
+        )
+    };
+    w.t.commit_audited(("user", w.sa.get()), &[token("user_employee_number")])
+        .await;
+    let mut tx = w.t.db.write_pool().begin().await.expect("begin");
+    let err = sqlx::query(&token("user_shoe_size"))
+        .execute(&mut *tx)
+        .await
+        .expect_err("unknown scope");
+    assert_eq!(constraint(&err), "tokens_scopes_known", "{err}");
+    drop(tx);
+    w.t.drop_now().await;
+}
+
+/// Review I1c (database WARN): retention batches are small and lock the
+/// feed state only for their last statement, so the sequencer keeps
+/// numbering while retention drains a large backlog.
+#[tokio::test]
+async fn retention_does_not_starve_the_sequencer() {
+    const { assert!(RETENTION_BATCH <= 2_000) };
+    let w = world().await;
+    bulk_events(&w, w.web.project_id, 6_000).await;
+    drain(&w.t).await;
+    w.t.exec_superuser(
+        "SET CONSTRAINTS ALL IMMEDIATE; \
+         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+         UPDATE forge.events SET occurred_at = now() - interval '100 days'; \
+         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
+    )
+    .await;
+    let db = w.t.db.clone();
+    let retention = tokio::spawn(async move {
+        let request = RequestId::parse("req-retention-loop").expect("id");
+        let mut deleted = 0;
+        loop {
+            let batch = run_retention(&db, &request, RETENTION_BATCH)
+                .await
+                .expect("retention");
+            if batch.range.is_none() {
+                return deleted;
+            }
+            deleted += batch.deleted;
+        }
+    });
+    let mut slowest = std::time::Duration::ZERO;
+    while !retention.is_finished() {
+        let started = std::time::Instant::now();
+        sequence(&w.t).await;
+        slowest = slowest.max(started.elapsed());
+    }
+    let deleted = retention.await.expect("task");
+    assert!(deleted >= 6_000, "{deleted}");
+    assert!(
+        slowest < std::time::Duration::from_secs(2),
+        "the sequencer waited {slowest:?}"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review I1c (LOW): when the 1.5 × limit removes events past a lagging
+/// subscriber, the audit row names it and its position.
+#[tokio::test]
+async fn retention_records_the_subscribers_it_overrode() {
+    let w = world().await;
+    w.t.exec_superuser(
+        "SET CONSTRAINTS ALL IMMEDIATE; \
+         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+         UPDATE forge.events SET occurred_at = now() - interval '140 days'; \
+         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only; \
+         INSERT INTO forge.event_subscribers (name, ordering, last_seq, updated_at) \
+         VALUES ('probe-lagging', 'ordered', 1, now())",
+    )
+    .await;
+    let batch = run_retention(
+        &w.t.db,
+        &RequestId::parse("req-override").expect("id"),
+        RETENTION_BATCH,
+    )
+    .await
+    .expect("retention");
+    assert!(batch.deleted > 1);
+    let details: Vec<serde_json::Value> =
+        w.t.json_rows("SELECT details FROM forge.audit_log WHERE action = 'events.retention'")
+            .await;
+    assert_eq!(
+        details[0]["details"]["overridden"],
+        serde_json::json!([{"subscriber": "probe-lagging", "last_seq": 1}]),
+        "{details:?}"
+    );
+    w.t.drop_now().await;
+}
+
+/// Review I1c (LOW): a snapshot dropped without `close` (a request cut by
+/// its timeout) leaves no transaction open once its connection is reused.
+#[tokio::test]
+async fn a_dropped_snapshot_leaves_no_open_transaction() {
+    let w = world().await;
+    for _ in 0..3 {
+        let mut snap = open(&w.t.db).await.expect("snapshot");
+        snap.state().await.expect("state");
+        drop(snap);
+    }
+    // Reuse the read pool: every connection's queued rollback runs first.
+    for _ in 0..3 {
+        let mut snap = open(&w.t.db).await.expect("snapshot again");
+        snap.state().await.expect("state");
+        snap.close().await;
+    }
+    let stuck: Vec<serde_json::Value> =
+        w.t.json_rows(&format!(
+            "SELECT pid FROM pg_stat_activity WHERE datname = '{}' \
+             AND state = 'idle in transaction'",
+            w.t.name
+        ))
+        .await;
+    assert!(stuck.is_empty(), "{stuck:?}");
+    w.t.drop_now().await;
+}

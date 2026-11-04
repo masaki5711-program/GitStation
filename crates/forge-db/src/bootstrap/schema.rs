@@ -675,12 +675,20 @@ fn expectations() -> Vec<(&'static str, Vec<String>)> {
         (
             "forge.integration_bindings",
             [
-                plain(&[
-                    "forge_app:SELECT",
-                    "forge_app:INSERT",
-                    "forge_app:DELETE",
-                    "forge_ro:SELECT",
-                ]),
+                plain(&["forge_app:SELECT", "forge_app:DELETE", "forge_ro:SELECT"]),
+                // M3 I1c review (20261118100100): INSERT by column, never
+                // `generation` (no OVERRIDING SYSTEM VALUE).
+                columns(
+                    "forge_app",
+                    "INSERT",
+                    &[
+                        "integration_id",
+                        "project_id",
+                        "external_project_id",
+                        "granted_membership",
+                        "created_by",
+                    ],
+                ),
                 // Column-level since 20261114100200 (re-review).
                 columns("forge_app", "UPDATE", &["granted_membership"]),
             ]

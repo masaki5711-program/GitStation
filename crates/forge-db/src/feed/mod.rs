@@ -40,7 +40,7 @@ use forge_core::ids::{IntegrationId, ProjectId, UserId};
 use forge_core::{FeedBinding, FeedMaterial, VisibleSet};
 use forge_errors::{ErrorCode, ForgeError};
 use sqlx::postgres::{PgConnection, Postgres};
-use sqlx::{ConnectOptions as _, Connection as _};
+use sqlx::{ConnectOptions as _, Connection as _, FromRow as _, Row as _};
 
 use crate::resolve::{interpret_project, ProjectAccessRow, PROJECT_ACCESS_SQL};
 use crate::roles::CAP;
@@ -64,12 +64,44 @@ pub const EVENT_ENVELOPE_BYTES: usize = 1024;
 pub const WORK_ITEM_BYTES: usize = 160;
 /// Rows fetched per statement while a page fills.
 const CHUNK: i64 = 100;
+/// The visible events' `seq` after `$1` up to `$2` of the projects `$3`
+/// and types `$4`, in order, at most `$5`. One ordered range per project
+/// on `events_project_seq (project_id, seq)`, each cut at `$5`, merged: the
+/// rows touched are bounded by projects × `$5` plus the other-class events
+/// interleaved, never the whole backlog (review I1c; the large-backlog test
+/// pins it).
+pub(crate) const PAGE_SEQS_SQL: &str = "SELECT x.seq FROM unnest($3::bigint[]) AS p(id) \
+     CROSS JOIN LATERAL (SELECT e.seq FROM forge.events e \
+       WHERE e.project_id = p.id AND e.seq > $1 AND e.seq <= $2 AND e.event_type = ANY($4) \
+       ORDER BY e.seq LIMIT $5) AS x \
+     ORDER BY x.seq LIMIT $5";
+/// The first visible event after `$1` (binds of [`PAGE_SEQS_SQL`] without
+/// `$5`): its `seq` and time, one index probe per project.
+pub(crate) const OLDEST_SQL: &str = "SELECT x.seq, x.at FROM unnest($3::bigint[]) AS p(id) \
+     CROSS JOIN LATERAL (SELECT e.seq, \
+         to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS at \
+       FROM forge.events e \
+       WHERE e.project_id = p.id AND e.seq > $1 AND e.seq <= $2 AND e.event_type = ANY($4) \
+       ORDER BY e.seq LIMIT 1) AS x \
+     ORDER BY x.seq LIMIT 1";
+/// The events of the seqs `$1`, in order (the page's second step).
+const PAGE_ROWS_SQL: &str = "SELECT e.seq, e.event_id::text, e.event_type, e.schema_version, \
+       to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), \
+       e.project_id, e.actor_kind, \
+       e.actor_user_id, u.username, u.display_name, \
+       e.actor_via_id, v.username, v.display_name, \
+       e.payload::text, octet_length(e.payload::text) \
+     FROM forge.events e \
+     LEFT JOIN forge.users u ON u.id = e.actor_user_id \
+     LEFT JOIN forge.users v ON v.id = e.actor_via_id \
+     WHERE e.seq = ANY($1) ORDER BY e.seq";
 /// The most bindings read for one decision (`integrations::MAX_BINDINGS`).
 const MAX_BINDINGS: i64 = crate::integrations::MAX_BINDINGS;
 /// How often a read record is written per integration (ADR-0016 §7).
 pub const READ_RECORD_PERIOD_SECS: i64 = 60;
-/// A retention batch (ADR-0016 §2: at most 10 000 rows per call).
-pub const RETENTION_BATCH: i32 = 10_000;
+/// A retention batch (review I1c: small, so one batch's deletes are short;
+/// the function accepts up to 10 000).
+pub const RETENTION_BATCH: i32 = 2_000;
 
 /// The snapshot one feed request reads in.
 pub struct FeedSnapshot {
@@ -159,6 +191,16 @@ pub struct FeedPage {
     /// Visible events remain after the last one returned (the limit or the
     /// byte budget ended the page).
     pub has_more: bool,
+}
+
+/// The resolver's project statement for every id of `$1` (viewer `$2`,
+/// cap `$3`), with the id as `bound_project`.
+fn batched_access_sql() -> String {
+    format!(
+        "SELECT x.id AS bound_project, q.* FROM unnest($1::bigint[]) AS x(id) \
+         CROSS JOIN LATERAL ({}) AS q",
+        PROJECT_ACCESS_SQL.replace("$1", "x.id")
+    )
 }
 
 /// Open the feed's snapshot on the read pool (`FG-DB-0001` / `FG-DB-0002`).
@@ -273,23 +315,35 @@ impl FeedSnapshot {
             .await
             .map_err(|e| read_query_error(QUERY, e))?;
             let viewer = UserId::new(service_account);
-            let mut bindings = Vec::with_capacity(bound.len());
-            for (project, generation) in bound {
-                let project = ProjectId::new(project);
-                let row: ProjectAccessRow = sqlx::query_as(PROJECT_ACCESS_SQL)
-                    .bind(project.get())
-                    .bind(viewer.get())
-                    .bind(CAP)
-                    .fetch_one(&mut *conn)
-                    .await
+            // Every binding's access facts in one statement (review I1c):
+            // the resolver's own statement per project, as a LATERAL.
+            let ids: Vec<i64> = bound.iter().map(|(p, _)| *p).collect();
+            let rows = sqlx::query(&batched_access_sql())
+                .bind(&ids)
+                .bind(viewer.get())
+                .bind(CAP)
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| read_query_error("feed.project_access", e))?;
+            let mut access_of = std::collections::BTreeMap::new();
+            for row in rows {
+                let id: i64 = row
+                    .try_get("bound_project")
                     .map_err(|e| read_query_error("feed.project_access", e))?;
-                let access = interpret_project(row, project, Some(viewer))?.map(|p| p.access);
-                bindings.push(FeedBinding {
-                    project,
-                    generation,
-                    access,
-                });
+                let facts = ProjectAccessRow::from_row(&row)
+                    .map_err(|e| read_query_error("feed.project_access", e))?;
+                let access =
+                    interpret_project(facts, ProjectId::new(id), Some(viewer))?.map(|p| p.access);
+                access_of.insert(id, access);
             }
+            let bindings = bound
+                .into_iter()
+                .map(|(project, generation)| FeedBinding {
+                    project: ProjectId::new(project),
+                    generation,
+                    access: access_of.remove(&project).flatten(),
+                })
+                .collect();
             Ok(Some(FeedMaterial {
                 integration,
                 service_account: viewer,
@@ -335,44 +389,42 @@ impl FeedSnapshot {
         let db = self.db.clone();
         let conn = self.conn();
         db.within(QUERY, async {
-            let mut events: Vec<FeedEvent> = Vec::new();
-            let mut used = 0usize;
-            let mut position = after;
-            loop {
-                let rows: Vec<EventRow> = sqlx::query_as(
-                    "SELECT e.seq, e.event_id::text, e.event_type, e.schema_version, \
-                       to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), \
-                       e.project_id, e.actor_kind, \
-                       e.actor_user_id, u.username, u.display_name, \
-                       e.actor_via_id, v.username, v.display_name, \
-                       e.payload::text, octet_length(e.payload::text) \
-                     FROM forge.events e \
-                     LEFT JOIN forge.users u ON u.id = e.actor_user_id \
-                     LEFT JOIN forge.users v ON v.id = e.actor_via_id \
-                     WHERE e.seq > $1 AND e.seq <= $2 \
-                       AND e.project_id = ANY($3) AND e.event_type = ANY($4) \
-                     ORDER BY e.seq LIMIT $5",
-                )
-                .bind(position)
+            // Step 1: the next `limit + 1` visible seqs (one ordered query).
+            let wanted = i64::try_from(limit).unwrap_or(i64::MAX).saturating_add(1);
+            let seqs: Vec<i64> = sqlx::query_scalar(PAGE_SEQS_SQL)
+                .bind(after)
                 .bind(bound)
                 .bind(&projects)
                 .bind(&types)
-                .bind(CHUNK)
+                .bind(wanted)
                 .fetch_all(&mut *conn)
                 .await
                 .map_err(|e| read_query_error(QUERY, e))?;
-                let exhausted = i64::try_from(rows.len()).unwrap_or(i64::MAX) < CHUNK;
-                let seqs: Vec<i64> = rows.iter().map(|r| r.0).collect();
-                let mut items = work_items_of(&mut *conn, integration, &seqs).await?;
+            let more_than_limit = seqs.len() > limit;
+            let mut events: Vec<FeedEvent> = Vec::new();
+            let mut used = 0usize;
+            // Step 2: their rows, 100 at a time, within the byte budget.
+            for chunk in seqs.chunks(usize::try_from(CHUNK).unwrap_or(100)) {
+                let chunk: Vec<i64> = chunk
+                    .iter()
+                    .copied()
+                    .take(limit.saturating_sub(events.len()))
+                    .collect();
+                if chunk.is_empty() {
+                    break;
+                }
+                let rows: Vec<EventRow> = sqlx::query_as(PAGE_ROWS_SQL)
+                    .bind(&chunk)
+                    .fetch_all(&mut *conn)
+                    .await
+                    .map_err(|e| read_query_error(QUERY, e))?;
+                let mut items = work_items_of(&mut *conn, integration, &chunk).await?;
                 for row in rows {
-                    let seq = row.0;
-                    let work_items = items.remove(&seq).unwrap_or_default();
+                    let work_items = items.remove(&row.0).unwrap_or_default();
                     let cost = EVENT_ENVELOPE_BYTES
                         + usize::try_from(row.14).unwrap_or(usize::MAX)
                         + WORK_ITEM_BYTES * work_items.len();
-                    if events.len() >= limit
-                        || (!events.is_empty() && used.saturating_add(cost) > max_bytes)
-                    {
+                    if !events.is_empty() && used.saturating_add(cost) > max_bytes {
                         return Ok(FeedPage {
                             events,
                             has_more: true,
@@ -380,15 +432,15 @@ impl FeedSnapshot {
                     }
                     used = used.saturating_add(cost);
                     events.push(event(row, work_items)?);
-                    position = seq;
                 }
-                if exhausted {
-                    return Ok(FeedPage {
-                        events,
-                        has_more: false,
-                    });
+                if events.len() >= limit {
+                    break;
                 }
             }
+            Ok(FeedPage {
+                events,
+                has_more: more_than_limit,
+            })
         })
         .await
     }
@@ -414,19 +466,15 @@ impl FeedSnapshot {
         let db = self.db.clone();
         let conn = self.conn();
         db.within(QUERY, async {
-            sqlx::query_scalar(
-                "SELECT to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
-                 FROM forge.events e WHERE e.seq > $1 AND e.seq <= $2 \
-                   AND e.project_id = ANY($3) AND e.event_type = ANY($4) \
-                 ORDER BY e.seq LIMIT 1",
-            )
-            .bind(after)
-            .bind(bound)
-            .bind(&projects)
-            .bind(&types)
-            .fetch_optional(&mut *conn)
-            .await
-            .map_err(|e| read_query_error(QUERY, e))
+            let row: Option<(i64, String)> = sqlx::query_as(OLDEST_SQL)
+                .bind(after)
+                .bind(bound)
+                .bind(&projects)
+                .bind(&types)
+                .fetch_optional(&mut *conn)
+                .await
+                .map_err(|e| read_query_error(QUERY, e))?;
+            Ok(row.map(|(_, at)| at))
         })
         .await
     }
