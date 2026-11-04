@@ -324,6 +324,7 @@ tls_root_cert = "<INTERNAL_CA_PEM>"
 | `git.http.fetch_request_max_bytes` / `idle_timeout_ms` / `timeout_ms` / `body_timeout_ms` / `max_object_wants` / `want_check_timeout_ms` / `max_streams` / `max_streams_per_principal` / `push_max_bytes` | `FORGE_GIT_HTTP_…` | Smart HTTP の上限 | 任意 | 16 MiB / 60 s / 3600 s / 300 s / 10000 / 30 s / 16 / 4 / 2 GiB |
 | `hosting.deletion_grace_days` / `purge_interval_secs` | `FORGE_HOSTING_…` | 削除待ちの日数（1〜365）・purge の周期（10〜86400） | 任意 | 7 / 300 |
 | `review.mergeability_fanout_max` | `FORGE_REVIEW_MERGEABILITY_FANOUT_MAX` | target の 1 回の push でマージできるかを確かめ直す MR の数の上限（1〜500。超えた分は `unchecked`） | 任意 | 50 |
+| `maintenance.interval_days` / `window_start` / `window_end` / `window_time_zone` / `prune_grace_hours` / `step_timeout_secs` / `fsck_interval_days` / `batch_max` / `refs_warn` | `FORGE_MAINTENANCE_…` | リポジトリの保守（M3 O3、Runbook `repo-maintenance`）: 間隔・夜の窓・猶予（24 時間以上）・1 手順の時間切れ・全体の fsck の間隔・同時に生きている保守のジョブ・ref の数の warn | 任意 | 7 / 02:00 / 05:00 / Asia/Tokyo / 48 / 1800 / 30 / 10 / 100000 |
 | `web.base_url` | `FORGE_WEB_BASE_URL` | 人が開く URL。CSRF の `Origin`・OIDC の `redirect_uri` の元 | **serve に必須** | `https://<TEST_SERVER_HOST>` |
 | `web.session_key_file` | `FORGE_WEB_SESSION_KEY_FILE` | セッション用の鍵 | **`auth.oidc` を使うなら必須** | `<SECRETS_DIR>/web-session-keys` |
 | `web.session_idle_secs` / `session_absolute_secs` | `FORGE_WEB_SESSION_…` | 無操作 / 絶対の寿命（60 以上、idle ≤ absolute ≤ 86400） | 任意 | 14400 / 43200 |

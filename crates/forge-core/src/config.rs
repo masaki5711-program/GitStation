@@ -21,6 +21,7 @@ mod database;
 mod git_http;
 mod hosting;
 mod keys;
+mod maintenance;
 mod review;
 mod secret;
 mod server_limits;
@@ -35,6 +36,7 @@ pub use database::{DatabaseConfig, PrivilegedMember, PRIVILEGED_ROLES};
 pub use git_http::{GitHttpConfig, FETCH_REQUEST_MAX_LIMIT};
 pub use hosting::HostingConfig;
 pub use keys::{Key, Kind, KEYS};
+pub use maintenance::{MaintenanceConfig, MaintenanceWindow};
 pub use review::ReviewConfig;
 pub use secret::{DatabaseUrl, Secret};
 pub use server_limits::ServerLimitsConfig;
@@ -54,6 +56,8 @@ const NAMESPACES: &[&str] = &[
     "FORGE_HOSTING_",
     // M3 R2: `review.*`.
     "FORGE_REVIEW_",
+    // M3 O3: `maintenance.*`.
+    "FORGE_MAINTENANCE_",
     // M2 MR3 / MR4 (ADR-0021 §12): `web.*` and `auth.oidc.*`.
     "FORGE_WEB_",
     "FORGE_AUTH_",
@@ -144,6 +148,8 @@ pub struct Config {
     pub hosting: HostingConfig,
     /// `review.*` (the mergeability fan-out cap, M3 R2).
     pub review: ReviewConfig,
+    /// `maintenance.*` (the repository maintenance, M3 O3).
+    pub maintenance: MaintenanceConfig,
     /// `web.*` (the base URL, the session keys and lifetimes, M2 MR3).
     pub web: WebConfig,
     /// `auth.oidc.*` (the browser sign-in, M2 MR4).
@@ -387,6 +393,7 @@ fn build(values: &BTreeMap<&'static str, String>) -> Result<Config, ForgeError> 
         git_http: git_http(get)?,
         hosting: HostingConfig::load(get)?,
         review: ReviewConfig::load(get)?,
+        maintenance: MaintenanceConfig::load(get)?,
         web: WebConfig::load(
             get,
             text("web.base_url")?,

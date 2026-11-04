@@ -45,6 +45,12 @@
 6. 残った一時ディレクトリ（`cleanup_failed`）: 中身を確認してから削除する。
    `[MUTATING — needs approval]` ロールバック: 削除の前に別名へ移しておく。
 
+7. 空き容量が足りない（`FG-REPO-0003`、`No space left on device`）: リポジトリごとの大きさは保守の台帳
+   `SELECT repo_id, objects, size_pack_kib, refs, last_finished_at, outcome FROM forge.repository_maintenance ORDER BY size_pack_kib DESC LIMIT 20`
+   で分かる（読み取りのみ。M3 O3）。参照されないオブジェクトの掃除は定期の保守の仕事（Runbook `repo-maintenance`）で、保守が失敗・
+   期日超えなら（`forge doctor` の `repositories.maintenance`）そちらを先に直す。`[MUTATING — needs approval]` 大きいリポジトリから
+   `forge admin repo maintain <repo_id>`（戻し: 不要）。空き容量が無いと gc 自身が失敗する（一時的に新しい pack を書くため）。
+
 ## Verify
 
 - `forge admin repo-path <repo_id> --storage-root <保存先>` が `exists` を表示する

@@ -1351,3 +1351,123 @@ fn review_mergeability_fanout_has_a_default_env_and_a_range() {
     let err = load(None, &env(&[("FORGE_REVIEW_FANOUT", "7")])).expect_err("typo");
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
+
+/// `maintenance.*` (M3 O3): defaults, the file and env forms, the window
+/// (also across midnight) and every range (FG-SYS-0002 naming the key). A
+/// prune grace below 24 h is refused at load time.
+#[test]
+fn maintenance_config_has_defaults_ranges_and_a_window() {
+    use super::{MaintenanceConfig, MaintenanceWindow};
+    let cfg = load(None, &env(&[])).expect("defaults");
+    assert_eq!(cfg.maintenance, MaintenanceConfig::default());
+    assert_eq!(cfg.maintenance.interval, Duration::from_secs(7 * 86_400));
+    assert_eq!(cfg.maintenance.prune_grace, Duration::from_secs(48 * 3600));
+    assert_eq!(
+        cfg.maintenance.window,
+        MaintenanceWindow {
+            start_minute: 120,
+            end_minute: 300
+        }
+    );
+    assert_eq!(cfg.maintenance.time_zone, "Asia/Tokyo");
+    let night = load(
+        None,
+        &env(&[
+            ("FORGE_MAINTENANCE_WINDOW_START", "23:30"),
+            ("FORGE_MAINTENANCE_WINDOW_END", "01:00"),
+            ("FORGE_MAINTENANCE_WINDOW_TIME_ZONE", "UTC"),
+            ("FORGE_MAINTENANCE_PRUNE_GRACE_HOURS", "24"),
+        ]),
+    )
+    .expect("across midnight");
+    let w = night.maintenance.window;
+    assert!(w.contains(23 * 60 + 45) && w.contains(30) && !w.contains(60) && !w.contains(600));
+    assert!(MaintenanceWindow {
+        start_minute: 120,
+        end_minute: 300
+    }
+    .contains(120));
+    assert_eq!(night.maintenance.time_zone, "UTC");
+    assert_eq!(
+        night.maintenance.prune_grace,
+        Duration::from_secs(24 * 3600)
+    );
+    for (var, value, key, reason) in [
+        (
+            "FORGE_MAINTENANCE_PRUNE_GRACE_HOURS",
+            "23",
+            "prune_grace_hours",
+            "below_min",
+        ),
+        (
+            "FORGE_MAINTENANCE_PRUNE_GRACE_HOURS",
+            "721",
+            "prune_grace_hours",
+            "above_max",
+        ),
+        (
+            "FORGE_MAINTENANCE_INTERVAL_DAYS",
+            "0",
+            "interval_days",
+            "below_min",
+        ),
+        (
+            "FORGE_MAINTENANCE_STEP_TIMEOUT_SECS",
+            "3001",
+            "step_timeout_secs",
+            "above_max",
+        ),
+        (
+            "FORGE_MAINTENANCE_STEP_TIMEOUT_SECS",
+            "59",
+            "step_timeout_secs",
+            "below_min",
+        ),
+        (
+            "FORGE_MAINTENANCE_FSCK_INTERVAL_DAYS",
+            "366",
+            "fsck_interval_days",
+            "above_max",
+        ),
+        ("FORGE_MAINTENANCE_BATCH_MAX", "0", "batch_max", "below_min"),
+        ("FORGE_MAINTENANCE_REFS_WARN", "0", "refs_warn", "below_min"),
+        (
+            "FORGE_MAINTENANCE_WINDOW_START",
+            "2:00",
+            "window_start",
+            "invalid",
+        ),
+        (
+            "FORGE_MAINTENANCE_WINDOW_START",
+            "24:00",
+            "window_start",
+            "invalid",
+        ),
+        (
+            "FORGE_MAINTENANCE_WINDOW_END",
+            "02:00",
+            "window_end",
+            "empty_window",
+        ),
+        (
+            "FORGE_MAINTENANCE_WINDOW_TIME_ZONE",
+            "Asia/To kyo",
+            "window_time_zone",
+            "invalid",
+        ),
+        (
+            "FORGE_MAINTENANCE_WINDOW_TIME_ZONE",
+            "../etc",
+            "window_time_zone",
+            "invalid",
+        ),
+    ] {
+        let err = load(None, &env(&[(var, value)])).expect_err(value);
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{var}={value}");
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!("maintenance.{key}")) && text.contains(reason),
+            "{var}={value}: {text}"
+        );
+    }
+}

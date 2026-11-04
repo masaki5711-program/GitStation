@@ -852,6 +852,49 @@ fix = "Push to a feature branch, open a merge request and merge it. A Maintainer
 runbook = "merge-blocked"
 test = "a_direct_push_to_a_branch_with_the_ban_is_refused"
 
+# ── M3 O3: repository maintenance (gc / pack-refs / commit-graph / fsck) ─
+[[error]]
+code = "FG-GIT-0018"
+name = "RepositoryMaintenanceFailed"
+http_status = 500
+severity = "warn"
+user_message_ja = "リポジトリの定期の保守に失敗しました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The scheduled maintenance of the repository failed. Contact the administrator with the request ID."
+user_message_id = "Pemeliharaan terjadwal repositori gagal. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "A step of the `repository.maintain` job (M3 O3, ADR-0024 \"実装で決めたこと（O3）\") failed: `git gc --cruft --prune=<grace>` (with `-c gc.packRefs=false`, bitmaps, no commit-graph), `git pack-refs --all` (under the merge lock), `git commit-graph write --reachable`, or the object / ref counts. git exited non-zero or printed output forge cannot read (`reason=fsck_unusable`: fsck exit 128 because git cannot open the repository at all — not a repository, dubious ownership — which is not a finding about the objects); nothing a user did. A timeout of a step stays FG-GIT-0002 (`step`, the step's process tree killed) and no free git slot FG-GIT-0004. The repository keeps working (clone, push, merge do not depend on maintenance), but unreferenced objects (trial merges, superseded merge commits, force-pushed history) are not pruned and packs are not consolidated while it fails. doctor `repositories.maintenance` turns this into an alert after two consecutive failures of one repository (`reason=failing`), or when a repository is past its due time by more than one interval (`reason=overdue`), when no run succeeded for twice the interval (`reason=no_recent_success`: a repository skipped every night — a push or another gc always in progress — is never `failed` nor overdue), or when a row is still `running` past the job lease (`reason=stale_running`: the run crashed and was not reaped yet; the scheduler records such a run as `failed` with FG-DB-0007 and counts it)."
+diagnosis = "One warn event `forge.git.maintenance_completed` with `outcome=failed`, `error_code`, `request_id` (the job's), `repo_id`, `step` (`gc`, `pack_refs`, `commit_graph`, `counts`), `exit_code` and the redacted head of git's `stderr`; `reason=unexpected_output` (with `subcommand`) when `count-objects -v` / `for-each-ref` printed something forge cannot read. The ledger row (read-only): `SELECT repo_id, outcome, error_code, failures, last_started_at, last_finished_at, next_due_at FROM forge.repository_maintenance WHERE repo_id = <id>`. `forge doctor` `repositories.maintenance` lists failing and overdue repositories. Reproduce read-only with `git -C <path from forge admin repo-path> count-objects -v` and `git fsck --connectivity-only --no-dangling`."
+fix = "Act on git's stderr: disk full or permissions on the storage root (runbook repo-storage), a stale lock file (`gc.pid` older than 12 h is ignored by git; a `packed-refs.lock` or `<ref>.lock` older than the longest push needs approval to remove — runbook repo-maintenance), or corruption (fsck → FG-GIT-0019). Then run the maintenance again: `forge admin repo maintain <repo_id>` (enqueues one job)."
+runbook = "repo-maintenance"
+test = "a_failing_gc_is_repository_maintenance_failed"
+
+[[error]]
+code = "FG-GIT-0019"
+name = "RepositoryCorrupt"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリの整合性の確認で問題が見つかりました。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "The integrity check of the repository found a problem. Contact the administrator with the request ID."
+user_message_id = "Pemeriksaan integritas repositori menemukan masalah. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "`git fsck` of the maintenance job (M3 O3: `--connectivity-only` with every run, a full check once per `maintenance.fsck_interval_days`) exited non-zero: an object a ref (or a merge request version ref) reaches is missing or unreadable, or (full) an object is malformed. Clones of the affected history, merges and the browse API can fail on that object. Never caused by a user action alone: storage (disk, file system, a restore that missed files), a process killed mid-write outside forge's own steps, or a manual change in the bare repository."
+diagnosis = "One alert event `forge.git.maintenance_completed` with `outcome=corrupt`, `error_code`, `repo_id`, `mode` (`connectivity` / `full`), `exit_code`, `findings` (the number of lines fsck printed), `first_finding` and the head of `stdout` / `stderr` (object ids and ref names only, never content). The ledger row has `outcome = 'corrupt'`, `error_code = 'FG-GIT-0019'`; doctor `repositories.integrity` lists every repository whose last fsck failed. Confirm read-only: `git -C <path> fsck --connectivity-only --no-dangling` (and `--full` for a malformed object), `git -C <path> cat-file -t <id>` for each finding."
+fix = "Do not run gc or prune on the repository (it would drop what may still be recoverable) — the maintenance job itself does not prune a repository whose fsck failed. Follow runbook repo-maintenance: find the objects in a clone (developers' clones, the GitLab mirror, the last backup) and bring them back with an approved step; then run `forge admin repo maintain <repo_id>` and check that `repositories.integrity` is clean."
+runbook = "repo-maintenance"
+test = "fsck_reports_corruption"
+
+[[error]]
+code = "FG-GIT-0020"
+name = "RepositoryRefLockStale"
+http_status = 500
+severity = "alert"
+user_message_ja = "リポジトリの ref のロックが残っています。問い合わせ番号を添えて管理者に連絡してください。"
+user_message_en = "A ref lock of the repository was left behind. Contact the administrator with the request ID."
+user_message_id = "Kunci ref repositori tertinggal. Hubungi administrator dengan menyertakan ID permintaan."
+cause = "`packed-refs.lock` exists in a repository and nothing is writing it: a git that held it was killed without its signal handlers running (SIGKILL, a Windows TerminateProcess, a host crash). While it stays, every push that deletes a packed ref (a branch or tag that pack-refs packed, a version ref purge) and every `update-ref` that needs it fails after the 10 s wait (`core.packedRefsTimeout`), and the maintenance's pack-refs fails too. The maintenance removes the lock its own killed pack-refs left (only when it is not older than the step, under the merge lock); a lock older than the step is someone else's and is left for a person (M3 O3 review)."
+diagnosis = "Two sources: the maintenance job (`event=forge.git.maintenance_lock_left`, error level, `repo_id`, `age_secs`, `request_id` of the job) after a failed pack-refs found a lock older than its step; `forge doctor` `repositories.stale_locks` found `packed-refs.lock` older than 10 minutes (`repositories`, `max_age_secs`, `repo_ids`, `checked`, `truncated`). Read-only: `forge admin repo-path <repo_id> --storage-root <root>`, `ls -la <path>/packed-refs.lock` (time), and whether a git runs on that path (`pgrep -af 'git.*<repo_id>.git'` / Task Manager)."
+fix = "When no git runs on the repository and the lock is older than the longest push (`git.http.timeout_ms`, default 1 h): [MUTATING — needs approval] move it aside (`mv <path>/packed-refs.lock <path>/packed-refs.lock.stale-<date>`; rollback: move it back), then `git --git-dir=<path> show-ref | head` and `forge admin repo maintain <repo_id>`. Never remove a lock while a git process on that repository is running (runbook repo-maintenance)."
+runbook = "repo-maintenance"
+test = "a_stale_packed_refs_lock_is_reported"
+
 # --- WEB: the HTTP layer (forge-web) ----------------------------------------
 
 [[error]]

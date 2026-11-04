@@ -145,6 +145,40 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
   loop takes the accepted exit codes and returns the code; a signal is never accepted; `output()` /
   `output_truncated()` are the `[0]` wrappers). Pinned by `merge_tree_exit_codes_on_git_2_38`
   (verified on git 2.53; 2.38 itself not run here).
+- **Maintenance** (`maintenance`, M3 O3, ADR-0024 "実装で決めたこと（O3）"): the git steps of the
+  `repository.maintain` job, each with its own timeout and the **process tree** killed on a
+  timeout / overflow / drop (`GitCommand::supervise_tree`, crate-internal; proven by
+  `maintenance_timeout_kills_the_process_tree` with a helper that outlives its leader).
+  `Git::maintenance_blocker(storage, id) -> Option<Blocked>` (an `objects/tmp_objdir-incoming-*`
+  quarantine younger than `QUARANTINE_STALE` 6 h → `Blocked::IncomingPush`; no git runs),
+  `Git::gc_objects(storage, id, prune_grace, timeout) -> GcRun::{Ran, AlreadyRunning}` (`-c
+  gc.packRefs=false -c gc.writeCommitGraph=false -c repack.writeBitmaps=true -c
+  pack.writeBitmapHashCache=true -c core.hooksPath=<empty> gc --cruft
+  --prune=<secs>.seconds.ago --quiet`; a grace below `MIN_PRUNE_GRACE` 24 h is FG-SYS-0002; git's own
+  `gc.pid` refusal is `AlreadyRunning`), `Git::pack_refs` (`pack-refs --all --prune`; the caller
+  holds the merge lock), `Git::write_commit_graph` (`commit-graph write --reachable
+  --no-progress`), `Git::fsck(…, FsckMode::{Connectivity, Full}, …)` (`fsck
+  --connectivity-only|--full --no-dangling --no-progress`; any non-zero exit → FG-GIT-0019 with
+  `mode`, `exit_code`, `findings`, `first_finding`), `Git::repository_counts -> RepositoryCounts`
+  (`count-objects -v` + `for-each-ref --format=.`: loose / packed objects, packs, `size_pack_kib`,
+  every ref incl. hidden ones). git failing in a step → FG-GIT-0018 (`step`); timeouts stay
+  FG-GIT-0002 and a missing slot FG-GIT-0004 (`step`). Pinned by `maintenance_argv_on_git_2_38`
+  (verified on git 2.53). O3 review: a supervised timeout first sends `SIGTERM` to the group
+  (git removes its lock files), waits `TERM_GRACE` (5 s) for the leader (watched with
+  `waitid(WNOWAIT)`), then `SIGKILL` (`stop=term|kill` in the FG-GIT-0002 context; Windows has
+  no graceful stop: `kill`); a leader that exits non-zero gets its group killed before it is
+  reaped; a helper that keeps the pipes open after the leader exited is killed after `LINGER`
+  (2 s); the output cap kills the group at once. `StepEnd::of(&err)` tells `Exited` / `Terminated`
+  (git removed its own locks) from `Killed { at }` (`stop=kill`, `killed_at_unix_ms`).
+  `Git::clear_own_packed_refs_lock(storage, id, step_started, killed_at) -> LockCleanup::{Absent,
+  Removed, Foreign}` is called only after a kill and removes a `packed-refs.lock` whose time lies
+  between the step's start and the kill (the merge lock does NOT keep receive-pack / update-ref
+  out); `packed_refs_lock_age` is doctor's probe. On Unix a reaped leader's group is never
+  signalled (only while it is an unreaped zombie). fsck exit 128 with "not a git repository" / dubious ownership is FG-GIT-0018
+  `reason=fsck_unusable`; the fsck stdout head is redacted. pack-refs also runs with
+  `core.packedRefsTimeout=10000`. Ref writers (`update_refs`, receive-pack) set
+  `core.packedRefsTimeout=10000` (`refs::PACKED_REFS_TIMEOUT_MS`) so a write that needs
+  `packed-refs.lock` waits out pack-refs (`version_ref_write_during_pack_refs_is_retried`).
 - **pkt-line** (`pkt_line`): `decode(buf, PktMode) -> Option<(Packet, used)>`, `decode_all`,
   `encode` / `encode_data`, `PktReader` (async, one packet ≤ 65520 bytes), `encode_sideband` /
   `decode_sideband` (`Band::{Data, Progress, Error}`, ≤ 65515 data bytes per packet). Invalid
@@ -275,6 +309,8 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
 | FG-GIT-0011 AmbiguousRefName | a pushed branch / tag name of 40 / 64 hex digits (`receive_request`) | — |
 | FG-GIT-0014 GitProtocolInvalid | bad pkt-line / gzip; `want_invalid`, `command_unsupported`, `want_unreachable` (MR3, here); `content_type`, `content_encoding` (forge-web); MR4 (`receive_request`): `too_many_commands`, `report_status_required`, `push_cert`, `command_invalid`, `capability_unsupported`, `duplicate_ref`, `shallow_misplaced` | `smart-http` |
 | FG-GIT-0015 GitClientDisconnected | stream aborted or dropped (client went away); tree killed | `smart-http` |
+| FG-GIT-0018 RepositoryMaintenanceFailed | a maintenance step's git failed (`step`; M3 O3) | `repo-maintenance` |
+| FG-GIT-0019 RepositoryCorrupt | the maintenance's fsck found a problem (`mode`, `findings`; M3 O3) | `repo-maintenance` |
 | FG-REPO-0001 StoragePathRejected | root missing / not a dir / symlink; symlink, non-dir or outside-root entry | `repo-storage` |
 | FG-REPO-0002 StorageMissing | repository directory missing | `repo-storage` |
 | FG-REPO-0003 StorageIoFailed | permission / disk / I/O failure on the storage root | `repo-storage` |
@@ -286,7 +322,14 @@ receive-pack command sets, and reads / answers receive-pack requests for the pus
 
 **Known gaps (tracked)**
 - Captured runs (`output()`) still kill only the direct child on timeout
-  (short commands without long-lived helpers); streams kill the whole tree.
+  (short commands without long-lived helpers) unless built with the
+  crate-internal `supervise_tree()` (the maintenance steps, M3 O3); streams
+  always kill the whole tree.
+- Windows: no graceful stop for a supervised run (closing the Job Object is
+  `TerminateProcess`, so a timed-out git leaves its lock files — the
+  maintenance removes its own `packed-refs.lock`); a helper started before
+  the Job Object assignment would escape (no suspended spawn without
+  `unsafe`; not hit in practice, see `process_tree.rs`).
 - **protocol v2 serves unreferenced objects** (any commit / blob whose id is
   known), and `uploadpack.allowAnySHA1InWant=false` does not stop it; v0
   serves unreferenced blobs. Pinned by

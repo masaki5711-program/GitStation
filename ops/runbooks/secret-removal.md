@@ -48,9 +48,15 @@ clone 済みの手元、ミラー（O2）、バックアップには写しが残
      ログ `event=forge.review.version_refs_purged` が残る。
    - DB の印（`refs_purged_at`）が先にコミットされ、その後に ref を消す。ref を消すのに失敗したら（FG-GIT-0002 / 0003）
      **同じ要求をもう一度送る**（`already_purged` の版の ref も毎回消す）。印のある版の ref は、版を作るジョブが二度と書かない。
-4. `[MUTATING — needs approval]` **到達できないオブジェクトを消す**（戻せない。実行の前にバックアップがあることを確かめる。承認された保守の手順。猶予なしの prune は他の進行中の処理のオブジェクトも消しうるので、
-   push とマージを止めた時間帯に行う）:
-   `git --git-dir <repo-path> reflog expire --expire=now --all && git --git-dir <repo-path> gc --prune=now`
+4. **到達できないオブジェクトを消す**。2 つの道がある:
+   - **待つ（既定）**: 定期の保守（M3 O3、Runbook `repo-maintenance`）が、Purge で参照されなくなったオブジェクトを **猶予
+     （`maintenance.prune_grace_hours`、既定 48 時間）が過ぎた後の最初の保守** で消す（`gc --cruft --prune=<猶予>`。週 1 回、夜の窓）。
+     急ぐなら、猶予が過ぎた後に `[MUTATING — needs approval]` `forge admin repo maintain <repo_id>`（戻し: 不要）。猶予の内のオブジェクトは
+     この方法では消えない。
+   - **すぐ消す（秘密がすぐに消えることが要るとき）**: `[MUTATING — needs approval]`（戻せない。実行の前にバックアップがあることを確かめる。
+     猶予なしの prune は他の進行中の処理のオブジェクトも消しうるので、push とマージを止めた時間帯に行う。保守のジョブと重ならないよう、
+     `<repo-path>/gc.pid` が無いことを先に確かめる — 重なっても git の `gc.pid` の確かめがどちらか一方を止める）:
+     `git --git-dir <repo-path> reflog expire --expire=now --all && git --git-dir <repo-path> gc --prune=now`
    その後、Diagnose 2 / 3 と `git cat-file -e <sha>`（失敗すれば消えた）で確かめる。
 5. `[MUTATING — needs approval]` **写しを扱う**（戻し: 宛先ごとの手順に従う）: ミラー（O2）の宛先は `refs/merge-requests` を送らない設定だが、ブランチの履歴に秘密が入っていた期間の写しは
    宛先側でも同じ手順で消す。バックアップは版の ref を含む: 秘密を含むバックアップの扱い（保存期間・隔離）を決める。

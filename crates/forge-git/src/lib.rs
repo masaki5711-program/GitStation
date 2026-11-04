@@ -31,6 +31,9 @@
 //! - [`mergeability`] runs the trial merge of a merge request
 //!   (`merge-tree --write-tree`, M3 R2) and the `merge-base` questions
 //!   (exit 1 is an answer there, `GitCommand::output_accepting`).
+//! - [`maintenance`] runs the steps of the repository maintenance job
+//!   (M3 O3): gc with a prune grace, pack-refs, commit-graph, fsck and the
+//!   object / ref counts, each bounded and killed with its process tree.
 
 pub mod browse;
 mod command;
@@ -38,6 +41,7 @@ pub mod commit;
 mod config;
 pub mod gzip;
 pub mod hidden_refs;
+pub mod maintenance;
 pub mod mergeability;
 pub mod pkt_line;
 mod process;

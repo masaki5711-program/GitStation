@@ -26,11 +26,21 @@
 //! actor (the file is not trusted to say who acted). A mutating command:
 //! in production an approved runbook step.
 
+//!
+//! `forge admin repo maintain <repo_id>` (M3 O3, runbook repo-maintenance):
+//! enqueue one `repository.maintain` job for a ready repository — the
+//! maintenance lane of a running `forge worker` runs it at once (not only
+//! in the nightly window). It only enqueues; every rule (the prune grace,
+//! a push in progress, the merge lock) is the job's. An operator command
+//! outside `authorize()` (ADR-0019 §8; the host operator is the trust
+//! root), in production an approved runbook step.
+
 use std::path::Path;
 
 use forge_core::config::DatabaseConfig;
 use forge_core::ids::{ProjectId, RepoId};
 use forge_core::{PushApplied, PushRecord, PushRecorded, PushReplay, RequestId};
+use forge_db::jobs::Enqueued;
 use forge_db::repositories::{self, Reprovisioned};
 use forge_db::Db;
 use forge_errors::{ErrorCode, ForgeError};
@@ -44,6 +54,47 @@ pub fn reprovision(
 ) -> Result<String, ForgeError> {
     with_db(cfg, async |db| {
         reprovision_with(db, request_id, repo_id).await
+    })
+}
+
+pub fn maintain(
+    cfg: &DatabaseConfig,
+    request_id: &RequestId,
+    repo_id: i64,
+) -> Result<String, ForgeError> {
+    with_db(cfg, async |db| maintain_with(db, request_id, repo_id).await)
+}
+
+pub(crate) async fn maintain_with(
+    db: &Db,
+    request_id: &RequestId,
+    repo_id: i64,
+) -> Result<String, ForgeError> {
+    let repo = RepoId::new(repo_id);
+    let enqueued = forge_db::maintenance::enqueue_now(db, repo, request_id).await?;
+    let (outcome, job) = match enqueued {
+        Enqueued::Queued(job) => ("queued", Some(job.get())),
+        Enqueued::Deduped => ("already_queued", None),
+    };
+    tracing::info!(
+        target: "forge_cli",
+        event = "forge.admin.repo.maintain_enqueued",
+        request_id = %request_id,
+        repo_id,
+        job_id = job,
+        outcome,
+        "repository maintenance enqueued"
+    );
+    Ok(match job {
+        Some(job) => format!(
+            "repository {repo_id}: maintenance job {job} queued; a running `forge worker` runs it \
+             now (check with `forge doctor`, repositories.maintenance, or the ledger \
+             forge.repository_maintenance)\n"
+        ),
+        None => format!(
+            "repository {repo_id}: a maintenance job of this request is already queued \
+             (nothing changed)\n"
+        ),
     })
 }
 

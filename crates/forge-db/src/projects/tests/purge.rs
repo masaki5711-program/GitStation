@@ -501,6 +501,49 @@ async fn a_purge_removes_the_projects_integration_binding() {
     t.drop_now().await;
 }
 
+/// M3 O3: the purge deletes the repository's maintenance ledger row (it
+/// references the repository row, which the purge deletes after it).
+#[tokio::test]
+async fn project_purge_removes_maintenance_rows() {
+    use crate::maintenance;
+    let t = FreshDb::migrated().await;
+    let alice = user(&t, "alice").await;
+    let web = create_ok(&t, &project("web", alice.namespace_id, alice.user_id)).await;
+    let marked = crate::repositories::mark_ready(&t.db, &ctx("req-ready"), web.repository_id)
+        .await
+        .expect("ready");
+    assert!(matches!(
+        marked,
+        crate::repositories::MarkReady::Marked { .. }
+    ));
+    maintenance::start(&t.db, web.repository_id)
+        .await
+        .expect("start")
+        .expect("ready repository");
+    delete(&t, web.project_id, alice.user_id).await;
+    expire(&t, web.project_id).await;
+    let started = purge::start(&t.db, &ctx("req-start"), web.project_id)
+        .await
+        .expect("start");
+    assert!(matches!(started, Started::Started { .. }), "{started:?}");
+    let finished = purge::finish(&t.db, &ctx("req-finish"), web.project_id, true)
+        .await
+        .expect("finish");
+    assert!(matches!(finished, Finished::Purged(_)), "{finished:?}");
+    let mut su = t.superuser().await;
+    let id = web.project_id.get();
+    assert_eq!(
+        count(
+            &mut su,
+            &format!("SELECT count(*) FROM forge.repository_maintenance WHERE project_id = {id}")
+        )
+        .await,
+        0
+    );
+    assert_eq!(left(&mut su, web.project_id).await, [0; 5]);
+    t.drop_now().await;
+}
+
 /// Phase 3 without phase 1 is a bug of the caller: refused, nothing deleted.
 #[tokio::test]
 async fn finishing_a_repository_that_is_not_purging_is_refused() {
