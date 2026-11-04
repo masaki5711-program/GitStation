@@ -48,7 +48,16 @@ fn mentions(needles: &[String]) -> Vec<(String, String)> {
         rust_files(&dir, &mut files);
         for file in files {
             let text = std::fs::read_to_string(&file).expect("read");
-            if needles.iter().any(|n| text.contains(n.as_str())) {
+            // Code only: a doc comment naming a function calls nothing.
+            let code: String = text
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                );
+            if needles.iter().any(|n| code.contains(n.as_str())) {
                 let rel = file
                     .strip_prefix(&dir)
                     .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -129,7 +138,8 @@ fn only_the_feed_routes_read_the_feed() {
 /// it, forge-db's feed tests decide with it (a dev-dependency).
 #[test]
 fn only_forge_integ_proves_what_the_feed_sees() {
-    let found = mentions(&[needle(&["prove", "_visible("])]);
+    // The bare name (re-review I1c): an import or a path call counts too.
+    let found = mentions(&[needle(&["prove", "_visible"])]);
     let offenders: Vec<_> = found
         .iter()
         .filter(|(krate, file)| {

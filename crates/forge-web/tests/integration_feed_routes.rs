@@ -693,3 +693,37 @@ async fn the_feed_answers_the_golden_example_shape() {
     );
     w.t.drop_now().await;
 }
+
+/// Re-review (I1c): a second concurrent read of the same feed answers 429
+/// FG-WEB-0010 with `Retry-After: 1` through the router (the first one
+/// completes).
+#[tokio::test]
+async fn a_concurrent_feed_read_answers_429_with_retry_after() {
+    let w = world().await;
+    let app = router(&w.t.db);
+    let request = || {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(events_uri(w.integration))
+            .body(Body::empty())
+            .expect("request");
+        req.extensions_mut().insert(sa_token(w.sa, READ));
+        req
+    };
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(request()),
+        app.clone().oneshot(request())
+    );
+    let mut statuses = [first.expect("infallible"), second.expect("infallible")];
+    statuses.sort_by_key(|r| r.status());
+    assert_eq!(statuses[0].status(), StatusCode::OK);
+    let busy = &statuses[1];
+    assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        busy.headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok()),
+        Some("1")
+    );
+    w.t.drop_now().await;
+}

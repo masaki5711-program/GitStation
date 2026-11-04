@@ -1222,3 +1222,28 @@ API の契約は `docs/api/integration-feed.md`（schema_version 1、欄は足�
 10. **受け入れた残り**: `FeedMaterial` は forge-core の型なので、Rust ではクレートをまたいで作り手を forge-db に限れない。代わりに
     `prove_visible` を呼ぶのは forge-integ（と forge-auth 自身・forge-db のテスト）だけ、とテスト
     `only_forge_integ_proves_what_the_feed_sees` で縛り、forge-integ は材料を必ず forge-db のスナップショットから読む。
+
+### I1c の再レビュー（2026-11-04）で変えた点
+
+追記のマイグレーション `20261118100200`。
+
+1. **見せない種類を歩かない**（database MEDIUM）: 索引 `events_project_type_seq (project_id, event_type, seq) WHERE seq IS NOT NULL`
+   を足し、ページと未読の最も古いイベントは（結びつけたプロジェクト × 見せる種類）ごとの範囲を `limit + 1`（古いほうは 1）で切って
+   合わせる。同じプロジェクトの maintainer の分類（`member.*`）や、狭めた許可リストの外の種類は読まない（テスト
+   `per_project_reads_skip_types_the_feed_does_not_show`: 3 000 件の `member.added` の後の 1 件で、読む行が 50 以下。索引の前は 3 001 行）。
+   触れる行の上限は「組 × (limit + 1)」（組が空なら索引の 1 回の探索だけ）。
+2. **200 の結びつけでの正しさ**（database MEDIUM）: 200 のプロジェクトに見せる種類と見せない種類を混ぜて交互に並べ、ページを順にたどった
+   結果が全件の走査と同じ（増え続け、抜けも重なりもない）こと、`has_more` が `limit` ちょうどで false、1 少ないと true であることを
+   テスト `two_hundred_bound_projects_page_exactly` で確かめる。
+3. **保持のロックの順**（database MEDIUM）: 前のテスト（番号付けが止まらない）は、ループ中にイベントを書かないので番号付けが
+   何もしない道を通り、意味がなかった。代わりに、状態の行を別の接続が `FOR UPDATE` で持っている間に保持の 1 回が、すでに
+   `forge.events` の行の排他ロック（DELETE）を持ったまま最後の UPDATE で待つことを `pg_locks` で確かめる
+   （`a_retention_batch_locks_the_feed_state_only_at_its_end`。最初に `FOR UPDATE` する以前の版では赤になる）。
+4. **権限の表**（security MEDIUM）: プロジェクトの単位の行も含め、`IntegrationEventRead` のすべての行に `IntegrationEventCursorRead` の
+   同じ行がある（16 行を足した）。テスト `the_cursor_route_mirrors_every_feed_row` が、片方だけの行を見つけると落ちる。
+5. **小さな点**（LOW）: 保持は `pg_try_advisory_xact_lock` で同時に 1 回だけ（2 つ目はすぐ戻る）、消した行が 0 件なら監査の行を書かない
+   （`retained_from` は進める。`an_empty_retention_batch_writes_no_audit_row`）。結びつけの access をまとめた文は、行の列名とぶつからない
+   `feed_binding_project_id` で結び、行のプロジェクトがその id でなければ `FG-SYS-0001 reason=feed_access_row_mismatch`。Reporter・
+   Guest・メンバーでなくなった・削除待ちの 4 つを 1 文で読み分けるテスト（`the_batched_access_read_gives_each_binding_its_own_facts`）。
+   `prove_visible` の呼び出し元のテストは名前だけで探す（コメントの行は除く）。経路で 429 に `Retry-After: 1` が付くテスト
+   （`a_concurrent_feed_read_answers_429_with_retry_after`）。
