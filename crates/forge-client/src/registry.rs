@@ -1114,6 +1114,28 @@ pub const COMMANDS: &[CommandSpec] = &[
         output: BINDINGS_SCHEMA,
     },
     CommandSpec {
+        name: "integration events",
+        summary: "One page of an integration's event feed after a cursor: every integration-class event of its bound projects in order, each with its work items (the integration's own service account token, read_api; FG-INT-0007 410 with reason when the cursor cannot continue, FG-INT-0008 for a cursor that is not this integration's).",
+        args: &[
+            arg("id", "positional", true, "The integration id."),
+            arg("--cursor", "option", false, "The cursor the feed gave (next_cursor, an event's cursor, or integration cursor); without it the oldest retained event."),
+            arg("--limit", "option", false, "Events per page, 1 to 500 (default 100)."),
+        ],
+        examples: &["gstn integration events 3 --cursor <next_cursor> --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/integrations/{id}/events"],
+        output: r#"{"type":"object","required":["schema_version","events","next_cursor","has_more"],"properties":{"schema_version":{"const":1},"events":{"type":"array","items":{"type":"object","required":["id","cursor","type","schema_version","occurred_at","project_id","actor","work_items","data"]}},"next_cursor":{"type":"string"},"has_more":{"type":"boolean"}}}"#,
+    },
+    CommandSpec {
+        name: "integration cursor",
+        summary: "The head of an integration's event feed as a cursor (a resync takes it first, then the development status, then reads from it; the integration's own service account token).",
+        args: &[arg("id", "positional", true, "The integration id.")],
+        examples: &["gstn integration cursor 3 --json"],
+        scopes: &["read_api"],
+        routes: &["GET /api/v1/integrations/{id}/events/cursor"],
+        output: r#"{"type":"object","required":["schema_version","cursor"],"properties":{"schema_version":{"const":1},"cursor":{"type":"string"}}}"#,
+    },
+    CommandSpec {
         name: "integration-binding list",
         summary: "Show a project's integration binding, none or one (as reading the project).",
         args: &[arg("--project", "option", true, "The project id.")],

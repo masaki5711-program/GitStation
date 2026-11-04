@@ -210,6 +210,7 @@ fn dispatch(cli: &Cli, env: EnvFn<'_>, exe: &str, io: &mut Io<'_>) -> Result<()>
             crate::mr_conditions::merge_rule_cmd(cli, command, env, io)
         }
         Command::Checks { command } => crate::checks::checks(cli, command, env, io),
+        Command::Integration { command } => crate::integrations::feed(cli, command, env, io),
         Command::IntegrationBinding { command } => {
             crate::integrations::binding(cli, command, env, io)
         }

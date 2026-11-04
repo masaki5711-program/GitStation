@@ -93,7 +93,8 @@ pub struct IssueServiceAccountToken {
     /// 1..=100 characters, no control or invisible format characters.
     pub name: String,
     /// `read_repository`, `write_repository`, `read_api`, `api`,
-    /// `merge_execute`, `merge_approve`, `user_email`; never `admin`.
+    /// `merge_execute`, `merge_approve`, `user_email`, `user_employee_number`
+    /// (M3 I1c: the event feed's actor); never `admin`.
     pub scopes: Vec<String>,
     /// Days until it expires, 1..=365 (default 90).
     #[schema(minimum = 1, maximum = 365)]

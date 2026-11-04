@@ -447,6 +447,27 @@ pub enum Resource {
         namespace: forge_core::CheckNamespace,
         granted: bool,
     },
+    /// An integration's event feed as its route loaded it
+    /// (`IntegrationEventRead`, `IntegrationEventCursorRead`; M3 I1c).
+    IntegrationFeed(IntegrationFeedView),
+    /// The events of one visibility class of one bound project, for the
+    /// feed's principal (`prove_visible`, M3 I1c, ADR-0016 §7): the
+    /// project as seen by the integration's service account.
+    ProjectEvents {
+        project: ProjectView,
+        class: forge_core::VisibilityClass,
+    },
+}
+
+/// An integration's feed as the caller reaches it (M3 I1c): whether the
+/// caller is the integration's own service account (`own`), whether the
+/// integration is enabled, and whether the request asked to act for a
+/// person (`Forge-Act-As`, never allowed on the feed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntegrationFeedView {
+    pub own: bool,
+    pub enabled: bool,
+    pub act_as: bool,
 }
 
 /// A user as a service account route sees it (M3 S0): its kind

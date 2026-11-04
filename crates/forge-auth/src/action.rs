@@ -244,6 +244,20 @@ actions! {
     /// above; `api`. Binding makes the integration's service account a
     /// Reporter of the project, so it is a membership change.
     IntegrationBindingManage,
+    /// `GET /api/v1/integrations/{id}/events` (M3 I1c, ADR-0016 §7, plan
+    /// 02 §5.7 / §11.2): the integration's event feed. Only that
+    /// integration's own service account (`Resource::IntegrationFeed`:
+    /// another integration, a person — administrators included —, a bot,
+    /// an agent's token, an act-as request and a disabled integration are
+    /// refused); `read_api`. What it then sees is decided per bound project
+    /// and visibility class (`Resource::ProjectEvents`: the integration
+    /// class by a Reporter membership; never the maintainer, deployment or
+    /// admin class) by `prove_visible`.
+    IntegrationEventRead,
+    /// `GET /api/v1/integrations/{id}/events/cursor` (M3 I1c): the feed's
+    /// current head as a cursor (the first step of a resync). Decided like
+    /// `IntegrationEventRead`.
+    IntegrationEventCursorRead,
     AuditRead,
     /// `GET /api/v1/user`: the caller's own account (any active signed-in
     /// user; `read_api` on a token). Decided on the instance: there is no
@@ -429,6 +443,8 @@ impl Action {
             | Action::ServiceAccountTokenList
             | Action::CheckRead
             | Action::IntegrationRead
+            | Action::IntegrationEventRead
+            | Action::IntegrationEventCursorRead
             | Action::Metrics => Some(Scope::ReadApi),
             Action::ProjectCreate
             | Action::ProjectUpdate

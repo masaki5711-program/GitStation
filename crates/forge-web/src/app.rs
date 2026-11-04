@@ -75,6 +75,10 @@ pub struct AppState {
     /// serve` always sets them; without them those routes answer
     /// `FG-SYS-0001 reason=checks_unconfigured`).
     pub checks: Option<Arc<forge_checks::Checks>>,
+    /// The integrations' event feed (M3 I1c, ADR-0016 §7; `forge serve`
+    /// always sets it; without it the feed routes answer `FG-SYS-0001
+    /// reason=feed_unconfigured`).
+    pub feed: Option<Arc<forge_integ::Feed>>,
     /// The list routes' page loaders and cursor keys (M1 phase 8b MR7b;
     /// `forge serve` always sets them, refusing to start without
     /// `api.cursor_keys_file`; without them a list answers `FG-SYS-0001
@@ -134,6 +138,7 @@ impl AppState {
             hosting: None,
             review: None,
             checks: None,
+            feed: None,
             lists: None,
             sessions: None,
             web_origin: None,
@@ -183,6 +188,13 @@ impl AppState {
     #[must_use]
     pub fn with_checks(mut self, checks: forge_checks::Checks) -> Self {
         self.checks = Some(Arc::new(checks));
+        self
+    }
+
+    /// The integrations' event feed (M3 I1c).
+    #[must_use]
+    pub fn with_feed(mut self, feed: forge_integ::Feed) -> Self {
+        self.feed = Some(Arc::new(feed));
         self
     }
 
@@ -426,10 +438,10 @@ pub(crate) fn registry_without_content() -> Registry<AppState> {
             routes::namespaces::PATH,
             routes::namespaces::QUERY,
         );
-    check_routes(integration_routes(service_account_routes(account_routes(
-        history_routes(browse_routes(git_routes(shell_routes(
+    check_routes(feed_routes(integration_routes(service_account_routes(
+        account_routes(history_routes(browse_routes(git_routes(shell_routes(
             merge_request_routes(member_routes(move_routes(hosting_routes(fixed)))),
-        )))),
+        ))))),
     ))))
 }
 
@@ -751,6 +763,33 @@ fn integration_routes(registry: Registry<AppState>) -> Registry<AppState> {
             i::unbind,
         )
         .responds_no_content(Verb::Delete, i::PROJECT_BINDING)
+}
+
+/// The integrations' event feed (M3 I1c, ADR-0016 §7, plan 02 §11.2,
+/// docs/api/integration-feed.md): only the integration's own service
+/// account reads it.
+fn feed_routes(registry: Registry<AppState>) -> Registry<AppState> {
+    use routes::integration_feed as f;
+    registry
+        .route_with(
+            Verb::Get,
+            f::EVENTS,
+            Action::IntegrationEventRead,
+            "The integration's event feed after a cursor: every integration-class event of its bound projects in order, each with its work items (the integration's own service account; read_api; 410 FG-INT-0007 with reason when the cursor cannot continue)",
+            f::FEED_EVENTS,
+            f::events,
+        )
+        .responds::<f::FeedPageBody>(Verb::Get, f::EVENTS)
+        .queries(Verb::Get, f::EVENTS, f::EVENTS_QUERY)
+        .route_with(
+            Verb::Get,
+            f::CURSOR,
+            Action::IntegrationEventCursorRead,
+            "The feed's head as a cursor (a resync takes it first, then the development status, then reads from it)",
+            f::FEED_CURSOR,
+            f::cursor,
+        )
+        .responds::<f::FeedCursorBody>(Verb::Get, f::CURSOR)
 }
 
 /// The repository browse API (`RepoBrowse`, `read_api`; M2 MR7, ADR-0015

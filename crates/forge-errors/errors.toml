@@ -1011,8 +1011,8 @@ severity = "info"
 user_message_ja = "短い間に要求が多すぎます。少し待ってからもう一度お試しください。"
 user_message_en = "Too many requests in a short time. Wait a moment and try again."
 user_message_id = "Terlalu banyak permintaan dalam waktu singkat. Tunggu sebentar lalu coba lagi."
-cause = "A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts and `GET /-/auth/callback` 20 callbacks per peer per minute, each with its own counter (an IPv6 peer counts as its /64), so nobody can flood the identity provider's authorization or token endpoint through GitStation. `GET /api/v1/namespaces/resolve?prefix=true` (M2 MR6, the SPA's rescue of GitHub-shaped URLs, ADR-0015) allows 60 requests per signed-in user per minute (`route=resolve_prefix`; one request resolves every leading prefix of the path), checked after the path is validated and the token scope decided, before any lookup. `GET /api/v1/users?search=` allows 120 searches per signed-in user per minute (`route=user_search`). A refused callback also clears the state cookie, so the user starts the sign-in again. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`."
-diagnosis = "The log event carries `route` (`login`, `callback`, `resolve_prefix` or `user_search`), `limit` and `window_s` (never the address, which is personal data; `resolve_prefix` and `user_search` also `retry_after_s`). The per-caller limits are tested by `prefix_resolution_is_rate_limited_per_caller` and `the_user_search_is_rate_limited_per_caller` (forge-web). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019."
+cause = "A rate-limited route was requested more often than its limit from one connection peer (ADR-0021 §3): `GET /-/auth/login` allows 20 starts and `GET /-/auth/callback` 20 callbacks per peer per minute, each with its own counter (an IPv6 peer counts as its /64), so nobody can flood the identity provider's authorization or token endpoint through GitStation. `GET /api/v1/namespaces/resolve?prefix=true` (M2 MR6, the SPA's rescue of GitHub-shaped URLs, ADR-0015) allows 60 requests per signed-in user per minute (`route=resolve_prefix`; one request resolves every leading prefix of the path), checked after the path is validated and the token scope decided, before any lookup. `GET /api/v1/users?search=` allows 120 searches per signed-in user per minute (`route=user_search`). A refused callback also clears the state cookie, so the user starts the sign-in again. The peer is the TCP peer address until the proxy layout is decided (ADR-0019 open question). Nothing was done; the answer carries `Retry-After`. M3 I1c: `GET /api/v1/integrations/{id}/events` and `…/events/cursor` allow one read in flight per integration (per process); a concurrent one is refused at once with `reason=feed_read_in_flight` and `Retry-After: 1` (the consumer retries; nothing was read)."
+diagnosis = "The log event carries `route` (`login`, `callback`, `resolve_prefix` or `user_search`), `limit` and `window_s` (never the address, which is personal data; `resolve_prefix` and `user_search` also `retry_after_s`). The per-caller limits are tested by `prefix_resolution_is_rate_limited_per_caller` and `the_user_search_is_rate_limited_per_caller` (forge-web). Many 429 behind a reverse proxy mean every user shares the proxy's peer address — the open question of ADR-0019. The feed's refusal carries `reason=feed_read_in_flight`, `integration_id` and `retry_after_s=1` (test `a_second_concurrent_read_of_the_same_integration_is_429`); many of them mean the consumer polls in parallel (runbook integration-feed-lag)."
 fix = "Wait `Retry-After` seconds. If a proxy in front of GitStation makes every user one peer, record it in the incident record and decide the client-address source (ADR-0019 open question) before raising the limit."
 test = "login_start_is_rate_limited_per_peer"
 
@@ -1325,6 +1325,20 @@ runbook = "append-only-violation"
 test = "an_event_without_an_audit_row_cannot_commit"
 
 # ── C8: the audit seal backlog (ADR-0018 §4) ─────────────────────────────
+
+[[error]]
+code = "FG-DB-0014"
+name = "FeedEpochChanged"
+http_status = 500
+severity = "warn"
+user_message_ja = "イベントの履歴の世代を作り直しました。連携先は履歴を取り直します。"
+user_message_en = "The event feed's epoch was rotated. Integrations resync their feed."
+user_message_id = "Epoch feed perubahan telah diperbarui. Integrasi akan menyinkronkan ulang feed-nya."
+cause = "The event feed's `epoch` (forge.event_feed_state) was rotated, so every integration's cursor answers 410 `epoch_mismatch` and the consumers resync (ADR-0016 §7, ADR-0018 §5). In M3 only by hand: `forge admin events new-epoch` (`reason=manual`) after the database was restored from a backup or rebuilt in the same cluster, an approved step of the restore runbook (forge_maint runs forge.feed_new_epoch, owned by forge_seq, which writes the `feed.epoch_rotated` audit row). The automatic detection of a rollback (system_identifier, timeline, the seal sink) comes with C9. Logged at warn by the command."
+diagnosis = "The log event carries `reason` (`manual`), `old_epoch` and `new_epoch`. SELECT epoch, epoch_rotated_at, high_seq FROM forge.event_feed_state; the audit row: SELECT occurred_at, details FROM forge.audit_log WHERE action = 'feed.epoch_rotated' ORDER BY id DESC LIMIT 5."
+fix = "Expected after a restore: nothing to do, the consumers resync after their 410 (runbook integration-feed-lag). Unexpected: find who ran it from the audit row and the maintenance login's logs."
+runbook = "integration-feed-lag"
+test = "new_epoch_rotates_the_feed_epoch"
 [[error]]
 code = "FG-DB-0015"
 name = "AuditSealBacklog"
@@ -1783,6 +1797,48 @@ diagnosis = "The log event carries `reason=manual_link_limit`, `limit` (50), `pr
 fix = "Unlink work items the merge request no longer needs (`DELETE …/work-items/{ref}`), or split the change into several merge requests. The limit is fixed in code."
 runbook = "integrations"
 test = "manual_links_past_the_limit_are_int_0019"
+# ── M3 I1c: the event feed of an integration (02 §5.7, §11.2, ADR-0016 §7, Amendment I1c) ──
+[[error]]
+code = "FG-INT-0007"
+name = "FeedCursorExpired"
+http_status = 410
+severity = "info"
+user_message_ja = "このカーソルからは続きを読めません。今の位置を取り直し、開発状況を取り直してから、その位置から読み直してください。"
+user_message_en = "The feed cannot continue from this cursor. Get the current position, resync the development status, then read from that position."
+user_message_id = "Feed tidak dapat dilanjutkan dari kursor ini. Ambil posisi saat ini, sinkronkan ulang status pengembangan, lalu baca dari posisi tersebut."
+cause = "`GET /api/v1/integrations/{id}/events?cursor=…` got an authentic cursor of this integration that the feed cannot continue without silently skipping events (ADR-0016 §7). The answer is 410 with `reason` in the body (the only field besides error_code, user_message and request_id): `retention` (events after the cursor were deleted by events.retention, or the cursor is older than 1.5 × the retention period), `epoch_mismatch` (the feed's epoch was rotated: `forge admin events new-epoch` after a restore or rebuild of the database), `ahead_of_head` (the cursor points past the last numbered event: the database was restored to an earlier point), `visible_set_changed` (what the integration may see changed since the cursor was issued: a project bound or unbound — an unbind and a rebind of the same project too, the binding generation is part of the set —, the service account's role, a project's deletion, or the integration's event_types). Nothing was read. Not an alert: the consumer recovers by itself."
+diagnosis = "The log event carries `reason`, `integration_id` and, by reason, `cursor_seq` with `retained_from` (retention) or `high_seq` (ahead_of_head); never the cursor's value. SELECT epoch, high_seq, retained_from FROM forge.event_feed_state; the binding history is in the audit log: SELECT action, project_id, occurred_at FROM forge.audit_log WHERE action IN ('integration.bound', 'integration.unbound') ORDER BY id DESC LIMIT 20."
+fix = "The consumer (kanflow K3) follows docs/api/integration-feed.md: GET /api/v1/integrations/{id}/events/cursor first, then resync the development status (state=all), then read from the position it got. Nothing to do on the server unless the reason is unexpected (retention while the consumer was healthy: runbook integration-feed-lag)."
+runbook = "integration-feed-lag"
+test = "an_authentic_cursor_past_max_age_is_int_0007_retention"
+
+[[error]]
+code = "FG-INT-0008"
+name = "FeedCursorInvalid"
+http_status = 400
+severity = "info"
+user_message_ja = "カーソルの値が正しくありません。前の応答の next_cursor をそのまま送るか、今の位置を取り直してください。"
+user_message_en = "The cursor is not valid. Send the previous answer's next_cursor unchanged, or get the current position again."
+user_message_id = "Nilai kursor tidak valid. Kirim next_cursor dari jawaban sebelumnya tanpa diubah, atau ambil posisi saat ini lagi."
+cause = "`GET /api/v1/integrations/{id}/events?cursor=…` got a cursor that is not one this integration was given (ADR-0016 §7): too long, not base64url, truncated, an unknown format version or key id (`api.cursor_keys_file` lost the key that sealed it), an AEAD tag that does not verify (changed, or sealed for another list), a payload of another shape, or the cursor of another integration (`rule=other_integration`). Nothing was read. The value is never logged."
+diagnosis = "The log event carries `rule` (`too_long`, `encoding`, `truncated`, `version`, `kid`, `tag`, `payload`, `other_integration`) and `integration_id`, never the cursor. `kid` after a key rotation means the old key was removed before its cursors aged out (runbook integration-feed-lag)."
+fix = "The consumer sends next_cursor exactly as received, for the same integration id. If the keys were rotated too early, put the old key back into api.cursor_keys_file (it then decrypts only), or let the consumer restart from GET …/events/cursor and a resync."
+runbook = "integration-feed-lag"
+test = "another_integrations_cursor_is_int_0008_other_integration"
+
+[[error]]
+code = "FG-INT-0009"
+name = "FeedConsumerLag"
+http_status = 500
+severity = "warn"
+user_message_ja = "連携先がイベントの履歴を読みに来ていないか、大きく遅れています。管理者に連絡してください。"
+user_message_en = "An integration has not read its event feed for long, or is far behind. Contact the administrator."
+user_message_id = "Sebuah integrasi sudah lama tidak membaca feed perubahannya, atau sangat tertinggal. Hubungi administrator."
+cause = "An enabled integration with bound projects has not read its feed for 24 hours (`reason=not_reading`; one that never read counts 24 hours after its first binding), or the oldest event it has not read yet is older than half the retention period (`reason=behind`): when retention deletes it, the consumer gets 410 retention and has to resync (ADR-0016 §11, plan 02 §11.3). Raised by forge doctor (`integrations.feed_lag`) from forge.integration_feed_reads, and logged at warn by the feed itself when a read finds the consumer behind (at most once per minute per integration, with the read's request_id). No request fails with it."
+diagnosis = "The doctor line or the log event carries `reason`, `integration_id`, `last_read_at` (RFC 3339, UTC, or `never`), `behind_seconds` (behind) and `retention_days`. SELECT integration_id, last_read_at, cursor_seq, read_bound_seq, oldest_unread_at FROM forge.integration_feed_reads ORDER BY last_read_at; kanflow's own logs show whether its poller runs."
+fix = "Follow runbook integration-feed-lag: check that kanflow's poller runs and authenticates (the service account's token: runbook service-accounts), that the work-item-sync subscriber is not stuck (doctor subscribers.work-item-sync; it bounds what the feed returns), then let the consumer catch up. A consumer that cannot catch up before retention resyncs after its 410."
+runbook = "integration-feed-lag"
+test = "feed_lag_names_not_reading_and_behind_integrations"
 # ── U2 follow-up: the rules' optimistic concurrency ──────────────────────
 [[error]]
 code = "FG-REVIEW-0018"

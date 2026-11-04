@@ -156,3 +156,69 @@ fn integration_binding_commands_call_the_project_routes() {
         json!({"project_id": 7, "integration_id": 3, "unbound": true})
     );
 }
+
+// ── M3 I1c: the event feed (the integration's service account token) ──
+
+const PAGE: &str = r#"{"schema_version":1,"events":[{"id":"evt_0192f3c4a1b27c3d8e9f00112233aabb","cursor":"c1","type":"merge_request.closed","schema_version":1,"occurred_at":"2026-11-03T01:15:00.123Z","project_id":12,"actor":{"kind":"user","user":{"id":5,"username":"alice","display_name":"Alice"},"via":null},"work_items":[{"provider":"kanflow","project_id":"kf-1","ref":"PBI-123"}],"data":{}}],"next_cursor":"c2","has_more":false}"#;
+
+/// `gstn integration events <id> [--cursor C] [--limit N]` reads one page
+/// of the feed; `gstn integration cursor <id>` the head position.
+#[test]
+fn integration_feed_commands_read_the_feed_routes() {
+    let srv = Mock::start(|r| {
+        if r.target.starts_with("/api/v1/integrations/3/events/cursor") {
+            ok(r#"{"schema_version":1,"cursor":"head-1"}"#)
+        } else {
+            ok(PAGE)
+        }
+    });
+    let sb = Sandbox::new();
+    let o = gstn(&sb, &srv, &["integration", "cursor", "3", "--json"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(last(&srv).1, "/api/v1/integrations/3/events/cursor");
+    let v: Value = serde_json::from_str(&o.stdout).expect("json");
+    assert_eq!(v["cursor"], "head-1");
+    let o = gstn(
+        &sb,
+        &srv,
+        &[
+            "integration",
+            "events",
+            "3",
+            "--cursor",
+            "head-1",
+            "--limit",
+            "500",
+            "--json",
+        ],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let (m, t, _) = last(&srv);
+    assert_eq!(m, "GET");
+    assert!(t.starts_with("/api/v1/integrations/3/events?"), "{t}");
+    assert!(
+        t.contains("cursor=head-1") && t.contains("limit=500"),
+        "{t}"
+    );
+    let v: Value = serde_json::from_str(&o.stdout).expect("json");
+    assert_eq!(v["events"][0]["type"], "merge_request.closed");
+    let human = gstn(&sb, &srv, &["integration", "events", "3"]);
+    assert_eq!(human.code, 0, "{}", human.stderr);
+    assert!(
+        human.stdout.contains("merge_request.closed"),
+        "{}",
+        human.stdout
+    );
+    assert!(human.stdout.contains("next_cursor: c2"), "{}", human.stdout);
+    // A limit outside 1..=500 or a cursor with other characters never
+    // leaves gstn.
+    let before = srv.seen().len();
+    for args in [
+        &["integration", "events", "3", "--limit", "501"][..],
+        &["integration", "events", "3", "--cursor", "a b"][..],
+    ] {
+        let bad = gstn(&sb, &srv, args);
+        assert_ne!(bad.code, 0, "{args:?}");
+    }
+    assert_eq!(srv.seen().len(), before);
+}

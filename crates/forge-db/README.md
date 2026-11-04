@@ -797,3 +797,27 @@ detected one the subscriber's progress; DELETE only while the repository is
 `linked_by_kind` / `unlinked_by_kind` (only a `human`'s manual unlink stops
 detection); unbinding ends the binding's open links (`unbound`). Tests
 `src/work_items/tests.rs`.
+
+**The integration feed (M3 I1c, migration `20261118100000`, ADR-0016 Amendment
+I1c)**: `feed::open` starts a `REPEATABLE READ READ ONLY` snapshot on the read
+pool (`FeedSnapshot`): `state` (epoch, `high_seq`, `retained_from`, the
+`work-item-sync` position, `retention_policy.events_days`; the read's bound is
+`min(high_seq, work-item-sync)`), `material` (the integration, its bindings with
+`generation` and the service account's access facts per project through
+`resolve::PROJECT_ACCESS_SQL` — forge-auth's `prove_visible` decides),
+`read_feed_page(&VisibleSet, after, bound, limit, max_bytes)` (only the set's
+project ids and event types reach SQL; 100 rows per statement, ≤ 500 events and
+≈ 2 MiB; each event with this integration's work items and its actor; called by
+forge-integ only) and `oldest_unread_at`. `personal_facts` reads e-mail and
+employee numbers on the write pool (the read pool cannot). `record_read` writes
+`forge.integration_feed_reads` (derived) at most once a minute per integration;
+`lag` (doctor `integrations.feed_lag`, FG-INT-0009), `watermark`
+(`subscribers.work-item-sync`), `retention` (`events.retention`).
+`run_retention` runs one batch of `forge.events_retention` (forge_purge,
+EXECUTE forge_app; `forge.retention_policy`, default 90 days, forge_app cannot
+write it); `Db::connect_maint` + `new_epoch` run `forge.feed_new_epoch`
+(forge_seq, EXECUTE forge_maint only; `feed.epoch_rotated` audit row;
+`epoch_changed` is FG-DB-0014). `integration_bindings.generation` (identity,
+never chosen nor updated by forge_app) makes a rebind a new visible set.
+`tokens_scopes_known` gains `user_employee_number`. Tests `src/feed/tests.rs`
+(the visible set decided with forge-auth, a dev-dependency).

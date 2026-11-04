@@ -1,8 +1,15 @@
-//! The SECURITY DEFINER functions of the migrated schema (ADR-0018 §1, §3):
-//! `forge.assign_seq` (step C4) exactly as the migrations ship it — one
-//! function of that name, owned by forge_seq, SECURITY DEFINER, plpgsql,
-//! volatile, `search_path = pg_catalog, forge, pg_temp`, the shipped
-//! arguments and body, and EXECUTE for forge_app only (besides its owner).
+//! The SECURITY DEFINER functions of the migrated schema (ADR-0018 §1, §3)
+//! exactly as the migrations ship them — one function of each name, owned
+//! by its role, SECURITY DEFINER, plpgsql, volatile, `search_path =
+//! pg_catalog, forge, pg_temp`, the shipped arguments and body, and EXECUTE
+//! for the listed roles only (besides its owner):
+//!
+//! - `forge.assign_seq` (step C4): owner forge_seq, EXECUTE forge_app;
+//! - `forge.events_retention` (M3 I1c): owner forge_purge, EXECUTE
+//!   forge_app (the worker's `events.retention` task);
+//! - `forge.feed_new_epoch` (M3 I1c): owner forge_seq, EXECUTE forge_maint
+//!   (`forge admin events new-epoch`).
+//!
 //! Each finding is `FG-DB-0009 reason=guard_missing` with `guard`
 //! (function_owner / function_body / function_privilege) and `function`.
 
@@ -12,28 +19,68 @@ use sqlx::postgres::PgConnection;
 use super::guard_missing;
 use crate::read_query_error;
 
-const NAME: &str = "assign_seq";
-const SIGNATURE: &str = "forge.assign_seq(integer,boolean)";
-const ARGUMENTS: &str = "max_batch integer, include_audit boolean, OUT from_seq bigint, \
-     OUT to_seq bigint, OUT audit_from bigint, OUT audit_to bigint";
-/// The migration that creates it.
-const VERSION: i64 = 20261027110000;
-/// Grantees other than the owner, as `role:PRIVILEGE`.
-const GRANTS: &[&str] = &["forge_app:EXECUTE"];
-
-fn finding(guard: &'static str) -> ForgeError {
-    guard_missing(guard).with_context("function", NAME)
+/// One shipped SECURITY DEFINER function.
+struct Definer {
+    name: &'static str,
+    signature: &'static str,
+    arguments: &'static str,
+    /// The migration that creates it.
+    version: i64,
+    owner: &'static str,
+    /// Grantees other than the owner, as `role:PRIVILEGE`.
+    grants: &'static [&'static str],
 }
 
+const DEFINERS: &[Definer] = &[
+    Definer {
+        name: "assign_seq",
+        signature: "forge.assign_seq(integer,boolean)",
+        arguments: "max_batch integer, include_audit boolean, OUT from_seq bigint, \
+             OUT to_seq bigint, OUT audit_from bigint, OUT audit_to bigint",
+        version: 20261027110000,
+        owner: "forge_seq",
+        grants: &["forge_app:EXECUTE"],
+    },
+    Definer {
+        name: "events_retention",
+        signature: "forge.events_retention(integer,text)",
+        arguments: "max_rows integer, request_id text, OUT deleted bigint, \
+             OUT from_seq bigint, OUT to_seq bigint",
+        version: 20261118100000,
+        owner: "forge_purge",
+        grants: &["forge_app:EXECUTE"],
+    },
+    Definer {
+        name: "feed_new_epoch",
+        signature: "forge.feed_new_epoch(text,text)",
+        arguments: "reason text, request_id text, OUT old_epoch uuid, OUT new_epoch uuid",
+        version: 20261118100000,
+        owner: "forge_seq",
+        grants: &["forge_maint:EXECUTE"],
+    },
+];
+
+fn finding(guard: &'static str, name: &'static str) -> ForgeError {
+    guard_missing(guard).with_context("function", name)
+}
+
+/// Every shipped SECURITY DEFINER function (the name kept for the caller).
 pub(super) async fn check_assign_seq(conn: &mut PgConnection) -> Result<(), ForgeError> {
+    for definer in DEFINERS {
+        check_definer(conn, definer).await?;
+    }
+    Ok(())
+}
+
+async fn check_definer(conn: &mut PgConnection, d: &Definer) -> Result<(), ForgeError> {
     let (applied, defined): (bool, i64) = sqlx::query_as(
         "SELECT EXISTS (SELECT 1 FROM forge._sqlx_migrations WHERE version = $1 AND success), \
                 (SELECT count(*) FROM pg_catalog.pg_proc p \
                  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace \
                  WHERE n.nspname = 'forge' AND p.proname = $2)",
     )
-    .bind(VERSION)
-    .bind(NAME)
+    .bind(d.version)
+    .bind(d.name)
     .fetch_one(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.definer_present", e))?;
@@ -44,7 +91,7 @@ pub(super) async fn check_assign_seq(conn: &mut PgConnection) -> Result<(), Forg
     // Missing, or an overload next to it (a better-matching call could
     // reach code that is not the shipped one).
     if defined != 1 {
-        return Err(finding("function_owner").with_context("count", defined));
+        return Err(finding("function_owner", d.name).with_context("count", defined));
     }
     let found: Option<(String, bool, String)> = sqlx::query_as(
         "SELECT pg_catalog.pg_get_userbyid(p.proowner)::text, \
@@ -55,26 +102,26 @@ pub(super) async fn check_assign_seq(conn: &mut PgConnection) -> Result<(), Forg
          p.prosrc \
          FROM pg_catalog.pg_proc p WHERE p.oid = pg_catalog.to_regprocedure($1)",
     )
-    .bind(SIGNATURE)
-    .bind(ARGUMENTS)
+    .bind(d.signature)
+    .bind(d.arguments)
     .fetch_optional(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.definer_function", e))?;
     let Some((owner, shape, body)) = found else {
-        return Err(finding("function_owner"));
+        return Err(finding("function_owner", d.name));
     };
-    if owner != "forge_seq" {
-        return Err(finding("function_owner"));
+    if owner != d.owner {
+        return Err(finding("function_owner", d.name));
     }
-    if !shape || migration_body(NAME).as_deref() != Some(body.as_str()) {
-        return Err(finding("function_body"));
+    if !shape || migration_body(d.name).as_deref() != Some(body.as_str()) {
+        return Err(finding("function_body", d.name));
     }
-    check_grants(conn).await
+    check_grants(conn, d).await
 }
 
-/// Exactly [`GRANTS`] besides the owner (PUBLIC included: a function's
-/// default ACL grants PUBLIC EXECUTE).
-async fn check_grants(conn: &mut PgConnection) -> Result<(), ForgeError> {
+/// Exactly the function's grants besides the owner (PUBLIC included: a
+/// function's default ACL grants PUBLIC EXECUTE).
+async fn check_grants(conn: &mut PgConnection, d: &Definer) -> Result<(), ForgeError> {
     let found: Vec<String> = sqlx::query_scalar(
         "SELECT coalesce(g.rolname::text, 'PUBLIC') || ':' || a.privilege_type \
          || CASE WHEN a.is_grantable THEN '*' ELSE '' END \
@@ -83,15 +130,15 @@ async fn check_grants(conn: &mut PgConnection) -> Result<(), ForgeError> {
          LEFT JOIN pg_catalog.pg_roles g ON g.oid = a.grantee \
          WHERE p.oid = pg_catalog.to_regprocedure($1) AND a.grantee <> p.proowner",
     )
-    .bind(SIGNATURE)
+    .bind(d.signature)
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| read_query_error("bootstrap.definer_privileges", e))?;
-    if let Some(extra) = found.iter().find(|g| !GRANTS.contains(&g.as_str())) {
-        return Err(finding("function_privilege").with_context("role", role_of(extra)));
+    if let Some(extra) = found.iter().find(|g| !d.grants.contains(&g.as_str())) {
+        return Err(finding("function_privilege", d.name).with_context("role", role_of(extra)));
     }
-    if let Some(missing) = GRANTS.iter().find(|g| !found.iter().any(|f| f == *g)) {
-        return Err(finding("function_privilege").with_context("role", role_of(missing)));
+    if let Some(missing) = d.grants.iter().find(|g| !found.iter().any(|f| f == *g)) {
+        return Err(finding("function_privilege", d.name).with_context("role", role_of(missing)));
     }
     Ok(())
 }
@@ -127,9 +174,18 @@ mod unit {
 
     #[test]
     fn the_shipped_body_is_found_in_the_migrations() {
-        let body = migration_body(NAME).expect("assign_seq is shipped");
+        let body = migration_body("assign_seq").expect("assign_seq is shipped");
         assert!(body.contains("pg_advisory_xact_lock"), "{body}");
         assert!(body.trim_end().ends_with("END"), "{body}");
         assert_eq!(role_of("forge_app:EXECUTE"), "forge_app");
+        for d in DEFINERS {
+            let body = migration_body(d.name);
+            assert!(
+                body.as_deref()
+                    .is_some_and(|b| b.trim_end().ends_with("END")),
+                "{} is shipped",
+                d.name
+            );
+        }
     }
 }

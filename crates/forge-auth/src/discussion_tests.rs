@@ -271,7 +271,9 @@ fn internal_project(resource: &crate::Resource) -> bool {
         | Resource::Resolved { .. }
         | Resource::ServiceAccount(_)
         | Resource::ServiceAccountTokenRequest { .. }
-        | Resource::CheckRun { .. } => None,
+        | Resource::CheckRun { .. }
+        | Resource::IntegrationFeed(_)
+        | Resource::ProjectEvents { .. } => None,
     };
     project.is_some_and(|p| p.visibility == Visibility::Internal)
 }
@@ -301,7 +303,24 @@ fn only_people_only_actions_refuse_by_account_kind() {
                         // a service account only — the allowed rows are
                         // service accounts', a bot twin is refused.
                         (AccountKind::Bot, "not_service_account") => {
-                            e.code() == ErrorCode::Forbidden && r.action == Action::CheckWrite
+                            e.code() == ErrorCode::Forbidden
+                                && matches!(
+                                    r.action,
+                                    Action::CheckWrite
+                                        | Action::IntegrationEventRead
+                                        | Action::IntegrationEventCursorRead
+                                )
+                        }
+                        // M3 I1c (ADR-0016 §7): the feed is read by the
+                        // integration's own service account only; a bot
+                        // twin is the same 404 as another integration.
+                        (AccountKind::Bot, "not_integration_account") => {
+                            e.code() == ErrorCode::NotFound
+                                && matches!(
+                                    r.action,
+                                    Action::IntegrationEventRead
+                                        | Action::IntegrationEventCursorRead
+                                )
                         }
                         // A Guest member of an internal project reads by
                         // its own role (a person reads it as a Reporter):

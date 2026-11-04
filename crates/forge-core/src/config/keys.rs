@@ -172,6 +172,11 @@ pub const KEYS: &[Key] = &[
         "review.mergeability_fanout_max",
         "FORGE_REVIEW_MERGEABILITY_FANOUT_MAX",
     ),
+    // M3 I1c: the feed's seal-sink comparison (ADR-0018 §5; false only in M3).
+    boolean(
+        "feed.require_sink_compare",
+        "FORGE_FEED_REQUIRE_SINK_COMPARE",
+    ),
     // M3 O3: the repository maintenance (ADR-0024 "実装で決めたこと（O3）").
     number(
         "maintenance.interval_days",

@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used, clippy::panic)] // tests may fail loudly (rust/testing.md)
 //! The dependency direction gate (CLAUDE.md §3-9, ADR-0001 and its M1 phase
 //! 8b amendment): `forge-web / forge-cli → feature crates (forge-hosting,
-//! forge-review, forge-checks, forge-oidc) →
+//! forge-review, forge-checks, forge-integ, forge-oidc) →
 //! forge-auth / forge-git / forge-db → forge-core → forge-errors`. Every
 //! workspace crate's normal and build dependencies on other forge crates
 //! are checked against the layer table; a crate missing from the table
@@ -53,6 +53,13 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-errors",
         ],
     ),
+    // M3 I1c (plan 11 §3.7, ADR-0016 §7): integrations — the event feed.
+    // No forge-git: it reads only the outbox (domain events), never a
+    // repository; never another feature crate.
+    (
+        "forge-integ",
+        &["forge-auth", "forge-db", "forge-core", "forge-errors"],
+    ),
     // M2 MR4 (ADR-0021 §2): the OIDC sign-in, beside forge-hosting.
     (
         "forge-oidc",
@@ -65,6 +72,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-hosting",
             "forge-review",
             "forge-checks",
+            "forge-integ",
             "forge-auth",
             "forge-git",
             "forge-core",
@@ -79,6 +87,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "forge-hosting",
             "forge-review",
             "forge-checks",
+            "forge-integ",
             "forge-auth",
             "forge-git",
             "forge-db",
@@ -164,5 +173,34 @@ fn forge_review_and_forge_checks_have_no_edge() {
     ] {
         let deps = allowed.get(a).expect("crate in the table");
         assert!(!deps.contains(&b), "{a} may not depend on {b}");
+    }
+}
+
+/// M3 I1c (plan 11 §3.7): forge-integ reads domain events only — no edge to
+/// another feature crate in either direction, and none to forge-git.
+#[test]
+fn forge_integ_has_no_edge_to_other_feature_crates() {
+    let allowed: BTreeMap<&str, &[&str]> = ALLOWED.iter().copied().collect();
+    let features = [
+        "forge-hosting",
+        "forge-review",
+        "forge-checks",
+        "forge-oidc",
+    ];
+    let integ = allowed
+        .get("forge-integ")
+        .expect("forge-integ in the table");
+    for other in features.iter().chain(&["forge-git"]) {
+        assert!(
+            !integ.contains(other),
+            "forge-integ may not depend on {other}"
+        );
+    }
+    for other in features {
+        let deps = allowed.get(other).expect("feature crate in the table");
+        assert!(
+            !deps.contains(&"forge-integ"),
+            "{other} may not depend on forge-integ"
+        );
     }
 }

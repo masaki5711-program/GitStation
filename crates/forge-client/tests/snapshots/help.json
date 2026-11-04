@@ -5728,6 +5728,116 @@
     {
       "args": [
         {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        },
+        {
+          "description": "The cursor the feed gave (next_cursor, an event's cursor, or integration cursor); without it the oldest retained event.",
+          "kind": "option",
+          "name": "--cursor",
+          "repeatable": false,
+          "required": false
+        },
+        {
+          "description": "Events per page, 1 to 500 (default 100).",
+          "kind": "option",
+          "name": "--limit",
+          "repeatable": false,
+          "required": false
+        }
+      ],
+      "examples": [
+        "gstn integration events 3 --cursor <next_cursor> --json"
+      ],
+      "name": "integration events",
+      "output": {
+        "properties": {
+          "events": {
+            "items": {
+              "required": [
+                "id",
+                "cursor",
+                "type",
+                "schema_version",
+                "occurred_at",
+                "project_id",
+                "actor",
+                "work_items",
+                "data"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version",
+          "events",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/integrations/{id}/events"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "One page of an integration's event feed after a cursor: every integration-class event of its bound projects in order, each with its work items (the integration's own service account token, read_api; FG-INT-0007 410 with reason when the cursor cannot continue, FG-INT-0008 for a cursor that is not this integration's)."
+    },
+    {
+      "args": [
+        {
+          "description": "The integration id.",
+          "kind": "positional",
+          "name": "id",
+          "repeatable": false,
+          "required": true
+        }
+      ],
+      "examples": [
+        "gstn integration cursor 3 --json"
+      ],
+      "name": "integration cursor",
+      "output": {
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1
+          }
+        },
+        "required": [
+          "schema_version",
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "routes": [
+        "GET /api/v1/integrations/{id}/events/cursor"
+      ],
+      "scopes": [
+        "read_api"
+      ],
+      "summary": "The head of an integration's event feed as a cursor (a resync takes it first, then the development status, then reads from it; the integration's own service account token)."
+    },
+    {
+      "args": [
+        {
           "description": "The project id.",
           "kind": "option",
           "name": "--project",

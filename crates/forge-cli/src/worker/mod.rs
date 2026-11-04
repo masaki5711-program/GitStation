@@ -68,6 +68,9 @@ mod codeowners_restore;
 pub(crate) mod maintenance;
 // ── end M3 O3 ──
 mod seal;
+// ── M3 I1c: events retention ──
+mod events_retention;
+// ── end M3 I1c ──
 // ── M2 MR6: the session purge ──
 mod session_purge;
 // ── end M2 MR6 ──
@@ -155,6 +158,8 @@ enum Task {
     MergeabilitySweep,
     /// Expired CODEOWNERS suspensions recorded (`codeowners_restore`, M3 R6).
     CodeownersRestore,
+    /// Events past the retention period (`events_retention`, M3 I1c).
+    EventsRetention,
     // ── M3 O3 ──
     /// The maintenance's own job runner (`maintenance`).
     MaintenanceRunner,
@@ -194,6 +199,8 @@ fn tasks(
         Task::MergeabilitySweep,
         // M3 R6: needs only the database.
         Task::CodeownersRestore,
+        // M3 I1c: needs only the database.
+        Task::EventsRetention,
     ];
     // ── C5: no subscriber, no task (and no LISTEN connection) ──
     if !registry.is_empty() {
@@ -268,6 +275,7 @@ impl Task {
             Self::SessionPurge => session_purge::NAME,
             Self::MergeabilitySweep => mergeability_sweep::NAME,
             Self::CodeownersRestore => codeowners_restore::NAME,
+            Self::EventsRetention => events_retention::NAME,
             Self::MaintenanceRunner => maintenance::RUNNER_NAME,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_NAME,
         }
@@ -291,6 +299,7 @@ impl Task {
                 .map_or(MAX_BACKOFF, |purge| purge.session_interval),
             Self::MergeabilitySweep => mergeability_sweep::PERIOD,
             Self::CodeownersRestore => codeowners_restore::PERIOD,
+            Self::EventsRetention => events_retention::PERIOD,
             Self::MaintenanceRunner => jobs::JOB_POLL_PERIOD,
             Self::MaintenanceSchedule => maintenance::SCHEDULE_PERIOD,
         }
@@ -338,6 +347,7 @@ impl Task {
                 mergeability_sweep::run_mergeability_sweep(db, shared.storage.as_ref()).await
             }
             Self::CodeownersRestore => codeowners_restore::run_codeowners_restore(db).await,
+            Self::EventsRetention => events_retention::run_events_retention(db).await,
             Self::MaintenanceRunner => match shared.maintenance.as_ref() {
                 Some(m) => {
                     let stop = shared.shutdown.clone(); // clone: the run waits on its own receiver

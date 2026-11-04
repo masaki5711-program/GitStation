@@ -12,7 +12,7 @@
 //! JSON body.
 
 use crate::app::{emit, EnvFn, Io};
-use crate::cli::{Cli, IntegrationBindingCommand, IntegrationCommand};
+use crate::cli::{Cli, IntegrationBindingCommand, IntegrationCommand, IntegrationFeedCommand};
 use crate::error::Result;
 use crate::hosting::{call, client, confirm, list_human, text};
 use crate::http::Method;
@@ -92,6 +92,85 @@ pub fn integration(
                 None,
             )?;
             let human = list_human(&body, "items", "-", "", &BINDING_KEYS);
+            emit(io, cli, body, &human)
+        }
+    }
+}
+
+/// One feed page as lines of text: one event per line, then the next
+/// cursor.
+fn page_human(v: &Value) -> String {
+    let mut lines: Vec<String> = v
+        .get("events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            events
+                .iter()
+                .map(|e| {
+                    let refs = e
+                        .get("work_items")
+                        .and_then(Value::as_array)
+                        .map(|w| {
+                            w.iter()
+                                .map(|i| text(i, "ref"))
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default();
+                    format!(
+                        "{}  {}  project {}  {}",
+                        text(e, "occurred_at"),
+                        text(e, "type"),
+                        text(e, "project_id"),
+                        refs
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    lines.push(format!("next_cursor: {}", text(v, "next_cursor")));
+    lines.push(format!("has_more: {}", text(v, "has_more")));
+    lines.join("\n")
+}
+
+/// `gstn integration events|cursor` (M3 I1c): the feed routes, which only
+/// the integration's own service account may read (docs/api/integration-feed.md).
+pub fn feed(
+    cli: &Cli,
+    cmd: &IntegrationFeedCommand,
+    env: EnvFn<'_>,
+    io: &mut Io<'_>,
+) -> Result<()> {
+    match cmd {
+        IntegrationFeedCommand::Events { id, cursor, limit } => {
+            let c = client(cli, env, io)?;
+            let mut query: Vec<(String, String)> = Vec::new();
+            if let Some(cursor) = cursor {
+                query.push(("cursor".to_string(), cursor.clone()));
+            }
+            if let Some(n) = limit {
+                query.push(("limit".to_string(), n.to_string()));
+            }
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/integrations/{id}/events"),
+                &query,
+                None,
+            )?;
+            let human = page_human(&body);
+            emit(io, cli, body, &human)
+        }
+        IntegrationFeedCommand::Cursor { id } => {
+            let c = client(cli, env, io)?;
+            let body = call(
+                &c,
+                Method::Get,
+                &format!("/api/v1/integrations/{id}/events/cursor"),
+                &[],
+                None,
+            )?;
+            let human = format!("cursor: {}", text(&body, "cursor"));
             emit(io, cli, body, &human)
         }
     }

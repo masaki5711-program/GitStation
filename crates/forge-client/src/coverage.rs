@@ -125,6 +125,17 @@ pub const API_ROUTES: &[(&str, &str, Coverage)] = &[
         "/api/v1/admin/integrations/{id}/bindings",
         Coverage::Command("admin integration bindings"),
     ),
+    // M3 I1c: the event feed (the integration's own service account).
+    (
+        "GET",
+        "/api/v1/integrations/{id}/events",
+        Coverage::Command("integration events"),
+    ),
+    (
+        "GET",
+        "/api/v1/integrations/{id}/events/cursor",
+        Coverage::Command("integration cursor"),
+    ),
     (
         "GET",
         "/api/v1/projects/{id}/integration-bindings",

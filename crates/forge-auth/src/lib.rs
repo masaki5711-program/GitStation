@@ -17,6 +17,7 @@ mod action;
 mod authorize;
 mod codeowners_ctx;
 mod contexts;
+mod feed_ctx;
 mod integration_ctx;
 pub mod matrix;
 mod matrix_review;
@@ -25,6 +26,7 @@ mod matrix_rows_approval;
 mod matrix_rows_checks;
 mod matrix_rows_conditions;
 mod matrix_rows_discussion;
+mod matrix_rows_feed;
 mod matrix_rows_integrations;
 mod matrix_rows_merge;
 mod matrix_rows_people;
@@ -39,13 +41,14 @@ mod viewer;
 pub use action::Action;
 pub use authorize::authorize;
 pub use codeowners_ctx::{CodeownersToggleCtx, MergeSettingsCtx};
+pub use feed_ctx::{prove_visible, IntegrationFeedCtx, LoadedIntegrationFeed};
 pub use integration_ctx::{IntegrationBindingCtx, IntegrationCtx};
 pub use merge_request_ctx::{DiscussionCtx, LoadedDiscussion, LoadedMergeRequest, MergeRequestCtx};
 pub use model::{
-    AccountKind, AdmissionAccount, CodeownersToggle, Credential, MembershipChange, MembershipScope,
-    MergeRequestEdit, MergeRequestState, NamespaceView, Principal, ProjectView, RefKind,
-    RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope, ServiceAccountView,
-    TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
+    AccountKind, AdmissionAccount, CodeownersToggle, Credential, IntegrationFeedView,
+    MembershipChange, MembershipScope, MergeRequestEdit, MergeRequestState, NamespaceView,
+    Principal, ProjectView, RefKind, RefProtection, RefUpdate, ResolvedVia, Resource, Role, Scope,
+    ServiceAccountView, TombstoneRelease, TransferTarget, UnresolvedReason, Visibility,
 };
 pub use prove::{
     prove, AccountFacts, Authorized, CheckNamespaceGrantCtx, CheckRunCtx, GroupCtx, GroupMemberCtx,
@@ -72,6 +75,9 @@ mod discussion_tests;
 
 #[cfg(test)]
 mod merge_request_tests;
+
+#[cfg(test)]
+mod feed_tests;
 
 #[cfg(test)]
 mod service_account_tests;

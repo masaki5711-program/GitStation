@@ -23,6 +23,8 @@ forge-hosting.workspace = true
 # M3 R1a: merge requests (ADR-0024 §11).
 forge-review.workspace = true
 forge-checks.workspace = true
+# M3 I1c: the integrations' event feed (serve).
+forge-integ.workspace = true
 forge-oidc.workspace = true
 httpdate.workspace = true
 tokio.workspace = true

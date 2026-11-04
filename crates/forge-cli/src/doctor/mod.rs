@@ -34,6 +34,8 @@ use crate::runtime::block_on;
 
 // M3 C1: required checks have a reporter.
 mod checks;
+// M3 I1c: the integrations' event feed.
+mod integrations;
 // M3 O3: FG-GIT-0018, FG-GIT-0019, the ref count.
 mod maintenance;
 mod oidc;
@@ -73,7 +75,7 @@ pub struct Report {
 }
 
 /// The checks that need a connected database.
-const DB_CHECKS: [&str; 24] = [
+const DB_CHECKS: [&str; 27] = [
     "db.bootstrap",
     "db.connections",
     "schema",
@@ -106,6 +108,10 @@ const DB_CHECKS: [&str; 24] = [
     "service_accounts.ownerless",
     // M3 C1: every required check namespace has a reporter (warn).
     "checks.reporters",
+    // M3 I1c: FG-INT-0009, the feed's bound, retention.
+    integrations::NAMES[0],
+    integrations::NAMES[1],
+    integrations::NAMES[2],
     // M3 O3: the repository maintenance ledger.
     "repositories.maintenance",
     "repositories.integrity",
@@ -245,6 +251,7 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
     let merges = review::merges_check(db).await;
     let [sa_expiring, sa_ownerless] = service_accounts::service_account_checks(db).await;
     let reporters = checks::reporters_check(db).await;
+    let [feed_lag, watermark, retention] = integrations::feed_checks(db).await;
     let [maintained, integrity, refs] = maintenance::maintenance_checks(db, &cfg.maintenance).await;
     let stale_locks = maintenance::stale_locks_check(db, root).await;
     vec![
@@ -268,6 +275,10 @@ async fn database_checks(db: &Db, cfg: &Config, root: Option<&StorageRoot>) -> V
         sa_expiring,
         sa_ownerless,
         reporters,
+        feed_lag,
+        watermark,
+        retention,
+        integrations::sink_compare_check(cfg),
         maintained,
         integrity,
         refs,

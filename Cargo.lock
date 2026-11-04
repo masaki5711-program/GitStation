@@ -746,6 +746,7 @@ dependencies = [
  "forge-errors",
  "forge-git",
  "forge-hosting",
+ "forge-integ",
  "forge-oidc",
  "forge-review",
  "forge-web",
@@ -807,6 +808,7 @@ dependencies = [
 name = "forge-db"
 version = "0.1.0"
 dependencies = [
+ "forge-auth",
  "forge-core",
  "forge-errors",
  "hmac",
@@ -861,6 +863,21 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "forge-integ"
+version = "0.1.0"
+dependencies = [
+ "forge-auth",
+ "forge-core",
+ "forge-db",
+ "forge-errors",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -923,6 +940,7 @@ dependencies = [
  "forge-errors",
  "forge-git",
  "forge-hosting",
+ "forge-integ",
  "forge-oidc",
  "forge-review",
  "forge-web",
