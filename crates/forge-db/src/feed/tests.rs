@@ -1025,6 +1025,9 @@ async fn explain(
             .collect::<Vec<_>>()
             .join(",")
     );
+    // The planner decides on statistics, as autovacuum keeps them in
+    // production (a bulk insert right before would otherwise look empty).
+    w.t.exec_superuser("ANALYZE forge.events").await;
     let literal = sql
         .replace("$5", &limit.unwrap_or(1).to_string())
         .replace("$4", &types)
@@ -1212,51 +1215,6 @@ async fn feed_functions_and_guards_refuse_what_they_must() {
     w.t.drop_now().await;
 }
 
-/// Review I1c (database WARN): retention batches are small and lock the
-/// feed state only for their last statement, so the sequencer keeps
-/// numbering while retention drains a large backlog.
-#[tokio::test]
-async fn retention_does_not_starve_the_sequencer() {
-    const { assert!(RETENTION_BATCH <= 2_000) };
-    let w = world().await;
-    bulk_events(&w, w.web.project_id, 6_000).await;
-    drain(&w.t).await;
-    w.t.exec_superuser(
-        "SET CONSTRAINTS ALL IMMEDIATE; \
-         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
-         UPDATE forge.events SET occurred_at = now() - interval '100 days'; \
-         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
-    )
-    .await;
-    let db = w.t.db.clone();
-    let retention = tokio::spawn(async move {
-        let request = RequestId::parse("req-retention-loop").expect("id");
-        let mut deleted = 0;
-        loop {
-            let batch = run_retention(&db, &request, RETENTION_BATCH)
-                .await
-                .expect("retention");
-            if batch.range.is_none() {
-                return deleted;
-            }
-            deleted += batch.deleted;
-        }
-    });
-    let mut slowest = std::time::Duration::ZERO;
-    while !retention.is_finished() {
-        let started = std::time::Instant::now();
-        sequence(&w.t).await;
-        slowest = slowest.max(started.elapsed());
-    }
-    let deleted = retention.await.expect("task");
-    assert!(deleted >= 6_000, "{deleted}");
-    assert!(
-        slowest < std::time::Duration::from_secs(2),
-        "the sequencer waited {slowest:?}"
-    );
-    w.t.drop_now().await;
-}
-
 /// Review I1c (LOW): when the 1.5 × limit removes events past a lagging
 /// subscriber, the audit row names it and its position.
 #[tokio::test]
@@ -1314,5 +1272,287 @@ async fn a_dropped_snapshot_leaves_no_open_transaction() {
         ))
         .await;
     assert!(stuck.is_empty(), "{stuck:?}");
+    w.t.drop_now().await;
+}
+
+// ── re-review of I1c (2026-11-04) ──────────────────────────────────────
+
+/// `count` numbered events of `event_type` for `project` (one superuser
+/// transaction with its audit row), then numbered.
+async fn bulk_typed(w: &World, project: ProjectId, event_type: &str, count: i64) {
+    w.t.exec_superuser(&format!(
+        "BEGIN; \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+           request_id) VALUES ('system', 'probe.bulk', 'succeeded', 'project', {p}, 'r-bulk'); \
+         INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+           aggregate_id, project_id, actor_kind, request_id, payload) \
+         SELECT gen_random_uuid(), '{event_type}', 1, 'project', {p}, {p}, 'system', 'r-bulk', \
+           '{{}}'::jsonb FROM generate_series(1, {count}); \
+         COMMIT",
+        p = project.get()
+    ))
+    .await;
+    for _ in 0..=(count / 1000) {
+        sequence(&w.t).await;
+    }
+}
+
+/// Re-review (database MEDIUM): types the feed does not show (3 000
+/// maintainer-class `member.added` of a bound project) are not walked
+/// before the one visible event — neither by the page nor by the
+/// oldest-unread probe.
+#[tokio::test]
+async fn per_project_reads_skip_types_the_feed_does_not_show() {
+    let w = world().await;
+    let start = head(&w).await;
+    bulk_typed(&w, w.web.project_id, "member.added", 3_000).await;
+    bulk_typed(&w, w.web.project_id, "project.created", 1).await;
+    let (mut snap, state, visible) = decided(&w).await;
+    let page = snap
+        .read_feed_page(&visible, start, state.high_seq, MAX_LIMIT, MAX_PAGE_BYTES)
+        .await
+        .expect("page");
+    snap.close().await;
+    assert_eq!(types(&page.events), ["project.created"]);
+    let read = explain(
+        &w,
+        PAGE_SEQS_SQL,
+        start,
+        state.high_seq,
+        &visible,
+        Some(501),
+    )
+    .await;
+    assert!(read <= 50.0, "the page touched {read} rows");
+    let oldest = explain(&w, OLDEST_SQL, start, state.high_seq, &visible, None).await;
+    assert!(
+        oldest <= 50.0,
+        "the oldest-unread probe touched {oldest} rows"
+    );
+    w.t.drop_now().await;
+}
+
+/// Re-review (database MEDIUM): 200 bound projects whose events interleave
+/// in `seq` with a mix of shown and hidden types — paging returns exactly
+/// the visible events of a full scan, strictly increasing, without gaps or
+/// duplicates, and `has_more` is exact at `limit` and `limit + 1`.
+#[tokio::test]
+async fn two_hundred_bound_projects_page_exactly() {
+    let w = world().await;
+    let mut ids = vec![w.web.project_id.get()];
+    for n in 1..200 {
+        let p = second_project(&w, &format!("p{n}")).await;
+        bind(&w, p.project_id, &format!("kf-{n}")).await;
+        ids.push(p.project_id.get());
+    }
+    drain(&w.t).await;
+    let start = head(&w).await;
+    let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    // 600 events round-robin over the 200 projects: project.created and
+    // repository.pushed shown, member.added hidden.
+    w.t.exec_superuser(&format!(
+        "BEGIN; \
+         INSERT INTO forge.audit_log (actor_kind, action, outcome, resource_type, resource_id, \
+           request_id) VALUES ('system', 'probe.bulk', 'succeeded', 'project', {first}, 'r-mix'); \
+         INSERT INTO forge.events (event_id, event_type, schema_version, aggregate_type, \
+           aggregate_id, project_id, actor_kind, request_id, payload) \
+         SELECT gen_random_uuid(), \
+           (ARRAY['project.created', 'member.added', 'repository.pushed'])[1 + g % 3], 1, \
+           'project', p, p, 'system', 'r-mix', '{{}}'::jsonb \
+         FROM generate_series(0, 599) AS g, \
+           LATERAL (SELECT (ARRAY[{list}])[1 + (g * 7) % 200] AS p) AS x; \
+         COMMIT",
+        first = ids[0]
+    ))
+    .await;
+    sequence(&w.t).await;
+    let (mut snap, state, visible) = decided(&w).await;
+    assert_eq!(visible.project_ids().len(), 200);
+    let expected: Vec<i64> = sqlx::query_scalar(
+        "SELECT seq FROM forge.events WHERE seq > $1 AND seq <= $2 \
+         AND project_id = ANY($3) AND event_type = ANY($4) ORDER BY seq",
+    )
+    .bind(start)
+    .bind(state.high_seq)
+    .bind(visible.project_ids())
+    .bind(
+        visible
+            .event_type_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<String>>(),
+    )
+    .fetch_all(&mut w.t.superuser().await)
+    .await
+    .expect("full scan");
+    assert_eq!(expected.len(), 400);
+    let mut got = Vec::new();
+    let mut after = start;
+    loop {
+        let page = snap
+            .read_feed_page(&visible, after, state.high_seq, 37, MAX_PAGE_BYTES)
+            .await
+            .expect("page");
+        got.extend(page.events.iter().map(|e| e.seq));
+        match page.events.last() {
+            Some(last) if page.has_more => after = last.seq,
+            _ => break,
+        }
+    }
+    assert!(got.windows(2).all(|p| p[0] < p[1]), "strictly increasing");
+    assert_eq!(got, expected, "no gap, no duplicate");
+    let exact = snap
+        .read_feed_page(&visible, start, state.high_seq, 400, MAX_PAGE_BYTES)
+        .await
+        .expect("exactly limit");
+    assert_eq!((exact.events.len(), exact.has_more), (400, false));
+    let one_less = snap
+        .read_feed_page(&visible, start, state.high_seq, 399, MAX_PAGE_BYTES)
+        .await
+        .expect("limit + 1 exist");
+    assert_eq!((one_less.events.len(), one_less.has_more), (399, true));
+    snap.close().await;
+    w.t.drop_now().await;
+}
+
+/// Re-review (database MEDIUM): a retention batch takes no lock on the feed
+/// state row until its final UPDATE. While the row is held (as the
+/// sequencer holds it), a batch has already removed its events — it holds
+/// the row-exclusive lock on forge.events — and waits only at the end.
+#[tokio::test]
+async fn a_retention_batch_locks_the_feed_state_only_at_its_end() {
+    let w = world().await;
+    w.t.exec_superuser(
+        "SET CONSTRAINTS ALL IMMEDIATE; \
+         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+         UPDATE forge.events SET occurred_at = now() - interval '100 days'; \
+         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
+    )
+    .await;
+    let mut holder = w.t.superuser().await;
+    sqlx::raw_sql("BEGIN; SELECT 1 FROM forge.event_feed_state FOR UPDATE")
+        .execute(&mut holder)
+        .await
+        .expect("hold the state row");
+    let db = w.t.db.clone();
+    let batch = tokio::spawn(async move {
+        run_retention(
+            &db,
+            &RequestId::parse("req-lock-order").expect("id"),
+            RETENTION_BATCH,
+        )
+        .await
+    });
+    w.t.until_waiting("events_retention").await;
+    let deleting: Vec<serde_json::Value> =
+        w.t.json_rows(
+            "SELECT l.mode FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+             WHERE a.query LIKE '%events_retention%' AND a.pid <> pg_backend_pid() \
+             AND l.relation = 'forge.events'::regclass AND l.mode = 'RowExclusiveLock' \
+             AND l.granted",
+        )
+        .await;
+    sqlx::raw_sql("COMMIT")
+        .execute(&mut holder)
+        .await
+        .expect("release");
+    let done = batch.await.expect("task").expect("retention");
+    assert!(
+        !deleting.is_empty(),
+        "the batch waited for the state row before deleting anything"
+    );
+    assert!(done.deleted > 0);
+    w.t.drop_now().await;
+}
+
+/// Re-review (LOW): a batch whose range holds no rows any more writes no
+/// audit row (it still moves retained_from past the range).
+#[tokio::test]
+async fn an_empty_retention_batch_writes_no_audit_row() {
+    let w = world().await;
+    w.t.exec_superuser(&format!(
+        "SET CONSTRAINTS ALL IMMEDIATE; \
+         ALTER TABLE forge.events DISABLE TRIGGER events_append_only; \
+         ALTER TABLE forge.event_work_items DISABLE TRIGGER ALL; \
+         {} FROM forge.event_work_items; {} FROM forge.events; \
+         ALTER TABLE forge.event_work_items ENABLE TRIGGER ALL; \
+         ALTER TABLE forge.events ENABLE ALWAYS TRIGGER events_append_only",
+        "DELETE", "DELETE"
+    ))
+    .await;
+    let batch = run_retention(
+        &w.t.db,
+        &RequestId::parse("req-empty").expect("id"),
+        RETENTION_BATCH,
+    )
+    .await
+    .expect("retention");
+    assert_eq!(batch.deleted, 0);
+    let audits: Vec<serde_json::Value> =
+        w.t.json_rows("SELECT id FROM forge.audit_log WHERE action = 'events.retention'")
+            .await;
+    assert!(audits.is_empty(), "{audits:?}");
+    w.t.drop_now().await;
+}
+
+/// Re-review (LOW): the batched access read gives each bound project its
+/// own facts — a Reporter, a Guest, a project the account left, and one
+/// pending deletion.
+#[tokio::test]
+async fn the_batched_access_read_gives_each_binding_its_own_facts() {
+    let w = world().await;
+    let guest = second_project(&w, "guest").await;
+    let left = second_project(&w, "left").await;
+    let deleted = second_project(&w, "deleted").await;
+    for (p, ext) in [(&guest, "kf-g"), (&left, "kf-l"), (&deleted, "kf-d")] {
+        bind(&w, p.project_id, ext).await;
+    }
+    w.t.commit_audited(
+        ("project", guest.project_id.get()),
+        &[format!(
+            "UPDATE forge.project_members SET role = 'guest' \
+             WHERE project_id = {} AND user_id = {}",
+            guest.project_id.get(),
+            w.sa.get()
+        )],
+    )
+    .await;
+    w.t.commit_audited(
+        ("project", left.project_id.get()),
+        &[format!(
+            "{} FROM forge.project_members WHERE project_id = {} AND user_id = {}",
+            "DELETE",
+            left.project_id.get(),
+            w.sa.get()
+        )],
+    )
+    .await;
+    w.t.commit_audited(
+        ("project", deleted.project_id.get()),
+        &[format!(
+            "UPDATE forge.projects SET deleted_at = now(), purge_after = now() + interval '30 days' WHERE id = {}",
+            deleted.project_id.get()
+        )],
+    )
+    .await;
+    let mut snap = open(&w.t.db).await.expect("snapshot");
+    let material = snap
+        .material(w.integration)
+        .await
+        .expect("material")
+        .expect("integration");
+    snap.close().await;
+    let facts = |p: ProjectId| {
+        material
+            .bindings
+            .iter()
+            .find(|b| b.project == p)
+            .and_then(|b| b.access)
+            .map(|a| (a.role.map(|r| r.as_str()), a.pending_deletion))
+    };
+    assert_eq!(facts(w.web.project_id), Some((Some("reporter"), false)));
+    assert_eq!(facts(guest.project_id), Some((Some("guest"), false)));
+    assert_eq!(facts(left.project_id), Some((None, false)));
+    assert_eq!(facts(deleted.project_id), Some((Some("reporter"), true)));
     w.t.drop_now().await;
 }

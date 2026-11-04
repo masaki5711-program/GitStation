@@ -65,23 +65,26 @@ pub const WORK_ITEM_BYTES: usize = 160;
 /// Rows fetched per statement while a page fills.
 const CHUNK: i64 = 100;
 /// The visible events' `seq` after `$1` up to `$2` of the projects `$3`
-/// and types `$4`, in order, at most `$5`. One ordered range per project
-/// on `events_project_seq (project_id, seq)`, each cut at `$5`, merged: the
-/// rows touched are bounded by projects × `$5` plus the other-class events
-/// interleaved, never the whole backlog (review I1c; the large-backlog test
-/// pins it).
+/// and types `$4`, in order, at most `$5`. One ordered range per (project,
+/// type) on `events_project_type_seq (project_id, event_type, seq)`, each
+/// cut at `$5`, merged: the rows touched are bounded by the pairs × `$5`,
+/// never the backlog, and types the feed does not show are never walked
+/// (review and re-review I1c; the large-backlog and mixed-type tests pin
+/// it).
 pub(crate) const PAGE_SEQS_SQL: &str = "SELECT x.seq FROM unnest($3::bigint[]) AS p(id) \
+     CROSS JOIN unnest($4::text[]) AS t(name) \
      CROSS JOIN LATERAL (SELECT e.seq FROM forge.events e \
-       WHERE e.project_id = p.id AND e.seq > $1 AND e.seq <= $2 AND e.event_type = ANY($4) \
+       WHERE e.project_id = p.id AND e.event_type = t.name AND e.seq > $1 AND e.seq <= $2 \
        ORDER BY e.seq LIMIT $5) AS x \
      ORDER BY x.seq LIMIT $5";
 /// The first visible event after `$1` (binds of [`PAGE_SEQS_SQL`] without
-/// `$5`): its `seq` and time, one index probe per project.
+/// `$5`): its `seq` and time, one index probe per (project, type).
 pub(crate) const OLDEST_SQL: &str = "SELECT x.seq, x.at FROM unnest($3::bigint[]) AS p(id) \
+     CROSS JOIN unnest($4::text[]) AS t(name) \
      CROSS JOIN LATERAL (SELECT e.seq, \
          to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS at \
        FROM forge.events e \
-       WHERE e.project_id = p.id AND e.seq > $1 AND e.seq <= $2 AND e.event_type = ANY($4) \
+       WHERE e.project_id = p.id AND e.event_type = t.name AND e.seq > $1 AND e.seq <= $2 \
        ORDER BY e.seq LIMIT 1) AS x \
      ORDER BY x.seq LIMIT 1";
 /// The events of the seqs `$1`, in order (the page's second step).
@@ -194,10 +197,11 @@ pub struct FeedPage {
 }
 
 /// The resolver's project statement for every id of `$1` (viewer `$2`,
-/// cap `$3`), with the id as `bound_project`.
+/// cap `$3`), with the id as `feed_binding_project_id` (a name the
+/// resolver's columns never use).
 fn batched_access_sql() -> String {
     format!(
-        "SELECT x.id AS bound_project, q.* FROM unnest($1::bigint[]) AS x(id) \
+        "SELECT x.id AS feed_binding_project_id, q.* FROM unnest($1::bigint[]) AS x(id) \
          CROSS JOIN LATERAL ({}) AS q",
         PROJECT_ACCESS_SQL.replace("$1", "x.id")
     )
@@ -328,10 +332,16 @@ impl FeedSnapshot {
             let mut access_of = std::collections::BTreeMap::new();
             for row in rows {
                 let id: i64 = row
-                    .try_get("bound_project")
+                    .try_get("feed_binding_project_id")
                     .map_err(|e| read_query_error("feed.project_access", e))?;
                 let facts = ProjectAccessRow::from_row(&row)
                     .map_err(|e| read_query_error("feed.project_access", e))?;
+                // The facts are the bound project's own (re-review I1c).
+                if facts.project_id().is_some_and(|p| p != id) {
+                    return Err(ForgeError::new(ErrorCode::Internal)
+                        .with_context("reason", "feed_access_row_mismatch")
+                        .with_context("project_id", id));
+                }
                 let access =
                     interpret_project(facts, ProjectId::new(id), Some(viewer))?.map(|p| p.access);
                 access_of.insert(id, access);
