@@ -716,7 +716,9 @@ async function main() {
     if (!(await notAllowed.innerText()).includes('req-allow')) problems.push('webhook refusal: request id is missing');
     await check('61-webhook-refused');
     await page.getByLabel('Payload URL').fill('https://hooks.example.test:8443/t/receiver-token');
-    await page.getByLabel('Event types').fill('merge_request.*');
+    // Event types are checkboxes: turn "All events" off and pick one event.
+    await page.getByRole('checkbox', { name: /All events/ }).uncheck();
+    await page.getByRole('checkbox', { name: 'merge_request.opened' }).check();
     await page.getByRole('button', { name: 'Add webhook' }).click();
     const secretPanel = page.getByTestId('webhook-secret');
     await secretPanel.waitFor();
@@ -742,7 +744,7 @@ async function main() {
     await page.getByRole('button', { name: 'Enable https://hooks.example.test:8443' }).click();
     await page.getByText('Enabled again. Its failure count was reset.').waitFor();
     await page.getByRole('button', { name: 'Edit https://hooks.example.test:8443' }).click();
-    await page.getByRole('dialog').getByLabel('Event types').fill('*');
+    await page.getByRole('dialog').getByRole('checkbox', { name: /All events/ }).check();
     await check('65-webhook-edit');
     await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click();
     await page.getByText('Saved.').first().waitFor();
